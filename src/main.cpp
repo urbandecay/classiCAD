@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QAction>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QCursor>
@@ -12,6 +13,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
@@ -47,6 +49,23 @@ enum class Tool {
     Nurbs,
     Rectangle,
     Circle,
+};
+
+enum class SnapType {
+    None,
+    Endpoint,
+    Midpoint,
+    Intersection,
+};
+
+struct SnapResult {
+    SnapType type = SnapType::None;
+    QPointF point;
+
+    bool isValid() const
+    {
+        return type != SnapType::None;
+    }
 };
 
 struct Shape {
@@ -85,6 +104,41 @@ Shape::NurbsCurve2D makeDegreeOneNurbs(const QVector<QPointF> &points)
     }
 
     return curve;
+}
+
+qreal crossProduct(const QPointF &a, const QPointF &b)
+{
+    return a.x() * b.y() - a.y() * b.x();
+}
+
+bool segmentIntersection(const QPointF &a,
+                         const QPointF &b,
+                         const QPointF &c,
+                         const QPointF &d,
+                         QPointF *intersection)
+{
+    const QPointF firstDirection = b - a;
+    const QPointF secondDirection = d - c;
+    const qreal denominator = crossProduct(firstDirection, secondDirection);
+
+    if (std::abs(denominator) < 1e-9) {
+        return false;
+    }
+
+    const QPointF betweenStarts = c - a;
+    const qreal firstParameter = crossProduct(betweenStarts, secondDirection) / denominator;
+    const qreal secondParameter = crossProduct(betweenStarts, firstDirection) / denominator;
+    constexpr qreal tolerance = 1e-9;
+
+    if (firstParameter < -tolerance || firstParameter > 1.0 + tolerance ||
+        secondParameter < -tolerance || secondParameter > 1.0 + tolerance) {
+        return false;
+    }
+
+    if (intersection != nullptr) {
+        *intersection = a + firstDirection * firstParameter;
+    }
+    return true;
 }
 
 QPointF eventPosition(const QMouseEvent *event)
@@ -195,6 +249,22 @@ QString toolName(Tool tool)
     return QStringLiteral("Unknown");
 }
 
+QString snapTypeName(SnapType type)
+{
+    switch (type) {
+    case SnapType::Endpoint:
+        return QStringLiteral("Endpoint");
+    case SnapType::Midpoint:
+        return QStringLiteral("Midpoint");
+    case SnapType::Intersection:
+        return QStringLiteral("Intersection");
+    case SnapType::None:
+        return QStringLiteral("None");
+    }
+
+    return QStringLiteral("None");
+}
+
 int requiredPoints(Tool tool)
 {
     switch (tool) {
@@ -235,13 +305,20 @@ public:
         pendingPoints_.clear();
         lineCommandActive_ = tool == Tool::Line;
 
+        if (tool != Tool::Select) {
+            selectedShapeIndex_ = -1;
+            draggingSelected_ = false;
+        }
+
         if (lineCommandActive_) {
             const QPoint localCursor = mapFromGlobal(QCursor::pos());
             if (rect().contains(localCursor)) {
-                cursorWorld_ = screenToWorld(localCursor);
+                rawCursorWorld_ = screenToWorld(localCursor);
                 cursorValid_ = true;
             }
         }
+
+        refreshCursorConstraint();
 
         if (tool == Tool::Select) {
             setCursor(Qt::ArrowCursor);
@@ -281,6 +358,51 @@ public:
         return panButton_;
     }
 
+    void setOrthoEnabled(bool enabled)
+    {
+        orthoEnabled_ = enabled;
+        refreshCursorConstraint();
+
+        DebugLog::instance().write(QStringLiteral("setOrthoEnabled=%1 cursor=%2")
+                                       .arg(orthoEnabled_)
+                                       .arg(pointText(cursorWorld_)));
+        update();
+    }
+
+    bool orthoEnabled() const
+    {
+        return orthoEnabled_;
+    }
+
+    void setOsnapEnabled(bool enabled)
+    {
+        osnapEnabled_ = enabled;
+        refreshCursorConstraint();
+        DebugLog::instance().write(QStringLiteral("setOsnapEnabled=%1 snap=%2")
+                                       .arg(osnapEnabled_)
+                                       .arg(snapTypeName(currentSnap_.type)));
+        update();
+    }
+
+    bool osnapEnabled() const
+    {
+        return osnapEnabled_;
+    }
+
+    void setSnapModes(bool endpoint, bool midpoint, bool intersection)
+    {
+        endpointSnapEnabled_ = endpoint;
+        midpointSnapEnabled_ = midpoint;
+        intersectionSnapEnabled_ = intersection;
+        refreshCursorConstraint();
+        DebugLog::instance().write(QStringLiteral("setSnapModes endpoint=%1 midpoint=%2 intersection=%3 snap=%4")
+                                       .arg(endpointSnapEnabled_)
+                                       .arg(midpointSnapEnabled_)
+                                       .arg(intersectionSnapEnabled_)
+                                       .arg(snapTypeName(currentSnap_.type)));
+        update();
+    }
+
     QString coordinateText() const
     {
         return QStringLiteral("X %1   Y %2   Zoom %3%")
@@ -299,8 +421,8 @@ protected:
         drawGrid(painter);
         drawOrigin(painter);
 
-        for (const Shape &shape : shapes_) {
-            drawShape(painter, shape, false);
+        for (int index = 0; index < shapes_.size(); ++index) {
+            drawShape(painter, shapes_[index], false, index == selectedShapeIndex_);
         }
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
@@ -330,14 +452,17 @@ protected:
     void mousePressEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
-        const QPointF worldPosition = screenToWorld(screenPosition);
+        const QPointF rawWorldPosition = screenToWorld(screenPosition);
+        const QPointF worldPosition = constrainLinePoint(rawWorldPosition);
         DebugLog::instance().write(
-            QStringLiteral("mousePress button=%1 screen=%2 world=%3 tool=%4 lineActive=%5 panButton=%6 modifiers=0x%7")
+            QStringLiteral("mousePress button=%1 screen=%2 worldRaw=%3 worldUsed=%4 tool=%5 lineActive=%6 ortho=%7 panButton=%8 modifiers=0x%9")
                 .arg(inputButtonName(event->button()))
                 .arg(pointText(screenPosition))
+                .arg(pointText(rawWorldPosition))
                 .arg(pointText(worldPosition))
                 .arg(toolName(activeTool_))
                 .arg(lineCommandActive_)
+                .arg(orthoEnabled_)
                 .arg(inputButtonName(panButton_))
                 .arg(static_cast<int>(event->modifiers()), 0, 16));
 
@@ -361,13 +486,41 @@ protected:
             return;
         }
 
+        if (event->button() == Qt::LeftButton && activeTool_ == Tool::Select) {
+            rawCursorWorld_ = rawWorldPosition;
+            cursorWorld_ = rawWorldPosition;
+            lastWorldPosition_ = rawWorldPosition;
+            cursorValid_ = true;
+
+            selectedShapeIndex_ = hitTestShape(screenPosition);
+            draggingSelected_ = selectedShapeIndex_ >= 0;
+
+            if (draggingSelected_) {
+                lastDragWorld_ = rawWorldPosition;
+                setCursor(Qt::SizeAllCursor);
+                DebugLog::instance().write(
+                    QStringLiteral("selection hit shape=%1 tool=%2 dragStart=%3")
+                        .arg(selectedShapeIndex_)
+                        .arg(toolName(shapes_[selectedShapeIndex_].tool))
+                        .arg(pointText(lastDragWorld_)));
+            } else {
+                DebugLog::instance().write(QStringLiteral("selection miss at=%1")
+                                               .arg(pointText(screenPosition)));
+            }
+
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
         if (event->button() != Qt::LeftButton || activeTool_ == Tool::Select) {
             DebugLog::instance().write(QStringLiteral("mousePress branch=ignored"));
             return;
         }
 
+        rawCursorWorld_ = rawWorldPosition;
         lastWorldPosition_ = worldPosition;
-        cursorWorld_ = lastWorldPosition_;
+        cursorWorld_ = worldPosition;
         cursorValid_ = true;
 
         if (activeTool_ == Tool::Line) {
@@ -396,8 +549,9 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
-        lastWorldPosition_ = screenToWorld(screenPosition);
-        cursorWorld_ = lastWorldPosition_;
+        rawCursorWorld_ = screenToWorld(screenPosition);
+        cursorWorld_ = constrainLinePoint(rawCursorWorld_);
+        lastWorldPosition_ = cursorWorld_;
         cursorValid_ = true;
 
         if (panning_) {
@@ -407,18 +561,35 @@ protected:
             lastMousePosition_ = current;
         }
 
-        if (lineCommandActive_ || panning_) {
+        if (draggingSelected_ && selectedShapeIndex_ >= 0 &&
+            selectedShapeIndex_ < shapes_.size()) {
+            const QPointF delta = rawCursorWorld_ - lastDragWorld_;
+            if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+                translateShape(selectedShapeIndex_, delta);
+                lastDragWorld_ = rawCursorWorld_;
+                DebugLog::instance().write(
+                    QStringLiteral("selection drag shape=%1 delta=%2 cursorWorld=%3")
+                        .arg(selectedShapeIndex_)
+                        .arg(pointText(delta))
+                        .arg(pointText(rawCursorWorld_)));
+            }
+        }
+
+        if (lineCommandActive_ || panning_ || draggingSelected_) {
             update();
         }
 
-        if (lineCommandActive_ || panning_) {
+        if (lineCommandActive_ || panning_ || draggingSelected_) {
             DebugLog::instance().write(
-                QStringLiteral("mouseMove screen=%1 world=%2 lineActive=%3 points=%4 panning=%5 pan=%6 zoom=%7 buttons=0x%8")
+                QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11")
                     .arg(pointText(screenPosition))
-                    .arg(pointText(lastWorldPosition_))
+                    .arg(pointText(rawCursorWorld_))
+                    .arg(pointText(cursorWorld_))
                     .arg(lineCommandActive_)
                     .arg(pendingPoints_.size())
                     .arg(panning_)
+                    .arg(draggingSelected_)
+                    .arg(orthoEnabled_)
                     .arg(pointText(pan_))
                     .arg(zoom_, 0, 'f', 4)
                     .arg(static_cast<int>(event->buttons()), 0, 16));
@@ -429,14 +600,23 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent *event) override
     {
-        DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3")
+        DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 draggingBefore=%4")
                                        .arg(inputButtonName(event->button()))
                                        .arg(pointText(eventPosition(event)))
-                                       .arg(panning_));
+                                       .arg(panning_)
+                                       .arg(draggingSelected_));
         if (panning_ && (event->button() == panButton_ || event->button() == Qt::LeftButton)) {
             panning_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-pan"));
+        }
+
+        if (draggingSelected_ && event->button() == Qt::LeftButton) {
+            draggingSelected_ = false;
+            setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
+            DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-selection-drag shape=%1")
+                                           .arg(selectedShapeIndex_));
+            update();
         }
     }
 
@@ -476,8 +656,17 @@ protected:
                                        .arg(pendingPoints_.size()));
         if (event->key() == Qt::Key_Escape) {
             pendingPoints_.clear();
-            lineCommandActive_ = false;
             DebugLog::instance().write(QStringLiteral("keyPress branch=cancel-input"));
+
+            if (activeTool_ == Tool::Line && lineCommandActive_) {
+                setTool(Tool::Select);
+                if (commandFinished_) {
+                    commandFinished_(Tool::Select);
+                }
+            } else {
+                lineCommandActive_ = false;
+            }
+
             update();
             return;
         }
@@ -505,12 +694,179 @@ private:
         }
 
         pendingPoints_.clear();
-        lineCommandActive_ = false;
-        setCursor(Qt::ArrowCursor);
-        DebugLog::instance().write(QStringLiteral("finishLineCommand end lineActive=%1 points=%2")
+        setTool(Tool::Select);
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        DebugLog::instance().write(QStringLiteral("finishLineCommand end tool=%1 lineActive=%2 points=%3")
+                                       .arg(toolName(activeTool_))
                                        .arg(lineCommandActive_)
                                        .arg(pendingPoints_.size()));
-        update();
+    }
+
+    SnapResult findSnapPoint(const QPointF &rawPoint) const
+    {
+        SnapResult best;
+        if (!osnapEnabled_ || activeTool_ != Tool::Line || !lineCommandActive_) {
+            return best;
+        }
+
+        const QPointF cursorScreen = worldToScreen(rawPoint);
+        constexpr qreal snapRadiusPixels = 12.0;
+        qreal bestDistance = snapRadiusPixels;
+
+        const auto consider = [&](SnapType type, const QPointF &candidate) {
+            const QPointF candidateScreen = worldToScreen(candidate);
+            const qreal distance = std::hypot(candidateScreen.x() - cursorScreen.x(),
+                                               candidateScreen.y() - cursorScreen.y());
+            if (distance <= bestDistance) {
+                bestDistance = distance;
+                best.type = type;
+                best.point = candidate;
+            }
+        };
+
+        struct Segment {
+            QPointF start;
+            QPointF end;
+        };
+        QVector<Segment> segments;
+
+        for (const Shape &shape : shapes_) {
+            if (shape.tool != Tool::Line || shape.points.isEmpty()) {
+                continue;
+            }
+
+            if (endpointSnapEnabled_) {
+                for (const QPointF &point : shape.points) {
+                    consider(SnapType::Endpoint, point);
+                }
+            }
+
+            for (int i = 0; i + 1 < shape.points.size(); ++i) {
+                const QPointF start = shape.points[i];
+                const QPointF end = shape.points[i + 1];
+                segments.append(Segment{start, end});
+
+                if (midpointSnapEnabled_) {
+                    consider(SnapType::Midpoint, (start + end) / 2.0);
+                }
+            }
+        }
+
+        if (intersectionSnapEnabled_) {
+            for (int first = 0; first < segments.size(); ++first) {
+                for (int second = first + 1; second < segments.size(); ++second) {
+                    QPointF intersection;
+                    if (segmentIntersection(segments[first].start,
+                                            segments[first].end,
+                                            segments[second].start,
+                                            segments[second].end,
+                                            &intersection)) {
+                        consider(SnapType::Intersection, intersection);
+                    }
+                }
+            }
+        }
+
+        return best;
+    }
+
+    QPointF constrainLinePoint(const QPointF &rawPoint)
+    {
+        currentSnap_ = findSnapPoint(rawPoint);
+        if (currentSnap_.isValid()) {
+            return currentSnap_.point;
+        }
+
+        if (!orthoEnabled_ || panning_ || activeTool_ != Tool::Line ||
+            !lineCommandActive_ || pendingPoints_.isEmpty()) {
+            return rawPoint;
+        }
+
+        const QPointF origin = pendingPoints_.back();
+        const qreal deltaX = rawPoint.x() - origin.x();
+        const qreal deltaY = rawPoint.y() - origin.y();
+
+        if (std::abs(deltaX) >= std::abs(deltaY)) {
+            return QPointF(rawPoint.x(), origin.y());
+        }
+
+        return QPointF(origin.x(), rawPoint.y());
+    }
+
+    void refreshCursorConstraint()
+    {
+        if (!cursorValid_) {
+            currentSnap_ = SnapResult{};
+            return;
+        }
+
+        cursorWorld_ = constrainLinePoint(rawCursorWorld_);
+        lastWorldPosition_ = cursorWorld_;
+    }
+
+    qreal distanceToSegment(const QPointF &point,
+                            const QPointF &start,
+                            const QPointF &end) const
+    {
+        const QPointF direction = end - start;
+        const QPointF fromStart = point - start;
+        const qreal lengthSquared = direction.x() * direction.x() +
+                                    direction.y() * direction.y();
+
+        if (lengthSquared <= 1e-12) {
+            return std::hypot(point.x() - start.x(), point.y() - start.y());
+        }
+
+        const qreal projection = std::clamp(
+            (fromStart.x() * direction.x() + fromStart.y() * direction.y()) / lengthSquared,
+            0.0,
+            1.0);
+        const QPointF closest = start + direction * projection;
+        return std::hypot(point.x() - closest.x(), point.y() - closest.y());
+    }
+
+    int hitTestShape(const QPointF &screenPosition) const
+    {
+        constexpr qreal hitRadiusPixels = 9.0;
+        int closestShape = -1;
+        qreal closestDistance = hitRadiusPixels;
+
+        for (int index = 0; index < shapes_.size(); ++index) {
+            const Shape &shape = shapes_[index];
+            if (shape.tool != Tool::Line) {
+                continue;
+            }
+
+            for (int pointIndex = 0; pointIndex + 1 < shape.points.size(); ++pointIndex) {
+                const qreal distance = distanceToSegment(
+                    screenPosition,
+                    worldToScreen(shape.points[pointIndex]),
+                    worldToScreen(shape.points[pointIndex + 1]));
+                if (distance <= closestDistance) {
+                    closestDistance = distance;
+                    closestShape = index;
+                }
+            }
+        }
+
+        return closestShape;
+    }
+
+    void translateShape(int index, const QPointF &delta)
+    {
+        if (index < 0 || index >= shapes_.size()) {
+            return;
+        }
+
+        Shape &shape = shapes_[index];
+        for (QPointF &point : shape.points) {
+            point += delta;
+        }
+        for (QPointF &point : shape.nurbs.controlPoints) {
+            point += delta;
+        }
     }
 
     QPointF screenToWorld(const QPointF &screen) const
@@ -554,6 +910,29 @@ private:
             painter.setBrush(pointColor);
             painter.drawEllipse(worldToScreen(cursorWorld_), 4.0, 4.0);
         }
+
+        if (currentSnap_.isValid()) {
+            const QPointF snapScreen = worldToScreen(currentSnap_.point);
+            const QColor snapColor(QStringLiteral("#63b5e8"));
+            painter.setPen(QPen(snapColor, 2.0));
+            painter.setBrush(Qt::NoBrush);
+
+            if (currentSnap_.type == SnapType::Endpoint) {
+                painter.drawEllipse(snapScreen, 7.0, 7.0);
+            } else if (currentSnap_.type == SnapType::Midpoint) {
+                painter.drawRect(QRectF(snapScreen - QPointF(6.0, 6.0),
+                                        snapScreen + QPointF(6.0, 6.0)));
+            } else if (currentSnap_.type == SnapType::Intersection) {
+                painter.drawLine(snapScreen - QPointF(7.0, 7.0),
+                                 snapScreen + QPointF(7.0, 7.0));
+                painter.drawLine(snapScreen - QPointF(7.0, -7.0),
+                                 snapScreen + QPointF(7.0, -7.0));
+            }
+
+            painter.setPen(snapColor);
+            painter.setFont(QFont(QStringLiteral("Sans"), 9, QFont::Bold));
+            painter.drawText(snapScreen + QPointF(10.0, -10.0), snapTypeName(currentSnap_.type));
+        }
     }
 
     void drawGrid(QPainter &painter)
@@ -587,17 +966,22 @@ private:
         painter.drawLine(qRound(origin.x()), 0, qRound(origin.x()), height());
     }
 
-    void drawShape(QPainter &painter, const Shape &shape, bool preview)
+    void drawShape(QPainter &painter,
+                   const Shape &shape,
+                   bool preview,
+                   bool selected = false)
     {
         if (shape.points.isEmpty()) {
             return;
         }
 
-        const QColor curveColor = preview ? QColor(QStringLiteral("#e6b85c"))
-                                         : QColor(QStringLiteral("#d28b45"));
+        const QColor curveColor = selected ? QColor(QStringLiteral("#5da9e9"))
+                                           : preview ? QColor(QStringLiteral("#e6b85c"))
+                                                     : QColor(QStringLiteral("#d28b45"));
         const QColor controlColor = QColor(QStringLiteral("#8aa7c7"));
+        const qreal curveWidth = selected ? 3.5 : (preview ? 1.5 : 2.0);
 
-        painter.setPen(QPen(curveColor, preview ? 1.5 : 2.0));
+        painter.setPen(QPen(curveColor, curveWidth));
 
         if (shape.tool == Tool::Line && shape.points.size() >= 2) {
             for (int i = 0; i + 1 < shape.points.size(); ++i) {
@@ -629,7 +1013,7 @@ private:
             curve.cubicTo(worldToScreen(shape.points[1]),
                           worldToScreen(shape.points[2]),
                           worldToScreen(shape.points[3]));
-            painter.setPen(QPen(curveColor, preview ? 1.5 : 2.0));
+            painter.setPen(QPen(curveColor, curveWidth));
             painter.drawPath(curve);
         } else {
             painter.setPen(QPen(controlColor, 1, Qt::DashLine));
@@ -657,6 +1041,7 @@ private:
 
 public:
     std::function<void(const QString &)> coordinateUpdate_;
+    std::function<void(Tool)> commandFinished_;
 
 private:
     Tool activeTool_ = Tool::Select;
@@ -664,13 +1049,23 @@ private:
     QVector<QPointF> pendingPoints_;
     QPointF pan_{0.0, 0.0};
     QPointF lastWorldPosition_{0.0, 0.0};
+    QPointF rawCursorWorld_{0.0, 0.0};
     QPoint lastMousePosition_;
     QPointF cursorWorld_{0.0, 0.0};
+    SnapResult currentSnap_;
+    int selectedShapeIndex_ = -1;
+    bool draggingSelected_ = false;
+    QPointF lastDragWorld_{0.0, 0.0};
     qreal zoom_ = 1.0;
     bool panning_ = false;
     Qt::MouseButton panButton_ = Qt::MiddleButton;
     bool lineCommandActive_ = false;
     bool cursorValid_ = false;
+    bool orthoEnabled_ = false;
+    bool osnapEnabled_ = false;
+    bool endpointSnapEnabled_ = true;
+    bool midpointSnapEnabled_ = true;
+    bool intersectionSnapEnabled_ = true;
 };
 
 class PreferencesDialog final : public QDialog {
@@ -880,18 +1275,109 @@ private:
         rootLayout->addWidget(createToolShelf());
 
         viewport_ = new ViewportWidget;
+        viewport_->commandFinished_ = [this](Tool tool) {
+            if (tool == Tool::Select && selectToolButton_ != nullptr) {
+                selectToolButton_->setChecked(true);
+                statusBar()->showMessage(QStringLiteral("Select mode"));
+            }
+        };
         rootLayout->addWidget(viewport_, 1);
 
         rootLayout->addWidget(createRightPanel());
         setCentralWidget(root);
+        createOsnapLane();
 
         coordinateLabel_ = new QLabel(QStringLiteral("X 0.00   Y 0.00   Zoom 100%"));
         statusBar()->addWidget(coordinateLabel_);
+
+        orthoAction_ = new QAction(QStringLiteral("Ortho"), this);
+        orthoAction_->setCheckable(true);
+        orthoAction_->setShortcut(QKeySequence(Qt::Key_F8));
+        orthoAction_->setShortcutContext(Qt::WindowShortcut);
+        addAction(orthoAction_);
+
+        auto *orthoButton = new QToolButton;
+        orthoButton->setObjectName(QStringLiteral("statusToggle"));
+        orthoButton->setDefaultAction(orthoAction_);
+        statusBar()->addPermanentWidget(orthoButton);
+
+        osnapAction_ = new QAction(QStringLiteral("OSnap"), this);
+        osnapAction_->setCheckable(true);
+        osnapAction_->setShortcut(QKeySequence(Qt::Key_F3));
+        osnapAction_->setShortcutContext(Qt::WindowShortcut);
+        addAction(osnapAction_);
+
+        auto *osnapButton = new QToolButton;
+        osnapButton->setObjectName(QStringLiteral("statusToggle"));
+        osnapButton->setDefaultAction(osnapAction_);
+        statusBar()->addPermanentWidget(osnapButton);
         statusBar()->addPermanentWidget(new QLabel(QStringLiteral("Ready")));
+
+        connect(orthoAction_, &QAction::toggled, this, [this](bool enabled) {
+            viewport_->setOrthoEnabled(enabled);
+            QSettings settings;
+            settings.setValue(QStringLiteral("modeling/orthoEnabled"), enabled);
+            settings.sync();
+            statusBar()->showMessage(enabled ? QStringLiteral("Ortho: On")
+                                             : QStringLiteral("Ortho: Off"));
+        });
+
+        connect(osnapAction_, &QAction::toggled, this, [this](bool enabled) {
+            osnapLane_->setVisible(enabled);
+            viewport_->setOsnapEnabled(enabled);
+            QSettings settings;
+            settings.setValue(QStringLiteral("osnap/enabled"), enabled);
+            settings.sync();
+            statusBar()->showMessage(enabled ? QStringLiteral("OSnap: On")
+                                             : QStringLiteral("OSnap: Off"));
+        });
 
         viewport_->coordinateUpdate_ = [this](const QString &text) {
             coordinateLabel_->setText(text);
         };
+    }
+
+    void createOsnapLane()
+    {
+        osnapLane_ = new QToolBar(QStringLiteral("Object Snaps"), this);
+        osnapLane_->setObjectName(QStringLiteral("osnapLane"));
+        osnapLane_->setMovable(false);
+        osnapLane_->setFloatable(false);
+        osnapLane_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+        QLabel *label = new QLabel(QStringLiteral("OSNAP"));
+        label->setObjectName(QStringLiteral("osnapLaneLabel"));
+        osnapLane_->addWidget(label);
+        osnapLane_->addSeparator();
+
+        endpointSnapAction_ = new QAction(QStringLiteral("Endpoint"), this);
+        midpointSnapAction_ = new QAction(QStringLiteral("Midpoint"), this);
+        intersectionSnapAction_ = new QAction(QStringLiteral("Intersection"), this);
+
+        for (QAction *action : {endpointSnapAction_, midpointSnapAction_, intersectionSnapAction_}) {
+            action->setCheckable(true);
+            action->setChecked(true);
+            osnapLane_->addAction(action);
+        }
+
+        const auto syncSnapModes = [this]() {
+            viewport_->setSnapModes(endpointSnapAction_->isChecked(),
+                                    midpointSnapAction_->isChecked(),
+                                    intersectionSnapAction_->isChecked());
+            QSettings settings;
+            settings.setValue(QStringLiteral("osnap/endpoint"), endpointSnapAction_->isChecked());
+            settings.setValue(QStringLiteral("osnap/midpoint"), midpointSnapAction_->isChecked());
+            settings.setValue(QStringLiteral("osnap/intersection"),
+                              intersectionSnapAction_->isChecked());
+            settings.sync();
+        };
+
+        connect(endpointSnapAction_, &QAction::toggled, this, syncSnapModes);
+        connect(midpointSnapAction_, &QAction::toggled, this, syncSnapModes);
+        connect(intersectionSnapAction_, &QAction::toggled, this, syncSnapModes);
+
+        addToolBar(Qt::BottomToolBarArea, osnapLane_);
+        osnapLane_->setVisible(false);
     }
 
     QWidget *createToolShelf()
@@ -912,7 +1398,7 @@ private:
         auto *group = new QButtonGroup(shelf);
         group->setExclusive(true);
 
-        addToolButton(layout, group, QStringLiteral("↖\nSelect"), Tool::Select, true);
+        selectToolButton_ = addToolButton(layout, group, QStringLiteral("↖\nSelect"), Tool::Select, true);
         addToolButton(layout, group, QStringLiteral("╱\nLine"), Tool::Line);
         addToolButton(layout, group, QStringLiteral("⌒\nArc"), Tool::Arc);
         addToolButton(layout, group, QStringLiteral("∿\nBezier"), Tool::Bezier);
@@ -931,11 +1417,11 @@ private:
         return shelf;
     }
 
-    void addToolButton(QVBoxLayout *layout,
-                       QButtonGroup *group,
-                       const QString &text,
-                       Tool tool,
-                       bool checked = false)
+    QToolButton *addToolButton(QVBoxLayout *layout,
+                               QButtonGroup *group,
+                               const QString &text,
+                               Tool tool,
+                               bool checked = false)
     {
         auto *button = new QToolButton;
         button->setObjectName(QStringLiteral("toolButton"));
@@ -951,6 +1437,8 @@ private:
             viewport_->setTool(tool);
             statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
         });
+
+        return button;
     }
 
     void loadPreferences()
@@ -962,6 +1450,25 @@ private:
         applyPanButton(savedPanButton == QStringLiteral("right") ? Qt::RightButton
                                                                    : Qt::MiddleButton,
                        false);
+
+        if (orthoAction_ != nullptr) {
+            orthoAction_->setChecked(settings.value(QStringLiteral("modeling/orthoEnabled"), false)
+                                         .toBool());
+        }
+
+        if (endpointSnapAction_ != nullptr) {
+            endpointSnapAction_->setChecked(settings.value(QStringLiteral("osnap/endpoint"), true)
+                                                .toBool());
+            midpointSnapAction_->setChecked(settings.value(QStringLiteral("osnap/midpoint"), true)
+                                                .toBool());
+            intersectionSnapAction_->setChecked(
+                settings.value(QStringLiteral("osnap/intersection"), true).toBool());
+        }
+
+        if (osnapAction_ != nullptr) {
+            osnapAction_->setChecked(settings.value(QStringLiteral("osnap/enabled"), false)
+                                         .toBool());
+        }
     }
 
     void openPreferences()
@@ -1086,6 +1593,35 @@ private:
                 background: #454545;
                 border-color: #5d5d5d;
             }
+            QToolBar#osnapLane {
+                background: #232323;
+                border-top: 1px solid #151515;
+                border-bottom: 1px solid #151515;
+                spacing: 4px;
+                padding: 3px 8px;
+            }
+            QLabel#osnapLaneLabel {
+                color: #777777;
+                font-size: 9px;
+                font-weight: bold;
+                padding-right: 6px;
+            }
+            QToolBar#osnapLane QToolButton {
+                background: #303030;
+                border: 1px solid #3b3b3b;
+                border-radius: 3px;
+                color: #c7c7c7;
+                padding: 4px 10px;
+            }
+            QToolBar#osnapLane QToolButton:hover {
+                background: #414141;
+                border-color: #686868;
+            }
+            QToolBar#osnapLane QToolButton:checked {
+                background: #537da0;
+                border-color: #82c7ec;
+                color: #ffffff;
+            }
             QFrame#toolShelf, QFrame#rightPanel {
                 background: #232323;
                 border: 0;
@@ -1171,6 +1707,22 @@ private:
             QDialog QGroupBox {
                 background: #303030;
             }
+            QToolButton#statusToggle {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                color: #999999;
+                padding: 2px 9px;
+                margin: 1px 3px;
+            }
+            QToolButton#statusToggle:hover {
+                background: #3d3d3d;
+            }
+            QToolButton#statusToggle:checked {
+                background: #9b5b2e;
+                border-color: #e39a54;
+                color: #ffffff;
+            }
             QStatusBar {
                 background: #202020;
                 color: #999999;
@@ -1182,6 +1734,13 @@ private:
     ViewportWidget *viewport_ = nullptr;
     QLabel *coordinateLabel_ = nullptr;
     QLabel *toolHelp_ = nullptr;
+    QToolButton *selectToolButton_ = nullptr;
+    QAction *orthoAction_ = nullptr;
+    QAction *osnapAction_ = nullptr;
+    QAction *endpointSnapAction_ = nullptr;
+    QAction *midpointSnapAction_ = nullptr;
+    QAction *intersectionSnapAction_ = nullptr;
+    QToolBar *osnapLane_ = nullptr;
 };
 
 } // namespace

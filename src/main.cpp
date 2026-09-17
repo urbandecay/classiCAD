@@ -59,6 +59,7 @@ enum class SnapType {
     Intersection,
     Center,
     Perpendicular,
+    Tangent,
 };
 
 struct SnapResult {
@@ -287,6 +288,8 @@ QString snapTypeName(SnapType type)
         return QStringLiteral("Center");
     case SnapType::Perpendicular:
         return QStringLiteral("Perpendicular");
+    case SnapType::Tangent:
+        return QStringLiteral("Tangent");
     case SnapType::None:
         return QStringLiteral("None");
     }
@@ -428,20 +431,23 @@ public:
                       bool midpoint,
                       bool intersection,
                       bool center,
-                      bool perpendicular)
+                      bool perpendicular,
+                      bool tangent)
     {
         endpointSnapEnabled_ = endpoint;
         midpointSnapEnabled_ = midpoint;
         intersectionSnapEnabled_ = intersection;
         centerSnapEnabled_ = center;
         perpendicularSnapEnabled_ = perpendicular;
+        tangentSnapEnabled_ = tangent;
         refreshCursorConstraint();
-        DebugLog::instance().write(QStringLiteral("setSnapModes endpoint=%1 midpoint=%2 intersection=%3 center=%4 perpendicular=%5 snap=%6")
+        DebugLog::instance().write(QStringLiteral("setSnapModes endpoint=%1 midpoint=%2 intersection=%3 center=%4 perpendicular=%5 tangent=%6 snap=%7")
                                        .arg(endpointSnapEnabled_)
                                        .arg(midpointSnapEnabled_)
                                        .arg(intersectionSnapEnabled_)
                                        .arg(centerSnapEnabled_)
                                        .arg(perpendicularSnapEnabled_)
+                                       .arg(tangentSnapEnabled_)
                                        .arg(snapTypeName(currentSnap_.type)));
         update();
     }
@@ -1003,6 +1009,61 @@ private:
         return candidates;
     }
 
+    QVector<SnapCandidate> tangentCandidates(const QPointF &origin) const
+    {
+        QVector<SnapCandidate> candidates;
+        if (!tangentSnapEnabled_) {
+            return candidates;
+        }
+
+        constexpr qreal epsilon = 1e-9;
+
+        for (const Shape &shape : shapes_) {
+            if (shape.tool != Tool::Circle || shape.points.size() < 2) {
+                continue;
+            }
+
+            const QPointF center = shape.points[0];
+            const QPointF edge = shape.points[1];
+            const qreal radius = std::hypot(edge.x() - center.x(),
+                                            edge.y() - center.y());
+            if (radius <= epsilon) {
+                continue;
+            }
+
+            const QPointF fromCenter = origin - center;
+            const qreal distanceFromCenter =
+                std::hypot(fromCenter.x(), fromCenter.y());
+            if (distanceFromCenter < radius - epsilon) {
+                // A point inside a circle has no real tangent points.
+                continue;
+            }
+
+            if (distanceFromCenter <= epsilon) {
+                continue;
+            }
+
+            const QPointF radialDirection = fromCenter / distanceFromCenter;
+            const QPointF tangentDirection(-radialDirection.y(), radialDirection.x());
+            const qreal radiusRatio = radius / distanceFromCenter;
+            const qreal radialDistance = radius * radiusRatio;
+            const qreal tangentDistance =
+                radius * std::sqrt(std::max(0.0, 1.0 - radiusRatio * radiusRatio));
+
+            candidates.append(SnapCandidate{
+                SnapType::Tangent,
+                center + radialDirection * radialDistance + tangentDirection * tangentDistance});
+
+            if (tangentDistance > epsilon) {
+                candidates.append(SnapCandidate{
+                    SnapType::Tangent,
+                    center + radialDirection * radialDistance - tangentDirection * tangentDistance});
+            }
+        }
+
+        return candidates;
+    }
+
     SnapResult findSnapPoint(const QPointF &rawPoint) const
     {
         SnapResult best;
@@ -1032,6 +1093,11 @@ private:
         if (!pendingPoints_.isEmpty()) {
             for (const SnapCandidate &candidate :
                  perpendicularCandidates(pendingPoints_.back(), rawPoint)) {
+                consider(candidate);
+            }
+
+            for (const SnapCandidate &candidate :
+                 tangentCandidates(pendingPoints_.back())) {
                 consider(candidate);
             }
         }
@@ -1228,6 +1294,10 @@ private:
             const QPointF corner = snapScreen + QPointF(-2.0, 3.0);
             painter.drawLine(snapScreen + QPointF(-8.0, 3.0), corner);
             painter.drawLine(corner, snapScreen + QPointF(-2.0, -5.0));
+        } else if (type == SnapType::Tangent) {
+            painter.drawEllipse(snapScreen, 6.0, 6.0);
+            painter.drawLine(snapScreen + QPointF(-7.0, 4.0),
+                             snapScreen + QPointF(7.0, -4.0));
         }
 
     }
@@ -1431,6 +1501,7 @@ private:
     bool intersectionSnapEnabled_ = true;
     bool centerSnapEnabled_ = true;
     bool perpendicularSnapEnabled_ = false;
+    bool tangentSnapEnabled_ = false;
 };
 
 class PreferencesDialog final : public QDialog {
@@ -1720,24 +1791,28 @@ private:
         intersectionSnapCheckBox_ = new QCheckBox(QStringLiteral("Intersection"));
         centerSnapCheckBox_ = new QCheckBox(QStringLiteral("Center"));
         perpendicularSnapCheckBox_ = new QCheckBox(QStringLiteral("Perpendicular"));
+        tangentSnapCheckBox_ = new QCheckBox(QStringLiteral("Tangent"));
 
         for (QCheckBox *checkBox : {endpointSnapCheckBox_,
                                     midpointSnapCheckBox_,
                                     intersectionSnapCheckBox_,
                                     centerSnapCheckBox_,
-                                    perpendicularSnapCheckBox_}) {
+                                    perpendicularSnapCheckBox_,
+                                    tangentSnapCheckBox_}) {
             checkBox->setObjectName(QStringLiteral("osnapCheckBox"));
             checkBox->setChecked(true);
             osnapLane_->addWidget(checkBox);
         }
         perpendicularSnapCheckBox_->setChecked(false);
+        tangentSnapCheckBox_->setChecked(false);
 
         const auto syncSnapModes = [this]() {
             viewport_->setSnapModes(endpointSnapCheckBox_->isChecked(),
                                     midpointSnapCheckBox_->isChecked(),
                                     intersectionSnapCheckBox_->isChecked(),
                                     centerSnapCheckBox_->isChecked(),
-                                    perpendicularSnapCheckBox_->isChecked());
+                                    perpendicularSnapCheckBox_->isChecked(),
+                                    tangentSnapCheckBox_->isChecked());
             QSettings settings;
             settings.setValue(QStringLiteral("osnap/endpoint"), endpointSnapCheckBox_->isChecked());
             settings.setValue(QStringLiteral("osnap/midpoint"), midpointSnapCheckBox_->isChecked());
@@ -1746,6 +1821,7 @@ private:
             settings.setValue(QStringLiteral("osnap/center"), centerSnapCheckBox_->isChecked());
             settings.setValue(QStringLiteral("osnap/perpendicular"),
                               perpendicularSnapCheckBox_->isChecked());
+            settings.setValue(QStringLiteral("osnap/tangent"), tangentSnapCheckBox_->isChecked());
             settings.sync();
         };
 
@@ -1754,6 +1830,7 @@ private:
         connect(intersectionSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
         connect(centerSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
         connect(perpendicularSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
+        connect(tangentSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
 
         addToolBar(Qt::BottomToolBarArea, osnapLane_);
         osnapLane_->setVisible(false);
@@ -1846,6 +1923,8 @@ private:
                                                 .toBool());
             perpendicularSnapCheckBox_->setChecked(
                 settings.value(QStringLiteral("osnap/perpendicular"), false).toBool());
+            tangentSnapCheckBox_->setChecked(
+                settings.value(QStringLiteral("osnap/tangent"), false).toBool());
         }
 
         if (osnapAction_ != nullptr) {
@@ -2129,6 +2208,7 @@ private:
     QCheckBox *intersectionSnapCheckBox_ = nullptr;
     QCheckBox *centerSnapCheckBox_ = nullptr;
     QCheckBox *perpendicularSnapCheckBox_ = nullptr;
+    QCheckBox *tangentSnapCheckBox_ = nullptr;
     QToolBar *osnapLane_ = nullptr;
 };
 

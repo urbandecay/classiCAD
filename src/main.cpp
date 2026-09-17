@@ -1060,9 +1060,6 @@ private:
                              snapScreen + QPointF(7.0, -7.0));
         }
 
-        painter.setPen(snapColor);
-        painter.setFont(QFont(QStringLiteral("Sans"), 9, QFont::Bold));
-        painter.drawText(snapScreen + QPointF(10.0, -10.0), snapTypeName(type));
     }
 
     void drawLineToolPreview(QPainter &painter)

@@ -52,6 +52,11 @@ enum class Tool {
     Circle,
 };
 
+enum class ArcMode {
+    OnePoint,
+    TwoPoint,
+};
+
 enum class SnapType {
     None,
     Endpoint,
@@ -103,6 +108,8 @@ struct Shape {
         QVector<double> weights;
         QVector<double> knots;
     } nurbs;
+    ArcMode arcMode = ArcMode::TwoPoint;
+    qreal arcSweep = 0.0;
 };
 
 Shape::NurbsCurve2D makeDegreeOneNurbs(const QVector<QPointF> &points)
@@ -275,6 +282,18 @@ QString toolName(Tool tool)
     return QStringLiteral("Unknown");
 }
 
+QString arcModeName(ArcMode mode)
+{
+    switch (mode) {
+    case ArcMode::OnePoint:
+        return QStringLiteral("1 Point Arc");
+    case ArcMode::TwoPoint:
+        return QStringLiteral("2 Point Arc");
+    }
+
+    return QStringLiteral("Arc");
+}
+
 QString snapTypeName(SnapType type)
 {
     switch (type) {
@@ -335,11 +354,14 @@ public:
                                        .arg(toolName(tool), toolName(activeTool_)));
         activeTool_ = tool;
         pendingPoints_.clear();
+        resetArcPreviewTracking();
         lineCommandActive_ = tool == Tool::Line;
 
         if (tool != Tool::Select) {
+            repeatTool_ = tool;
             selectedShapeIndex_ = -1;
             draggingSelected_ = false;
+            dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
         }
@@ -368,9 +390,85 @@ public:
         update();
     }
 
+    bool canUndo() const
+    {
+        return !undoStack_.isEmpty();
+    }
+
+    bool canRedo() const
+    {
+        return !redoStack_.isEmpty();
+    }
+
+    void undo()
+    {
+        if (undoStack_.isEmpty()) {
+            DebugLog::instance().write(QStringLiteral("undo ignored empty-history"));
+            return;
+        }
+
+        redoStack_.append(shapes_);
+        shapes_ = undoStack_.takeLast();
+        resetInteractionAfterHistory();
+        notifyHistoryChanged();
+        DebugLog::instance().write(QStringLiteral("undo applied shapes=%1 undoRemaining=%2 redoAvailable=%3")
+                                       .arg(shapes_.size())
+                                       .arg(undoStack_.size())
+                                       .arg(redoStack_.size()));
+    }
+
+    void redo()
+    {
+        if (redoStack_.isEmpty()) {
+            DebugLog::instance().write(QStringLiteral("redo ignored empty-history"));
+            return;
+        }
+
+        undoStack_.append(shapes_);
+        shapes_ = redoStack_.takeLast();
+        resetInteractionAfterHistory();
+        notifyHistoryChanged();
+        DebugLog::instance().write(QStringLiteral("redo applied shapes=%1 undoAvailable=%2 redoRemaining=%3")
+                                       .arg(shapes_.size())
+                                       .arg(undoStack_.size())
+                                       .arg(redoStack_.size()));
+    }
+
+    void repeatLastTool()
+    {
+        if (repeatTool_ == Tool::Select) {
+            DebugLog::instance().write(QStringLiteral("repeatTool ignored no-last-tool"));
+            return;
+        }
+
+        const Tool tool = repeatTool_;
+        DebugLog::instance().write(QStringLiteral("repeatTool tool=%1")
+                                       .arg(toolName(tool)));
+        setTool(tool);
+        if (toolRepeated_) {
+            toolRepeated_(tool);
+        }
+    }
+
     Tool activeTool() const
     {
         return activeTool_;
+    }
+
+    void setArcMode(ArcMode mode)
+    {
+        arcMode_ = mode;
+        pendingPoints_.clear();
+        resetArcPreviewTracking();
+        currentSnap_ = SnapResult{};
+        DebugLog::instance().write(QStringLiteral("setArcMode mode=%1")
+                                       .arg(arcModeName(arcMode_)));
+        update();
+    }
+
+    ArcMode arcMode() const
+    {
+        return arcMode_;
     }
 
     void setPanButton(Qt::MouseButton button)
@@ -476,6 +574,8 @@ protected:
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
             drawLineToolPreview(painter);
+        } else if (activeTool_ == Tool::Arc) {
+            drawArcToolPreview(painter);
         } else if (activeTool_ == Tool::Circle && !pendingPoints_.isEmpty()) {
             drawCircleToolPreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
@@ -490,7 +590,12 @@ protected:
 
         painter.setPen(QColor(QStringLiteral("#a0a0a0")));
         painter.setFont(QFont(QStringLiteral("Sans"), 10));
-        painter.drawText(18, 28, QStringLiteral("2D VIEWPORT  •  %1").arg(toolName(activeTool_)));
+        const QString activeToolLabel = activeTool_ == Tool::Arc
+                                            ? arcModeName(arcMode_)
+                                            : toolName(activeTool_);
+        painter.drawText(18,
+                         28,
+                         QStringLiteral("2D VIEWPORT  •  %1").arg(activeToolLabel));
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
             painter.setPen(QColor(QStringLiteral("#777777")));
@@ -498,9 +603,18 @@ protected:
                              height() - 18,
                              QStringLiteral("Click to place connected points  •  Right-click to finish"));
         } else if (activeTool_ != Tool::Select) {
-            const QString hint = QStringLiteral("Click to place %1 point%2  •  Esc clears current tool input")
-                                     .arg(toolName(activeTool_).toLower())
-                                     .arg(requiredPoints(activeTool_) == 1 ? QString() : QStringLiteral("s"));
+            QString hint;
+            if (activeTool_ == Tool::Arc) {
+                const QString points = arcMode_ == ArcMode::OnePoint
+                                            ? QStringLiteral("center, start, endpoint")
+                                            : QStringLiteral("start, end, through point");
+                hint = QStringLiteral("Click to place %1  •  Esc clears current tool input")
+                           .arg(points);
+            } else {
+                hint = QStringLiteral("Click to place %1 point%2  •  Esc clears current tool input")
+                           .arg(toolName(activeTool_).toLower())
+                           .arg(requiredPoints(activeTool_) == 1 ? QString() : QStringLiteral("s"));
+            }
             painter.setPen(QColor(QStringLiteral("#777777")));
             painter.drawText(18, height() - 18, hint);
         }
@@ -512,7 +626,7 @@ protected:
         const QPointF rawWorldPosition = screenToWorld(screenPosition);
         const QPointF worldPosition = constrainLinePoint(rawWorldPosition);
         DebugLog::instance().write(
-            QStringLiteral("mousePress button=%1 screen=%2 worldRaw=%3 worldUsed=%4 tool=%5 lineActive=%6 ortho=%7 panButton=%8 modifiers=0x%9")
+            QStringLiteral("mousePress button=%1 screen=%2 worldRaw=%3 worldUsed=%4 tool=%5 lineActive=%6 ortho=%7 panButton=%8 modifiers=0x%9 snap=%10")
                 .arg(inputButtonName(event->button()))
                 .arg(pointText(screenPosition))
                 .arg(pointText(rawWorldPosition))
@@ -521,7 +635,8 @@ protected:
                 .arg(lineCommandActive_)
                 .arg(orthoEnabled_)
                 .arg(inputButtonName(panButton_))
-                .arg(static_cast<int>(event->modifiers()), 0, 16));
+                .arg(static_cast<int>(event->modifiers()), 0, 16)
+                .arg(snapTypeName(currentSnap_.type)));
 
         // While drawing a connected line, right-click is the command's
         // finish action. This takes priority over right-button panning.
@@ -536,6 +651,8 @@ protected:
         if (event->button() == panButton_ ||
             (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::AltModifier))) {
             panning_ = true;
+            panMoved_ = false;
+            panStartPosition_ = screenPosition.toPoint();
             lastMousePosition_ = screenPosition.toPoint();
             DebugLog::instance().write(QStringLiteral("mousePress branch=start-pan at=%1")
                                            .arg(pointText(screenPosition)));
@@ -551,6 +668,7 @@ protected:
 
             selectedShapeIndex_ = hitTestShape(screenPosition);
             draggingSelected_ = selectedShapeIndex_ >= 0;
+            dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
 
@@ -592,20 +710,51 @@ protected:
             return;
         }
 
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+            pendingPoints_.size() == 2) {
+            // A click can arrive without a final mouse-move event. Include
+            // that last position before saving the arc's unwrapped sweep.
+            updateArcPreviewTracking(lastWorldPosition_);
+        }
+
         pendingPoints_.append(lastWorldPosition_);
 
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+            pendingPoints_.size() == 2) {
+            initializeArcPreviewTracking();
+        }
+
         if (pendingPoints_.size() == requiredPoints(activeTool_)) {
-            shapes_.append(Shape{activeTool_, pendingPoints_, Shape::NurbsCurve2D{}});
-            DebugLog::instance().write(QStringLiteral("placeholder shape committed tool=%1 points=%2")
-                                           .arg(toolName(activeTool_))
-                                           .arg(pendingPoints_.size()));
+            recordGeometryChange();
+            const ArcMode completedArcMode = activeTool_ == Tool::Arc
+                                                 ? arcMode_
+                                                 : ArcMode::TwoPoint;
+            Shape completedShape{activeTool_,
+                                 pendingPoints_,
+                                 Shape::NurbsCurve2D{},
+                                 completedArcMode};
+            if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint) {
+                completedShape.arcSweep = arcPreviewSweepAngle_;
+            }
+            shapes_.append(completedShape);
+            QString commitMessage = QStringLiteral("placeholder shape committed tool=%1 points=%2")
+                                        .arg(toolName(activeTool_))
+                                        .arg(pendingPoints_.size());
+            if (activeTool_ == Tool::Arc) {
+                commitMessage += QStringLiteral(" mode=%1 p0=%2 p1=%3 p2=%4 sweep=%5")
+                                     .arg(arcModeName(completedShape.arcMode))
+                                     .arg(pointText(completedShape.points[0]))
+                                     .arg(pointText(completedShape.points[1]))
+                                     .arg(pointText(completedShape.points[2]))
+                                     .arg(completedShape.arcSweep, 0, 'f', 4);
+            }
+            commitMessage += QStringLiteral(" shapes=%1").arg(shapes_.size());
+            DebugLog::instance().write(commitMessage);
             pendingPoints_.clear();
 
-            if (activeTool_ == Tool::Circle) {
-                setTool(Tool::Select);
-                if (commandFinished_) {
-                    commandFinished_(Tool::Select);
-                }
+            setTool(Tool::Select);
+            if (commandFinished_) {
+                commandFinished_(Tool::Select);
             }
         }
 
@@ -620,10 +769,20 @@ protected:
         lastWorldPosition_ = cursorWorld_;
         cursorValid_ = true;
         const bool circlePreviewActive = activeTool_ == Tool::Circle && !pendingPoints_.isEmpty();
+        const bool arcPreviewActive = activeTool_ == Tool::Arc;
+
+        if (!panning_ && activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+            pendingPoints_.size() >= 2) {
+            updateArcPreviewTracking(cursorWorld_);
+        }
 
         if (panning_) {
             const QPoint current = screenPosition.toPoint();
             const QPoint delta = current - lastMousePosition_;
+            const QPoint totalPanDelta = current - panStartPosition_;
+            if (std::hypot(totalPanDelta.x(), totalPanDelta.y()) >= 3.0) {
+                panMoved_ = true;
+            }
             pan_ += QPointF(delta.x() / zoom_, -delta.y() / zoom_);
             lastMousePosition_ = current;
         }
@@ -651,6 +810,7 @@ protected:
                         // Release from the snap using the complete cursor movement
                         // since the snap was acquired, so the line leaves cleanly.
                         const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
+                        beginDragHistory();
                         translateShape(selectedShapeIndex_, detachDelta);
                         currentDragSnap_ = DragSnapResult{};
                         dragSnapLocked_ = false;
@@ -659,6 +819,7 @@ protected:
                                 .arg(selectedShapeIndex_)
                                 .arg(cursorDistanceFromSnap, 0, 'f', 2));
                     } else {
+                        beginDragHistory();
                         translateShape(selectedShapeIndex_, delta);
                         currentDragSnap_ = findDragSnap(selectedShapeIndex_);
                         if (currentDragSnap_.isValid()) {
@@ -683,13 +844,13 @@ protected:
             }
         }
 
-        if (lineCommandActive_ || circlePreviewActive || panning_ || draggingSelected_) {
+        if (lineCommandActive_ || arcPreviewActive || circlePreviewActive || panning_ || draggingSelected_) {
             update();
         }
 
-        if (lineCommandActive_ || circlePreviewActive || panning_ || draggingSelected_) {
+        if (lineCommandActive_ || arcPreviewActive || circlePreviewActive || panning_ || draggingSelected_) {
             DebugLog::instance().write(
-                QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11")
+                QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11 arcMode=%12 arcSweep=%13 snap=%14")
                     .arg(pointText(screenPosition))
                     .arg(pointText(rawCursorWorld_))
                     .arg(pointText(cursorWorld_))
@@ -700,7 +861,10 @@ protected:
                     .arg(orthoEnabled_)
                     .arg(pointText(pan_))
                     .arg(zoom_, 0, 'f', 4)
-                    .arg(static_cast<int>(event->buttons()), 0, 16));
+                    .arg(static_cast<int>(event->buttons()), 0, 16)
+                    .arg(activeTool_ == Tool::Arc ? arcModeName(arcMode_) : QStringLiteral("None"))
+                    .arg(arcPreviewSweepAngle_, 0, 'f', 4)
+                    .arg(snapTypeName(currentSnap_.type)));
         }
 
         emitCoordinateUpdate();
@@ -708,19 +872,32 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent *event) override
     {
-        DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 draggingBefore=%4")
+        const bool repeatToolOnRelease =
+            panning_ && event->button() == panButton_ && !panMoved_ &&
+            activeTool_ == Tool::Select && repeatTool_ != Tool::Select;
+
+        DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 panMoved=%4 draggingBefore=%5 repeat=%6")
                                        .arg(inputButtonName(event->button()))
                                        .arg(pointText(eventPosition(event)))
                                        .arg(panning_)
-                                       .arg(draggingSelected_));
+                                       .arg(panMoved_)
+                                       .arg(draggingSelected_)
+                                       .arg(repeatToolOnRelease));
         if (panning_ && (event->button() == panButton_ || event->button() == Qt::LeftButton)) {
             panning_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-pan"));
         }
+        panMoved_ = false;
+
+        if (repeatToolOnRelease) {
+            DebugLog::instance().write(QStringLiteral("mouseRelease branch=repeat-tool"));
+            repeatLastTool();
+        }
 
         if (draggingSelected_ && event->button() == Qt::LeftButton) {
             draggingSelected_ = false;
+            dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
@@ -766,6 +943,7 @@ protected:
                                        .arg(pendingPoints_.size()));
         if (event->key() == Qt::Key_Escape) {
             pendingPoints_.clear();
+            resetArcPreviewTracking();
             DebugLog::instance().write(QStringLiteral("keyPress branch=cancel-input"));
 
             if (activeTool_ == Tool::Line && lineCommandActive_) {
@@ -785,12 +963,55 @@ protected:
     }
 
 private:
+    void notifyHistoryChanged()
+    {
+        if (historyChanged_) {
+            historyChanged_();
+        }
+    }
+
+    void recordGeometryChange()
+    {
+        undoStack_.append(shapes_);
+        redoStack_.clear();
+        notifyHistoryChanged();
+        DebugLog::instance().write(QStringLiteral("history record shapes=%1 undoAvailable=%2 redoCleared")
+                                       .arg(shapes_.size())
+                                       .arg(undoStack_.size()));
+    }
+
+    void beginDragHistory()
+    {
+        if (!dragHistoryRecorded_) {
+            recordGeometryChange();
+            dragHistoryRecorded_ = true;
+        }
+    }
+
+    void resetInteractionAfterHistory()
+    {
+        pendingPoints_.clear();
+        selectedShapeIndex_ = -1;
+        draggingSelected_ = false;
+        dragHistoryRecorded_ = false;
+        currentSnap_ = SnapResult{};
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        lineCommandActive_ = false;
+        setTool(Tool::Select);
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        update();
+    }
+
     void finishLineCommand()
     {
         DebugLog::instance().write(QStringLiteral("finishLineCommand begin points=%1")
                                        .arg(pendingPoints_.size()));
         if (pendingPoints_.size() >= 2) {
             const Shape::NurbsCurve2D curve = makeDegreeOneNurbs(pendingPoints_);
+            recordGeometryChange();
             shapes_.append(Shape{Tool::Line, pendingPoints_, curve});
             DebugLog::instance().write(
                 QStringLiteral("finishLineCommand committed controlPoints=%1 degree=%2 weights=%3 knots=%4 shapes=%5")
@@ -814,6 +1035,113 @@ private:
                                        .arg(pendingPoints_.size()));
     }
 
+    bool makeArcSnapGeometry(const Shape &shape,
+                             QPointF *centerScreen,
+                             qreal *radius,
+                             qreal *startAngle,
+                             qreal *sweepAngle) const
+    {
+        if (shape.tool != Tool::Arc || shape.points.size() < 3) {
+            return false;
+        }
+
+        if (shape.arcMode == ArcMode::TwoPoint) {
+            return makeCircularArcGeometry(shape.points[0],
+                                           shape.points[1],
+                                           shape.points[2],
+                                           centerScreen,
+                                           radius,
+                                           startAngle,
+                                           sweepAngle);
+        }
+
+        const QPointF center = worldToScreen(shape.points[0]);
+        const QPointF start = worldToScreen(shape.points[1]);
+        const QPointF end = worldToScreen(shape.points[2]);
+        const qreal arcRadius = std::hypot(start.x() - center.x(),
+                                           start.y() - center.y());
+        if (arcRadius <= 1e-9) {
+            return false;
+        }
+
+        constexpr qreal pi = 3.14159265358979323846;
+        constexpr qreal twoPi = 2.0 * pi;
+        const qreal firstAngle = std::atan2(start.y() - center.y(),
+                                            start.x() - center.x());
+        qreal selectedSweep = shape.arcSweep;
+        if (std::abs(selectedSweep) <= 1e-9) {
+            const qreal endAngle = std::atan2(end.y() - center.y(),
+                                              end.x() - center.x());
+            selectedSweep = endAngle - firstAngle;
+            if (selectedSweep > pi) {
+                selectedSweep -= twoPi;
+            } else if (selectedSweep < -pi) {
+                selectedSweep += twoPi;
+            }
+        }
+
+        if (centerScreen != nullptr) {
+            *centerScreen = center;
+        }
+        if (radius != nullptr) {
+            *radius = arcRadius;
+        }
+        if (startAngle != nullptr) {
+            *startAngle = firstAngle;
+        }
+        if (sweepAngle != nullptr) {
+            *sweepAngle = selectedSweep;
+        }
+        return true;
+    }
+
+    bool arcAngleIsOnSweep(qreal startAngle, qreal sweepAngle, qreal angle) const
+    {
+        constexpr qreal twoPi = 6.28318530717958647692;
+        constexpr qreal epsilon = 1e-7;
+        if (std::abs(sweepAngle) >= twoPi - epsilon) {
+            return true;
+        }
+
+        const auto positiveAngle = [twoPi](qreal value) {
+            value = std::fmod(value, twoPi);
+            if (value < 0.0) {
+                value += twoPi;
+            }
+            return value;
+        };
+
+        if (sweepAngle >= 0.0) {
+            return positiveAngle(angle - startAngle) <= sweepAngle + epsilon;
+        }
+
+        return positiveAngle(startAngle - angle) <= -sweepAngle + epsilon;
+    }
+
+    bool arcSnapPointAtFraction(const Shape &shape,
+                                qreal fraction,
+                                QPointF *point) const
+    {
+        QPointF center;
+        qreal radius = 0.0;
+        qreal startAngle = 0.0;
+        qreal sweepAngle = 0.0;
+        if (!makeArcSnapGeometry(shape,
+                                 &center,
+                                 &radius,
+                                 &startAngle,
+                                 &sweepAngle)) {
+            return false;
+        }
+
+        const qreal angle = startAngle + sweepAngle * fraction;
+        if (point != nullptr) {
+            *point = screenToWorld(QPointF(center.x() + radius * std::cos(angle),
+                                           center.y() + radius * std::sin(angle)));
+        }
+        return true;
+    }
+
     QVector<SnapCandidate> snapCandidatesForShape(const Shape &shape) const
     {
         QVector<SnapCandidate> candidates;
@@ -823,6 +1151,35 @@ private:
 
         if (shape.tool == Tool::Circle) {
             candidates.append(SnapCandidate{SnapType::Center, shape.points.first()});
+            return candidates;
+        }
+
+        if (shape.tool == Tool::Arc && shape.points.size() >= 3) {
+            QPointF start = shape.arcMode == ArcMode::OnePoint
+                                ? shape.points[1]
+                                : shape.points[0];
+            QPointF end = shape.arcMode == ArcMode::OnePoint
+                              ? shape.points[2]
+                              : shape.points[1];
+            QPointF evaluatedEndpoint;
+            if (arcSnapPointAtFraction(shape, 0.0, &evaluatedEndpoint)) {
+                start = evaluatedEndpoint;
+            }
+            if (arcSnapPointAtFraction(shape, 1.0, &evaluatedEndpoint)) {
+                end = evaluatedEndpoint;
+            }
+            candidates.append(SnapCandidate{SnapType::Endpoint, start});
+            candidates.append(SnapCandidate{SnapType::Endpoint, end});
+
+            QPointF midpoint;
+            if (arcSnapPointAtFraction(shape, 0.5, &midpoint)) {
+                candidates.append(SnapCandidate{SnapType::Midpoint, midpoint});
+            }
+
+            QPointF center;
+            if (makeArcSnapGeometry(shape, &center, nullptr, nullptr, nullptr)) {
+                candidates.append(SnapCandidate{SnapType::Center, screenToWorld(center)});
+            }
             return candidates;
         }
 
@@ -880,6 +1237,45 @@ private:
                 if (centerSnapEnabled_) {
                     candidates.append(SnapCandidate{SnapType::Center, shape.points.first()});
                 }
+                continue;
+            }
+
+            if (shape.tool == Tool::Arc && shape.points.size() >= 3) {
+                QPointF start = shape.arcMode == ArcMode::OnePoint
+                                    ? shape.points[1]
+                                    : shape.points[0];
+                QPointF end = shape.arcMode == ArcMode::OnePoint
+                                  ? shape.points[2]
+                                  : shape.points[1];
+                QPointF evaluatedEndpoint;
+                if (arcSnapPointAtFraction(shape, 0.0, &evaluatedEndpoint)) {
+                    start = evaluatedEndpoint;
+                }
+                if (arcSnapPointAtFraction(shape, 1.0, &evaluatedEndpoint)) {
+                    end = evaluatedEndpoint;
+                }
+
+                if (endpointSnapEnabled_) {
+                    candidates.append(SnapCandidate{SnapType::Endpoint, start});
+                    candidates.append(SnapCandidate{SnapType::Endpoint, end});
+                }
+
+                if (midpointSnapEnabled_) {
+                    QPointF midpoint;
+                    if (arcSnapPointAtFraction(shape, 0.5, &midpoint)) {
+                        candidates.append(SnapCandidate{SnapType::Midpoint, midpoint});
+                    }
+                }
+
+                if (centerSnapEnabled_) {
+                    QPointF center;
+                    if (makeArcSnapGeometry(shape, &center, nullptr, nullptr, nullptr)) {
+                        candidates.append(SnapCandidate{
+                            SnapType::Center,
+                            screenToWorld(center)});
+                    }
+                }
+
                 continue;
             }
 
@@ -975,6 +1371,52 @@ private:
                 continue;
             }
 
+            if (shape.tool == Tool::Arc && shape.points.size() >= 3) {
+                QPointF center;
+                qreal radius = 0.0;
+                qreal startAngle = 0.0;
+                qreal sweepAngle = 0.0;
+                if (!makeArcSnapGeometry(shape,
+                                         &center,
+                                         &radius,
+                                         &startAngle,
+                                         &sweepAngle)) {
+                    continue;
+                }
+
+                const QPointF originScreen = worldToScreen(origin);
+                const QPointF fromCenter = originScreen - center;
+                const qreal distanceFromCenter =
+                    std::hypot(fromCenter.x(), fromCenter.y());
+
+                const auto appendIfOnArc = [&](const QPointF &candidateScreen) {
+                    const qreal candidateAngle =
+                        std::atan2(candidateScreen.y() - center.y(),
+                                   candidateScreen.x() - center.x());
+                    if (arcAngleIsOnSweep(startAngle, sweepAngle, candidateAngle)) {
+                        candidates.append(SnapCandidate{
+                            SnapType::Perpendicular,
+                            screenToWorld(candidateScreen)});
+                    }
+                };
+
+                if (distanceFromCenter <= epsilon) {
+                    const QPointF cursorScreen = worldToScreen(cursor);
+                    const QPointF towardCursor = cursorScreen - center;
+                    const qreal cursorDistance =
+                        std::hypot(towardCursor.x(), towardCursor.y());
+                    if (cursorDistance > epsilon) {
+                        appendIfOnArc(center + towardCursor * (radius / cursorDistance));
+                    }
+                } else {
+                    const QPointF radialDirection = fromCenter / distanceFromCenter;
+                    appendIfOnArc(center + radialDirection * radius);
+                    appendIfOnArc(center - radialDirection * radius);
+                }
+
+                continue;
+            }
+
             if (shape.tool != Tool::Line) {
                 continue;
             }
@@ -1019,27 +1461,68 @@ private:
         constexpr qreal epsilon = 1e-9;
 
         for (const Shape &shape : shapes_) {
-            if (shape.tool != Tool::Circle || shape.points.size() < 2) {
+            if (shape.tool == Tool::Circle && shape.points.size() >= 2) {
+                const QPointF center = shape.points[0];
+                const QPointF edge = shape.points[1];
+                const qreal radius = std::hypot(edge.x() - center.x(),
+                                                edge.y() - center.y());
+                if (radius <= epsilon) {
+                    continue;
+                }
+
+                const QPointF fromCenter = origin - center;
+                const qreal distanceFromCenter =
+                    std::hypot(fromCenter.x(), fromCenter.y());
+                if (distanceFromCenter < radius - epsilon) {
+                    // A point inside a circle has no real tangent points.
+                    continue;
+                }
+
+                if (distanceFromCenter <= epsilon) {
+                    continue;
+                }
+
+                const QPointF radialDirection = fromCenter / distanceFromCenter;
+                const QPointF tangentDirection(-radialDirection.y(), radialDirection.x());
+                const qreal radiusRatio = radius / distanceFromCenter;
+                const qreal radialDistance = radius * radiusRatio;
+                const qreal tangentDistance =
+                    radius * std::sqrt(std::max(0.0, 1.0 - radiusRatio * radiusRatio));
+
+                candidates.append(SnapCandidate{
+                    SnapType::Tangent,
+                    center + radialDirection * radialDistance + tangentDirection * tangentDistance});
+
+                if (tangentDistance > epsilon) {
+                    candidates.append(SnapCandidate{
+                        SnapType::Tangent,
+                        center + radialDirection * radialDistance - tangentDirection * tangentDistance});
+                }
                 continue;
             }
 
-            const QPointF center = shape.points[0];
-            const QPointF edge = shape.points[1];
-            const qreal radius = std::hypot(edge.x() - center.x(),
-                                            edge.y() - center.y());
-            if (radius <= epsilon) {
+            if (shape.tool != Tool::Arc || shape.points.size() < 3) {
                 continue;
             }
 
-            const QPointF fromCenter = origin - center;
+            QPointF centerScreen;
+            qreal radius = 0.0;
+            qreal startAngle = 0.0;
+            qreal sweepAngle = 0.0;
+            if (!makeArcSnapGeometry(shape,
+                                     &centerScreen,
+                                     &radius,
+                                     &startAngle,
+                                     &sweepAngle)) {
+                continue;
+            }
+
+            const QPointF originScreen = worldToScreen(origin);
+            const QPointF fromCenter = originScreen - centerScreen;
             const qreal distanceFromCenter =
                 std::hypot(fromCenter.x(), fromCenter.y());
-            if (distanceFromCenter < radius - epsilon) {
-                // A point inside a circle has no real tangent points.
-                continue;
-            }
-
-            if (distanceFromCenter <= epsilon) {
+            if (distanceFromCenter < radius - epsilon ||
+                distanceFromCenter <= epsilon) {
                 continue;
             }
 
@@ -1050,14 +1533,22 @@ private:
             const qreal tangentDistance =
                 radius * std::sqrt(std::max(0.0, 1.0 - radiusRatio * radiusRatio));
 
-            candidates.append(SnapCandidate{
-                SnapType::Tangent,
-                center + radialDirection * radialDistance + tangentDirection * tangentDistance});
+            const auto appendIfOnArc = [&](const QPointF &candidateScreen) {
+                const qreal candidateAngle =
+                    std::atan2(candidateScreen.y() - centerScreen.y(),
+                               candidateScreen.x() - centerScreen.x());
+                if (arcAngleIsOnSweep(startAngle, sweepAngle, candidateAngle)) {
+                    candidates.append(SnapCandidate{
+                        SnapType::Tangent,
+                        screenToWorld(candidateScreen)});
+                }
+            };
 
+            appendIfOnArc(centerScreen + radialDirection * radialDistance +
+                          tangentDirection * tangentDistance);
             if (tangentDistance > epsilon) {
-                candidates.append(SnapCandidate{
-                    SnapType::Tangent,
-                    center + radialDirection * radialDistance - tangentDirection * tangentDistance});
+                appendIfOnArc(centerScreen + radialDirection * radialDistance -
+                              tangentDirection * tangentDistance);
             }
         }
 
@@ -1067,7 +1558,9 @@ private:
     SnapResult findSnapPoint(const QPointF &rawPoint) const
     {
         SnapResult best;
-        if (!osnapEnabled_ || activeTool_ != Tool::Line || !lineCommandActive_) {
+        const bool drawingSnapActive =
+            (activeTool_ == Tool::Line && lineCommandActive_) || activeTool_ == Tool::Arc;
+        if (!osnapEnabled_ || !drawingSnapActive) {
             return best;
         }
 
@@ -1146,8 +1639,9 @@ private:
             return currentSnap_.point;
         }
 
-        if (!orthoEnabled_ || panning_ || activeTool_ != Tool::Line ||
-            !lineCommandActive_ || pendingPoints_.isEmpty()) {
+        const bool drawingConstraintActive =
+            (activeTool_ == Tool::Line && lineCommandActive_) || activeTool_ == Tool::Arc;
+        if (!orthoEnabled_ || panning_ || !drawingConstraintActive || pendingPoints_.isEmpty()) {
             return rawPoint;
         }
 
@@ -1337,6 +1831,343 @@ private:
         }
     }
 
+    bool makeCircularArcGeometry(const QPointF &startWorld,
+                                 const QPointF &endWorld,
+                                 const QPointF &throughWorld,
+                                 QPointF *center,
+                                 qreal *radius,
+                                 qreal *startAngle,
+                                 qreal *sweepAngle) const
+    {
+        const QPointF start = worldToScreen(startWorld);
+        const QPointF end = worldToScreen(endWorld);
+        const QPointF through = worldToScreen(throughWorld);
+
+        const qreal startSquared = start.x() * start.x() + start.y() * start.y();
+        const qreal endSquared = end.x() * end.x() + end.y() * end.y();
+        const qreal throughSquared =
+            through.x() * through.x() + through.y() * through.y();
+        const qreal denominator = 2.0 *
+            (start.x() * (end.y() - through.y()) +
+             end.x() * (through.y() - start.y()) +
+             through.x() * (start.y() - end.y()));
+
+        if (std::abs(denominator) < 1e-9) {
+            return false;
+        }
+
+        const QPointF circleCenter(
+            (startSquared * (end.y() - through.y()) +
+             endSquared * (through.y() - start.y()) +
+             throughSquared * (start.y() - end.y())) / denominator,
+            (startSquared * (through.x() - end.x()) +
+             endSquared * (start.x() - through.x()) +
+             throughSquared * (end.x() - start.x())) / denominator);
+        const qreal circleRadius = std::hypot(start.x() - circleCenter.x(),
+                                              start.y() - circleCenter.y());
+        if (circleRadius <= 1e-9) {
+            return false;
+        }
+
+        constexpr qreal twoPi = 6.28318530717958647692;
+        const auto normalizeAngle = [twoPi](qreal angle) {
+            angle = std::fmod(angle, twoPi);
+            if (angle < 0.0) {
+                angle += twoPi;
+            }
+            return angle;
+        };
+
+        const qreal firstAngle = std::atan2(start.y() - circleCenter.y(),
+                                            start.x() - circleCenter.x());
+        const qreal secondAngle = std::atan2(end.y() - circleCenter.y(),
+                                             end.x() - circleCenter.x());
+        const qreal throughAngle = std::atan2(through.y() - circleCenter.y(),
+                                              through.x() - circleCenter.x());
+        const qreal counterClockwiseSweep = normalizeAngle(secondAngle - firstAngle);
+        const qreal throughSweep = normalizeAngle(throughAngle - firstAngle);
+
+        if (counterClockwiseSweep <= 1e-9) {
+            return false;
+        }
+
+        const qreal selectedSweep = throughSweep <= counterClockwiseSweep + 1e-7
+                                        ? counterClockwiseSweep
+                                        : -(twoPi - counterClockwiseSweep);
+
+        if (center != nullptr) {
+            *center = circleCenter;
+        }
+        if (radius != nullptr) {
+            *radius = circleRadius;
+        }
+        if (startAngle != nullptr) {
+            *startAngle = firstAngle;
+        }
+        if (sweepAngle != nullptr) {
+            *sweepAngle = selectedSweep;
+        }
+        return true;
+    }
+
+    void drawCircularArc(QPainter &painter,
+                         const QPointF &start,
+                         const QPointF &end,
+                         const QPointF &through)
+    {
+        QPointF center;
+        qreal radius = 0.0;
+        qreal startAngle = 0.0;
+        qreal sweepAngle = 0.0;
+
+        if (!makeCircularArcGeometry(start,
+                                     end,
+                                     through,
+                                     &center,
+                                     &radius,
+                                     &startAngle,
+                                     &sweepAngle)) {
+            painter.drawLine(worldToScreen(start), worldToScreen(end));
+            return;
+        }
+
+        const int steps = std::clamp(
+            static_cast<int>(std::ceil(std::abs(sweepAngle) * radius / 8.0)),
+            12,
+            256);
+        QPainterPath path;
+        for (int step = 0; step <= steps; ++step) {
+            const qreal fraction = static_cast<qreal>(step) / steps;
+            const qreal angle = startAngle + sweepAngle * fraction;
+            const QPointF point(center.x() + radius * std::cos(angle),
+                                 center.y() + radius * std::sin(angle));
+            if (step == 0) {
+                path.moveTo(point);
+            } else {
+                path.lineTo(point);
+            }
+        }
+        painter.drawPath(path);
+    }
+
+    void drawCenterArcWithSweep(QPainter &painter,
+                                const QPointF &centerWorld,
+                                const QPointF &startWorld,
+                                qreal sweepAngle)
+    {
+        const QPointF center = worldToScreen(centerWorld);
+        const QPointF start = worldToScreen(startWorld);
+        const qreal radius = std::hypot(start.x() - center.x(),
+                                        start.y() - center.y());
+
+        if (radius <= 1e-9) {
+            return;
+        }
+
+        const qreal startAngle = std::atan2(start.y() - center.y(),
+                                            start.x() - center.x());
+
+        if (std::abs(sweepAngle) <= 1e-9) {
+            return;
+        }
+
+        const int steps = std::clamp(
+            static_cast<int>(std::ceil(std::abs(sweepAngle) * radius / 8.0)),
+            12,
+            256);
+        QPainterPath path;
+        for (int step = 0; step <= steps; ++step) {
+            const qreal fraction = static_cast<qreal>(step) / steps;
+            const qreal angle = startAngle + sweepAngle * fraction;
+            const QPointF point(center.x() + radius * std::cos(angle),
+                                 center.y() + radius * std::sin(angle));
+            if (step == 0) {
+                path.moveTo(point);
+            } else {
+                path.lineTo(point);
+            }
+        }
+        painter.drawPath(path);
+    }
+
+    void drawCenterArc(QPainter &painter,
+                       const QPointF &centerWorld,
+                       const QPointF &startWorld,
+                       const QPointF &endWorld)
+    {
+        const QPointF center = worldToScreen(centerWorld);
+        const QPointF start = worldToScreen(startWorld);
+        const QPointF end = worldToScreen(endWorld);
+        const qreal radius = std::hypot(start.x() - center.x(),
+                                        start.y() - center.y());
+
+        if (radius <= 1e-9) {
+            painter.drawLine(start, end);
+            return;
+        }
+
+        constexpr qreal pi = 3.14159265358979323846;
+        constexpr qreal twoPi = 2.0 * pi;
+        const qreal startAngle = std::atan2(start.y() - center.y(),
+                                            start.x() - center.x());
+        const qreal endAngle = std::atan2(end.y() - center.y(),
+                                          end.x() - center.x());
+        qreal sweepAngle = endAngle - startAngle;
+        if (sweepAngle > pi) {
+            sweepAngle -= twoPi;
+        } else if (sweepAngle < -pi) {
+            sweepAngle += twoPi;
+        }
+
+        if (std::abs(sweepAngle) <= 1e-9) {
+            painter.drawLine(start, end);
+            return;
+        }
+
+        drawCenterArcWithSweep(painter, centerWorld, startWorld, sweepAngle);
+    }
+
+    void resetArcPreviewTracking()
+    {
+        arcPreviewInitialized_ = false;
+        arcPreviewPreviousAngle_ = 0.0;
+        arcPreviewSweepAngle_ = 0.0;
+    }
+
+    void initializeArcPreviewTracking()
+    {
+        resetArcPreviewTracking();
+        if (arcMode_ != ArcMode::OnePoint || pendingPoints_.size() < 2) {
+            return;
+        }
+
+        const QPointF center = worldToScreen(pendingPoints_[0]);
+        const QPointF start = worldToScreen(pendingPoints_[1]);
+        const qreal radius = std::hypot(start.x() - center.x(),
+                                        start.y() - center.y());
+        if (radius <= 1e-9) {
+            return;
+        }
+
+        arcPreviewPreviousAngle_ = std::atan2(start.y() - center.y(),
+                                              start.x() - center.x());
+        arcPreviewInitialized_ = true;
+    }
+
+    void updateArcPreviewTracking(const QPointF &cursorWorld)
+    {
+        if (arcMode_ != ArcMode::OnePoint || pendingPoints_.size() < 2) {
+            return;
+        }
+
+        const QPointF center = worldToScreen(pendingPoints_[0]);
+        const QPointF cursor = worldToScreen(cursorWorld);
+        const qreal radius = std::hypot(cursor.x() - center.x(),
+                                        cursor.y() - center.y());
+        if (radius <= 1e-9) {
+            return;
+        }
+
+        const qreal angle = std::atan2(cursor.y() - center.y(),
+                                       cursor.x() - center.x());
+        if (!arcPreviewInitialized_) {
+            arcPreviewPreviousAngle_ = angle;
+            arcPreviewInitialized_ = true;
+            return;
+        }
+
+        constexpr qreal pi = 3.14159265358979323846;
+        constexpr qreal twoPi = 2.0 * pi;
+        qreal delta = angle - arcPreviewPreviousAngle_;
+        if (delta > pi) {
+            delta -= twoPi;
+        } else if (delta < -pi) {
+            delta += twoPi;
+        }
+
+        arcPreviewSweepAngle_ += delta;
+        arcPreviewPreviousAngle_ = angle;
+    }
+
+    void drawArcToolPreview(QPainter &painter)
+    {
+        if (pendingPoints_.isEmpty()) {
+            if (currentSnap_.isValid()) {
+                drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+            }
+            return;
+        }
+
+        const QColor arcColor(QStringLiteral("#e6b85c"));
+        const QColor pointColor(QStringLiteral("#f0a45a"));
+        painter.setPen(QPen(arcColor, 2.0));
+        painter.setBrush(Qt::NoBrush);
+
+        if (arcMode_ == ArcMode::OnePoint) {
+            if (pendingPoints_.size() == 1) {
+                if (cursorValid_) {
+                    // First click establishes the center. The radius follows
+                    // the cursor until the second click plants the start.
+                    painter.drawLine(worldToScreen(pendingPoints_.first()),
+                                     worldToScreen(cursorWorld_));
+                }
+            } else if (cursorValid_) {
+                // The center and start are fixed; the endpoint remains live
+                // under the cursor until the third click commits the arc.
+                painter.setPen(QPen(QColor(QStringLiteral("#8aa7c7")),
+                                    1.0,
+                                    Qt::DashLine));
+                painter.drawLine(worldToScreen(pendingPoints_[0]),
+                                 worldToScreen(pendingPoints_[1]));
+
+                painter.setPen(QPen(arcColor, 2.0));
+                if (arcPreviewInitialized_) {
+                    drawCenterArcWithSweep(painter,
+                                           pendingPoints_[0],
+                                           pendingPoints_[1],
+                                           arcPreviewSweepAngle_);
+                }
+            }
+        } else {
+            if (pendingPoints_.size() == 1) {
+                if (cursorValid_) {
+                    painter.drawLine(worldToScreen(pendingPoints_.first()),
+                                     worldToScreen(cursorWorld_));
+                }
+            } else if (cursorValid_) {
+                // The fixed two-point chord is a construction guide. It
+                // disappears when the third click commits the circular arc.
+                painter.setPen(QPen(QColor(QStringLiteral("#8aa7c7")),
+                                    1.0,
+                                    Qt::DashLine));
+                painter.drawLine(worldToScreen(pendingPoints_[0]),
+                                 worldToScreen(pendingPoints_[1]));
+
+                painter.setPen(QPen(arcColor, 2.0));
+                drawCircularArc(painter,
+                                pendingPoints_[0],
+                                pendingPoints_[1],
+                                cursorWorld_);
+            }
+        }
+
+        painter.setPen(QPen(pointColor, 1.5));
+        painter.setBrush(QColor(QStringLiteral("#282828")));
+        for (const QPointF &point : pendingPoints_) {
+            painter.drawEllipse(worldToScreen(point), 5.0, 5.0);
+        }
+
+        if (cursorValid_) {
+            painter.setPen(QPen(pointColor, 2.0));
+            painter.setBrush(pointColor);
+            painter.drawEllipse(worldToScreen(cursorWorld_), 4.0, 4.0);
+        }
+
+        if (currentSnap_.isValid()) {
+            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        }
+    }
+
     void drawCircleToolPreview(QPainter &painter)
     {
         if (pendingPoints_.isEmpty()) {
@@ -1427,10 +2258,24 @@ private:
             const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
             painter.drawEllipse(center, radius, radius);
         } else if (shape.tool == Tool::Arc && shape.points.size() >= 3) {
-            QPainterPath path;
-            path.moveTo(worldToScreen(shape.points[0]));
-            path.quadTo(worldToScreen(shape.points[1]), worldToScreen(shape.points[2]));
-            painter.drawPath(path);
+            if (shape.arcMode == ArcMode::OnePoint) {
+                if (std::abs(shape.arcSweep) > 1e-9) {
+                    drawCenterArcWithSweep(painter,
+                                           shape.points[0],
+                                           shape.points[1],
+                                           shape.arcSweep);
+                } else {
+                    drawCenterArc(painter,
+                                  shape.points[0],
+                                  shape.points[1],
+                                  shape.points[2]);
+                }
+            } else {
+                drawCircularArc(painter,
+                                shape.points[0],
+                                shape.points[1],
+                                shape.points[2]);
+            }
         } else if ((shape.tool == Tool::Bezier || shape.tool == Tool::Nurbs) &&
                    shape.points.size() >= 4) {
             painter.setPen(QPen(controlColor, 1, Qt::DashLine));
@@ -1472,10 +2317,19 @@ private:
 public:
     std::function<void(const QString &)> coordinateUpdate_;
     std::function<void(Tool)> commandFinished_;
+    std::function<void(Tool)> toolRepeated_;
+    std::function<void()> historyChanged_;
 
 private:
     Tool activeTool_ = Tool::Select;
+    Tool repeatTool_ = Tool::Select;
+    ArcMode arcMode_ = ArcMode::OnePoint;
+    bool arcPreviewInitialized_ = false;
+    qreal arcPreviewPreviousAngle_ = 0.0;
+    qreal arcPreviewSweepAngle_ = 0.0;
     QVector<Shape> shapes_;
+    QVector<QVector<Shape>> undoStack_;
+    QVector<QVector<Shape>> redoStack_;
     QVector<QPointF> pendingPoints_;
     QPointF pan_{0.0, 0.0};
     QPointF lastWorldPosition_{0.0, 0.0};
@@ -1486,11 +2340,14 @@ private:
     DragSnapResult currentDragSnap_;
     int selectedShapeIndex_ = -1;
     bool draggingSelected_ = false;
+    bool dragHistoryRecorded_ = false;
     bool dragSnapLocked_ = false;
     QPointF dragSnapCursorWorld_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
     qreal zoom_ = 1.0;
     bool panning_ = false;
+    bool panMoved_ = false;
+    QPoint panStartPosition_;
     Qt::MouseButton panButton_ = Qt::MiddleButton;
     bool lineCommandActive_ = false;
     bool cursorValid_ = false;
@@ -1652,8 +2509,20 @@ private:
         fileMenu->addAction(QStringLiteral("Quit"), this, &QWidget::close);
 
         QMenu *editMenu = menuBar()->addMenu(QStringLiteral("Edit"));
-        editMenu->addAction(QStringLiteral("Undo"));
-        editMenu->addAction(QStringLiteral("Redo"));
+        undoAction_ = editMenu->addAction(QStringLiteral("Undo"));
+        undoAction_->setShortcut(QKeySequence::Undo);
+        undoAction_->setEnabled(false);
+        redoAction_ = editMenu->addAction(QStringLiteral("Redo"));
+        redoAction_->setShortcut(QKeySequence::Redo);
+        redoAction_->setEnabled(false);
+        connect(undoAction_, &QAction::triggered, this, [this]() {
+            viewport_->undo();
+            statusBar()->showMessage(QStringLiteral("Undo"));
+        });
+        connect(redoAction_, &QAction::triggered, this, [this]() {
+            viewport_->redo();
+            statusBar()->showMessage(QStringLiteral("Redo"));
+        });
         editMenu->addSeparator();
         QAction *preferencesAction = editMenu->addAction(QStringLiteral("Preferences…"));
         connect(preferencesAction, &QAction::triggered, this, [this]() {
@@ -1665,6 +2534,16 @@ private:
         viewMenu->addAction(QStringLiteral("Toggle Grid"));
 
         menuBar()->addMenu(QStringLiteral("Help"));
+    }
+
+    void updateHistoryActions()
+    {
+        if (undoAction_ != nullptr && viewport_ != nullptr) {
+            undoAction_->setEnabled(viewport_->canUndo());
+        }
+        if (redoAction_ != nullptr && viewport_ != nullptr) {
+            redoAction_->setEnabled(viewport_->canRedo());
+        }
     }
 
     void createWorkspaceBar()
@@ -1716,6 +2595,15 @@ private:
                 selectToolButton_->setChecked(true);
                 statusBar()->showMessage(QStringLiteral("Select mode"));
             }
+        };
+        viewport_->toolRepeated_ = [this](Tool tool) {
+            for (QToolButton *button : toolButtons_) {
+                if (button->toolTip() == toolName(tool)) {
+                    button->setChecked(true);
+                    break;
+                }
+            }
+            statusBar()->showMessage(QStringLiteral("Repeated tool: %1").arg(toolName(tool)));
         };
         rootLayout->addWidget(viewport_, 1);
 
@@ -1771,6 +2659,10 @@ private:
         viewport_->coordinateUpdate_ = [this](const QString &text) {
             coordinateLabel_->setText(text);
         };
+        viewport_->historyChanged_ = [this]() {
+            updateHistoryActions();
+        };
+        updateHistoryActions();
     }
 
     void createOsnapLane()
@@ -1856,7 +2748,8 @@ private:
 
         selectToolButton_ = addToolButton(layout, group, QStringLiteral("↖\nSelect"), Tool::Select, true);
         addToolButton(layout, group, QStringLiteral("╱\nLine"), Tool::Line);
-        addToolButton(layout, group, QStringLiteral("⌒\nArc"), Tool::Arc);
+        arcToolButton_ = addToolButton(layout, group, QStringLiteral("⌒\nArc"), Tool::Arc);
+        createArcToolMenu(arcToolButton_);
         addToolButton(layout, group, QStringLiteral("∿\nBezier"), Tool::Bezier);
         addToolButton(layout, group, QStringLiteral("N\nNURBS"), Tool::Nurbs);
         addToolButton(layout, group, QStringLiteral("□\nRect"), Tool::Rectangle);
@@ -1888,13 +2781,50 @@ private:
         button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         group->addButton(button);
         layout->addWidget(button);
+        toolButtons_.append(button);
 
         connect(button, &QToolButton::clicked, this, [this, tool]() {
+            if (tool == Tool::Arc) {
+                // A normal click always returns to the default arc command.
+                viewport_->setArcMode(ArcMode::OnePoint);
+            }
             viewport_->setTool(tool);
             statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
         });
 
         return button;
+    }
+
+    void activateArcMode(ArcMode mode)
+    {
+        viewport_->setArcMode(mode);
+        viewport_->setTool(Tool::Arc);
+        if (arcToolButton_ != nullptr) {
+            arcToolButton_->setChecked(true);
+        }
+        statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(arcModeName(mode)));
+    }
+
+    void createArcToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+
+        auto *menu = new QMenu(button);
+        QAction *onePointAction = menu->addAction(QStringLiteral("1 Point Arc"));
+        QAction *twoPointAction = menu->addAction(QStringLiteral("2 Point Arc"));
+        button->setMenu(menu);
+        // A quick click runs the default 1 Point Arc. Holding the button
+        // opens this menu, matching the tool-flyout behavior requested here.
+        button->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(onePointAction, &QAction::triggered, this, [this]() {
+            activateArcMode(ArcMode::OnePoint);
+        });
+        connect(twoPointAction, &QAction::triggered, this, [this]() {
+            activateArcMode(ArcMode::TwoPoint);
+        });
     }
 
     void loadPreferences()
@@ -2201,6 +3131,10 @@ private:
     QLabel *coordinateLabel_ = nullptr;
     QLabel *toolHelp_ = nullptr;
     QToolButton *selectToolButton_ = nullptr;
+    QToolButton *arcToolButton_ = nullptr;
+    QVector<QToolButton *> toolButtons_;
+    QAction *undoAction_ = nullptr;
+    QAction *redoAction_ = nullptr;
     QAction *orthoAction_ = nullptr;
     QAction *osnapAction_ = nullptr;
     QCheckBox *endpointSnapCheckBox_ = nullptr;

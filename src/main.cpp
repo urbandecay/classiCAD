@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QAction>
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QCursor>
 #include <QDateTime>
@@ -56,6 +57,8 @@ enum class SnapType {
     Endpoint,
     Midpoint,
     Intersection,
+    Center,
+    Perpendicular,
 };
 
 struct SnapResult {
@@ -280,6 +283,10 @@ QString snapTypeName(SnapType type)
         return QStringLiteral("Midpoint");
     case SnapType::Intersection:
         return QStringLiteral("Intersection");
+    case SnapType::Center:
+        return QStringLiteral("Center");
+    case SnapType::Perpendicular:
+        return QStringLiteral("Perpendicular");
     case SnapType::None:
         return QStringLiteral("None");
     }
@@ -417,16 +424,24 @@ public:
         return osnapEnabled_;
     }
 
-    void setSnapModes(bool endpoint, bool midpoint, bool intersection)
+    void setSnapModes(bool endpoint,
+                      bool midpoint,
+                      bool intersection,
+                      bool center,
+                      bool perpendicular)
     {
         endpointSnapEnabled_ = endpoint;
         midpointSnapEnabled_ = midpoint;
         intersectionSnapEnabled_ = intersection;
+        centerSnapEnabled_ = center;
+        perpendicularSnapEnabled_ = perpendicular;
         refreshCursorConstraint();
-        DebugLog::instance().write(QStringLiteral("setSnapModes endpoint=%1 midpoint=%2 intersection=%3 snap=%4")
+        DebugLog::instance().write(QStringLiteral("setSnapModes endpoint=%1 midpoint=%2 intersection=%3 center=%4 perpendicular=%5 snap=%6")
                                        .arg(endpointSnapEnabled_)
                                        .arg(midpointSnapEnabled_)
                                        .arg(intersectionSnapEnabled_)
+                                       .arg(centerSnapEnabled_)
+                                       .arg(perpendicularSnapEnabled_)
                                        .arg(snapTypeName(currentSnap_.type)));
         update();
     }
@@ -455,6 +470,8 @@ protected:
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
             drawLineToolPreview(painter);
+        } else if (activeTool_ == Tool::Circle && !pendingPoints_.isEmpty()) {
+            drawCircleToolPreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
             drawShape(painter, Shape{activeTool_, pendingPoints_, Shape::NurbsCurve2D{}}, true);
         }
@@ -577,6 +594,13 @@ protected:
                                            .arg(toolName(activeTool_))
                                            .arg(pendingPoints_.size()));
             pendingPoints_.clear();
+
+            if (activeTool_ == Tool::Circle) {
+                setTool(Tool::Select);
+                if (commandFinished_) {
+                    commandFinished_(Tool::Select);
+                }
+            }
         }
 
         update();
@@ -589,6 +613,7 @@ protected:
         cursorWorld_ = constrainLinePoint(rawCursorWorld_);
         lastWorldPosition_ = cursorWorld_;
         cursorValid_ = true;
+        const bool circlePreviewActive = activeTool_ == Tool::Circle && !pendingPoints_.isEmpty();
 
         if (panning_) {
             const QPoint current = screenPosition.toPoint();
@@ -652,11 +677,11 @@ protected:
             }
         }
 
-        if (lineCommandActive_ || panning_ || draggingSelected_) {
+        if (lineCommandActive_ || circlePreviewActive || panning_ || draggingSelected_) {
             update();
         }
 
-        if (lineCommandActive_ || panning_ || draggingSelected_) {
+        if (lineCommandActive_ || circlePreviewActive || panning_ || draggingSelected_) {
             DebugLog::instance().write(
                 QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11")
                     .arg(pointText(screenPosition))
@@ -786,7 +811,16 @@ private:
     QVector<SnapCandidate> snapCandidatesForShape(const Shape &shape) const
     {
         QVector<SnapCandidate> candidates;
-        if (shape.tool != Tool::Line || shape.points.isEmpty()) {
+        if (shape.points.isEmpty()) {
+            return candidates;
+        }
+
+        if (shape.tool == Tool::Circle) {
+            candidates.append(SnapCandidate{SnapType::Center, shape.points.first()});
+            return candidates;
+        }
+
+        if (shape.tool != Tool::Line) {
             return candidates;
         }
 
@@ -832,7 +866,18 @@ private:
             }
 
             const Shape &shape = shapes_[shapeIndex];
-            if (shape.tool != Tool::Line || shape.points.isEmpty()) {
+            if (shape.points.isEmpty()) {
+                continue;
+            }
+
+            if (shape.tool == Tool::Circle) {
+                if (centerSnapEnabled_) {
+                    candidates.append(SnapCandidate{SnapType::Center, shape.points.first()});
+                }
+                continue;
+            }
+
+            if (shape.tool != Tool::Line) {
                 continue;
             }
 
@@ -871,6 +916,93 @@ private:
         return candidates;
     }
 
+    QVector<SnapCandidate> perpendicularCandidates(const QPointF &origin,
+                                                    const QPointF &cursor) const
+    {
+        QVector<SnapCandidate> candidates;
+        if (!perpendicularSnapEnabled_) {
+            return candidates;
+        }
+
+        constexpr qreal epsilon = 1e-9;
+
+        for (const Shape &shape : shapes_) {
+            if (shape.points.isEmpty()) {
+                continue;
+            }
+
+            if (shape.tool == Tool::Circle && shape.points.size() >= 2) {
+                const QPointF center = shape.points[0];
+                const QPointF edge = shape.points[1];
+                const qreal radius = std::hypot(edge.x() - center.x(),
+                                                edge.y() - center.y());
+                if (radius <= epsilon) {
+                    continue;
+                }
+
+                const QPointF fromCenter = origin - center;
+                const qreal distanceFromCenter =
+                    std::hypot(fromCenter.x(), fromCenter.y());
+
+                if (distanceFromCenter <= epsilon) {
+                    // From a circle center, every radius is perpendicular to
+                    // the circumference. Use the cursor direction to choose
+                    // which point on the circumference to target.
+                    const QPointF towardCursor = cursor - center;
+                    const qreal cursorDistance =
+                        std::hypot(towardCursor.x(), towardCursor.y());
+                    if (cursorDistance > epsilon) {
+                        candidates.append(SnapCandidate{
+                            SnapType::Perpendicular,
+                            center + towardCursor * (radius / cursorDistance)});
+                    }
+                } else {
+                    const QPointF radialDirection = fromCenter / distanceFromCenter;
+                    candidates.append(SnapCandidate{
+                        SnapType::Perpendicular,
+                        center + radialDirection * radius});
+                    candidates.append(SnapCandidate{
+                        SnapType::Perpendicular,
+                        center - radialDirection * radius});
+                }
+
+                continue;
+            }
+
+            if (shape.tool != Tool::Line) {
+                continue;
+            }
+
+            for (int index = 0; index + 1 < shape.points.size(); ++index) {
+                const QPointF start = shape.points[index];
+                const QPointF end = shape.points[index + 1];
+                const QPointF direction = end - start;
+                const qreal lengthSquared = direction.x() * direction.x() +
+                                            direction.y() * direction.y();
+                if (lengthSquared <= epsilon) {
+                    continue;
+                }
+
+                const QPointF fromStart = origin - start;
+                const qreal projection =
+                    (fromStart.x() * direction.x() + fromStart.y() * direction.y()) /
+                    lengthSquared;
+                if (projection < -epsilon || projection > 1.0 + epsilon) {
+                    continue;
+                }
+
+                const QPointF foot = start + direction * std::clamp(projection, 0.0, 1.0);
+                if (std::hypot(origin.x() - foot.x(), origin.y() - foot.y()) <= epsilon) {
+                    continue;
+                }
+
+                candidates.append(SnapCandidate{SnapType::Perpendicular, foot});
+            }
+        }
+
+        return candidates;
+    }
+
     SnapResult findSnapPoint(const QPointF &rawPoint) const
     {
         SnapResult best;
@@ -882,7 +1014,7 @@ private:
         constexpr qreal snapRadiusPixels = 12.0;
         qreal bestDistance = snapRadiusPixels;
 
-        for (const SnapCandidate &candidate : snapCandidatesForScene()) {
+        const auto consider = [&](const SnapCandidate &candidate) {
             const QPointF candidateScreen = worldToScreen(candidate.point);
             const qreal distance = std::hypot(candidateScreen.x() - cursorScreen.x(),
                                                candidateScreen.y() - cursorScreen.y());
@@ -890,6 +1022,17 @@ private:
                 bestDistance = distance;
                 best.type = candidate.type;
                 best.point = candidate.point;
+            }
+        };
+
+        for (const SnapCandidate &candidate : snapCandidatesForScene()) {
+            consider(candidate);
+        }
+
+        if (!pendingPoints_.isEmpty()) {
+            for (const SnapCandidate &candidate :
+                 perpendicularCandidates(pendingPoints_.back(), rawPoint)) {
+                consider(candidate);
             }
         }
 
@@ -993,6 +1136,23 @@ private:
 
         for (int index = 0; index < shapes_.size(); ++index) {
             const Shape &shape = shapes_[index];
+
+            if (shape.tool == Tool::Circle && shape.points.size() >= 2) {
+                const QPointF center = worldToScreen(shape.points[0]);
+                const QPointF edge = worldToScreen(shape.points[1]);
+                const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
+                const qreal distanceFromCenter =
+                    std::hypot(screenPosition.x() - center.x(),
+                               screenPosition.y() - center.y());
+                const qreal distanceFromCircle = std::abs(distanceFromCenter - radius);
+
+                if (distanceFromCircle <= closestDistance) {
+                    closestDistance = distanceFromCircle;
+                    closestShape = index;
+                }
+                continue;
+            }
+
             if (shape.tool != Tool::Line) {
                 continue;
             }
@@ -1058,6 +1218,16 @@ private:
                              snapScreen + QPointF(7.0, 7.0));
             painter.drawLine(snapScreen - QPointF(7.0, -7.0),
                              snapScreen + QPointF(7.0, -7.0));
+        } else if (type == SnapType::Center) {
+            painter.drawEllipse(snapScreen, 7.0, 7.0);
+            painter.drawLine(snapScreen - QPointF(9.0, 0.0),
+                             snapScreen + QPointF(9.0, 0.0));
+            painter.drawLine(snapScreen - QPointF(0.0, 9.0),
+                             snapScreen + QPointF(0.0, 9.0));
+        } else if (type == SnapType::Perpendicular) {
+            const QPointF corner = snapScreen + QPointF(-2.0, 3.0);
+            painter.drawLine(snapScreen + QPointF(-8.0, 3.0), corner);
+            painter.drawLine(corner, snapScreen + QPointF(-2.0, -5.0));
         }
 
     }
@@ -1095,6 +1265,34 @@ private:
         if (currentSnap_.isValid()) {
             drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
         }
+    }
+
+    void drawCircleToolPreview(QPainter &painter)
+    {
+        if (pendingPoints_.isEmpty()) {
+            return;
+        }
+
+        const QColor circleColor(QStringLiteral("#e6b85c"));
+        const QColor pointColor(QStringLiteral("#f0a45a"));
+        const QPointF center = worldToScreen(pendingPoints_.first());
+
+        painter.setPen(QPen(circleColor, 2.0));
+        painter.setBrush(Qt::NoBrush);
+
+        if (cursorValid_) {
+            const QPointF edge = worldToScreen(cursorWorld_);
+            const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
+            painter.drawEllipse(center, radius, radius);
+
+            painter.setPen(QPen(pointColor, 1.5));
+            painter.setBrush(pointColor);
+            painter.drawEllipse(edge, 4.0, 4.0);
+        }
+
+        painter.setPen(QPen(pointColor, 1.5));
+        painter.setBrush(QColor(QStringLiteral("#282828")));
+        painter.drawEllipse(center, 5.0, 5.0);
     }
 
     void drawGrid(QPainter &painter)
@@ -1231,6 +1429,8 @@ private:
     bool endpointSnapEnabled_ = true;
     bool midpointSnapEnabled_ = true;
     bool intersectionSnapEnabled_ = true;
+    bool centerSnapEnabled_ = true;
+    bool perpendicularSnapEnabled_ = false;
 };
 
 class PreferencesDialog final : public QDialog {
@@ -1515,31 +1715,45 @@ private:
         osnapLane_->addWidget(label);
         osnapLane_->addSeparator();
 
-        endpointSnapAction_ = new QAction(QStringLiteral("Endpoint"), this);
-        midpointSnapAction_ = new QAction(QStringLiteral("Midpoint"), this);
-        intersectionSnapAction_ = new QAction(QStringLiteral("Intersection"), this);
+        endpointSnapCheckBox_ = new QCheckBox(QStringLiteral("Endpoint"));
+        midpointSnapCheckBox_ = new QCheckBox(QStringLiteral("Midpoint"));
+        intersectionSnapCheckBox_ = new QCheckBox(QStringLiteral("Intersection"));
+        centerSnapCheckBox_ = new QCheckBox(QStringLiteral("Center"));
+        perpendicularSnapCheckBox_ = new QCheckBox(QStringLiteral("Perpendicular"));
 
-        for (QAction *action : {endpointSnapAction_, midpointSnapAction_, intersectionSnapAction_}) {
-            action->setCheckable(true);
-            action->setChecked(true);
-            osnapLane_->addAction(action);
+        for (QCheckBox *checkBox : {endpointSnapCheckBox_,
+                                    midpointSnapCheckBox_,
+                                    intersectionSnapCheckBox_,
+                                    centerSnapCheckBox_,
+                                    perpendicularSnapCheckBox_}) {
+            checkBox->setObjectName(QStringLiteral("osnapCheckBox"));
+            checkBox->setChecked(true);
+            osnapLane_->addWidget(checkBox);
         }
+        perpendicularSnapCheckBox_->setChecked(false);
 
         const auto syncSnapModes = [this]() {
-            viewport_->setSnapModes(endpointSnapAction_->isChecked(),
-                                    midpointSnapAction_->isChecked(),
-                                    intersectionSnapAction_->isChecked());
+            viewport_->setSnapModes(endpointSnapCheckBox_->isChecked(),
+                                    midpointSnapCheckBox_->isChecked(),
+                                    intersectionSnapCheckBox_->isChecked(),
+                                    centerSnapCheckBox_->isChecked(),
+                                    perpendicularSnapCheckBox_->isChecked());
             QSettings settings;
-            settings.setValue(QStringLiteral("osnap/endpoint"), endpointSnapAction_->isChecked());
-            settings.setValue(QStringLiteral("osnap/midpoint"), midpointSnapAction_->isChecked());
+            settings.setValue(QStringLiteral("osnap/endpoint"), endpointSnapCheckBox_->isChecked());
+            settings.setValue(QStringLiteral("osnap/midpoint"), midpointSnapCheckBox_->isChecked());
             settings.setValue(QStringLiteral("osnap/intersection"),
-                              intersectionSnapAction_->isChecked());
+                              intersectionSnapCheckBox_->isChecked());
+            settings.setValue(QStringLiteral("osnap/center"), centerSnapCheckBox_->isChecked());
+            settings.setValue(QStringLiteral("osnap/perpendicular"),
+                              perpendicularSnapCheckBox_->isChecked());
             settings.sync();
         };
 
-        connect(endpointSnapAction_, &QAction::toggled, this, syncSnapModes);
-        connect(midpointSnapAction_, &QAction::toggled, this, syncSnapModes);
-        connect(intersectionSnapAction_, &QAction::toggled, this, syncSnapModes);
+        connect(endpointSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
+        connect(midpointSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
+        connect(intersectionSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
+        connect(centerSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
+        connect(perpendicularSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
 
         addToolBar(Qt::BottomToolBarArea, osnapLane_);
         osnapLane_->setVisible(false);
@@ -1621,13 +1835,17 @@ private:
                                          .toBool());
         }
 
-        if (endpointSnapAction_ != nullptr) {
-            endpointSnapAction_->setChecked(settings.value(QStringLiteral("osnap/endpoint"), true)
-                                                .toBool());
-            midpointSnapAction_->setChecked(settings.value(QStringLiteral("osnap/midpoint"), true)
-                                                .toBool());
-            intersectionSnapAction_->setChecked(
+        if (endpointSnapCheckBox_ != nullptr) {
+            endpointSnapCheckBox_->setChecked(settings.value(QStringLiteral("osnap/endpoint"), true)
+                                                  .toBool());
+            midpointSnapCheckBox_->setChecked(settings.value(QStringLiteral("osnap/midpoint"), true)
+                                                  .toBool());
+            intersectionSnapCheckBox_->setChecked(
                 settings.value(QStringLiteral("osnap/intersection"), true).toBool());
+            centerSnapCheckBox_->setChecked(settings.value(QStringLiteral("osnap/center"), true)
+                                                .toBool());
+            perpendicularSnapCheckBox_->setChecked(
+                settings.value(QStringLiteral("osnap/perpendicular"), false).toBool());
         }
 
         if (osnapAction_ != nullptr) {
@@ -1771,21 +1989,25 @@ private:
                 font-weight: bold;
                 padding-right: 6px;
             }
-            QToolBar#osnapLane QToolButton {
-                background: #303030;
-                border: 1px solid #3b3b3b;
-                border-radius: 3px;
+            QCheckBox#osnapCheckBox {
                 color: #c7c7c7;
-                padding: 4px 10px;
+                spacing: 5px;
+                padding: 3px 7px;
+                border-radius: 3px;
             }
-            QToolBar#osnapLane QToolButton:hover {
+            QCheckBox#osnapCheckBox:hover {
                 background: #414141;
-                border-color: #686868;
             }
-            QToolBar#osnapLane QToolButton:checked {
+            QCheckBox#osnapCheckBox::indicator {
+                width: 13px;
+                height: 13px;
+                background: #303030;
+                border: 1px solid #686868;
+                border-radius: 2px;
+            }
+            QCheckBox#osnapCheckBox::indicator:checked {
                 background: #537da0;
                 border-color: #82c7ec;
-                color: #ffffff;
             }
             QFrame#toolShelf, QFrame#rightPanel {
                 background: #232323;
@@ -1902,9 +2124,11 @@ private:
     QToolButton *selectToolButton_ = nullptr;
     QAction *orthoAction_ = nullptr;
     QAction *osnapAction_ = nullptr;
-    QAction *endpointSnapAction_ = nullptr;
-    QAction *midpointSnapAction_ = nullptr;
-    QAction *intersectionSnapAction_ = nullptr;
+    QCheckBox *endpointSnapCheckBox_ = nullptr;
+    QCheckBox *midpointSnapCheckBox_ = nullptr;
+    QCheckBox *intersectionSnapCheckBox_ = nullptr;
+    QCheckBox *centerSnapCheckBox_ = nullptr;
+    QCheckBox *perpendicularSnapCheckBox_ = nullptr;
     QToolBar *osnapLane_ = nullptr;
 };
 

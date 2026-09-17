@@ -13,6 +13,7 @@ The first pass is intentionally a Blender-inspired layout:
 - Edit > Preferences with Blender-style categories and a Keymap page for choosing MMB or RMB panning
 - Edit > Undo and Redo actions with Ctrl+Z/Ctrl+Y shortcuts for geometry changes
 - A stationary click of the configured pan button repeats the last completed tool; moving while holding it pans the viewport
+- A Control Points toggle on the tool shelf displays handles for the selected line or curve; the setting is remembered
 
 The drawing buttons are placeholders. The Line tool behaves as a continuous point-placement command: left-click plants points, the next segment previews under the cursor, and right-click finishes the chain. Finished chains are stored as open, clamped, degree-1 NURBS curves with unit weights, which is the NURBS equivalent of connected straight line segments. In Select mode, a left-click near a finished line highlights it and dragging translates the connected chain and its NURBS control points together. Move snapping allows any source point to snap to any enabled target type (for example, an endpoint to a midpoint), with a short breakaway distance so snapped geometry can be separated without fighting the snap correction.
 

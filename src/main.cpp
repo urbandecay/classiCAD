@@ -471,6 +471,20 @@ public:
         return arcMode_;
     }
 
+    void setControlPointsVisible(bool visible)
+    {
+        controlPointsVisible_ = visible;
+        DebugLog::instance().write(QStringLiteral("setControlPointsVisible=%1 selectedShape=%2")
+                                       .arg(controlPointsVisible_)
+                                       .arg(selectedShapeIndex_));
+        update();
+    }
+
+    bool controlPointsVisible() const
+    {
+        return controlPointsVisible_;
+    }
+
     void setPanButton(Qt::MouseButton button)
     {
         if (button != Qt::MiddleButton && button != Qt::RightButton) {
@@ -570,6 +584,11 @@ protected:
 
         for (int index = 0; index < shapes_.size(); ++index) {
             drawShape(painter, shapes_[index], false, index == selectedShapeIndex_);
+        }
+
+        if (controlPointsVisible_ && selectedShapeIndex_ >= 0 &&
+            selectedShapeIndex_ < shapes_.size()) {
+            drawControlPoints(painter, shapes_[selectedShapeIndex_]);
         }
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
@@ -1688,6 +1707,77 @@ private:
         return std::hypot(point.x() - closest.x(), point.y() - closest.y());
     }
 
+    qreal distanceToArc(const QPointF &screenPosition, const Shape &shape) const
+    {
+        QPointF center;
+        qreal radius = 0.0;
+        qreal startAngle = 0.0;
+        qreal sweepAngle = 0.0;
+        if (!makeArcSnapGeometry(shape,
+                                 &center,
+                                 &radius,
+                                 &startAngle,
+                                 &sweepAngle)) {
+            return 1.0e9;
+        }
+
+        const QPointF fromCenter = screenPosition - center;
+        const qreal distanceFromCenter =
+            std::hypot(fromCenter.x(), fromCenter.y());
+        const qreal pointAngle = std::atan2(fromCenter.y(), fromCenter.x());
+        if (arcAngleIsOnSweep(startAngle, sweepAngle, pointAngle)) {
+            return std::abs(distanceFromCenter - radius);
+        }
+
+        QPointF startPoint;
+        QPointF endPoint;
+        if (!arcSnapPointAtFraction(shape, 0.0, &startPoint) ||
+            !arcSnapPointAtFraction(shape, 1.0, &endPoint)) {
+            return 1.0e9;
+        }
+
+        return std::min(
+            distanceToSegment(screenPosition,
+                             worldToScreen(startPoint),
+                             worldToScreen(startPoint)),
+            distanceToSegment(screenPosition,
+                             worldToScreen(endPoint),
+                             worldToScreen(endPoint)));
+    }
+
+    qreal distanceToCubicCurve(const QPointF &screenPosition,
+                               const Shape &shape) const
+    {
+        if (shape.points.size() < 4) {
+            return 1.0e9;
+        }
+
+        const QPointF first = worldToScreen(shape.points[0]);
+        const QPointF second = worldToScreen(shape.points[1]);
+        const QPointF third = worldToScreen(shape.points[2]);
+        const QPointF fourth = worldToScreen(shape.points[3]);
+        constexpr int sampleCount = 64;
+        qreal closestDistance = 1.0e9;
+        QPointF previous = first;
+
+        for (int sample = 1; sample <= sampleCount; ++sample) {
+            const qreal t = static_cast<qreal>(sample) / sampleCount;
+            const qreal inverse = 1.0 - t;
+            const QPointF current =
+                first * (inverse * inverse * inverse) +
+                second * (3.0 * inverse * inverse * t) +
+                third * (3.0 * inverse * t * t) +
+                fourth * (t * t * t);
+            closestDistance = std::min(closestDistance,
+                                       distanceToSegment(screenPosition,
+                                                        previous,
+                                                        current));
+            previous = current;
+        }
+
+        return closestDistance;
+    }
+
     int hitTestShape(const QPointF &screenPosition) const
     {
         constexpr qreal hitRadiusPixels = 9.0;
@@ -1708,6 +1798,45 @@ private:
 
                 if (distanceFromCircle <= closestDistance) {
                     closestDistance = distanceFromCircle;
+                    closestShape = index;
+                }
+                continue;
+            }
+
+            if (shape.tool == Tool::Arc && shape.points.size() >= 3) {
+                const qreal distance = distanceToArc(screenPosition, shape);
+                if (distance <= closestDistance) {
+                    closestDistance = distance;
+                    closestShape = index;
+                }
+                continue;
+            }
+
+            if ((shape.tool == Tool::Bezier || shape.tool == Tool::Nurbs) &&
+                shape.points.size() >= 4) {
+                const qreal distance = distanceToCubicCurve(screenPosition, shape);
+                if (distance <= closestDistance) {
+                    closestDistance = distance;
+                    closestShape = index;
+                }
+                continue;
+            }
+
+            if (shape.tool == Tool::Rectangle && shape.points.size() >= 2) {
+                const QPointF first = worldToScreen(shape.points[0]);
+                const QPointF second = worldToScreen(shape.points[1]);
+                const QRectF rectangle = QRectF(first, second).normalized();
+                const QPointF topLeft = rectangle.topLeft();
+                const QPointF topRight = rectangle.topRight();
+                const QPointF bottomLeft = rectangle.bottomLeft();
+                const QPointF bottomRight = rectangle.bottomRight();
+                const qreal distance = std::min({
+                    distanceToSegment(screenPosition, topLeft, topRight),
+                    distanceToSegment(screenPosition, topRight, bottomRight),
+                    distanceToSegment(screenPosition, bottomRight, bottomLeft),
+                    distanceToSegment(screenPosition, bottomLeft, topLeft)});
+                if (distance <= closestDistance) {
+                    closestDistance = distance;
                     closestShape = index;
                 }
                 continue;
@@ -2196,6 +2325,34 @@ private:
         painter.drawEllipse(center, 5.0, 5.0);
     }
 
+    void drawControlPoints(QPainter &painter, const Shape &shape)
+    {
+        QVector<QPointF> controlPoints = shape.nurbs.controlPoints;
+        if (controlPoints.isEmpty()) {
+            controlPoints = shape.points;
+        }
+        if (controlPoints.isEmpty()) {
+            return;
+        }
+
+        const QColor handleColor(QStringLiteral("#77b7e6"));
+        const QColor handleFill(QStringLiteral("#263b4b"));
+        painter.setPen(QPen(handleColor, 1.0, Qt::DashLine));
+        painter.setBrush(Qt::NoBrush);
+        for (int index = 0; index + 1 < controlPoints.size(); ++index) {
+            painter.drawLine(worldToScreen(controlPoints[index]),
+                             worldToScreen(controlPoints[index + 1]));
+        }
+
+        painter.setPen(QPen(handleColor, 1.5));
+        painter.setBrush(handleFill);
+        for (const QPointF &point : controlPoints) {
+            const QPointF screenPoint = worldToScreen(point);
+            painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
+                                    screenPoint + QPointF(4.0, 4.0)));
+        }
+    }
+
     void drawGrid(QPainter &painter)
     {
         const QPointF topLeft = screenToWorld(QPointF(0, 0));
@@ -2327,6 +2484,7 @@ private:
     bool arcPreviewInitialized_ = false;
     qreal arcPreviewPreviousAngle_ = 0.0;
     qreal arcPreviewSweepAngle_ = 0.0;
+    bool controlPointsVisible_ = false;
     QVector<Shape> shapes_;
     QVector<QVector<Shape>> undoStack_;
     QVector<QVector<Shape>> redoStack_;
@@ -2755,6 +2913,23 @@ private:
         addToolButton(layout, group, QStringLiteral("□\nRect"), Tool::Rectangle);
         addToolButton(layout, group, QStringLiteral("○\nCircle"), Tool::Circle);
 
+        layout->addSpacing(8);
+        controlPointsButton_ = new QToolButton;
+        controlPointsButton_->setObjectName(QStringLiteral("toolButton"));
+        controlPointsButton_->setText(QStringLiteral("CP\nPoints"));
+        controlPointsButton_->setToolTip(QStringLiteral("Control Points"));
+        controlPointsButton_->setCheckable(true);
+        controlPointsButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        layout->addWidget(controlPointsButton_);
+        connect(controlPointsButton_, &QToolButton::toggled, this, [this](bool visible) {
+            viewport_->setControlPointsVisible(visible);
+            QSettings settings;
+            settings.setValue(QStringLiteral("view/controlPoints"), visible);
+            settings.sync();
+            statusBar()->showMessage(visible ? QStringLiteral("Control points: On")
+                                             : QStringLiteral("Control points: Off"));
+        });
+
         layout->addStretch(1);
 
         toolHelp_ = new QLabel;
@@ -2860,6 +3035,11 @@ private:
         if (osnapAction_ != nullptr) {
             osnapAction_->setChecked(settings.value(QStringLiteral("osnap/enabled"), false)
                                          .toBool());
+        }
+
+        if (controlPointsButton_ != nullptr) {
+            controlPointsButton_->setChecked(
+                settings.value(QStringLiteral("view/controlPoints"), false).toBool());
         }
     }
 
@@ -3132,6 +3312,7 @@ private:
     QLabel *toolHelp_ = nullptr;
     QToolButton *selectToolButton_ = nullptr;
     QToolButton *arcToolButton_ = nullptr;
+    QToolButton *controlPointsButton_ = nullptr;
     QVector<QToolButton *> toolButtons_;
     QAction *undoAction_ = nullptr;
     QAction *redoAction_ = nullptr;

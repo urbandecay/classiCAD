@@ -9,10 +9,10 @@ The first pass is intentionally a Blender-inspired layout:
 - central 2D viewport with grid, pan, and zoom
 - right outliner and properties panel
 - bottom coordinate/status bar
-- Rhino-style Ortho and OSnap toggles; enabling OSnap reveals Endpoint, Midpoint, and Intersection controls
+- Rhino-style Ortho and OSnap toggles; enabling OSnap reveals Endpoint, Midpoint, and Intersection controls for drawing and moving geometry
 - Edit > Preferences with Blender-style categories and a Keymap page for choosing MMB or RMB panning
 
-The drawing buttons are placeholders. The Line tool behaves as a continuous point-placement command: left-click plants points, the next segment previews under the cursor, and right-click finishes the chain. Finished chains are stored as open, clamped, degree-1 NURBS curves with unit weights, which is the NURBS equivalent of connected straight line segments. In Select mode, a left-click near a finished line highlights it and dragging translates the connected chain and its NURBS control points together.
+The drawing buttons are placeholders. The Line tool behaves as a continuous point-placement command: left-click plants points, the next segment previews under the cursor, and right-click finishes the chain. Finished chains are stored as open, clamped, degree-1 NURBS curves with unit weights, which is the NURBS equivalent of connected straight line segments. In Select mode, a left-click near a finished line highlights it and dragging translates the connected chain and its NURBS control points together. Move snapping allows any source point to snap to any enabled target type (for example, an endpoint to a midpoint), with a short breakaway distance so snapped geometry can be separated without fighting the snap correction.
 
 Arc, Bezier, NURBS, rectangle, and circle input currently draw lightweight preview geometry so the interaction can be tested before the full geometry kernel and Rhino `.3dm` reader/writer are added.
 

@@ -68,6 +68,28 @@ struct SnapResult {
     }
 };
 
+struct SnapCandidate {
+    SnapType type = SnapType::None;
+    QPointF point;
+};
+
+struct LineSegment {
+    QPointF start;
+    QPointF end;
+};
+
+struct DragSnapResult {
+    SnapType type = SnapType::None;
+    QPointF sourcePoint;
+    QPointF targetPoint;
+    QPointF translation;
+
+    bool isValid() const
+    {
+        return type != SnapType::None;
+    }
+};
+
 struct Shape {
     Tool tool;
     QVector<QPointF> points;
@@ -308,6 +330,8 @@ public:
         if (tool != Tool::Select) {
             selectedShapeIndex_ = -1;
             draggingSelected_ = false;
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapLocked_ = false;
         }
 
         if (lineCommandActive_) {
@@ -377,6 +401,10 @@ public:
     void setOsnapEnabled(bool enabled)
     {
         osnapEnabled_ = enabled;
+        if (!enabled) {
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapLocked_ = false;
+        }
         refreshCursorConstraint();
         DebugLog::instance().write(QStringLiteral("setOsnapEnabled=%1 snap=%2")
                                        .arg(osnapEnabled_)
@@ -429,6 +457,12 @@ protected:
             drawLineToolPreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
             drawShape(painter, Shape{activeTool_, pendingPoints_, Shape::NurbsCurve2D{}}, true);
+        }
+
+        if (draggingSelected_ && currentDragSnap_.isValid()) {
+            drawSnapMarker(painter,
+                           currentDragSnap_.type,
+                           currentDragSnap_.targetPoint);
         }
 
         painter.setPen(QColor(QStringLiteral("#a0a0a0")));
@@ -494,6 +528,8 @@ protected:
 
             selectedShapeIndex_ = hitTestShape(screenPosition);
             draggingSelected_ = selectedShapeIndex_ >= 0;
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapLocked_ = false;
 
             if (draggingSelected_) {
                 lastDragWorld_ = rawWorldPosition;
@@ -565,13 +601,54 @@ protected:
             selectedShapeIndex_ < shapes_.size()) {
             const QPointF delta = rawCursorWorld_ - lastDragWorld_;
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
-                translateShape(selectedShapeIndex_, delta);
+                constexpr qreal dragSnapBreakawayPixels = 18.0;
+                const qreal cursorDistanceFromSnap =
+                    std::hypot(screenPosition.x() - worldToScreen(dragSnapCursorWorld_).x(),
+                               screenPosition.y() - worldToScreen(dragSnapCursorWorld_).y());
+
+                if (dragSnapLocked_ && cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
+                    // Keep the geometry attached while the cursor is still near the
+                    // snap point. This prevents a one-pixel mouse move from
+                    // repeatedly attaching and detaching the line.
+                    DebugLog::instance().write(
+                        QStringLiteral("selection drag snap-hold shape=%1 cursorDistance=%2 breakaway=%3")
+                            .arg(selectedShapeIndex_)
+                            .arg(cursorDistanceFromSnap, 0, 'f', 2)
+                            .arg(dragSnapBreakawayPixels, 0, 'f', 2));
+                } else {
+                    if (dragSnapLocked_) {
+                        // Release from the snap using the complete cursor movement
+                        // since the snap was acquired, so the line leaves cleanly.
+                        const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
+                        translateShape(selectedShapeIndex_, detachDelta);
+                        currentDragSnap_ = DragSnapResult{};
+                        dragSnapLocked_ = false;
+                        DebugLog::instance().write(
+                            QStringLiteral("selection drag snap-breakaway shape=%1 cursorDistance=%2")
+                                .arg(selectedShapeIndex_)
+                                .arg(cursorDistanceFromSnap, 0, 'f', 2));
+                    } else {
+                        translateShape(selectedShapeIndex_, delta);
+                        currentDragSnap_ = findDragSnap(selectedShapeIndex_);
+                        if (currentDragSnap_.isValid()) {
+                            translateShape(selectedShapeIndex_, currentDragSnap_.translation);
+                            dragSnapLocked_ = true;
+                            dragSnapCursorWorld_ = rawCursorWorld_;
+                        }
+                    }
+                }
+
                 lastDragWorld_ = rawCursorWorld_;
+
                 DebugLog::instance().write(
-                    QStringLiteral("selection drag shape=%1 delta=%2 cursorWorld=%3")
+                    QStringLiteral("selection drag shape=%1 delta=%2 cursorWorld=%3 snap=%4 snapSource=%5 snapTarget=%6 snapTranslation=%7")
                         .arg(selectedShapeIndex_)
                         .arg(pointText(delta))
-                        .arg(pointText(rawCursorWorld_)));
+                        .arg(pointText(rawCursorWorld_))
+                        .arg(snapTypeName(currentDragSnap_.type))
+                        .arg(pointText(currentDragSnap_.sourcePoint))
+                        .arg(pointText(currentDragSnap_.targetPoint))
+                        .arg(pointText(currentDragSnap_.translation)));
             }
         }
 
@@ -613,6 +690,8 @@ protected:
 
         if (draggingSelected_ && event->button() == Qt::LeftButton) {
             draggingSelected_ = false;
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapLocked_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-selection-drag shape=%1")
                                            .arg(selectedShapeIndex_));
@@ -704,52 +783,72 @@ private:
                                        .arg(pendingPoints_.size()));
     }
 
-    SnapResult findSnapPoint(const QPointF &rawPoint) const
+    QVector<SnapCandidate> snapCandidatesForShape(const Shape &shape) const
     {
-        SnapResult best;
-        if (!osnapEnabled_ || activeTool_ != Tool::Line || !lineCommandActive_) {
-            return best;
+        QVector<SnapCandidate> candidates;
+        if (shape.tool != Tool::Line || shape.points.isEmpty()) {
+            return candidates;
         }
 
-        const QPointF cursorScreen = worldToScreen(rawPoint);
-        constexpr qreal snapRadiusPixels = 12.0;
-        qreal bestDistance = snapRadiusPixels;
+        QVector<LineSegment> segments;
+        // A moved object may use any of its snap points as the source. The
+        // OSnap toggles control which target types are eligible below.
+        for (const QPointF &point : shape.points) {
+            candidates.append(SnapCandidate{SnapType::Endpoint, point});
+        }
 
-        const auto consider = [&](SnapType type, const QPointF &candidate) {
-            const QPointF candidateScreen = worldToScreen(candidate);
-            const qreal distance = std::hypot(candidateScreen.x() - cursorScreen.x(),
-                                               candidateScreen.y() - cursorScreen.y());
-            if (distance <= bestDistance) {
-                bestDistance = distance;
-                best.type = type;
-                best.point = candidate;
+        for (int index = 0; index + 1 < shape.points.size(); ++index) {
+            const QPointF start = shape.points[index];
+            const QPointF end = shape.points[index + 1];
+            segments.append(LineSegment{start, end});
+
+            candidates.append(SnapCandidate{SnapType::Midpoint, (start + end) / 2.0});
+        }
+
+        for (int first = 0; first < segments.size(); ++first) {
+            for (int second = first + 1; second < segments.size(); ++second) {
+                QPointF intersection;
+                if (segmentIntersection(segments[first].start,
+                                        segments[first].end,
+                                        segments[second].start,
+                                        segments[second].end,
+                                        &intersection)) {
+                    candidates.append(SnapCandidate{SnapType::Intersection, intersection});
+                }
             }
-        };
+        }
 
-        struct Segment {
-            QPointF start;
-            QPointF end;
-        };
-        QVector<Segment> segments;
+        return candidates;
+    }
 
-        for (const Shape &shape : shapes_) {
+    QVector<SnapCandidate> snapCandidatesForScene(int excludedShapeIndex = -1) const
+    {
+        QVector<SnapCandidate> candidates;
+        QVector<LineSegment> segments;
+
+        for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
+            if (shapeIndex == excludedShapeIndex) {
+                continue;
+            }
+
+            const Shape &shape = shapes_[shapeIndex];
             if (shape.tool != Tool::Line || shape.points.isEmpty()) {
                 continue;
             }
 
             if (endpointSnapEnabled_) {
                 for (const QPointF &point : shape.points) {
-                    consider(SnapType::Endpoint, point);
+                    candidates.append(SnapCandidate{SnapType::Endpoint, point});
                 }
             }
 
-            for (int i = 0; i + 1 < shape.points.size(); ++i) {
-                const QPointF start = shape.points[i];
-                const QPointF end = shape.points[i + 1];
-                segments.append(Segment{start, end});
+            for (int index = 0; index + 1 < shape.points.size(); ++index) {
+                const QPointF start = shape.points[index];
+                const QPointF end = shape.points[index + 1];
+                segments.append(LineSegment{start, end});
 
                 if (midpointSnapEnabled_) {
-                    consider(SnapType::Midpoint, (start + end) / 2.0);
+                    candidates.append(SnapCandidate{SnapType::Midpoint, (start + end) / 2.0});
                 }
             }
         }
@@ -763,8 +862,67 @@ private:
                                             segments[second].start,
                                             segments[second].end,
                                             &intersection)) {
-                        consider(SnapType::Intersection, intersection);
+                        candidates.append(SnapCandidate{SnapType::Intersection, intersection});
                     }
+                }
+            }
+        }
+
+        return candidates;
+    }
+
+    SnapResult findSnapPoint(const QPointF &rawPoint) const
+    {
+        SnapResult best;
+        if (!osnapEnabled_ || activeTool_ != Tool::Line || !lineCommandActive_) {
+            return best;
+        }
+
+        const QPointF cursorScreen = worldToScreen(rawPoint);
+        constexpr qreal snapRadiusPixels = 12.0;
+        qreal bestDistance = snapRadiusPixels;
+
+        for (const SnapCandidate &candidate : snapCandidatesForScene()) {
+            const QPointF candidateScreen = worldToScreen(candidate.point);
+            const qreal distance = std::hypot(candidateScreen.x() - cursorScreen.x(),
+                                               candidateScreen.y() - cursorScreen.y());
+            if (distance <= bestDistance) {
+                bestDistance = distance;
+                best.type = candidate.type;
+                best.point = candidate.point;
+            }
+        }
+
+        return best;
+    }
+
+    DragSnapResult findDragSnap(int selectedShapeIndex) const
+    {
+        DragSnapResult best;
+        if (!osnapEnabled_ || selectedShapeIndex < 0 ||
+            selectedShapeIndex >= shapes_.size()) {
+            return best;
+        }
+
+        const QVector<SnapCandidate> sourceCandidates =
+            snapCandidatesForShape(shapes_[selectedShapeIndex]);
+        const QVector<SnapCandidate> targetCandidates =
+            snapCandidatesForScene(selectedShapeIndex);
+        constexpr qreal snapRadiusPixels = 12.0;
+        qreal bestDistance = snapRadiusPixels;
+
+        for (const SnapCandidate &source : sourceCandidates) {
+            const QPointF sourceScreen = worldToScreen(source.point);
+            for (const SnapCandidate &target : targetCandidates) {
+                const QPointF targetScreen = worldToScreen(target.point);
+                const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
+                                                   targetScreen.y() - sourceScreen.y());
+                if (distance <= bestDistance) {
+                    bestDistance = distance;
+                    best.type = source.type;
+                    best.sourcePoint = source.point;
+                    best.targetPoint = target.point;
+                    best.translation = target.point - source.point;
                 }
             }
         }
@@ -881,6 +1039,32 @@ private:
                        height() / 2.0 - (world.y() + pan_.y()) * zoom_);
     }
 
+    void drawSnapMarker(QPainter &painter,
+                        SnapType type,
+                        const QPointF &worldPoint)
+    {
+        const QPointF snapScreen = worldToScreen(worldPoint);
+        const QColor snapColor(QStringLiteral("#63b5e8"));
+        painter.setPen(QPen(snapColor, 2.0));
+        painter.setBrush(Qt::NoBrush);
+
+        if (type == SnapType::Endpoint) {
+            painter.drawEllipse(snapScreen, 7.0, 7.0);
+        } else if (type == SnapType::Midpoint) {
+            painter.drawRect(QRectF(snapScreen - QPointF(6.0, 6.0),
+                                    snapScreen + QPointF(6.0, 6.0)));
+        } else if (type == SnapType::Intersection) {
+            painter.drawLine(snapScreen - QPointF(7.0, 7.0),
+                             snapScreen + QPointF(7.0, 7.0));
+            painter.drawLine(snapScreen - QPointF(7.0, -7.0),
+                             snapScreen + QPointF(7.0, -7.0));
+        }
+
+        painter.setPen(snapColor);
+        painter.setFont(QFont(QStringLiteral("Sans"), 9, QFont::Bold));
+        painter.drawText(snapScreen + QPointF(10.0, -10.0), snapTypeName(type));
+    }
+
     void drawLineToolPreview(QPainter &painter)
     {
         const QColor lineColor(QStringLiteral("#e6b85c"));
@@ -912,26 +1096,7 @@ private:
         }
 
         if (currentSnap_.isValid()) {
-            const QPointF snapScreen = worldToScreen(currentSnap_.point);
-            const QColor snapColor(QStringLiteral("#63b5e8"));
-            painter.setPen(QPen(snapColor, 2.0));
-            painter.setBrush(Qt::NoBrush);
-
-            if (currentSnap_.type == SnapType::Endpoint) {
-                painter.drawEllipse(snapScreen, 7.0, 7.0);
-            } else if (currentSnap_.type == SnapType::Midpoint) {
-                painter.drawRect(QRectF(snapScreen - QPointF(6.0, 6.0),
-                                        snapScreen + QPointF(6.0, 6.0)));
-            } else if (currentSnap_.type == SnapType::Intersection) {
-                painter.drawLine(snapScreen - QPointF(7.0, 7.0),
-                                 snapScreen + QPointF(7.0, 7.0));
-                painter.drawLine(snapScreen - QPointF(7.0, -7.0),
-                                 snapScreen + QPointF(7.0, -7.0));
-            }
-
-            painter.setPen(snapColor);
-            painter.setFont(QFont(QStringLiteral("Sans"), 9, QFont::Bold));
-            painter.drawText(snapScreen + QPointF(10.0, -10.0), snapTypeName(currentSnap_.type));
+            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
         }
     }
 
@@ -1053,8 +1218,11 @@ private:
     QPoint lastMousePosition_;
     QPointF cursorWorld_{0.0, 0.0};
     SnapResult currentSnap_;
+    DragSnapResult currentDragSnap_;
     int selectedShapeIndex_ = -1;
     bool draggingSelected_ = false;
+    bool dragSnapLocked_ = false;
+    QPointF dragSnapCursorWorld_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
     qreal zoom_ = 1.0;
     bool panning_ = false;

@@ -681,6 +681,8 @@ public:
             repeatTool_ = tool;
             selectedShapeIndex_ = -1;
             draggingSelected_ = false;
+            draggingControlPoint_ = false;
+            controlPointIndex_ = -1;
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
@@ -794,6 +796,11 @@ public:
     void setControlPointsVisible(bool visible)
     {
         controlPointsVisible_ = visible;
+        if (!visible) {
+            draggingControlPoint_ = false;
+            controlPointIndex_ = -1;
+            dragHistoryRecorded_ = false;
+        }
         DebugLog::instance().write(QStringLiteral("setControlPointsVisible=%1 selectedShape=%2")
                                        .arg(controlPointsVisible_)
                                        .arg(selectedShapeIndex_));
@@ -1090,6 +1097,8 @@ public:
         resetArcPreviewTracking();
         selectedShapeIndex_ = -1;
         draggingSelected_ = false;
+        draggingControlPoint_ = false;
+        controlPointIndex_ = -1;
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
@@ -1266,8 +1275,34 @@ protected:
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
 
+            if (controlPointsVisible_ && selectedShapeIndex_ >= 0 &&
+                selectedShapeIndex_ < shapes_.size()) {
+                const int grabbedControlPoint =
+                    hitTestControlPoint(selectedShapeIndex_, screenPosition);
+                if (grabbedControlPoint >= 0) {
+                    draggingControlPoint_ = true;
+                    draggingSelected_ = false;
+                    controlPointIndex_ = grabbedControlPoint;
+                    lastControlPointWorld_ = rawWorldPosition;
+                    dragHistoryRecorded_ = false;
+                    currentDragSnap_ = DragSnapResult{};
+                    dragSnapLocked_ = false;
+                    setCursor(Qt::SizeAllCursor);
+                    DebugLog::instance().write(
+                        QStringLiteral("control point drag start shape=%1 index=%2 world=%3")
+                            .arg(selectedShapeIndex_)
+                            .arg(controlPointIndex_)
+                            .arg(pointText(lastControlPointWorld_)));
+                    update();
+                    emitCoordinateUpdate();
+                    return;
+                }
+            }
+
             selectedShapeIndex_ = hitTestShape(screenPosition);
             draggingSelected_ = selectedShapeIndex_ >= 0;
+            draggingControlPoint_ = false;
+            controlPointIndex_ = -1;
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
@@ -1417,7 +1452,21 @@ protected:
             lastMousePosition_ = current;
         }
 
-        if (draggingSelected_ && selectedShapeIndex_ >= 0 &&
+        if (draggingControlPoint_ && selectedShapeIndex_ >= 0 &&
+            selectedShapeIndex_ < shapes_.size() && controlPointIndex_ >= 0) {
+            const QPointF delta = rawCursorWorld_ - lastControlPointWorld_;
+            if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+                beginDragHistory();
+                translateControlPoint(selectedShapeIndex_, controlPointIndex_, delta);
+                lastControlPointWorld_ = rawCursorWorld_;
+                DebugLog::instance().write(
+                    QStringLiteral("control point drag shape=%1 index=%2 delta=%3 world=%4")
+                        .arg(selectedShapeIndex_)
+                        .arg(controlPointIndex_)
+                        .arg(pointText(delta))
+                        .arg(pointText(rawCursorWorld_)));
+            }
+        } else if (draggingSelected_ && selectedShapeIndex_ >= 0 &&
             selectedShapeIndex_ < shapes_.size()) {
             const QPointF delta = rawCursorWorld_ - lastDragWorld_;
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
@@ -1475,12 +1524,12 @@ protected:
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
-            rectanglePreviewActive || panning_ || draggingSelected_) {
+            rectanglePreviewActive || panning_ || draggingSelected_ || draggingControlPoint_) {
             update();
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
-            rectanglePreviewActive || panning_ || draggingSelected_) {
+            rectanglePreviewActive || panning_ || draggingSelected_ || draggingControlPoint_) {
             DebugLog::instance().write(
                 QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11 arcMode=%12 arcSweep=%13 snap=%14")
                     .arg(pointText(screenPosition))
@@ -1527,7 +1576,15 @@ protected:
             repeatLastTool();
         }
 
-        if (draggingSelected_ && event->button() == Qt::LeftButton) {
+        if (draggingControlPoint_ && event->button() == Qt::LeftButton) {
+            draggingControlPoint_ = false;
+            controlPointIndex_ = -1;
+            dragHistoryRecorded_ = false;
+            setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
+            DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-control-point-drag shape=%1")
+                                           .arg(selectedShapeIndex_));
+            update();
+        } else if (draggingSelected_ && event->button() == Qt::LeftButton) {
             draggingSelected_ = false;
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
@@ -1878,6 +1935,8 @@ private:
         currentSnap_ = SnapResult{};
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
+        draggingControlPoint_ = false;
+        controlPointIndex_ = -1;
         subdivisionActive_ = false;
         subdivisionShapeIndex_ = -1;
         subdivisionSections_ = 2;
@@ -2905,6 +2964,42 @@ private:
         return closestDistance;
     }
 
+    QVector<QPointF> controlPointsForShape(const Shape &shape) const
+    {
+        if (shape.tool == Tool::Point) {
+            return {};
+        }
+
+        if (!shape.nurbs.controlPoints.isEmpty()) {
+            return shape.nurbs.controlPoints;
+        }
+
+        return shape.points;
+    }
+
+    int hitTestControlPoint(int shapeIndex, const QPointF &screenPosition) const
+    {
+        if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+            return -1;
+        }
+
+        const QVector<QPointF> controlPoints = controlPointsForShape(shapes_[shapeIndex]);
+        constexpr qreal hitRadiusPixels = 10.0;
+        int closestIndex = -1;
+        qreal closestDistance = hitRadiusPixels;
+        for (int index = 0; index < controlPoints.size(); ++index) {
+            const QPointF screenPoint = worldToScreen(controlPoints[index]);
+            const qreal distance = std::hypot(screenPosition.x() - screenPoint.x(),
+                                              screenPosition.y() - screenPoint.y());
+            if (distance <= closestDistance) {
+                closestDistance = distance;
+                closestIndex = index;
+            }
+        }
+
+        return closestIndex;
+    }
+
     int hitTestShape(const QPointF &screenPosition) const
     {
         constexpr qreal hitRadiusPixels = 9.0;
@@ -2926,13 +3021,18 @@ private:
             }
 
             if (shape.tool == Tool::Circle && shape.points.size() >= 2) {
-                const QPointF center = worldToScreen(shape.points[0]);
-                const QPointF edge = worldToScreen(shape.points[1]);
-                const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
-                const qreal distanceFromCenter =
-                    std::hypot(screenPosition.x() - center.x(),
-                               screenPosition.y() - center.y());
-                const qreal distanceFromCircle = std::abs(distanceFromCenter - radius);
+                qreal distanceFromCircle = 1.0e9;
+                if (isValidNurbsCurve(shape.nurbs)) {
+                    distanceFromCircle = distanceToNurbsCurve(screenPosition, shape.nurbs);
+                } else {
+                    const QPointF center = worldToScreen(shape.points[0]);
+                    const QPointF edge = worldToScreen(shape.points[1]);
+                    const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
+                    const qreal distanceFromCenter =
+                        std::hypot(screenPosition.x() - center.x(),
+                                   screenPosition.y() - center.y());
+                    distanceFromCircle = std::abs(distanceFromCenter - radius);
+                }
 
                 if (distanceFromCircle <= closestDistance) {
                     closestDistance = distanceFromCircle;
@@ -2942,7 +3042,9 @@ private:
             }
 
             if (shape.tool == Tool::Arc && shape.points.size() >= 3) {
-                const qreal distance = distanceToArc(screenPosition, shape);
+                const qreal distance = isValidNurbsCurve(shape.nurbs)
+                                           ? distanceToNurbsCurve(screenPosition, shape.nurbs)
+                                           : distanceToArc(screenPosition, shape);
                 if (distance <= closestDistance) {
                     closestDistance = distance;
                     closestShape = index;
@@ -2999,6 +3101,39 @@ private:
         }
 
         return closestShape;
+    }
+
+    void translateControlPoint(int shapeIndex, int controlPointIndex, const QPointF &delta)
+    {
+        if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
+            controlPointIndex < 0 ||
+            (qFuzzyIsNull(delta.x()) && qFuzzyIsNull(delta.y()))) {
+            return;
+        }
+
+        Shape &shape = shapes_[shapeIndex];
+        if (!shape.nurbs.controlPoints.isEmpty()) {
+            if (controlPointIndex >= shape.nurbs.controlPoints.size()) {
+                return;
+            }
+
+            shape.nurbs.controlPoints[controlPointIndex] += delta;
+
+            // These curve types keep their source points in the same order as
+            // their NURBS CVs. Keep both representations synchronized. Arc
+            // and circle construction points intentionally remain unchanged;
+            // their stored NURBS is the geometry being edited.
+            if ((shape.tool == Tool::Line || shape.tool == Tool::Bezier ||
+                 shape.tool == Tool::Nurbs) &&
+                controlPointIndex < shape.points.size()) {
+                shape.points[controlPointIndex] += delta;
+            }
+            return;
+        }
+
+        if (controlPointIndex < shape.points.size()) {
+            shape.points[controlPointIndex] += delta;
+        }
     }
 
     void translateShape(int index, const QPointF &delta)
@@ -3520,14 +3655,7 @@ private:
 
     void drawControlPoints(QPainter &painter, const Shape &shape)
     {
-        if (shape.tool == Tool::Point) {
-            return;
-        }
-
-        QVector<QPointF> controlPoints = shape.nurbs.controlPoints;
-        if (controlPoints.isEmpty()) {
-            controlPoints = shape.points;
-        }
+        const QVector<QPointF> controlPoints = controlPointsForShape(shape);
         if (controlPoints.isEmpty()) {
             return;
         }
@@ -3541,9 +3669,15 @@ private:
                              worldToScreen(controlPoints[index + 1]));
         }
 
-        painter.setPen(QPen(handleColor, 1.5));
-        painter.setBrush(handleFill);
-        for (const QPointF &point : controlPoints) {
+        for (int index = 0; index < controlPoints.size(); ++index) {
+            const bool active = draggingControlPoint_ &&
+                                selectedShapeIndex_ >= 0 &&
+                                selectedShapeIndex_ < shapes_.size() &&
+                                controlPointIndex_ == index;
+            painter.setPen(QPen(active ? QColor(QStringLiteral("#f0a45a")) : handleColor,
+                                1.5));
+            painter.setBrush(active ? QColor(QStringLiteral("#f0a45a")) : handleFill);
+            const QPointF &point = controlPoints[index];
             const QPointF screenPoint = worldToScreen(point);
             painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
                                     screenPoint + QPointF(4.0, 4.0)));
@@ -3939,10 +4073,13 @@ private:
     DragSnapResult currentDragSnap_;
     int selectedShapeIndex_ = -1;
     bool draggingSelected_ = false;
+    bool draggingControlPoint_ = false;
+    int controlPointIndex_ = -1;
     bool dragHistoryRecorded_ = false;
     bool dragSnapLocked_ = false;
     QPointF dragSnapCursorWorld_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
+    QPointF lastControlPointWorld_{0.0, 0.0};
     qreal zoom_ = 1.0;
     bool panning_ = false;
     bool panMoved_ = false;

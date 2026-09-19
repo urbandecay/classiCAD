@@ -1351,9 +1351,18 @@ protected:
                                   true);
         }
 
-        if (controlPointsVisible_ && selectedShapeIndex_ >= 0 &&
-            selectedShapeIndex_ < shapes_.size()) {
-            drawControlPoints(painter, shapes_[selectedShapeIndex_]);
+        if (controlPointsVisible_) {
+            QVector<int> controlPointShapeIndices = selectedShapeIndices_;
+            if (controlPointShapeIndices.isEmpty() &&
+                selectedShapeIndex_ >= 0 && selectedShapeIndex_ < shapes_.size()) {
+                controlPointShapeIndices.append(selectedShapeIndex_);
+            }
+
+            for (const int shapeIndex : controlPointShapeIndices) {
+                if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
+                    drawControlPoints(painter, shapes_[shapeIndex], shapeIndex);
+                }
+            }
         }
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
@@ -1527,11 +1536,14 @@ protected:
             cursorValid_ = true;
             const bool shiftPressed = event->modifiers().testFlag(Qt::ShiftModifier);
 
-            if (!shiftPressed && controlPointsVisible_ && selectedShapeIndex_ >= 0 &&
-                selectedShapeIndex_ < shapes_.size()) {
-                const int grabbedControlPoint =
-                    hitTestControlPoint(selectedShapeIndex_, screenPosition);
-                if (grabbedControlPoint >= 0) {
+            if (!shiftPressed && controlPointsVisible_ &&
+                !selectedShapeIndices_.isEmpty()) {
+                int grabbedShapeIndex = -1;
+                int grabbedControlPoint = -1;
+                if (hitTestSelectedControlPoint(screenPosition,
+                                                &grabbedShapeIndex,
+                                                &grabbedControlPoint)) {
+                    selectedShapeIndex_ = grabbedShapeIndex;
                     draggingControlPoint_ = true;
                     draggingSelected_ = false;
                     controlPointIndex_ = grabbedControlPoint;
@@ -4004,27 +4016,45 @@ private:
         return shape.points;
     }
 
-    int hitTestControlPoint(int shapeIndex, const QPointF &screenPosition) const
+    bool hitTestSelectedControlPoint(const QPointF &screenPosition,
+                                     int *shapeIndex,
+                                     int *controlPointIndex) const
     {
-        if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
-            return -1;
-        }
-
-        const QVector<QPointF> controlPoints = controlPointsForShape(shapes_[shapeIndex]);
         constexpr qreal hitRadiusPixels = 10.0;
-        int closestIndex = -1;
+        int closestShapeIndex = -1;
+        int closestControlPointIndex = -1;
         qreal closestDistance = hitRadiusPixels;
-        for (int index = 0; index < controlPoints.size(); ++index) {
-            const QPointF screenPoint = worldToScreen(controlPoints[index]);
-            const qreal distance = std::hypot(screenPosition.x() - screenPoint.x(),
-                                              screenPosition.y() - screenPoint.y());
-            if (distance <= closestDistance) {
-                closestDistance = distance;
-                closestIndex = index;
+
+        for (const int candidateShapeIndex : selectedShapeIndices_) {
+            if (candidateShapeIndex < 0 || candidateShapeIndex >= shapes_.size()) {
+                continue;
+            }
+
+            const QVector<QPointF> controlPoints =
+                controlPointsForShape(shapes_[candidateShapeIndex]);
+            for (int candidateControlPointIndex = 0;
+                 candidateControlPointIndex < controlPoints.size();
+                 ++candidateControlPointIndex) {
+                const QPointF screenPoint =
+                    worldToScreen(controlPoints[candidateControlPointIndex]);
+                const qreal distance =
+                    std::hypot(screenPosition.x() - screenPoint.x(),
+                               screenPosition.y() - screenPoint.y());
+                if (distance <= closestDistance) {
+                    closestDistance = distance;
+                    closestShapeIndex = candidateShapeIndex;
+                    closestControlPointIndex = candidateControlPointIndex;
+                }
             }
         }
 
-        return closestIndex;
+        if (shapeIndex != nullptr) {
+            *shapeIndex = closestShapeIndex;
+        }
+        if (controlPointIndex != nullptr) {
+            *controlPointIndex = closestControlPointIndex;
+        }
+        return closestShapeIndex >= 0 && closestControlPointIndex >= 0;
     }
 
     int hitTestShape(const QPointF &screenPosition) const
@@ -4740,7 +4770,7 @@ private:
         }
     }
 
-    void drawControlPoints(QPainter &painter, const Shape &shape)
+    void drawControlPoints(QPainter &painter, const Shape &shape, int shapeIndex)
     {
         const QColor handleColor(QStringLiteral("#77b7e6"));
         const QColor handleFill(QStringLiteral("#263b4b"));
@@ -4762,8 +4792,7 @@ private:
 
             for (int index = 0; index < controlPoints.size(); ++index) {
                 const bool active = draggingControlPoint_ &&
-                                    selectedShapeIndex_ >= 0 &&
-                                    selectedShapeIndex_ < shapes_.size() &&
+                                    shapeIndex == selectedShapeIndex_ &&
                                     controlPointIndex_ == globalControlPointIndex + index;
                 painter.setPen(QPen(active ? QColor(QStringLiteral("#f0a45a")) : handleColor,
                                     1.5));

@@ -18,6 +18,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QInputDialog>
+#include <QIcon>
 #include <QListWidget>
 #include <QMenu>
 #include <QMainWindow>
@@ -26,6 +27,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QPixmap>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -62,6 +64,9 @@ enum class Tool {
     Point,
     // Keep PolyCurve after the existing IDs for session compatibility.
     PolyCurve,
+    // Erase is a command, not a persisted geometry type. Keep it last so
+    // existing saved shape IDs remain unchanged.
+    Erase,
 };
 
 enum class ArcMode {
@@ -98,6 +103,38 @@ struct LineSegment {
     QPointF start;
     QPointF end;
 };
+
+struct HomogeneousControlPoint2D {
+    QPointF weightedPosition;
+    qreal weight = 1.0;
+};
+
+struct RationalBezierSpan2D {
+    qreal startParameter = 0.0;
+    qreal endParameter = 0.0;
+    QVector<HomogeneousControlPoint2D> controlPoints;
+};
+
+struct ParameterInterval {
+    qreal start = 0.0;
+    qreal end = 0.0;
+};
+
+struct SampledNurbsCurve2D {
+    QVector<qreal> parameters;
+    QVector<QPointF> screenPoints;
+};
+
+HomogeneousControlPoint2D blendHomogeneousControlPoints(
+    const HomogeneousControlPoint2D &first,
+    const HomogeneousControlPoint2D &second,
+    qreal secondFraction)
+{
+    const qreal firstFraction = 1.0 - secondFraction;
+    return HomogeneousControlPoint2D{
+        first.weightedPosition * firstFraction + second.weightedPosition * secondFraction,
+        first.weight * firstFraction + second.weight * secondFraction};
+}
 
 struct DragSnapResult {
     SnapType type = SnapType::None;
@@ -621,9 +658,39 @@ QString toolName(Tool tool)
         return QStringLiteral("Point");
     case Tool::PolyCurve:
         return QStringLiteral("PolyCurve");
+    case Tool::Erase:
+        return QStringLiteral("Erase");
     }
 
     return QStringLiteral("Unknown");
+}
+
+QIcon makeEraserIcon()
+{
+    QPixmap pixmap(32, 32);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(QColor(QStringLiteral("#171717")), 1.5));
+    painter.setBrush(QColor(QStringLiteral("#e6b85c")));
+
+    QPainterPath eraser;
+    eraser.moveTo(7.0, 21.0);
+    eraser.lineTo(17.5, 10.5);
+    eraser.quadTo(19.0, 9.0, 20.5, 10.5);
+    eraser.lineTo(26.5, 16.5);
+    eraser.quadTo(28.0, 18.0, 26.5, 19.5);
+    eraser.lineTo(19.0, 27.0);
+    eraser.lineTo(11.0, 27.0);
+    eraser.closeSubpath();
+    painter.drawPath(eraser);
+
+    painter.setPen(QPen(QColor(QStringLiteral("#8f5b2d")), 1.5));
+    painter.drawLine(QPointF(13.0, 15.0), QPointF(21.0, 23.0));
+    painter.setPen(QPen(QColor(QStringLiteral("#d7d7d7")), 2.0));
+    painter.drawLine(QPointF(19.0, 27.0), QPointF(28.0, 27.0));
+    return QIcon(pixmap);
 }
 
 QString arcModeName(ArcMode mode)
@@ -678,6 +745,7 @@ int requiredPoints(Tool tool)
     case Tool::PolyCurve:
         return 0;
     case Tool::Select:
+    case Tool::Erase:
         return 0;
     }
 
@@ -710,11 +778,18 @@ public:
         pendingPoints_.clear();
         resetArcPreviewTracking();
         lineCommandActive_ = tool == Tool::Line;
+        if (tool != Tool::Erase) {
+            eraseStrokeActive_ = false;
+            eraseCandidateShapeIndices_.clear();
+            eraseStrokeScreenPath_.clear();
+        }
 
         if (tool != Tool::Select) {
             repeatTool_ = tool;
-            selectedShapeIndices_.clear();
-            selectedShapeIndex_ = -1;
+            if (tool != Tool::Erase) {
+                selectedShapeIndices_.clear();
+                selectedShapeIndex_ = -1;
+            }
             selectionBoxActive_ = false;
             selectionBoxMoved_ = false;
             selectionBoxAdditive_ = false;
@@ -1295,6 +1370,9 @@ public:
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
+        eraseStrokeActive_ = false;
+        eraseCandidateShapeIndices_.clear();
+        eraseStrokeScreenPath_.clear();
         currentSnap_ = SnapResult{};
         joinActive_ = false;
         joinShapeIndices_.clear();
@@ -1331,7 +1409,8 @@ protected:
         for (int index = 0; index < shapes_.size(); ++index) {
             const bool selected = selectedShapeIndices_.contains(index) ||
                                   index == selectedShapeIndex_ ||
-                                  joinShapeIndices_.contains(index);
+                                  joinShapeIndices_.contains(index) ||
+                                  eraseCandidateShapeIndices_.contains(index);
             drawShape(painter, shapes_[index], false, selected);
             if (!subdivisionActive_ || index != subdivisionShapeIndex_) {
                 drawSubdivisionPoints(painter,
@@ -1369,6 +1448,8 @@ protected:
             drawRectangleToolPreview(painter);
         } else if (activeTool_ == Tool::Point) {
             drawPointToolPreview(painter);
+        } else if (activeTool_ == Tool::Erase) {
+            drawErasePreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
             drawShape(painter,
                       Shape{activeTool_,
@@ -1419,7 +1500,12 @@ protected:
                                  .arg(joinShapeIndices_.size()));
         }
 
-        if (activeTool_ == Tool::Line && lineCommandActive_) {
+        if (activeTool_ == Tool::Erase) {
+            painter.setPen(QColor(QStringLiteral("#777777")));
+            painter.drawText(18,
+                             height() - 18,
+                             QStringLiteral("Drag over a curve segment  •  Release to erase to intersection/end  •  Esc/RMB exits"));
+        } else if (activeTool_ == Tool::Line && lineCommandActive_) {
             painter.setPen(QColor(QStringLiteral("#777777")));
             painter.drawText(18,
                              height() - 18,
@@ -1484,6 +1570,11 @@ protected:
             return;
         }
 
+        if (event->button() == Qt::RightButton && activeTool_ == Tool::Erase) {
+            exitEraseTool();
+            return;
+        }
+
         if (event->button() == panButton_ ||
             (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::AltModifier))) {
             panning_ = true;
@@ -1520,6 +1611,26 @@ protected:
                                            .arg(shapeIndex)
                                            .arg(joinShapeIndices_.size()));
             update();
+            return;
+        }
+
+        if (event->button() == Qt::LeftButton && activeTool_ == Tool::Erase) {
+            rawCursorWorld_ = rawWorldPosition;
+            cursorWorld_ = rawWorldPosition;
+            lastWorldPosition_ = rawWorldPosition;
+            cursorValid_ = true;
+            eraseCursorScreen_ = screenPosition;
+            lastEraseScreen_ = screenPosition;
+            eraseStrokeScreenPath_.clear();
+            eraseStrokeScreenPath_.append(screenPosition);
+            eraseCandidateShapeIndices_.clear();
+            eraseStrokeActive_ = true;
+            eraseAlongScreenSegment(screenPosition, screenPosition);
+            setCursor(Qt::CrossCursor);
+            DebugLog::instance().write(QStringLiteral("erase stroke start screen=%1")
+                                           .arg(pointText(screenPosition)));
+            update();
+            emitCoordinateUpdate();
             return;
         }
 
@@ -1710,6 +1821,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
+        eraseCursorScreen_ = screenPosition;
         rawCursorWorld_ = screenToWorld(screenPosition);
         cursorWorld_ = constrainLinePoint(rawCursorWorld_);
         lastWorldPosition_ = cursorWorld_;
@@ -1741,6 +1853,18 @@ protected:
             const QPointF totalDelta = screenPosition - selectionBoxStartScreen_;
             if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
                 selectionBoxMoved_ = true;
+            }
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
+        if (eraseStrokeActive_) {
+            eraseAlongScreenSegment(lastEraseScreen_, screenPosition);
+            lastEraseScreen_ = screenPosition;
+            if (eraseStrokeScreenPath_.isEmpty() ||
+                eraseStrokeScreenPath_.back() != screenPosition) {
+                eraseStrokeScreenPath_.append(screenPosition);
             }
             update();
             emitCoordinateUpdate();
@@ -1876,12 +2000,14 @@ protected:
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
-            rectanglePreviewActive || panning_ || draggingSelected_ || draggingControlPoint_) {
+            rectanglePreviewActive || activeTool_ == Tool::Erase || panning_ ||
+            draggingSelected_ || draggingControlPoint_) {
             update();
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
-            rectanglePreviewActive || panning_ || draggingSelected_ || draggingControlPoint_) {
+            rectanglePreviewActive || activeTool_ == Tool::Erase || panning_ ||
+            draggingSelected_ || draggingControlPoint_) {
             DebugLog::instance().write(
                 QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11 arcMode=%12 arcSweep=%13 snap=%14")
                     .arg(pointText(screenPosition))
@@ -1926,6 +2052,17 @@ protected:
         if (repeatToolOnRelease) {
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=repeat-tool"));
             repeatLastTool();
+        }
+
+        if (eraseStrokeActive_ && event->button() == Qt::LeftButton) {
+            applyEraseCandidates();
+            eraseStrokeActive_ = false;
+            eraseCandidateShapeIndices_.clear();
+            eraseStrokeScreenPath_.clear();
+            setCursor(Qt::CrossCursor);
+            DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-erase-stroke"));
+            update();
+            return;
         }
 
         if (selectionBoxActive_ && event->button() == Qt::LeftButton) {
@@ -2033,6 +2170,11 @@ protected:
 
         if (subdivisionActive_ && event->key() == Qt::Key_Escape) {
             cancelSubdivisionPreview();
+            return;
+        }
+
+        if (activeTool_ == Tool::Erase && event->key() == Qt::Key_Escape) {
+            exitEraseTool();
             return;
         }
 
@@ -2870,6 +3012,9 @@ private:
         dragSnapLocked_ = false;
         draggingControlPoint_ = false;
         controlPointIndex_ = -1;
+        eraseStrokeActive_ = false;
+        eraseCandidateShapeIndices_.clear();
+        eraseStrokeScreenPath_.clear();
         joinActive_ = false;
         joinShapeIndices_.clear();
         subdivisionActive_ = false;
@@ -3999,6 +4144,83 @@ private:
         return closestDistance;
     }
 
+    qreal distanceToShape(const QPointF &screenPosition, const Shape &shape) const
+    {
+        if (shape.tool == Tool::PolyCurve && !shape.components.isEmpty()) {
+            qreal distance = 1.0e9;
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                distance = std::min(distance,
+                                    distanceToNurbsCurve(screenPosition, component));
+            }
+            return distance;
+        }
+
+        if (shape.tool == Tool::Point && !shape.points.isEmpty()) {
+            const QPointF point = worldToScreen(shape.points.first());
+            return std::hypot(screenPosition.x() - point.x(),
+                             screenPosition.y() - point.y());
+        }
+
+        if (shape.tool == Tool::Circle && shape.points.size() >= 2) {
+            if (isValidNurbsCurve(shape.nurbs)) {
+                return distanceToNurbsCurve(screenPosition, shape.nurbs);
+            }
+
+            const QPointF center = worldToScreen(shape.points[0]);
+            const QPointF edge = worldToScreen(shape.points[1]);
+            const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
+            const qreal distanceFromCenter =
+                std::hypot(screenPosition.x() - center.x(),
+                           screenPosition.y() - center.y());
+            return std::abs(distanceFromCenter - radius);
+        }
+
+        if (shape.tool == Tool::Arc && shape.points.size() >= 3) {
+            return isValidNurbsCurve(shape.nurbs)
+                       ? distanceToNurbsCurve(screenPosition, shape.nurbs)
+                       : distanceToArc(screenPosition, shape);
+        }
+
+        if ((shape.tool == Tool::Bezier || shape.tool == Tool::Nurbs) &&
+            shape.points.size() >= 4) {
+            return isValidNurbsCurve(shape.nurbs)
+                       ? distanceToNurbsCurve(screenPosition, shape.nurbs)
+                       : distanceToCubicCurve(screenPosition, shape);
+        }
+
+        if (shape.tool == Tool::Rectangle && shape.points.size() >= 2) {
+            const QRectF rectangle =
+                QRectF(worldToScreen(shape.points[0]), worldToScreen(shape.points[1])).normalized();
+            const QPointF topLeft = rectangle.topLeft();
+            const QPointF topRight = rectangle.topRight();
+            const QPointF bottomLeft = rectangle.bottomLeft();
+            const QPointF bottomRight = rectangle.bottomRight();
+            return std::min({
+                distanceToSegment(screenPosition, topLeft, topRight),
+                distanceToSegment(screenPosition, topRight, bottomRight),
+                distanceToSegment(screenPosition, bottomRight, bottomLeft),
+                distanceToSegment(screenPosition, bottomLeft, topLeft)});
+        }
+
+        if (shape.tool == Tool::Line) {
+            if (isValidNurbsCurve(shape.nurbs)) {
+                return distanceToNurbsCurve(screenPosition, shape.nurbs);
+            }
+
+            qreal distance = 1.0e9;
+            for (int pointIndex = 0; pointIndex + 1 < shape.points.size(); ++pointIndex) {
+                distance = std::min(
+                    distance,
+                    distanceToSegment(screenPosition,
+                                      worldToScreen(shape.points[pointIndex]),
+                                      worldToScreen(shape.points[pointIndex + 1])));
+            }
+            return distance;
+        }
+
+        return 1.0e9;
+    }
+
     QVector<QPointF> controlPointsForShape(const Shape &shape) const
     {
         if (shape.tool == Tool::Point) {
@@ -4185,6 +4407,910 @@ private:
         }
 
         return closestShape;
+    }
+
+    bool insertNurbsKnot(QVector<HomogeneousControlPoint2D> *controlPoints,
+                         QVector<double> *knots,
+                         int degree,
+                         qreal parameter) const
+    {
+        if (controlPoints == nullptr || knots == nullptr ||
+            controlPoints->isEmpty() || knots->isEmpty() || degree < 1) {
+            return false;
+        }
+
+        const auto sameKnot = [](qreal first, qreal second) {
+            const qreal tolerance = 1.0e-9 *
+                                     std::max<qreal>(1.0,
+                                                     std::max(std::abs(first),
+                                                              std::abs(second)));
+            return std::abs(first - second) <= tolerance;
+        };
+
+        const int n = controlPoints->size() - 1;
+        const int m = knots->size() - 1;
+        if (m != n + degree + 1) {
+            return false;
+        }
+
+        int span = degree;
+        if (parameter >= knots->at(n + 1)) {
+            span = n;
+        } else {
+            int low = degree;
+            int high = n + 1;
+            int middle = (low + high) / 2;
+            while (parameter < knots->at(middle) || parameter >= knots->at(middle + 1)) {
+                if (parameter < knots->at(middle)) {
+                    high = middle;
+                } else {
+                    low = middle;
+                }
+                middle = (low + high) / 2;
+            }
+            span = middle;
+        }
+
+        int multiplicity = 0;
+        for (const double knot : *knots) {
+            if (sameKnot(knot, parameter)) {
+                ++multiplicity;
+            }
+        }
+        if (multiplicity >= degree) {
+            return false;
+        }
+
+        QVector<HomogeneousControlPoint2D> insertedControlPoints(n + 2);
+        for (int index = 0; index <= span - degree; ++index) {
+            insertedControlPoints[index] = controlPoints->at(index);
+        }
+        for (int index = span - multiplicity; index <= n; ++index) {
+            insertedControlPoints[index + 1] = controlPoints->at(index);
+        }
+        for (int index = span - degree + 1; index <= span - multiplicity; ++index) {
+            const qreal denominator = knots->at(index + degree) - knots->at(index);
+            if (std::abs(denominator) <= 1.0e-12) {
+                return false;
+            }
+            const qreal alpha = (parameter - knots->at(index)) / denominator;
+            insertedControlPoints[index] = blendHomogeneousControlPoints(
+                controlPoints->at(index - 1),
+                controlPoints->at(index),
+                alpha);
+        }
+
+        QVector<double> insertedKnots(m + 2);
+        for (int index = 0; index <= span; ++index) {
+            insertedKnots[index] = knots->at(index);
+        }
+        insertedKnots[span + 1] = parameter;
+        for (int index = span + 1; index <= m; ++index) {
+            insertedKnots[index + 1] = knots->at(index);
+        }
+
+        *controlPoints = insertedControlPoints;
+        *knots = insertedKnots;
+        return true;
+    }
+
+    bool rationalBezierSpansForCurve(
+        const Shape::NurbsCurve2D &curve,
+        QVector<RationalBezierSpan2D> *spans) const
+    {
+        if (spans == nullptr || !isValidNurbsCurve(curve)) {
+            return false;
+        }
+
+        spans->clear();
+        QVector<HomogeneousControlPoint2D> controlPoints;
+        controlPoints.reserve(curve.controlPoints.size());
+        for (int index = 0; index < curve.controlPoints.size(); ++index) {
+            const qreal weight = curve.rational ? curve.weights[index] : 1.0;
+            controlPoints.append(HomogeneousControlPoint2D{
+                curve.controlPoints[index] * weight,
+                weight});
+        }
+
+        QVector<double> knots = expandedKnotVector(curve);
+        const qreal domainStart = knots[curve.degree];
+        const qreal domainEnd = knots[curve.controlPoints.size()];
+        const auto sameKnot = [](qreal first, qreal second) {
+            const qreal tolerance = 1.0e-9 *
+                                     std::max<qreal>(1.0,
+                                                     std::max(std::abs(first),
+                                                              std::abs(second)));
+            return std::abs(first - second) <= tolerance;
+        };
+
+        QVector<double> internalKnots;
+        for (const double knot : knots) {
+            if (knot <= domainStart || knot >= domainEnd) {
+                continue;
+            }
+            if (internalKnots.isEmpty() || !sameKnot(internalKnots.back(), knot)) {
+                internalKnots.append(knot);
+            }
+        }
+
+        for (const double internalKnot : internalKnots) {
+            int multiplicity = 0;
+            for (const double knot : knots) {
+                if (sameKnot(knot, internalKnot)) {
+                    ++multiplicity;
+                }
+            }
+            while (multiplicity < curve.degree) {
+                if (!insertNurbsKnot(&controlPoints,
+                                     &knots,
+                                     curve.degree,
+                                     internalKnot)) {
+                    return false;
+                }
+                ++multiplicity;
+            }
+        }
+
+        const qreal knotTolerance = 1.0e-10;
+        for (int spanIndex = curve.degree;
+             spanIndex < controlPoints.size();
+             ++spanIndex) {
+            if (knots[spanIndex + 1] - knots[spanIndex] <= knotTolerance) {
+                continue;
+            }
+
+            RationalBezierSpan2D span;
+            span.startParameter = knots[spanIndex];
+            span.endParameter = knots[spanIndex + 1];
+            span.controlPoints.reserve(curve.degree + 1);
+            for (int controlIndex = spanIndex - curve.degree;
+                 controlIndex <= spanIndex;
+                 ++controlIndex) {
+                span.controlPoints.append(controlPoints[controlIndex]);
+            }
+            spans->append(span);
+        }
+
+        return !spans->isEmpty();
+    }
+
+    bool splitRationalBezierSpan(
+        const QVector<HomogeneousControlPoint2D> &source,
+        qreal fraction,
+        QVector<HomogeneousControlPoint2D> *left,
+        QVector<HomogeneousControlPoint2D> *right) const
+    {
+        if (source.size() < 2 || left == nullptr || right == nullptr ||
+            fraction <= 0.0 || fraction >= 1.0) {
+            return false;
+        }
+
+        QVector<HomogeneousControlPoint2D> working = source;
+        left->resize(source.size());
+        right->resize(source.size());
+        (*left)[0] = working.first();
+        (*right)[source.size() - 1] = working.last();
+
+        for (int level = 1; level < source.size(); ++level) {
+            for (int index = 0; index + 1 < working.size(); ++index) {
+                working[index] = blendHomogeneousControlPoints(
+                    working[index],
+                    working[index + 1],
+                    fraction);
+            }
+            (*left)[level] = working.first();
+            (*right)[source.size() - 1 - level] = working[source.size() - 1 - level];
+        }
+        return true;
+    }
+
+    bool trimNurbsCurve(const Shape::NurbsCurve2D &source,
+                        qreal startParameter,
+                        qreal endParameter,
+                        Shape::NurbsCurve2D *trimmed) const
+    {
+        if (trimmed == nullptr || !isValidNurbsCurve(source)) {
+            return false;
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(source);
+        const qreal domainStart = fullKnots[source.degree];
+        const qreal domainEnd = fullKnots[source.controlPoints.size()];
+        const qreal domainTolerance =
+            std::max<qreal>(1.0e-9, std::abs(domainEnd - domainStart) * 1.0e-9);
+        const qreal start = std::clamp(startParameter, domainStart, domainEnd);
+        const qreal end = std::clamp(endParameter, domainStart, domainEnd);
+        if (end - start <= domainTolerance) {
+            return false;
+        }
+
+        QVector<RationalBezierSpan2D> spans;
+        if (!rationalBezierSpansForCurve(source, &spans)) {
+            return false;
+        }
+
+        QVector<RationalBezierSpan2D> trimmedSpans;
+        for (const RationalBezierSpan2D &span : spans) {
+            const qreal overlapStart = std::max(start, span.startParameter);
+            const qreal overlapEnd = std::min(end, span.endParameter);
+            if (overlapEnd - overlapStart <= domainTolerance) {
+                continue;
+            }
+
+            const qreal spanLength = span.endParameter - span.startParameter;
+            qreal localStart = (overlapStart - span.startParameter) / spanLength;
+            qreal localEnd = (overlapEnd - span.startParameter) / spanLength;
+            QVector<HomogeneousControlPoint2D> working = span.controlPoints;
+
+            if (localStart > 1.0e-10) {
+                QVector<HomogeneousControlPoint2D> discarded;
+                QVector<HomogeneousControlPoint2D> remaining;
+                if (!splitRationalBezierSpan(working,
+                                              localStart,
+                                              &discarded,
+                                              &remaining)) {
+                    return false;
+                }
+                working = remaining;
+                localEnd = (localEnd - localStart) / (1.0 - localStart);
+            }
+
+            if (localEnd < 1.0 - 1.0e-10) {
+                QVector<HomogeneousControlPoint2D> remaining;
+                QVector<HomogeneousControlPoint2D> discarded;
+                if (!splitRationalBezierSpan(working,
+                                              localEnd,
+                                              &remaining,
+                                              &discarded)) {
+                    return false;
+                }
+                working = remaining;
+            }
+
+            RationalBezierSpan2D trimmedSpan;
+            trimmedSpan.startParameter = overlapStart;
+            trimmedSpan.endParameter = overlapEnd;
+            trimmedSpan.controlPoints = working;
+            trimmedSpans.append(trimmedSpan);
+        }
+
+        if (trimmedSpans.isEmpty()) {
+            return false;
+        }
+
+        Shape::NurbsCurve2D result;
+        result.dimension = source.dimension;
+        result.degree = source.degree;
+        result.order = source.order;
+        result.rational = source.rational;
+
+        for (int spanIndex = 0; spanIndex < trimmedSpans.size(); ++spanIndex) {
+            const QVector<HomogeneousControlPoint2D> &spanPoints =
+                trimmedSpans[spanIndex].controlPoints;
+            const int firstPoint = spanIndex == 0 ? 0 : 1;
+            for (int pointIndex = firstPoint; pointIndex < spanPoints.size(); ++pointIndex) {
+                const HomogeneousControlPoint2D &point = spanPoints[pointIndex];
+                if (std::abs(point.weight) <= 1.0e-12) {
+                    return false;
+                }
+                result.controlPoints.append(point.weightedPosition / point.weight);
+                result.weights.append(source.rational ? point.weight : 1.0);
+            }
+        }
+
+        QVector<double> resultFullKnots;
+        const auto appendRepeated = [&resultFullKnots](qreal value, int count) {
+            for (int index = 0; index < count; ++index) {
+                resultFullKnots.append(value);
+            }
+        };
+        appendRepeated(trimmedSpans.first().startParameter, source.degree + 1);
+        for (int spanIndex = 0; spanIndex + 1 < trimmedSpans.size(); ++spanIndex) {
+            appendRepeated(trimmedSpans[spanIndex].endParameter, source.degree);
+        }
+        appendRepeated(trimmedSpans.last().endParameter, source.degree + 1);
+
+        if (resultFullKnots.size() < 2) {
+            return false;
+        }
+        result.knots = resultFullKnots;
+        result.knots.removeFirst();
+        result.knots.removeLast();
+        if (!isValidNurbsCurve(result)) {
+            return false;
+        }
+
+        *trimmed = result;
+        return true;
+    }
+
+    qreal distanceToEraserStroke(const QPointF &screenPoint,
+                                 const QVector<QPointF> &stroke) const
+    {
+        if (stroke.isEmpty()) {
+            return 1.0e9;
+        }
+        if (stroke.size() == 1) {
+            return distanceToSegment(screenPoint, stroke.first(), stroke.first());
+        }
+
+        qreal distance = 1.0e9;
+        for (int index = 1; index < stroke.size(); ++index) {
+            distance = std::min(distance,
+                                distanceToSegment(screenPoint,
+                                                  stroke[index - 1],
+                                                  stroke[index]));
+        }
+        return distance;
+    }
+
+    bool sampleNurbsCurveForErase(const Shape::NurbsCurve2D &curve,
+                                  SampledNurbsCurve2D *sampled) const
+    {
+        if (sampled == nullptr || !isValidNurbsCurve(curve)) {
+            return false;
+        }
+
+        sampled->parameters.clear();
+        sampled->screenPoints.clear();
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const qreal domainStart = fullKnots[curve.degree];
+        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
+        if (domainEnd <= domainStart) {
+            return false;
+        }
+
+        int nonZeroSpans = 0;
+        for (int index = curve.degree; index < curve.controlPoints.size(); ++index) {
+            if (fullKnots[index + 1] > fullKnots[index]) {
+                ++nonZeroSpans;
+            }
+        }
+
+        const int sampleCount = std::clamp(std::max(256, nonZeroSpans * 128),
+                                           256,
+                                           4096);
+        sampled->parameters.reserve(sampleCount + 1);
+        sampled->screenPoints.reserve(sampleCount + 1);
+        for (int sample = 0; sample <= sampleCount; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
+            const qreal parameter = domainStart + (domainEnd - domainStart) * fraction;
+            QPointF worldPoint;
+            if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
+                sampled->parameters.clear();
+                sampled->screenPoints.clear();
+                return false;
+            }
+            sampled->parameters.append(parameter);
+            sampled->screenPoints.append(worldToScreen(worldPoint));
+        }
+
+        return sampled->parameters.size() >= 2;
+    }
+
+    QVector<Shape::NurbsCurve2D> eraseIntersectionCurvesForShape(
+        const Shape &shape) const
+    {
+        if (shape.tool == Tool::PolyCurve) {
+            return shape.components;
+        }
+
+        if (isValidNurbsCurve(shape.nurbs)) {
+            return {shape.nurbs};
+        }
+
+        if (shape.tool == Tool::Line && shape.points.size() >= 2) {
+            return {makeDegreeOneNurbs(shape.points)};
+        }
+
+        if ((shape.tool == Tool::Bezier || shape.tool == Tool::Nurbs) &&
+            shape.points.size() >= 2) {
+            return {makeBezierNurbs(shape.points)};
+        }
+
+        if (shape.tool == Tool::Rectangle && shape.points.size() >= 2) {
+            const QPointF first = shape.points[0];
+            const QPointF second = shape.points[1];
+            const QPointF topLeft(std::min(first.x(), second.x()),
+                                  std::max(first.y(), second.y()));
+            const QPointF topRight(std::max(first.x(), second.x()),
+                                   std::max(first.y(), second.y()));
+            const QPointF bottomRight(std::max(first.x(), second.x()),
+                                      std::min(first.y(), second.y()));
+            const QPointF bottomLeft(std::min(first.x(), second.x()),
+                                     std::min(first.y(), second.y()));
+            return {makeDegreeOneNurbs({topLeft, topRight}),
+                    makeDegreeOneNurbs({topRight, bottomRight}),
+                    makeDegreeOneNurbs({bottomRight, bottomLeft}),
+                    makeDegreeOneNurbs({bottomLeft, topLeft})};
+        }
+
+        return {};
+    }
+
+    QVector<qreal> eraseIntersectionParameters(
+        int sourceShapeIndex,
+        int sourceComponentIndex,
+        const Shape::NurbsCurve2D &sourceCurve) const
+    {
+        QVector<qreal> parameters;
+        if (sourceShapeIndex < 0 || sourceShapeIndex >= shapes_.size() ||
+            !isValidNurbsCurve(sourceCurve)) {
+            return parameters;
+        }
+
+        SampledNurbsCurve2D sourceSamples;
+        if (!sampleNurbsCurveForErase(sourceCurve, &sourceSamples)) {
+            return parameters;
+        }
+
+        const auto parameterAtIntersection = [](const QPointF &first,
+                                                 const QPointF &second,
+                                                 const QPointF &intersection) {
+            const QPointF direction = second - first;
+            const qreal lengthSquared = QPointF::dotProduct(direction, direction);
+            if (lengthSquared <= 1.0e-12) {
+                return 0.0;
+            }
+            return std::clamp(QPointF::dotProduct(intersection - first, direction) /
+                                  lengthSquared,
+                              0.0,
+                              1.0);
+        };
+
+        for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
+            const QVector<Shape::NurbsCurve2D> otherCurves =
+                eraseIntersectionCurvesForShape(shapes_[shapeIndex]);
+            for (int componentIndex = 0;
+                 componentIndex < otherCurves.size();
+                 ++componentIndex) {
+                if (shapeIndex == sourceShapeIndex &&
+                    componentIndex == sourceComponentIndex) {
+                    continue;
+                }
+
+                SampledNurbsCurve2D otherSamples;
+                if (!sampleNurbsCurveForErase(otherCurves[componentIndex],
+                                              &otherSamples)) {
+                    continue;
+                }
+
+                for (int sourceSegment = 1;
+                     sourceSegment < sourceSamples.screenPoints.size();
+                     ++sourceSegment) {
+                    const QPointF &sourceStart =
+                        sourceSamples.screenPoints[sourceSegment - 1];
+                    const QPointF &sourceEnd =
+                        sourceSamples.screenPoints[sourceSegment];
+                    for (int otherSegment = 1;
+                         otherSegment < otherSamples.screenPoints.size();
+                         ++otherSegment) {
+                        QPointF intersection;
+                        if (!segmentIntersection(
+                                sourceStart,
+                                sourceEnd,
+                                otherSamples.screenPoints[otherSegment - 1],
+                                otherSamples.screenPoints[otherSegment],
+                                &intersection)) {
+                            continue;
+                        }
+
+                        const qreal localParameter = parameterAtIntersection(
+                            sourceStart,
+                            sourceEnd,
+                            intersection);
+                        parameters.append(
+                            sourceSamples.parameters[sourceSegment - 1] +
+                            (sourceSamples.parameters[sourceSegment] -
+                             sourceSamples.parameters[sourceSegment - 1]) *
+                                localParameter);
+                    }
+                }
+            }
+        }
+
+        return parameters;
+    }
+
+    QVector<ParameterInterval> eraserIntervalsForCurve(
+        const Shape::NurbsCurve2D &curve,
+        const QVector<QPointF> &stroke) const
+    {
+        QVector<ParameterInterval> intervals;
+        if (!isValidNurbsCurve(curve) || stroke.isEmpty()) {
+            return intervals;
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const qreal domainStart = fullKnots[curve.degree];
+        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
+        const qreal domainLength = domainEnd - domainStart;
+        if (domainLength <= 1.0e-12) {
+            return intervals;
+        }
+
+        int nonZeroSpans = 0;
+        for (int index = curve.degree; index < curve.controlPoints.size(); ++index) {
+            if (fullKnots[index + 1] > fullKnots[index]) {
+                ++nonZeroSpans;
+            }
+        }
+        const int sampleCount = std::max(256, nonZeroSpans * 128);
+        constexpr qreal eraserRadiusPixels = 10.0;
+        const auto insideEraser = [&](qreal parameter) {
+            QPointF worldPoint;
+            if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
+                return false;
+            }
+            return distanceToEraserStroke(worldToScreen(worldPoint), stroke) <=
+                   eraserRadiusPixels;
+        };
+
+        const auto refineBoundary = [&](qreal first,
+                                        qreal second,
+                                        bool firstInside) {
+            qreal low = first;
+            qreal high = second;
+            for (int iteration = 0; iteration < 30; ++iteration) {
+                const qreal middle = (low + high) * 0.5;
+                if (insideEraser(middle) == firstInside) {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+            return (low + high) * 0.5;
+        };
+
+        qreal previousParameter = domainStart;
+        bool previousInside = insideEraser(previousParameter);
+        qreal intervalStart = previousInside ? domainStart : -1.0;
+        for (int sample = 1; sample <= sampleCount; ++sample) {
+            const qreal currentParameter =
+                domainStart + domainLength * sample / sampleCount;
+            const bool currentInside = insideEraser(currentParameter);
+            if (currentInside != previousInside) {
+                const qreal boundary = refineBoundary(previousParameter,
+                                                       currentParameter,
+                                                       previousInside);
+                if (currentInside) {
+                    intervalStart = boundary;
+                } else if (intervalStart >= 0.0) {
+                    intervals.append(ParameterInterval{intervalStart, boundary});
+                    intervalStart = -1.0;
+                }
+            }
+            previousParameter = currentParameter;
+            previousInside = currentInside;
+        }
+
+        if (intervalStart >= 0.0) {
+            intervals.append(ParameterInterval{intervalStart, domainEnd});
+        }
+
+        const qreal mergeTolerance = std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
+        QVector<ParameterInterval> merged;
+        for (const ParameterInterval &interval : intervals) {
+            if (interval.end - interval.start <= mergeTolerance) {
+                continue;
+            }
+            if (!merged.isEmpty() && interval.start <= merged.last().end + mergeTolerance) {
+                merged.last().end = std::max(merged.last().end, interval.end);
+            } else {
+                merged.append(interval);
+            }
+        }
+        return merged;
+    }
+
+    QVector<ParameterInterval> eraseIntervalsBoundedByIntersections(
+        int sourceShapeIndex,
+        int sourceComponentIndex,
+        const Shape::NurbsCurve2D &curve,
+        const QVector<QPointF> &stroke) const
+    {
+        const QVector<ParameterInterval> hitIntervals =
+            eraserIntervalsForCurve(curve, stroke);
+        if (hitIntervals.isEmpty()) {
+            return {};
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const qreal domainStart = fullKnots[curve.degree];
+        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
+        const qreal domainLength = domainEnd - domainStart;
+        const qreal tolerance = std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
+
+        QVector<qreal> boundaries{domainStart, domainEnd};
+        boundaries += eraseIntersectionParameters(sourceShapeIndex,
+                                                  sourceComponentIndex,
+                                                  curve);
+        std::sort(boundaries.begin(), boundaries.end());
+
+        QVector<qreal> uniqueBoundaries;
+        for (const qreal boundary : boundaries) {
+            const qreal clampedBoundary = std::clamp(boundary,
+                                                     domainStart,
+                                                     domainEnd);
+            if (uniqueBoundaries.isEmpty() ||
+                clampedBoundary > uniqueBoundaries.back() + tolerance) {
+                uniqueBoundaries.append(clampedBoundary);
+            } else {
+                uniqueBoundaries.back() =
+                    std::max(uniqueBoundaries.back(), clampedBoundary);
+            }
+        }
+
+        QVector<ParameterInterval> removedIntervals;
+        for (const ParameterInterval &hit : hitIntervals) {
+            for (int boundaryIndex = 0;
+                 boundaryIndex + 1 < uniqueBoundaries.size();
+                 ++boundaryIndex) {
+                const qreal pieceStart = uniqueBoundaries[boundaryIndex];
+                const qreal pieceEnd = uniqueBoundaries[boundaryIndex + 1];
+                if (pieceEnd - pieceStart <= tolerance ||
+                    hit.end <= pieceStart + tolerance ||
+                    hit.start >= pieceEnd - tolerance) {
+                    continue;
+                }
+                removedIntervals.append(ParameterInterval{pieceStart, pieceEnd});
+            }
+        }
+
+        if (removedIntervals.isEmpty()) {
+            return removedIntervals;
+        }
+
+        std::sort(removedIntervals.begin(),
+                  removedIntervals.end(),
+                  [](const ParameterInterval &first, const ParameterInterval &second) {
+                      return first.start < second.start;
+                  });
+        QVector<ParameterInterval> merged;
+        for (const ParameterInterval &interval : removedIntervals) {
+            if (!merged.isEmpty() &&
+                interval.start <= merged.last().end + tolerance) {
+                merged.last().end = std::max(merged.last().end, interval.end);
+            } else {
+                merged.append(interval);
+            }
+        }
+        return merged;
+    }
+
+    bool trimShapeAtEraserStroke(const Shape &shape,
+                                 const QVector<QPointF> &stroke,
+                                 QVector<Shape> *replacement,
+                                 int sourceShapeIndex = -1) const
+    {
+        if (replacement == nullptr) {
+            return false;
+        }
+        replacement->clear();
+
+        if (shape.tool == Tool::Point || shape.tool == Tool::Rectangle) {
+            return true;
+        }
+
+        QVector<Shape::NurbsCurve2D> sourceCurves;
+        if (shape.tool == Tool::PolyCurve) {
+            sourceCurves = shape.components;
+        } else if (isValidNurbsCurve(shape.nurbs)) {
+            sourceCurves.append(shape.nurbs);
+        } else if (shape.tool == Tool::Line && shape.points.size() >= 2) {
+            sourceCurves.append(makeDegreeOneNurbs(shape.points));
+        } else {
+            return true;
+        }
+
+        QVector<Shape::NurbsCurve2D> remainingCurves;
+        bool changed = false;
+        for (int sourceComponentIndex = 0;
+             sourceComponentIndex < sourceCurves.size();
+             ++sourceComponentIndex) {
+            const Shape::NurbsCurve2D &sourceCurve = sourceCurves[sourceComponentIndex];
+            const QVector<ParameterInterval> removedIntervals =
+                eraseIntervalsBoundedByIntersections(sourceShapeIndex,
+                                                     sourceComponentIndex,
+                                                     sourceCurve,
+                                                     stroke);
+            if (removedIntervals.isEmpty()) {
+                remainingCurves.append(sourceCurve);
+                continue;
+            }
+
+            changed = true;
+            const QVector<double> fullKnots = expandedKnotVector(sourceCurve);
+            const qreal domainStart = fullKnots[sourceCurve.degree];
+            const qreal domainEnd = fullKnots[sourceCurve.controlPoints.size()];
+            qreal keepStart = domainStart;
+            const qreal tolerance =
+                std::max<qreal>(1.0e-9, std::abs(domainEnd - domainStart) * 1.0e-9);
+            for (const ParameterInterval &removed : removedIntervals) {
+                if (removed.start - keepStart > tolerance) {
+                    Shape::NurbsCurve2D kept;
+                    if (!trimNurbsCurve(sourceCurve, keepStart, removed.start, &kept)) {
+                        return false;
+                    }
+                    remainingCurves.append(kept);
+                }
+                keepStart = std::max(keepStart, removed.end);
+            }
+            if (domainEnd - keepStart > tolerance) {
+                Shape::NurbsCurve2D kept;
+                if (!trimNurbsCurve(sourceCurve, keepStart, domainEnd, &kept)) {
+                    return false;
+                }
+                remainingCurves.append(kept);
+            }
+        }
+
+        if (!changed) {
+            return false;
+        }
+        if (remainingCurves.isEmpty()) {
+            return true;
+        }
+
+        if (shape.tool == Tool::Line && remainingCurves.size() == 1) {
+            Shape updated = shape;
+            updated.nurbs = remainingCurves.first();
+            updated.points = updated.nurbs.controlPoints;
+            updated.subdivisionParameters.clear();
+            replacement->append(updated);
+            return true;
+        }
+
+        Shape updated{Tool::PolyCurve,
+                      polyCurvePoints(remainingCurves),
+                      Shape::NurbsCurve2D{},
+                      ArcMode::TwoPoint,
+                      0.0,
+                      {},
+                      remainingCurves};
+        replacement->append(updated);
+        return true;
+    }
+
+    void eraseAlongScreenSegment(const QPointF &start, const QPointF &end)
+    {
+        constexpr qreal eraserRadiusPixels = 10.0;
+        constexpr qreal sampleSpacingPixels = 5.0;
+        const qreal length = std::hypot(end.x() - start.x(), end.y() - start.y());
+        const int sampleCount = std::max(
+            1,
+            static_cast<int>(std::ceil(length / sampleSpacingPixels)));
+
+        int addedCandidates = 0;
+        for (int sample = 0; sample <= sampleCount; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
+            const QPointF cursor = start + (end - start) * fraction;
+            for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
+                if (eraseCandidateShapeIndices_.contains(shapeIndex)) {
+                    continue;
+                }
+
+                if (distanceToShape(cursor, shapes_[shapeIndex]) <= eraserRadiusPixels) {
+                    eraseCandidateShapeIndices_.append(shapeIndex);
+                    ++addedCandidates;
+                }
+            }
+        }
+
+        if (addedCandidates > 0) {
+            DebugLog::instance().write(
+                QStringLiteral("erase candidates added=%1 total=%2")
+                    .arg(addedCandidates)
+                    .arg(eraseCandidateShapeIndices_.size()));
+        }
+    }
+
+    void applyEraseCandidates()
+    {
+        if (eraseCandidateShapeIndices_.isEmpty()) {
+            return;
+        }
+
+        QVector<int> indices = eraseCandidateShapeIndices_;
+        std::sort(indices.begin(), indices.end());
+        indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+
+        QVector<QPair<int, QVector<Shape>>> changes;
+        for (auto iterator = indices.crbegin(); iterator != indices.crend(); ++iterator) {
+            if (*iterator < 0 || *iterator >= shapes_.size()) {
+                continue;
+            }
+
+            QVector<Shape> replacement;
+            if (trimShapeAtEraserStroke(shapes_[*iterator],
+                                        eraseStrokeScreenPath_,
+                                        &replacement,
+                                        *iterator)) {
+                changes.append(qMakePair(*iterator, replacement));
+            }
+        }
+
+        if (changes.isEmpty()) {
+            DebugLog::instance().write(QStringLiteral("erase found no trim interval"));
+            return;
+        }
+
+        recordGeometryChange();
+        int removedCount = 0;
+        QVector<int> removedIndices;
+        for (const QPair<int, QVector<Shape>> &change : changes) {
+            const int shapeIndex = change.first;
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                continue;
+            }
+
+            if (change.second.isEmpty()) {
+                shapes_.removeAt(shapeIndex);
+                removedIndices.append(shapeIndex);
+                ++removedCount;
+            } else {
+                shapes_[shapeIndex] = change.second.first();
+            }
+        }
+
+        const QVector<int> oldSelectedShapeIndices = selectedShapeIndices_;
+        const int oldSelectedShapeIndex = selectedShapeIndex_;
+        selectedShapeIndices_.clear();
+        const auto remapIndex = [&removedIndices](int oldIndex) {
+            if (removedIndices.contains(oldIndex)) {
+                return -1;
+            }
+            int shift = 0;
+            for (const int removedIndex : removedIndices) {
+                if (removedIndex < oldIndex) {
+                    ++shift;
+                }
+            }
+            return oldIndex - shift;
+        };
+        for (const int oldIndex : oldSelectedShapeIndices) {
+            const int newIndex = remapIndex(oldIndex);
+            if (newIndex >= 0 && newIndex < shapes_.size()) {
+                selectedShapeIndices_.append(newIndex);
+            }
+        }
+        selectedShapeIndex_ = remapIndex(oldSelectedShapeIndex);
+        if (selectedShapeIndex_ < 0 && !selectedShapeIndices_.isEmpty()) {
+            selectedShapeIndex_ = selectedShapeIndices_.back();
+        }
+        draggingSelected_ = false;
+        draggingShapeIndices_.clear();
+        draggingControlPoint_ = false;
+        controlPointIndex_ = -1;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        dragHistoryRecorded_ = false;
+        DebugLog::instance().write(QStringLiteral("erase segment applied candidates=%1 changed=%2 removed=%3 shapes=%4")
+                                       .arg(indices.size())
+                                       .arg(changes.size())
+                                       .arg(removedCount)
+                                       .arg(shapes_.size()));
+        update();
+    }
+
+    void cancelEraseStroke()
+    {
+        eraseStrokeActive_ = false;
+        eraseCandidateShapeIndices_.clear();
+        eraseStrokeScreenPath_.clear();
+        update();
+        DebugLog::instance().write(QStringLiteral("erase stroke canceled"));
+    }
+
+    void exitEraseTool()
+    {
+        cancelEraseStroke();
+        setTool(Tool::Select);
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        DebugLog::instance().write(QStringLiteral("erase tool exited"));
     }
 
     void translateControlPoint(int shapeIndex, int controlPointIndex, const QPointF &delta)
@@ -5074,6 +6200,27 @@ private:
         }
     }
 
+    void drawErasePreview(QPainter &painter)
+    {
+        if (!cursorValid_) {
+            return;
+        }
+
+        constexpr qreal eraserRadiusPixels = 10.0;
+        const QColor eraserColor(QStringLiteral("#f0a45a"));
+        painter.setPen(QPen(eraserColor, 1.5, Qt::DashLine));
+        painter.setBrush(QColor(240, 164, 90, 28));
+        painter.drawEllipse(eraseCursorScreen_, eraserRadiusPixels, eraserRadiusPixels);
+
+        if (eraseStrokeActive_ && !eraseCandidateShapeIndices_.isEmpty()) {
+            painter.setPen(QColor(QStringLiteral("#f0a45a")));
+            painter.setFont(QFont(QStringLiteral("Sans"), 9));
+            painter.drawText(eraseCursorScreen_ + QPointF(14.0, -10.0),
+                             QStringLiteral("Erase %1")
+                                 .arg(eraseCandidateShapeIndices_.size()));
+        }
+    }
+
     void drawShape(QPainter &painter,
                    const Shape &shape,
                    bool preview,
@@ -5238,6 +6385,11 @@ private:
     bool selectionBoxAdditive_ = false;
     QPointF selectionBoxStartScreen_{0.0, 0.0};
     QPointF selectionBoxCurrentScreen_{0.0, 0.0};
+    bool eraseStrokeActive_ = false;
+    QPointF eraseCursorScreen_{0.0, 0.0};
+    QPointF lastEraseScreen_{0.0, 0.0};
+    QVector<QPointF> eraseStrokeScreenPath_;
+    QVector<int> eraseCandidateShapeIndices_;
     qreal zoom_ = 1.0;
     bool panning_ = false;
     bool panMoved_ = false;
@@ -5529,6 +6681,17 @@ private:
         statusBar()->showMessage(viewport_->joinStatusText());
     }
 
+    void activateEraseTool()
+    {
+        if (viewport_ != nullptr) {
+            viewport_->setTool(Tool::Erase);
+        }
+        if (eraseToolButton_ != nullptr) {
+            eraseToolButton_->setChecked(true);
+        }
+        statusBar()->showMessage(QStringLiteral("Erase: drag over geometry, then release"));
+    }
+
     void subdivideWithNumberOfPoints()
     {
         if (viewport_ == nullptr || !viewport_->beginSubdivisionWheelMode()) {
@@ -5602,6 +6765,13 @@ private:
         joinAction_->setShortcutContext(Qt::WindowShortcut);
         connect(joinAction_, &QAction::triggered, this, [this]() {
             startJoinMode();
+        });
+
+        eraseAction_ = editMenu->addAction(QStringLiteral("Erase"));
+        eraseAction_->setShortcut(QKeySequence(Qt::Key_E));
+        eraseAction_->setShortcutContext(Qt::WindowShortcut);
+        connect(eraseAction_, &QAction::triggered, this, [this]() {
+            activateEraseTool();
         });
 
         editMenu->addSeparator();
@@ -5859,6 +7029,10 @@ private:
         addToolButton(layout, group, QStringLiteral("N\nNURBS"), Tool::Nurbs);
         addToolButton(layout, group, QStringLiteral("□\nRect"), Tool::Rectangle);
         addToolButton(layout, group, QStringLiteral("○\nCircle"), Tool::Circle);
+        eraseToolButton_ = addToolButton(layout, group, QStringLiteral("Erase"), Tool::Erase);
+        eraseToolButton_->setIcon(makeEraserIcon());
+        eraseToolButton_->setIconSize(QSize(24, 24));
+        eraseToolButton_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
 
         layout->addSpacing(8);
         controlPointsButton_ = new QToolButton;
@@ -6279,6 +7453,7 @@ private:
     QLabel *toolHelp_ = nullptr;
     QToolButton *selectToolButton_ = nullptr;
     QToolButton *arcToolButton_ = nullptr;
+    QToolButton *eraseToolButton_ = nullptr;
     QToolButton *controlPointsButton_ = nullptr;
     QToolButton *subdivideButton_ = nullptr;
     QToolButton *joinButton_ = nullptr;
@@ -6287,6 +7462,7 @@ private:
     QAction *redoAction_ = nullptr;
     QAction *subdivideAction_ = nullptr;
     QAction *joinAction_ = nullptr;
+    QAction *eraseAction_ = nullptr;
     QAction *updateAction_ = nullptr;
     QAction *orthoAction_ = nullptr;
     QAction *osnapAction_ = nullptr;

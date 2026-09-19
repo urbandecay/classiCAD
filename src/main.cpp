@@ -60,6 +60,8 @@ enum class Tool {
     Circle,
     // Keep Point at the end so existing saved sessions keep their tool IDs.
     Point,
+    // Keep PolyCurve after the existing IDs for session compatibility.
+    PolyCurve,
 };
 
 enum class ArcMode {
@@ -132,6 +134,9 @@ struct Shape {
     // parameter domain. They are markers, not new curve spans or control
     // vertices, so the original NURBS remains unchanged.
     QVector<double> subdivisionParameters;
+    // A joined spline remains a Rhino-style component curve collection. Each
+    // component keeps its own degree, weights, knots, and parameter domain.
+    QVector<NurbsCurve2D> components;
 };
 
 Shape::NurbsCurve2D makeDegreeOneNurbs(const QVector<QPointF> &points)
@@ -478,6 +483,12 @@ QJsonObject shapeToJson(const Shape &shape)
         subdivisionParameters.append(parameter);
     }
     object.insert(QStringLiteral("subdivisionParameters"), subdivisionParameters);
+
+    QJsonArray components;
+    for (const Shape::NurbsCurve2D &component : shape.components) {
+        components.append(nurbsToJson(component));
+    }
+    object.insert(QStringLiteral("components"), components);
     return object;
 }
 
@@ -491,7 +502,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     const int toolValue = object.value(QStringLiteral("tool")).toInt(-1);
     const int arcModeValue = object.value(QStringLiteral("arcMode")).toInt(-1);
     if (toolValue < static_cast<int>(Tool::Select) ||
-        toolValue > static_cast<int>(Tool::Point) ||
+        toolValue > static_cast<int>(Tool::PolyCurve) ||
         arcModeValue < static_cast<int>(ArcMode::OnePoint) ||
         arcModeValue > static_cast<int>(ArcMode::TwoPoint)) {
         return false;
@@ -526,12 +537,28 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         }
     }
 
+    QVector<Shape::NurbsCurve2D> components;
+    const QJsonValue componentsValue = object.value(QStringLiteral("components"));
+    if (!componentsValue.isUndefined()) {
+        if (!componentsValue.isArray()) {
+            return false;
+        }
+        for (const QJsonValue &componentValue : componentsValue.toArray()) {
+            Shape::NurbsCurve2D component;
+            if (!nurbsFromJson(componentValue, &component)) {
+                return false;
+            }
+            components.append(component);
+        }
+    }
+
     shape->tool = static_cast<Tool>(toolValue);
     shape->points = points;
     shape->nurbs = nurbs;
     shape->arcMode = static_cast<ArcMode>(arcModeValue);
     shape->arcSweep = arcSweepValue.toDouble();
     shape->subdivisionParameters = subdivisionParameters;
+    shape->components = components;
     return true;
 }
 
@@ -592,6 +619,8 @@ QString toolName(Tool tool)
         return QStringLiteral("Circle");
     case Tool::Point:
         return QStringLiteral("Point");
+    case Tool::PolyCurve:
+        return QStringLiteral("PolyCurve");
     }
 
     return QStringLiteral("Unknown");
@@ -646,6 +675,8 @@ int requiredPoints(Tool tool)
         return 2;
     case Tool::Point:
         return 1;
+    case Tool::PolyCurve:
+        return 0;
     case Tool::Select:
         return 0;
     }
@@ -672,6 +703,9 @@ public:
         if (subdivisionActive_ && tool != Tool::Select) {
             cancelSubdivisionPreview();
         }
+        if (joinActive_ && tool != Tool::Select) {
+            cancelJoinMode();
+        }
         activeTool_ = tool;
         pendingPoints_.clear();
         resetArcPreviewTracking();
@@ -679,8 +713,13 @@ public:
 
         if (tool != Tool::Select) {
             repeatTool_ = tool;
+            selectedShapeIndices_.clear();
             selectedShapeIndex_ = -1;
+            selectionBoxActive_ = false;
+            selectionBoxMoved_ = false;
+            selectionBoxAdditive_ = false;
             draggingSelected_ = false;
+            draggingShapeIndices_.clear();
             draggingControlPoint_ = false;
             controlPointIndex_ = -1;
             dragHistoryRecorded_ = false;
@@ -998,6 +1037,147 @@ public:
             .arg(subdivisionSections_);
     }
 
+    bool beginJoinMode()
+    {
+        if (subdivisionActive_) {
+            cancelSubdivisionPreview();
+        }
+
+        const QVector<int> preselectedShapes = selectedShapeIndices_;
+        setTool(Tool::Select);
+        joinActive_ = true;
+        joinShapeIndices_ = preselectedShapes;
+        if (joinShapeIndices_.isEmpty()) {
+            selectedShapeIndices_.clear();
+            selectedShapeIndex_ = -1;
+        } else {
+            selectedShapeIndex_ = joinShapeIndices_.back();
+        }
+        selectionBoxActive_ = false;
+        selectionBoxMoved_ = false;
+        selectionBoxAdditive_ = false;
+        draggingSelected_ = false;
+        draggingShapeIndices_.clear();
+        draggingControlPoint_ = false;
+        controlPointIndex_ = -1;
+        setFocus(Qt::OtherFocusReason);
+        setCursor(Qt::CrossCursor);
+        notifyJoinStatus();
+        update();
+        DebugLog::instance().write(QStringLiteral("beginJoinMode"));
+        return true;
+    }
+
+    void cancelJoinMode()
+    {
+        if (!joinActive_) {
+            return;
+        }
+
+        const QVector<int> joinedSelection = joinShapeIndices_;
+        joinActive_ = false;
+        joinShapeIndices_.clear();
+        selectedShapeIndices_ = joinedSelection;
+        selectedShapeIndex_ = selectedShapeIndices_.isEmpty()
+                                  ? -1
+                                  : selectedShapeIndices_.back();
+        setCursor(Qt::ArrowCursor);
+        notifyJoinStatus();
+        update();
+        DebugLog::instance().write(QStringLiteral("cancelJoinMode"));
+    }
+
+    QString joinStatusText() const
+    {
+        if (!joinActive_) {
+            return QString();
+        }
+
+        return QStringLiteral("Join: %1 curves selected  •  Click connected curves in order  •  Enter to join  •  Esc to cancel")
+            .arg(joinShapeIndices_.size());
+    }
+
+    bool applyJoin()
+    {
+        if (!joinActive_) {
+            return false;
+        }
+
+        if (joinShapeIndices_.size() < 2) {
+            notifyJoinStatus(QStringLiteral("Join needs at least two curves"));
+            return false;
+        }
+
+        QVector<Shape::NurbsCurve2D> components;
+        for (const int shapeIndex : joinShapeIndices_) {
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
+                !appendJoinComponents(shapes_[shapeIndex], &components)) {
+                notifyJoinStatus(QStringLiteral("Join failed — select lines or curves only"));
+                return false;
+            }
+        }
+
+        if (components.size() < 2) {
+            notifyJoinStatus(QStringLiteral("Join failed — select at least two curves"));
+            return false;
+        }
+
+        if (!joinComponentsAreContinuous(components)) {
+            QVector<Shape::NurbsCurve2D> orderedComponents;
+            if (!orderJoinComponents(components, &orderedComponents)) {
+                notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
+                DebugLog::instance().write(
+                    QStringLiteral("applyJoin rejected disconnected components=%1 tolerance=%2")
+                        .arg(components.size())
+                        .arg(joinEndpointTolerance(), 0, 'f', 6));
+                return false;
+            }
+            components = orderedComponents;
+            DebugLog::instance().write(QStringLiteral("applyJoin reordered/reversed connected components=%1")
+                                           .arg(components.size()));
+        }
+
+        if (!closeJoinGaps(&components) || !joinComponentsAreContinuous(components)) {
+            notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
+            DebugLog::instance().write(QStringLiteral("applyJoin rejected reordered components=%1")
+                                           .arg(components.size()));
+            return false;
+        }
+
+        const int insertIndex = *std::min_element(joinShapeIndices_.cbegin(),
+                                                  joinShapeIndices_.cend());
+        const int sourceShapeCount = joinShapeIndices_.size();
+        recordGeometryChange();
+
+        QVector<int> indicesToRemove = joinShapeIndices_;
+        std::sort(indicesToRemove.begin(), indicesToRemove.end());
+        for (auto index = indicesToRemove.crbegin(); index != indicesToRemove.crend(); ++index) {
+            shapes_.removeAt(*index);
+        }
+
+        Shape joined{Tool::PolyCurve,
+                     polyCurvePoints(components),
+                     Shape::NurbsCurve2D{},
+                     ArcMode::TwoPoint,
+                     0.0,
+                     {},
+                     components};
+        shapes_.insert(insertIndex, joined);
+
+        joinActive_ = false;
+        joinShapeIndices_.clear();
+        selectedShapeIndices_ = {insertIndex};
+        selectedShapeIndex_ = insertIndex;
+        setCursor(Qt::ArrowCursor);
+        notifyJoinStatus(QStringLiteral("Joined %1 curves into one PolyCurve")
+                             .arg(sourceShapeCount));
+        update();
+        DebugLog::instance().write(QStringLiteral("applyJoin committed components=%1 shapes=%2")
+                                       .arg(components.size())
+                                       .arg(shapes_.size()));
+        return true;
+    }
+
     bool saveUpdateSession(const QString &path) const
     {
         QFile file(path);
@@ -1083,7 +1263,13 @@ public:
         const QJsonArray shapes = shapesValue.toArray();
         restoredShapes.reserve(shapes.size());
         for (const QJsonValue &shapeValue : shapes) {
-            Shape shape{Tool::Select, {}, Shape::NurbsCurve2D{}, ArcMode::TwoPoint, 0.0, {}};
+            Shape shape{Tool::Select,
+                        {},
+                        Shape::NurbsCurve2D{},
+                        ArcMode::TwoPoint,
+                        0.0,
+                        {},
+                        {}};
             if (!shapeFromJson(shapeValue, &shape)) {
                 DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid shape path=%1")
                                                .arg(path));
@@ -1097,14 +1283,21 @@ public:
         redoStack_.clear();
         pendingPoints_.clear();
         resetArcPreviewTracking();
+        selectedShapeIndices_.clear();
         selectedShapeIndex_ = -1;
+        selectionBoxActive_ = false;
+        selectionBoxMoved_ = false;
+        selectionBoxAdditive_ = false;
         draggingSelected_ = false;
+        draggingShapeIndices_.clear();
         draggingControlPoint_ = false;
         controlPointIndex_ = -1;
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
         currentSnap_ = SnapResult{};
+        joinActive_ = false;
+        joinShapeIndices_.clear();
         subdivisionActive_ = false;
         subdivisionShapeIndex_ = -1;
         subdivisionSections_ = 2;
@@ -1136,7 +1329,10 @@ protected:
         drawOrigin(painter);
 
         for (int index = 0; index < shapes_.size(); ++index) {
-            drawShape(painter, shapes_[index], false, index == selectedShapeIndex_);
+            const bool selected = selectedShapeIndices_.contains(index) ||
+                                  index == selectedShapeIndex_ ||
+                                  joinShapeIndices_.contains(index);
+            drawShape(painter, shapes_[index], false, selected);
             if (!subdivisionActive_ || index != subdivisionShapeIndex_) {
                 drawSubdivisionPoints(painter,
                                       shapes_[index],
@@ -1172,7 +1368,13 @@ protected:
             drawPointToolPreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
             drawShape(painter,
-                      Shape{activeTool_, pendingPoints_, Shape::NurbsCurve2D{}, ArcMode::TwoPoint, 0.0, {}},
+                      Shape{activeTool_,
+                            pendingPoints_,
+                            Shape::NurbsCurve2D{},
+                            ArcMode::TwoPoint,
+                            0.0,
+                            {},
+                            {}},
                       true);
         }
 
@@ -1180,6 +1382,13 @@ protected:
             drawSnapMarker(painter,
                            currentDragSnap_.type,
                            currentDragSnap_.targetPoint);
+        }
+
+        if (selectionBoxActive_) {
+            const QRectF selectionBox(selectionBoxStartScreen_, selectionBoxCurrentScreen_);
+            painter.setPen(QPen(QColor(QStringLiteral("#63b5e8")), 1.0, Qt::DashLine));
+            painter.setBrush(QColor(99, 181, 232, 35));
+            painter.drawRect(selectionBox.normalized());
         }
 
         painter.setPen(QColor(QStringLiteral("#a0a0a0")));
@@ -1197,6 +1406,14 @@ protected:
                              height() - 42,
                              QStringLiteral("SUBDIVIDE  •  %1 sections  •  endpoints included")
                                  .arg(subdivisionSections_));
+        }
+
+        if (joinActive_) {
+            painter.setPen(QColor(QStringLiteral("#f0a45a")));
+            painter.drawText(18,
+                             height() - 42,
+                             QStringLiteral("JOIN  •  %1 curves selected  •  Enter to join  •  Esc to cancel")
+                                 .arg(joinShapeIndices_.size()));
         }
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
@@ -1219,6 +1436,11 @@ protected:
             }
             painter.setPen(QColor(QStringLiteral("#777777")));
             painter.drawText(18, height() - 18, hint);
+        } else if (!joinActive_) {
+            painter.setPen(QColor(QStringLiteral("#777777")));
+            painter.drawText(18,
+                             height() - 18,
+                             QStringLiteral("Shift-click: add/remove  •  Drag empty: box select  •  Drag selected: move group"));
         }
     }
 
@@ -1271,13 +1493,41 @@ protected:
             return;
         }
 
+        if (joinActive_ && event->button() == Qt::LeftButton) {
+            const int shapeIndex = hitTestShape(screenPosition);
+            if (shapeIndex < 0 || !isJoinableShape(shapes_[shapeIndex])) {
+                notifyJoinStatus(QStringLiteral("Join: click a line or curve"));
+                DebugLog::instance().write(QStringLiteral("join click ignored shape=%1")
+                                               .arg(shapeIndex));
+                return;
+            }
+
+            if (joinShapeIndices_.contains(shapeIndex)) {
+                notifyJoinStatus(QStringLiteral("Join: curve already selected"));
+                return;
+            }
+
+            joinShapeIndices_.append(shapeIndex);
+            if (!selectedShapeIndices_.contains(shapeIndex)) {
+                selectedShapeIndices_.append(shapeIndex);
+            }
+            selectedShapeIndex_ = shapeIndex;
+            notifyJoinStatus();
+            DebugLog::instance().write(QStringLiteral("join selected shape=%1 total=%2")
+                                           .arg(shapeIndex)
+                                           .arg(joinShapeIndices_.size()));
+            update();
+            return;
+        }
+
         if (event->button() == Qt::LeftButton && activeTool_ == Tool::Select) {
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
+            const bool shiftPressed = event->modifiers().testFlag(Qt::ShiftModifier);
 
-            if (controlPointsVisible_ && selectedShapeIndex_ >= 0 &&
+            if (!shiftPressed && controlPointsVisible_ && selectedShapeIndex_ >= 0 &&
                 selectedShapeIndex_ < shapes_.size()) {
                 const int grabbedControlPoint =
                     hitTestControlPoint(selectedShapeIndex_, screenPosition);
@@ -1301,15 +1551,39 @@ protected:
                 }
             }
 
-            selectedShapeIndex_ = hitTestShape(screenPosition);
-            draggingSelected_ = selectedShapeIndex_ >= 0;
+            const int clickedShapeIndex = hitTestShape(screenPosition);
             draggingControlPoint_ = false;
             controlPointIndex_ = -1;
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
+            draggingSelected_ = false;
 
-            if (draggingSelected_) {
+            if (shiftPressed) {
+                if (clickedShapeIndex >= 0) {
+                    toggleShapeSelection(clickedShapeIndex);
+                    DebugLog::instance().write(
+                        QStringLiteral("shift selection toggle shape=%1 selected=%2")
+                            .arg(clickedShapeIndex)
+                            .arg(selectedShapeIndices_.size()));
+                    update();
+                    emitCoordinateUpdate();
+                } else {
+                    beginSelectionBox(screenPosition, true);
+                }
+                return;
+            }
+
+            if (clickedShapeIndex >= 0) {
+                if (!selectedShapeIndices_.contains(clickedShapeIndex)) {
+                    setSingleSelection(clickedShapeIndex);
+                } else {
+                    // Clicking an already-selected shape starts a group drag
+                    // without collapsing the current multi-selection.
+                    selectedShapeIndex_ = clickedShapeIndex;
+                }
+                draggingShapeIndices_ = selectedShapeIndices_;
+                draggingSelected_ = true;
                 lastDragWorld_ = rawWorldPosition;
                 setCursor(Qt::SizeAllCursor);
                 DebugLog::instance().write(
@@ -1318,8 +1592,10 @@ protected:
                         .arg(toolName(shapes_[selectedShapeIndex_].tool))
                         .arg(pointText(lastDragWorld_)));
             } else {
+                draggingSelected_ = false;
                 DebugLog::instance().write(QStringLiteral("selection miss at=%1")
                                                .arg(pointText(screenPosition)));
+                beginSelectionBox(screenPosition, false);
             }
 
             update();
@@ -1371,6 +1647,7 @@ protected:
                                  Shape::NurbsCurve2D{},
                                  completedArcMode,
                                  0.0,
+                                 {},
                                  {}};
             if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint) {
                 completedShape.arcSweep = arcPreviewSweepAngle_;
@@ -1454,6 +1731,17 @@ protected:
             lastMousePosition_ = current;
         }
 
+        if (selectionBoxActive_) {
+            selectionBoxCurrentScreen_ = screenPosition;
+            const QPointF totalDelta = screenPosition - selectionBoxStartScreen_;
+            if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
+                selectionBoxMoved_ = true;
+            }
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
         if (draggingControlPoint_ && selectedShapeIndex_ >= 0 &&
             selectedShapeIndex_ < shapes_.size() && controlPointIndex_ >= 0) {
             const QPointF delta = rawCursorWorld_ - lastControlPointWorld_;
@@ -1516,6 +1804,10 @@ protected:
             }
         } else if (draggingSelected_ && selectedShapeIndex_ >= 0 &&
             selectedShapeIndex_ < shapes_.size()) {
+            const QVector<int> dragIndices = draggingShapeIndices_.isEmpty()
+                                                ? QVector<int>{selectedShapeIndex_}
+                                                : draggingShapeIndices_;
+            const bool groupDrag = dragIndices.size() > 1;
             const QPointF delta = rawCursorWorld_ - lastDragWorld_;
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
                 constexpr qreal dragSnapBreakawayPixels = 18.0;
@@ -1538,7 +1830,7 @@ protected:
                         // since the snap was acquired, so the line leaves cleanly.
                         const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
                         beginDragHistory();
-                        translateShape(selectedShapeIndex_, detachDelta);
+                        translateShapes(dragIndices, detachDelta);
                         currentDragSnap_ = DragSnapResult{};
                         dragSnapLocked_ = false;
                         DebugLog::instance().write(
@@ -1547,10 +1839,12 @@ protected:
                                 .arg(cursorDistanceFromSnap, 0, 'f', 2));
                     } else {
                         beginDragHistory();
-                        translateShape(selectedShapeIndex_, delta);
-                        currentDragSnap_ = findDragSnap(selectedShapeIndex_);
+                        translateShapes(dragIndices, delta);
+                        currentDragSnap_ = groupDrag
+                                                ? findDragSnap(dragIndices)
+                                                : findDragSnap(selectedShapeIndex_);
                         if (currentDragSnap_.isValid()) {
-                            translateShape(selectedShapeIndex_, currentDragSnap_.translation);
+                            translateShapes(dragIndices, currentDragSnap_.translation);
                             dragSnapLocked_ = true;
                             dragSnapCursorWorld_ = rawCursorWorld_;
                         }
@@ -1568,6 +1862,11 @@ protected:
                         .arg(pointText(currentDragSnap_.sourcePoint))
                         .arg(pointText(currentDragSnap_.targetPoint))
                         .arg(pointText(currentDragSnap_.translation)));
+                if (groupDrag) {
+                    DebugLog::instance().write(
+                        QStringLiteral("group selection drag count=%1")
+                            .arg(dragIndices.size()));
+                }
             }
         }
 
@@ -1624,6 +1923,11 @@ protected:
             repeatLastTool();
         }
 
+        if (selectionBoxActive_ && event->button() == Qt::LeftButton) {
+            finishSelectionBox();
+            return;
+        }
+
         if (draggingControlPoint_ && event->button() == Qt::LeftButton) {
             draggingControlPoint_ = false;
             controlPointIndex_ = -1;
@@ -1636,6 +1940,7 @@ protected:
             update();
         } else if (draggingSelected_ && event->button() == Qt::LeftButton) {
             draggingSelected_ = false;
+            draggingShapeIndices_.clear();
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
@@ -1699,6 +2004,22 @@ protected:
                                        .arg(toolName(activeTool_))
                                        .arg(lineCommandActive_)
                                        .arg(pendingPoints_.size()));
+        if (selectionBoxActive_ && event->key() == Qt::Key_Escape) {
+            cancelSelectionBox();
+            return;
+        }
+
+        if (joinActive_ &&
+            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+            applyJoin();
+            return;
+        }
+
+        if (joinActive_ && event->key() == Qt::Key_Escape) {
+            cancelJoinMode();
+            return;
+        }
+
         if (subdivisionActive_ &&
             (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
             applySubdivision(subdivisionSections_);
@@ -1732,6 +2053,471 @@ protected:
     }
 
 private:
+    bool isJoinableShape(const Shape &shape) const
+    {
+        if (shape.tool == Tool::PolyCurve) {
+            if (shape.components.isEmpty()) {
+                return false;
+            }
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                if (!isValidNurbsCurve(component)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        return shape.tool == Tool::Line ||
+               shape.tool == Tool::Arc ||
+               shape.tool == Tool::Bezier ||
+               shape.tool == Tool::Nurbs;
+    }
+
+    bool appendJoinComponents(const Shape &shape,
+                              QVector<Shape::NurbsCurve2D> *components) const
+    {
+        if (components == nullptr || !isJoinableShape(shape)) {
+            return false;
+        }
+
+        if (shape.tool == Tool::PolyCurve) {
+            *components += shape.components;
+            return true;
+        }
+
+        if (isValidNurbsCurve(shape.nurbs)) {
+            components->append(shape.nurbs);
+            return true;
+        }
+
+        if (shape.tool == Tool::Line && shape.points.size() >= 2) {
+            const Shape::NurbsCurve2D line = makeDegreeOneNurbs(shape.points);
+            if (isValidNurbsCurve(line)) {
+                components->append(line);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool nurbsCurveEndpoints(const Shape::NurbsCurve2D &curve,
+                             QPointF *start,
+                             QPointF *end) const
+    {
+        if (!isValidNurbsCurve(curve) || (start == nullptr && end == nullptr)) {
+            return false;
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        if (fullKnots.size() <= curve.controlPoints.size()) {
+            return false;
+        }
+
+        const bool startValid = start == nullptr ||
+                                evaluateNurbsPoint(curve, fullKnots[curve.degree], start);
+        const bool endValid = end == nullptr ||
+                              evaluateNurbsPoint(curve,
+                                                 fullKnots[curve.controlPoints.size()],
+                                                 end);
+        return startValid && endValid;
+    }
+
+    qreal joinEndpointTolerance() const
+    {
+        constexpr qreal minimumTolerance = 1.0e-5;
+        constexpr qreal screenTolerancePixels = 3.0;
+        return std::max(minimumTolerance,
+                        screenTolerancePixels / std::max(zoom_, 1.0e-9));
+    }
+
+    Shape::NurbsCurve2D reversedNurbsCurve(const Shape::NurbsCurve2D &curve) const
+    {
+        if (!isValidNurbsCurve(curve)) {
+            return {};
+        }
+
+        Shape::NurbsCurve2D reversed = curve;
+        std::reverse(reversed.controlPoints.begin(), reversed.controlPoints.end());
+        if (!reversed.weights.isEmpty()) {
+            std::reverse(reversed.weights.begin(), reversed.weights.end());
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const qreal domainStart = fullKnots[curve.degree];
+        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
+        reversed.knots.clear();
+        reversed.knots.reserve(curve.knots.size());
+        for (int index = 1; index + 1 < fullKnots.size(); ++index) {
+            reversed.knots.append(domainStart + domainEnd -
+                                  fullKnots[fullKnots.size() - 1 - index]);
+        }
+        return reversed;
+    }
+
+    bool orderJoinComponents(const QVector<Shape::NurbsCurve2D> &input,
+                             QVector<Shape::NurbsCurve2D> *ordered) const
+    {
+        if (ordered == nullptr || input.isEmpty()) {
+            return false;
+        }
+
+        QVector<QPointF> starts;
+        QVector<QPointF> ends;
+        starts.reserve(input.size());
+        ends.reserve(input.size());
+        for (const Shape::NurbsCurve2D &curve : input) {
+            QPointF start;
+            QPointF end;
+            if (!nurbsCurveEndpoints(curve, &start, &end)) {
+                return false;
+            }
+            starts.append(start);
+            ends.append(end);
+        }
+
+        const qreal tolerance = joinEndpointTolerance();
+        const auto endpointsMatch = [tolerance](const QPointF &first,
+                                                  const QPointF &second) {
+            return std::hypot(first.x() - second.x(), first.y() - second.y()) <= tolerance;
+        };
+
+        QVector<int> componentOrder;
+        QVector<bool> componentReversed;
+        QVector<char> used(input.size(), false);
+
+        const auto makeResult = [&]() {
+            ordered->clear();
+            ordered->reserve(componentOrder.size());
+            for (int position = 0; position < componentOrder.size(); ++position) {
+                const int componentIndex = componentOrder[position];
+                ordered->append(componentReversed[position]
+                                    ? reversedNurbsCurve(input[componentIndex])
+                                    : input[componentIndex]);
+            }
+        };
+
+        std::function<bool(const QPointF &)> extendChain;
+        extendChain = [&](const QPointF &currentEnd) {
+            if (componentOrder.size() == input.size()) {
+                return true;
+            }
+
+            for (int candidate = 0; candidate < input.size(); ++candidate) {
+                if (used[candidate]) {
+                    continue;
+                }
+
+                if (endpointsMatch(currentEnd, starts[candidate])) {
+                    used[candidate] = true;
+                    componentOrder.append(candidate);
+                    componentReversed.append(false);
+                    if (extendChain(ends[candidate])) {
+                        return true;
+                    }
+                    componentReversed.removeLast();
+                    componentOrder.removeLast();
+                    used[candidate] = false;
+                }
+
+                if (endpointsMatch(currentEnd, ends[candidate])) {
+                    used[candidate] = true;
+                    componentOrder.append(candidate);
+                    componentReversed.append(true);
+                    if (extendChain(starts[candidate])) {
+                        return true;
+                    }
+                    componentReversed.removeLast();
+                    componentOrder.removeLast();
+                    used[candidate] = false;
+                }
+            }
+
+            return false;
+        };
+
+        for (int first = 0; first < input.size(); ++first) {
+            for (const bool reverseFirst : {false, true}) {
+                std::fill(used.begin(), used.end(), false);
+                componentOrder.clear();
+                componentReversed.clear();
+                used[first] = true;
+                componentOrder.append(first);
+                componentReversed.append(reverseFirst);
+                const QPointF firstEnd = reverseFirst ? starts[first] : ends[first];
+                if (extendChain(firstEnd)) {
+                    makeResult();
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool closeJoinGaps(QVector<Shape::NurbsCurve2D> *components) const
+    {
+        if (components == nullptr || components->isEmpty()) {
+            return false;
+        }
+
+        const qreal tolerance = joinEndpointTolerance();
+        for (int index = 0; index + 1 < components->size(); ++index) {
+            QPointF previousEnd;
+            QPointF nextStart;
+            if (!nurbsCurveEndpoints(components->at(index), nullptr, &previousEnd) ||
+                !nurbsCurveEndpoints(components->at(index + 1), &nextStart, nullptr)) {
+                return false;
+            }
+
+            const QPointF delta = previousEnd - nextStart;
+            if (std::hypot(delta.x(), delta.y()) > tolerance) {
+                return false;
+            }
+
+            // Move only the next component. That closes this seam without
+            // disturbing a seam that was already closed earlier in the chain.
+            // The component's degree, weights, knots, and parameter domain
+            // remain unchanged.
+            for (QPointF &controlPoint : (*components)[index + 1].controlPoints) {
+                controlPoint += delta;
+            }
+        }
+
+        return true;
+    }
+
+    bool nurbsCurvePointAtFraction(const Shape::NurbsCurve2D &curve,
+                                   qreal fraction,
+                                   QPointF *point) const
+    {
+        if (!isValidNurbsCurve(curve) || point == nullptr) {
+            return false;
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        if (fullKnots.size() <= curve.controlPoints.size()) {
+            return false;
+        }
+
+        const qreal firstParameter = fullKnots[curve.degree];
+        const qreal lastParameter = fullKnots[curve.controlPoints.size()];
+        return evaluateNurbsPoint(curve,
+                                  firstParameter +
+                                      (lastParameter - firstParameter) *
+                                          std::clamp(fraction, 0.0, 1.0),
+                                  point);
+    }
+
+    bool joinComponentsAreContinuous(const QVector<Shape::NurbsCurve2D> &components) const
+    {
+        const qreal joinTolerance = joinEndpointTolerance();
+        for (int index = 0; index + 1 < components.size(); ++index) {
+            QPointF firstEnd;
+            QPointF nextStart;
+            if (!nurbsCurveEndpoints(components[index], nullptr, &firstEnd) ||
+                !nurbsCurveEndpoints(components[index + 1], &nextStart, nullptr)) {
+                return false;
+            }
+
+            if (std::hypot(firstEnd.x() - nextStart.x(),
+                           firstEnd.y() - nextStart.y()) > joinTolerance) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    QVector<QPointF> polyCurvePoints(
+        const QVector<Shape::NurbsCurve2D> &components) const
+    {
+        QVector<QPointF> points;
+        for (int index = 0; index < components.size(); ++index) {
+            QPointF start;
+            QPointF end;
+            if (!nurbsCurveEndpoints(components[index], &start, &end)) {
+                continue;
+            }
+            if (index == 0) {
+                points.append(start);
+            }
+            points.append(end);
+        }
+        return points;
+    }
+
+    void notifyJoinStatus(const QString &message = QString())
+    {
+        if (joinStatusUpdate_) {
+            joinStatusUpdate_(message.isEmpty() ? joinStatusText() : message);
+        }
+    }
+
+    bool isShapeSelected(int shapeIndex) const
+    {
+        return shapeIndex >= 0 && selectedShapeIndices_.contains(shapeIndex);
+    }
+
+    void clearSelection()
+    {
+        selectedShapeIndices_.clear();
+        selectedShapeIndex_ = -1;
+    }
+
+    void setSingleSelection(int shapeIndex)
+    {
+        selectedShapeIndices_.clear();
+        if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
+            selectedShapeIndices_.append(shapeIndex);
+            selectedShapeIndex_ = shapeIndex;
+        } else {
+            selectedShapeIndex_ = -1;
+        }
+    }
+
+    void toggleShapeSelection(int shapeIndex)
+    {
+        if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+            return;
+        }
+
+        if (selectedShapeIndices_.contains(shapeIndex)) {
+            selectedShapeIndices_.removeOne(shapeIndex);
+            selectedShapeIndex_ = selectedShapeIndices_.isEmpty()
+                                      ? -1
+                                      : selectedShapeIndices_.back();
+        } else {
+            selectedShapeIndices_.append(shapeIndex);
+            selectedShapeIndex_ = shapeIndex;
+        }
+    }
+
+    QRectF selectionBoundsForShape(const Shape &shape) const
+    {
+        QVector<QPointF> points = controlPointsForShape(shape);
+        if (points.isEmpty()) {
+            points = shape.points;
+        }
+
+        QRectF bounds;
+        bool initialized = false;
+        for (const QPointF &point : points) {
+            if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
+                continue;
+            }
+
+            const QPointF screenPoint = worldToScreen(point);
+            if (!initialized) {
+                bounds = QRectF(screenPoint, screenPoint);
+                initialized = true;
+            } else {
+                bounds = bounds.united(QRectF(screenPoint, screenPoint));
+            }
+        }
+
+        if (!initialized) {
+            return {};
+        }
+
+        // A line or a point can have a zero-width bounding box. The small
+        // padding keeps box selection usable at normal zoom levels and also
+        // covers the visible stroke/point marker.
+        return bounds.adjusted(-5.0, -5.0, 5.0, 5.0);
+    }
+
+    bool shapeIntersectsSelectionBox(const Shape &shape, const QRectF &box) const
+    {
+        const QRectF bounds = selectionBoundsForShape(shape);
+        return !bounds.isNull() && bounds.intersects(box);
+    }
+
+    void beginSelectionBox(const QPointF &screenPosition, bool additive)
+    {
+        selectionBoxActive_ = true;
+        selectionBoxMoved_ = false;
+        selectionBoxAdditive_ = additive;
+        selectionBoxStartScreen_ = screenPosition;
+        selectionBoxCurrentScreen_ = screenPosition;
+        draggingSelected_ = false;
+        draggingShapeIndices_.clear();
+        draggingControlPoint_ = false;
+        controlPointIndex_ = -1;
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        setCursor(Qt::CrossCursor);
+        update();
+        emitCoordinateUpdate();
+        DebugLog::instance().write(QStringLiteral("selection box start additive=%1 at=%2")
+                                       .arg(additive)
+                                       .arg(pointText(screenPosition)));
+    }
+
+    void finishSelectionBox()
+    {
+        if (!selectionBoxActive_) {
+            return;
+        }
+
+        const QRectF selectionBox =
+            QRectF(selectionBoxStartScreen_, selectionBoxCurrentScreen_).normalized();
+        const bool moved = selectionBoxMoved_ ||
+                           selectionBox.width() >= 3.0 ||
+                           selectionBox.height() >= 3.0;
+        QVector<int> boxSelection;
+        if (moved) {
+            for (int index = 0; index < shapes_.size(); ++index) {
+                if (shapeIntersectsSelectionBox(shapes_[index], selectionBox)) {
+                    boxSelection.append(index);
+                }
+            }
+        }
+
+        if (moved) {
+            if (selectionBoxAdditive_) {
+                for (const int index : boxSelection) {
+                    if (!selectedShapeIndices_.contains(index)) {
+                        selectedShapeIndices_.append(index);
+                    }
+                }
+                if (!boxSelection.isEmpty()) {
+                    selectedShapeIndex_ = boxSelection.back();
+                }
+            } else {
+                selectedShapeIndices_ = boxSelection;
+                selectedShapeIndex_ = boxSelection.isEmpty() ? -1 : boxSelection.back();
+            }
+        } else if (!selectionBoxAdditive_) {
+            clearSelection();
+        }
+
+        DebugLog::instance().write(QStringLiteral("selection box finish moved=%1 additive=%2 selected=%3")
+                                       .arg(moved)
+                                       .arg(selectionBoxAdditive_)
+                                       .arg(selectedShapeIndices_.size()));
+        selectionBoxActive_ = false;
+        selectionBoxMoved_ = false;
+        selectionBoxAdditive_ = false;
+        setCursor(joinActive_ ? Qt::CrossCursor : Qt::ArrowCursor);
+        update();
+        emitCoordinateUpdate();
+    }
+
+    void cancelSelectionBox()
+    {
+        if (!selectionBoxActive_) {
+            return;
+        }
+
+        selectionBoxActive_ = false;
+        selectionBoxMoved_ = false;
+        selectionBoxAdditive_ = false;
+        setCursor(joinActive_ ? Qt::CrossCursor : Qt::ArrowCursor);
+        update();
+        DebugLog::instance().write(QStringLiteral("selection box canceled"));
+    }
+
     bool isSubdividableShape(const Shape &shape) const
     {
         if (shape.tool == Tool::Line) {
@@ -1979,14 +2765,21 @@ private:
     void resetInteractionAfterHistory()
     {
         pendingPoints_.clear();
+        selectedShapeIndices_.clear();
         selectedShapeIndex_ = -1;
+        selectionBoxActive_ = false;
+        selectionBoxMoved_ = false;
+        selectionBoxAdditive_ = false;
         draggingSelected_ = false;
+        draggingShapeIndices_.clear();
         dragHistoryRecorded_ = false;
         currentSnap_ = SnapResult{};
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
         draggingControlPoint_ = false;
         controlPointIndex_ = -1;
+        joinActive_ = false;
+        joinShapeIndices_.clear();
         subdivisionActive_ = false;
         subdivisionShapeIndex_ = -1;
         subdivisionSections_ = 2;
@@ -2011,6 +2804,7 @@ private:
                                  curve,
                                  ArcMode::TwoPoint,
                                  0.0,
+                                 {},
                                  {}});
             DebugLog::instance().write(
                 QStringLiteral("finishLineCommand committed dimension=%1 degree=%2 order=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7 shapes=%8")
@@ -2243,6 +3037,22 @@ private:
             return candidates;
         }
 
+        if (shape.tool == Tool::PolyCurve) {
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                QPointF start;
+                QPointF end;
+                if (nurbsCurveEndpoints(component, &start, &end)) {
+                    candidates.append(SnapCandidate{SnapType::Endpoint, start});
+                    candidates.append(SnapCandidate{SnapType::Endpoint, end});
+                }
+                QPointF midpoint;
+                if (nurbsCurvePointAtFraction(component, 0.5, &midpoint)) {
+                    candidates.append(SnapCandidate{SnapType::Midpoint, midpoint});
+                }
+            }
+            return candidates;
+        }
+
         if (shape.tool == Tool::Circle) {
             candidates.append(SnapCandidate{SnapType::Center, shape.points.first()});
             return candidates;
@@ -2314,11 +3124,20 @@ private:
 
     QVector<SnapCandidate> snapCandidatesForScene(int excludedShapeIndex = -1) const
     {
+        const QVector<int> excludedShapeIndices = excludedShapeIndex >= 0
+                                                      ? QVector<int>{excludedShapeIndex}
+                                                      : QVector<int>{};
+        return snapCandidatesForScene(excludedShapeIndices);
+    }
+
+    QVector<SnapCandidate> snapCandidatesForScene(
+        const QVector<int> &excludedShapeIndices) const
+    {
         QVector<SnapCandidate> candidates;
         QVector<LineSegment> segments;
 
         for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
-            if (shapeIndex == excludedShapeIndex) {
+            if (excludedShapeIndices.contains(shapeIndex)) {
                 continue;
             }
 
@@ -2342,6 +3161,25 @@ private:
             if (shape.tool == Tool::Point) {
                 if (endpointSnapEnabled_) {
                     candidates.append(SnapCandidate{SnapType::Endpoint, shape.points.first()});
+                }
+                continue;
+            }
+
+            if (shape.tool == Tool::PolyCurve) {
+                for (const Shape::NurbsCurve2D &component : shape.components) {
+                    QPointF start;
+                    QPointF end;
+                    if (endpointSnapEnabled_ &&
+                        nurbsCurveEndpoints(component, &start, &end)) {
+                        candidates.append(SnapCandidate{SnapType::Endpoint, start});
+                        candidates.append(SnapCandidate{SnapType::Endpoint, end});
+                    }
+                    if (midpointSnapEnabled_) {
+                        QPointF midpoint;
+                        if (nurbsCurvePointAtFraction(component, 0.5, &midpoint)) {
+                            candidates.append(SnapCandidate{SnapType::Midpoint, midpoint});
+                        }
+                    }
                 }
                 continue;
             }
@@ -2715,16 +3553,29 @@ private:
 
     DragSnapResult findDragSnap(int selectedShapeIndex) const
     {
+        return findDragSnap(QVector<int>{selectedShapeIndex});
+    }
+
+    DragSnapResult findDragSnap(const QVector<int> &selectedShapeIndices) const
+    {
         DragSnapResult best;
-        if (!osnapEnabled_ || selectedShapeIndex < 0 ||
-            selectedShapeIndex >= shapes_.size()) {
+        if (!osnapEnabled_ || selectedShapeIndices.isEmpty()) {
             return best;
         }
 
-        const QVector<SnapCandidate> sourceCandidates =
-            snapCandidatesForShape(shapes_[selectedShapeIndex]);
+        QVector<SnapCandidate> sourceCandidates;
+        for (const int shapeIndex : selectedShapeIndices) {
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                continue;
+            }
+            sourceCandidates += snapCandidatesForShape(shapes_[shapeIndex]);
+        }
+        if (sourceCandidates.isEmpty()) {
+            return best;
+        }
+
         const QVector<SnapCandidate> targetCandidates =
-            snapCandidatesForScene(selectedShapeIndex);
+            snapCandidatesForScene(selectedShapeIndices);
         constexpr qreal snapRadiusPixels = 12.0;
         qreal bestDistance = snapRadiusPixels;
 
@@ -3051,6 +3902,14 @@ private:
             return {};
         }
 
+        if (shape.tool == Tool::PolyCurve) {
+            QVector<QPointF> controlPoints;
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                controlPoints += component.controlPoints;
+            }
+            return controlPoints;
+        }
+
         if (!shape.nurbs.controlPoints.isEmpty()) {
             return shape.nurbs.controlPoints;
         }
@@ -3089,6 +3948,19 @@ private:
 
         for (int index = 0; index < shapes_.size(); ++index) {
             const Shape &shape = shapes_[index];
+
+            if (shape.tool == Tool::PolyCurve && !shape.components.isEmpty()) {
+                qreal distance = 1.0e9;
+                for (const Shape::NurbsCurve2D &component : shape.components) {
+                    distance = std::min(distance,
+                                       distanceToNurbsCurve(screenPosition, component));
+                }
+                if (distance <= closestDistance) {
+                    closestDistance = distance;
+                    closestShape = index;
+                }
+                continue;
+            }
 
             if (shape.tool == Tool::Point && !shape.points.isEmpty()) {
                 const QPointF point = worldToScreen(shape.points.first());
@@ -3193,6 +4065,41 @@ private:
         }
 
         Shape &shape = shapes_[shapeIndex];
+        if (shape.tool == Tool::PolyCurve) {
+            int remaining = controlPointIndex;
+            for (int componentIndex = 0; componentIndex < shape.components.size(); ++componentIndex) {
+                Shape::NurbsCurve2D &component = shape.components[componentIndex];
+                if (remaining < component.controlPoints.size()) {
+                    const QPointF oldPoint = component.controlPoints[remaining];
+                    component.controlPoints[remaining] += delta;
+                    const qreal seamTolerance = joinEndpointTolerance();
+                    if (remaining == 0 && componentIndex > 0) {
+                        Shape::NurbsCurve2D &previous = shape.components[componentIndex - 1];
+                        if (!previous.controlPoints.isEmpty() &&
+                            std::hypot(previous.controlPoints.last().x() - oldPoint.x(),
+                                       previous.controlPoints.last().y() - oldPoint.y()) <=
+                                seamTolerance) {
+                            previous.controlPoints.last() += delta;
+                        }
+                    }
+                    if (remaining == component.controlPoints.size() - 1 &&
+                        componentIndex + 1 < shape.components.size()) {
+                        Shape::NurbsCurve2D &next = shape.components[componentIndex + 1];
+                        if (!next.controlPoints.isEmpty() &&
+                            std::hypot(next.controlPoints.first().x() - oldPoint.x(),
+                                       next.controlPoints.first().y() - oldPoint.y()) <=
+                                seamTolerance) {
+                            next.controlPoints.first() += delta;
+                        }
+                    }
+                    shape.points = polyCurvePoints(shape.components);
+                    return;
+                }
+                remaining -= component.controlPoints.size();
+            }
+            return;
+        }
+
         if (!shape.nurbs.controlPoints.isEmpty()) {
             if (controlPointIndex >= shape.nurbs.controlPoints.size()) {
                 return;
@@ -3229,6 +4136,18 @@ private:
         }
         for (QPointF &point : shape.nurbs.controlPoints) {
             point += delta;
+        }
+        for (Shape::NurbsCurve2D &component : shape.components) {
+            for (QPointF &point : component.controlPoints) {
+                point += delta;
+            }
+        }
+    }
+
+    void translateShapes(const QVector<int> &indices, const QPointF &delta)
+    {
+        for (const int index : indices) {
+            translateShape(index, delta);
         }
     }
 
@@ -3736,33 +4655,47 @@ private:
 
     void drawControlPoints(QPainter &painter, const Shape &shape)
     {
-        const QVector<QPointF> controlPoints = controlPointsForShape(shape);
-        if (controlPoints.isEmpty()) {
-            return;
-        }
-
         const QColor handleColor(QStringLiteral("#77b7e6"));
         const QColor handleFill(QStringLiteral("#263b4b"));
         painter.setPen(QPen(handleColor, 1.0, Qt::DashLine));
         painter.setBrush(Qt::NoBrush);
-        for (int index = 0; index + 1 < controlPoints.size(); ++index) {
-            painter.drawLine(worldToScreen(controlPoints[index]),
-                             worldToScreen(controlPoints[index + 1]));
+
+        int globalControlPointIndex = 0;
+        const auto drawControlPointChain = [&](const QVector<QPointF> &controlPoints) {
+            if (controlPoints.isEmpty()) {
+                return;
+            }
+
+            // Each PolyCurve component owns its own control polygon. Do not
+            // draw a fictitious segment between adjacent component CV lists.
+            for (int index = 0; index + 1 < controlPoints.size(); ++index) {
+                painter.drawLine(worldToScreen(controlPoints[index]),
+                                 worldToScreen(controlPoints[index + 1]));
+            }
+
+            for (int index = 0; index < controlPoints.size(); ++index) {
+                const bool active = draggingControlPoint_ &&
+                                    selectedShapeIndex_ >= 0 &&
+                                    selectedShapeIndex_ < shapes_.size() &&
+                                    controlPointIndex_ == globalControlPointIndex + index;
+                painter.setPen(QPen(active ? QColor(QStringLiteral("#f0a45a")) : handleColor,
+                                    1.5));
+                painter.setBrush(active ? QColor(QStringLiteral("#f0a45a")) : handleFill);
+                const QPointF screenPoint = worldToScreen(controlPoints[index]);
+                painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
+                                        screenPoint + QPointF(4.0, 4.0)));
+            }
+            globalControlPointIndex += controlPoints.size();
+        };
+
+        if (shape.tool == Tool::PolyCurve) {
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                drawControlPointChain(component.controlPoints);
+            }
+            return;
         }
 
-        for (int index = 0; index < controlPoints.size(); ++index) {
-            const bool active = draggingControlPoint_ &&
-                                selectedShapeIndex_ >= 0 &&
-                                selectedShapeIndex_ < shapes_.size() &&
-                                controlPointIndex_ == index;
-            painter.setPen(QPen(active ? QColor(QStringLiteral("#f0a45a")) : handleColor,
-                                1.5));
-            painter.setBrush(active ? QColor(QStringLiteral("#f0a45a")) : handleFill);
-            const QPointF &point = controlPoints[index];
-            const QPointF screenPoint = worldToScreen(point);
-            painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
-                                    screenPoint + QPointF(4.0, 4.0)));
-        }
+        drawControlPointChain(controlPointsForShape(shape));
     }
 
     void drawGrid(QPainter &painter)
@@ -4031,7 +4964,13 @@ private:
         // brush so an open curve is never rendered as a filled wedge.
         painter.setBrush(Qt::NoBrush);
 
-        if (shape.tool == Tool::Point && shape.points.size() >= 1) {
+        if (shape.tool == Tool::PolyCurve && !shape.components.isEmpty()) {
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                if (isValidNurbsCurve(component)) {
+                    drawNurbsCurve(painter, component);
+                }
+            }
+        } else if (shape.tool == Tool::Point && shape.points.size() >= 1) {
             painter.setPen(QPen(curveColor, selected ? 2.0 : 1.5));
             painter.setBrush(curveColor);
             painter.drawEllipse(worldToScreen(shape.points.first()),
@@ -4131,6 +5070,7 @@ public:
     std::function<void(Tool)> toolRepeated_;
     std::function<void()> historyChanged_;
     std::function<void(const QString &)> subdivisionStatusUpdate_;
+    std::function<void(const QString &)> joinStatusUpdate_;
 
 private:
     static constexpr int maxSubdivisionSections = 10000;
@@ -4152,8 +5092,10 @@ private:
     QPointF cursorWorld_{0.0, 0.0};
     SnapResult currentSnap_;
     DragSnapResult currentDragSnap_;
+    QVector<int> selectedShapeIndices_;
     int selectedShapeIndex_ = -1;
     bool draggingSelected_ = false;
+    QVector<int> draggingShapeIndices_;
     bool draggingControlPoint_ = false;
     int controlPointIndex_ = -1;
     bool dragHistoryRecorded_ = false;
@@ -4161,6 +5103,11 @@ private:
     QPointF dragSnapCursorWorld_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
     QPointF lastControlPointWorld_{0.0, 0.0};
+    bool selectionBoxActive_ = false;
+    bool selectionBoxMoved_ = false;
+    bool selectionBoxAdditive_ = false;
+    QPointF selectionBoxStartScreen_{0.0, 0.0};
+    QPointF selectionBoxCurrentScreen_{0.0, 0.0};
     qreal zoom_ = 1.0;
     bool panning_ = false;
     bool panMoved_ = false;
@@ -4181,6 +5128,8 @@ private:
     int subdivisionSections_ = 2;
     int subdivisionWheelAccumulator_ = 0;
     qreal subdivisionPixelAccumulator_ = 0.0;
+    bool joinActive_ = false;
+    QVector<int> joinShapeIndices_;
 };
 
 class PreferencesDialog final : public QDialog {
@@ -4440,6 +5389,16 @@ private:
         statusBar()->showMessage(viewport_->subdivisionStatusText());
     }
 
+    void startJoinMode()
+    {
+        if (viewport_ == nullptr || !viewport_->beginJoinMode()) {
+            statusBar()->showMessage(QStringLiteral("Could not start Join"), 4000);
+            return;
+        }
+
+        statusBar()->showMessage(viewport_->joinStatusText());
+    }
+
     void subdivideWithNumberOfPoints()
     {
         if (viewport_ == nullptr || !viewport_->beginSubdivisionWheelMode()) {
@@ -4506,6 +5465,13 @@ private:
         subdivideAction_->setShortcutContext(Qt::WindowShortcut);
         connect(subdivideAction_, &QAction::triggered, this, [this]() {
             startSubdivisionWheelMode();
+        });
+
+        joinAction_ = editMenu->addAction(QStringLiteral("Join Splines"));
+        joinAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+J")));
+        joinAction_->setShortcutContext(Qt::WindowShortcut);
+        connect(joinAction_, &QAction::triggered, this, [this]() {
+            startJoinMode();
         });
 
         editMenu->addSeparator();
@@ -4663,6 +5629,13 @@ private:
                 statusBar()->showMessage(message);
             }
         };
+        viewport_->joinStatusUpdate_ = [this](const QString &message) {
+            if (message.isEmpty()) {
+                statusBar()->clearMessage();
+            } else {
+                statusBar()->showMessage(message);
+            }
+        };
         updateHistoryActions();
     }
 
@@ -4782,6 +5755,16 @@ private:
         layout->addWidget(subdivideButton_);
         connect(subdivideButton_, &QToolButton::clicked, this, [this]() {
             subdivideWithNumberOfPoints();
+        });
+
+        joinButton_ = new QToolButton;
+        joinButton_->setObjectName(QStringLiteral("toolButton"));
+        joinButton_->setText(QStringLiteral("Join\nSplines"));
+        joinButton_->setToolTip(QStringLiteral("Join connected lines and curves into a component-preserving PolyCurve"));
+        joinButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        layout->addWidget(joinButton_);
+        connect(joinButton_, &QToolButton::clicked, this, [this]() {
+            startJoinMode();
         });
 
         layout->addStretch(1);
@@ -5168,10 +6151,12 @@ private:
     QToolButton *arcToolButton_ = nullptr;
     QToolButton *controlPointsButton_ = nullptr;
     QToolButton *subdivideButton_ = nullptr;
+    QToolButton *joinButton_ = nullptr;
     QVector<QToolButton *> toolButtons_;
     QAction *undoAction_ = nullptr;
     QAction *redoAction_ = nullptr;
     QAction *subdivideAction_ = nullptr;
+    QAction *joinAction_ = nullptr;
     QAction *updateAction_ = nullptr;
     QAction *orthoAction_ = nullptr;
     QAction *osnapAction_ = nullptr;

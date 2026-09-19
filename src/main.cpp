@@ -103,9 +103,17 @@ struct Shape {
     Tool tool;
     QVector<QPointF> points;
     struct NurbsCurve2D {
+        // Mirrors the core ON_NurbsCurve fields. Rhino stores rational CVs
+        // as homogeneous values; this lightweight model keeps Euclidean CVs
+        // plus their weights and converts to homogeneous form at export.
+        int dimension = 2;
         int degree = 1;
+        int order = 2;
+        bool rational = false;
         QVector<QPointF> controlPoints;
         QVector<double> weights;
+        // Rhino/openNURBS knot convention: the two superfluous end knots
+        // from the mathematical full vector are not stored here.
         QVector<double> knots;
     } nurbs;
     ArcMode arcMode = ArcMode::TwoPoint;
@@ -115,6 +123,10 @@ struct Shape {
 Shape::NurbsCurve2D makeDegreeOneNurbs(const QVector<QPointF> &points)
 {
     Shape::NurbsCurve2D curve;
+    curve.dimension = 2;
+    curve.degree = 1;
+    curve.order = 2;
+    curve.rational = false;
     curve.controlPoints = points;
     curve.weights.fill(1.0, points.size());
 
@@ -125,17 +137,103 @@ Shape::NurbsCurve2D makeDegreeOneNurbs(const QVector<QPointF> &points)
     // An open, clamped degree-1 curve represents the same connected
     // segments as a Rhino-style polyline while remaining NURBS data.
     const int pointCount = points.size();
-    curve.knots.reserve(pointCount + 2);
-    for (int i = 0; i < pointCount + 2; ++i) {
-        if (i < 2) {
-            curve.knots.append(0.0);
-        } else if (i >= pointCount) {
-            curve.knots.append(pointCount - 1.0);
-        } else {
-            curve.knots.append(i - 1.0);
-        }
+    curve.knots.reserve(pointCount);
+    for (int i = 0; i < pointCount; ++i) {
+        curve.knots.append(static_cast<double>(i));
     }
 
+    return curve;
+}
+
+Shape::NurbsCurve2D makeBezierNurbs(const QVector<QPointF> &points)
+{
+    Shape::NurbsCurve2D curve;
+    curve.dimension = 2;
+    curve.controlPoints = points;
+    curve.weights.fill(1.0, points.size());
+
+    if (points.size() < 2) {
+        return curve;
+    }
+
+    curve.degree = points.size() - 1;
+    curve.order = curve.degree + 1;
+    curve.rational = false;
+
+    // A single Bezier span is a clamped NURBS with degree repeated at each
+    // end. Store the Rhino/openNURBS knot array without the two redundant
+    // outer entries.
+    curve.knots.reserve(curve.controlPoints.size() + curve.degree - 1);
+    for (int index = 0; index < curve.degree; ++index) {
+        curve.knots.append(0.0);
+    }
+    for (int index = 0; index < curve.degree; ++index) {
+        curve.knots.append(1.0);
+    }
+
+    return curve;
+}
+
+Shape::NurbsCurve2D makeCircleNurbs(const QVector<QPointF> &points)
+{
+    Shape::NurbsCurve2D curve;
+    curve.dimension = 2;
+    curve.degree = 2;
+    curve.order = 3;
+    curve.rational = true;
+
+    if (points.size() < 2) {
+        return curve;
+    }
+
+    constexpr qreal pi = 3.14159265358979323846;
+    constexpr qreal halfPi = pi / 2.0;
+    const QPointF center = points[0];
+    const QPointF edge = points[1];
+    const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
+    if (radius <= 1e-9) {
+        return curve;
+    }
+
+    const qreal startAngle = std::atan2(edge.y() - center.y(), edge.x() - center.x());
+    const qreal middleWeight = std::cos(pi / 4.0);
+    const qreal middleRadius = radius / middleWeight;
+
+    curve.controlPoints.reserve(9);
+    curve.weights.reserve(9);
+    for (int span = 0; span < 4; ++span) {
+        const qreal spanStart = startAngle + halfPi * span;
+        const qreal spanEnd = spanStart + halfPi;
+        const qreal spanMiddle = (spanStart + spanEnd) * 0.5;
+        const auto circlePoint = [center, radius](qreal angle) {
+            return QPointF(center.x() + radius * std::cos(angle),
+                           center.y() + radius * std::sin(angle));
+        };
+
+        if (span == 0) {
+            curve.controlPoints.append(circlePoint(spanStart));
+            curve.weights.append(1.0);
+        }
+        curve.controlPoints.append(QPointF(
+            center.x() + middleRadius * std::cos(spanMiddle),
+            center.y() + middleRadius * std::sin(spanMiddle)));
+        curve.weights.append(middleWeight);
+        curve.controlPoints.append(circlePoint(spanEnd));
+        curve.weights.append(1.0);
+    }
+
+    // This is the same reduced knot array used by Rhino's documented
+    // degree-2 rational NURBS circle construction.
+    curve.knots = {0.0,
+                   0.0,
+                   halfPi,
+                   halfPi,
+                   pi,
+                   pi,
+                   3.0 * halfPi,
+                   3.0 * halfPi,
+                   2.0 * pi,
+                   2.0 * pi};
     return curve;
 }
 
@@ -509,6 +607,14 @@ public:
         orthoEnabled_ = enabled;
         refreshCursorConstraint();
 
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+            pendingPoints_.size() >= 2 && cursorValid_) {
+            // Reconcile the live sweep immediately when Ortho changes while
+            // the endpoint is being positioned. Otherwise the cursor marker
+            // and the preview can briefly represent different angles.
+            updateArcPreviewTracking(cursorWorld_);
+        }
+
         DebugLog::instance().write(QStringLiteral("setOrthoEnabled=%1 cursor=%2")
                                        .arg(orthoEnabled_)
                                        .arg(pointText(cursorWorld_)));
@@ -755,6 +861,13 @@ protected:
             if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint) {
                 completedShape.arcSweep = arcPreviewSweepAngle_;
             }
+            if (activeTool_ == Tool::Arc) {
+                completedShape.nurbs = makeArcNurbsCurve(completedShape);
+            } else if (activeTool_ == Tool::Bezier || activeTool_ == Tool::Nurbs) {
+                completedShape.nurbs = makeBezierNurbs(completedShape.points);
+            } else if (activeTool_ == Tool::Circle) {
+                completedShape.nurbs = makeCircleNurbs(completedShape.points);
+            }
             shapes_.append(completedShape);
             QString commitMessage = QStringLiteral("placeholder shape committed tool=%1 points=%2")
                                         .arg(toolName(activeTool_))
@@ -766,6 +879,24 @@ protected:
                                      .arg(pointText(completedShape.points[1]))
                                      .arg(pointText(completedShape.points[2]))
                                      .arg(completedShape.arcSweep, 0, 'f', 4);
+                commitMessage += QStringLiteral(" nurbsDimension=%1 nurbsDegree=%2 nurbsOrder=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7")
+                                     .arg(completedShape.nurbs.dimension)
+                                     .arg(completedShape.nurbs.degree)
+                                     .arg(completedShape.nurbs.order)
+                                     .arg(completedShape.nurbs.rational)
+                                     .arg(completedShape.nurbs.controlPoints.size())
+                                     .arg(completedShape.nurbs.weights.size())
+                                     .arg(completedShape.nurbs.knots.size());
+            } else if (activeTool_ == Tool::Bezier || activeTool_ == Tool::Nurbs ||
+                       activeTool_ == Tool::Circle) {
+                commitMessage += QStringLiteral(" nurbsDimension=%1 nurbsDegree=%2 nurbsOrder=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7")
+                                     .arg(completedShape.nurbs.dimension)
+                                     .arg(completedShape.nurbs.degree)
+                                     .arg(completedShape.nurbs.order)
+                                     .arg(completedShape.nurbs.rational)
+                                     .arg(completedShape.nurbs.controlPoints.size())
+                                     .arg(completedShape.nurbs.weights.size())
+                                     .arg(completedShape.nurbs.knots.size());
             }
             commitMessage += QStringLiteral(" shapes=%1").arg(shapes_.size());
             DebugLog::instance().write(commitMessage);
@@ -1033,9 +1164,12 @@ private:
             recordGeometryChange();
             shapes_.append(Shape{Tool::Line, pendingPoints_, curve});
             DebugLog::instance().write(
-                QStringLiteral("finishLineCommand committed controlPoints=%1 degree=%2 weights=%3 knots=%4 shapes=%5")
-                    .arg(curve.controlPoints.size())
+                QStringLiteral("finishLineCommand committed dimension=%1 degree=%2 order=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7 shapes=%8")
+                    .arg(curve.dimension)
                     .arg(curve.degree)
+                    .arg(curve.order)
+                    .arg(curve.rational)
+                    .arg(curve.controlPoints.size())
                     .arg(curve.weights.size())
                     .arg(curve.knots.size())
                     .arg(shapes_.size()));
@@ -1159,6 +1293,83 @@ private:
                                            center.y() + radius * std::sin(angle)));
         }
         return true;
+    }
+
+    Shape::NurbsCurve2D makeArcNurbsCurve(const Shape &shape) const
+    {
+        Shape::NurbsCurve2D curve;
+        curve.dimension = 2;
+        curve.degree = 2;
+        curve.order = 3;
+        curve.rational = true;
+
+        QPointF centerScreen;
+        qreal radius = 0.0;
+        qreal startAngle = 0.0;
+        qreal sweepAngle = 0.0;
+        if (!makeArcSnapGeometry(shape,
+                                 &centerScreen,
+                                 &radius,
+                                 &startAngle,
+                                 &sweepAngle) ||
+            radius <= 1e-9 || std::abs(sweepAngle) <= 1e-9) {
+            return curve;
+        }
+
+        constexpr qreal pi = 3.14159265358979323846;
+        constexpr qreal halfPi = pi / 2.0;
+        const int spanCount = std::max(1, static_cast<int>(std::ceil(
+            std::abs(sweepAngle) / halfPi)));
+        const qreal spanSweep = sweepAngle / spanCount;
+
+        const auto screenPointAt = [centerScreen, radius](qreal angle) {
+            return QPointF(centerScreen.x() + radius * std::cos(angle),
+                           centerScreen.y() + radius * std::sin(angle));
+        };
+
+        curve.controlPoints.reserve(spanCount * 2 + 1);
+        curve.weights.reserve(spanCount * 2 + 1);
+        for (int span = 0; span < spanCount; ++span) {
+            const qreal spanStart = startAngle + spanSweep * span;
+            const qreal spanEnd = spanStart + spanSweep;
+            const qreal spanMiddle = (spanStart + spanEnd) * 0.5;
+            const qreal middleWeight = std::cos(std::abs(spanSweep) * 0.5);
+
+            if (span == 0) {
+                curve.controlPoints.append(screenToWorld(screenPointAt(spanStart)));
+                curve.weights.append(1.0);
+            }
+
+            // A circular span is an exact rational quadratic Bezier. The
+            // middle CV lies outside the circle and its weight controls the
+            // pull back onto the circle. Adjacent spans share their endpoint.
+            const qreal middleRadius = radius / middleWeight;
+            const QPointF middleScreen(
+                centerScreen.x() + middleRadius * std::cos(spanMiddle),
+                centerScreen.y() + middleRadius * std::sin(spanMiddle));
+            curve.controlPoints.append(screenToWorld(middleScreen));
+            curve.weights.append(middleWeight);
+            curve.controlPoints.append(screenToWorld(screenPointAt(spanEnd)));
+            curve.weights.append(1.0);
+        }
+
+        // Clamped knot vector for piecewise rational quadratic Bezier spans:
+        // endpoint multiplicity 3 and internal knot multiplicity 2. The
+        // first and last redundant entries are omitted, as in openNURBS.
+        const qreal knotDelta = std::abs(spanSweep);
+        curve.knots.reserve(curve.controlPoints.size() + curve.degree - 1);
+        curve.knots.append(0.0);
+        curve.knots.append(0.0);
+        for (int knot = 1; knot < spanCount; ++knot) {
+            const double parameter = knotDelta * knot;
+            curve.knots.append(parameter);
+            curve.knots.append(parameter);
+        }
+        const double endParameter = std::abs(sweepAngle);
+        curve.knots.append(endParameter);
+        curve.knots.append(endParameter);
+
+        return curve;
     }
 
     QVector<SnapCandidate> snapCandidatesForShape(const Shape &shape) const
@@ -1664,6 +1875,11 @@ private:
             return rawPoint;
         }
 
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+            pendingPoints_.size() >= 2) {
+            return constrainOnePointArcEndpoint(rawPoint);
+        }
+
         const QPointF origin = pendingPoints_.back();
         const qreal deltaX = rawPoint.x() - origin.x();
         const qreal deltaY = rawPoint.y() - origin.y();
@@ -1673,6 +1889,53 @@ private:
         }
 
         return QPointF(origin.x(), rawPoint.y());
+    }
+
+    QPointF constrainOnePointArcEndpoint(const QPointF &rawPoint) const
+    {
+        const QPointF center = worldToScreen(pendingPoints_[0]);
+        const QPointF start = worldToScreen(pendingPoints_[1]);
+        const qreal radius = std::hypot(start.x() - center.x(),
+                                        start.y() - center.y());
+        if (radius <= 1e-9) {
+            return rawPoint;
+        }
+
+        constexpr qreal pi = 3.14159265358979323846;
+        constexpr qreal halfPi = pi / 2.0;
+        constexpr qreal twoPi = 2.0 * pi;
+        const qreal startAngle = std::atan2(start.y() - center.y(),
+                                            start.x() - center.x());
+        const QPointF raw = worldToScreen(rawPoint);
+        const qreal rawAngle = std::atan2(raw.y() - center.y(),
+                                          raw.x() - center.x());
+
+        // Use the previous constrained angle as the reference for the next
+        // cursor sample. This keeps the sweep unwrapped while the cursor
+        // crosses +/-180 degrees, so 270 and 360 degree quarter-turns remain
+        // reachable instead of jumping back to the principal angle.
+        qreal candidateSweep = rawAngle - startAngle;
+        if (arcPreviewInitialized_) {
+            qreal delta = rawAngle - arcPreviewPreviousAngle_;
+            if (delta > pi) {
+                delta -= twoPi;
+            } else if (delta < -pi) {
+                delta += twoPi;
+            }
+            candidateSweep = arcPreviewSweepAngle_ + delta;
+        } else {
+            if (candidateSweep > pi) {
+                candidateSweep -= twoPi;
+            } else if (candidateSweep < -pi) {
+                candidateSweep += twoPi;
+            }
+        }
+
+        const qreal snappedSweep = std::round(candidateSweep / halfPi) * halfPi;
+        const qreal snappedAngle = startAngle + snappedSweep;
+        const QPointF snappedScreen(center.x() + radius * std::cos(snappedAngle),
+                                    center.y() + radius * std::sin(snappedAngle));
+        return screenToWorld(snappedScreen);
     }
 
     void refreshCursorConstraint()
@@ -1778,6 +2041,50 @@ private:
         return closestDistance;
     }
 
+    qreal distanceToNurbsCurve(const QPointF &screenPosition,
+                               const Shape::NurbsCurve2D &curve) const
+    {
+        if (!isValidNurbsCurve(curve)) {
+            return 1.0e9;
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const qreal firstParameter = fullKnots[curve.degree];
+        const qreal lastParameter = fullKnots[curve.controlPoints.size()];
+        int nonZeroSpans = 0;
+        for (int index = curve.degree; index < curve.controlPoints.size(); ++index) {
+            if (fullKnots[index + 1] > fullKnots[index]) {
+                ++nonZeroSpans;
+            }
+        }
+
+        const int sampleCount = std::max(64, nonZeroSpans * 32);
+        QPointF previousWorld;
+        if (!evaluateNurbsPoint(curve, firstParameter, &previousWorld)) {
+            return 1.0e9;
+        }
+
+        qreal closestDistance = 1.0e9;
+        QPointF previous = worldToScreen(previousWorld);
+        for (int sample = 1; sample <= sampleCount; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
+            const qreal parameter = firstParameter +
+                                    (lastParameter - firstParameter) * fraction;
+            QPointF currentWorld;
+            if (!evaluateNurbsPoint(curve, parameter, &currentWorld)) {
+                continue;
+            }
+            const QPointF current = worldToScreen(currentWorld);
+            closestDistance = std::min(closestDistance,
+                                       distanceToSegment(screenPosition,
+                                                        previous,
+                                                        current));
+            previous = current;
+        }
+
+        return closestDistance;
+    }
+
     int hitTestShape(const QPointF &screenPosition) const
     {
         constexpr qreal hitRadiusPixels = 9.0;
@@ -1814,7 +2121,9 @@ private:
 
             if ((shape.tool == Tool::Bezier || shape.tool == Tool::Nurbs) &&
                 shape.points.size() >= 4) {
-                const qreal distance = distanceToCubicCurve(screenPosition, shape);
+                const qreal distance = isValidNurbsCurve(shape.nurbs)
+                                           ? distanceToNurbsCurve(screenPosition, shape.nurbs)
+                                           : distanceToCubicCurve(screenPosition, shape);
                 if (distance <= closestDistance) {
                     closestDistance = distance;
                     closestShape = index;
@@ -2384,6 +2693,162 @@ private:
         painter.drawLine(qRound(origin.x()), 0, qRound(origin.x()), height());
     }
 
+    QVector<double> expandedKnotVector(const Shape::NurbsCurve2D &curve) const
+    {
+        QVector<double> fullKnots;
+        if (curve.knots.isEmpty()) {
+            return fullKnots;
+        }
+
+        fullKnots.reserve(curve.knots.size() + 2);
+        fullKnots.append(curve.knots.first());
+        for (const double knot : curve.knots) {
+            fullKnots.append(knot);
+        }
+        fullKnots.append(curve.knots.last());
+        return fullKnots;
+    }
+
+    bool isValidNurbsCurve(const Shape::NurbsCurve2D &curve) const
+    {
+        if (curve.degree < 1 ||
+            curve.order != curve.degree + 1 ||
+            curve.controlPoints.size() <= curve.degree ||
+            curve.knots.size() != curve.controlPoints.size() + curve.order - 2 ||
+            (curve.rational && curve.weights.size() != curve.controlPoints.size()) ||
+            (!curve.rational && !curve.weights.isEmpty() &&
+             curve.weights.size() != curve.controlPoints.size())) {
+            return false;
+        }
+
+        for (int index = 0; index < curve.knots.size(); ++index) {
+            if (!std::isfinite(curve.knots[index]) ||
+                (index > 0 && curve.knots[index] < curve.knots[index - 1])) {
+                return false;
+            }
+        }
+        for (const double weight : curve.weights) {
+            if (!std::isfinite(weight) || (curve.rational && weight <= 0.0)) {
+                return false;
+            }
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const int endKnotIndex = curve.controlPoints.size();
+        return fullKnots.size() == curve.controlPoints.size() + curve.degree + 1 &&
+               fullKnots[curve.degree] < fullKnots[endKnotIndex];
+    }
+
+    bool evaluateNurbsPoint(const Shape::NurbsCurve2D &curve,
+                            qreal parameter,
+                            QPointF *point) const
+    {
+        if (!isValidNurbsCurve(curve) || point == nullptr) {
+            return false;
+        }
+
+        const int controlPointCount = curve.controlPoints.size();
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const int endKnotIndex = controlPointCount;
+        const qreal firstParameter = fullKnots[curve.degree];
+        const qreal lastParameter = fullKnots[endKnotIndex];
+        const qreal epsilon = 1e-12;
+        if (parameter <= firstParameter + epsilon) {
+            *point = curve.controlPoints.first();
+            return true;
+        }
+        if (parameter >= lastParameter - epsilon) {
+            *point = curve.controlPoints.last();
+            return true;
+        }
+
+        const auto basis = [&fullKnots](const auto &self,
+                                       int index,
+                                       int degree,
+                                       qreal parameterValue) -> qreal {
+            if (degree == 0) {
+                return fullKnots[index] <= parameterValue &&
+                               parameterValue < fullKnots[index + 1]
+                           ? 1.0
+                           : 0.0;
+            }
+
+            qreal value = 0.0;
+            const qreal leftDenominator = fullKnots[index + degree] - fullKnots[index];
+            if (std::abs(leftDenominator) > 1e-12) {
+                value += (parameterValue - fullKnots[index]) / leftDenominator *
+                         self(self, index, degree - 1, parameterValue);
+            }
+
+            const qreal rightDenominator = fullKnots[index + degree + 1] -
+                                           fullKnots[index + 1];
+            if (std::abs(rightDenominator) > 1e-12) {
+                value += (fullKnots[index + degree + 1] - parameterValue) /
+                         rightDenominator *
+                         self(self, index + 1, degree - 1, parameterValue);
+            }
+            return value;
+        };
+
+        QPointF numerator(0.0, 0.0);
+        qreal denominator = 0.0;
+        for (int index = 0; index < controlPointCount; ++index) {
+            const qreal weightedBasis = basis(basis, index, curve.degree, parameter) *
+                                         (curve.rational ? curve.weights[index] : 1.0);
+            numerator += curve.controlPoints[index] * weightedBasis;
+            denominator += weightedBasis;
+        }
+
+        if (std::abs(denominator) <= 1e-12) {
+            return false;
+        }
+        *point = numerator / denominator;
+        return true;
+    }
+
+    void drawNurbsCurve(QPainter &painter, const Shape::NurbsCurve2D &curve)
+    {
+        if (!isValidNurbsCurve(curve)) {
+            return;
+        }
+
+        const int controlPointCount = curve.controlPoints.size();
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const qreal firstParameter = fullKnots[curve.degree];
+        const qreal lastParameter = fullKnots[controlPointCount];
+        int nonZeroSpans = 0;
+        for (int index = curve.degree; index < controlPointCount; ++index) {
+            if (fullKnots[index + 1] > fullKnots[index]) {
+                ++nonZeroSpans;
+            }
+        }
+        const int sampleCount = std::max(32, nonZeroSpans * 24);
+
+        QPainterPath path;
+        bool hasStart = false;
+
+        for (int sample = 0; sample <= sampleCount; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
+            const qreal parameter = firstParameter +
+                                    (lastParameter - firstParameter) * fraction;
+            QPointF point;
+            if (!evaluateNurbsPoint(curve, parameter, &point)) {
+                continue;
+            }
+            const QPointF screenPoint = worldToScreen(point);
+            if (!hasStart) {
+                path.moveTo(screenPoint);
+                hasStart = true;
+            } else {
+                path.lineTo(screenPoint);
+            }
+        }
+
+        if (hasStart) {
+            painter.drawPath(path);
+        }
+    }
+
     void drawShape(QPainter &painter,
                    const Shape &shape,
                    bool preview,
@@ -2402,20 +2867,30 @@ private:
         painter.setPen(QPen(curveColor, curveWidth));
 
         if (shape.tool == Tool::Line && shape.points.size() >= 2) {
-            for (int i = 0; i + 1 < shape.points.size(); ++i) {
-                painter.drawLine(worldToScreen(shape.points[i]),
-                                 worldToScreen(shape.points[i + 1]));
+            if (isValidNurbsCurve(shape.nurbs)) {
+                drawNurbsCurve(painter, shape.nurbs);
+            } else {
+                for (int i = 0; i + 1 < shape.points.size(); ++i) {
+                    painter.drawLine(worldToScreen(shape.points[i]),
+                                     worldToScreen(shape.points[i + 1]));
+                }
             }
         } else if (shape.tool == Tool::Rectangle && shape.points.size() >= 2) {
             const QRectF rectangle(worldToScreen(shape.points[0]), worldToScreen(shape.points[1]));
             painter.drawRect(rectangle.normalized());
         } else if (shape.tool == Tool::Circle && shape.points.size() >= 2) {
-            const QPointF center = worldToScreen(shape.points[0]);
-            const QPointF edge = worldToScreen(shape.points[1]);
-            const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
-            painter.drawEllipse(center, radius, radius);
+            if (isValidNurbsCurve(shape.nurbs)) {
+                drawNurbsCurve(painter, shape.nurbs);
+            } else {
+                const QPointF center = worldToScreen(shape.points[0]);
+                const QPointF edge = worldToScreen(shape.points[1]);
+                const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
+                painter.drawEllipse(center, radius, radius);
+            }
         } else if (shape.tool == Tool::Arc && shape.points.size() >= 3) {
-            if (shape.arcMode == ArcMode::OnePoint) {
+            if (isValidNurbsCurve(shape.nurbs)) {
+                drawNurbsCurve(painter, shape.nurbs);
+            } else if (shape.arcMode == ArcMode::OnePoint) {
                 if (std::abs(shape.arcSweep) > 1e-9) {
                     drawCenterArcWithSweep(painter,
                                            shape.points[0],
@@ -2435,18 +2910,26 @@ private:
             }
         } else if ((shape.tool == Tool::Bezier || shape.tool == Tool::Nurbs) &&
                    shape.points.size() >= 4) {
+            const QVector<QPointF> controlPoints = shape.nurbs.controlPoints.isEmpty()
+                                                       ? shape.points
+                                                       : shape.nurbs.controlPoints;
             painter.setPen(QPen(controlColor, 1, Qt::DashLine));
-            for (int i = 0; i + 1 < shape.points.size(); ++i) {
-                painter.drawLine(worldToScreen(shape.points[i]), worldToScreen(shape.points[i + 1]));
+            for (int i = 0; i + 1 < controlPoints.size(); ++i) {
+                painter.drawLine(worldToScreen(controlPoints[i]),
+                                 worldToScreen(controlPoints[i + 1]));
             }
 
-            QPainterPath curve;
-            curve.moveTo(worldToScreen(shape.points[0]));
-            curve.cubicTo(worldToScreen(shape.points[1]),
-                          worldToScreen(shape.points[2]),
-                          worldToScreen(shape.points[3]));
             painter.setPen(QPen(curveColor, curveWidth));
-            painter.drawPath(curve);
+            if (isValidNurbsCurve(shape.nurbs)) {
+                drawNurbsCurve(painter, shape.nurbs);
+            } else {
+                QPainterPath curve;
+                curve.moveTo(worldToScreen(shape.points[0]));
+                curve.cubicTo(worldToScreen(shape.points[1]),
+                              worldToScreen(shape.points[2]),
+                              worldToScreen(shape.points[3]));
+                painter.drawPath(curve);
+            }
         } else {
             painter.setPen(QPen(controlColor, 1, Qt::DashLine));
             for (int i = 0; i + 1 < shape.points.size(); ++i) {

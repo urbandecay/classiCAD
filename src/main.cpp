@@ -2474,7 +2474,7 @@ private:
                                   const QRectF &box,
                                   bool crossingSelection) const
     {
-        const QRectF bounds = selectionBoundsForShape(shape);
+        const QRectF bounds = selectionBoundsForShape(shape).normalized();
         if (bounds.isNull()) {
             return false;
         }
@@ -2482,7 +2482,22 @@ private:
         // CAD-style selection windows use containment when dragged from
         // left to right and crossing selection when dragged from right to
         // left. The crossing window includes anything that touches it.
-        return crossingSelection ? bounds.intersects(box) : box.contains(bounds);
+        if (!crossingSelection) {
+            return box.normalized().contains(bounds);
+        }
+
+        // QRectF::intersects() can exclude a contact that falls exactly on
+        // an edge. Include the visible stroke/point tolerance and compare
+        // the normalized edges inclusively so a touching curve is selected.
+        constexpr qreal crossingTolerancePixels = 2.0;
+        const QRectF crossingBox = box.normalized().adjusted(-crossingTolerancePixels,
+                                                              -crossingTolerancePixels,
+                                                              crossingTolerancePixels,
+                                                              crossingTolerancePixels);
+        return bounds.left() <= crossingBox.right() &&
+               crossingBox.left() <= bounds.right() &&
+               bounds.top() <= crossingBox.bottom() &&
+               crossingBox.top() <= bounds.bottom();
     }
 
     void beginSelectionBox(const QPointF &screenPosition, bool additive)
@@ -2549,8 +2564,9 @@ private:
             clearSelection();
         }
 
-        DebugLog::instance().write(QStringLiteral("selection box finish moved=%1 additive=%2 selected=%3")
+        DebugLog::instance().write(QStringLiteral("selection box finish moved=%1 crossing=%2 additive=%3 selected=%4")
                                        .arg(moved)
+                                       .arg(crossingSelection)
                                        .arg(selectionBoxAdditive_)
                                        .arg(selectedShapeIndices_.size()));
         selectionBoxActive_ = false;

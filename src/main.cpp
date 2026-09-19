@@ -1880,6 +1880,11 @@ private:
             return constrainOnePointArcEndpoint(rawPoint);
         }
 
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint &&
+            pendingPoints_.size() >= 2) {
+            return constrainTwoPointArcThroughPoint(rawPoint);
+        }
+
         const QPointF origin = pendingPoints_.back();
         const qreal deltaX = rawPoint.x() - origin.x();
         const qreal deltaY = rawPoint.y() - origin.y();
@@ -1936,6 +1941,45 @@ private:
         const QPointF snappedScreen(center.x() + radius * std::cos(snappedAngle),
                                     center.y() + radius * std::sin(snappedAngle));
         return screenToWorld(snappedScreen);
+    }
+
+    QPointF constrainTwoPointArcThroughPoint(const QPointF &rawPoint) const
+    {
+        const QPointF start = worldToScreen(pendingPoints_[0]);
+        const QPointF end = worldToScreen(pendingPoints_[1]);
+        const QPointF chord = end - start;
+        const qreal chordLength = std::hypot(chord.x(), chord.y());
+        if (chordLength <= 1e-9) {
+            return rawPoint;
+        }
+
+        const QPointF midpoint = (start + end) / 2.0;
+        const QPointF raw = worldToScreen(rawPoint);
+
+        // A semicircle's through point is one half-chord radius away from
+        // the chord midpoint, perpendicular to the start/end chord. These
+        // are snap targets, not a permanent constraint: outside the snap
+        // radius the third point remains free to define any circular arc.
+        const QPointF leftNormal(-chord.y() / chordLength,
+                                 chord.x() / chordLength);
+        const qreal halfChord = chordLength / 2.0;
+        const QPointF candidates[] = {
+            midpoint + leftNormal * halfChord,
+            midpoint - leftNormal * halfChord};
+
+        constexpr qreal semicircleSnapRadiusPixels = 12.0;
+        qreal closestDistance = semicircleSnapRadiusPixels;
+        const QPointF *closestCandidate = nullptr;
+        for (const QPointF &candidate : candidates) {
+            const qreal distance = std::hypot(raw.x() - candidate.x(),
+                                              raw.y() - candidate.y());
+            if (distance <= closestDistance) {
+                closestDistance = distance;
+                closestCandidate = &candidate;
+            }
+        }
+
+        return closestCandidate != nullptr ? screenToWorld(*closestCandidate) : rawPoint;
     }
 
     void refreshCursorConstraint()

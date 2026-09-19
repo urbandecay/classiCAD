@@ -2470,10 +2470,19 @@ private:
         return bounds.adjusted(-5.0, -5.0, 5.0, 5.0);
     }
 
-    bool shapeIntersectsSelectionBox(const Shape &shape, const QRectF &box) const
+    bool shapeMatchesSelectionBox(const Shape &shape,
+                                  const QRectF &box,
+                                  bool crossingSelection) const
     {
         const QRectF bounds = selectionBoundsForShape(shape);
-        return !bounds.isNull() && bounds.intersects(box);
+        if (bounds.isNull()) {
+            return false;
+        }
+
+        // CAD-style selection windows use containment when dragged from
+        // left to right and crossing selection when dragged from right to
+        // left. The crossing window includes anything that touches it.
+        return crossingSelection ? bounds.intersects(box) : box.contains(bounds);
     }
 
     void beginSelectionBox(const QPointF &screenPosition, bool additive)
@@ -2506,13 +2515,17 @@ private:
 
         const QRectF selectionBox =
             QRectF(selectionBoxStartScreen_, selectionBoxCurrentScreen_).normalized();
+        const bool crossingSelection =
+            selectionBoxCurrentScreen_.x() < selectionBoxStartScreen_.x();
         const bool moved = selectionBoxMoved_ ||
                            selectionBox.width() >= 3.0 ||
                            selectionBox.height() >= 3.0;
         QVector<int> boxSelection;
         if (moved) {
             for (int index = 0; index < shapes_.size(); ++index) {
-                if (shapeIntersectsSelectionBox(shapes_[index], selectionBox)) {
+                if (shapeMatchesSelectionBox(shapes_[index],
+                                              selectionBox,
+                                              crossingSelection)) {
                     boxSelection.append(index);
                 }
             }

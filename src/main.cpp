@@ -5497,6 +5497,35 @@ private:
             return removedIntervals;
         }
 
+        // A closed curve's domain ends are the same geometric point, not
+        // cutting boundaries. The first and last parameter pieces therefore
+        // belong to one section unless another curve intersects the seam.
+        QPointF firstPoint;
+        QPointF lastPoint;
+        const bool closed = evaluateNurbsPoint(curve, domainStart, &firstPoint) &&
+                            evaluateNurbsPoint(curve, domainEnd, &lastPoint) &&
+                            std::hypot(firstPoint.x() - lastPoint.x(),
+                                       firstPoint.y() - lastPoint.y()) <= 1.0e-8;
+        const bool seamIsIntersection = std::any_of(
+            intersectionParameters.begin(), intersectionParameters.end(),
+            [&](qreal parameter) {
+                return std::abs(parameter - domainStart) <= tolerance ||
+                       std::abs(parameter - domainEnd) <= tolerance;
+            });
+        if (closed && !seamIsIntersection && uniqueBoundaries.size() > 2) {
+            const bool touchesSeam = std::any_of(
+                removedIntervals.begin(), removedIntervals.end(),
+                [&](const ParameterInterval &interval) {
+                    return interval.start <= domainStart + tolerance ||
+                           interval.end >= domainEnd - tolerance;
+                });
+            if (touchesSeam) {
+                removedIntervals.append({domainStart, uniqueBoundaries[1]});
+                removedIntervals.append({uniqueBoundaries[uniqueBoundaries.size() - 2],
+                                         domainEnd});
+            }
+        }
+
         std::sort(removedIntervals.begin(),
                   removedIntervals.end(),
                   [](const ParameterInterval &first, const ParameterInterval &second) {

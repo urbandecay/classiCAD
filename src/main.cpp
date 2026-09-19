@@ -58,6 +58,8 @@ enum class Tool {
     Nurbs,
     Rectangle,
     Circle,
+    // Keep Point at the end so existing saved sessions keep their tool IDs.
+    Point,
 };
 
 enum class ArcMode {
@@ -489,7 +491,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     const int toolValue = object.value(QStringLiteral("tool")).toInt(-1);
     const int arcModeValue = object.value(QStringLiteral("arcMode")).toInt(-1);
     if (toolValue < static_cast<int>(Tool::Select) ||
-        toolValue > static_cast<int>(Tool::Circle) ||
+        toolValue > static_cast<int>(Tool::Point) ||
         arcModeValue < static_cast<int>(ArcMode::OnePoint) ||
         arcModeValue > static_cast<int>(ArcMode::TwoPoint)) {
         return false;
@@ -588,6 +590,8 @@ QString toolName(Tool tool)
         return QStringLiteral("Rectangle");
     case Tool::Circle:
         return QStringLiteral("Circle");
+    case Tool::Point:
+        return QStringLiteral("Point");
     }
 
     return QStringLiteral("Unknown");
@@ -640,6 +644,8 @@ int requiredPoints(Tool tool)
     case Tool::Rectangle:
     case Tool::Circle:
         return 2;
+    case Tool::Point:
+        return 1;
     case Tool::Select:
         return 0;
     }
@@ -1151,6 +1157,8 @@ protected:
             drawCircleToolPreview(painter);
         } else if (activeTool_ == Tool::Rectangle && !pendingPoints_.isEmpty()) {
             drawRectangleToolPreview(painter);
+        } else if (activeTool_ == Tool::Point) {
+            drawPointToolPreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
             drawShape(painter,
                       Shape{activeTool_, pendingPoints_, Shape::NurbsCurve2D{}, ArcMode::TwoPoint, 0.0, {}},
@@ -1387,6 +1395,7 @@ protected:
         cursorWorld_ = constrainLinePoint(rawCursorWorld_);
         lastWorldPosition_ = cursorWorld_;
         cursorValid_ = true;
+        const bool pointPreviewActive = activeTool_ == Tool::Point;
         const bool circlePreviewActive = activeTool_ == Tool::Circle && !pendingPoints_.isEmpty();
         const bool rectanglePreviewActive =
             activeTool_ == Tool::Rectangle && !pendingPoints_.isEmpty();
@@ -1465,12 +1474,12 @@ protected:
             }
         }
 
-        if (lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
+        if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
             rectanglePreviewActive || panning_ || draggingSelected_) {
             update();
         }
 
-        if (lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
+        if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
             rectanglePreviewActive || panning_ || draggingSelected_) {
             DebugLog::instance().write(
                 QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11 arcMode=%12 arcSweep=%13 snap=%14")
@@ -2120,6 +2129,11 @@ private:
             }
         }
 
+        if (shape.tool == Tool::Point) {
+            candidates.append(SnapCandidate{SnapType::Endpoint, shape.points.first()});
+            return candidates;
+        }
+
         if (shape.tool == Tool::Circle) {
             candidates.append(SnapCandidate{SnapType::Center, shape.points.first()});
             return candidates;
@@ -2214,6 +2228,13 @@ private:
                         }
                     }
                 }
+            }
+
+            if (shape.tool == Tool::Point) {
+                if (endpointSnapEnabled_) {
+                    candidates.append(SnapCandidate{SnapType::Endpoint, shape.points.first()});
+                }
+                continue;
             }
 
             if (shape.tool == Tool::Circle) {
@@ -2543,7 +2564,8 @@ private:
         SnapResult best;
         const bool drawingSnapActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
-            activeTool_ == Tool::Arc || activeTool_ == Tool::Circle;
+            activeTool_ == Tool::Arc || activeTool_ == Tool::Circle ||
+            activeTool_ == Tool::Point;
         if (!osnapEnabled_ || !drawingSnapActive) {
             return best;
         }
@@ -2891,6 +2913,17 @@ private:
 
         for (int index = 0; index < shapes_.size(); ++index) {
             const Shape &shape = shapes_[index];
+
+            if (shape.tool == Tool::Point && !shape.points.isEmpty()) {
+                const QPointF point = worldToScreen(shape.points.first());
+                const qreal distance = std::hypot(screenPosition.x() - point.x(),
+                                                  screenPosition.y() - point.y());
+                if (distance <= closestDistance) {
+                    closestDistance = distance;
+                    closestShape = index;
+                }
+                continue;
+            }
 
             if (shape.tool == Tool::Circle && shape.points.size() >= 2) {
                 const QPointF center = worldToScreen(shape.points[0]);
@@ -3487,6 +3520,10 @@ private:
 
     void drawControlPoints(QPainter &painter, const Shape &shape)
     {
+        if (shape.tool == Tool::Point) {
+            return;
+        }
+
         QVector<QPointF> controlPoints = shape.nurbs.controlPoints;
         if (controlPoints.isEmpty()) {
             controlPoints = shape.points;
@@ -3742,6 +3779,23 @@ private:
         }
     }
 
+    void drawPointToolPreview(QPainter &painter)
+    {
+        if (!cursorValid_) {
+            return;
+        }
+
+        const QPointF screenPoint = worldToScreen(cursorWorld_);
+        const QColor pointColor(QStringLiteral("#e6b85c"));
+        painter.setPen(QPen(pointColor, 1.5));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(screenPoint, 4.5, 4.5);
+
+        if (currentSnap_.isValid()) {
+            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        }
+    }
+
     void drawShape(QPainter &painter,
                    const Shape &shape,
                    bool preview,
@@ -3762,7 +3816,13 @@ private:
         // brush so an open curve is never rendered as a filled wedge.
         painter.setBrush(Qt::NoBrush);
 
-        if (shape.tool == Tool::Line && shape.points.size() >= 2) {
+        if (shape.tool == Tool::Point && shape.points.size() >= 1) {
+            painter.setPen(QPen(curveColor, selected ? 2.0 : 1.5));
+            painter.setBrush(curveColor);
+            painter.drawEllipse(worldToScreen(shape.points.first()),
+                                selected ? 5.0 : 4.5,
+                                selected ? 5.0 : 4.5);
+        } else if (shape.tool == Tool::Line && shape.points.size() >= 2) {
             if (isValidNurbsCurve(shape.nurbs)) {
                 drawNurbsCurve(painter, shape.nurbs);
             } else {
@@ -4470,6 +4530,7 @@ private:
         group->setExclusive(true);
 
         selectToolButton_ = addToolButton(layout, group, QStringLiteral("↖\nSelect"), Tool::Select, true);
+        addToolButton(layout, group, QStringLiteral("•\nPoint"), Tool::Point);
         addToolButton(layout, group, QStringLiteral("╱\nLine"), Tool::Line);
         arcToolButton_ = addToolButton(layout, group, QStringLiteral("⌒\nArc"), Tool::Arc);
         createArcToolMenu(arcToolButton_);

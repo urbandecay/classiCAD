@@ -2289,6 +2289,29 @@ protected:
         }
 
         if (activeTool_ == Tool::Select &&
+            event->key() == Qt::Key_A &&
+            event->modifiers() == Qt::NoModifier) {
+            selectedShapeIndices_.clear();
+            selectedShapeIndices_.reserve(shapes_.size());
+            for (int index = 0; index < shapes_.size(); ++index) {
+                selectedShapeIndices_.append(index);
+            }
+            selectedShapeIndex_ = selectedShapeIndices_.isEmpty()
+                                      ? -1
+                                      : selectedShapeIndices_.back();
+            draggingSelected_ = false;
+            draggingShapeIndices_.clear();
+            draggingControlPoint_ = false;
+            controlPointIndex_ = -1;
+            update();
+            emitCoordinateUpdate();
+            DebugLog::instance().write(
+                QStringLiteral("select all count=%1")
+                    .arg(selectedShapeIndices_.size()));
+            return;
+        }
+
+        if (activeTool_ == Tool::Select &&
             (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) &&
             !selectedShapeIndices_.isEmpty()) {
             deleteSelectedShapes();

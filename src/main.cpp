@@ -129,6 +129,8 @@ struct ParameterInterval {
 struct SampledNurbsCurve2D {
     QVector<qreal> parameters;
     QVector<QPointF> screenPoints;
+    QVector<QRectF> segmentBounds;
+    QRectF bounds;
 };
 
 HomogeneousControlPoint2D blendHomogeneousControlPoints(
@@ -188,6 +190,10 @@ struct EraseCurveSampleCache {
     Shape::NurbsCurve2D curve;
     SampledNurbsCurve2D sampled;
     QVector<qreal> intersectionParameters;
+    // Preview intervals are updated as the erase stroke grows. Keeping them
+    // in the cache avoids rechecking the complete stroke on every repaint.
+    QVector<ParameterInterval> previewIntervals;
+    int previewStrokePointCount = 0;
 };
 
 Shape::NurbsCurve2D makeDegreeOneNurbs(const QVector<QPointF> &points)
@@ -1453,12 +1459,9 @@ protected:
         drawOrigin(painter);
 
         for (int index = 0; index < shapes_.size(); ++index) {
-            const bool erasePreviewCandidate =
-                isEraseLikeTool(activeTool_) && eraseCandidateShapeIndices_.contains(index);
-            const bool selected = !erasePreviewCandidate &&
-                                  (selectedShapeIndices_.contains(index) ||
-                                   index == selectedShapeIndex_ ||
-                                   joinShapeIndices_.contains(index));
+            const bool selected = selectedShapeIndices_.contains(index) ||
+                                  index == selectedShapeIndex_ ||
+                                  joinShapeIndices_.contains(index);
             drawShape(painter, shapes_[index], false, selected);
             if (!subdivisionActive_ || index != subdivisionShapeIndex_) {
                 drawSubdivisionPoints(painter,
@@ -1694,6 +1697,7 @@ protected:
             eraseCandidateShapeIndices_.clear();
             eraseStrokeActive_ = true;
             eraseAlongScreenSegment(screenPosition, screenPosition);
+            updateErasePreviewIntervals(false);
             setCursor(Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("erase stroke start screen=%1")
                                            .arg(pointText(screenPosition)));
@@ -1946,6 +1950,7 @@ protected:
                 eraseStrokeScreenPath_.back() != screenPosition) {
                 eraseStrokeScreenPath_.append(screenPosition);
             }
+            updateErasePreviewIntervals(false);
             update();
             emitCoordinateUpdate();
             return;
@@ -2087,8 +2092,7 @@ protected:
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
-            rectanglePreviewActive || activeTool_ == Tool::Erase || panning_ ||
-            draggingSelected_ || draggingControlPoint_) {
+            rectanglePreviewActive || panning_ || draggingSelected_ || draggingControlPoint_) {
             update();
         }
 
@@ -4848,6 +4852,8 @@ private:
 
         sampled->parameters.clear();
         sampled->screenPoints.clear();
+        sampled->segmentBounds.clear();
+        sampled->bounds = QRectF();
 
         const QVector<double> fullKnots = expandedKnotVector(curve);
         const qreal domainStart = fullKnots[curve.degree];
@@ -4863,22 +4869,55 @@ private:
             }
         }
 
-        const int sampleCount = std::clamp(std::max(256, nonZeroSpans * 128),
-                                           256,
-                                           4096);
-        sampled->parameters.reserve(sampleCount + 1);
-        sampled->screenPoints.reserve(sampleCount + 1);
-        for (int sample = 0; sample <= sampleCount; ++sample) {
-            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
-            const qreal parameter = domainStart + (domainEnd - domainStart) * fraction;
-            QPointF worldPoint;
-            if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
-                sampled->parameters.clear();
-                sampled->screenPoints.clear();
-                return false;
+        // Use enough points for a responsive partial-erase preview while
+        // avoiding the old 256-sample minimum for every curve. Degree-1
+        // spans get a little more density because a long straight span still
+        // needs a visible partial interval when the eraser crosses it.
+        const int samplesPerSpan = curve.degree <= 1 ? 64 : 32;
+        const int maxSampleCount = 2048;
+        const int samplesForEachSpan =
+            std::max(1, std::min(samplesPerSpan,
+                                  maxSampleCount / std::max(1, nonZeroSpans)));
+        sampled->parameters.reserve(nonZeroSpans * samplesForEachSpan + 1);
+        sampled->screenPoints.reserve(nonZeroSpans * samplesForEachSpan + 1);
+        for (int spanIndex = curve.degree;
+             spanIndex < curve.controlPoints.size();
+             ++spanIndex) {
+            const qreal spanStart = fullKnots[spanIndex];
+            const qreal spanEnd = fullKnots[spanIndex + 1];
+            if (spanEnd <= spanStart) {
+                continue;
             }
-            sampled->parameters.append(parameter);
-            sampled->screenPoints.append(worldToScreen(worldPoint));
+
+            for (int sample = 0; sample <= samplesForEachSpan; ++sample) {
+                if (spanIndex > curve.degree && sample == 0) {
+                    continue;
+                }
+
+                const qreal fraction = static_cast<qreal>(sample) /
+                                       samplesForEachSpan;
+                const qreal parameter = spanStart + (spanEnd - spanStart) * fraction;
+                QPointF worldPoint;
+                if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
+                    sampled->parameters.clear();
+                    sampled->screenPoints.clear();
+                    sampled->segmentBounds.clear();
+                    sampled->bounds = QRectF();
+                    return false;
+                }
+                sampled->parameters.append(parameter);
+                sampled->screenPoints.append(worldToScreen(worldPoint));
+            }
+        }
+
+        sampled->segmentBounds.reserve(sampled->screenPoints.size() - 1);
+        sampled->bounds = QRectF(sampled->screenPoints.first(),
+                                 sampled->screenPoints.first());
+        for (int sample = 1; sample < sampled->screenPoints.size(); ++sample) {
+            const QPointF &first = sampled->screenPoints[sample - 1];
+            const QPointF &second = sampled->screenPoints[sample];
+            sampled->segmentBounds.append(QRectF(first, second).normalized());
+            sampled->bounds = sampled->bounds.united(QRectF(second, second));
         }
 
         return sampled->parameters.size() >= 2;
@@ -4959,14 +4998,32 @@ private:
             }
             return std::clamp(QPointF::dotProduct(intersection - first, direction) /
                                   lengthSquared,
-                              0.0,
-                              1.0);
+                                  0.0,
+                                  1.0);
+        };
+
+        const auto boundsOverlap = [](const QRectF &first, const QRectF &second) {
+            return first.right() >= second.left() &&
+                   second.right() >= first.left() &&
+                   first.bottom() >= second.top() &&
+                   second.bottom() >= first.top();
         };
 
         const auto collectIntersections =
             [&](const SampledNurbsCurve2D &otherSamples) {
                 if (otherSamples.screenPoints.size() < 2 ||
                     otherSamples.parameters.size() != otherSamples.screenPoints.size()) {
+                    return;
+                }
+
+                const bool useBounds =
+                    !sourceSamples->bounds.isNull() && !otherSamples.bounds.isNull() &&
+                    sourceSamples->segmentBounds.size() ==
+                        sourceSamples->screenPoints.size() - 1 &&
+                    otherSamples.segmentBounds.size() ==
+                        otherSamples.screenPoints.size() - 1;
+                if (useBounds && !boundsOverlap(sourceSamples->bounds,
+                                                otherSamples.bounds)) {
                     return;
                 }
 
@@ -4980,6 +5037,13 @@ private:
                     for (int otherSegment = 1;
                          otherSegment < otherSamples.screenPoints.size();
                          ++otherSegment) {
+                        if (useBounds &&
+                            !boundsOverlap(
+                                sourceSamples->segmentBounds[sourceSegment - 1],
+                                otherSamples.segmentBounds[otherSegment - 1])) {
+                            continue;
+                        }
+
                         QPointF intersection;
                         if (!segmentIntersection(
                                 sourceStart,
@@ -5115,6 +5179,7 @@ private:
     qreal distanceToCachedEraseShape(const QPointF &screenPosition,
                                      int shapeIndex) const
     {
+        constexpr qreal eraserRadiusPixels = 10.0;
         qreal distance = 1.0e9;
         for (const EraseCurveSampleCache &targetCurve : eraseTargetCurveCaches_) {
             if (targetCurve.shapeIndex != shapeIndex) {
@@ -5124,6 +5189,18 @@ private:
             for (int sample = 1;
                  sample < targetCurve.sampled.screenPoints.size();
                  ++sample) {
+                if (targetCurve.sampled.segmentBounds.size() ==
+                    targetCurve.sampled.screenPoints.size() - 1) {
+                    const QRectF &bounds =
+                        targetCurve.sampled.segmentBounds[sample - 1];
+                    if (screenPosition.x() < bounds.left() - eraserRadiusPixels ||
+                        screenPosition.x() > bounds.right() + eraserRadiusPixels ||
+                        screenPosition.y() < bounds.top() - eraserRadiusPixels ||
+                        screenPosition.y() > bounds.bottom() + eraserRadiusPixels) {
+                        continue;
+                    }
+                }
+
                 distance = std::min(
                     distance,
                     distanceToSegment(screenPosition,
@@ -5163,6 +5240,7 @@ private:
         if (closestShapeIndex >= 0) {
             eraseCandidateShapeIndices_.append(closestShapeIndex);
         }
+        updateErasePreviewIntervals(true);
     }
 
     void trimAtScreenPosition(const QPointF &screenPosition)
@@ -5288,42 +5366,42 @@ private:
                          distanceToSegment(secondEnd, firstStart, firstEnd)});
     }
 
-    QVector<ParameterInterval> eraserIntervalsForSampledCurve(
+    QVector<ParameterInterval> eraserIntervalsForSampledCurveSegment(
         const SampledNurbsCurve2D &sampled,
-        const QVector<QPointF> &stroke) const
+        const QPointF &strokeStart,
+        const QPointF &strokeEnd) const
     {
         QVector<ParameterInterval> intervals;
         if (sampled.parameters.size() < 2 ||
-            sampled.parameters.size() != sampled.screenPoints.size() ||
-            stroke.isEmpty()) {
+            sampled.parameters.size() != sampled.screenPoints.size()) {
             return intervals;
         }
 
         constexpr qreal eraserRadiusPixels = 10.0;
+        const QRectF strokeBounds = QRectF(strokeStart, strokeEnd).normalized();
+        const bool hasBounds = sampled.segmentBounds.size() ==
+                               sampled.screenPoints.size() - 1;
         bool inside = false;
         qreal intervalStart = 0.0;
         for (int sample = 1; sample < sampled.screenPoints.size(); ++sample) {
-            qreal distance = 1.0e9;
-            for (int strokeSegment = 1;
-                 strokeSegment < stroke.size();
-                 ++strokeSegment) {
-                distance = std::min(
-                    distance,
-                    distanceBetweenScreenSegments(
-                        sampled.screenPoints[sample - 1],
-                        sampled.screenPoints[sample],
-                        stroke[strokeSegment - 1],
-                        stroke[strokeSegment]));
+            bool segmentInside = false;
+            bool boundsMayBeNear = !hasBounds;
+            if (hasBounds) {
+                const QRectF &curveBounds = sampled.segmentBounds[sample - 1];
+                boundsMayBeNear =
+                    curveBounds.right() >= strokeBounds.left() - eraserRadiusPixels &&
+                    strokeBounds.right() >= curveBounds.left() - eraserRadiusPixels &&
+                    curveBounds.bottom() >= strokeBounds.top() - eraserRadiusPixels &&
+                    strokeBounds.bottom() >= curveBounds.top() - eraserRadiusPixels;
             }
-            if (stroke.size() == 1) {
-                distance = distanceBetweenScreenSegments(
-                    sampled.screenPoints[sample - 1],
-                    sampled.screenPoints[sample],
-                    stroke.first(),
-                    stroke.first());
+            if (boundsMayBeNear) {
+                segmentInside =
+                    distanceBetweenScreenSegments(sampled.screenPoints[sample - 1],
+                                                  sampled.screenPoints[sample],
+                                                  strokeStart,
+                                                  strokeEnd) <= eraserRadiusPixels;
             }
 
-            const bool segmentInside = distance <= eraserRadiusPixels;
             if (segmentInside && !inside) {
                 intervalStart = sampled.parameters[sample - 1];
                 inside = true;
@@ -5409,6 +5487,58 @@ private:
             }
         }
         return merged;
+    }
+
+    void updateErasePreviewIntervals(bool reset)
+    {
+        if (eraseStrokeScreenPath_.isEmpty()) {
+            return;
+        }
+
+        const int strokePointCount = eraseStrokeScreenPath_.size();
+        for (EraseCurveSampleCache &targetCurve : eraseTargetCurveCaches_) {
+            if (reset || targetCurve.previewStrokePointCount > strokePointCount) {
+                targetCurve.previewIntervals.clear();
+                targetCurve.previewStrokePointCount = 0;
+            }
+            if (!eraseCandidateShapeIndices_.contains(targetCurve.shapeIndex)) {
+                continue;
+            }
+
+            QVector<ParameterInterval> newHitIntervals;
+            int firstStrokeSegment = targetCurve.previewStrokePointCount;
+            if (targetCurve.previewStrokePointCount == 0) {
+                newHitIntervals = eraserIntervalsForSampledCurveSegment(
+                    targetCurve.sampled,
+                    eraseStrokeScreenPath_.first(),
+                    eraseStrokeScreenPath_.first());
+                firstStrokeSegment = 1;
+            }
+
+            for (int strokeSegment = firstStrokeSegment;
+                 strokeSegment < strokePointCount;
+                 ++strokeSegment) {
+                const QVector<ParameterInterval> segmentIntervals =
+                    eraserIntervalsForSampledCurveSegment(
+                        targetCurve.sampled,
+                        eraseStrokeScreenPath_[strokeSegment - 1],
+                        eraseStrokeScreenPath_[strokeSegment]);
+                for (const ParameterInterval &interval : segmentIntervals) {
+                    newHitIntervals.append(interval);
+                }
+            }
+
+            if (!newHitIntervals.isEmpty()) {
+                for (const ParameterInterval &interval : newHitIntervals) {
+                    targetCurve.previewIntervals.append(interval);
+                }
+                targetCurve.previewIntervals = boundEraseIntervals(
+                    targetCurve.curve,
+                    targetCurve.previewIntervals,
+                    targetCurve.intersectionParameters);
+            }
+            targetCurve.previewStrokePointCount = strokePointCount;
+        }
     }
 
     QVector<ParameterInterval> eraseIntervalsBoundedByIntersections(
@@ -6623,7 +6753,11 @@ private:
             return;
         }
 
-        painter.setPen(QPen(QColor(QStringLiteral("#5da9e9")), 3.5));
+        // Erase candidates are already rendered with the selected style above.
+        // Paint only the interval that will be removed back in the normal
+        // geometry color, so the deletion interval is the part that visibly
+        // loses its selection during the live preview.
+        painter.setPen(QPen(QColor(QStringLiteral("#d28b45")), 3.5));
         painter.setBrush(Qt::NoBrush);
 
         for (const EraseCurveSampleCache &targetCurve : eraseTargetCurveCaches_) {
@@ -6631,14 +6765,9 @@ private:
                 continue;
             }
 
-            const QVector<ParameterInterval> hitIntervals =
-                eraserIntervalsForSampledCurve(targetCurve.sampled,
-                                               eraseStrokeScreenPath_);
-            const QVector<ParameterInterval> intervals =
-                boundEraseIntervals(targetCurve.curve,
-                                    hitIntervals,
-                                    targetCurve.intersectionParameters);
-            drawSampledEraseIntervals(painter, targetCurve.sampled, intervals);
+            drawSampledEraseIntervals(painter,
+                                      targetCurve.sampled,
+                                      targetCurve.previewIntervals);
         }
     }
 

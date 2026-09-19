@@ -6,6 +6,7 @@
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
+#include <QDir>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFile>
@@ -16,6 +17,7 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QLabel>
+#include <QInputDialog>
 #include <QListWidget>
 #include <QMenu>
 #include <QMainWindow>
@@ -24,12 +26,18 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QPushButton>
+#include <QProcess>
 #include <QSettings>
 #include <QSizePolicy>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QTextStream>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -118,6 +126,10 @@ struct Shape {
     } nurbs;
     ArcMode arcMode = ArcMode::TwoPoint;
     qreal arcSweep = 0.0;
+    // Interior subdivision locations are stored in the source curve's
+    // parameter domain. They are markers, not new curve spans or control
+    // vertices, so the original NURBS remains unchanged.
+    QVector<double> subdivisionParameters;
 };
 
 Shape::NurbsCurve2D makeDegreeOneNurbs(const QVector<QPointF> &points)
@@ -320,6 +332,207 @@ QString pointText(const QPointF &point)
         .arg(point.y(), 0, 'f', 3);
 }
 
+QJsonObject pointToJson(const QPointF &point)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("x"), point.x());
+    object.insert(QStringLiteral("y"), point.y());
+    return object;
+}
+
+bool pointFromJson(const QJsonValue &value, QPointF *point)
+{
+    if (point == nullptr || !value.isObject()) {
+        return false;
+    }
+
+    const QJsonObject object = value.toObject();
+    const QJsonValue xValue = object.value(QStringLiteral("x"));
+    const QJsonValue yValue = object.value(QStringLiteral("y"));
+    if (!xValue.isDouble() || !yValue.isDouble()) {
+        return false;
+    }
+
+    const qreal x = xValue.toDouble();
+    const qreal y = yValue.toDouble();
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+        return false;
+    }
+
+    *point = QPointF(x, y);
+    return true;
+}
+
+QJsonArray pointsToJson(const QVector<QPointF> &points)
+{
+    QJsonArray array;
+    for (const QPointF &point : points) {
+        array.append(pointToJson(point));
+    }
+    return array;
+}
+
+bool pointsFromJson(const QJsonValue &value, QVector<QPointF> *points)
+{
+    if (points == nullptr || !value.isArray()) {
+        return false;
+    }
+
+    QVector<QPointF> restoredPoints;
+    const QJsonArray array = value.toArray();
+    restoredPoints.reserve(array.size());
+    for (const QJsonValue &pointValue : array) {
+        QPointF point;
+        if (!pointFromJson(pointValue, &point)) {
+            return false;
+        }
+        restoredPoints.append(point);
+    }
+
+    *points = restoredPoints;
+    return true;
+}
+
+QJsonObject nurbsToJson(const Shape::NurbsCurve2D &curve)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("dimension"), curve.dimension);
+    object.insert(QStringLiteral("degree"), curve.degree);
+    object.insert(QStringLiteral("order"), curve.order);
+    object.insert(QStringLiteral("rational"), curve.rational);
+    object.insert(QStringLiteral("controlPoints"), pointsToJson(curve.controlPoints));
+
+    QJsonArray weights;
+    for (const double weight : curve.weights) {
+        weights.append(weight);
+    }
+    object.insert(QStringLiteral("weights"), weights);
+
+    QJsonArray knots;
+    for (const double knot : curve.knots) {
+        knots.append(knot);
+    }
+    object.insert(QStringLiteral("knots"), knots);
+    return object;
+}
+
+bool nurbsFromJson(const QJsonValue &value, Shape::NurbsCurve2D *curve)
+{
+    if (curve == nullptr || !value.isObject()) {
+        return false;
+    }
+
+    const QJsonObject object = value.toObject();
+    QVector<QPointF> controlPoints;
+    if (!pointsFromJson(object.value(QStringLiteral("controlPoints")), &controlPoints)) {
+        return false;
+    }
+
+    QVector<double> weights;
+    const QJsonValue weightsValue = object.value(QStringLiteral("weights"));
+    if (!weightsValue.isArray()) {
+        return false;
+    }
+    for (const QJsonValue &weightValue : weightsValue.toArray()) {
+        if (!weightValue.isDouble() || !std::isfinite(weightValue.toDouble())) {
+            return false;
+        }
+        weights.append(weightValue.toDouble());
+    }
+
+    QVector<double> knots;
+    const QJsonValue knotsValue = object.value(QStringLiteral("knots"));
+    if (!knotsValue.isArray()) {
+        return false;
+    }
+    for (const QJsonValue &knotValue : knotsValue.toArray()) {
+        if (!knotValue.isDouble() || !std::isfinite(knotValue.toDouble())) {
+            return false;
+        }
+        knots.append(knotValue.toDouble());
+    }
+
+    curve->dimension = object.value(QStringLiteral("dimension")).toInt(2);
+    curve->degree = object.value(QStringLiteral("degree")).toInt(1);
+    curve->order = object.value(QStringLiteral("order")).toInt(2);
+    curve->rational = object.value(QStringLiteral("rational")).toBool(false);
+    curve->controlPoints = controlPoints;
+    curve->weights = weights;
+    curve->knots = knots;
+    return true;
+}
+
+QJsonObject shapeToJson(const Shape &shape)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("tool"), static_cast<int>(shape.tool));
+    object.insert(QStringLiteral("points"), pointsToJson(shape.points));
+    object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
+    object.insert(QStringLiteral("arcMode"), static_cast<int>(shape.arcMode));
+    object.insert(QStringLiteral("arcSweep"), shape.arcSweep);
+
+    QJsonArray subdivisionParameters;
+    for (const double parameter : shape.subdivisionParameters) {
+        subdivisionParameters.append(parameter);
+    }
+    object.insert(QStringLiteral("subdivisionParameters"), subdivisionParameters);
+    return object;
+}
+
+bool shapeFromJson(const QJsonValue &value, Shape *shape)
+{
+    if (shape == nullptr || !value.isObject()) {
+        return false;
+    }
+
+    const QJsonObject object = value.toObject();
+    const int toolValue = object.value(QStringLiteral("tool")).toInt(-1);
+    const int arcModeValue = object.value(QStringLiteral("arcMode")).toInt(-1);
+    if (toolValue < static_cast<int>(Tool::Select) ||
+        toolValue > static_cast<int>(Tool::Circle) ||
+        arcModeValue < static_cast<int>(ArcMode::OnePoint) ||
+        arcModeValue > static_cast<int>(ArcMode::TwoPoint)) {
+        return false;
+    }
+
+    QVector<QPointF> points;
+    if (!pointsFromJson(object.value(QStringLiteral("points")), &points)) {
+        return false;
+    }
+
+    Shape::NurbsCurve2D nurbs;
+    if (!nurbsFromJson(object.value(QStringLiteral("nurbs")), &nurbs)) {
+        return false;
+    }
+
+    const QJsonValue arcSweepValue = object.value(QStringLiteral("arcSweep"));
+    if (!arcSweepValue.isDouble() || !std::isfinite(arcSweepValue.toDouble())) {
+        return false;
+    }
+
+    QVector<double> subdivisionParameters;
+    const QJsonValue subdivisionValue = object.value(QStringLiteral("subdivisionParameters"));
+    if (!subdivisionValue.isUndefined()) {
+        if (!subdivisionValue.isArray()) {
+            return false;
+        }
+        for (const QJsonValue &parameterValue : subdivisionValue.toArray()) {
+            if (!parameterValue.isDouble() || !std::isfinite(parameterValue.toDouble())) {
+                return false;
+            }
+            subdivisionParameters.append(parameterValue.toDouble());
+        }
+    }
+
+    shape->tool = static_cast<Tool>(toolValue);
+    shape->points = points;
+    shape->nurbs = nurbs;
+    shape->arcMode = static_cast<ArcMode>(arcModeValue);
+    shape->arcSweep = arcSweepValue.toDouble();
+    shape->subdivisionParameters = subdivisionParameters;
+    return true;
+}
+
 class DebugLog final {
 public:
     static DebugLog &instance()
@@ -450,6 +663,9 @@ public:
     {
         DebugLog::instance().write(QStringLiteral("setTool requested=%1 previous=%2")
                                        .arg(toolName(tool), toolName(activeTool_)));
+        if (subdivisionActive_ && tool != Tool::Select) {
+            cancelSubdivisionPreview();
+        }
         activeTool_ = tool;
         pendingPoints_.clear();
         resetArcPreviewTracking();
@@ -678,6 +894,220 @@ public:
             .arg(zoom_ * 100.0, 0, 'f', 0);
     }
 
+    bool beginSubdivisionWheelMode()
+    {
+        if (selectedShapeIndex_ < 0 || selectedShapeIndex_ >= shapes_.size() ||
+            !isSubdividableShape(shapes_[selectedShapeIndex_])) {
+            DebugLog::instance().write(QStringLiteral("beginSubdivisionWheelMode ignored selectedShape=%1")
+                                           .arg(selectedShapeIndex_));
+            return false;
+        }
+
+        subdivisionShapeIndex_ = selectedShapeIndex_;
+        subdivisionSections_ = std::clamp(
+            static_cast<int>(shapes_[subdivisionShapeIndex_].subdivisionParameters.size()) + 1,
+            2,
+            maxSubdivisionSections);
+        resetSubdivisionWheelTracking();
+        subdivisionActive_ = true;
+        setFocus(Qt::OtherFocusReason);
+        notifySubdivisionStatus();
+        update();
+        DebugLog::instance().write(QStringLiteral("beginSubdivisionWheelMode shape=%1 sections=%2")
+                                       .arg(subdivisionShapeIndex_)
+                                       .arg(subdivisionSections_));
+        return true;
+    }
+
+    void cancelSubdivisionWheelMode()
+    {
+        cancelSubdivisionPreview();
+    }
+
+    bool applySubdivision(int sections)
+    {
+        if (sections < 2 || sections > maxSubdivisionSections) {
+            DebugLog::instance().write(QStringLiteral("applySubdivision rejected sections=%1")
+                                           .arg(sections));
+            return false;
+        }
+
+        const int shapeIndex = subdivisionActive_ ? subdivisionShapeIndex_ : selectedShapeIndex_;
+        if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
+            !isSubdividableShape(shapes_[shapeIndex])) {
+            DebugLog::instance().write(QStringLiteral("applySubdivision ignored selectedShape=%1")
+                                           .arg(shapeIndex));
+            return false;
+        }
+
+        const QVector<double> parameters = subdivisionParametersForSections(
+            shapes_[shapeIndex], sections);
+        if (parameters.size() != sections - 1) {
+            DebugLog::instance().write(QStringLiteral("applySubdivision failed shape=%1 sections=%2 generated=%3")
+                                           .arg(shapeIndex)
+                                           .arg(sections)
+                                           .arg(parameters.size()));
+            return false;
+        }
+
+        if (shapes_[shapeIndex].subdivisionParameters != parameters) {
+            recordGeometryChange();
+            shapes_[shapeIndex].subdivisionParameters = parameters;
+        }
+
+        subdivisionActive_ = false;
+        subdivisionShapeIndex_ = -1;
+        subdivisionSections_ = 2;
+        resetSubdivisionWheelTracking();
+        notifySubdivisionStatus();
+        update();
+        DebugLog::instance().write(QStringLiteral("applySubdivision shape=%1 sections=%2 points=%3")
+                                       .arg(shapeIndex)
+                                       .arg(sections)
+                                       .arg(parameters.size()));
+        return true;
+    }
+
+    bool subdivisionActive() const
+    {
+        return subdivisionActive_;
+    }
+
+    QString subdivisionStatusText() const
+    {
+        if (!subdivisionActive_) {
+            return QString();
+        }
+
+        return QStringLiteral("Subdivide: %1 sections  •  Scroll to change  •  Click/Enter to apply  •  Esc to cancel")
+            .arg(subdivisionSections_);
+    }
+
+    bool saveUpdateSession(const QString &path) const
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            DebugLog::instance().write(QStringLiteral("saveUpdateSession failed path=%1 error=%2")
+                                           .arg(path, file.errorString()));
+            return false;
+        }
+
+        QJsonObject root;
+        root.insert(QStringLiteral("version"), 1);
+        root.insert(QStringLiteral("zoom"), zoom_);
+        root.insert(QStringLiteral("pan"), pointToJson(pan_));
+
+        QJsonArray shapes;
+        for (const Shape &shape : shapes_) {
+            shapes.append(shapeToJson(shape));
+        }
+        root.insert(QStringLiteral("shapes"), shapes);
+
+        const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Compact);
+        if (file.write(data) != data.size()) {
+            DebugLog::instance().write(QStringLiteral("saveUpdateSession write failed path=%1 error=%2")
+                                           .arg(path, file.errorString()));
+            return false;
+        }
+
+        DebugLog::instance().write(QStringLiteral("saveUpdateSession path=%1 shapes=%2")
+                                       .arg(path)
+                                       .arg(shapes_.size()));
+        return true;
+    }
+
+    bool restoreUpdateSession(const QString &path)
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            DebugLog::instance().write(QStringLiteral("restoreUpdateSession failed path=%1 error=%2")
+                                           .arg(path, file.errorString()));
+            return false;
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            DebugLog::instance().write(QStringLiteral("restoreUpdateSession parse failed path=%1 error=%2")
+                                           .arg(path, parseError.errorString()));
+            return false;
+        }
+
+        const QJsonObject root = document.object();
+        const int version = root.value(QStringLiteral("version")).toInt(-1);
+        if (version != 1) {
+            DebugLog::instance().write(QStringLiteral("restoreUpdateSession unsupported version=%1 path=%2")
+                                           .arg(version)
+                                           .arg(path));
+            return false;
+        }
+
+        QPointF restoredPan;
+        if (!pointFromJson(root.value(QStringLiteral("pan")), &restoredPan)) {
+            DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid pan path=%1")
+                                           .arg(path));
+            return false;
+        }
+
+        const QJsonValue zoomValue = root.value(QStringLiteral("zoom"));
+        const qreal restoredZoom = zoomValue.toDouble(1.0);
+        if (!zoomValue.isDouble() || !std::isfinite(restoredZoom) || restoredZoom <= 1e-9) {
+            DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid zoom path=%1")
+                                           .arg(path));
+            return false;
+        }
+
+        const QJsonValue shapesValue = root.value(QStringLiteral("shapes"));
+        if (!shapesValue.isArray()) {
+            DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid shapes path=%1")
+                                           .arg(path));
+            return false;
+        }
+
+        QVector<Shape> restoredShapes;
+        const QJsonArray shapes = shapesValue.toArray();
+        restoredShapes.reserve(shapes.size());
+        for (const QJsonValue &shapeValue : shapes) {
+            Shape shape{Tool::Select, {}, Shape::NurbsCurve2D{}, ArcMode::TwoPoint, 0.0, {}};
+            if (!shapeFromJson(shapeValue, &shape)) {
+                DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid shape path=%1")
+                                               .arg(path));
+                return false;
+            }
+            restoredShapes.append(shape);
+        }
+
+        shapes_ = restoredShapes;
+        undoStack_.clear();
+        redoStack_.clear();
+        pendingPoints_.clear();
+        resetArcPreviewTracking();
+        selectedShapeIndex_ = -1;
+        draggingSelected_ = false;
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        currentSnap_ = SnapResult{};
+        subdivisionActive_ = false;
+        subdivisionShapeIndex_ = -1;
+        subdivisionSections_ = 2;
+        resetSubdivisionWheelTracking();
+        lineCommandActive_ = false;
+        activeTool_ = Tool::Select;
+        repeatTool_ = Tool::Select;
+        pan_ = restoredPan;
+        zoom_ = restoredZoom;
+        setCursor(Qt::ArrowCursor);
+        update();
+        emitCoordinateUpdate();
+        notifyHistoryChanged();
+
+        DebugLog::instance().write(QStringLiteral("restoreUpdateSession path=%1 shapes=%2")
+                                       .arg(path)
+                                       .arg(shapes_.size()));
+        return true;
+    }
+
 protected:
     void paintEvent(QPaintEvent *) override
     {
@@ -690,6 +1120,22 @@ protected:
 
         for (int index = 0; index < shapes_.size(); ++index) {
             drawShape(painter, shapes_[index], false, index == selectedShapeIndex_);
+            if (!subdivisionActive_ || index != subdivisionShapeIndex_) {
+                drawSubdivisionPoints(painter,
+                                      shapes_[index],
+                                      shapes_[index].subdivisionParameters,
+                                      false);
+            }
+        }
+
+        if (subdivisionActive_ && subdivisionShapeIndex_ >= 0 &&
+            subdivisionShapeIndex_ < shapes_.size()) {
+            const QVector<double> previewParameters = subdivisionParametersForSections(
+                shapes_[subdivisionShapeIndex_], subdivisionSections_);
+            drawSubdivisionPoints(painter,
+                                  shapes_[subdivisionShapeIndex_],
+                                  previewParameters,
+                                  true);
         }
 
         if (controlPointsVisible_ && selectedShapeIndex_ >= 0 &&
@@ -703,8 +1149,12 @@ protected:
             drawArcToolPreview(painter);
         } else if (activeTool_ == Tool::Circle && !pendingPoints_.isEmpty()) {
             drawCircleToolPreview(painter);
+        } else if (activeTool_ == Tool::Rectangle && !pendingPoints_.isEmpty()) {
+            drawRectangleToolPreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
-            drawShape(painter, Shape{activeTool_, pendingPoints_, Shape::NurbsCurve2D{}}, true);
+            drawShape(painter,
+                      Shape{activeTool_, pendingPoints_, Shape::NurbsCurve2D{}, ArcMode::TwoPoint, 0.0, {}},
+                      true);
         }
 
         if (draggingSelected_ && currentDragSnap_.isValid()) {
@@ -721,6 +1171,14 @@ protected:
         painter.drawText(18,
                          28,
                          QStringLiteral("2D VIEWPORT  •  %1").arg(activeToolLabel));
+
+        if (subdivisionActive_) {
+            painter.setPen(QColor(QStringLiteral("#f0a45a")));
+            painter.drawText(18,
+                             height() - 42,
+                             QStringLiteral("SUBDIVIDE  •  %1 sections  •  endpoints included")
+                                 .arg(subdivisionSections_));
+        }
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
             painter.setPen(QColor(QStringLiteral("#777777")));
@@ -762,6 +1220,15 @@ protected:
                 .arg(inputButtonName(panButton_))
                 .arg(static_cast<int>(event->modifiers()), 0, 16)
                 .arg(snapTypeName(currentSnap_.type)));
+
+        if (subdivisionActive_) {
+            if (event->button() == Qt::LeftButton) {
+                applySubdivision(subdivisionSections_);
+            } else if (event->button() == Qt::RightButton) {
+                cancelSubdivisionPreview();
+            }
+            return;
+        }
 
         // While drawing a connected line, right-click is the command's
         // finish action. This takes priority over right-button panning.
@@ -857,7 +1324,9 @@ protected:
             Shape completedShape{activeTool_,
                                  pendingPoints_,
                                  Shape::NurbsCurve2D{},
-                                 completedArcMode};
+                                 completedArcMode,
+                                 0.0,
+                                 {}};
             if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint) {
                 completedShape.arcSweep = arcPreviewSweepAngle_;
             }
@@ -919,6 +1388,8 @@ protected:
         lastWorldPosition_ = cursorWorld_;
         cursorValid_ = true;
         const bool circlePreviewActive = activeTool_ == Tool::Circle && !pendingPoints_.isEmpty();
+        const bool rectanglePreviewActive =
+            activeTool_ == Tool::Rectangle && !pendingPoints_.isEmpty();
         const bool arcPreviewActive = activeTool_ == Tool::Arc;
 
         if (!panning_ && activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
@@ -994,11 +1465,13 @@ protected:
             }
         }
 
-        if (lineCommandActive_ || arcPreviewActive || circlePreviewActive || panning_ || draggingSelected_) {
+        if (lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
+            rectanglePreviewActive || panning_ || draggingSelected_) {
             update();
         }
 
-        if (lineCommandActive_ || arcPreviewActive || circlePreviewActive || panning_ || draggingSelected_) {
+        if (lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
+            rectanglePreviewActive || panning_ || draggingSelected_) {
             DebugLog::instance().write(
                 QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11 arcMode=%12 arcSweep=%13 snap=%14")
                     .arg(pointText(screenPosition))
@@ -1059,6 +1532,25 @@ protected:
 
     void wheelEvent(QWheelEvent *event) override
     {
+        if (subdivisionActive_) {
+            const int angleDelta = event->angleDelta().y();
+            const int pixelDelta = event->pixelDelta().y();
+            const int logicalSteps = subdivisionWheelStepsFromEvent(angleDelta, pixelDelta);
+            applySubdivisionWheelSteps(logicalSteps);
+
+            DebugLog::instance().write(
+                QStringLiteral("subdivision wheel angleDelta=%1 pixelDelta=%2 phase=%3 logicalSteps=%4 angleRemainder=%5 pixelRemainder=%6 sections=%7")
+                    .arg(angleDelta)
+                    .arg(pixelDelta)
+                    .arg(static_cast<int>(event->phase()))
+                    .arg(logicalSteps)
+                    .arg(subdivisionWheelAccumulator_)
+                    .arg(subdivisionPixelAccumulator_, 0, 'f', 2)
+                    .arg(subdivisionSections_));
+            event->accept();
+            return;
+        }
+
         const QPointF screenPosition = eventPosition(event);
         const QPointF beforeZoom = screenToWorld(screenPosition);
         const qreal oldZoom = zoom_;
@@ -1091,6 +1583,17 @@ protected:
                                        .arg(toolName(activeTool_))
                                        .arg(lineCommandActive_)
                                        .arg(pendingPoints_.size()));
+        if (subdivisionActive_ &&
+            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+            applySubdivision(subdivisionSections_);
+            return;
+        }
+
+        if (subdivisionActive_ && event->key() == Qt::Key_Escape) {
+            cancelSubdivisionPreview();
+            return;
+        }
+
         if (event->key() == Qt::Key_Escape) {
             pendingPoints_.clear();
             resetArcPreviewTracking();
@@ -1113,6 +1616,225 @@ protected:
     }
 
 private:
+    bool isSubdividableShape(const Shape &shape) const
+    {
+        if (shape.tool == Tool::Line) {
+            return shape.points.size() >= 2 &&
+                   (isValidNurbsCurve(shape.nurbs) || !shape.points.isEmpty());
+        }
+
+        return (shape.tool == Tool::Arc ||
+                shape.tool == Tool::Bezier ||
+                shape.tool == Tool::Nurbs ||
+                shape.tool == Tool::Circle) &&
+               isValidNurbsCurve(shape.nurbs);
+    }
+
+    bool subdivisionCurve(const Shape &shape, Shape::NurbsCurve2D *curve) const
+    {
+        if (curve == nullptr || !isSubdividableShape(shape)) {
+            return false;
+        }
+
+        if (isValidNurbsCurve(shape.nurbs)) {
+            *curve = shape.nurbs;
+            return true;
+        }
+
+        if (shape.tool == Tool::Line && shape.points.size() >= 2) {
+            *curve = makeDegreeOneNurbs(shape.points);
+            return isValidNurbsCurve(*curve);
+        }
+
+        return false;
+    }
+
+    QVector<double> subdivisionParametersForSections(const Shape &shape,
+                                                      int sections) const
+    {
+        QVector<double> parameters;
+        if (sections < 2) {
+            return parameters;
+        }
+
+        Shape::NurbsCurve2D curve;
+        if (!subdivisionCurve(shape, &curve)) {
+            return parameters;
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        if (fullKnots.size() <= curve.degree + 1 ||
+            curve.controlPoints.isEmpty()) {
+            return parameters;
+        }
+
+        const qreal firstParameter = fullKnots[curve.degree];
+        const qreal lastParameter = fullKnots[curve.controlPoints.size()];
+        if (!std::isfinite(firstParameter) || !std::isfinite(lastParameter) ||
+            lastParameter <= firstParameter) {
+            return parameters;
+        }
+
+        int nonZeroSpans = 0;
+        for (int index = curve.degree; index < curve.controlPoints.size(); ++index) {
+            if (fullKnots[index + 1] > fullKnots[index]) {
+                ++nonZeroSpans;
+            }
+        }
+
+        const int sampleCount = std::clamp(std::max(128, nonZeroSpans * 64), 128, 4096);
+        QVector<qreal> sampleParameters;
+        QVector<qreal> cumulativeLengths;
+        sampleParameters.reserve(sampleCount + 1);
+        cumulativeLengths.reserve(sampleCount + 1);
+
+        QPointF previousPoint;
+        if (!evaluateNurbsPoint(curve, firstParameter, &previousPoint)) {
+            return parameters;
+        }
+
+        sampleParameters.append(firstParameter);
+        cumulativeLengths.append(0.0);
+        qreal totalLength = 0.0;
+        for (int sample = 1; sample <= sampleCount; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
+            const qreal parameter = firstParameter +
+                                    (lastParameter - firstParameter) * fraction;
+            QPointF currentPoint;
+            if (!evaluateNurbsPoint(curve, parameter, &currentPoint)) {
+                return QVector<double>();
+            }
+
+            totalLength += std::hypot(currentPoint.x() - previousPoint.x(),
+                                      currentPoint.y() - previousPoint.y());
+            sampleParameters.append(parameter);
+            cumulativeLengths.append(totalLength);
+            previousPoint = currentPoint;
+        }
+
+        if (totalLength <= 1e-9) {
+            return parameters;
+        }
+
+        parameters.reserve(sections - 1);
+        for (int division = 1; division < sections; ++division) {
+            const qreal targetLength = totalLength * division / sections;
+            const auto upper = std::lower_bound(cumulativeLengths.cbegin(),
+                                                cumulativeLengths.cend(),
+                                                targetLength);
+            const int upperIndex = static_cast<int>(upper - cumulativeLengths.cbegin());
+            if (upperIndex <= 0) {
+                parameters.append(sampleParameters.first());
+                continue;
+            }
+            if (upperIndex >= cumulativeLengths.size()) {
+                parameters.append(sampleParameters.last());
+                continue;
+            }
+
+            const qreal lowerLength = cumulativeLengths[upperIndex - 1];
+            const qreal upperLength = cumulativeLengths[upperIndex];
+            const qreal span = upperLength - lowerLength;
+            const qreal localFraction = span > 1e-12
+                                            ? (targetLength - lowerLength) / span
+                                            : 0.0;
+            parameters.append(sampleParameters[upperIndex - 1] +
+                               (sampleParameters[upperIndex] -
+                                sampleParameters[upperIndex - 1]) * localFraction);
+        }
+
+        return parameters;
+    }
+
+    void resetSubdivisionWheelTracking()
+    {
+        subdivisionWheelAccumulator_ = 0;
+        subdivisionPixelAccumulator_ = 0.0;
+    }
+
+    int subdivisionWheelStepsFromEvent(int angleDelta, int pixelDelta)
+    {
+        if (angleDelta != 0) {
+            // Qt can split one physical wheel detent into several smooth
+            // angle deltas. Blender's modal tools receive normalized wheel
+            // events, so retain only the incomplete part here and emit one
+            // logical step for each complete 120-unit detent.
+            subdivisionPixelAccumulator_ = 0.0;
+            if (subdivisionWheelAccumulator_ != 0 &&
+                ((subdivisionWheelAccumulator_ > 0) != (angleDelta > 0))) {
+                subdivisionWheelAccumulator_ = 0;
+            }
+
+            subdivisionWheelAccumulator_ += angleDelta;
+            const int steps = subdivisionWheelAccumulator_ / 120;
+            subdivisionWheelAccumulator_ -= steps * 120;
+            return steps;
+        }
+
+        if (pixelDelta != 0) {
+            // A pure pixel-delta stream has no platform-independent detent
+            // size. Keep the same discrete behavior with a conservative
+            // screen-pixel threshold for touch/high-resolution devices.
+            subdivisionWheelAccumulator_ = 0;
+            if (subdivisionPixelAccumulator_ != 0.0 &&
+                ((subdivisionPixelAccumulator_ > 0.0) != (pixelDelta > 0))) {
+                subdivisionPixelAccumulator_ = 0.0;
+            }
+
+            subdivisionPixelAccumulator_ += pixelDelta;
+            constexpr qreal pixelsPerWheelStep = 40.0;
+            const int magnitude = static_cast<int>(std::floor(
+                std::abs(subdivisionPixelAccumulator_) / pixelsPerWheelStep));
+            const int steps = subdivisionPixelAccumulator_ > 0.0 ? magnitude : -magnitude;
+            subdivisionPixelAccumulator_ -= steps * pixelsPerWheelStep;
+            return steps;
+        }
+
+        return 0;
+    }
+
+    void applySubdivisionWheelSteps(int steps)
+    {
+        if (!subdivisionActive_ || steps == 0) {
+            return;
+        }
+
+        const int previousSections = subdivisionSections_;
+        subdivisionSections_ = std::clamp(subdivisionSections_ + steps,
+                                          2,
+                                          maxSubdivisionSections);
+        if (subdivisionSections_ != previousSections) {
+            notifySubdivisionStatus();
+            update();
+            DebugLog::instance().write(
+                QStringLiteral("subdivision wheel sections=%1 points=%2")
+                    .arg(subdivisionSections_)
+                    .arg(subdivisionSections_ - 1));
+        }
+    }
+
+    void notifySubdivisionStatus()
+    {
+        if (subdivisionStatusUpdate_) {
+            subdivisionStatusUpdate_(subdivisionStatusText());
+        }
+    }
+
+    void cancelSubdivisionPreview()
+    {
+        if (!subdivisionActive_) {
+            return;
+        }
+
+        subdivisionActive_ = false;
+        subdivisionShapeIndex_ = -1;
+        subdivisionSections_ = 2;
+        resetSubdivisionWheelTracking();
+        notifySubdivisionStatus();
+        update();
+        DebugLog::instance().write(QStringLiteral("cancelSubdivisionPreview"));
+    }
+
     void notifyHistoryChanged()
     {
         if (historyChanged_) {
@@ -1147,6 +1869,10 @@ private:
         currentSnap_ = SnapResult{};
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
+        subdivisionActive_ = false;
+        subdivisionShapeIndex_ = -1;
+        subdivisionSections_ = 2;
+        resetSubdivisionWheelTracking();
         lineCommandActive_ = false;
         setTool(Tool::Select);
         if (commandFinished_) {
@@ -1162,7 +1888,12 @@ private:
         if (pendingPoints_.size() >= 2) {
             const Shape::NurbsCurve2D curve = makeDegreeOneNurbs(pendingPoints_);
             recordGeometryChange();
-            shapes_.append(Shape{Tool::Line, pendingPoints_, curve});
+            shapes_.append(Shape{Tool::Line,
+                                 pendingPoints_,
+                                 curve,
+                                 ArcMode::TwoPoint,
+                                 0.0,
+                                 {}});
             DebugLog::instance().write(
                 QStringLiteral("finishLineCommand committed dimension=%1 degree=%2 order=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7 shapes=%8")
                     .arg(curve.dimension)
@@ -1379,6 +2110,16 @@ private:
             return candidates;
         }
 
+        Shape::NurbsCurve2D subdivisionCurveData;
+        if (subdivisionCurve(shape, &subdivisionCurveData)) {
+            for (const double parameter : shape.subdivisionParameters) {
+                QPointF point;
+                if (evaluateNurbsPoint(subdivisionCurveData, parameter, &point)) {
+                    candidates.append(SnapCandidate{SnapType::Endpoint, point});
+                }
+            }
+        }
+
         if (shape.tool == Tool::Circle) {
             candidates.append(SnapCandidate{SnapType::Center, shape.points.first()});
             return candidates;
@@ -1461,6 +2202,18 @@ private:
             const Shape &shape = shapes_[shapeIndex];
             if (shape.points.isEmpty()) {
                 continue;
+            }
+
+            if (endpointSnapEnabled_) {
+                Shape::NurbsCurve2D subdivisionCurveData;
+                if (subdivisionCurve(shape, &subdivisionCurveData)) {
+                    for (const double parameter : shape.subdivisionParameters) {
+                        QPointF point;
+                        if (evaluateNurbsPoint(subdivisionCurveData, parameter, &point)) {
+                            candidates.append(SnapCandidate{SnapType::Endpoint, point});
+                        }
+                    }
+                }
             }
 
             if (shape.tool == Tool::Circle) {
@@ -2683,6 +3436,55 @@ private:
         }
     }
 
+    void drawRectangleToolPreview(QPainter &painter)
+    {
+        if (pendingPoints_.isEmpty()) {
+            return;
+        }
+
+        const QColor rectangleColor(QStringLiteral("#e6b85c"));
+        const QColor pointColor(QStringLiteral("#f0a45a"));
+        const QPointF firstWorld = pendingPoints_.first();
+        const QPointF firstScreen = worldToScreen(firstWorld);
+
+        painter.setPen(QPen(pointColor, 1.5));
+        painter.setBrush(QColor(QStringLiteral("#282828")));
+        painter.drawEllipse(firstScreen, 5.0, 5.0);
+
+        if (!cursorValid_) {
+            return;
+        }
+
+        const QPointF secondWorld = cursorWorld_;
+        const QPointF secondScreen = worldToScreen(secondWorld);
+        const QRectF rectangle = QRectF(firstScreen, secondScreen).normalized();
+
+        painter.setPen(QPen(rectangleColor, 2.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(rectangle);
+
+        painter.setPen(QPen(pointColor, 2.0));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(secondScreen, 4.0, 4.0);
+
+        painter.setPen(QColor(QStringLiteral("#d0d0d0")));
+        painter.setFont(QFont(QStringLiteral("Sans"), 9));
+        const qreal width = std::abs(secondWorld.x() - firstWorld.x());
+        const qreal height = std::abs(secondWorld.y() - firstWorld.y());
+        const QString dimensions = QStringLiteral("W %1  H %2")
+                                       .arg(width, 0, 'f', 2)
+                                       .arg(height, 0, 'f', 2);
+        QPointF labelPosition = rectangle.topLeft() + QPointF(6.0, -8.0);
+        if (labelPosition.y() < 14.0) {
+            labelPosition.setY(rectangle.top() + 16.0);
+        }
+        painter.drawText(labelPosition, dimensions);
+
+        if (currentSnap_.isValid()) {
+            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        }
+    }
+
     void drawControlPoints(QPainter &painter, const Shape &shape)
     {
         QVector<QPointF> controlPoints = shape.nurbs.controlPoints;
@@ -2898,6 +3700,48 @@ private:
         }
     }
 
+    void drawSubdivisionPoints(QPainter &painter,
+                               const Shape &shape,
+                               const QVector<double> &parameters,
+                               bool preview)
+    {
+        if (parameters.isEmpty()) {
+            return;
+        }
+
+        Shape::NurbsCurve2D curve;
+        if (!subdivisionCurve(shape, &curve)) {
+            return;
+        }
+
+        const QColor pointColor = preview ? QColor(QStringLiteral("#f0a45a"))
+                                          : QColor(QStringLiteral("#e6b85c"));
+        painter.setPen(QPen(pointColor, preview ? 2.0 : 1.5));
+        painter.setBrush(pointColor);
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        if (fullKnots.size() > curve.controlPoints.size()) {
+            const double firstParameter = fullKnots[curve.degree];
+            const double lastParameter = fullKnots[curve.controlPoints.size()];
+            for (const double parameter : {firstParameter, lastParameter}) {
+                QPointF point;
+                if (evaluateNurbsPoint(curve, parameter, &point)) {
+                    painter.drawEllipse(worldToScreen(point),
+                                         preview ? 5.0 : 4.0,
+                                         preview ? 5.0 : 4.0);
+                }
+            }
+        }
+
+        for (const double parameter : parameters) {
+            QPointF point;
+            if (!evaluateNurbsPoint(curve, parameter, &point)) {
+                continue;
+            }
+            painter.drawEllipse(worldToScreen(point), preview ? 5.0 : 4.0, preview ? 5.0 : 4.0);
+        }
+    }
+
     void drawShape(QPainter &painter,
                    const Shape &shape,
                    bool preview,
@@ -2914,6 +3758,9 @@ private:
         const qreal curveWidth = selected ? 3.5 : (preview ? 1.5 : 2.0);
 
         painter.setPen(QPen(curveColor, curveWidth));
+        // Subdivision markers use a filled brush. Always reset the geometry
+        // brush so an open curve is never rendered as a filled wedge.
+        painter.setBrush(Qt::NoBrush);
 
         if (shape.tool == Tool::Line && shape.points.size() >= 2) {
             if (isValidNurbsCurve(shape.nurbs)) {
@@ -3008,8 +3855,10 @@ public:
     std::function<void(Tool)> commandFinished_;
     std::function<void(Tool)> toolRepeated_;
     std::function<void()> historyChanged_;
+    std::function<void(const QString &)> subdivisionStatusUpdate_;
 
 private:
+    static constexpr int maxSubdivisionSections = 10000;
     Tool activeTool_ = Tool::Select;
     Tool repeatTool_ = Tool::Select;
     ArcMode arcMode_ = ArcMode::OnePoint;
@@ -3049,6 +3898,11 @@ private:
     bool centerSnapEnabled_ = true;
     bool perpendicularSnapEnabled_ = false;
     bool tangentSnapEnabled_ = false;
+    bool subdivisionActive_ = false;
+    int subdivisionShapeIndex_ = -1;
+    int subdivisionSections_ = 2;
+    int subdivisionWheelAccumulator_ = 0;
+    qreal subdivisionPixelAccumulator_ = 0.0;
 };
 
 class PreferencesDialog final : public QDialog {
@@ -3186,7 +4040,161 @@ public:
         applyTheme();
     }
 
+    bool restoreUpdateSession(const QString &path)
+    {
+        if (viewport_ == nullptr || !viewport_->restoreUpdateSession(path)) {
+            statusBar()->showMessage(QStringLiteral("Update session could not be restored"), 8000);
+            return false;
+        }
+
+        QFile::remove(path);
+        statusBar()->showMessage(QStringLiteral("Update complete — scene restored"), 5000);
+        return true;
+    }
+
 private:
+    void updateApplication()
+    {
+        if (updateProcess_ != nullptr) {
+            statusBar()->showMessage(QStringLiteral("Update already in progress"), 3000);
+            return;
+        }
+
+        const QString executablePath = QCoreApplication::applicationFilePath();
+        const QString buildDirectory = QCoreApplication::applicationDirPath();
+        const QString sessionPath = QDir(QDir::tempPath()).filePath(
+            QStringLiteral("classiCAD-update-%1-%2.json")
+                .arg(QCoreApplication::applicationPid())
+                .arg(QDateTime::currentMSecsSinceEpoch()));
+
+        if (viewport_ == nullptr || !viewport_->saveUpdateSession(sessionPath)) {
+            statusBar()->showMessage(QStringLiteral("Update cancelled — could not save the current scene"),
+                                     8000);
+            return;
+        }
+
+        updateAction_->setEnabled(false);
+        statusBar()->showMessage(QStringLiteral("Updating classiCAD — rebuilding…"));
+
+        auto *process = new QProcess(this);
+        updateProcess_ = process;
+        process->setWorkingDirectory(buildDirectory);
+
+        const auto failUpdate = [this, process, sessionPath](const QString &message) {
+            if (updateProcess_ != process) {
+                return;
+            }
+
+            updateProcess_ = nullptr;
+            updateAction_->setEnabled(true);
+            QFile::remove(sessionPath);
+            statusBar()->showMessage(message, 8000);
+            process->deleteLater();
+        };
+
+        connect(process,
+                &QProcess::errorOccurred,
+                this,
+                [process, failUpdate](QProcess::ProcessError error) {
+                    if (error == QProcess::FailedToStart) {
+                        failUpdate(QStringLiteral("Update failed — could not start cmake: %1")
+                                       .arg(process->errorString()));
+                    }
+                });
+
+        connect(process,
+                qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+                this,
+                [this,
+                 process,
+                 sessionPath,
+                 executablePath,
+                 buildDirectory,
+                 failUpdate](int exitCode, QProcess::ExitStatus exitStatus) {
+                    if (updateProcess_ != process) {
+                        return;
+                    }
+
+                    const QString buildOutput =
+                        QString::fromLocal8Bit(process->readAllStandardOutput() +
+                                                process->readAllStandardError())
+                            .trimmed();
+                    if (!buildOutput.isEmpty()) {
+                        DebugLog::instance().write(QStringLiteral("update build output: %1")
+                                                       .arg(buildOutput));
+                    }
+
+                    if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+                        failUpdate(QStringLiteral("Update failed — build exited with code %1")
+                                       .arg(exitCode));
+                        return;
+                    }
+
+                    const QStringList arguments{
+                        QStringLiteral("--update-session"),
+                        sessionPath};
+                    if (!QProcess::startDetached(executablePath,
+                                                 arguments,
+                                                 buildDirectory)) {
+                        failUpdate(QStringLiteral("Update failed — could not restart classiCAD"));
+                        return;
+                    }
+
+                    updateProcess_ = nullptr;
+                    process->deleteLater();
+                    statusBar()->showMessage(QStringLiteral("Update complete — restarting classiCAD"));
+                    QTimer::singleShot(0, []() {
+                        QCoreApplication::quit();
+                    });
+                });
+
+        process->start(QStringLiteral("cmake"),
+                       QStringList{QStringLiteral("--build"), buildDirectory});
+    }
+
+    void startSubdivisionWheelMode()
+    {
+        if (viewport_ == nullptr || !viewport_->beginSubdivisionWheelMode()) {
+            statusBar()->showMessage(QStringLiteral("Select a line or curve first"), 4000);
+            return;
+        }
+
+        statusBar()->showMessage(viewport_->subdivisionStatusText());
+    }
+
+    void subdivideWithNumberOfPoints()
+    {
+        if (viewport_ == nullptr || !viewport_->beginSubdivisionWheelMode()) {
+            statusBar()->showMessage(QStringLiteral("Select a line or curve first"), 4000);
+            return;
+        }
+
+        const QString title = QStringLiteral("Subdivide Curve");
+        const QString label = QStringLiteral("Number of sections:");
+        bool accepted = false;
+        const int sections = QInputDialog::getInt(this,
+                                                  title,
+                                                  label,
+                                                  2,
+                                                  2,
+                                                  10000,
+                                                  1,
+                                                  &accepted);
+        if (!accepted) {
+            viewport_->cancelSubdivisionWheelMode();
+            return;
+        }
+
+        if (!viewport_->applySubdivision(sections)) {
+            statusBar()->showMessage(QStringLiteral("Could not subdivide the selected curve"), 5000);
+            return;
+        }
+
+        statusBar()->showMessage(QStringLiteral("Subdivided into %1 sections (endpoints marked)")
+                                     .arg(sections),
+                                 5000);
+    }
+
     void createMenus()
     {
         QMenu *fileMenu = menuBar()->addMenu(QStringLiteral("File"));
@@ -3213,6 +4221,15 @@ private:
             viewport_->redo();
             statusBar()->showMessage(QStringLiteral("Redo"));
         });
+
+        editMenu->addSeparator();
+        subdivideAction_ = editMenu->addAction(QStringLiteral("Subdivide Selected (Wheel)"));
+        subdivideAction_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+        subdivideAction_->setShortcutContext(Qt::WindowShortcut);
+        connect(subdivideAction_, &QAction::triggered, this, [this]() {
+            startSubdivisionWheelMode();
+        });
+
         editMenu->addSeparator();
         QAction *preferencesAction = editMenu->addAction(QStringLiteral("Preferences…"));
         connect(preferencesAction, &QAction::triggered, this, [this]() {
@@ -3267,6 +4284,15 @@ private:
         QLabel *mode = new QLabel(QStringLiteral("2D NURBS"));
         mode->setObjectName(QStringLiteral("modeLabel"));
         bar->addWidget(mode);
+
+        bar->addSeparator();
+        updateAction_ = new QAction(QStringLiteral("Update"), this);
+        updateAction_->setToolTip(QStringLiteral("Rebuild and restart classiCAD, preserving the current scene"));
+        connect(updateAction_, &QAction::triggered, this, [this]() {
+            updateApplication();
+        });
+        bar->addAction(updateAction_);
+
         addToolBar(Qt::TopToolBarArea, bar);
     }
 
@@ -3351,6 +4377,13 @@ private:
         };
         viewport_->historyChanged_ = [this]() {
             updateHistoryActions();
+        };
+        viewport_->subdivisionStatusUpdate_ = [this](const QString &message) {
+            if (message.isEmpty()) {
+                statusBar()->clearMessage();
+            } else {
+                statusBar()->showMessage(message);
+            }
         };
         updateHistoryActions();
     }
@@ -3460,6 +4493,16 @@ private:
             settings.sync();
             statusBar()->showMessage(visible ? QStringLiteral("Control points: On")
                                              : QStringLiteral("Control points: Off"));
+        });
+
+        subdivideButton_ = new QToolButton;
+        subdivideButton_->setObjectName(QStringLiteral("toolButton"));
+        subdivideButton_->setText(QStringLiteral("Subdiv\nPoints"));
+        subdivideButton_->setToolTip(QStringLiteral("Add evenly spaced subdivision points to the selected line or curve"));
+        subdivideButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        layout->addWidget(subdivideButton_);
+        connect(subdivideButton_, &QToolButton::clicked, this, [this]() {
+            subdivideWithNumberOfPoints();
         });
 
         layout->addStretch(1);
@@ -3845,9 +4888,12 @@ private:
     QToolButton *selectToolButton_ = nullptr;
     QToolButton *arcToolButton_ = nullptr;
     QToolButton *controlPointsButton_ = nullptr;
+    QToolButton *subdivideButton_ = nullptr;
     QVector<QToolButton *> toolButtons_;
     QAction *undoAction_ = nullptr;
     QAction *redoAction_ = nullptr;
+    QAction *subdivideAction_ = nullptr;
+    QAction *updateAction_ = nullptr;
     QAction *orthoAction_ = nullptr;
     QAction *osnapAction_ = nullptr;
     QCheckBox *endpointSnapCheckBox_ = nullptr;
@@ -3857,6 +4903,7 @@ private:
     QCheckBox *perpendicularSnapCheckBox_ = nullptr;
     QCheckBox *tangentSnapCheckBox_ = nullptr;
     QToolBar *osnapLane_ = nullptr;
+    QProcess *updateProcess_ = nullptr;
 };
 
 } // namespace
@@ -3867,10 +4914,22 @@ int main(int argc, char *argv[])
     application.setApplicationName(QStringLiteral("classiCAD"));
     application.setOrganizationName(QStringLiteral("classiCAD"));
 
+    QString updateSessionPath;
+    const QStringList arguments = application.arguments();
+    for (int index = 1; index + 1 < arguments.size(); ++index) {
+        if (arguments[index] == QStringLiteral("--update-session")) {
+            updateSessionPath = arguments[index + 1];
+            break;
+        }
+    }
+
     DebugLog::instance().write(QStringLiteral("application start logFile=%1")
                                    .arg(DebugLog::instance().path()));
 
     MainWindow window;
+    if (!updateSessionPath.isEmpty()) {
+        window.restoreUpdateSession(updateSessionPath);
+    }
     window.show();
 
     return application.exec();

@@ -800,6 +800,8 @@ public:
             draggingControlPoint_ = false;
             controlPointIndex_ = -1;
             dragHistoryRecorded_ = false;
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapLocked_ = false;
         }
         DebugLog::instance().write(QStringLiteral("setControlPointsVisible=%1 selectedShape=%2")
                                        .arg(controlPointsVisible_)
@@ -1174,7 +1176,7 @@ protected:
                       true);
         }
 
-        if (draggingSelected_ && currentDragSnap_.isValid()) {
+        if ((draggingSelected_ || draggingControlPoint_) && currentDragSnap_.isValid()) {
             drawSnapMarker(painter,
                            currentDragSnap_.type,
                            currentDragSnap_.targetPoint);
@@ -1456,8 +1458,54 @@ protected:
             selectedShapeIndex_ < shapes_.size() && controlPointIndex_ >= 0) {
             const QPointF delta = rawCursorWorld_ - lastControlPointWorld_;
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
-                beginDragHistory();
-                translateControlPoint(selectedShapeIndex_, controlPointIndex_, delta);
+                constexpr qreal dragSnapBreakawayPixels = 18.0;
+                const qreal cursorDistanceFromSnap =
+                    std::hypot(screenPosition.x() - worldToScreen(dragSnapCursorWorld_).x(),
+                               screenPosition.y() - worldToScreen(dragSnapCursorWorld_).y());
+
+                if (dragSnapLocked_ && cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
+                    DebugLog::instance().write(
+                        QStringLiteral("control point snap-hold shape=%1 index=%2 cursorDistance=%3 breakaway=%4")
+                            .arg(selectedShapeIndex_)
+                            .arg(controlPointIndex_)
+                            .arg(cursorDistanceFromSnap, 0, 'f', 2)
+                            .arg(dragSnapBreakawayPixels, 0, 'f', 2));
+                } else if (dragSnapLocked_) {
+                    const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
+                    beginDragHistory();
+                    translateControlPoint(selectedShapeIndex_, controlPointIndex_, detachDelta);
+                    currentDragSnap_ = DragSnapResult{};
+                    dragSnapLocked_ = false;
+                    DebugLog::instance().write(
+                        QStringLiteral("control point snap-breakaway shape=%1 index=%2 cursorDistance=%3")
+                            .arg(selectedShapeIndex_)
+                            .arg(controlPointIndex_)
+                            .arg(cursorDistanceFromSnap, 0, 'f', 2));
+                } else {
+                    beginDragHistory();
+                    translateControlPoint(selectedShapeIndex_, controlPointIndex_, delta);
+
+                    const QVector<QPointF> controlPoints =
+                        controlPointsForShape(shapes_[selectedShapeIndex_]);
+                    if (controlPointIndex_ < controlPoints.size()) {
+                        currentDragSnap_ = findControlPointSnap(
+                            selectedShapeIndex_, controlPoints[controlPointIndex_]);
+                        if (currentDragSnap_.isValid()) {
+                            translateControlPoint(selectedShapeIndex_,
+                                                  controlPointIndex_,
+                                                  currentDragSnap_.translation);
+                            dragSnapLocked_ = true;
+                            dragSnapCursorWorld_ = rawCursorWorld_;
+                            DebugLog::instance().write(
+                                QStringLiteral("control point snapped shape=%1 index=%2 type=%3 target=%4")
+                                    .arg(selectedShapeIndex_)
+                                    .arg(controlPointIndex_)
+                                    .arg(snapTypeName(currentDragSnap_.type))
+                                    .arg(pointText(currentDragSnap_.targetPoint)));
+                        }
+                    }
+                }
+
                 lastControlPointWorld_ = rawCursorWorld_;
                 DebugLog::instance().write(
                     QStringLiteral("control point drag shape=%1 index=%2 delta=%3 world=%4")
@@ -1580,6 +1628,8 @@ protected:
             draggingControlPoint_ = false;
             controlPointIndex_ = -1;
             dragHistoryRecorded_ = false;
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapLocked_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-control-point-drag shape=%1")
                                            .arg(selectedShapeIndex_));
@@ -2691,6 +2741,37 @@ private:
                     best.targetPoint = target.point;
                     best.translation = target.point - source.point;
                 }
+            }
+        }
+
+        return best;
+    }
+
+    DragSnapResult findControlPointSnap(int selectedShapeIndex,
+                                        const QPointF &controlPoint) const
+    {
+        DragSnapResult best;
+        if (!osnapEnabled_ || selectedShapeIndex < 0 ||
+            selectedShapeIndex >= shapes_.size()) {
+            return best;
+        }
+
+        const QPointF sourceScreen = worldToScreen(controlPoint);
+        const QVector<SnapCandidate> targetCandidates =
+            snapCandidatesForScene(selectedShapeIndex);
+        constexpr qreal snapRadiusPixels = 12.0;
+        qreal bestDistance = snapRadiusPixels;
+
+        for (const SnapCandidate &target : targetCandidates) {
+            const QPointF targetScreen = worldToScreen(target.point);
+            const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
+                                              targetScreen.y() - sourceScreen.y());
+            if (distance <= bestDistance) {
+                bestDistance = distance;
+                best.type = target.type;
+                best.sourcePoint = controlPoint;
+                best.targetPoint = target.point;
+                best.translation = target.point - controlPoint;
             }
         }
 

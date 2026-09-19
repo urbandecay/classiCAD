@@ -1789,7 +1789,8 @@ private:
     {
         SnapResult best;
         const bool drawingSnapActive =
-            (activeTool_ == Tool::Line && lineCommandActive_) || activeTool_ == Tool::Arc;
+            (activeTool_ == Tool::Line && lineCommandActive_) ||
+            activeTool_ == Tool::Arc || activeTool_ == Tool::Circle;
         if (!osnapEnabled_ || !drawingSnapActive) {
             return best;
         }
@@ -2676,6 +2677,10 @@ private:
         painter.setPen(QPen(pointColor, 1.5));
         painter.setBrush(QColor(QStringLiteral("#282828")));
         painter.drawEllipse(center, 5.0, 5.0);
+
+        if (currentSnap_.isValid()) {
+            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        }
     }
 
     void drawControlPoints(QPainter &painter, const Shape &shape)

@@ -1303,6 +1303,123 @@ public:
         return true;
     }
 
+    int explodeSelectedShapes()
+    {
+        if (joinActive_) {
+            cancelJoinMode();
+        }
+
+        QVector<int> selected = selectedShapeIndices_;
+        if (selectedShapeIndex_ >= 0 &&
+            selectedShapeIndex_ < shapes_.size() &&
+            !selected.contains(selectedShapeIndex_)) {
+            selected.append(selectedShapeIndex_);
+        }
+
+        if (selected.isEmpty()) {
+            DebugLog::instance().write(QStringLiteral("explode ignored no selection"));
+            return 0;
+        }
+
+        const auto selectedContains = [&selected](int index) {
+            return selected.contains(index);
+        };
+
+        int explodeableShapeCount = 0;
+        int explodedComponentCount = 0;
+        for (const int shapeIndex : selected) {
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                continue;
+            }
+
+            const Shape &shape = shapes_[shapeIndex];
+            if (shape.tool != Tool::PolyCurve || shape.components.isEmpty()) {
+                continue;
+            }
+
+            bool validComponents = true;
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                if (!isValidNurbsCurve(component)) {
+                    validComponents = false;
+                    break;
+                }
+            }
+            if (validComponents) {
+                ++explodeableShapeCount;
+                explodedComponentCount += shape.components.size();
+            }
+        }
+
+        if (explodeableShapeCount == 0) {
+            DebugLog::instance().write(QStringLiteral("explode ignored no PolyCurve selection"));
+            return 0;
+        }
+
+        recordGeometryChange();
+
+        QVector<Shape> explodedShapes;
+        QVector<int> explodedSelection;
+        explodedShapes.reserve(shapes_.size() + explodedComponentCount - explodeableShapeCount);
+
+        for (int sourceIndex = 0; sourceIndex < shapes_.size(); ++sourceIndex) {
+            const Shape &source = shapes_[sourceIndex];
+            const bool selectedSource = selectedContains(sourceIndex);
+            const bool canExplode = selectedSource &&
+                                    source.tool == Tool::PolyCurve &&
+                                    !source.components.isEmpty();
+            bool validComponents = canExplode;
+            if (validComponents) {
+                for (const Shape::NurbsCurve2D &component : source.components) {
+                    if (!isValidNurbsCurve(component)) {
+                        validComponents = false;
+                        break;
+                    }
+                }
+            }
+
+            if (!validComponents) {
+                const int newIndex = explodedShapes.size();
+                explodedShapes.append(source);
+                if (selectedSource) {
+                    explodedSelection.append(newIndex);
+                }
+                continue;
+            }
+
+            for (const Shape::NurbsCurve2D &component : source.components) {
+                const int newIndex = explodedShapes.size();
+                explodedShapes.append(Shape{
+                    Tool::PolyCurve,
+                    polyCurvePoints({component}),
+                    Shape::NurbsCurve2D{},
+                    ArcMode::TwoPoint,
+                    0.0,
+                    {},
+                    {component}});
+                explodedSelection.append(newIndex);
+            }
+        }
+
+        shapes_ = explodedShapes;
+        selectedShapeIndices_ = explodedSelection;
+        selectedShapeIndex_ = selectedShapeIndices_.isEmpty()
+                                  ? -1
+                                  : selectedShapeIndices_.back();
+        draggingSelected_ = false;
+        draggingShapeIndices_.clear();
+        draggingControlPoint_ = false;
+        controlPointIndex_ = -1;
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        update();
+        DebugLog::instance().write(
+            QStringLiteral("explode committed shapes=%1 components=%2")
+                .arg(explodeableShapeCount)
+                .arg(explodedComponentCount));
+        return explodedComponentCount;
+    }
+
     bool saveUpdateSession(const QString &path) const
     {
         QFile file(path);
@@ -7390,6 +7507,24 @@ private:
         statusBar()->showMessage(viewport_->joinStatusText());
     }
 
+    void explodeSelectedShapes()
+    {
+        if (viewport_ == nullptr) {
+            return;
+        }
+
+        viewport_->setTool(Tool::Select);
+        const int explodedComponents = viewport_->explodeSelectedShapes();
+        if (explodedComponents == 0) {
+            statusBar()->showMessage(QStringLiteral("Select a joined spline first"), 4000);
+            return;
+        }
+
+        statusBar()->showMessage(QStringLiteral("Exploded into %1 separate splines")
+                                     .arg(explodedComponents),
+                                 5000);
+    }
+
     void activateEraseTool()
     {
         if (viewport_ != nullptr) {
@@ -7485,6 +7620,13 @@ private:
         joinAction_->setShortcutContext(Qt::WindowShortcut);
         connect(joinAction_, &QAction::triggered, this, [this]() {
             startJoinMode();
+        });
+
+        QAction *explodeAction = editMenu->addAction(QStringLiteral("Explode Splines"));
+        explodeAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+J")));
+        explodeAction->setShortcutContext(Qt::WindowShortcut);
+        connect(explodeAction, &QAction::triggered, this, [this]() {
+            explodeSelectedShapes();
         });
 
         eraseAction_ = editMenu->addAction(QStringLiteral("Erase"));
@@ -7800,6 +7942,16 @@ private:
         layout->addWidget(joinButton_);
         connect(joinButton_, &QToolButton::clicked, this, [this]() {
             startJoinMode();
+        });
+
+        explodeButton_ = new QToolButton;
+        explodeButton_->setObjectName(QStringLiteral("toolButton"));
+        explodeButton_->setText(QStringLiteral("Explode\nSplines"));
+        explodeButton_->setToolTip(QStringLiteral("Separate selected joined splines into individual curves"));
+        explodeButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        layout->addWidget(explodeButton_);
+        connect(explodeButton_, &QToolButton::clicked, this, [this]() {
+            explodeSelectedShapes();
         });
 
         layout->addStretch(1);
@@ -8189,6 +8341,7 @@ private:
     QToolButton *controlPointsButton_ = nullptr;
     QToolButton *subdivideButton_ = nullptr;
     QToolButton *joinButton_ = nullptr;
+    QToolButton *explodeButton_ = nullptr;
     QVector<QToolButton *> toolButtons_;
     QAction *undoAction_ = nullptr;
     QAction *redoAction_ = nullptr;

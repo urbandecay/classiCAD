@@ -111,6 +111,27 @@ int main(int argc, char **argv)
         ++failures;
     }
 
+    Shape joined{Tool::PolyCurve,
+                 view.polyCurvePoints({arc.nurbs, line.nurbs}),
+                 Shape::NurbsCurve2D{},
+                 ArcMode::TwoPoint,
+                 0.0,
+                 {},
+                 {arc.nurbs, line.nurbs}};
+    view.shapes_ = {joined};
+    view.selectedShapeIndices_ = {0};
+    view.selectedShapeIndex_ = 0;
+    if (view.explodeSelectedShapes() != 2 ||
+        view.shapes_.size() != 2 ||
+        view.shapes_[0].tool != Tool::PolyCurve ||
+        view.shapes_[1].tool != Tool::PolyCurve ||
+        view.shapes_[0].components.size() != 1 ||
+        view.shapes_[1].components.size() != 1 ||
+        view.selectedShapeIndices_.size() != 2) {
+        qWarning() << "Explode must create separate selected component shapes";
+        ++failures;
+    }
+
     qInfo() << "Trim seam failures:" << failures;
     return failures ? 1 : 0;
 }

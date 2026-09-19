@@ -2031,6 +2031,13 @@ protected:
             return;
         }
 
+        if (activeTool_ == Tool::Select &&
+            (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) &&
+            !selectedShapeIndices_.isEmpty()) {
+            deleteSelectedShapes();
+            return;
+        }
+
         if (event->key() == Qt::Key_Escape) {
             pendingPoints_.clear();
             resetArcPreviewTracking();
@@ -2357,6 +2364,43 @@ private:
     bool isShapeSelected(int shapeIndex) const
     {
         return shapeIndex >= 0 && selectedShapeIndices_.contains(shapeIndex);
+    }
+
+    bool deleteSelectedShapes()
+    {
+        QVector<int> indices;
+        for (const int index : selectedShapeIndices_) {
+            if (index >= 0 && index < shapes_.size() && !indices.contains(index)) {
+                indices.append(index);
+            }
+        }
+
+        if (indices.isEmpty()) {
+            clearSelection();
+            return false;
+        }
+
+        std::sort(indices.begin(), indices.end());
+        const int deletedCount = indices.size();
+        recordGeometryChange();
+
+        for (auto iterator = indices.crbegin(); iterator != indices.crend(); ++iterator) {
+            shapes_.removeAt(*iterator);
+        }
+
+        clearSelection();
+        draggingSelected_ = false;
+        draggingShapeIndices_.clear();
+        draggingControlPoint_ = false;
+        controlPointIndex_ = -1;
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        update();
+        DebugLog::instance().write(QStringLiteral("delete selection count=%1 shapes=%2")
+                                       .arg(deletedCount)
+                                       .arg(shapes_.size()));
+        return true;
     }
 
     void clearSelection()

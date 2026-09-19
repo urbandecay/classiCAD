@@ -1352,13 +1352,7 @@ protected:
         }
 
         if (controlPointsVisible_) {
-            QVector<int> controlPointShapeIndices = selectedShapeIndices_;
-            if (controlPointShapeIndices.isEmpty() &&
-                selectedShapeIndex_ >= 0 && selectedShapeIndex_ < shapes_.size()) {
-                controlPointShapeIndices.append(selectedShapeIndex_);
-            }
-
-            for (const int shapeIndex : controlPointShapeIndices) {
+            for (const int shapeIndex : controlPointShapeIndices()) {
                 if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
                     drawControlPoints(painter, shapes_[shapeIndex], shapeIndex);
                 }
@@ -1536,8 +1530,7 @@ protected:
             cursorValid_ = true;
             const bool shiftPressed = event->modifiers().testFlag(Qt::ShiftModifier);
 
-            if (!shiftPressed && controlPointsVisible_ &&
-                !selectedShapeIndices_.isEmpty()) {
+            if (!shiftPressed && controlPointsVisible_) {
                 int grabbedShapeIndex = -1;
                 int grabbedControlPoint = -1;
                 if (hitTestSelectedControlPoint(screenPosition,
@@ -3164,12 +3157,18 @@ private:
             QPointF end = shape.arcMode == ArcMode::OnePoint
                               ? shape.points[2]
                               : shape.points[1];
-            QPointF evaluatedEndpoint;
-            if (arcSnapPointAtFraction(shape, 0.0, &evaluatedEndpoint)) {
-                start = evaluatedEndpoint;
-            }
-            if (arcSnapPointAtFraction(shape, 1.0, &evaluatedEndpoint)) {
-                end = evaluatedEndpoint;
+            // The stored NURBS is the rendered source of truth. In
+            // particular, this remains correct after a control point edit,
+            // when the legacy three-point arc definition no longer describes
+            // the displayed curve exactly.
+            if (!nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
+                QPointF evaluatedEndpoint;
+                if (arcSnapPointAtFraction(shape, 0.0, &evaluatedEndpoint)) {
+                    start = evaluatedEndpoint;
+                }
+                if (arcSnapPointAtFraction(shape, 1.0, &evaluatedEndpoint)) {
+                    end = evaluatedEndpoint;
+                }
             }
             candidates.append(SnapCandidate{SnapType::Endpoint, start});
             candidates.append(SnapCandidate{SnapType::Endpoint, end});
@@ -3297,12 +3296,17 @@ private:
                 QPointF end = shape.arcMode == ArcMode::OnePoint
                                   ? shape.points[2]
                                   : shape.points[1];
-                QPointF evaluatedEndpoint;
-                if (arcSnapPointAtFraction(shape, 0.0, &evaluatedEndpoint)) {
-                    start = evaluatedEndpoint;
-                }
-                if (arcSnapPointAtFraction(shape, 1.0, &evaluatedEndpoint)) {
-                    end = evaluatedEndpoint;
+                // Use the same NURBS data that drawShape() renders. The
+                // legacy arc construction points may be stale after control
+                // point editing.
+                if (!nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
+                    QPointF evaluatedEndpoint;
+                    if (arcSnapPointAtFraction(shape, 0.0, &evaluatedEndpoint)) {
+                        start = evaluatedEndpoint;
+                    }
+                    if (arcSnapPointAtFraction(shape, 1.0, &evaluatedEndpoint)) {
+                        end = evaluatedEndpoint;
+                    }
                 }
 
                 if (endpointSnapEnabled_) {
@@ -4016,6 +4020,16 @@ private:
         return shape.points;
     }
 
+    QVector<int> controlPointShapeIndices() const
+    {
+        QVector<int> indices = selectedShapeIndices_;
+        if (selectedShapeIndex_ >= 0 && selectedShapeIndex_ < shapes_.size() &&
+            !indices.contains(selectedShapeIndex_)) {
+            indices.append(selectedShapeIndex_);
+        }
+        return indices;
+    }
+
     bool hitTestSelectedControlPoint(const QPointF &screenPosition,
                                      int *shapeIndex,
                                      int *controlPointIndex) const
@@ -4025,7 +4039,7 @@ private:
         int closestControlPointIndex = -1;
         qreal closestDistance = hitRadiusPixels;
 
-        for (const int candidateShapeIndex : selectedShapeIndices_) {
+        for (const int candidateShapeIndex : controlPointShapeIndices()) {
             if (candidateShapeIndex < 0 || candidateShapeIndex >= shapes_.size()) {
                 continue;
             }

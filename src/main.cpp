@@ -824,12 +824,14 @@ public:
         lineCommandActive_ = tool == Tool::Line;
         if (!isEraseLikeTool(tool) || previousTool != tool) {
             eraseStrokeActive_ = false;
+            eraseCursorPressed_ = false;
             eraseCandidateShapeIndices_.clear();
             eraseStrokeScreenPath_.clear();
             eraseTargetShapeIndices_.clear();
             eraseSceneCurveCaches_.clear();
             eraseTargetCurveCaches_.clear();
             eraseGeometryCachePrepared_ = false;
+            trimHoverPositionValid_ = false;
         }
 
         if (tool != Tool::Select) {
@@ -1419,12 +1421,14 @@ public:
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
         eraseStrokeActive_ = false;
+        eraseCursorPressed_ = false;
         eraseCandidateShapeIndices_.clear();
         eraseStrokeScreenPath_.clear();
         eraseTargetShapeIndices_.clear();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = false;
+        trimHoverPositionValid_ = false;
         currentSnap_ = SnapResult{};
         joinActive_ = false;
         joinShapeIndices_.clear();
@@ -1686,6 +1690,7 @@ protected:
                 return;
             }
 
+            eraseCursorPressed_ = true;
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
@@ -1707,6 +1712,7 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton && activeTool_ == Tool::Trim) {
+            eraseCursorPressed_ = true;
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
@@ -2133,6 +2139,11 @@ protected:
                                        .arg(panMoved_)
                                        .arg(draggingSelected_)
                                        .arg(repeatToolOnRelease));
+        const bool releaseEraseCursor =
+            isEraseLikeTool(activeTool_) && event->button() == Qt::LeftButton;
+        if (releaseEraseCursor) {
+            eraseCursorPressed_ = false;
+        }
         if (panning_ && (event->button() == panButton_ || event->button() == Qt::LeftButton)) {
             panning_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
@@ -2184,6 +2195,10 @@ protected:
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-selection-drag shape=%1")
                                            .arg(selectedShapeIndex_));
+            update();
+        }
+
+        if (releaseEraseCursor) {
             update();
         }
     }
@@ -3108,12 +3123,14 @@ private:
         draggingControlPoint_ = false;
         controlPointIndex_ = -1;
         eraseStrokeActive_ = false;
+        eraseCursorPressed_ = false;
         eraseCandidateShapeIndices_.clear();
         eraseStrokeScreenPath_.clear();
         eraseTargetShapeIndices_.clear();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = false;
+        trimHoverPositionValid_ = false;
         joinActive_ = false;
         joinShapeIndices_.clear();
         subdivisionActive_ = false;
@@ -5213,6 +5230,13 @@ private:
 
     void updateTrimHover(const QPointF &screenPosition)
     {
+        if (trimHoverPositionValid_ && eraseGeometryCachePrepared_ &&
+            trimHoverScreenPosition_ == screenPosition) {
+            return;
+        }
+        trimHoverScreenPosition_ = screenPosition;
+        trimHoverPositionValid_ = true;
+
         if (!eraseGeometryCachePrepared_) {
             prepareEraseGeometryCache();
         }
@@ -5260,6 +5284,7 @@ private:
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = false;
+        trimHoverPositionValid_ = false;
         update();
         DebugLog::instance().write(QStringLiteral("trim click applied"));
     }
@@ -5798,6 +5823,7 @@ private:
     void cancelEraseStroke()
     {
         eraseStrokeActive_ = false;
+        eraseCursorPressed_ = false;
         eraseCandidateShapeIndices_.clear();
         eraseStrokeScreenPath_.clear();
         update();
@@ -6773,11 +6799,9 @@ private:
 
     void drawErasePreview(QPainter &painter)
     {
-        // Erase is a drag command: do not leave the brush ring on the canvas
-        // after the left-button stroke has ended. Trim keeps its hover marker
-        // because it is a click-to-trim command.
-        if (!cursorValid_ ||
-            (activeTool_ == Tool::Erase && !eraseStrokeActive_)) {
+        // Both commands show the brush ring only while their left-button
+        // interaction is active; never leave it hanging on the canvas.
+        if (!cursorValid_ || !eraseCursorPressed_) {
             return;
         }
 
@@ -6962,6 +6986,7 @@ private:
     QPointF selectionBoxStartScreen_{0.0, 0.0};
     QPointF selectionBoxCurrentScreen_{0.0, 0.0};
     bool eraseStrokeActive_ = false;
+    bool eraseCursorPressed_ = false;
     QPointF eraseCursorScreen_{0.0, 0.0};
     QPointF lastEraseScreen_{0.0, 0.0};
     QVector<QPointF> eraseStrokeScreenPath_;
@@ -6970,6 +6995,8 @@ private:
     QVector<EraseCurveSampleCache> eraseSceneCurveCaches_;
     QVector<EraseCurveSampleCache> eraseTargetCurveCaches_;
     bool eraseGeometryCachePrepared_ = false;
+    bool trimHoverPositionValid_ = false;
+    QPointF trimHoverScreenPosition_{0.0, 0.0};
     qreal zoom_ = 1.0;
     bool panning_ = false;
     bool panMoved_ = false;

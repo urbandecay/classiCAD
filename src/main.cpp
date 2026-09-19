@@ -6773,7 +6773,11 @@ private:
 
     void drawErasePreview(QPainter &painter)
     {
-        if (!cursorValid_) {
+        // Erase is a drag command: do not leave the brush ring on the canvas
+        // after the left-button stroke has ended. Trim keeps its hover marker
+        // because it is a click-to-trim command.
+        if (!cursorValid_ ||
+            (activeTool_ == Tool::Erase && !eraseStrokeActive_)) {
             return;
         }
 

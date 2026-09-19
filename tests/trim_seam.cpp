@@ -48,6 +48,69 @@ int main(int argc, char **argv)
             }
         }
     }
+    const auto worldPoint = [&view](qreal x, qreal y) {
+        return view.screenToWorld(QPointF(x, y));
+    };
+    Shape arc{Tool::Arc,
+              {worldPoint(249, 169), worldPoint(391, 311), worldPoint(391, 169)},
+              {},
+              ArcMode::TwoPoint,
+              0.0,
+              {},
+              {}};
+    arc.nurbs = view.makeArcNurbsCurve(arc);
+    Shape line{Tool::Line,
+               {worldPoint(178, 98), worldPoint(462, 382)},
+               makeDegreeOneNurbs({worldPoint(178, 98), worldPoint(462, 382)}),
+               ArcMode::TwoPoint,
+               0.0,
+               {},
+               {}};
+    view.shapes_ = {arc, line};
+    view.selectedShapeIndices_ = {0, 1};
+    view.selectedShapeIndex_ = 0;
+    view.prepareEraseGeometryCache();
+    const QVector<QPointF> middleStroke{QPointF(300, 220), QPointF(340, 260)};
+    const auto checkMiddleLineSection = [&view, &failures](
+        const QVector<QPointF> &stroke, const char *label) {
+        if (view.eraseTargetCurveCaches_.size() < 2) {
+            ++failures;
+            return;
+        }
+        const auto &lineTarget = view.eraseTargetCurveCaches_[1];
+        const auto hit = view.eraserIntervalsForCurve(lineTarget.curve, stroke);
+        const auto bounded = view.boundEraseIntervals(
+            lineTarget.curve, hit, lineTarget.intersectionParameters);
+        if (bounded.size() != 1 ||
+            std::abs(bounded.first().start - 0.25) > 1.0e-6 ||
+            std::abs(bounded.first().end - 0.75) > 1.0e-6) {
+            qWarning() << "Wrong intersection-bounded erase interval" << label
+                       << "count" << bounded.size();
+            ++failures;
+        }
+    };
+    checkMiddleLineSection(middleStroke, "middle");
+    // The brush overlaps the first intersection by a few pixels, but the
+    // stroke is centered in the middle section. The neighboring section must
+    // remain intact.
+    checkMiddleLineSection({QPointF(255, 175), QPointF(300, 220)},
+                           "near intersection");
+
+    // Simulate the tiny gap left by a previous sampled circle cut. The arc
+    // lies entirely on one side of the line, so strict crossing misses it.
+    for (auto &point : view.shapes_[0].nurbs.controlPoints) {
+        point += QPointF(0.02, 0.02);
+    }
+    view.prepareEraseGeometryCache();
+    checkMiddleLineSection(middleStroke, "trimmed endpoint contact");
+    QVector<Shape> remaining;
+    if (!view.trimShapeAtEraserStroke(view.shapes_[1], middleStroke,
+                                     &remaining, 1, &view.eraseTargetCurveCaches_) ||
+        remaining.size() != 1 || remaining.first().components.size() != 2) {
+        qWarning() << "Middle cut must preserve both outer line tails";
+        ++failures;
+    }
+
     qInfo() << "Trim seam failures:" << failures;
     return failures ? 1 : 0;
 }

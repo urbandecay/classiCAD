@@ -5040,8 +5040,33 @@ private:
                     otherSamples.segmentBounds.size() ==
                         otherSamples.screenPoints.size() - 1;
                 if (useBounds && !boundsOverlap(sourceSamples->bounds,
-                                                otherSamples.bounds)) {
+                                                otherSamples.bounds.adjusted(-1, -1, 1, 1))) {
                     return;
+                }
+
+                // A previously trimmed endpoint can lie just off the sampled
+                // chord. Recognize endpoint contacts before strict segment
+                // crossings, otherwise an entire neighboring section is lost.
+                for (int endpoint : {0, int(otherSamples.screenPoints.size() - 1)}) {
+                    const QPointF point = otherSamples.screenPoints[endpoint];
+                    qreal bestDistance = 1.0;
+                    qreal bestParameter = 0.0;
+                    bool found = false;
+                    for (int i = 1; i < sourceSamples->screenPoints.size(); ++i) {
+                        const QPointF a = sourceSamples->screenPoints[i - 1];
+                        const QPointF b = sourceSamples->screenPoints[i];
+                        const qreal distance = distanceToSegment(point, a, b);
+                        if (distance <= bestDistance) {
+                            bestDistance = distance;
+                            bestParameter = sourceSamples->parameters[i - 1] +
+                                (sourceSamples->parameters[i] - sourceSamples->parameters[i - 1]) *
+                                parameterAtIntersection(a, b, point);
+                            found = true;
+                        }
+                    }
+                    if (found) {
+                        parameters.append(bestParameter);
+                    }
                 }
 
                 for (int sourceSegment = 1;
@@ -5479,6 +5504,7 @@ private:
 
         QVector<ParameterInterval> removedIntervals;
         for (const ParameterInterval &hit : hitIntervals) {
+            const qreal hitMidpoint = (hit.start + hit.end) * 0.5;
             for (int boundaryIndex = 0;
                  boundaryIndex + 1 < uniqueBoundaries.size();
                  ++boundaryIndex) {
@@ -5489,7 +5515,25 @@ private:
                     hit.start >= pieceEnd - tolerance) {
                     continue;
                 }
-                removedIntervals.append(ParameterInterval{pieceStart, pieceEnd});
+
+                // The eraser has a visible radius. Near a real intersection,
+                // that radius can overlap both neighboring pieces even when
+                // the stroke is centered on only one of them. Use the stroke
+                // interval's center to choose the directly erased piece, and
+                // also retain pieces whose center is fully covered by a long
+                // stroke. This prevents a small brush overlap from deleting
+                // past the intersection while still allowing a long drag to
+                // remove several complete pieces.
+                const qreal pieceMidpoint = (pieceStart + pieceEnd) * 0.5;
+                const bool hitCenterIsInPiece =
+                    hitMidpoint > pieceStart + tolerance &&
+                    hitMidpoint < pieceEnd - tolerance;
+                const bool pieceCenterIsInHit =
+                    pieceMidpoint >= hit.start - tolerance &&
+                    pieceMidpoint <= hit.end + tolerance;
+                if (hitCenterIsInPiece || pieceCenterIsInHit) {
+                    removedIntervals.append(ParameterInterval{pieceStart, pieceEnd});
+                }
             }
         }
 
@@ -5513,13 +5557,19 @@ private:
                        std::abs(parameter - domainEnd) <= tolerance;
             });
         if (closed && !seamIsIntersection && uniqueBoundaries.size() > 2) {
-            const bool touchesSeam = std::any_of(
+            const bool removesFirstPiece = std::any_of(
                 removedIntervals.begin(), removedIntervals.end(),
                 [&](const ParameterInterval &interval) {
-                    return interval.start <= domainStart + tolerance ||
-                           interval.end >= domainEnd - tolerance;
+                    return interval.start <= domainStart + tolerance &&
+                           interval.end > domainStart + tolerance;
                 });
-            if (touchesSeam) {
+            const bool removesLastPiece = std::any_of(
+                removedIntervals.begin(), removedIntervals.end(),
+                [&](const ParameterInterval &interval) {
+                    return interval.end >= domainEnd - tolerance &&
+                           interval.start < domainEnd - tolerance;
+                });
+            if (removesFirstPiece || removesLastPiece) {
                 removedIntervals.append({domainStart, uniqueBoundaries[1]});
                 removedIntervals.append({uniqueBoundaries[uniqueBoundaries.size() - 2],
                                          domainEnd});

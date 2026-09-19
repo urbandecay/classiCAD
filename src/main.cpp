@@ -2440,11 +2440,20 @@ private:
     QRectF selectionBoundsForShape(const Shape &shape) const
     {
         QVector<QPointF> points = controlPointsForShape(shape);
-        if (points.isEmpty()) {
-            points = shape.points;
+        // Keep the source points in the selection bounds as well as the
+        // stored NURBS CVs. This covers endpoints that are represented by
+        // the shape record but are not present in a malformed/legacy CV
+        // array, while the NURBS data remains the rendering source of truth.
+        for (const QPointF &point : shape.points) {
+            if (!points.contains(point)) {
+                points.append(point);
+            }
         }
 
-        QRectF bounds;
+        qreal minX = 0.0;
+        qreal maxX = 0.0;
+        qreal minY = 0.0;
+        qreal maxY = 0.0;
         bool initialized = false;
         for (const QPointF &point : points) {
             if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
@@ -2453,10 +2462,14 @@ private:
 
             const QPointF screenPoint = worldToScreen(point);
             if (!initialized) {
-                bounds = QRectF(screenPoint, screenPoint);
+                minX = maxX = screenPoint.x();
+                minY = maxY = screenPoint.y();
                 initialized = true;
             } else {
-                bounds = bounds.united(QRectF(screenPoint, screenPoint));
+                minX = std::min(minX, screenPoint.x());
+                maxX = std::max(maxX, screenPoint.x());
+                minY = std::min(minY, screenPoint.y());
+                maxY = std::max(maxY, screenPoint.y());
             }
         }
 
@@ -2467,7 +2480,8 @@ private:
         // A line or a point can have a zero-width bounding box. The small
         // padding keeps box selection usable at normal zoom levels and also
         // covers the visible stroke/point marker.
-        return bounds.adjusted(-5.0, -5.0, 5.0, 5.0);
+        return QRectF(QPointF(minX, minY), QPointF(maxX, maxY))
+            .adjusted(-5.0, -5.0, 5.0, 5.0);
     }
 
     bool shapeMatchesSelectionBox(const Shape &shape,

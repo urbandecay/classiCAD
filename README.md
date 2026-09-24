@@ -81,5 +81,7 @@ geometry.
 Mirror is a copy command: select one or more editable objects, choose Mirror
 (`M`), then click two points for the axis. The axis uses the same Ortho and
 OSnap constraints as Line, the originals remain in place, and the mirrored
-copies become selected. NURBS control points and component curves are reflected
-through the shared geometry transform while their curve structure is retained.
+copies become selected. After the first axis point, a temporary mirrored
+preview follows the constrained cursor until the second point commits it.
+NURBS control points and component curves are reflected through the shared
+geometry transform while their curve structure is retained.

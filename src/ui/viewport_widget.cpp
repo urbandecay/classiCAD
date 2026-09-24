@@ -1302,6 +1302,7 @@ protected:
         if (activeTool_ == Tool::Line && lineCommandActive_) {
             drawLineToolPreview(painter);
         } else if (activeTool_ == Tool::Mirror) {
+            drawMirrorToolPreview(painter);
             drawLineToolPreview(painter);
         } else if (activeTool_ == Tool::Arc) {
             drawArcToolPreview(painter);
@@ -5996,6 +5997,37 @@ private:
                                          cursorValid_,
                                          currentSnap_,
                                          size());
+    }
+
+    void drawMirrorToolPreview(QPainter &painter)
+    {
+        if (pendingPoints_.isEmpty() || !cursorValid_) {
+            return;
+        }
+
+        const QPointF axisStart = pendingPoints_.first();
+        const QPointF axisEnd = cursorWorld_;
+        for (const ObjectId objectId : mirrorShapeIndices_) {
+            const int shapeIndex = objectIndex(objectId);
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
+                !document_.isObjectVisible(objectId)) {
+                continue;
+            }
+
+            Shape mirroredShape;
+            if (mirrorShapeAcrossLine(shapes_[shapeIndex],
+                                      axisStart,
+                                      axisEnd,
+                                      &mirroredShape)) {
+                drawShape(painter, mirroredShape, true);
+                if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
+                    drawSubdivisionPoints(painter,
+                                          mirroredShape,
+                                          mirroredShape.subdivisionParameters,
+                                          false);
+                }
+            }
+        }
     }
 
     bool makeCircularArcGeometry(const QPointF &startWorld,

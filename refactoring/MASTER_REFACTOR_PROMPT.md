@@ -115,7 +115,9 @@ the intentional compatibility boundaries in the README and this map.
 Mirror is a copy command implemented through `geometry_transform.*` and the
 viewport's existing two-point constrained-input path: it preserves the source
 objects, reflects their stored points and NURBS control vertices, and selects
-the new copies after commit. Its axis therefore receives the same Ortho and
+the new copies after commit. The transient reflected geometry is drawn from
+the same transform while the second axis point moves, so the user sees the
+copy before committing it. Its axis therefore receives the same Ortho and
 OSnap behavior as Line without introducing a second snapping model.
 
 Do not begin by moving lines into arbitrary folders. First identify the owner of each piece of state and the direction of its dependencies.

@@ -39,3 +39,47 @@ Blender’s source separates the screen into areas and regions, builds controls 
 Qt widgets/layouts  ->  C++ commands  ->  document/model  ->  NURBS geometry
 Python tools later  ------------------------------^ 
 ```
+
+The current source layout follows that boundary:
+
+```text
+src/main.cpp                 application entry point
+src/core/geometry/*          shared NurbsCurve2D storage, evaluation, validation, and transforms
+src/core/model.*             compatibility shape records, factories, and legacy helpers
+src/core/document/*          document, layers, scene objects, and stable selection IDs
+src/core/history/*            document-level undo/redo snapshots
+src/core/serialization/*     versioned document, layer, and object save/restore
+src/services/*                viewport transforms, sampling, hit-testing, and snapping
+src/tools/*                   named non-Qt interaction tool contracts and modules
+src/core/debug_log.*         application logging
+src/ui/input_helpers.*       Qt event and icon helpers
+src/ui/viewport_widget_api.h typed viewport settings, command, status, and callback boundary
+src/ui/viewport_widget.cpp   viewport event routing, selection, editing, and lifecycle state
+src/ui/viewport/*             geometry renderer and transient overlay responsibilities
+src/ui/main_window.*         menus, tool shelf, preferences, and window wiring
+tests/trim_seam.cpp          focused geometry/editing regression coverage
+tests/core_contracts.cpp     core, service, tool, and session-contract coverage
+```
+
+The window talks to the viewport through `ViewportWidgetApi`: menu/edit actions
+use typed viewport commands, while settings and UI notifications use explicit
+contracts. Geometry and serialization live in `core`, keeping document
+mutation and curve algorithms out of the Qt window code. The Layers panel uses
+stable layer IDs for active/visible/locked state, ordering, and moving selected
+objects between editable layers. CMake groups application and test sources by
+the same `core`, `services`, `tools`, and `ui` folders, so the build files do
+not maintain separate flat copies of the architecture.
+
+The remaining compatibility paths are intentional migration boundaries: the
+legacy `Shape` factories/JSON helpers in `core/model.*`, the document's
+container-style viewport bridge, and the viewport's selection/state aliases
+are still used by live editing and session-compatibility tests. There is one
+committed curve representation (`NurbsCurve2D`); homogeneous Bezier spans and
+sample caches are transient algorithm/rendering data, not alternate stored
+geometry.
+
+Mirror is a copy command: select one or more editable objects, choose Mirror
+(`M`), then click two points for the axis. The axis uses the same Ortho and
+OSnap constraints as Line, the originals remain in place, and the mirrored
+copies become selected. NURBS control points and component curves are reflected
+through the shared geometry transform while their curve structure is retained.

@@ -1,11 +1,11 @@
 #include <QApplication>
 #define private public
 #define protected public
-#define main classicad_app_main
-#include "../src/main.cpp"
-#undef main
+#include "../src/ui/viewport_widget.cpp"
 #undef protected
 #undef private
+
+using namespace classiCAD;
 
 int main(int argc, char **argv)
 {
@@ -20,10 +20,11 @@ int main(int argc, char **argv)
         const auto circle = makeCircleNurbs({QPointF(0, 0),
             QPointF(100 * std::cos(radians), 100 * std::sin(radians))});
         const auto line = makeDegreeOneNurbs({QPointF(-150, 0), QPointF(150, 0)});
-        view.shapes_ = {Shape{Tool::Circle, {}, circle, ArcMode::TwoPoint, 0, {}, {}},
-                        Shape{Tool::Line, {}, line, ArcMode::TwoPoint, 0, {}, {}}};
-        view.selectedShapeIndices_ = {0, 1};
-        view.selectedShapeIndex_ = 0;
+        view.shapes_ = {Shape{GeometryType::Circle, {}, circle, ArcMode::TwoPoint, 0, {}, {}},
+                        Shape{GeometryType::Line, {}, line, ArcMode::TwoPoint, 0, {}, {}}};
+        view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0),
+                                      view.shapes_.objectIdAt(1)};
+        view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
         view.prepareEraseGeometryCache();
         QVector<Shape> result;
         if (!view.trimShapeAtEraserStroke(view.shapes_[0],
@@ -51,7 +52,7 @@ int main(int argc, char **argv)
     const auto worldPoint = [&view](qreal x, qreal y) {
         return view.screenToWorld(QPointF(x, y));
     };
-    Shape arc{Tool::Arc,
+    Shape arc{GeometryType::Arc,
               {worldPoint(249, 169), worldPoint(391, 311), worldPoint(391, 169)},
               {},
               ArcMode::TwoPoint,
@@ -59,7 +60,7 @@ int main(int argc, char **argv)
               {},
               {}};
     arc.nurbs = view.makeArcNurbsCurve(arc);
-    Shape line{Tool::Line,
+    Shape line{GeometryType::Line,
                {worldPoint(178, 98), worldPoint(462, 382)},
                makeDegreeOneNurbs({worldPoint(178, 98), worldPoint(462, 382)}),
                ArcMode::TwoPoint,
@@ -67,8 +68,9 @@ int main(int argc, char **argv)
                {},
                {}};
     view.shapes_ = {arc, line};
-    view.selectedShapeIndices_ = {0, 1};
-    view.selectedShapeIndex_ = 0;
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0),
+                                  view.shapes_.objectIdAt(1)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
     view.prepareEraseGeometryCache();
     const QVector<QPointF> middleStroke{QPointF(300, 220), QPointF(340, 260)};
     const auto checkMiddleLineSection = [&view, &failures](
@@ -111,7 +113,7 @@ int main(int argc, char **argv)
         ++failures;
     }
 
-    Shape joined{Tool::PolyCurve,
+    Shape joined{GeometryType::PolyCurve,
                  view.polyCurvePoints({arc.nurbs, line.nurbs}),
                  Shape::NurbsCurve2D{},
                  ArcMode::TwoPoint,
@@ -119,18 +121,94 @@ int main(int argc, char **argv)
                  {},
                  {arc.nurbs, line.nurbs}};
     view.shapes_ = {joined};
-    view.selectedShapeIndices_ = {0};
-    view.selectedShapeIndex_ = 0;
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
     if (view.explodeSelectedShapes() != 2 ||
         view.shapes_.size() != 2 ||
-        view.shapes_[0].tool != Tool::PolyCurve ||
-        view.shapes_[1].tool != Tool::PolyCurve ||
+        view.shapes_[0].geometryType != GeometryType::PolyCurve ||
+        view.shapes_[1].geometryType != GeometryType::PolyCurve ||
         view.shapes_[0].components.size() != 1 ||
         view.shapes_[1].components.size() != 1 ||
         view.selectedShapeIndices_.size() != 2) {
         qWarning() << "Explode must create separate selected component shapes";
         ++failures;
     }
+
+    Shape rotateFirst{GeometryType::Line,
+                      {QPointF(1, 0), QPointF(2, 0)},
+                      makeDegreeOneNurbs({QPointF(1, 0), QPointF(2, 0)}),
+                      ArcMode::TwoPoint,
+                      0.0,
+                      {},
+                      {}};
+    Shape rotateSecond{GeometryType::Line,
+                       {QPointF(0, 1), QPointF(0, 2)},
+                       makeDegreeOneNurbs({QPointF(0, 1), QPointF(0, 2)}),
+                       ArcMode::TwoPoint,
+                       0.0,
+                       {},
+                       {}};
+    view.shapes_ = {rotateFirst, rotateSecond};
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0),
+                                  view.shapes_.objectIdAt(1)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(1);
+    const bool rotateStarted = view.beginRotate();
+    view.handleRotatePoint(QPointF(0, 0));
+    view.handleRotatePoint(QPointF(1, 0));
+    view.handleRotatePoint(QPointF(0, 1));
+    const auto near = [](qreal first, qreal second) {
+        return std::abs(first - second) <= 1.0e-9;
+    };
+    if (!rotateStarted || view.activeTool_ != Tool::Select ||
+        view.shapes_.size() != 2 ||
+        !near(view.shapes_[0].nurbs.controlPoints[0].x(), 0.0) ||
+        !near(view.shapes_[0].nurbs.controlPoints[0].y(), 1.0) ||
+        !near(view.shapes_[1].nurbs.controlPoints[0].x(), -1.0) ||
+        !near(view.shapes_[1].nurbs.controlPoints[0].y(), 0.0)) {
+        qWarning() << "Rotate must apply one angle to every selected shape";
+        ++failures;
+    }
+
+    Shape mirrorSource{GeometryType::Line,
+                       {QPointF(1, 2), QPointF(3, 2)},
+                       makeDegreeOneNurbs({QPointF(1, 2), QPointF(3, 2)}),
+                       ArcMode::TwoPoint,
+                       0.0,
+                       {},
+                       {}};
+    view.shapes_ = {mirrorSource};
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
+    view.setSnapModes(true, false, false, false, false, false);
+    view.setOsnapEnabled(true);
+    const bool endpointMirrorStarted = view.beginMirror();
+    const QPointF snappedAxisStart = view.constrainLinePoint(QPointF(1.1, 2.0));
+    if (!endpointMirrorStarted ||
+        std::hypot(snappedAxisStart.x() - 1.0,
+                   snappedAxisStart.y() - 2.0) > 1.0e-9) {
+        qWarning() << "Mirror axis must use endpoint snapping";
+        ++failures;
+    }
+    view.cancelMirror();
+
+    view.setOsnapEnabled(false);
+    view.setOrthoEnabled(true);
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
+    const bool mirrorStarted = view.beginMirror();
+    view.handleMirrorPoint(QPointF(0, 0));
+    const QPointF orthoAxisEnd = view.constrainLinePoint(QPointF(1, 4));
+    view.handleMirrorPoint(orthoAxisEnd);
+    if (!mirrorStarted || view.activeTool_ != Tool::Select ||
+        view.shapes_.size() != 2 ||
+        !near(view.shapes_[1].nurbs.controlPoints[0].x(), -1.0) ||
+        !near(view.shapes_[1].nurbs.controlPoints[0].y(), 2.0) ||
+        !near(view.shapes_[1].nurbs.controlPoints[1].x(), -3.0) ||
+        !near(view.shapes_[1].nurbs.controlPoints[1].y(), 2.0)) {
+        qWarning() << "Mirror must preserve the source and reflect the selected NURBS across an ortho axis";
+        ++failures;
+    }
+    view.setOrthoEnabled(false);
 
     qInfo() << "Trim seam failures:" << failures;
     return failures ? 1 : 0;

@@ -21,7 +21,8 @@ public:
                    const Shape &shape,
                    const QSize &viewportSize,
                    bool preview,
-                   bool selected = false) const;
+                   bool selected = false,
+                   bool drawPreviewPoints = true) const;
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
                         const QSize &viewportSize) const;

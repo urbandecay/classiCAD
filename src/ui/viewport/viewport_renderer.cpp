@@ -98,7 +98,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  const Shape &shape,
                                  const QSize &viewportSize,
                                  bool preview,
-                                 bool selected) const
+                                 bool selected,
+                                 bool drawPreviewPoints) const
 {
     if (shape.points.isEmpty()) {
         return;
@@ -210,7 +211,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
         }
     }
 
-    if (preview) {
+    if (preview && drawPreviewPoints) {
         painter.setBrush(controlColor);
         painter.setPen(Qt::NoPen);
         for (const QPointF &point : shape.points) {

@@ -6019,7 +6019,7 @@ private:
                                       axisStart,
                                       axisEnd,
                                       &mirroredShape)) {
-                drawShape(painter, mirroredShape, true);
+                drawShape(painter, mirroredShape, true, false, false);
                 if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
                     drawSubdivisionPoints(painter,
                                           mirroredShape,
@@ -6296,9 +6296,15 @@ private:
     void drawShape(QPainter &painter,
                    const Shape &shape,
                    bool preview,
-                   bool selected = false)
+                   bool selected = false,
+                   bool drawPreviewPoints = true)
     {
-        viewportRenderer_.drawShape(painter, shape, size(), preview, selected);
+        viewportRenderer_.drawShape(painter,
+                                    shape,
+                                    size(),
+                                    preview,
+                                    selected,
+                                    drawPreviewPoints);
     }
 
     void emitCoordinateUpdate()

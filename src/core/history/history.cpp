@@ -29,7 +29,12 @@ int History::redoCount() const
 
 void History::record()
 {
-    undoStack_.append(document_.snapshot());
+    record(document_.snapshot());
+}
+
+void History::record(const Document::Snapshot &snapshot)
+{
+    undoStack_.append(snapshot);
     redoStack_.clear();
 }
 

@@ -42,6 +42,26 @@
 
 namespace classiCAD {
 
+enum class DragAxisLock {
+    None,
+    X,
+    Y,
+};
+
+QString dragAxisLockName(DragAxisLock lock)
+{
+    switch (lock) {
+    case DragAxisLock::X:
+        return QStringLiteral("X");
+    case DragAxisLock::Y:
+        return QStringLiteral("Y");
+    case DragAxisLock::None:
+        return QStringLiteral("None");
+    }
+
+    return QStringLiteral("None");
+}
+
 class ViewportWidget final : public ViewportWidgetApi {
 public:
     explicit ViewportWidget(QWidget *parent = nullptr)
@@ -116,6 +136,9 @@ public:
     {
         DebugLog::instance().write(QStringLiteral("setTool requested=%1 previous=%2")
                                        .arg(toolName(tool), toolName(activeTool_)));
+        if (grabActive_ && tool != Tool::Select) {
+            cancelGrab();
+        }
         const Tool previousTool = activeTool_;
         if (activeToolController_ != nullptr && activeToolController_->id() != tool) {
             activeToolController_->cancel(toolContext_);
@@ -165,6 +188,7 @@ public:
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
+            dragAxisLock_ = DragAxisLock::None;
         }
 
         if (lineCommandActive_) {
@@ -770,6 +794,102 @@ public:
         return true;
     }
 
+    bool beginGrab()
+    {
+        if (activeTool_ != Tool::Select || grabActive_ || draggingSelected_) {
+            return false;
+        }
+
+        QVector<ObjectId> selected = selectedShapeIndices_;
+        if (selectedShapeIndex_.isValid() && !selected.contains(selectedShapeIndex_)) {
+            selected.append(selectedShapeIndex_);
+        }
+
+        QVector<ObjectId> validSelection;
+        for (const ObjectId objectId : selected) {
+            if (document_.isObjectEditable(objectId) && !validSelection.contains(objectId)) {
+                validSelection.append(objectId);
+            }
+        }
+        if (validSelection.isEmpty()) {
+            DebugLog::instance().write(QStringLiteral("beginGrab ignored no editable selection"));
+            return false;
+        }
+
+        grabStartSnapshot_ = document_.snapshot();
+        grabActive_ = true;
+        grabMoved_ = false;
+        draggingSelected_ = true;
+        draggingShapeIndices_ = validSelection;
+        if (!selectedShapeIndex_.isValid() || !validSelection.contains(selectedShapeIndex_)) {
+            selectedShapeIndex_ = validSelection.back();
+        }
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        dragAxisLock_ = DragAxisLock::None;
+
+        const QPoint localCursor = mapFromGlobal(QCursor::pos());
+        if (rect().contains(localCursor)) {
+            rawCursorWorld_ = screenToWorld(localCursor);
+            cursorWorld_ = rawCursorWorld_;
+            cursorValid_ = true;
+        }
+        grabStartWorld_ = rawCursorWorld_;
+        lastDragWorld_ = grabStartWorld_;
+        setFocus(Qt::OtherFocusReason);
+        setCursor(Qt::SizeAllCursor);
+        update();
+        DebugLog::instance().write(QStringLiteral("beginGrab shapes=%1")
+                                       .arg(draggingShapeIndices_.size()));
+        return true;
+    }
+
+    void finishGrab()
+    {
+        if (!grabActive_) {
+            return;
+        }
+
+        if (grabMoved_) {
+            recordGeometrySnapshot(grabStartSnapshot_);
+        }
+        const bool moved = grabMoved_;
+        resetGrabInteraction();
+        draggingSelected_ = false;
+        draggingShapeIndices_.clear();
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        dragAxisLock_ = DragAxisLock::None;
+        setCursor(Qt::ArrowCursor);
+        update();
+        DebugLog::instance().write(QStringLiteral("grab finished moved=%1").arg(moved));
+    }
+
+    void cancelGrab()
+    {
+        if (!grabActive_) {
+            return;
+        }
+
+        const bool moved = grabMoved_;
+        if (moved) {
+            document_.restoreSnapshot(grabStartSnapshot_);
+            notifyLayersChanged();
+        }
+        resetGrabInteraction();
+        draggingSelected_ = false;
+        draggingShapeIndices_.clear();
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        dragAxisLock_ = DragAxisLock::None;
+        setCursor(Qt::ArrowCursor);
+        update();
+        DebugLog::instance().write(QStringLiteral("grab canceled moved=%1").arg(moved));
+    }
+
     bool beginJoinMode()
     {
         if (subdivisionActive_) {
@@ -1369,6 +1489,15 @@ protected:
                 .arg(static_cast<int>(event->modifiers()), 0, 16)
                 .arg(snapTypeName(currentSnap_.type)));
 
+        if (grabActive_) {
+            if (event->button() == Qt::LeftButton) {
+                finishGrab();
+            } else if (event->button() == Qt::RightButton) {
+                cancelGrab();
+            }
+            return;
+        }
+
         if (subdivisionActive_) {
             if (event->button() == Qt::LeftButton) {
                 applySubdivision(subdivisionSections_);
@@ -1551,6 +1680,7 @@ protected:
                     dragHistoryRecorded_ = false;
                     currentDragSnap_ = DragSnapResult{};
                     dragSnapLocked_ = false;
+                    dragAxisLock_ = DragAxisLock::None;
                     setCursor(Qt::SizeAllCursor);
                     DebugLog::instance().write(
                         QStringLiteral("control point drag start shape=%1 index=%2 world=%3")
@@ -1569,6 +1699,7 @@ protected:
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
+            dragAxisLock_ = DragAxisLock::None;
             draggingSelected_ = false;
 
             if (shiftPressed) {
@@ -1597,6 +1728,7 @@ protected:
                 }
                 draggingShapeIndices_ = selectedShapeIndices_;
                 draggingSelected_ = true;
+                setFocus(Qt::MouseFocusReason);
                 lastDragWorld_ = rawWorldPosition;
                 setCursor(Qt::SizeAllCursor);
                 DebugLog::instance().write(
@@ -1869,67 +2001,84 @@ protected:
             }
         } else if (draggingSelected_ && selectedIndex >= 0) {
             const QVector<ObjectId> dragIndices = draggingShapeIndices_.isEmpty()
-                                                ? QVector<ObjectId>{selectedShapeIndex_}
-                                                : draggingShapeIndices_;
-            const bool groupDrag = dragIndices.size() > 1;
-            const QPointF delta = rawCursorWorld_ - lastDragWorld_;
-            if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
-                constexpr qreal dragSnapBreakawayPixels = 18.0;
-                const qreal cursorDistanceFromSnap =
-                    std::hypot(screenPosition.x() - worldToScreen(dragSnapCursorWorld_).x(),
-                               screenPosition.y() - worldToScreen(dragSnapCursorWorld_).y());
-
-                if (dragSnapLocked_ && cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
-                    // Keep the geometry attached while the cursor is still near the
-                    // snap point. This prevents a one-pixel mouse move from
-                    // repeatedly attaching and detaching the line.
-                    DebugLog::instance().write(
-                        QStringLiteral("selection drag snap-hold shape=%1 cursorDistance=%2 breakaway=%3")
-                            .arg(selectedIndex)
-                            .arg(cursorDistanceFromSnap, 0, 'f', 2)
-                            .arg(dragSnapBreakawayPixels, 0, 'f', 2));
-                } else {
-                    if (dragSnapLocked_) {
-                        // Release from the snap using the complete cursor movement
-                        // since the snap was acquired, so the line leaves cleanly.
-                        const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
-                        beginDragHistory();
-                        translateShapes(dragIndices, detachDelta);
+                                                     ? QVector<ObjectId>{selectedShapeIndex_}
+                                                     : draggingShapeIndices_;
+            if (grabActive_) {
+                updateGrabPosition(dragIndices);
+            } else {
+                const bool groupDrag = dragIndices.size() > 1;
+                const QPointF rawDelta = rawCursorWorld_ - lastDragWorld_;
+                const QPointF delta = constrainDragDelta(rawDelta);
+                if (!qFuzzyIsNull(rawDelta.x()) || !qFuzzyIsNull(rawDelta.y())) {
+                    if (dragAxisLock_ != DragAxisLock::None) {
+                        if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+                            beginDragHistory();
+                            translateShapes(dragIndices, delta);
+                        }
+                        // Axis locking takes priority over object snapping so the
+                        // move remains exactly horizontal or vertical.
                         currentDragSnap_ = DragSnapResult{};
                         dragSnapLocked_ = false;
-                        DebugLog::instance().write(
-                            QStringLiteral("selection drag snap-breakaway shape=%1 cursorDistance=%2")
-                                .arg(selectedIndex)
-                                .arg(cursorDistanceFromSnap, 0, 'f', 2));
                     } else {
-                        beginDragHistory();
-                        translateShapes(dragIndices, delta);
-                        currentDragSnap_ = groupDrag
-                                                ? findDragSnap(dragIndices)
-                                                : findDragSnap(selectedShapeIndex_);
-                        if (currentDragSnap_.isValid()) {
-                            translateShapes(dragIndices, currentDragSnap_.translation);
-                            dragSnapLocked_ = true;
-                            dragSnapCursorWorld_ = rawCursorWorld_;
+                        constexpr qreal dragSnapBreakawayPixels = 18.0;
+                        const qreal cursorDistanceFromSnap =
+                            std::hypot(screenPosition.x() - worldToScreen(dragSnapCursorWorld_).x(),
+                                       screenPosition.y() - worldToScreen(dragSnapCursorWorld_).y());
+
+                        if (dragSnapLocked_ && cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
+                            // Keep the geometry attached while the cursor is still near the
+                            // snap point. This prevents a one-pixel mouse move from
+                            // repeatedly attaching and detaching the line.
+                            DebugLog::instance().write(
+                                QStringLiteral("selection drag snap-hold shape=%1 cursorDistance=%2 breakaway=%3")
+                                    .arg(selectedIndex)
+                                    .arg(cursorDistanceFromSnap, 0, 'f', 2)
+                                    .arg(dragSnapBreakawayPixels, 0, 'f', 2));
+                        } else {
+                            if (dragSnapLocked_) {
+                                // Release from the snap using the complete cursor movement
+                                // since the snap was acquired, so the line leaves cleanly.
+                                const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
+                                beginDragHistory();
+                                translateShapes(dragIndices, detachDelta);
+                                currentDragSnap_ = DragSnapResult{};
+                                dragSnapLocked_ = false;
+                                DebugLog::instance().write(
+                                    QStringLiteral("selection drag snap-breakaway shape=%1 cursorDistance=%2")
+                                        .arg(selectedIndex)
+                                        .arg(cursorDistanceFromSnap, 0, 'f', 2));
+                            } else {
+                                beginDragHistory();
+                                translateShapes(dragIndices, delta);
+                                currentDragSnap_ = groupDrag
+                                                        ? findDragSnap(dragIndices)
+                                                        : findDragSnap(selectedShapeIndex_);
+                                if (currentDragSnap_.isValid()) {
+                                    translateShapes(dragIndices, currentDragSnap_.translation);
+                                    dragSnapLocked_ = true;
+                                    dragSnapCursorWorld_ = rawCursorWorld_;
+                                }
+                            }
                         }
                     }
-                }
 
-                lastDragWorld_ = rawCursorWorld_;
+                    lastDragWorld_ = rawCursorWorld_;
 
-                DebugLog::instance().write(
-                    QStringLiteral("selection drag shape=%1 delta=%2 cursorWorld=%3 snap=%4 snapSource=%5 snapTarget=%6 snapTranslation=%7")
-                        .arg(selectedIndex)
-                        .arg(pointText(delta))
-                        .arg(pointText(rawCursorWorld_))
-                        .arg(snapTypeName(currentDragSnap_.type))
-                        .arg(pointText(currentDragSnap_.sourcePoint))
-                        .arg(pointText(currentDragSnap_.targetPoint))
-                        .arg(pointText(currentDragSnap_.translation)));
-                if (groupDrag) {
                     DebugLog::instance().write(
-                        QStringLiteral("group selection drag count=%1")
-                            .arg(dragIndices.size()));
+                        QStringLiteral("selection drag shape=%1 delta=%2 cursorWorld=%3 snap=%4 snapSource=%5 snapTarget=%6 snapTranslation=%7 axisLock=%8")
+                            .arg(selectedIndex)
+                            .arg(pointText(delta))
+                            .arg(pointText(rawCursorWorld_))
+                            .arg(snapTypeName(currentDragSnap_.type))
+                            .arg(pointText(currentDragSnap_.sourcePoint))
+                            .arg(pointText(currentDragSnap_.targetPoint))
+                            .arg(pointText(currentDragSnap_.translation))
+                            .arg(dragAxisLockName(dragAxisLock_)));
+                    if (groupDrag) {
+                        DebugLog::instance().write(
+                            QStringLiteral("group selection drag count=%1")
+                                .arg(dragIndices.size()));
+                    }
                 }
             }
         }
@@ -2020,6 +2169,7 @@ protected:
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
+            dragAxisLock_ = DragAxisLock::None;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-control-point-drag shape=%1")
                                            .arg(objectIndex(selectedShapeIndex_)));
@@ -2030,6 +2180,7 @@ protected:
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
+            dragAxisLock_ = DragAxisLock::None;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-selection-drag shape=%1")
                                            .arg(objectIndex(selectedShapeIndex_)));
@@ -2125,6 +2276,42 @@ protected:
 
         if (activeTool_ == Tool::Mirror && event->key() == Qt::Key_Escape) {
             cancelMirror();
+            return;
+        }
+
+        if (grabActive_ && event->key() == Qt::Key_Escape) {
+            cancelGrab();
+            return;
+        }
+
+        if (activeTool_ == Tool::Select && !grabActive_ &&
+            !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
+            event->key() == Qt::Key_G) {
+            beginGrab();
+            return;
+        }
+
+        if (activeTool_ == Tool::Select && draggingSelected_ &&
+            !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
+            (event->key() == Qt::Key_X || event->key() == Qt::Key_Y)) {
+            const DragAxisLock requestedLock = event->key() == Qt::Key_X
+                                                   ? DragAxisLock::X
+                                                   : DragAxisLock::Y;
+            dragAxisLock_ = dragAxisLock_ == requestedLock
+                                ? DragAxisLock::None
+                                : requestedLock;
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapLocked_ = false;
+            if (grabActive_) {
+                updateGrabPosition(draggingShapeIndices_.isEmpty()
+                                       ? QVector<ObjectId>{selectedShapeIndex_}
+                                       : draggingShapeIndices_);
+            }
+            DebugLog::instance().write(
+                QStringLiteral("selection drag axis lock=%1")
+                    .arg(dragAxisLockName(dragAxisLock_)));
+            update();
+            emitCoordinateUpdate();
             return;
         }
 
@@ -3021,7 +3208,12 @@ private:
 
     void recordGeometryChange()
     {
-        history_.record();
+        recordGeometrySnapshot(document_.snapshot());
+    }
+
+    void recordGeometrySnapshot(const Document::Snapshot &snapshot)
+    {
+        history_.record(snapshot);
         notifyHistoryChanged();
         QTimer::singleShot(0, this, [this]() {
             notifyLayersChanged();
@@ -3033,10 +3225,19 @@ private:
 
     void beginDragHistory()
     {
+        if (grabActive_) {
+            return;
+        }
         if (!dragHistoryRecorded_) {
             recordGeometryChange();
             dragHistoryRecorded_ = true;
         }
+    }
+
+    void resetGrabInteraction()
+    {
+        grabActive_ = false;
+        grabMoved_ = false;
     }
 
     void resetInteractionAfterHistory()
@@ -3053,6 +3254,8 @@ private:
         currentSnap_ = SnapResult{};
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
+        dragAxisLock_ = DragAxisLock::None;
+        resetGrabInteraction();
         draggingControlPoint_ = false;
         controlPointIndex_ = -1;
         eraseStrokeActive_ = false;
@@ -5972,6 +6175,49 @@ private:
         }
     }
 
+    QPointF constrainDragDelta(const QPointF &delta) const
+    {
+        switch (dragAxisLock_) {
+        case DragAxisLock::X:
+            return QPointF(delta.x(), 0.0);
+        case DragAxisLock::Y:
+            return QPointF(0.0, delta.y());
+        case DragAxisLock::None:
+            return delta;
+        }
+
+        return delta;
+    }
+
+    void updateGrabPosition(const QVector<ObjectId> &dragIndices)
+    {
+        if (!grabActive_) {
+            return;
+        }
+
+        const QPointF totalDelta = rawCursorWorld_ - grabStartWorld_;
+        const QPointF delta = constrainDragDelta(totalDelta);
+
+        // Grab movement is absolute from the point where G was pressed. Rebuild
+        // the preview from that snapshot so changing the axis never changes the
+        // movement origin or accumulates a second, incremental delta.
+        document_.restoreSnapshot(grabStartSnapshot_);
+        if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+            translateShapes(dragIndices, delta);
+            grabMoved_ = true;
+        } else {
+            grabMoved_ = false;
+        }
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        lastDragWorld_ = rawCursorWorld_;
+        DebugLog::instance().write(
+            QStringLiteral("grab move delta=%1 cursorWorld=%2 axisLock=%3")
+                .arg(pointText(delta))
+                .arg(pointText(rawCursorWorld_))
+                .arg(dragAxisLockName(dragAxisLock_)));
+    }
+
     QPointF screenToWorld(const QPointF &screen) const
     {
         return viewportTransform_.screenToWorld(screen, size());
@@ -6428,6 +6674,11 @@ private:
     int &controlPointIndex_;
     bool dragHistoryRecorded_ = false;
     bool dragSnapLocked_ = false;
+    DragAxisLock dragAxisLock_ = DragAxisLock::None;
+    bool grabActive_ = false;
+    bool grabMoved_ = false;
+    Document::Snapshot grabStartSnapshot_;
+    QPointF grabStartWorld_{0.0, 0.0};
     QPointF dragSnapCursorWorld_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
     QPointF lastControlPointWorld_{0.0, 0.0};

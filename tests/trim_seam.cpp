@@ -210,6 +210,41 @@ int main(int argc, char **argv)
     }
     view.setOrthoEnabled(false);
 
+    view.setTool(Tool::Select);
+    view.draggingSelected_ = true;
+    view.dragAxisLock_ = DragAxisLock::None;
+    QKeyEvent xPress(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier);
+    view.keyPressEvent(&xPress);
+    const QPointF xLockedDelta = view.constrainDragDelta(QPointF(5.0, 7.0));
+    QKeyEvent yPress(QEvent::KeyPress, Qt::Key_Y, Qt::NoModifier);
+    view.keyPressEvent(&yPress);
+    const QPointF yLockedDelta = view.constrainDragDelta(QPointF(5.0, 7.0));
+    QKeyEvent yRelease(QEvent::KeyPress, Qt::Key_Y, Qt::NoModifier);
+    view.keyPressEvent(&yRelease);
+    const QPointF unlockedDelta = view.constrainDragDelta(QPointF(5.0, 7.0));
+    view.draggingSelected_ = false;
+    if (xLockedDelta != QPointF(5.0, 0.0) ||
+        yLockedDelta != QPointF(0.0, 7.0) ||
+        unlockedDelta != QPointF(5.0, 7.0)) {
+        qWarning() << "X and Y must constrain selected-object movement independently of Ortho";
+        ++failures;
+    }
+
+    view.draggingSelected_ = false;
+    view.dragAxisLock_ = DragAxisLock::None;
+    QKeyEvent gPress(QEvent::KeyPress, Qt::Key_G, Qt::NoModifier);
+    view.keyPressEvent(&gPress);
+    const bool grabStarted = view.grabActive_ && view.draggingSelected_;
+    QKeyEvent grabXPress(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier);
+    view.keyPressEvent(&grabXPress);
+    const bool grabAxisLocked = view.grabActive_ && view.dragAxisLock_ == DragAxisLock::X;
+    QKeyEvent grabEscape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    view.keyPressEvent(&grabEscape);
+    if (!grabStarted || !grabAxisLocked || view.grabActive_ || view.draggingSelected_) {
+        qWarning() << "G must start a cancelable grab with X/Y axis locking";
+        ++failures;
+    }
+
     qInfo() << "Trim seam failures:" << failures;
     return failures ? 1 : 0;
 }

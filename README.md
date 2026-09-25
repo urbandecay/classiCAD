@@ -78,6 +78,11 @@ committed curve representation (`NurbsCurve2D`); homogeneous Bezier spans and
 sample caches are transient algorithm/rendering data, not alternate stored
 geometry.
 
+Selected-object movement also supports a Blender-style grab flow: press `G`,
+move the selection, press `X` or `Y` to constrain the axis, then click to
+confirm or press `Esc`/right-click to cancel. Ordinary click-drag movement
+continues to work as before.
+
 Mirror is a copy command: select one or more editable objects, choose Mirror
 (`M`), then click two points for the axis. The axis uses the same Ortho and
 OSnap constraints as Line, the originals remain in place, and the mirrored

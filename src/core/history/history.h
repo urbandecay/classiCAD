@@ -16,6 +16,7 @@ public:
     int redoCount() const;
 
     void record();
+    void record(const Document::Snapshot &snapshot);
     bool undo();
     bool redo();
     void clear();

@@ -120,6 +120,12 @@ the same transform while the second axis point moves, so the user sees the
 copy before committing it. Its axis therefore receives the same Ortho and
 OSnap behavior as Line without introducing a second snapping model.
 
+Select-mode movement also supports an explicit Blender-style grab lifecycle:
+`G` starts a move for the selected editable objects, `X`/`Y` constrains the
+move independently of Ortho, left-click commits it, and Esc/right-click
+restores the pre-grab document snapshot. Ordinary selection dragging remains
+available as a separate path.
+
 Do not begin by moving lines into arbitrary folders. First identify the owner of each piece of state and the direction of its dependencies.
 
 ## Organization rules

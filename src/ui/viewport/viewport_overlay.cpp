@@ -549,7 +549,7 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,
                          viewportSize.height() - 18,
-                         QStringLiteral("Shift-click: add/remove  •  Drag empty: box select  •  Drag selected: move group"));
+                         QStringLiteral("Shift-click: add/remove  •  Drag empty: box select  •  G: grab selected  •  X/Y: lock axis"));
     }
 }
 

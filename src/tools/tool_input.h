@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QPointF>
+#include <QSize>
 #include <QString>
 #include <Qt>
 
@@ -19,6 +20,7 @@ struct ToolInput {
     QString text;
     int wheelAngleDelta = 0;
     int wheelPixelDelta = 0;
+    QSize viewportSize;
 };
 
 } // namespace classiCAD

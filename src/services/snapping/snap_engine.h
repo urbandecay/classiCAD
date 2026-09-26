@@ -46,6 +46,11 @@ public:
         const ViewportTransform &transform,
         const QSize &viewportSize,
         const QVector<int> &excludedShapeIndices = {}) const;
+    QVector<SnapCandidate> tangentCandidatesForShape(
+        const Shape &shape,
+        const QPointF &origin,
+        const ViewportTransform &transform,
+        const QSize &viewportSize) const;
     QVector<SnapCandidate> nearCandidatesForScene(
         const Document &document,
         const QPointF &cursor,

@@ -43,6 +43,7 @@ set(CLASSICAD_TOOL_SOURCES
     src/tools/erase_tool.cpp
     src/tools/point_tool.cpp
     src/tools/line_tool.cpp
+    src/tools/tangent_from_curve_tool.cpp
     src/tools/mirror_tool.cpp
     src/tools/rectangle_tool.cpp
     src/tools/circle_tool.cpp

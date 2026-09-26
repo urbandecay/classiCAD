@@ -1004,105 +1004,116 @@ QVector<SnapCandidate> SnapEngine::tangentCandidates(
     if (!settings_.tangent) {
         return candidates;
     }
-    constexpr qreal epsilon = 1.0e-9;
-    const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
         if (excludedShapeIndices.contains(shapeIndex) ||
             !document.isObjectVisible(document.objectIdAt(shapeIndex))) {
             continue;
         }
-        const Shape &shape = document[shapeIndex];
-        if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
-            const QPointF center = shape.points[0];
-            const QPointF edge = shape.points[1];
-            const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
-            if (radius <= epsilon) {
-                continue;
-            }
-            const QPointF fromCenter = origin - center;
-            const qreal distanceFromCenter = std::hypot(fromCenter.x(), fromCenter.y());
-            if (distanceFromCenter < radius - epsilon || distanceFromCenter <= epsilon) {
-                continue;
-            }
-            const QPointF radialDirection = fromCenter / distanceFromCenter;
-            const QPointF tangentDirection(-radialDirection.y(), radialDirection.x());
-            const qreal radiusRatio = radius / distanceFromCenter;
-            const qreal radialDistance = radius * radiusRatio;
-            const qreal tangentDistance =
-                radius * std::sqrt(std::max(0.0, 1.0 - radiusRatio * radiusRatio));
+        candidates += tangentCandidatesForShape(document[shapeIndex],
+                                                origin,
+                                                transform,
+                                                viewportSize);
+    }
+    return candidates;
+}
+
+QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
+    const Shape &shape,
+    const QPointF &origin,
+    const ViewportTransform &transform,
+    const QSize &viewportSize) const
+{
+    QVector<SnapCandidate> candidates;
+    constexpr qreal epsilon = 1.0e-9;
+    const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
+
+    if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
+        const QPointF center = shape.points[0];
+        const QPointF edge = shape.points[1];
+        const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
+        if (radius <= epsilon) {
+            return candidates;
+        }
+        const QPointF fromCenter = origin - center;
+        const qreal distanceFromCenter = std::hypot(fromCenter.x(), fromCenter.y());
+        if (distanceFromCenter < radius - epsilon || distanceFromCenter <= epsilon) {
+            return candidates;
+        }
+        const QPointF radialDirection = fromCenter / distanceFromCenter;
+        const QPointF tangentDirection(-radialDirection.y(), radialDirection.x());
+        const qreal radiusRatio = radius / distanceFromCenter;
+        const qreal radialDistance = radius * radiusRatio;
+        const qreal tangentDistance =
+            radius * std::sqrt(std::max(0.0, 1.0 - radiusRatio * radiusRatio));
+        candidates.append({SnapType::Tangent,
+                           center + radialDirection * radialDistance +
+                               tangentDirection * tangentDistance});
+        if (tangentDistance > epsilon) {
             candidates.append({SnapType::Tangent,
-                               center + radialDirection * radialDistance +
+                               center + radialDirection * radialDistance -
                                    tangentDirection * tangentDistance});
-            if (tangentDistance > epsilon) {
-                candidates.append({SnapType::Tangent,
-                                   center + radialDirection * radialDistance -
-                                       tangentDirection * tangentDistance});
-            }
-            continue;
         }
-        if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
-            QPointF centerScreen;
-            qreal radius = 0.0;
-            qreal startAngle = 0.0;
-            qreal sweepAngle = 0.0;
-            if (makeArcSnapGeometry(shape,
-                                    transform,
-                                    viewportSize,
-                                    &centerScreen,
-                                    &radius,
-                                    &startAngle,
-                                    &sweepAngle)) {
-                const QPointF fromCenter = originScreen - centerScreen;
-                const qreal distanceFromCenter =
-                    std::hypot(fromCenter.x(), fromCenter.y());
-                if (distanceFromCenter >= radius - epsilon &&
-                    distanceFromCenter > epsilon) {
-                    const QPointF radialDirection = fromCenter / distanceFromCenter;
-                    const QPointF tangentDirection(-radialDirection.y(),
-                                                   radialDirection.x());
-                    const qreal radiusRatio = radius / distanceFromCenter;
-                    const qreal radialDistance = radius * radiusRatio;
-                    const qreal tangentDistance =
-                        radius * std::sqrt(std::max(0.0,
-                                                    1.0 - radiusRatio * radiusRatio));
-                    const auto appendIfOnArc = [&](const QPointF &candidateScreen) {
-                        const qreal candidateAngle =
-                            std::atan2(candidateScreen.y() - centerScreen.y(),
-                                       candidateScreen.x() - centerScreen.x());
-                        if (arcAngleIsOnSweep(startAngle, sweepAngle, candidateAngle)) {
-                            candidates.append({
-                                SnapType::Tangent,
-                                transform.screenToWorld(candidateScreen, viewportSize)});
-                        }
-                    };
-                    appendIfOnArc(centerScreen + radialDirection * radialDistance +
-                                  tangentDirection * tangentDistance);
-                    if (tangentDistance > epsilon) {
-                        appendIfOnArc(centerScreen + radialDirection * radialDistance -
-                                      tangentDirection * tangentDistance);
+        return candidates;
+    }
+
+    if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
+        QPointF centerScreen;
+        qreal radius = 0.0;
+        qreal startAngle = 0.0;
+        qreal sweepAngle = 0.0;
+        if (makeArcSnapGeometry(shape,
+                                transform,
+                                viewportSize,
+                                &centerScreen,
+                                &radius,
+                                &startAngle,
+                                &sweepAngle)) {
+            const QPointF fromCenter = originScreen - centerScreen;
+            const qreal distanceFromCenter = std::hypot(fromCenter.x(), fromCenter.y());
+            if (distanceFromCenter >= radius - epsilon && distanceFromCenter > epsilon) {
+                const QPointF radialDirection = fromCenter / distanceFromCenter;
+                const QPointF tangentDirection(-radialDirection.y(), radialDirection.x());
+                const qreal radiusRatio = radius / distanceFromCenter;
+                const qreal radialDistance = radius * radiusRatio;
+                const qreal tangentDistance =
+                    radius * std::sqrt(std::max(0.0, 1.0 - radiusRatio * radiusRatio));
+                const auto appendIfOnArc = [&](const QPointF &candidateScreen) {
+                    const qreal candidateAngle =
+                        std::atan2(candidateScreen.y() - centerScreen.y(),
+                                   candidateScreen.x() - centerScreen.x());
+                    if (arcAngleIsOnSweep(startAngle, sweepAngle, candidateAngle)) {
+                        candidates.append({
+                            SnapType::Tangent,
+                            transform.screenToWorld(candidateScreen, viewportSize)});
                     }
+                };
+                appendIfOnArc(centerScreen + radialDirection * radialDistance +
+                              tangentDirection * tangentDistance);
+                if (tangentDistance > epsilon) {
+                    appendIfOnArc(centerScreen + radialDirection * radialDistance -
+                                  tangentDirection * tangentDistance);
                 }
-                continue;
             }
+            return candidates;
         }
+    }
 
-        if (shape.geometryType == GeometryType::PolyCurve) {
-            for (const Shape::NurbsCurve2D &component : shape.components) {
-                candidates += tangentCandidatesForNurbsCurve(component,
-                                                             originScreen,
-                                                             transform,
-                                                             viewportSize);
-            }
-            continue;
-        }
-
-        Shape::NurbsCurve2D curve;
-        if (subdivisionCurve(shape, &curve)) {
-            candidates += tangentCandidatesForNurbsCurve(curve,
+    if (shape.geometryType == GeometryType::PolyCurve) {
+        for (const Shape::NurbsCurve2D &component : shape.components) {
+            candidates += tangentCandidatesForNurbsCurve(component,
                                                          originScreen,
                                                          transform,
                                                          viewportSize);
         }
+        return candidates;
+    }
+
+    Shape::NurbsCurve2D curve;
+    if (subdivisionCurve(shape, &curve)) {
+        candidates += tangentCandidatesForNurbsCurve(curve,
+                                                     originScreen,
+                                                     transform,
+                                                     viewportSize);
     }
     return candidates;
 }

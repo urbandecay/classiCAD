@@ -73,6 +73,7 @@ GeometryType geometryTypeForTool(ToolId tool)
     case ToolId::Trim:
     case ToolId::Rotate:
     case ToolId::Mirror:
+    case ToolId::TangentFromCurve:
         return GeometryType::Invalid;
     }
 

@@ -1452,7 +1452,12 @@ protected:
             }
         }
 
-        if (activeTool_ == Tool::Line && lineCommandActive_) {
+        if (activeTool_ == Tool::TangentFromCurve) {
+            drawLineToolPreview(painter);
+            if (!pendingPoints_.isEmpty()) {
+                drawSnapMarker(painter, SnapType::Tangent, pendingPoints_.first());
+            }
+        } else if (activeTool_ == Tool::Line && lineCommandActive_) {
             drawLineToolPreview(painter);
         } else if (activeTool_ == Tool::Mirror) {
             drawMirrorToolPreview(painter);
@@ -4174,7 +4179,8 @@ private:
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Circle ||
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate ||
-            activeTool_ == Tool::Mirror;
+            activeTool_ == Tool::Mirror ||
+            activeTool_ == Tool::TangentFromCurve;
         return snapEngine_.findSnapPoint(document_,
                                          rawPoint,
                                          serviceDrawingSnapActive,
@@ -4371,7 +4377,8 @@ private:
 
         const bool drawingConstraintActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
-            activeTool_ == Tool::Arc || activeTool_ == Tool::Mirror;
+            activeTool_ == Tool::Arc || activeTool_ == Tool::Mirror ||
+            activeTool_ == Tool::TangentFromCurve;
         if (!orthoEnabled_ || panning_ || !drawingConstraintActive || pendingPoints_.isEmpty()) {
             return rawPoint;
         }
@@ -6743,6 +6750,7 @@ private:
         input.screenPosition = screenPosition;
         input.rawWorldPosition = rawWorldPosition;
         input.worldPosition = worldPosition;
+        input.viewportSize = size();
         if (event != nullptr) {
             input.button = event->button();
             input.buttons = event->buttons();
@@ -6754,6 +6762,7 @@ private:
     ToolInput makeKeyToolInput(const QKeyEvent *event) const
     {
         ToolInput input;
+        input.viewportSize = size();
         if (event != nullptr) {
             input.key = event->key();
             input.text = event->text();

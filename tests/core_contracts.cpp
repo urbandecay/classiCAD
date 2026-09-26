@@ -15,6 +15,7 @@
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
 #include "tools/point_tool.h"
+#include "tools/tangent_from_curve_tool.h"
 #include "tools/tool_context.h"
 #include "tools/tool_registry.h"
 
@@ -511,6 +512,7 @@ int main(int argc, char **argv)
     passed &= check(toolRegistry.find(ToolId::Select) != nullptr &&
                         toolRegistry.find(ToolId::Point) != nullptr &&
                         toolRegistry.find(ToolId::Line) != nullptr &&
+                        toolRegistry.find(ToolId::TangentFromCurve) != nullptr &&
                         toolRegistry.find(ToolId::Arc) != nullptr &&
                         toolRegistry.find(ToolId::Rectangle) != nullptr &&
                         toolRegistry.find(ToolId::Circle) != nullptr &&
@@ -550,6 +552,84 @@ int main(int argc, char **argv)
                         previewUpdateCount >= 3 &&
                         finishedTool == ToolId::Select,
                     "line tool must retain connected points until right-click commit");
+
+    const Shape tangentTestCircle{GeometryType::Circle,
+                                  {QPointF(0.0, 0.0), QPointF(10.0, 0.0)},
+                                  makeCircleNurbs({QPointF(0.0, 0.0), QPointF(10.0, 0.0)}),
+                                  ArcMode::TwoPoint,
+                                  0.0,
+                                  {},
+                                  {}};
+    const ObjectId tangentCircleId = toolDocument.append(tangentTestCircle);
+    constexpr QPointF tangentEndpoint(20.0, 0.0);
+    const ObjectId tangentTargetId = toolDocument.append(
+        Shape{GeometryType::Line,
+              {tangentEndpoint, QPointF(30.0, 0.0)},
+              makeDegreeOneNurbs({tangentEndpoint, QPointF(30.0, 0.0)}),
+              ArcMode::TwoPoint,
+              0.0,
+              {},
+              {}});
+    constexpr QSize tangentViewportSize(640, 480);
+    const auto tangentInputAt = [&](const QPointF &worldPoint) {
+        ToolInput input;
+        input.screenPosition = toolTransform.worldToScreen(worldPoint,
+                                                           tangentViewportSize);
+        input.rawWorldPosition = worldPoint;
+        input.worldPosition = worldPoint;
+        input.viewportSize = tangentViewportSize;
+        input.button = Qt::LeftButton;
+        return input;
+    };
+
+    TangentFromCurveTool tangentTool;
+    tangentTool.begin(toolContext);
+    const ToolInput tangentCurvePick = tangentInputAt(QPointF(10.0, 0.0));
+    const bool tangentCurvePicked = tangentTool.handleMousePress(tangentCurvePick,
+                                                                 toolContext);
+    const ToolInput insideCircleCursor = tangentInputAt(QPointF(5.0, 0.0));
+    tangentTool.handleMouseMove(insideCircleCursor, toolContext);
+    const bool tangentUnavailableInside = tangentTool.preview().points.isEmpty();
+
+    const QPointF rawTangentCursor(19.5, 0.25);
+    SnapEngine tangentEndpointSnapEngine;
+    tangentEndpointSnapEngine.setSettings(
+        SnapSettings{true, true, false, false, false, false, false, false});
+    const SnapResult tangentEndpointSnap = tangentEndpointSnapEngine.findSnapPoint(
+        toolDocument,
+        rawTangentCursor,
+        true,
+        {},
+        toolTransform,
+        tangentViewportSize);
+    ToolInput tangentCursor = tangentInputAt(tangentEndpointSnap.point);
+    tangentCursor.screenPosition = toolTransform.worldToScreen(rawTangentCursor,
+                                                              tangentViewportSize);
+    tangentCursor.rawWorldPosition = rawTangentCursor;
+    tangentTool.handleMouseMove(tangentCursor, toolContext);
+    const ToolPreview tangentPreview = tangentTool.preview();
+    const bool tangentPreviewIsValid = tangentPreview.points.size() == 1 &&
+        std::abs(QPointF::dotProduct(tangentPreview.points.first(),
+                                     tangentPreview.points.first()) - 100.0) <= 1.0e-4 &&
+        std::abs(QPointF::dotProduct(tangentPreview.points.first(),
+                                     tangentEndpoint - tangentPreview.points.first())) <= 1.0e-4;
+    const bool tangentLineCommitted = tangentTool.handleMousePress(tangentCursor,
+                                                                   toolContext);
+    passed &= check(tangentCurvePicked &&
+                        toolSelection.primaryObjectId() == tangentCircleId &&
+                        tangentTargetId.isValid() &&
+                        tangentUnavailableInside &&
+                        tangentEndpointSnap.type == SnapType::Endpoint &&
+                        tangentEndpointSnap.point == tangentEndpoint &&
+                        tangentPreviewIsValid &&
+                        tangentLineCommitted &&
+                        committedToolShapes.size() == 3 &&
+                        committedToolShapes.back().geometryType == GeometryType::Line &&
+                        committedToolShapes.back().points.first() == tangentPreview.points.first() &&
+                        committedToolShapes.back().points.back() == tangentEndpoint &&
+                        validateNurbsCurve(committedToolShapes.back().nurbs) &&
+                        finishedTool == ToolId::Select,
+                    "tangent-from-curve tool must preview and commit a tangent line from a selected curve");
 
     return passed ? 0 : 1;
 }

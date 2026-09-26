@@ -11,6 +11,7 @@
 #include "rectangle_tool.h"
 #include "rotate_tool.h"
 #include "select_tool.h"
+#include "tangent_from_curve_tool.h"
 #include "trim_tool.h"
 
 namespace classiCAD {
@@ -20,6 +21,7 @@ ToolRegistry::ToolRegistry()
     add(std::make_unique<SelectTool>());
     add(std::make_unique<PointTool>());
     add(std::make_unique<LineTool>());
+    add(std::make_unique<TangentFromCurveTool>());
     add(std::make_unique<ArcTool>());
     add(std::make_unique<RectangleTool>());
     add(std::make_unique<CircleTool>());

@@ -587,6 +587,9 @@ private:
             }
         };
         viewportCallbacks.toolRepeated = [this](ToolId tool) {
+            if (tool == Tool::TangentFromCurve && lineToolButton_ != nullptr) {
+                lineToolButton_->setChecked(true);
+            }
             for (QToolButton *button : toolButtons_) {
                 if (button->toolTip() == toolName(tool)) {
                     button->setChecked(true);
@@ -763,7 +766,8 @@ private:
 
         selectToolButton_ = addToolButton(layout, group, QStringLiteral("↖\nSelect"), Tool::Select, true);
         addToolButton(layout, group, QStringLiteral("•\nPoint"), Tool::Point);
-        addToolButton(layout, group, QStringLiteral("╱\nLine"), Tool::Line);
+        lineToolButton_ = addToolButton(layout, group, QStringLiteral("╱\nLine"), Tool::Line);
+        createLineToolMenu(lineToolButton_);
         arcToolButton_ = addToolButton(layout, group, QStringLiteral("⌒\nArc"), Tool::Arc);
         createArcToolMenu(arcToolButton_);
         addToolButton(layout, group, QStringLiteral("∿\nBezier"), Tool::Bezier);
@@ -884,6 +888,36 @@ private:
             arcToolButton_->setChecked(true);
         }
         statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(arcModeName(mode)));
+    }
+
+    void activateLineTool(ToolId tool)
+    {
+        if (lineToolButton_ != nullptr) {
+            lineToolButton_->setChecked(true);
+        }
+        viewport_->setTool(tool);
+        statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
+    }
+
+    void createLineToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+
+        auto *menu = new QMenu(button);
+        QAction *lineAction = menu->addAction(QStringLiteral("Line"));
+        QAction *tangentAction = menu->addAction(QStringLiteral("Tangent from Curve"));
+        button->setMenu(menu);
+        // A quick click runs Line; holding the button exposes both line modes.
+        button->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(lineAction, &QAction::triggered, this, [this]() {
+            activateLineTool(Tool::Line);
+        });
+        connect(tangentAction, &QAction::triggered, this, [this]() {
+            activateLineTool(Tool::TangentFromCurve);
+        });
     }
 
     void createArcToolMenu(QToolButton *button)
@@ -1548,6 +1582,7 @@ private:
     QLabel *coordinateLabel_ = nullptr;
     QLabel *toolHelp_ = nullptr;
     QToolButton *selectToolButton_ = nullptr;
+    QToolButton *lineToolButton_ = nullptr;
     QToolButton *arcToolButton_ = nullptr;
     QToolButton *eraseToolButton_ = nullptr;
     QToolButton *trimToolButton_ = nullptr;

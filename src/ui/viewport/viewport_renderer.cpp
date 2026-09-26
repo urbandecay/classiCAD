@@ -16,6 +16,11 @@ ViewportRenderer::ViewportRenderer(const ViewportTransform &transform,
 {
 }
 
+void ViewportRenderer::setSmoothCurveDisplay(bool enabled)
+{
+    smoothCurveDisplay_ = enabled;
+}
+
 QPointF ViewportRenderer::worldToScreen(const QPointF &world,
                                         const QSize &viewportSize) const
 {
@@ -351,28 +356,180 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
             ++nonZeroSpans;
         }
     }
-    const int sampleCount = std::max(32, nonZeroSpans * 24);
-
     QPainterPath path;
+    if (!smoothCurveDisplay_) {
+        const int sampleCount = std::max(32, nonZeroSpans * 24);
+        bool hasStart = false;
+        for (int sample = 0; sample <= sampleCount; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
+            const qreal parameter = firstParameter +
+                                    (lastParameter - firstParameter) * fraction;
+            QPointF point;
+            if (!evaluateNurbsPoint(curve, parameter, &point)) {
+                continue;
+            }
+            const QPointF screenPoint = worldToScreen(point, viewportSize);
+            if (!hasStart) {
+                path.moveTo(screenPoint);
+                hasStart = true;
+            } else {
+                path.lineTo(screenPoint);
+            }
+        }
+
+        if (hasStart) {
+            painter.drawPath(path);
+        }
+        return;
+    }
+
+    constexpr qreal flatnessTolerancePixels = 0.3;
+    constexpr int maximumSubdivisionDepth = 14;
+    constexpr int maximumAdaptivePointCount = 16384;
+    QVector<QPointF> screenPoints;
+    screenPoints.reserve(std::min(maximumAdaptivePointCount, nonZeroSpans * 8));
+    bool exceededAdaptivePointLimit = false;
+
+    const auto screenPointAt = [&](qreal parameter, QPointF *screenPoint) {
+        if (screenPoint == nullptr) {
+            return false;
+        }
+        QPointF worldPoint;
+        if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
+            return false;
+        }
+        *screenPoint = worldToScreen(worldPoint, viewportSize);
+        return true;
+    };
+    const auto distanceToSegment = [](const QPointF &point,
+                                     const QPointF &segmentStart,
+                                     const QPointF &segmentEnd) {
+        const QPointF direction = segmentEnd - segmentStart;
+        const qreal lengthSquared = QPointF::dotProduct(direction, direction);
+        if (lengthSquared <= 1.0e-16) {
+            return std::hypot(point.x() - segmentStart.x(),
+                              point.y() - segmentStart.y());
+        }
+        const qreal projection = std::clamp(
+            QPointF::dotProduct(point - segmentStart, direction) / lengthSquared,
+            0.0,
+            1.0);
+        const QPointF nearest = segmentStart + direction * projection;
+        return std::hypot(point.x() - nearest.x(), point.y() - nearest.y());
+    };
+
+    const auto appendAdaptiveSegment = [&](const auto &self,
+                                           qreal parameterStart,
+                                           const QPointF &screenStart,
+                                           qreal parameterEnd,
+                                           const QPointF &screenEnd,
+                                           int depth) -> void {
+        if (exceededAdaptivePointLimit) {
+            return;
+        }
+
+        const qreal parameterRange = parameterEnd - parameterStart;
+        const qreal quarterParameter = parameterStart + parameterRange * 0.25;
+        const qreal middleParameter = parameterStart + parameterRange * 0.5;
+        const qreal threeQuarterParameter = parameterStart + parameterRange * 0.75;
+        QPointF quarterPoint;
+        QPointF middlePoint;
+        QPointF threeQuarterPoint;
+        if (!screenPointAt(quarterParameter, &quarterPoint) ||
+            !screenPointAt(middleParameter, &middlePoint) ||
+            !screenPointAt(threeQuarterParameter, &threeQuarterPoint)) {
+            screenPoints.append(screenEnd);
+            if (screenPoints.size() > maximumAdaptivePointCount) {
+                exceededAdaptivePointLimit = true;
+            }
+            return;
+        }
+
+        const qreal maximumDeviation = std::max({
+            distanceToSegment(quarterPoint, screenStart, screenEnd),
+            distanceToSegment(middlePoint, screenStart, screenEnd),
+            distanceToSegment(threeQuarterPoint, screenStart, screenEnd)});
+        if (maximumDeviation <= flatnessTolerancePixels ||
+            depth >= maximumSubdivisionDepth) {
+            screenPoints.append(screenEnd);
+            if (screenPoints.size() > maximumAdaptivePointCount) {
+                exceededAdaptivePointLimit = true;
+            }
+            return;
+        }
+
+        self(self,
+             parameterStart,
+             screenStart,
+             middleParameter,
+             middlePoint,
+             depth + 1);
+        self(self,
+             middleParameter,
+             middlePoint,
+             parameterEnd,
+             screenEnd,
+             depth + 1);
+    };
+
     bool hasStart = false;
-    for (int sample = 0; sample <= sampleCount; ++sample) {
-        const qreal fraction = static_cast<qreal>(sample) / sampleCount;
-        const qreal parameter = firstParameter +
-                                (lastParameter - firstParameter) * fraction;
-        QPointF point;
-        if (!evaluateNurbsPoint(curve, parameter, &point)) {
+    for (int spanIndex = curve.degree;
+         spanIndex < controlPointCount && !exceededAdaptivePointLimit;
+         ++spanIndex) {
+        const qreal spanStart = fullKnots[spanIndex];
+        const qreal spanEnd = fullKnots[spanIndex + 1];
+        if (spanEnd <= spanStart) {
             continue;
         }
-        const QPointF screenPoint = worldToScreen(point, viewportSize);
+
+        QPointF spanStartPoint;
+        QPointF spanEndPoint;
+        if (!screenPointAt(spanStart, &spanStartPoint) ||
+            !screenPointAt(spanEnd, &spanEndPoint)) {
+            continue;
+        }
         if (!hasStart) {
-            path.moveTo(screenPoint);
+            screenPoints.append(spanStartPoint);
             hasStart = true;
-        } else {
-            path.lineTo(screenPoint);
+        }
+        appendAdaptiveSegment(appendAdaptiveSegment,
+                              spanStart,
+                              spanStartPoint,
+                              spanEnd,
+                              spanEndPoint,
+                              0);
+    }
+
+    if (exceededAdaptivePointLimit) {
+        // Preserve the entire curve if a pathological shape exceeds the
+        // adaptive detail budget. This fallback is bounded and still becomes
+        // denser at higher zoom levels.
+        screenPoints.clear();
+        const int sampleCount = std::max(
+            32,
+            std::min(maximumAdaptivePointCount,
+                     static_cast<int>(std::ceil(nonZeroSpans * 24.0 *
+                                                std::sqrt(std::max(1.0, transform_.zoom()))))));
+        for (int sample = 0; sample <= sampleCount; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
+            const qreal parameter = firstParameter +
+                                    (lastParameter - firstParameter) * fraction;
+            QPointF screenPoint;
+            if (screenPointAt(parameter, &screenPoint)) {
+                screenPoints.append(screenPoint);
+            }
         }
     }
 
-    if (hasStart) {
+    for (int index = 0; index < screenPoints.size(); ++index) {
+        if (index == 0) {
+            path.moveTo(screenPoints[index]);
+        } else {
+            path.lineTo(screenPoints[index]);
+        }
+    }
+
+    if (!screenPoints.isEmpty()) {
         painter.drawPath(path);
     }
 }

@@ -96,7 +96,7 @@ private:
                                   qreal *distanceSquared) const;
     QVector<SnapCandidate> tangentCandidatesForNurbsCurve(
         const Shape::NurbsCurve2D &curve,
-        const QPointF &originScreen,
+        const QPointF &originWorld,
         const ViewportTransform &transform,
         const QSize &viewportSize) const;
     bool makeCircularArcGeometry(const QPointF &startWorld,

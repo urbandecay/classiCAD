@@ -222,7 +222,7 @@ bool SnapEngine::nearestPointOnNurbsCurve(const Shape::NurbsCurve2D &curve,
 
 QVector<SnapCandidate> SnapEngine::tangentCandidatesForNurbsCurve(
     const Shape::NurbsCurve2D &curve,
-    const QPointF &originScreen,
+    const QPointF &originWorld,
     const ViewportTransform &transform,
     const QSize &viewportSize) const
 {
@@ -232,7 +232,8 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForNurbsCurve(
     }
 
     const QVector<double> fullKnots = expandedNurbsKnotVector(curve);
-    constexpr int samplesPerSpan = 48;
+    constexpr qreal rootTolerance = 1.0e-8;
+    const int samplesPerSpan = std::clamp(curve.degree * 32, 64, 512);
     const auto tangentCondition = [&](qreal parameter,
                                       qreal spanStart,
                                       qreal spanEnd,
@@ -240,34 +241,33 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForNurbsCurve(
         if (condition == nullptr) {
             return false;
         }
-        const qreal derivativeStep = std::max((spanEnd - spanStart) * 1.0e-5,
-                                               1.0e-8);
-        const qreal lowerParameter = std::max(spanStart, parameter - derivativeStep);
-        const qreal upperParameter = std::min(spanEnd, parameter + derivativeStep);
-        if (upperParameter - lowerParameter <= 1.0e-14) {
-            return false;
+        qreal evaluationParameter = parameter;
+        if (evaluationParameter <= spanStart) {
+            evaluationParameter = std::nextafter(spanStart, spanEnd);
+        } else if (evaluationParameter >= spanEnd) {
+            evaluationParameter = std::nextafter(spanEnd, spanStart);
         }
 
         QPointF curvePoint;
-        QPointF lowerPoint;
-        QPointF upperPoint;
-        if (!evaluateNurbsPoint(curve, parameter, &curvePoint) ||
-            !evaluateNurbsPoint(curve, lowerParameter, &lowerPoint) ||
-            !evaluateNurbsPoint(curve, upperParameter, &upperPoint)) {
+        QPointF derivative;
+        if (!evaluateNurbsPoint(curve, evaluationParameter, &curvePoint) ||
+            !evaluateNurbsDerivative(curve, evaluationParameter, &derivative)) {
             return false;
         }
 
-        const QPointF curveScreen = transform.worldToScreen(curvePoint, viewportSize);
-        const QPointF lowerScreen = transform.worldToScreen(lowerPoint, viewportSize);
-        const QPointF upperScreen = transform.worldToScreen(upperPoint, viewportSize);
-        const QPointF derivative = (upperScreen - lowerScreen) /
-                                   (upperParameter - lowerParameter);
-        const qreal derivativeLengthSquared = QPointF::dotProduct(derivative, derivative);
-        if (derivativeLengthSquared <= 1.0e-18) {
+        const QPointF toCurve = curvePoint - originWorld;
+        const qreal chordLength = std::hypot(toCurve.x(), toCurve.y());
+        const qreal derivativeLength = std::hypot(derivative.x(), derivative.y());
+        if (chordLength <= 1.0e-12 || derivativeLength <= 1.0e-12) {
             return false;
         }
 
-        *condition = crossProduct(curveScreen - originScreen, derivative);
+        // A normalized cross product is the sine of the angle between the
+        // candidate line and the curve tangent. It is scale-independent and
+        // gives the root finder a stable residual across zoom levels and
+        // differently sized curves.
+        *condition = crossProduct(toCurve / chordLength,
+                                  derivative / derivativeLength);
         return std::isfinite(*condition);
     };
 
@@ -281,11 +281,24 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForNurbsCurve(
         }
 
         const auto appendRoot = [&](qreal parameter) {
+            qreal evaluationParameter = parameter;
+            if (evaluationParameter <= spanStart) {
+                evaluationParameter = std::nextafter(spanStart, spanEnd);
+            } else if (evaluationParameter >= spanEnd) {
+                evaluationParameter = std::nextafter(spanEnd, spanStart);
+            }
             QPointF worldPoint;
-            if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
+            qreal residual = 0.0;
+            if (!evaluateNurbsPoint(curve, evaluationParameter, &worldPoint) ||
+                !tangentCondition(evaluationParameter,
+                                  spanStart,
+                                  spanEnd,
+                                  &residual) ||
+                std::abs(residual) > rootTolerance) {
                 return;
             }
             const QPointF screenPoint = transform.worldToScreen(worldPoint, viewportSize);
+            const QPointF originScreen = transform.worldToScreen(originWorld, viewportSize);
             if (std::hypot(screenPoint.x() - originScreen.x(),
                            screenPoint.y() - originScreen.y()) <= 1.0e-6) {
                 return;
@@ -301,31 +314,31 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForNurbsCurve(
             candidates.append({SnapType::Tangent, worldPoint});
         };
 
-        qreal previousParameter = spanStart;
-        qreal previousCondition = 0.0;
-        bool previousValid = tangentCondition(previousParameter,
-                                              spanStart,
-                                              spanEnd,
-                                              &previousCondition);
-        if (previousValid && std::abs(previousCondition) <= 1.0e-10) {
-            appendRoot(previousParameter);
+        QVector<qreal> parameters(samplesPerSpan + 1);
+        QVector<qreal> conditions(samplesPerSpan + 1, 0.0);
+        QVector<bool> valid(samplesPerSpan + 1, false);
+        for (int sample = 0; sample <= samplesPerSpan; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / samplesPerSpan;
+            parameters[sample] = spanStart + (spanEnd - spanStart) * fraction;
+            valid[sample] = tangentCondition(parameters[sample],
+                                             spanStart,
+                                             spanEnd,
+                                             &conditions[sample]);
+            // Check both ends of every knot span explicitly. A tangent at an
+            // arc seam or trimmed endpoint may not produce a sign change.
+            if (valid[sample] && std::abs(conditions[sample]) <= rootTolerance) {
+                appendRoot(parameters[sample]);
+            }
         }
 
         for (int sample = 1; sample <= samplesPerSpan; ++sample) {
-            const qreal fraction = static_cast<qreal>(sample) / samplesPerSpan;
-            const qreal parameter = spanStart + (spanEnd - spanStart) * fraction;
-            qreal condition = 0.0;
-            const bool valid = tangentCondition(parameter,
-                                                spanStart,
-                                                spanEnd,
-                                                &condition);
-            if (previousValid && valid &&
-                ((previousCondition < 0.0 && condition > 0.0) ||
-                 (previousCondition > 0.0 && condition < 0.0))) {
-                qreal low = previousParameter;
-                qreal high = parameter;
-                qreal lowCondition = previousCondition;
-                for (int iteration = 0; iteration < 48; ++iteration) {
+            if (valid[sample - 1] && valid[sample] &&
+                ((conditions[sample - 1] < 0.0 && conditions[sample] > 0.0) ||
+                 (conditions[sample - 1] > 0.0 && conditions[sample] < 0.0))) {
+                qreal low = parameters[sample - 1];
+                qreal high = parameters[sample];
+                qreal lowCondition = conditions[sample - 1];
+                for (int iteration = 0; iteration < 64; ++iteration) {
                     const qreal middle = (low + high) * 0.5;
                     qreal middleCondition = 0.0;
                     if (!tangentCondition(middle,
@@ -341,15 +354,68 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForNurbsCurve(
                     } else {
                         high = middle;
                     }
+                    if (high - low <= 1.0e-13 *
+                                           std::max(1.0, std::abs((low + high) * 0.5))) {
+                        break;
+                    }
                 }
                 appendRoot((low + high) * 0.5);
-            } else if (valid && std::abs(condition) <= 1.0e-10) {
-                appendRoot(parameter);
+            }
+        }
+
+        // Also catch an even-multiplicity/touching root, where the tangent
+        // residual reaches zero without changing sign between samples.
+        for (int sample = 1; sample < samplesPerSpan; ++sample) {
+            if (!valid[sample - 1] || !valid[sample] || !valid[sample + 1] ||
+                conditions[sample - 1] * conditions[sample] <= 0.0 ||
+                conditions[sample] * conditions[sample + 1] <= 0.0 ||
+                std::abs(conditions[sample]) > std::abs(conditions[sample - 1]) ||
+                std::abs(conditions[sample]) > std::abs(conditions[sample + 1])) {
+                continue;
             }
 
-            previousParameter = parameter;
-            previousCondition = condition;
-            previousValid = valid;
+            qreal low = parameters[sample - 1];
+            qreal high = parameters[sample + 1];
+            constexpr qreal goldenRatioConjugate = 0.6180339887498948482;
+            qreal first = high - goldenRatioConjugate * (high - low);
+            qreal second = low + goldenRatioConjugate * (high - low);
+            qreal firstCondition = 0.0;
+            qreal secondCondition = 0.0;
+            if (!tangentCondition(first, spanStart, spanEnd, &firstCondition) ||
+                !tangentCondition(second, spanStart, spanEnd, &secondCondition)) {
+                continue;
+            }
+            for (int iteration = 0; iteration < 48; ++iteration) {
+                if (std::abs(firstCondition) <= std::abs(secondCondition)) {
+                    high = second;
+                    second = first;
+                    secondCondition = firstCondition;
+                    first = high - goldenRatioConjugate * (high - low);
+                    if (!tangentCondition(first,
+                                          spanStart,
+                                          spanEnd,
+                                          &firstCondition)) {
+                        break;
+                    }
+                } else {
+                    low = first;
+                    first = second;
+                    firstCondition = secondCondition;
+                    second = low + goldenRatioConjugate * (high - low);
+                    if (!tangentCondition(second,
+                                          spanStart,
+                                          spanEnd,
+                                          &secondCondition)) {
+                        break;
+                    }
+                }
+            }
+            const qreal root = (low + high) * 0.5;
+            qreal residual = 0.0;
+            if (tangentCondition(root, spanStart, spanEnd, &residual) &&
+                std::abs(residual) <= rootTolerance) {
+                appendRoot(root);
+            }
         }
     }
     return candidates;
@@ -1027,6 +1093,14 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
     constexpr qreal epsilon = 1.0e-9;
     const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
 
+    if (shape.geometryType == GeometryType::Circle &&
+        validateNurbsCurve(shape.nurbs)) {
+        return tangentCandidatesForNurbsCurve(shape.nurbs,
+                                              origin,
+                                              transform,
+                                              viewportSize);
+    }
+
     if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
         const QPointF center = shape.points[0];
         const QPointF edge = shape.points[1];
@@ -1054,6 +1128,14 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
                                    tangentDirection * tangentDistance});
         }
         return candidates;
+    }
+
+    if (shape.geometryType == GeometryType::Arc &&
+        validateNurbsCurve(shape.nurbs)) {
+        return tangentCandidatesForNurbsCurve(shape.nurbs,
+                                              origin,
+                                              transform,
+                                              viewportSize);
     }
 
     if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
@@ -1101,7 +1183,7 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
     if (shape.geometryType == GeometryType::PolyCurve) {
         for (const Shape::NurbsCurve2D &component : shape.components) {
             candidates += tangentCandidatesForNurbsCurve(component,
-                                                         originScreen,
+                                                         origin,
                                                          transform,
                                                          viewportSize);
         }
@@ -1111,7 +1193,7 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
     Shape::NurbsCurve2D curve;
     if (subdivisionCurve(shape, &curve)) {
         candidates += tangentCandidatesForNurbsCurve(curve,
-                                                     originScreen,
+                                                     origin,
                                                      transform,
                                                      viewportSize);
     }

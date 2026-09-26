@@ -1,5 +1,6 @@
 #include "viewport_overlay.h"
 
+#include <QFont>
 #include <QPainterPath>
 
 #include <algorithm>
@@ -14,11 +15,17 @@ ViewportOverlay::ViewportOverlay(const ViewportRenderer &renderer,
 {
 }
 
+void ViewportOverlay::setSnapLabelsVisible(bool visible)
+{
+    snapLabelsVisible_ = visible;
+}
+
 void ViewportOverlay::drawSnapMarker(QPainter &painter,
                                      SnapType type,
                                      const QPointF &worldPoint,
                                      const QSize &viewportSize) const
 {
+    painter.save();
     const QPointF snapScreen = transform_.worldToScreen(worldPoint, viewportSize);
     const QColor snapColor(QStringLiteral("#63b5e8"));
     painter.setPen(QPen(snapColor, 2.0));
@@ -58,6 +65,13 @@ void ViewportOverlay::drawSnapMarker(QPainter &painter,
                                    snapScreen + QPointF(-7.0, 0.0)};
         painter.drawPolygon(diamond, 4);
     }
+
+    if (snapLabelsVisible_ && type != SnapType::None) {
+        painter.setPen(snapColor);
+        painter.setFont(QFont(QStringLiteral("Sans"), 9, QFont::Bold));
+        painter.drawText(snapScreen + QPointF(10.0, -10.0), snapTypeName(type));
+    }
+    painter.restore();
 }
 
 void ViewportOverlay::drawSelectionBox(QPainter &painter,

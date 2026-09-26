@@ -12,4 +12,8 @@ bool evaluateNurbsPoint(const NurbsCurve2D &curve,
                         qreal parameter,
                         QPointF *point);
 
+bool evaluateNurbsDerivative(const NurbsCurve2D &curve,
+                             qreal parameter,
+                             QPointF *derivative);
+
 } // namespace classiCAD

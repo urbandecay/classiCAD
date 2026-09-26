@@ -543,6 +543,20 @@ public:
         return controlPointsVisible_;
     }
 
+    void setSnapLabelsVisible(bool visible) override
+    {
+        viewportOverlay_.setSnapLabelsVisible(visible);
+        DebugLog::instance().write(QStringLiteral("setSnapLabelsVisible=%1").arg(visible));
+        update();
+    }
+
+    void setSmoothCurveDisplay(bool enabled) override
+    {
+        viewportRenderer_.setSmoothCurveDisplay(enabled);
+        DebugLog::instance().write(QStringLiteral("setSmoothCurveDisplay=%1").arg(enabled));
+        update();
+    }
+
     void setPanButton(Qt::MouseButton button)
     {
         if (button != Qt::MiddleButton && button != Qt::RightButton) {

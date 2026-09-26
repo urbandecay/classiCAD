@@ -14,6 +14,7 @@ public:
     ViewportOverlay(const ViewportRenderer &renderer,
                     const ViewportTransform &transform);
 
+    void setSnapLabelsVisible(bool visible);
     void drawSnapMarker(QPainter &painter,
                         SnapType type,
                         const QPointF &worldPoint,
@@ -106,6 +107,7 @@ private:
 
     const ViewportRenderer &renderer_;
     const ViewportTransform &transform_;
+    bool snapLabelsVisible_ = true;
 };
 
 } // namespace classiCAD

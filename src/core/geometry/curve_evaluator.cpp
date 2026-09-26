@@ -1,5 +1,6 @@
 #include "curve_evaluator.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace classiCAD {
@@ -94,6 +95,100 @@ bool evaluateNurbsPoint(const NurbsCurve2D &curve,
     }
     *point = numerator / denominator;
     return true;
+}
+
+bool evaluateNurbsDerivative(const NurbsCurve2D &curve,
+                             qreal parameter,
+                             QPointF *derivative)
+{
+    if (!validateNurbsCurve(curve) || derivative == nullptr || curve.degree < 1) {
+        return false;
+    }
+
+    const QVector<double> fullKnots = expandedNurbsKnotVector(curve);
+    const qreal domainStart = fullKnots[curve.degree];
+    const qreal domainEnd = fullKnots[curve.controlPoints.size()];
+    if (domainEnd <= domainStart) {
+        return false;
+    }
+
+    qreal evaluationParameter = std::clamp(parameter, domainStart, domainEnd);
+    if (evaluationParameter >= domainEnd) {
+        evaluationParameter = std::nextafter(domainEnd, domainStart);
+    }
+
+    const auto basis = [&fullKnots](const auto &self,
+                                    int index,
+                                    int degree,
+                                    qreal value) -> qreal {
+        if (degree == 0) {
+            return fullKnots[index] <= value && value < fullKnots[index + 1]
+                       ? 1.0
+                       : 0.0;
+        }
+
+        qreal result = 0.0;
+        const qreal leftDenominator = fullKnots[index + degree] - fullKnots[index];
+        if (std::abs(leftDenominator) > 1.0e-12) {
+            result += (value - fullKnots[index]) / leftDenominator *
+                      self(self, index, degree - 1, value);
+        }
+
+        const qreal rightDenominator = fullKnots[index + degree + 1] -
+                                       fullKnots[index + 1];
+        if (std::abs(rightDenominator) > 1.0e-12) {
+            result += (fullKnots[index + degree + 1] - value) / rightDenominator *
+                      self(self, index + 1, degree - 1, value);
+        }
+        return result;
+    };
+
+    QPointF numerator(0.0, 0.0);
+    QPointF numeratorDerivative(0.0, 0.0);
+    qreal denominator = 0.0;
+    qreal denominatorDerivative = 0.0;
+    for (int index = 0; index < curve.controlPoints.size(); ++index) {
+        const qreal weight = curve.rational ? curve.weights[index] : 1.0;
+        const qreal pointBasis = basis(basis,
+                                       index,
+                                       curve.degree,
+                                       evaluationParameter);
+        const qreal lowerBasis = basis(basis,
+                                       index,
+                                       curve.degree - 1,
+                                       evaluationParameter);
+        const qreal nextLowerBasis = basis(basis,
+                                           index + 1,
+                                           curve.degree - 1,
+                                           evaluationParameter);
+
+        const qreal leftDenominator = fullKnots[index + curve.degree] -
+                                      fullKnots[index];
+        const qreal rightDenominator = fullKnots[index + curve.degree + 1] -
+                                       fullKnots[index + 1];
+        qreal pointBasisDerivative = 0.0;
+        if (std::abs(leftDenominator) > 1.0e-12) {
+            pointBasisDerivative += curve.degree / leftDenominator * lowerBasis;
+        }
+        if (std::abs(rightDenominator) > 1.0e-12) {
+            pointBasisDerivative -= curve.degree / rightDenominator * nextLowerBasis;
+        }
+
+        const qreal weightedBasis = weight * pointBasis;
+        const qreal weightedBasisDerivative = weight * pointBasisDerivative;
+        numerator += curve.controlPoints[index] * weightedBasis;
+        numeratorDerivative += curve.controlPoints[index] * weightedBasisDerivative;
+        denominator += weightedBasis;
+        denominatorDerivative += weightedBasisDerivative;
+    }
+
+    if (std::abs(denominator) <= 1.0e-12) {
+        return false;
+    }
+
+    const QPointF point = numerator / denominator;
+    *derivative = (numeratorDerivative - point * denominatorDerivative) / denominator;
+    return std::isfinite(derivative->x()) && std::isfinite(derivative->y());
 }
 
 } // namespace classiCAD

@@ -93,6 +93,8 @@ public:
     virtual void setArcMode(ArcMode mode) = 0;
     virtual ArcMode arcMode() const = 0;
     virtual void setControlPointsVisible(bool visible) = 0;
+    virtual void setSnapLabelsVisible(bool visible) = 0;
+    virtual void setSmoothCurveDisplay(bool enabled) = 0;
     virtual void setPanButton(Qt::MouseButton button) = 0;
     virtual Qt::MouseButton panButton() const = 0;
     virtual void setOrthoEnabled(bool enabled) = 0;

@@ -4,6 +4,7 @@
 #include "core/document/selection_model.h"
 #include "core/geometry/geometry_type.h"
 #include "core/geometry/geometry_transform.h"
+#include "core/geometry/curve_evaluator.h"
 #include "core/geometry/nurbs_curve.h"
 #include "core/history/history.h"
 #include "core/model.h"
@@ -92,6 +93,14 @@ int main(int argc, char **argv)
                        {}};
     passed &= check(validateNurbsCurve(circle.nurbs),
                     "factory circle must satisfy rational NURBS invariants");
+    constexpr qreal quarterTurn = 0.78539816339744830962;
+    QPointF circleDerivative;
+    passed &= check(evaluateNurbsDerivative(circle.nurbs,
+                                            quarterTurn,
+                                            &circleDerivative) &&
+                        std::abs(circleDerivative.x() + circleDerivative.y()) <= 1.0e-8 &&
+                        circleDerivative.x() < 0.0 && circleDerivative.y() > 0.0,
+                    "rational NURBS derivative must match the exact circle tangent");
 
     Shape mirroredLine;
     passed &= check(mirrorShapeAcrossLine(lineShape,
@@ -323,6 +332,152 @@ int main(int argc, char **argv)
     passed &= check(endpointSnap.type == SnapType::Endpoint &&
                         std::hypot(endpointSnap.point.x(), endpointSnap.point.y()) <= 1.0e-9,
                     "snap engine must select the nearest enabled endpoint");
+
+    Shape nurbsCircleShape{GeometryType::Nurbs,
+                           {},
+                           circle.nurbs,
+                           ArcMode::TwoPoint,
+                           0.0,
+                           {},
+                           {}};
+    const QPointF nurbsCircleTangentOrigin(20.0, 7.0);
+    const QVector<SnapCandidate> nurbsCircleTangents = snapEngine.tangentCandidatesForShape(
+        nurbsCircleShape,
+        nurbsCircleTangentOrigin,
+        viewportTransform,
+        viewportSize);
+    bool nurbsTangenciesAreValid = nurbsCircleTangents.size() == 2;
+    for (const SnapCandidate &candidate : nurbsCircleTangents) {
+        const QPointF radial = candidate.point;
+        const QPointF lineDirection = nurbsCircleTangentOrigin - candidate.point;
+        const qreal normalizedDot = std::abs(QPointF::dotProduct(radial, lineDirection)) /
+                                    (10.0 * std::hypot(lineDirection.x(), lineDirection.y()));
+        nurbsTangenciesAreValid &= candidate.type == SnapType::Tangent &&
+                                   std::abs(std::hypot(radial.x(), radial.y()) - 10.0) <=
+                                       1.0e-7 &&
+                                   normalizedDot <= 1.0e-7;
+    }
+    passed &= check(nurbsTangenciesAreValid,
+                    "NURBS tangencies must lie on the curve with the line perpendicular to its derivative");
+
+    const QPointF editedCircleCenter(30.0, 40.0);
+    const QPointF editedCircleEdge(35.0, 40.0);
+    const Shape editedCircleShape{GeometryType::Circle,
+                                  {QPointF(0.0, 0.0), QPointF(10.0, 0.0)},
+                                  makeCircleNurbs({editedCircleCenter, editedCircleEdge}),
+                                  ArcMode::TwoPoint,
+                                  0.0,
+                                  {},
+                                  {}};
+    const QPointF editedCircleOrigin(50.0, 47.0);
+    const QVector<SnapCandidate> editedCircleTangents = snapEngine.tangentCandidatesForShape(
+        editedCircleShape,
+        editedCircleOrigin,
+        viewportTransform,
+        viewportSize);
+    bool editedCircleTangenciesUseVisibleCurve = editedCircleTangents.size() == 2;
+    for (const SnapCandidate &candidate : editedCircleTangents) {
+        const QPointF radial = candidate.point - editedCircleCenter;
+        const QPointF tangent = editedCircleOrigin - candidate.point;
+        const qreal radius = std::hypot(radial.x(), radial.y());
+        const qreal tangentLength = std::hypot(tangent.x(), tangent.y());
+        editedCircleTangenciesUseVisibleCurve &=
+            candidate.type == SnapType::Tangent &&
+            std::abs(radius - 5.0) <= 1.0e-7 && tangentLength > 1.0e-12 &&
+            std::abs(QPointF::dotProduct(radial, tangent)) /
+                    (radius * tangentLength) <=
+                1.0e-7;
+    }
+    passed &= check(editedCircleTangenciesUseVisibleCurve,
+                    "edited circles must calculate tangencies from stored NURBS, not stale construction points");
+
+    const Shape editedArcShape{GeometryType::Arc,
+                               {QPointF(0.0, 0.0),
+                                QPointF(10.0, 0.0),
+                                QPointF(0.0, 10.0)},
+                               editedCircleShape.nurbs,
+                               ArcMode::TwoPoint,
+                               0.0,
+                               {},
+                               {}};
+    const QVector<SnapCandidate> editedArcTangents = snapEngine.tangentCandidatesForShape(
+        editedArcShape,
+        editedCircleOrigin,
+        viewportTransform,
+        viewportSize);
+    bool editedArcTangenciesUseVisibleCurve = editedArcTangents.size() == 2;
+    for (const SnapCandidate &candidate : editedArcTangents) {
+        const QPointF radial = candidate.point - editedCircleCenter;
+        const QPointF tangent = editedCircleOrigin - candidate.point;
+        const qreal radius = std::hypot(radial.x(), radial.y());
+        const qreal tangentLength = std::hypot(tangent.x(), tangent.y());
+        editedArcTangenciesUseVisibleCurve &=
+            candidate.type == SnapType::Tangent &&
+            std::abs(radius - 5.0) <= 1.0e-7 && tangentLength > 1.0e-12 &&
+            std::abs(QPointF::dotProduct(radial, tangent)) /
+                    (radius * tangentLength) <=
+                1.0e-7;
+    }
+    passed &= check(editedArcTangenciesUseVisibleCurve,
+                    "edited arcs must calculate tangencies from stored NURBS, not stale construction points");
+
+    const QVector<QPointF> archControlPoints{QPointF(0.0, 0.0),
+                                              QPointF(0.0, 100.0),
+                                              QPointF(100.0, 100.0),
+                                              QPointF(100.0, 0.0)};
+    const Shape::NurbsCurve2D archCurve = makeBezierNurbs(archControlPoints);
+    const Shape archShape{GeometryType::Bezier,
+                          archControlPoints,
+                          archCurve,
+                          ArcMode::TwoPoint,
+                          0.0,
+                          {},
+                          {}};
+    const QPointF archOrigin(50.0, 130.0);
+    const QVector<SnapCandidate> archTangents = snapEngine.tangentCandidatesForShape(
+        archShape, archOrigin, viewportTransform, viewportSize);
+    qreal archStartParameter = 0.0;
+    qreal archEndParameter = 0.0;
+    bool freeformTangenciesAreValid = !archTangents.isEmpty() &&
+        nurbsParameterDomain(archCurve, &archStartParameter, &archEndParameter);
+    for (const SnapCandidate &candidate : archTangents) {
+        qreal low = archStartParameter;
+        qreal high = archEndParameter;
+        for (int iteration = 0; iteration < 64; ++iteration) {
+            const qreal middle = (low + high) * 0.5;
+            QPointF point;
+            if (!evaluateNurbsPoint(archCurve, middle, &point)) {
+                freeformTangenciesAreValid = false;
+                break;
+            }
+            if (point.x() < candidate.point.x()) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        const qreal parameter = (low + high) * 0.5;
+        QPointF point;
+        QPointF derivative;
+        if (!evaluateNurbsPoint(archCurve, parameter, &point) ||
+            !evaluateNurbsDerivative(archCurve, parameter, &derivative)) {
+            freeformTangenciesAreValid = false;
+            continue;
+        }
+        const QPointF chord = point - archOrigin;
+        const qreal denominator = std::hypot(chord.x(), chord.y()) *
+                                  std::hypot(derivative.x(), derivative.y());
+        const qreal tangentResidual = denominator <= 1.0e-12
+                                          ? 1.0
+                                          : std::abs(crossProduct(chord, derivative)) /
+                                                denominator;
+        freeformTangenciesAreValid &= candidate.type == SnapType::Tangent &&
+                                      std::hypot(point.x() - candidate.point.x(),
+                                                 point.y() - candidate.point.y()) <= 1.0e-6 &&
+                                      tangentResidual <= 1.0e-7;
+    }
+    passed &= check(freeformTangenciesAreValid,
+                    "freeform Bezier tangent lines must match the curve's analytic derivative");
 
     SnapSettings nearOnlySettings{true, false, false, false, false, false, false, true};
     SnapEngine nearSnapEngine;
@@ -630,6 +785,61 @@ int main(int argc, char **argv)
                         validateNurbsCurve(committedToolShapes.back().nurbs) &&
                         finishedTool == ToolId::Select,
                     "tangent-from-curve tool must preview and commit a tangent line from a selected curve");
+
+    const ObjectId archObjectId = toolDocument.append(archShape);
+    QPointF archPickPoint;
+    const bool archPickPointEvaluated = evaluateNurbsPoint(archCurve,
+                                                           0.25,
+                                                           &archPickPoint);
+    TangentFromCurveTool freeformTangentTool;
+    freeformTangentTool.begin(toolContext);
+    const bool freeformCurvePicked = archPickPointEvaluated &&
+        freeformTangentTool.handleMousePress(tangentInputAt(archPickPoint), toolContext);
+    const ToolInput archEndpointInput = tangentInputAt(archOrigin);
+    freeformTangentTool.handleMouseMove(archEndpointInput, toolContext);
+    const ToolPreview freeformPreview = freeformTangentTool.preview();
+    bool committedFreeformTangentIsValid = freeformPreview.points.size() == 1;
+    if (committedFreeformTangentIsValid) {
+        qreal low = archStartParameter;
+        qreal high = archEndParameter;
+        for (int iteration = 0; iteration < 64; ++iteration) {
+            const qreal middle = (low + high) * 0.5;
+            QPointF point;
+            evaluateNurbsPoint(archCurve, middle, &point);
+            if (point.x() < freeformPreview.points.first().x()) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        const qreal parameter = (low + high) * 0.5;
+        QPointF point;
+        QPointF derivative;
+        if (!evaluateNurbsPoint(archCurve, parameter, &point) ||
+            !evaluateNurbsDerivative(archCurve, parameter, &derivative)) {
+            committedFreeformTangentIsValid = false;
+        } else {
+            const QPointF chord = archOrigin - point;
+            const qreal denominator = std::hypot(chord.x(), chord.y()) *
+                                      std::hypot(derivative.x(), derivative.y());
+            committedFreeformTangentIsValid = denominator > 1.0e-12 &&
+                std::abs(crossProduct(chord, derivative)) / denominator <= 1.0e-7;
+        }
+    }
+    const bool freeformLineCommitted = freeformTangentTool.handleMousePress(
+        archEndpointInput, toolContext);
+    passed &= check(archObjectId.isValid() && freeformCurvePicked &&
+                        toolSelection.primaryObjectId() == archObjectId,
+                    "tangent tool must select the requested freeform curve");
+    passed &= check(committedFreeformTangentIsValid,
+                    "freeform tangent preview must align with the curve derivative");
+    passed &= check(freeformLineCommitted && committedToolShapes.size() == 4 &&
+                        committedToolShapes.back().geometryType == GeometryType::Line &&
+                        committedToolShapes.back().points.first() ==
+                            freeformPreview.points.first() &&
+                        committedToolShapes.back().points.back() == archOrigin &&
+                        validateNurbsCurve(committedToolShapes.back().nurbs),
+                    "tangent tool must commit a line aligned with a freeform curve derivative");
 
     return passed ? 0 : 1;
 }

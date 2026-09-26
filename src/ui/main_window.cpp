@@ -44,7 +44,10 @@ namespace classiCAD {
 
 class PreferencesDialog final : public QDialog {
 public:
-    explicit PreferencesDialog(Qt::MouseButton panButton, QWidget *parent = nullptr)
+    explicit PreferencesDialog(Qt::MouseButton panButton,
+                               bool snapLabelsVisible,
+                               bool smoothCurveDisplay,
+                               QWidget *parent = nullptr)
         : QDialog(parent)
     {
         setWindowTitle(QStringLiteral("Preferences"));
@@ -84,7 +87,10 @@ public:
 
         pages_ = new QStackedWidget;
         for (const QString &category : categoryNames) {
-            if (category == QStringLiteral("Keymap")) {
+            if (category == QStringLiteral("Viewport")) {
+                pages_->addWidget(createViewportPage(snapLabelsVisible,
+                                                     smoothCurveDisplay));
+            } else if (category == QStringLiteral("Keymap")) {
                 pages_->addWidget(createKeymapPage(panButton));
             } else {
                 pages_->addWidget(createPlaceholderPage(category));
@@ -105,6 +111,16 @@ public:
     Qt::MouseButton panButton() const
     {
         return panButtonCombo_->currentIndex() == 1 ? Qt::RightButton : Qt::MiddleButton;
+    }
+
+    bool snapLabelsVisible() const
+    {
+        return snapLabelsCheckBox_->isChecked();
+    }
+
+    bool smoothCurveDisplay() const
+    {
+        return smoothCurveDisplayCheckBox_->isChecked();
     }
 
 private:
@@ -157,9 +173,55 @@ private:
         return page;
     }
 
+    QWidget *createViewportPage(bool snapLabelsVisible, bool smoothCurveDisplay)
+    {
+        auto *page = new QWidget;
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 12, 18, 12);
+        layout->setSpacing(12);
+
+        auto *title = new QLabel(QStringLiteral("Viewport"));
+        title->setObjectName(QStringLiteral("preferencesTitle"));
+        layout->addWidget(title);
+
+        auto *feedbackBox = new QGroupBox(QStringLiteral("Snap Feedback"));
+        auto *feedbackLayout = new QVBoxLayout(feedbackBox);
+        snapLabelsCheckBox_ = new QCheckBox(QStringLiteral("Show snap type labels"));
+        snapLabelsCheckBox_->setObjectName(QStringLiteral("snapLabelsPreference"));
+        snapLabelsCheckBox_->setChecked(snapLabelsVisible);
+        feedbackLayout->addWidget(snapLabelsCheckBox_);
+
+        auto *hint = new QLabel(QStringLiteral(
+            "Display the snap type, such as Endpoint, Midpoint, or Tangent, beside its marker."));
+        hint->setObjectName(QStringLiteral("preferencesHint"));
+        hint->setWordWrap(true);
+        feedbackLayout->addWidget(hint);
+        layout->addWidget(feedbackBox);
+
+        auto *curveBox = new QGroupBox(QStringLiteral("Curve Display"));
+        auto *curveLayout = new QVBoxLayout(curveBox);
+        smoothCurveDisplayCheckBox_ = new QCheckBox(
+            QStringLiteral("Smooth curves when zoomed in"));
+        smoothCurveDisplayCheckBox_->setObjectName(
+            QStringLiteral("smoothCurveDisplayPreference"));
+        smoothCurveDisplayCheckBox_->setChecked(smoothCurveDisplay);
+        curveLayout->addWidget(smoothCurveDisplayCheckBox_);
+
+        auto *curveHint = new QLabel(QStringLiteral(
+            "Add drawing detail as you zoom in. Turn this off to use a faster, fixed-detail display."));
+        curveHint->setObjectName(QStringLiteral("preferencesHint"));
+        curveHint->setWordWrap(true);
+        curveLayout->addWidget(curveHint);
+        layout->addWidget(curveBox);
+        layout->addStretch(1);
+        return page;
+    }
+
     QListWidget *categoryList_ = nullptr;
     QStackedWidget *pages_ = nullptr;
     QComboBox *panButtonCombo_ = nullptr;
+    QCheckBox *snapLabelsCheckBox_ = nullptr;
+    QCheckBox *smoothCurveDisplayCheckBox_ = nullptr;
 };
 
 class MainWindow final : public QMainWindow {
@@ -951,6 +1013,10 @@ private:
         applyPanButton(savedPanButton == QStringLiteral("right") ? Qt::RightButton
                                                                    : Qt::MiddleButton,
                        false);
+        viewport_->setSnapLabelsVisible(
+            settings.value(QStringLiteral("viewport/snapLabelsVisible"), true).toBool());
+        viewport_->setSmoothCurveDisplay(
+            settings.value(QStringLiteral("viewport/smoothCurveDisplay"), true).toBool());
 
         if (orthoAction_ != nullptr) {
             orthoAction_->setChecked(settings.value(QStringLiteral("modeling/orthoEnabled"), false)
@@ -987,9 +1053,40 @@ private:
 
     void openPreferences()
     {
-        PreferencesDialog dialog(viewport_->panButton(), this);
+        QSettings settings;
+        PreferencesDialog dialog(
+            viewport_->panButton(),
+            settings.value(QStringLiteral("viewport/snapLabelsVisible"), true).toBool(),
+            settings.value(QStringLiteral("viewport/smoothCurveDisplay"), true).toBool(),
+            this);
         if (dialog.exec() == QDialog::Accepted) {
             applyPanButton(dialog.panButton(), true);
+            applySnapLabelsVisible(dialog.snapLabelsVisible(), true);
+            applySmoothCurveDisplay(dialog.smoothCurveDisplay(), true);
+        }
+    }
+
+    void applySmoothCurveDisplay(bool enabled, bool save)
+    {
+        viewport_->setSmoothCurveDisplay(enabled);
+        if (save) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("viewport/smoothCurveDisplay"), enabled);
+            settings.sync();
+            statusBar()->showMessage(enabled ? QStringLiteral("Smooth curve display: On")
+                                             : QStringLiteral("Smooth curve display: Off"));
+        }
+    }
+
+    void applySnapLabelsVisible(bool visible, bool save)
+    {
+        viewport_->setSnapLabelsVisible(visible);
+        if (save) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("viewport/snapLabelsVisible"), visible);
+            settings.sync();
+            statusBar()->showMessage(visible ? QStringLiteral("Snap type labels: On")
+                                             : QStringLiteral("Snap type labels: Off"));
         }
     }
 

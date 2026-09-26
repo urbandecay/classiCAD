@@ -23,6 +23,7 @@ public:
                    bool preview,
                    bool selected = false,
                    bool drawPreviewPoints = true) const;
+    void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
                         const QSize &viewportSize) const;
@@ -78,6 +79,7 @@ private:
 
     const ViewportTransform &transform_;
     const CurveHitTester &curveHitTester_;
+    bool smoothCurveDisplay_ = true;
 };
 
 } // namespace classiCAD

@@ -47,6 +47,12 @@ bool SnapEngine::subdivisionCurve(const Shape &shape,
         *curve = makeDegreeOneNurbs(shape.points);
         return validateNurbsCurve(*curve);
     }
+    if ((shape.geometryType == GeometryType::Bezier ||
+         shape.geometryType == GeometryType::Nurbs) &&
+        shape.points.size() >= 2) {
+        *curve = makeBezierNurbs(shape.points);
+        return validateNurbsCurve(*curve);
+    }
     return false;
 }
 
@@ -274,7 +280,8 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     const QSize &viewportSize) const
 {
     QVector<SnapCandidate> candidates;
-    if (shape.points.isEmpty()) {
+    if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
+        shape.components.isEmpty()) {
         return candidates;
     }
 
@@ -307,8 +314,27 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         }
         return candidates;
     }
+    if (shape.geometryType == GeometryType::Bezier ||
+        shape.geometryType == GeometryType::Nurbs) {
+        Shape::NurbsCurve2D curve;
+        if (subdivisionCurve(shape, &curve)) {
+            QPointF start;
+            QPointF end;
+            if (nurbsCurveEndpoints(curve, &start, &end)) {
+                candidates.append({SnapType::Endpoint, start});
+                candidates.append({SnapType::Endpoint, end});
+            }
+            QPointF midpoint;
+            if (nurbsCurvePointAtFraction(curve, 0.5, &midpoint)) {
+                candidates.append({SnapType::Midpoint, midpoint});
+            }
+        }
+        return candidates;
+    }
     if (shape.geometryType == GeometryType::Circle) {
-        candidates.append({SnapType::Center, shape.points.first()});
+        if (!shape.points.isEmpty()) {
+            candidates.append({SnapType::Center, shape.points.first()});
+        }
         return candidates;
     }
     if (shape.geometryType == GeometryType::Rectangle) {
@@ -323,21 +349,27 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         }
         return candidates;
     }
-    if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
-        QPointF start = shape.arcMode == ArcMode::OnePoint ? shape.points[1]
-                                                            : shape.points[0];
-        QPointF end = shape.arcMode == ArcMode::OnePoint ? shape.points[2]
-                                                          : shape.points[1];
-        if (!nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
-            QPointF evaluatedEndpoint;
-            if (arcSnapPointAtFraction(shape, 0.0, transform, viewportSize,
-                                       &evaluatedEndpoint)) {
-                start = evaluatedEndpoint;
+    if (shape.geometryType == GeometryType::Arc) {
+        QPointF start;
+        QPointF end;
+        if (shape.points.size() >= 3) {
+            start = shape.arcMode == ArcMode::OnePoint ? shape.points[1]
+                                                        : shape.points[0];
+            end = shape.arcMode == ArcMode::OnePoint ? shape.points[2]
+                                                      : shape.points[1];
+            if (!nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
+                QPointF evaluatedEndpoint;
+                if (arcSnapPointAtFraction(shape, 0.0, transform, viewportSize,
+                                           &evaluatedEndpoint)) {
+                    start = evaluatedEndpoint;
+                }
+                if (arcSnapPointAtFraction(shape, 1.0, transform, viewportSize,
+                                           &evaluatedEndpoint)) {
+                    end = evaluatedEndpoint;
+                }
             }
-            if (arcSnapPointAtFraction(shape, 1.0, transform, viewportSize,
-                                       &evaluatedEndpoint)) {
-                end = evaluatedEndpoint;
-            }
+        } else if (!nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
+            return candidates;
         }
         candidates.append({SnapType::Endpoint, start});
         candidates.append({SnapType::Endpoint, end});
@@ -363,6 +395,16 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     }
 
     QVector<LineSegment> segments;
+    if (shape.points.isEmpty()) {
+        QPointF start;
+        QPointF end;
+        if (nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
+            candidates.append({SnapType::Endpoint, start});
+            candidates.append({SnapType::Endpoint, end});
+        }
+        return candidates;
+    }
+
     for (const QPointF &point : shape.points) {
         candidates.append({SnapType::Endpoint, point});
     }
@@ -403,7 +445,8 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             continue;
         }
         const Shape &shape = document[shapeIndex];
-        if (shape.points.isEmpty()) {
+        if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
+            shape.components.isEmpty()) {
             continue;
         }
 
@@ -420,7 +463,7 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
         }
 
         if (shape.geometryType == GeometryType::Point) {
-            if (settings_.endpoint) {
+            if (settings_.endpoint && !shape.points.isEmpty()) {
                 candidates.append({SnapType::Endpoint, shape.points.first()});
             }
             continue;
@@ -441,8 +484,26 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             }
             continue;
         }
+        if (shape.geometryType == GeometryType::Bezier ||
+            shape.geometryType == GeometryType::Nurbs) {
+            Shape::NurbsCurve2D curve;
+            if (subdivisionCurve(shape, &curve)) {
+                QPointF start;
+                QPointF end;
+                if (settings_.endpoint && nurbsCurveEndpoints(curve, &start, &end)) {
+                    candidates.append({SnapType::Endpoint, start});
+                    candidates.append({SnapType::Endpoint, end});
+                }
+                QPointF midpoint;
+                if (settings_.midpoint &&
+                    nurbsCurvePointAtFraction(curve, 0.5, &midpoint)) {
+                    candidates.append({SnapType::Midpoint, midpoint});
+                }
+            }
+            continue;
+        }
         if (shape.geometryType == GeometryType::Circle) {
-            if (settings_.center) {
+            if (settings_.center && !shape.points.isEmpty()) {
                 candidates.append({SnapType::Center, shape.points.first()});
             }
             continue;
@@ -504,12 +565,28 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             }
             continue;
         }
+        if (shape.geometryType == GeometryType::Arc) {
+            QPointF start;
+            QPointF end;
+            if (settings_.endpoint && nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
+                candidates.append({SnapType::Endpoint, start});
+                candidates.append({SnapType::Endpoint, end});
+            }
+            continue;
+        }
         if (shape.geometryType != GeometryType::Line) {
             continue;
         }
         if (settings_.endpoint) {
-            for (const QPointF &point : shape.points) {
-                candidates.append({SnapType::Endpoint, point});
+            QPointF start;
+            QPointF end;
+            if (nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
+                candidates.append({SnapType::Endpoint, start});
+                candidates.append({SnapType::Endpoint, end});
+            } else {
+                for (const QPointF &point : shape.points) {
+                    candidates.append({SnapType::Endpoint, point});
+                }
             }
         }
         for (int index = 0; index + 1 < shape.points.size(); ++index) {
@@ -853,21 +930,27 @@ DragSnapResult SnapEngine::findDragSnap(
 DragSnapResult SnapEngine::findControlPointSnap(
     const Document &document,
     int selectedShapeIndex,
+    int selectedControlPointIndex,
     const QPointF &controlPoint,
-    const QVector<QPointF> &otherControlPoints,
     const ViewportTransform &transform,
     const QSize &viewportSize) const
 {
     DragSnapResult best;
     const QPointF sourceScreen = transform.worldToScreen(controlPoint, viewportSize);
-    constexpr qreal snapRadiusPixels = 12.0;
+    constexpr qreal snapRadiusPixels = 20.0;
     qreal bestDistance = snapRadiusPixels;
 
     const auto consider = [&](SnapType type, const QPointF &targetPoint) {
         const QPointF targetScreen = transform.worldToScreen(targetPoint, viewportSize);
         const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
                                           targetScreen.y() - sourceScreen.y());
-        if (distance <= bestDistance) {
+        constexpr qreal tieTolerancePixels = 1.0e-6;
+        const bool closer = distance < bestDistance - tieTolerancePixels;
+        const bool preferredTie = std::abs(distance - bestDistance) <= tieTolerancePixels &&
+                                  (best.type == SnapType::None ||
+                                   (type == SnapType::Endpoint &&
+                                    best.type != SnapType::Endpoint));
+        if (distance <= snapRadiusPixels && (closer || preferredTie)) {
             bestDistance = distance;
             best.type = type;
             best.sourcePoint = controlPoint;
@@ -888,8 +971,44 @@ DragSnapResult SnapEngine::findControlPointSnap(
         }
     }
 
-    for (const QPointF &target : otherControlPoints) {
-        consider(SnapType::ControlPoint, target);
+    for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
+        const ObjectId objectId = document.objectIdAt(shapeIndex);
+        if (!document.isObjectVisible(objectId)) {
+            continue;
+        }
+
+        const Shape &shape = document[shapeIndex];
+        QVector<QPointF> controlPoints;
+        if (shape.geometryType == GeometryType::PolyCurve) {
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                controlPoints += component.controlPoints;
+            }
+        } else if (!shape.nurbs.controlPoints.isEmpty()) {
+            controlPoints = shape.nurbs.controlPoints;
+        } else {
+            controlPoints = shape.points;
+        }
+
+        for (int pointIndex = 0; pointIndex < controlPoints.size(); ++pointIndex) {
+            if (shapeIndex == selectedShapeIndex &&
+                pointIndex == selectedControlPointIndex) {
+                continue;
+            }
+            consider(SnapType::ControlPoint, controlPoints[pointIndex]);
+        }
+
+        // A two-point rectangle stores only its diagonal construction points,
+        // but all four corners are visible geometric snap targets.
+        if (shape.geometryType == GeometryType::Rectangle) {
+            for (const QPointF &corner : rectangleVertices(shape)) {
+                const QPointF difference = corner - controlPoint;
+                if (shapeIndex == selectedShapeIndex &&
+                    QPointF::dotProduct(difference, difference) <= 1.0e-18) {
+                    continue;
+                }
+                consider(SnapType::ControlPoint, corner);
+            }
+        }
     }
     return best;
 }

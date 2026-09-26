@@ -4334,22 +4334,10 @@ private:
                                         int selectedControlPointIndex,
                                         const QPointF &controlPoint) const
     {
-        QVector<QPointF> otherControlPoints;
-        for (const int shapeIndex : controlPointShapeIndices()) {
-            const ObjectId objectId = document_.objectIdAt(shapeIndex);
-            const QVector<QPointF> controlPoints = controlPointsForShape(shapes_[shapeIndex]);
-            for (int index = 0; index < controlPoints.size(); ++index) {
-                if (objectId == selectedObjectId && index == selectedControlPointIndex) {
-                    continue;
-                }
-                otherControlPoints.append(controlPoints[index]);
-            }
-        }
-
         return snapEngine_.findControlPointSnap(document_,
                                                 objectIndex(selectedObjectId),
+                                                selectedControlPointIndex,
                                                 controlPoint,
-                                                otherControlPoints,
                                                 viewportTransform_,
                                                 size());
     }

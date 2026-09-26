@@ -323,6 +323,97 @@ int main(int argc, char **argv)
                         std::hypot(endpointSnap.point.x(), endpointSnap.point.y()) <= 1.0e-9,
                     "snap engine must select the nearest enabled endpoint");
 
+    Document controlPointSnapDocument;
+    Shape movingControlPointLine = lineShape;
+    movingControlPointLine.points = {QPointF(17.0, 50.0), QPointF(100.0, 100.0)};
+    movingControlPointLine.nurbs = makeDegreeOneNurbs(movingControlPointLine.points);
+    controlPointSnapDocument.append(movingControlPointLine);
+    controlPointSnapDocument.append(
+        Shape{GeometryType::Rectangle,
+              {QPointF(0.0, 0.0), QPointF(100.0, 50.0)},
+              {},
+              ArcMode::TwoPoint,
+              0.0,
+              {},
+              {}});
+    SnapEngine controlPointSnapEngine;
+    const DragSnapResult rectangleCornerSnap =
+        controlPointSnapEngine.findControlPointSnap(controlPointSnapDocument,
+                                                    0,
+                                                    0,
+                                                    QPointF(17.0, 50.0),
+                                                    viewportTransform,
+                                                    viewportSize);
+    passed &= check(rectangleCornerSnap.type == SnapType::ControlPoint &&
+                        rectangleCornerSnap.targetPoint == QPointF(0.0, 50.0),
+                    "control-point dragging must snap to any visible rectangle corner with OSnap disabled");
+
+    SnapEngine endpointControlPointSnapEngine;
+    endpointControlPointSnapEngine.setSettings(
+        SnapSettings{true, true, false, false, false, false, false});
+    const DragSnapResult endpointModeCornerSnap =
+        endpointControlPointSnapEngine.findControlPointSnap(controlPointSnapDocument,
+                                                            0,
+                                                            0,
+                                                            QPointF(17.0, 50.0),
+                                                            viewportTransform,
+                                                            viewportSize);
+    passed &= check(endpointModeCornerSnap.type == SnapType::Endpoint &&
+                        endpointModeCornerSnap.targetPoint == QPointF(0.0, 50.0),
+                    "Endpoint OSnap must identify rectangle corners as endpoints while dragging a control point");
+
+    const NurbsCurve2D nurbsOnlyBezier = makeBezierNurbs(
+        {QPointF(50.0, 50.0), QPointF(60.0, 50.0),
+         QPointF(70.0, 50.0), QPointF(80.0, 50.0)});
+    Document nurbsEndpointDocument;
+    Shape nurbsEndpointSource = movingControlPointLine;
+    nurbsEndpointSource.points = {QPointF(52.0, 50.0), QPointF(100.0, 100.0)};
+    nurbsEndpointSource.nurbs = makeDegreeOneNurbs(nurbsEndpointSource.points);
+    nurbsEndpointDocument.append(nurbsEndpointSource);
+    nurbsEndpointDocument.append(Shape{GeometryType::Bezier,
+                                       {},
+                                       nurbsOnlyBezier,
+                                       ArcMode::TwoPoint,
+                                       0.0,
+                                       {},
+                                       {}});
+    const DragSnapResult nurbsEndpointSnap =
+        endpointControlPointSnapEngine.findControlPointSnap(nurbsEndpointDocument,
+                                                            0,
+                                                            0,
+                                                            QPointF(52.0, 50.0),
+                                                            viewportTransform,
+                                                            viewportSize);
+    passed &= check(nurbsEndpointSnap.type == SnapType::Endpoint &&
+                        nurbsEndpointSnap.targetPoint == QPointF(50.0, 50.0),
+                    "Endpoint OSnap must find evaluated endpoints on NURBS-only curves");
+
+    Document reverseDragSnapDocument;
+    reverseDragSnapDocument.append(
+        Shape{GeometryType::Rectangle,
+              {QPointF(50.0, 52.0), QPointF(100.0, 100.0)},
+              {},
+              ArcMode::TwoPoint,
+              0.0,
+              {},
+              {}});
+    reverseDragSnapDocument.append(Shape{GeometryType::Bezier,
+                                         {},
+                                         nurbsOnlyBezier,
+                                         ArcMode::TwoPoint,
+                                         0.0,
+                                         {},
+                                         {}});
+    const DragSnapResult reverseDirectionSnap =
+        endpointControlPointSnapEngine.findDragSnap(reverseDragSnapDocument,
+                                                    {1},
+                                                    viewportTransform,
+                                                    viewportSize);
+    passed &= check(reverseDirectionSnap.type == SnapType::Endpoint &&
+                        reverseDirectionSnap.sourcePoint == QPointF(50.0, 50.0) &&
+                        reverseDirectionSnap.targetPoint == QPointF(50.0, 52.0),
+                    "Bezier endpoints must remain snap sources when dragging the curve toward a rectangle");
+
     Document toolDocument;
     SelectionModel toolSelection;
     History toolHistory(toolDocument);

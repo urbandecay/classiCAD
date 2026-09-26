@@ -62,8 +62,8 @@ public:
     DragSnapResult findControlPointSnap(
         const Document &document,
         int selectedShapeIndex,
+        int selectedControlPointIndex,
         const QPointF &controlPoint,
-        const QVector<QPointF> &otherControlPoints,
         const ViewportTransform &transform,
         const QSize &viewportSize) const;
 

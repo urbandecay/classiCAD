@@ -182,6 +182,7 @@ public:
             selectionBoxMoved_ = false;
             selectionBoxAdditive_ = false;
             draggingSelected_ = false;
+            dragGestureStarted_ = false;
             draggingShapeIndices_.clear();
             draggingControlPoint_ = false;
             controlPointIndex_ = -1;
@@ -822,6 +823,7 @@ public:
         grabPickingBasePoint_ = false;
         grabHasBasePoint_ = false;
         draggingSelected_ = true;
+        dragGestureStarted_ = true;
         draggingShapeIndices_ = validSelection;
         if (!selectedShapeIndex_.isValid() || !validSelection.contains(selectedShapeIndex_)) {
             selectedShapeIndex_ = validSelection.back();
@@ -838,6 +840,7 @@ public:
             cursorWorld_ = rawCursorWorld_;
             cursorValid_ = true;
         }
+        dragStartScreen_ = localCursor;
         grabStartWorld_ = rawCursorWorld_;
         lastDragWorld_ = grabStartWorld_;
         setFocus(Qt::OtherFocusReason);
@@ -1726,6 +1729,8 @@ protected:
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
+            dragGestureStarted_ = false;
+            dragStartScreen_ = screenPosition;
             const bool shiftPressed = event->modifiers().testFlag(Qt::ShiftModifier);
 
             if (!shiftPressed && controlPointsVisible_) {
@@ -2010,8 +2015,17 @@ protected:
             return;
         }
 
+        if ((draggingSelected_ || draggingControlPoint_) && !dragGestureStarted_) {
+            constexpr qreal dragStartThresholdPixels = 4.0;
+            const QPointF screenDelta = screenPosition - dragStartScreen_;
+            if (std::hypot(screenDelta.x(), screenDelta.y()) >= dragStartThresholdPixels) {
+                dragGestureStarted_ = true;
+            }
+        }
+
         const int selectedIndex = objectIndex(selectedShapeIndex_);
-        if (draggingControlPoint_ && selectedIndex >= 0 && controlPointIndex_ >= 0) {
+        if (draggingControlPoint_ && dragGestureStarted_ && selectedIndex >= 0 &&
+            controlPointIndex_ >= 0) {
             const QPointF delta = rawCursorWorld_ - lastControlPointWorld_;
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
                 constexpr qreal dragSnapBreakawayPixels = 18.0;
@@ -2072,7 +2086,7 @@ protected:
                         .arg(pointText(delta))
                         .arg(pointText(rawCursorWorld_)));
             }
-        } else if (draggingSelected_ && selectedIndex >= 0) {
+        } else if (draggingSelected_ && dragGestureStarted_ && selectedIndex >= 0) {
             const QVector<ObjectId> dragIndices = draggingShapeIndices_.isEmpty()
                                                      ? QVector<ObjectId>{selectedShapeIndex_}
                                                      : draggingShapeIndices_;
@@ -2242,6 +2256,7 @@ protected:
 
         if (draggingControlPoint_ && event->button() == Qt::LeftButton) {
             draggingControlPoint_ = false;
+            dragGestureStarted_ = false;
             controlPointIndex_ = -1;
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
@@ -2253,6 +2268,7 @@ protected:
             update();
         } else if (draggingSelected_ && event->button() == Qt::LeftButton) {
             draggingSelected_ = false;
+            dragGestureStarted_ = false;
             draggingShapeIndices_.clear();
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
@@ -6824,6 +6840,7 @@ private:
     bool draggingSelected_ = false;
     QVector<ObjectId> draggingShapeIndices_;
     bool draggingControlPoint_ = false;
+    bool dragGestureStarted_ = false;
     int &controlPointIndex_;
     bool dragHistoryRecorded_ = false;
     bool dragSnapLocked_ = false;
@@ -6837,6 +6854,7 @@ private:
     QPointF grabBasePoint_{0.0, 0.0};
     QPointF grabCursorOffset_{0.0, 0.0};
     QPointF dragSnapCursorWorld_{0.0, 0.0};
+    QPointF dragStartScreen_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
     QPointF lastControlPointWorld_{0.0, 0.0};
     bool selectionBoxActive_ = false;

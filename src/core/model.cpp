@@ -786,6 +786,15 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         dimensionOffsetValid = true;
     }
 
+    if ((geometryType == GeometryType::Circle ||
+         geometryType == GeometryType::Ellipse) &&
+        validateNurbsCurve(nurbs) && nurbs.controlPoints.size() >= 2) {
+        const QPointF seam =
+            (nurbs.controlPoints.first() + nurbs.controlPoints.last()) * 0.5;
+        nurbs.controlPoints.first() = seam;
+        nurbs.controlPoints.last() = seam;
+    }
+
     shape->geometryType = geometryType;
     shape->points = points;
     shape->nurbs = nurbs;

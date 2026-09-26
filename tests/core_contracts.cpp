@@ -178,6 +178,15 @@ int main(int argc, char **argv)
                         editedCircleSeam.nurbs.controlPoints.first() == movedLastSeam &&
                         editedCircleSeam.nurbs.controlPoints.last() == movedLastSeam,
                     "dragging either circle seam CV must preserve closure and heal an open seam");
+    Shape brokenSavedCircle = circle;
+    brokenSavedCircle.nurbs.controlPoints.last() += QPointF(0.0, 2.0);
+    Shape restoredClosedCircle;
+    passed &= check(shapeFromJson(shapeToJson(brokenSavedCircle), &restoredClosedCircle) &&
+                        restoredClosedCircle.nurbs.controlPoints.first() ==
+                            restoredClosedCircle.nurbs.controlPoints.last() &&
+                        restoredClosedCircle.nurbs.controlPoints.first() ==
+                            circle.nurbs.controlPoints.first() + QPointF(0.0, 1.0),
+                    "loading a circle with a split seam must restore a closed control-point loop");
     QVector<QPointF> diameterCircleDefinition;
     QVector<QPointF> threePointCircleDefinition;
     passed &= check(makeCircleDefinitionFromDiameter(QPointF(-5.0, 0.0),

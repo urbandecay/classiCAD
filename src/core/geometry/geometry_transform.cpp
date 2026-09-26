@@ -88,4 +88,30 @@ bool mirrorShapeAcrossLine(const Shape &source,
     return true;
 }
 
+bool setClosedNurbsSeamControlPoint(Shape *shape,
+                                    int controlPointIndex,
+                                    const QPointF &position)
+{
+    if (shape == nullptr || shape->nurbs.controlPoints.size() < 2) {
+        return false;
+    }
+    const int lastIndex = shape->nurbs.controlPoints.size() - 1;
+    if (controlPointIndex != 0 && controlPointIndex != lastIndex) {
+        return false;
+    }
+
+    const bool alwaysClosedType = shape->geometryType == GeometryType::Circle ||
+                                  shape->geometryType == GeometryType::Ellipse;
+    const QPointF seamDelta = shape->nurbs.controlPoints.first() -
+                              shape->nurbs.controlPoints.last();
+    const bool alreadyClosed = QPointF::dotProduct(seamDelta, seamDelta) <= 1.0e-18;
+    if (!alwaysClosedType && !alreadyClosed) {
+        return false;
+    }
+
+    shape->nurbs.controlPoints[0] = position;
+    shape->nurbs.controlPoints[lastIndex] = position;
+    return true;
+}
+
 } // namespace classiCAD

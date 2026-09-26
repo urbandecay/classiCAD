@@ -159,6 +159,25 @@ int main(int argc, char **argv)
                        {}};
     passed &= check(validateNurbsCurve(circle.nurbs),
                     "factory circle must satisfy rational NURBS invariants");
+    Shape editedCircleSeam = circle;
+    editedCircleSeam.nurbs.controlPoints.last() += QPointF(0.0, 2.0);
+    const QPointF movedFirstSeam =
+        editedCircleSeam.nurbs.controlPoints.first() + QPointF(3.0, -4.0);
+    passed &= check(setClosedNurbsSeamControlPoint(&editedCircleSeam,
+                                                   0,
+                                                   movedFirstSeam) &&
+                        editedCircleSeam.nurbs.controlPoints.first() == movedFirstSeam &&
+                        editedCircleSeam.nurbs.controlPoints.last() == movedFirstSeam,
+                    "moving a circle seam control point must move both duplicated CVs together");
+    const int lastCircleControlPoint =
+        editedCircleSeam.nurbs.controlPoints.size() - 1;
+    const QPointF movedLastSeam = movedFirstSeam + QPointF(-2.0, 5.0);
+    passed &= check(setClosedNurbsSeamControlPoint(&editedCircleSeam,
+                                                   lastCircleControlPoint,
+                                                   movedLastSeam) &&
+                        editedCircleSeam.nurbs.controlPoints.first() == movedLastSeam &&
+                        editedCircleSeam.nurbs.controlPoints.last() == movedLastSeam,
+                    "dragging either circle seam CV must preserve closure and heal an open seam");
     QVector<QPointF> diameterCircleDefinition;
     QVector<QPointF> threePointCircleDefinition;
     passed &= check(makeCircleDefinitionFromDiameter(QPointF(-5.0, 0.0),

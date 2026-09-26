@@ -6477,7 +6477,13 @@ private:
                 return;
             }
 
-            shape.nurbs.controlPoints[controlPointIndex] += delta;
+            const QPointF newControlPoint =
+                shape.nurbs.controlPoints[controlPointIndex] + delta;
+            if (!setClosedNurbsSeamControlPoint(&shape,
+                                               controlPointIndex,
+                                               newControlPoint)) {
+                shape.nurbs.controlPoints[controlPointIndex] = newControlPoint;
+            }
 
             // These curve types keep their source points in the same order as
             // their NURBS CVs. Keep both representations synchronized. Arc

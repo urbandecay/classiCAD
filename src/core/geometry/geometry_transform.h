@@ -12,4 +12,11 @@ bool mirrorShapeAcrossLine(const Shape &source,
                            const QPointF &axisEnd,
                            Shape *mirrored);
 
+// Move either duplicated endpoint CV of a closed NURBS curve while keeping
+// the seam closed. Circle and ellipse shapes remain seam-linked even after
+// an earlier edit has already separated the two CVs.
+bool setClosedNurbsSeamControlPoint(Shape *shape,
+                                    int controlPointIndex,
+                                    const QPointF &position);
+
 } // namespace classiCAD

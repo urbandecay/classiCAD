@@ -583,6 +583,37 @@ int main(int argc, char **argv)
                         endpointModeCornerSnap.targetPoint == QPointF(0.0, 50.0),
                     "Endpoint OSnap must identify rectangle corners as endpoints while dragging a control point");
 
+    const QPointF fixedLineEndpoint(20.0, 0.0);
+    const QPointF circleTangentPoint(5.0, 8.660254037844386);
+    const QPointF draggedLineEndpoint = circleTangentPoint + QPointF(1.0, 0.0);
+    Document tangentControlPointDocument;
+    tangentControlPointDocument.append(
+        Shape{GeometryType::Line,
+              {fixedLineEndpoint, draggedLineEndpoint},
+              makeDegreeOneNurbs({fixedLineEndpoint, draggedLineEndpoint}),
+              ArcMode::TwoPoint,
+              0.0,
+              {},
+              {}});
+    tangentControlPointDocument.append(circle);
+    SnapEngine tangentControlPointSnapEngine;
+    tangentControlPointSnapEngine.setSettings(
+        SnapSettings{true, true, false, false, false, false, true, false, false});
+    const DragSnapResult draggedEndpointTangentSnap =
+        tangentControlPointSnapEngine.findControlPointSnap(
+            tangentControlPointDocument,
+            0,
+            1,
+            draggedLineEndpoint,
+            viewportTransform,
+            viewportSize);
+    passed &= check(draggedEndpointTangentSnap.type == SnapType::Tangent &&
+                        std::hypot(draggedEndpointTangentSnap.targetPoint.x() -
+                                       circleTangentPoint.x(),
+                                   draggedEndpointTangentSnap.targetPoint.y() -
+                                       circleTangentPoint.y()) <= 1.0e-6,
+                    "dragged line endpoints must snap to curve tangencies when Tangent OSnap is enabled");
+
     const NurbsCurve2D nurbsOnlyBezier = makeBezierNurbs(
         {QPointF(50.0, 50.0), QPointF(60.0, 50.0),
          QPointF(70.0, 50.0), QPointF(80.0, 50.0)});

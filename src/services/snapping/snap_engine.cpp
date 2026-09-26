@@ -1508,6 +1508,32 @@ DragSnapResult SnapEngine::findControlPointSnap(
         }
     }
 
+    if (settings_.enabled && settings_.tangent && selectedShapeIndex >= 0 &&
+        selectedShapeIndex < document.size()) {
+        const Shape &sourceShape = document[selectedShapeIndex];
+        if (sourceShape.geometryType == GeometryType::Line) {
+            const QVector<QPointF> &lineControlPoints =
+                sourceShape.nurbs.controlPoints.isEmpty()
+                    ? sourceShape.points
+                    : sourceShape.nurbs.controlPoints;
+            if (lineControlPoints.size() >= 2 &&
+                (selectedControlPointIndex == 0 ||
+                 selectedControlPointIndex == lineControlPoints.size() - 1)) {
+                const int fixedEndpointIndex =
+                    selectedControlPointIndex == 0 ? 1 : lineControlPoints.size() - 2;
+                const QVector<SnapCandidate> tangentTargets =
+                    tangentCandidates(document,
+                                      lineControlPoints[fixedEndpointIndex],
+                                      transform,
+                                      viewportSize,
+                                      {selectedShapeIndex});
+                for (const SnapCandidate &target : tangentTargets) {
+                    consider(target.type, target.point);
+                }
+            }
+        }
+    }
+
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
         const ObjectId objectId = document.objectIdAt(shapeIndex);
         if (!document.isObjectVisible(objectId)) {

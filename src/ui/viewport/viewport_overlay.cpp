@@ -560,6 +560,12 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
         painter.drawText(18,
                          viewportSize.height() - 18,
                          QStringLiteral("Click a curve, then click the line endpoint  •  Esc cancels"));
+    } else if (activeTool == Tool::PerpendicularFromCurve) {
+        painter.setPen(QColor(QStringLiteral("#777777")));
+        painter.drawText(
+            18,
+            viewportSize.height() - 18,
+            QStringLiteral("Click a curve, then click the perpendicular line endpoint  •  Esc cancels"));
     } else if (activeTool != Tool::Select) {
         QString hint;
         if (activeTool == Tool::Arc) {

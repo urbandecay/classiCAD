@@ -1474,6 +1474,13 @@ protected:
             if (!pendingPoints_.isEmpty()) {
                 drawSnapMarker(painter, SnapType::Tangent, pendingPoints_.first());
             }
+        } else if (activeTool_ == Tool::PerpendicularFromCurve) {
+            drawLineToolPreview(painter);
+            if (!pendingPoints_.isEmpty()) {
+                drawSnapMarker(painter,
+                               SnapType::Perpendicular,
+                               pendingPoints_.first());
+            }
         } else if (activeTool_ == Tool::Line && lineCommandActive_) {
             drawLineToolPreview(painter);
         } else if (activeTool_ == Tool::Mirror) {
@@ -4198,7 +4205,8 @@ private:
             activeTool_ == Tool::Arc || activeTool_ == Tool::Circle ||
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate ||
             activeTool_ == Tool::Mirror ||
-            activeTool_ == Tool::TangentFromCurve;
+            activeTool_ == Tool::TangentFromCurve ||
+            activeTool_ == Tool::PerpendicularFromCurve;
         return snapEngine_.findSnapPoint(document_,
                                          rawPoint,
                                          serviceDrawingSnapActive,
@@ -4396,7 +4404,8 @@ private:
         const bool drawingConstraintActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Mirror ||
-            activeTool_ == Tool::TangentFromCurve;
+            activeTool_ == Tool::TangentFromCurve ||
+            activeTool_ == Tool::PerpendicularFromCurve;
         if (!orthoEnabled_ || panning_ || !drawingConstraintActive || pendingPoints_.isEmpty()) {
             return rawPoint;
         }

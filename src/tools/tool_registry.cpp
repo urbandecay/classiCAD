@@ -7,6 +7,7 @@
 #include "line_tool.h"
 #include "mirror_tool.h"
 #include "nurbs_tool.h"
+#include "perpendicular_from_curve_tool.h"
 #include "point_tool.h"
 #include "rectangle_tool.h"
 #include "rotate_tool.h"
@@ -22,6 +23,7 @@ ToolRegistry::ToolRegistry()
     add(std::make_unique<PointTool>());
     add(std::make_unique<LineTool>());
     add(std::make_unique<TangentFromCurveTool>());
+    add(std::make_unique<PerpendicularFromCurveTool>());
     add(std::make_unique<ArcTool>());
     add(std::make_unique<RectangleTool>());
     add(std::make_unique<CircleTool>());

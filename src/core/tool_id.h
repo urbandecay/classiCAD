@@ -22,6 +22,7 @@ enum class ToolId : int {
     Rotate = 11,
     Mirror = 12,
     TangentFromCurve = 13,
+    PerpendicularFromCurve = 14,
 };
 
 // Transitional source alias for the existing UI implementation. New code

@@ -421,6 +421,136 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForNurbsCurve(
     return candidates;
 }
 
+QVector<SnapCandidate> SnapEngine::perpendicularCandidatesForNurbsCurve(
+    const Shape::NurbsCurve2D &curve,
+    const QPointF &originWorld) const
+{
+    QVector<SnapCandidate> candidates;
+    if (!validateNurbsCurve(curve)) {
+        return candidates;
+    }
+
+    const QVector<double> fullKnots = expandedNurbsKnotVector(curve);
+    const int samplesPerSpan = std::clamp(curve.degree * 32, 64, 512);
+    const auto perpendicularCondition = [&](qreal parameter,
+                                            qreal spanStart,
+                                            qreal spanEnd,
+                                            qreal *condition) {
+        if (condition == nullptr) {
+            return false;
+        }
+        qreal evaluationParameter = parameter;
+        if (evaluationParameter <= spanStart) {
+            evaluationParameter = std::nextafter(spanStart, spanEnd);
+        } else if (evaluationParameter >= spanEnd) {
+            evaluationParameter = std::nextafter(spanEnd, spanStart);
+        }
+
+        QPointF curvePoint;
+        QPointF derivative;
+        if (!evaluateNurbsPoint(curve, evaluationParameter, &curvePoint) ||
+            !evaluateNurbsDerivative(curve, evaluationParameter, &derivative)) {
+            return false;
+        }
+        const QPointF toCurve = curvePoint - originWorld;
+        const qreal chordLength = std::hypot(toCurve.x(), toCurve.y());
+        const qreal derivativeLength = std::hypot(derivative.x(), derivative.y());
+        if (chordLength <= 1.0e-12 || derivativeLength <= 1.0e-12) {
+            return false;
+        }
+        *condition = QPointF::dotProduct(toCurve / chordLength,
+                                         derivative / derivativeLength);
+        return std::isfinite(*condition);
+    };
+
+    for (int spanIndex = curve.degree;
+         spanIndex < curve.controlPoints.size();
+         ++spanIndex) {
+        const qreal spanStart = fullKnots[spanIndex];
+        const qreal spanEnd = fullKnots[spanIndex + 1];
+        if (spanEnd <= spanStart) {
+            continue;
+        }
+
+        const auto appendRoot = [&](qreal parameter) {
+            qreal evaluationParameter = parameter;
+            if (evaluationParameter <= spanStart) {
+                evaluationParameter = std::nextafter(spanStart, spanEnd);
+            } else if (evaluationParameter >= spanEnd) {
+                evaluationParameter = std::nextafter(spanEnd, spanStart);
+            }
+            QPointF worldPoint;
+            qreal residual = 0.0;
+            if (!evaluateNurbsPoint(curve, evaluationParameter, &worldPoint) ||
+                !perpendicularCondition(evaluationParameter,
+                                        spanStart,
+                                        spanEnd,
+                                        &residual) ||
+                std::abs(residual) > 1.0e-8 ||
+                std::hypot(worldPoint.x() - originWorld.x(),
+                           worldPoint.y() - originWorld.y()) <= 1.0e-9) {
+                return;
+            }
+            for (const SnapCandidate &candidate : candidates) {
+                if (std::hypot(candidate.point.x() - worldPoint.x(),
+                               candidate.point.y() - worldPoint.y()) <= 1.0e-7) {
+                    return;
+                }
+            }
+            candidates.append({SnapType::Perpendicular, worldPoint});
+        };
+
+        QVector<qreal> parameters(samplesPerSpan + 1);
+        QVector<qreal> conditions(samplesPerSpan + 1, 0.0);
+        QVector<bool> valid(samplesPerSpan + 1, false);
+        for (int sample = 0; sample <= samplesPerSpan; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / samplesPerSpan;
+            parameters[sample] = spanStart + (spanEnd - spanStart) * fraction;
+            valid[sample] = perpendicularCondition(parameters[sample],
+                                                   spanStart,
+                                                   spanEnd,
+                                                   &conditions[sample]);
+            if (valid[sample] && std::abs(conditions[sample]) <= 1.0e-9) {
+                appendRoot(parameters[sample]);
+            }
+        }
+
+        for (int sample = 1; sample <= samplesPerSpan; ++sample) {
+            if (!valid[sample - 1] || !valid[sample] ||
+                !((conditions[sample - 1] < 0.0 && conditions[sample] > 0.0) ||
+                  (conditions[sample - 1] > 0.0 && conditions[sample] < 0.0))) {
+                continue;
+            }
+            qreal low = parameters[sample - 1];
+            qreal high = parameters[sample];
+            qreal lowCondition = conditions[sample - 1];
+            for (int iteration = 0; iteration < 64; ++iteration) {
+                const qreal middle = (low + high) * 0.5;
+                qreal middleCondition = 0.0;
+                if (!perpendicularCondition(middle,
+                                            spanStart,
+                                            spanEnd,
+                                            &middleCondition)) {
+                    break;
+                }
+                if ((lowCondition < 0.0 && middleCondition < 0.0) ||
+                    (lowCondition > 0.0 && middleCondition > 0.0)) {
+                    low = middle;
+                    lowCondition = middleCondition;
+                } else {
+                    high = middle;
+                }
+                if (high - low <= 1.0e-13 *
+                                       std::max(1.0, std::abs((low + high) * 0.5))) {
+                    break;
+                }
+            }
+            appendRoot((low + high) * 0.5);
+        }
+    }
+    return candidates;
+}
+
 bool SnapEngine::makeCircularArcGeometry(
     const QPointF &startWorld,
     const QPointF &endWorld,
@@ -961,6 +1091,101 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
         }
     }
     return candidates;
+}
+
+bool SnapEngine::perpendicularPointForShape(const Shape &shape,
+                                            const QPointF &origin,
+                                            const ViewportTransform &transform,
+                                            const QSize &viewportSize,
+                                            QPointF *point) const
+{
+    if (point == nullptr || shape.geometryType == GeometryType::Point ||
+        shape.geometryType == GeometryType::Rectangle) {
+        return false;
+    }
+
+    const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
+    qreal bestDistanceSquared = std::numeric_limits<qreal>::infinity();
+    QPointF bestPoint;
+    const auto considerCurve = [&](const Shape::NurbsCurve2D &curve) {
+        for (const SnapCandidate &candidate :
+             perpendicularCandidatesForNurbsCurve(curve, origin)) {
+            const QPointF difference = candidate.point - origin;
+            const qreal distanceSquared = QPointF::dotProduct(difference, difference);
+            if (distanceSquared < bestDistanceSquared) {
+                bestDistanceSquared = distanceSquared;
+                bestPoint = candidate.point;
+            }
+        }
+    };
+
+    if (shape.geometryType == GeometryType::PolyCurve) {
+        for (const Shape::NurbsCurve2D &component : shape.components) {
+            considerCurve(component);
+        }
+    } else {
+        Shape::NurbsCurve2D curve;
+        if (subdivisionCurve(shape, &curve)) {
+            considerCurve(curve);
+        } else if (shape.geometryType == GeometryType::Circle &&
+                   shape.points.size() >= 2) {
+            considerCurve(makeCircleNurbs(shape.points));
+        } else if (shape.geometryType == GeometryType::Arc &&
+                   shape.points.size() >= 3) {
+            // Legacy arc fallback: committed arcs use their stored NURBS above.
+            constexpr int arcSegments = 128;
+            QPointF previousWorld;
+            if (arcSnapPointAtFraction(shape,
+                                       0.0,
+                                       transform,
+                                       viewportSize,
+                                       &previousWorld)) {
+                QPointF previousScreen = transform.worldToScreen(previousWorld,
+                                                                  viewportSize);
+                for (int segmentIndex = 1; segmentIndex <= arcSegments;
+                     ++segmentIndex) {
+                    QPointF currentWorld;
+                    if (!arcSnapPointAtFraction(
+                            shape,
+                            static_cast<qreal>(segmentIndex) / arcSegments,
+                            transform,
+                            viewportSize,
+                            &currentWorld)) {
+                        break;
+                    }
+                    const QPointF currentScreen = transform.worldToScreen(currentWorld,
+                                                                           viewportSize);
+                    const QPointF segment = currentScreen - previousScreen;
+                    const qreal lengthSquared = QPointF::dotProduct(segment, segment);
+                    const qreal fraction =
+                        lengthSquared <= 1.0e-18
+                            ? 0.0
+                            : std::clamp(
+                                  QPointF::dotProduct(originScreen - previousScreen,
+                                                      segment) /
+                                      lengthSquared,
+                                  0.0,
+                                  1.0);
+                    const QPointF projectedScreen = previousScreen + segment * fraction;
+                    const QPointF difference = projectedScreen - originScreen;
+                    const qreal distanceSquared = QPointF::dotProduct(difference,
+                                                                       difference);
+                    if (distanceSquared < bestDistanceSquared) {
+                        bestDistanceSquared = distanceSquared;
+                        bestPoint = previousWorld + (currentWorld - previousWorld) * fraction;
+                    }
+                    previousWorld = currentWorld;
+                    previousScreen = currentScreen;
+                }
+            }
+        }
+    }
+
+    if (!std::isfinite(bestDistanceSquared)) {
+        return false;
+    }
+    *point = bestPoint;
+    return true;
 }
 
 QVector<SnapCandidate> SnapEngine::perpendicularCandidates(

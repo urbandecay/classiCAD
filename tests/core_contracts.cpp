@@ -15,6 +15,7 @@
 #include "services/snapping/snap_engine.h"
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
+#include "tools/perpendicular_from_curve_tool.h"
 #include "tools/point_tool.h"
 #include "tools/tangent_from_curve_tool.h"
 #include "tools/tool_context.h"
@@ -51,6 +52,11 @@ int main(int argc, char **argv)
                     "line tool must map to line geometry");
     passed &= check(geometryTypeForTool(ToolId::Trim) == GeometryType::Invalid,
                     "trim must not map to persisted geometry");
+    passed &= check(geometryTypeForTool(ToolId::PerpendicularFromCurve) ==
+                            GeometryType::Invalid &&
+                        toolName(ToolId::PerpendicularFromCurve) ==
+                            QStringLiteral("Perpendicular from Curve"),
+                    "perpendicular-from-curve must remain a named line command, not persisted geometry");
     passed &= check(geometryTypeForTool(ToolId::Mirror) == GeometryType::Invalid &&
                         toolName(ToolId::Mirror) == QStringLiteral("Mirror"),
                     "mirror must remain a command rather than persisted geometry");
@@ -620,6 +626,24 @@ int main(int argc, char **argv)
     const NurbsCurve2D nearBezierCurve = makeBezierNurbs(
         {QPointF(0.0, 0.0), QPointF(0.0, 10.0),
          QPointF(10.0, 10.0), QPointF(10.0, 0.0)});
+    Shape projectionBezier{GeometryType::Bezier,
+                           {},
+                           nearBezierCurve,
+                           ArcMode::TwoPoint,
+                           0.0,
+                           {},
+                           {}};
+    QPointF perpendicularBezierPoint;
+    const bool foundBezierPerpendicular = snapEngine.perpendicularPointForShape(
+        projectionBezier,
+        QPointF(5.0, 12.5),
+        viewportTransform,
+        viewportSize,
+        &perpendicularBezierPoint);
+    passed &= check(foundBezierPerpendicular &&
+                        std::hypot(perpendicularBezierPoint.x() - 5.0,
+                                   perpendicularBezierPoint.y() - 7.5) <= 1.0e-6,
+                    "perpendicular projection must evaluate the stored NURBS curve");
     Document nearBezierDocument;
     nearBezierDocument.append(Shape{GeometryType::Bezier,
                                     {},
@@ -748,6 +772,7 @@ int main(int argc, char **argv)
                         toolRegistry.find(ToolId::Point) != nullptr &&
                         toolRegistry.find(ToolId::Line) != nullptr &&
                         toolRegistry.find(ToolId::TangentFromCurve) != nullptr &&
+                        toolRegistry.find(ToolId::PerpendicularFromCurve) != nullptr &&
                         toolRegistry.find(ToolId::Arc) != nullptr &&
                         toolRegistry.find(ToolId::Rectangle) != nullptr &&
                         toolRegistry.find(ToolId::Circle) != nullptr &&
@@ -920,6 +945,41 @@ int main(int argc, char **argv)
                         committedToolShapes.back().points.back() == archOrigin &&
                         validateNurbsCurve(committedToolShapes.back().nurbs),
                     "tangent tool must commit a line aligned with a freeform curve derivative");
+
+    PerpendicularFromCurveTool perpendicularTool;
+    perpendicularTool.begin(toolContext);
+    const bool perpendicularCurvePicked = perpendicularTool.handleMousePress(
+        tangentInputAt(QPointF(10.0, 0.0)), toolContext);
+    const QPointF perpendicularEndpoint(20.0, 7.0);
+    const ToolInput perpendicularInput = tangentInputAt(perpendicularEndpoint);
+    perpendicularTool.handleMouseMove(perpendicularInput, toolContext);
+    const ToolPreview perpendicularPreview = perpendicularTool.preview();
+    bool perpendicularPreviewIsValid = perpendicularPreview.points.size() == 1;
+    if (perpendicularPreviewIsValid) {
+        const QPointF foot = perpendicularPreview.points.first();
+        const QPointF radial = foot;
+        const QPointF lineDirection = perpendicularEndpoint - foot;
+        const qreal denominator = std::hypot(radial.x(), radial.y()) *
+                                  std::hypot(lineDirection.x(), lineDirection.y());
+        perpendicularPreviewIsValid = denominator > 1.0e-12 &&
+            std::abs(crossProduct(radial, lineDirection)) / denominator <= 1.0e-7 &&
+            std::abs(std::hypot(radial.x(), radial.y()) - 10.0) <= 1.0e-7;
+    }
+    const bool perpendicularLineCommitted = perpendicularTool.handleMousePress(
+        perpendicularInput, toolContext);
+    passed &= check(perpendicularCurvePicked &&
+                        toolSelection.primaryObjectId() == tangentCircleId,
+                    "perpendicular-from-curve tool must select the requested curve");
+    passed &= check(perpendicularPreviewIsValid,
+                    "perpendicular-from-curve tool must preview a normal line from the selected curve");
+    passed &= check(perpendicularLineCommitted && committedToolShapes.size() == 5 &&
+                        committedToolShapes.back().geometryType == GeometryType::Line &&
+                        committedToolShapes.back().points.first() ==
+                            perpendicularPreview.points.first() &&
+                        committedToolShapes.back().points.back() == perpendicularEndpoint &&
+                        validateNurbsCurve(committedToolShapes.back().nurbs) &&
+                        finishedTool == ToolId::Select,
+                    "perpendicular-from-curve tool must commit the previewed line as NURBS geometry");
 
     return passed ? 0 : 1;
 }

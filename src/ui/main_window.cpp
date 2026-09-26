@@ -649,7 +649,9 @@ private:
             }
         };
         viewportCallbacks.toolRepeated = [this](ToolId tool) {
-            if (tool == Tool::TangentFromCurve && lineToolButton_ != nullptr) {
+            if ((tool == Tool::TangentFromCurve ||
+                 tool == Tool::PerpendicularFromCurve) &&
+                lineToolButton_ != nullptr) {
                 lineToolButton_->setChecked(true);
             }
             for (QToolButton *button : toolButtons_) {
@@ -977,8 +979,10 @@ private:
         auto *menu = new QMenu(button);
         QAction *lineAction = menu->addAction(QStringLiteral("Line"));
         QAction *tangentAction = menu->addAction(QStringLiteral("Tangent from Curve"));
+        QAction *perpendicularAction =
+            menu->addAction(QStringLiteral("Perpendicular from Curve"));
         button->setMenu(menu);
-        // A quick click runs Line; holding the button exposes both line modes.
+        // A quick click runs Line; holding the button exposes the line variants.
         button->setPopupMode(QToolButton::DelayedPopup);
 
         connect(lineAction, &QAction::triggered, this, [this]() {
@@ -986,6 +990,9 @@ private:
         });
         connect(tangentAction, &QAction::triggered, this, [this]() {
             activateLineTool(Tool::TangentFromCurve);
+        });
+        connect(perpendicularAction, &QAction::triggered, this, [this]() {
+            activateLineTool(Tool::PerpendicularFromCurve);
         });
     }
 

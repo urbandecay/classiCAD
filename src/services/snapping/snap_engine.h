@@ -41,6 +41,11 @@ public:
         const ViewportTransform &transform,
         const QSize &viewportSize,
         const QVector<int> &excludedShapeIndices = {}) const;
+    bool perpendicularPointForShape(const Shape &shape,
+                                    const QPointF &origin,
+                                    const ViewportTransform &transform,
+                                    const QSize &viewportSize,
+                                    QPointF *point) const;
     QVector<SnapCandidate> tangentCandidates(
         const Document &document,
         const QPointF &origin,
@@ -100,6 +105,9 @@ private:
         const QPointF &originWorld,
         const ViewportTransform &transform,
         const QSize &viewportSize) const;
+    QVector<SnapCandidate> perpendicularCandidatesForNurbsCurve(
+        const Shape::NurbsCurve2D &curve,
+        const QPointF &originWorld) const;
     bool makeCircularArcGeometry(const QPointF &startWorld,
                                  const QPointF &endWorld,
                                  const QPointF &throughWorld,

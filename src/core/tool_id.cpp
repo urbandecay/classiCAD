@@ -36,6 +36,8 @@ QString toolName(ToolId tool)
         return QStringLiteral("Mirror");
     case ToolId::TangentFromCurve:
         return QStringLiteral("Tangent from Curve");
+    case ToolId::PerpendicularFromCurve:
+        return QStringLiteral("Perpendicular from Curve");
     }
 
     return QStringLiteral("Unknown");
@@ -62,6 +64,7 @@ int requiredPoints(ToolId tool)
     case ToolId::Rotate:
     case ToolId::Mirror:
     case ToolId::TangentFromCurve:
+    case ToolId::PerpendicularFromCurve:
         return 0;
     }
 

@@ -6,7 +6,7 @@ namespace classiCAD {
 
 class CircleTool final : public ShapeCreationTool {
 public:
-    CircleTool();
+    explicit CircleTool(ToolId tool = ToolId::Circle);
 
 protected:
     bool buildShape(const ToolContext &context, Shape *shape) const override;

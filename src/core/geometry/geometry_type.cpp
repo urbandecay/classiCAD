@@ -91,6 +91,10 @@ GeometryType geometryTypeForTool(ToolId tool)
     case ToolId::PolygonEdge:
         return GeometryType::Polygon;
     case ToolId::Circle:
+    case ToolId::CircleDiameter:
+    case ToolId::CircleThreePoint:
+    case ToolId::CircleTangentTwo:
+    case ToolId::CircleTangentThree:
         return GeometryType::Circle;
     case ToolId::Ellipse:
     case ToolId::EllipseFromEndpoints:

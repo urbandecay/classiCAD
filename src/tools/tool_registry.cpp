@@ -3,6 +3,7 @@
 #include "bezier_tool.h"
 #include "arc_tool.h"
 #include "circle_tool.h"
+#include "circle_tangent_tool.h"
 #include "erase_tool.h"
 #include "ellipse_tool.h"
 #include "line_tool.h"
@@ -35,6 +36,10 @@ ToolRegistry::ToolRegistry()
     add(std::make_unique<PolygonTool>(ToolId::PolygonCornerCorner));
     add(std::make_unique<PolygonTool>(ToolId::PolygonEdge));
     add(std::make_unique<CircleTool>());
+    add(std::make_unique<CircleTool>(ToolId::CircleDiameter));
+    add(std::make_unique<CircleTool>(ToolId::CircleThreePoint));
+    add(std::make_unique<CircleTangentTool>(ToolId::CircleTangentTwo));
+    add(std::make_unique<CircleTangentTool>(ToolId::CircleTangentThree));
     add(std::make_unique<EllipseTool>(ToolId::Ellipse));
     add(std::make_unique<EllipseTool>(ToolId::EllipseFromEndpoints));
     add(std::make_unique<EllipseTool>(ToolId::EllipseFromCorners));

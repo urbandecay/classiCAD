@@ -4,8 +4,8 @@
 
 namespace classiCAD {
 
-CircleTool::CircleTool()
-    : ShapeCreationTool(ToolId::Circle, 2)
+CircleTool::CircleTool(ToolId tool)
+    : ShapeCreationTool(tool, requiredPoints(tool))
 {
 }
 

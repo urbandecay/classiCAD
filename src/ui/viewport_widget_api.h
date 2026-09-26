@@ -65,6 +65,7 @@ struct ViewportLayerInfo {
 
 struct ViewportUiCallbacks {
     std::function<void(const QString &)> coordinateUpdate;
+    std::function<void(const QString &)> toolStatusUpdate;
     std::function<void(ToolId)> commandFinished;
     std::function<void(ToolId)> toolRepeated;
     std::function<void()> historyChanged;
@@ -119,6 +120,7 @@ public:
     void setUiCallbacks(const ViewportUiCallbacks &callbacks)
     {
         coordinateUpdate_ = callbacks.coordinateUpdate;
+        toolStatusUpdate_ = callbacks.toolStatusUpdate;
         commandFinished_ = callbacks.commandFinished;
         toolRepeated_ = callbacks.toolRepeated;
         historyChanged_ = callbacks.historyChanged;
@@ -129,6 +131,7 @@ public:
 
 protected:
     std::function<void(const QString &)> coordinateUpdate_;
+    std::function<void(const QString &)> toolStatusUpdate_;
     std::function<void(ToolId)> commandFinished_;
     std::function<void(ToolId)> toolRepeated_;
     std::function<void()> historyChanged_;

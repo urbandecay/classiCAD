@@ -70,6 +70,22 @@ PolygonMode polygonModeForTool(ToolId tool)
     }
 }
 
+bool isCircleConstructionTool(ToolId tool)
+{
+    return tool == ToolId::Circle || tool == ToolId::CircleDiameter ||
+           tool == ToolId::CircleThreePoint;
+}
+
+bool isCircleTangentTool(ToolId tool)
+{
+    return tool == ToolId::CircleTangentTwo || tool == ToolId::CircleTangentThree;
+}
+
+bool isCircleTool(ToolId tool)
+{
+    return isCircleConstructionTool(tool) || isCircleTangentTool(tool);
+}
+
 QString toolName(ToolId tool)
 {
     switch (tool) {
@@ -86,7 +102,7 @@ QString toolName(ToolId tool)
     case ToolId::Rectangle:
         return QStringLiteral("Rectangle");
     case ToolId::Circle:
-        return QStringLiteral("Circle");
+        return QStringLiteral("Circle (Center, Radius)");
     case ToolId::Point:
         return QStringLiteral("Point");
     case ToolId::Erase:
@@ -121,6 +137,14 @@ QString toolName(ToolId tool)
         return QStringLiteral("Polygon (Corner, Corner)");
     case ToolId::PolygonEdge:
         return QStringLiteral("Polygon (Side Size)");
+    case ToolId::CircleDiameter:
+        return QStringLiteral("Circle (2 Point Diameter)");
+    case ToolId::CircleThreePoint:
+        return QStringLiteral("Circle (3 Points)");
+    case ToolId::CircleTangentTwo:
+        return QStringLiteral("Circle Tangent to 2 Curves");
+    case ToolId::CircleTangentThree:
+        return QStringLiteral("Circle Tangent to 3 Curves");
     }
 
     return QStringLiteral("Unknown");
@@ -138,6 +162,7 @@ int requiredPoints(ToolId tool)
         return 4;
     case ToolId::Rectangle:
     case ToolId::Circle:
+    case ToolId::CircleDiameter:
     case ToolId::EllipseFromCorners:
     case ToolId::RectangleFromCenter:
     case ToolId::PolygonCenterCorner:
@@ -160,7 +185,11 @@ int requiredPoints(ToolId tool)
     case ToolId::PerpendicularFromCurve:
         return 0;
     case ToolId::RectangleThreePoint:
+    case ToolId::CircleThreePoint:
         return 3;
+    case ToolId::CircleTangentTwo:
+    case ToolId::CircleTangentThree:
+        return 0;
     }
 
     return 0;

@@ -18,6 +18,7 @@ set(CLASSICAD_CORE_SOURCES
     src/core/geometry/geometry_type.cpp
     src/core/geometry/nurbs_curve.cpp
     src/core/geometry/curve_evaluator.cpp
+    src/core/geometry/circle_construction.cpp
     src/core/geometry/geometry_transform.cpp
     src/core/document/document.cpp
     src/core/document/selection_model.cpp
@@ -48,6 +49,7 @@ set(CLASSICAD_TOOL_SOURCES
     src/tools/mirror_tool.cpp
     src/tools/rectangle_tool.cpp
     src/tools/polygon_tool.cpp
+    src/tools/circle_tangent_tool.cpp
     src/tools/circle_tool.cpp
     src/tools/ellipse_tool.cpp
     src/tools/bezier_tool.cpp

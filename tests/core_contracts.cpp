@@ -2,6 +2,7 @@
 #include "core/document/layer_id.h"
 #include "core/document/object_id.h"
 #include "core/document/selection_model.h"
+#include "core/geometry/circle_construction.h"
 #include "core/geometry/geometry_type.h"
 #include "core/geometry/geometry_transform.h"
 #include "core/geometry/curve_evaluator.h"
@@ -15,6 +16,8 @@
 #include "services/snapping/snap_engine.h"
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
+#include "tools/circle_tool.h"
+#include "tools/circle_tangent_tool.h"
 #include "tools/perpendicular_from_curve_tool.h"
 #include "tools/point_tool.h"
 #include "tools/polygon_tool.h"
@@ -88,6 +91,19 @@ int main(int argc, char **argv)
                         requiredPoints(ToolId::PolygonCornerCorner) == 2 &&
                         requiredPoints(ToolId::PolygonEdge) == 2,
                     "each polygon construction mode must create polygon geometry from two clicks");
+    passed &= check(isCircleConstructionTool(ToolId::Circle) &&
+                        isCircleConstructionTool(ToolId::CircleDiameter) &&
+                        isCircleConstructionTool(ToolId::CircleThreePoint) &&
+                        isCircleTangentTool(ToolId::CircleTangentTwo) &&
+                        isCircleTangentTool(ToolId::CircleTangentThree) &&
+                        geometryTypeForTool(ToolId::CircleDiameter) == GeometryType::Circle &&
+                        geometryTypeForTool(ToolId::CircleThreePoint) == GeometryType::Circle &&
+                        geometryTypeForTool(ToolId::CircleTangentTwo) == GeometryType::Circle &&
+                        geometryTypeForTool(ToolId::CircleTangentThree) == GeometryType::Circle &&
+                        requiredPoints(ToolId::Circle) == 2 &&
+                        requiredPoints(ToolId::CircleDiameter) == 2 &&
+                        requiredPoints(ToolId::CircleThreePoint) == 3,
+                    "circle construction variants must map to circle geometry and request their defining clicks");
     passed &= check(geometryTypeForTool(ToolId::Mirror) == GeometryType::Invalid &&
                         toolName(ToolId::Mirror) == QStringLiteral("Mirror"),
                     "mirror must remain a command rather than persisted geometry");
@@ -130,6 +146,30 @@ int main(int argc, char **argv)
                        {}};
     passed &= check(validateNurbsCurve(circle.nurbs),
                     "factory circle must satisfy rational NURBS invariants");
+    QVector<QPointF> diameterCircleDefinition;
+    QVector<QPointF> threePointCircleDefinition;
+    passed &= check(makeCircleDefinitionFromDiameter(QPointF(-5.0, 0.0),
+                                                     QPointF(5.0, 0.0),
+                                                     &diameterCircleDefinition) &&
+                        diameterCircleDefinition ==
+                            QVector<QPointF>{QPointF(0.0, 0.0), QPointF(-5.0, 0.0)} &&
+                        makeCircleDefinitionFromThreePoints(QPointF(1.0, 0.0),
+                                                            QPointF(0.0, 1.0),
+                                                            QPointF(-1.0, 0.0),
+                                                            &threePointCircleDefinition) &&
+                        std::hypot(threePointCircleDefinition[0].x(),
+                                   threePointCircleDefinition[0].y()) <= 1.0e-9 &&
+                        std::abs(std::hypot(threePointCircleDefinition[1].x() -
+                                                threePointCircleDefinition[0].x(),
+                                            threePointCircleDefinition[1].y() -
+                                                threePointCircleDefinition[0].y()) -
+                                 1.0) <= 1.0e-9,
+                    "diameter and three-point circle construction must produce a center-radius definition");
+    passed &= check(!makeCircleDefinitionFromThreePoints(QPointF(0.0, 0.0),
+                                                         QPointF(1.0, 0.0),
+                                                         QPointF(2.0, 0.0),
+                                                         &threePointCircleDefinition),
+                    "three-point circle construction must reject collinear points");
     constexpr qreal quarterTurn = 0.78539816339744830962;
     QPointF circleDerivative;
     passed &= check(evaluateNurbsDerivative(circle.nurbs,
@@ -1032,6 +1072,20 @@ int main(int argc, char **argv)
                            {}};
             if (tool == ToolId::Line) {
                 shape->nurbs = makeDegreeOneNurbs(points);
+            } else if (isCircleConstructionTool(tool)) {
+                QVector<QPointF> definition = points;
+                if (tool == ToolId::CircleDiameter &&
+                    !makeCircleDefinitionFromDiameter(points[0], points[1], &definition)) {
+                    return false;
+                }
+                if (tool == ToolId::CircleThreePoint &&
+                    !makeCircleDefinitionFromThreePoints(
+                        points[0], points[1], points[2], &definition)) {
+                    return false;
+                }
+                shape->points = definition;
+                shape->nurbs = makeCircleNurbs(definition);
+                return validateNurbsCurve(shape->nurbs);
             }
             return true;
         });
@@ -1062,6 +1116,10 @@ int main(int argc, char **argv)
                         toolRegistry.find(ToolId::PolygonCornerCorner) != nullptr &&
                         toolRegistry.find(ToolId::PolygonEdge) != nullptr &&
                         toolRegistry.find(ToolId::Circle) != nullptr &&
+                        toolRegistry.find(ToolId::CircleDiameter) != nullptr &&
+                        toolRegistry.find(ToolId::CircleThreePoint) != nullptr &&
+                        toolRegistry.find(ToolId::CircleTangentTwo) != nullptr &&
+                        toolRegistry.find(ToolId::CircleTangentThree) != nullptr &&
                         toolRegistry.find(ToolId::Ellipse) != nullptr &&
                         toolRegistry.find(ToolId::EllipseFromEndpoints) != nullptr &&
                         toolRegistry.find(ToolId::EllipseFromCorners) != nullptr &&
@@ -1270,6 +1328,412 @@ int main(int argc, char **argv)
                         validateNurbsCurve(committedToolShapes.back().nurbs) &&
                         finishedTool == ToolId::Select,
                     "perpendicular-from-curve tool must commit the previewed line as NURBS geometry");
+
+    Document circleToolDocument;
+    SelectionModel circleToolSelection;
+    History circleToolHistory(circleToolDocument);
+    ViewportTransform circleToolTransform;
+    CurveSampler circleToolSampler;
+    CurveHitTester circleToolHitTester;
+    SnapEngine circleToolSnapEngine;
+    ToolContext circleToolContext(circleToolDocument,
+                                  circleToolSelection,
+                                  circleToolHistory,
+                                  circleToolTransform,
+                                  circleToolSampler,
+                                  circleToolHitTester,
+                                  circleToolSnapEngine);
+    QVector<Shape> committedCircleTools;
+    circleToolContext.setShapeFactory(
+        [](ToolId tool,
+           const QVector<QPointF> &points,
+           ArcMode arcMode,
+           qreal arcSweep,
+           Shape *shape) {
+            if (shape == nullptr || points.size() < requiredPoints(tool)) {
+                return false;
+            }
+            QVector<QPointF> definition = points;
+            if (tool == ToolId::CircleDiameter &&
+                !makeCircleDefinitionFromDiameter(points[0], points[1], &definition)) {
+                return false;
+            }
+            if (tool == ToolId::CircleThreePoint &&
+                !makeCircleDefinitionFromThreePoints(
+                    points[0], points[1], points[2], &definition)) {
+                return false;
+            }
+            *shape = Shape{GeometryType::Circle,
+                           definition,
+                           makeCircleNurbs(definition),
+                           arcMode,
+                           arcSweep,
+                           {},
+                           {}};
+            return validateNurbsCurve(shape->nurbs);
+        });
+    circleToolContext.setShapeCommitter(
+        [&committedCircleTools](ToolId, const Shape &shape) {
+            committedCircleTools.append(shape);
+            return true;
+        });
+    circleToolContext.setToolFinisher([](ToolId) {});
+
+    const auto circleInputAt = [&](const QPointF &worldPoint) {
+        ToolInput input;
+        input.screenPosition = circleToolTransform.worldToScreen(worldPoint,
+                                                                 tangentViewportSize);
+        input.rawWorldPosition = worldPoint;
+        input.worldPosition = worldPoint;
+        input.viewportSize = tangentViewportSize;
+        input.button = Qt::LeftButton;
+        return input;
+    };
+
+    CircleTool diameterCircleTool(ToolId::CircleDiameter);
+    diameterCircleTool.begin(circleToolContext);
+    diameterCircleTool.handleMousePress(circleInputAt(QPointF(-10.0, 0.0)),
+                                        circleToolContext);
+    const bool diameterCircleCommitted = diameterCircleTool.handleMousePress(
+        circleInputAt(QPointF(10.0, 0.0)), circleToolContext);
+    const bool diameterCircleIsCorrect = diameterCircleCommitted &&
+        committedCircleTools.size() == 1 &&
+        committedCircleTools.back().geometryType == GeometryType::Circle &&
+        committedCircleTools.back().points.size() == 2 &&
+        committedCircleTools.back().points[0] == QPointF(0.0, 0.0) &&
+        std::abs(std::hypot(committedCircleTools.back().points[1].x(),
+                            committedCircleTools.back().points[1].y()) -
+                 10.0) <= 1.0e-9 &&
+        validateNurbsCurve(committedCircleTools.back().nurbs);
+
+    CircleTool threePointCircleTool(ToolId::CircleThreePoint);
+    threePointCircleTool.begin(circleToolContext);
+    threePointCircleTool.handleMousePress(circleInputAt(QPointF(1.0, 0.0)),
+                                          circleToolContext);
+    threePointCircleTool.handleMousePress(circleInputAt(QPointF(0.0, 1.0)),
+                                          circleToolContext);
+    const bool threePointCircleCommitted = threePointCircleTool.handleMousePress(
+        circleInputAt(QPointF(-1.0, 0.0)), circleToolContext);
+    const bool threePointCircleIsCorrect = threePointCircleCommitted &&
+        committedCircleTools.size() == 2 &&
+        committedCircleTools.back().geometryType == GeometryType::Circle &&
+        std::hypot(committedCircleTools.back().points[0].x(),
+                   committedCircleTools.back().points[0].y()) <= 1.0e-9 &&
+        std::abs(std::hypot(committedCircleTools.back().points[1].x(),
+                            committedCircleTools.back().points[1].y()) -
+                 1.0) <= 1.0e-9 &&
+        validateNurbsCurve(committedCircleTools.back().nurbs);
+    passed &= check(diameterCircleIsCorrect && threePointCircleIsCorrect,
+                    "2-point and 3-point circle tools must commit exact rational NURBS circles");
+
+    const auto appendCircleTargetLine = [&circleToolDocument](const QPointF &first,
+                                                              const QPointF &second) {
+        const QVector<QPointF> points{first, second};
+        return circleToolDocument.append(Shape{GeometryType::Line,
+                                               points,
+                                               makeDegreeOneNurbs(points),
+                                               ArcMode::TwoPoint,
+                                               0.0,
+                                               {},
+                                               {}});
+    };
+    const ObjectId lowerTangentLine = appendCircleTargetLine(QPointF(-100.0, 0.0),
+                                                             QPointF(100.0, 0.0));
+    const ObjectId upperTangentLine = appendCircleTargetLine(QPointF(-100.0, 10.0),
+                                                             QPointF(100.0, 10.0));
+    CircleTangentTool twoCurveCircleTool(ToolId::CircleTangentTwo);
+    twoCurveCircleTool.begin(circleToolContext);
+    twoCurveCircleTool.handleMousePress(circleInputAt(QPointF(40.0, 0.0)),
+                                        circleToolContext);
+    twoCurveCircleTool.handleMousePress(circleInputAt(QPointF(40.0, 10.0)),
+                                        circleToolContext);
+    const ToolInput twoCurveSeed = circleInputAt(QPointF(10.0, 5.0));
+    twoCurveCircleTool.handleMouseMove(twoCurveSeed, circleToolContext);
+    const ToolPreview twoCurveCirclePreview = twoCurveCircleTool.preview();
+    const bool twoCurveCirclePreviewIsCorrect = twoCurveCirclePreview.hasShape &&
+        twoCurveCirclePreview.shape.geometryType == GeometryType::Circle &&
+        std::abs(twoCurveCirclePreview.shape.points.first().y() - 5.0) <= 1.0e-5 &&
+        std::abs(std::hypot(twoCurveCirclePreview.shape.points[1].x() -
+                                twoCurveCirclePreview.shape.points[0].x(),
+                            twoCurveCirclePreview.shape.points[1].y() -
+                                twoCurveCirclePreview.shape.points[0].y()) -
+                 5.0) <= 1.0e-5;
+    const bool twoCurveCircleCommitted = twoCurveCircleTool.handleMousePress(
+        twoCurveSeed, circleToolContext);
+
+    const QPointF concentricCircleCenter(250.0, 100.0);
+    const ObjectId innerTangentCircle = circleToolDocument.append(
+        Shape{GeometryType::Circle,
+              {concentricCircleCenter, concentricCircleCenter + QPointF(10.0, 0.0)},
+              makeCircleNurbs({concentricCircleCenter,
+                               concentricCircleCenter + QPointF(10.0, 0.0)}),
+              ArcMode::TwoPoint,
+              0.0,
+              {},
+              {}});
+    const ObjectId outerTangentCircle = circleToolDocument.append(
+        Shape{GeometryType::Circle,
+              {concentricCircleCenter, concentricCircleCenter + QPointF(20.0, 0.0)},
+              makeCircleNurbs({concentricCircleCenter,
+                               concentricCircleCenter + QPointF(20.0, 0.0)}),
+              ArcMode::TwoPoint,
+              0.0,
+              {},
+              {}});
+    CircleTangentTool twoCircleCircleTool(ToolId::CircleTangentTwo);
+    twoCircleCircleTool.begin(circleToolContext);
+    twoCircleCircleTool.handleMousePress(circleInputAt(QPointF(260.0, 100.0)),
+                                         circleToolContext);
+    twoCircleCircleTool.handleMousePress(circleInputAt(QPointF(270.0, 100.0)),
+                                         circleToolContext);
+    const ToolInput twoCircleSeed = circleInputAt(QPointF(265.0, 100.0));
+    twoCircleCircleTool.handleMouseMove(twoCircleSeed, circleToolContext);
+    const ToolPreview twoCircleCirclePreview = twoCircleCircleTool.preview();
+    const bool twoCircleCirclePreviewIsCorrect = twoCircleCirclePreview.hasShape &&
+        std::abs(twoCircleCirclePreview.shape.points.first().x() - 265.0) <= 0.02 &&
+        std::abs(twoCircleCirclePreview.shape.points.first().y() - 100.0) <= 0.02 &&
+        std::abs(std::hypot(twoCircleCirclePreview.shape.points[1].x() -
+                                twoCircleCirclePreview.shape.points[0].x(),
+                            twoCircleCirclePreview.shape.points[1].y() -
+                                twoCircleCirclePreview.shape.points[0].y()) -
+                 5.0) <= 0.02;
+    const bool twoCircleCircleCommitted = twoCircleCircleTool.handleMousePress(
+        twoCircleSeed, circleToolContext);
+
+    const ObjectId triangleBottom = appendCircleTargetLine(QPointF(0.0, 100.0),
+                                                           QPointF(200.0, 100.0));
+    const ObjectId triangleLeft = appendCircleTargetLine(QPointF(100.0, 0.0),
+                                                         QPointF(100.0, 200.0));
+    const ObjectId triangleDiagonal = appendCircleTargetLine(QPointF(0.0, 220.0),
+                                                             QPointF(220.0, 0.0));
+    CircleTangentTool threeCurveCircleTool(ToolId::CircleTangentThree);
+    threeCurveCircleTool.begin(circleToolContext);
+    threeCurveCircleTool.handleMousePress(circleInputAt(QPointF(50.0, 100.0)),
+                                          circleToolContext);
+    threeCurveCircleTool.handleMousePress(circleInputAt(QPointF(100.0, 50.0)),
+                                          circleToolContext);
+    threeCurveCircleTool.handleMousePress(circleInputAt(QPointF(20.0, 200.0)),
+                                          circleToolContext);
+    const ToolInput threeCurveSeed = circleInputAt(QPointF(106.0, 106.0));
+    threeCurveCircleTool.handleMouseMove(threeCurveSeed, circleToolContext);
+    const ToolPreview threeCurveCirclePreview = threeCurveCircleTool.preview();
+    bool threeCurveCirclePreviewIsCorrect = threeCurveCirclePreview.hasShape &&
+        threeCurveCirclePreview.shape.geometryType == GeometryType::Circle &&
+        validateNurbsCurve(threeCurveCirclePreview.shape.nurbs);
+    if (threeCurveCirclePreviewIsCorrect) {
+        const QPointF center = threeCurveCirclePreview.shape.points.first();
+        const QPointF edge = threeCurveCirclePreview.shape.points[1];
+        const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
+        constexpr qreal inverseSqrtTwo = 0.70710678118654752440;
+        threeCurveCirclePreviewIsCorrect =
+            std::abs(center.y() - 100.0 - radius) <= 0.02 &&
+            std::abs(center.x() - 100.0 - radius) <= 0.02 &&
+            std::abs((220.0 - center.x() - center.y()) * inverseSqrtTwo - radius) <= 0.02;
+    }
+    ToolInput cycleTangentSolutionInput;
+    cycleTangentSolutionInput.key = Qt::Key_Tab;
+    const bool tangentSolutionTabHandled = threeCurveCircleTool.handleKey(
+        cycleTangentSolutionInput, circleToolContext);
+    const ToolPreview cycledThreeCurveCirclePreview = threeCurveCircleTool.preview();
+    const bool tangentConfigurationAdvanced =
+        cycledThreeCurveCirclePreview.statusText.contains(
+            QStringLiteral("configuration 1 of 8"), Qt::CaseInsensitive);
+    ToolInput reverseTangentSolutionInput;
+    reverseTangentSolutionInput.key = Qt::Key_Backtab;
+    reverseTangentSolutionInput.modifiers = Qt::ShiftModifier;
+    const bool reverseTangentSolutionHandled = threeCurveCircleTool.handleKey(
+        reverseTangentSolutionInput, circleToolContext);
+    const ToolPreview reversedThreeCurveCirclePreview = threeCurveCircleTool.preview();
+    const bool tangentSolutionReversed = reversedThreeCurveCirclePreview.hasShape &&
+        std::hypot(reversedThreeCurveCirclePreview.shape.points.first().x() -
+                       threeCurveCirclePreview.shape.points.first().x(),
+                   reversedThreeCurveCirclePreview.shape.points.first().y() -
+                       threeCurveCirclePreview.shape.points.first().y()) <= 0.02;
+    const bool threeCurveCircleCommitted = threeCurveCircleTool.handleMousePress(
+        threeCurveSeed, circleToolContext);
+    passed &= check(lowerTangentLine.isValid() && upperTangentLine.isValid() &&
+                        innerTangentCircle.isValid() && outerTangentCircle.isValid() &&
+                        triangleBottom.isValid() && triangleLeft.isValid() &&
+                        triangleDiagonal.isValid() &&
+                        twoCurveCirclePreviewIsCorrect && twoCurveCircleCommitted &&
+                        twoCircleCirclePreviewIsCorrect && twoCircleCircleCommitted &&
+                        threeCurveCirclePreviewIsCorrect && tangentSolutionTabHandled &&
+                        tangentConfigurationAdvanced && reverseTangentSolutionHandled &&
+                        tangentSolutionReversed && threeCurveCircleCommitted &&
+                        committedCircleTools.size() == 5 &&
+                        committedCircleTools[2].geometryType == GeometryType::Circle &&
+                        committedCircleTools[3].geometryType == GeometryType::Circle &&
+                        committedCircleTools[4].geometryType == GeometryType::Circle &&
+                        validateNurbsCurve(committedCircleTools[2].nurbs) &&
+                        validateNurbsCurve(committedCircleTools[3].nurbs) &&
+                        validateNurbsCurve(committedCircleTools[4].nurbs),
+                    "2-curve and 3-curve tangent-circle tools must preview and commit tangent NURBS circles");
+
+    const auto appendExactCircleTarget = [&circleToolDocument](const QPointF &center) {
+        const QVector<QPointF> definition{center, center + QPointF(2.0, 0.0)};
+        return circleToolDocument.append(Shape{GeometryType::Circle,
+                                               definition,
+                                               makeCircleNurbs(definition),
+                                               ArcMode::TwoPoint,
+                                               0.0,
+                                               {},
+                                               {}});
+    };
+    const QVector<QPointF> targetCenters{
+        QPointF(-20.0, -100.0),
+        QPointF(20.0, -100.0),
+        QPointF(0.0, -65.35898384862245),
+    };
+    bool exactTargetsAdded = true;
+    for (const QPointF &center : targetCenters) {
+        exactTargetsAdded &= appendExactCircleTarget(center).isValid();
+    }
+
+    CircleTangentTool eightSolutionTool(ToolId::CircleTangentThree);
+    eightSolutionTool.begin(circleToolContext);
+    eightSolutionTool.handleMousePress(circleInputAt(QPointF(-22.0, -100.0)),
+                                       circleToolContext);
+    eightSolutionTool.handleMousePress(circleInputAt(QPointF(22.0, -100.0)),
+                                       circleToolContext);
+    eightSolutionTool.handleMousePress(circleInputAt(QPointF(0.0, -63.35898384862245)),
+                                       circleToolContext);
+    eightSolutionTool.handleMouseMove(circleInputAt(QPointF(0.0, -88.45)),
+                                      circleToolContext);
+
+    ToolInput nextTangentSolutionInput;
+    nextTangentSolutionInput.key = Qt::Key_Tab;
+    QVector<QPointF> solutionCenters;
+    QVector<qreal> solutionRadii;
+    bool allEightTangentSolutionsValid = true;
+    for (int index = 0; index < 8; ++index) {
+        if (index > 0) {
+            allEightTangentSolutionsValid &= eightSolutionTool.handleKey(
+                nextTangentSolutionInput, circleToolContext);
+        }
+        const ToolPreview solution = eightSolutionTool.preview();
+        if (!solution.hasShape || solution.shape.points.size() < 2 ||
+            !validateNurbsCurve(solution.shape.nurbs)) {
+            allEightTangentSolutionsValid = false;
+            continue;
+        }
+        const QPointF center = solution.shape.points[0];
+        const QPointF edge = solution.shape.points[1] - center;
+        const qreal radius = std::hypot(edge.x(), edge.y());
+        for (const QPointF &targetCenter : targetCenters) {
+            const qreal separation = std::hypot(center.x() - targetCenter.x(),
+                                                center.y() - targetCenter.y());
+            const qreal externalResidual = std::abs(separation - radius - 2.0);
+            const qreal internalResidual =
+                std::abs(separation - std::abs(radius - 2.0));
+            allEightTangentSolutionsValid &=
+                std::min(externalResidual, internalResidual) <= 1.0e-5;
+        }
+        for (int prior = 0; prior < solutionCenters.size(); ++prior) {
+            allEightTangentSolutionsValid &=
+                std::hypot(center.x() - solutionCenters[prior].x(),
+                           center.y() - solutionCenters[prior].y()) > 1.0e-4 ||
+                std::abs(radius - solutionRadii[prior]) > 1.0e-4;
+        }
+        solutionCenters.append(center);
+        solutionRadii.append(radius);
+    }
+    const bool wrapsAfterEight = eightSolutionTool.handleKey(
+        nextTangentSolutionInput, circleToolContext);
+    const ToolPreview wrappedSolution = eightSolutionTool.preview();
+    const bool cyclesAllEight = allEightTangentSolutionsValid &&
+        solutionCenters.size() == 8 && wrapsAfterEight &&
+        wrappedSolution.hasShape &&
+        std::hypot(wrappedSolution.shape.points[0].x() - solutionCenters[0].x(),
+                   wrappedSolution.shape.points[0].y() - solutionCenters[0].y()) <= 1.0e-5 &&
+        std::abs(std::hypot(wrappedSolution.shape.points[1].x() -
+                                wrappedSolution.shape.points[0].x(),
+                            wrappedSolution.shape.points[1].y() -
+                                wrappedSolution.shape.points[0].y()) -
+                 solutionRadii[0]) <= 1.0e-5;
+    const bool selectedNextSolution = eightSolutionTool.handleKey(
+        nextTangentSolutionInput, circleToolContext);
+    const ToolPreview selectedSolution = eightSolutionTool.preview();
+    const int committedBeforeSelection = committedCircleTools.size();
+    const bool selectedSolutionCommitted = eightSolutionTool.handleMousePress(
+        circleInputAt(QPointF(0.0, -88.45)), circleToolContext);
+    const bool committedSelectedSolution = selectedNextSolution &&
+        selectedSolution.hasShape && selectedSolutionCommitted &&
+        committedCircleTools.size() == committedBeforeSelection + 1 &&
+        validateNurbsCurve(committedCircleTools.back().nurbs) &&
+        std::hypot(committedCircleTools.back().points[0].x() -
+                       selectedSolution.shape.points[0].x(),
+                   committedCircleTools.back().points[0].y() -
+                       selectedSolution.shape.points[0].y()) <= 1.0e-5;
+    passed &= check(exactTargetsAdded && cyclesAllEight &&
+                        committedSelectedSolution,
+                    "three separate circles must cycle and commit all eight tangent-circle solutions");
+
+    constexpr qreal pi = 3.14159265358979323846;
+    const auto appendQuarterCircleArc = [&circleToolDocument](
+                                            const QPointF &center,
+                                            qreal startAngle) {
+        constexpr qreal localPi = 3.14159265358979323846;
+        const qreal middleAngle = startAngle + localPi / 4.0;
+        const qreal endAngle = startAngle + localPi / 2.0;
+        const qreal middleWeight = std::cos(localPi / 4.0);
+        const auto pointAt = [center](qreal angle, qreal radius) {
+            return center + QPointF(radius * std::cos(angle),
+                                    radius * std::sin(angle));
+        };
+        Shape::NurbsCurve2D arc;
+        arc.dimension = 2;
+        arc.degree = 2;
+        arc.order = 3;
+        arc.rational = true;
+        arc.controlPoints = {pointAt(startAngle, 2.0),
+                             pointAt(middleAngle, 2.0 / middleWeight),
+                             pointAt(endAngle, 2.0)};
+        arc.weights = {1.0, middleWeight, 1.0};
+        arc.knots = {0.0, 0.0, 1.0, 1.0};
+        return circleToolDocument.append(Shape{GeometryType::Arc,
+                                               {arc.controlPoints.first(),
+                                                arc.controlPoints.last(),
+                                                pointAt(middleAngle, 2.0)},
+                                               arc,
+                                               ArcMode::TwoPoint,
+                                               0.0,
+                                               {},
+                                               {}});
+    };
+    const QPointF firstArcCenter(-20.0, -180.0);
+    const QPointF secondArcCenter(20.0, -180.0);
+    const QPointF thirdArcCenter(0.0, -145.35898384862245);
+    const bool circularArcsAdded =
+        appendQuarterCircleArc(firstArcCenter, 0.0).isValid() &&
+        appendQuarterCircleArc(secondArcCenter, pi / 2.0).isValid() &&
+        appendQuarterCircleArc(thirdArcCenter, 5.0 * pi / 4.0).isValid();
+    CircleTangentTool arcTangentCircleTool(ToolId::CircleTangentThree);
+    arcTangentCircleTool.begin(circleToolContext);
+    arcTangentCircleTool.handleMousePress(
+        circleInputAt(firstArcCenter + QPointF(std::sqrt(2.0), std::sqrt(2.0))),
+        circleToolContext);
+    arcTangentCircleTool.handleMousePress(
+        circleInputAt(secondArcCenter + QPointF(-std::sqrt(2.0), std::sqrt(2.0))),
+        circleToolContext);
+    arcTangentCircleTool.handleMousePress(
+        circleInputAt(thirdArcCenter + QPointF(0.0, -2.0)),
+        circleToolContext);
+    arcTangentCircleTool.handleMouseMove(
+        circleInputAt(QPointF(0.0, -168.453)), circleToolContext);
+    const ToolPreview arcTangentPreview = arcTangentCircleTool.preview();
+    const bool arcsUseVisibleTangencies = circularArcsAdded &&
+        arcTangentPreview.hasShape &&
+        arcTangentPreview.statusText.contains(QStringLiteral("Tangent solution")) &&
+        std::hypot(arcTangentPreview.shape.points[0].x(),
+                   arcTangentPreview.shape.points[0].y() + 168.4529946162075) <= 0.05 &&
+        validateNurbsCurve(arcTangentPreview.shape.nurbs);
+    if (!arcsUseVisibleTangencies) {
+        qWarning() << "arc tangent diagnostic" << circularArcsAdded
+                   << arcTangentPreview.hasShape << arcTangentPreview.statusText
+                   << arcTangentPreview.shape.points;
+    }
+    passed &= check(arcsUseVisibleTangencies,
+                    "three circular arcs must use only tangent contacts on their visible spans");
 
     return passed ? 0 : 1;
 }

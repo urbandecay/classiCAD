@@ -1,5 +1,7 @@
 #include "viewport_overlay.h"
 
+#include "core/geometry/circle_construction.h"
+
 #include <QFont>
 #include <QPainterPath>
 
@@ -231,6 +233,7 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
 }
 
 void ViewportOverlay::drawCirclePreview(QPainter &painter,
+                                        ToolId tool,
                                         const QVector<QPointF> &pendingPoints,
                                         const QPointF &cursorWorld,
                                         bool cursorValid,
@@ -242,23 +245,74 @@ void ViewportOverlay::drawCirclePreview(QPainter &painter,
     }
 
     const QColor circleColor(QStringLiteral("#e6b85c"));
+    const QColor guideColor(QStringLiteral("#8aa7c7"));
     const QColor pointColor(QStringLiteral("#f0a45a"));
-    const QPointF center = transform_.worldToScreen(pendingPoints.first(), viewportSize);
-
-    painter.setPen(QPen(circleColor, 2.0));
-    painter.setBrush(Qt::NoBrush);
+    QVector<QPointF> candidatePoints = pendingPoints;
     if (cursorValid) {
-        const QPointF edge = transform_.worldToScreen(cursorWorld, viewportSize);
-        const qreal radius = std::hypot(edge.x() - center.x(), edge.y() - center.y());
-        painter.drawEllipse(center, radius, radius);
-        painter.setPen(QPen(pointColor, 1.5));
-        painter.setBrush(pointColor);
-        painter.drawEllipse(edge, 4.0, 4.0);
+        candidatePoints.append(cursorWorld);
+    }
+
+    QVector<QPointF> definition;
+    bool definitionValid = false;
+    if (candidatePoints.size() >= requiredPoints(tool)) {
+        if (tool == ToolId::CircleDiameter) {
+            definitionValid = makeCircleDefinitionFromDiameter(candidatePoints[0],
+                                                               candidatePoints[1],
+                                                               &definition);
+        } else if (tool == ToolId::CircleThreePoint) {
+            definitionValid = makeCircleDefinitionFromThreePoints(candidatePoints[0],
+                                                                  candidatePoints[1],
+                                                                  candidatePoints[2],
+                                                                  &definition);
+        } else {
+            definition = {candidatePoints[0], candidatePoints[1]};
+            definitionValid = true;
+        }
+    }
+
+    if (definitionValid) {
+        const Shape::NurbsCurve2D curve = makeCircleNurbs(definition);
+        if (validateNurbsCurve(curve)) {
+            painter.save();
+            painter.setPen(QPen(circleColor, 2.0));
+            painter.setBrush(Qt::NoBrush);
+            renderer_.drawNurbsCurve(painter, curve, viewportSize);
+            painter.restore();
+        }
+    }
+
+    painter.save();
+    painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
+    if (cursorValid) {
+        const QPointF previous = tool == ToolId::CircleThreePoint && pendingPoints.size() >= 2
+                                     ? pendingPoints.back()
+                                     : pendingPoints.first();
+        painter.drawLine(transform_.worldToScreen(previous, viewportSize),
+                         transform_.worldToScreen(cursorWorld, viewportSize));
+        if (tool == ToolId::CircleThreePoint && pendingPoints.size() >= 2) {
+            painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
+                             transform_.worldToScreen(pendingPoints[1], viewportSize));
+        }
     }
 
     painter.setPen(QPen(pointColor, 1.5));
     painter.setBrush(QColor(QStringLiteral("#282828")));
-    painter.drawEllipse(center, 5.0, 5.0);
+    for (const QPointF &point : pendingPoints) {
+        painter.drawEllipse(transform_.worldToScreen(point, viewportSize), 5.0, 5.0);
+    }
+    if (cursorValid) {
+        const QPointF cursorScreen = transform_.worldToScreen(cursorWorld, viewportSize);
+        painter.setPen(QPen(pointColor, 2.0));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(cursorScreen, 4.0, 4.0);
+    }
+    if (definitionValid && !definition.isEmpty()) {
+        const QPointF centerScreen = transform_.worldToScreen(definition.first(), viewportSize);
+        painter.setPen(QPen(pointColor, 1.5));
+        painter.setBrush(QColor(QStringLiteral("#282828")));
+        painter.drawEllipse(centerScreen, 5.0, 5.0);
+    }
+    painter.restore();
 
     if (currentSnap.isValid()) {
         drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);

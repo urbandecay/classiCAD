@@ -2,6 +2,7 @@
 #include "../core/document/document.h"
 #include "../core/document/selection_model.h"
 #include "../core/debug_log.h"
+#include "../core/geometry/circle_construction.h"
 #include "../core/geometry/curve_evaluator.h"
 #include "../core/geometry/geometry_transform.h"
 #include "../core/history/history.h"
@@ -110,10 +111,15 @@ public:
             // Rendering remains in the viewport for now, but the pending
             // points themselves are owned by the active tool.
             pendingPoints_ = preview.points;
+            controllerPreviewShape_ = preview.shape;
+            controllerPreviewShapeVisible_ = preview.hasShape;
             update();
         });
         toolContext_.setStatusPublisher([this](const ToolStatus &status) {
             toolStatus_ = status;
+            if (activeTool_ == Tool::CircleTangentThree && toolStatusUpdate_) {
+                toolStatusUpdate_(status.text);
+            }
         });
         toolContext_.setPointConstraint(
             [this](ToolId, const QPointF &rawPoint, const QVector<QPointF> &) {
@@ -128,8 +134,14 @@ public:
         setMinimumSize(480, 320);
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
+        qApp->installEventFilter(this);
         setCursor(Qt::CrossCursor);
         DebugLog::instance().write(QStringLiteral("viewport constructed"));
+    }
+
+    ~ViewportWidget() override
+    {
+        qApp->removeEventFilter(this);
     }
 
     void setTool(ToolId tool)
@@ -168,6 +180,8 @@ public:
         activeTool_ = tool;
         activeToolController_ = toolRegistry_.find(tool);
         pendingPoints_.clear();
+        controllerPreviewShape_ = Shape{};
+        controllerPreviewShapeVisible_ = false;
         resetArcPreviewTracking();
         lineCommandActive_ = tool == Tool::Line;
         if (!isEraseLikeTool(tool) || previousTool != tool) {
@@ -220,6 +234,9 @@ public:
             setCursor(Qt::ArrowCursor);
         } else {
             setCursor(Qt::CrossCursor);
+        }
+        if (isCircleTangentTool(tool)) {
+            setFocus(Qt::OtherFocusReason);
         }
 
         DebugLog::instance().write(QStringLiteral("setTool applied=%1 lineCommandActive=%2 cursorValid=%3 cursorWorld=%4")
@@ -1498,8 +1515,10 @@ protected:
             drawLineToolPreview(painter);
         } else if (activeTool_ == Tool::Arc) {
             drawArcToolPreview(painter);
-        } else if (activeTool_ == Tool::Circle && !pendingPoints_.isEmpty()) {
+        } else if (isCircleConstructionTool(activeTool_) && !pendingPoints_.isEmpty()) {
             drawCircleToolPreview(painter);
+        } else if (isCircleTangentTool(activeTool_)) {
+            drawCircleTangentToolPreview(painter);
         } else if (isEllipseTool(activeTool_)) {
             drawEllipseToolPreview(painter);
         } else if (isRectangleTool(activeTool_)) {
@@ -1983,7 +2002,9 @@ protected:
             activeToolController_->handleMouseMove(input, toolContext_);
         }
         const bool pointPreviewActive = activeTool_ == Tool::Point;
-        const bool circlePreviewActive = activeTool_ == Tool::Circle && !pendingPoints_.isEmpty();
+        const bool circlePreviewActive = isCircleConstructionTool(activeTool_) &&
+                                         !pendingPoints_.isEmpty();
+        const bool tangentCirclePreviewActive = isCircleTangentTool(activeTool_);
         const bool ellipsePreviewActive = isEllipseTool(activeTool_);
         const bool rectanglePreviewActive = isRectangleTool(activeTool_);
         const bool polygonPreviewActive = isPolygonTool(activeTool_);
@@ -2217,7 +2238,7 @@ protected:
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
-            ellipsePreviewActive ||
+            tangentCirclePreviewActive || ellipsePreviewActive ||
             rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive || panning_ ||
             draggingSelected_ ||
             draggingControlPoint_) {
@@ -2225,7 +2246,7 @@ protected:
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
-            ellipsePreviewActive ||
+            tangentCirclePreviewActive || ellipsePreviewActive ||
             rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive ||
             activeTool_ == Tool::Erase || panning_ ||
             draggingSelected_ || draggingControlPoint_) {
@@ -2556,6 +2577,34 @@ protected:
         }
 
         QWidget::keyPressEvent(event);
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (activeTool_ != Tool::CircleTangentThree ||
+            event->type() != QEvent::KeyPress) {
+            return false;
+        }
+
+        QWidget *targetWidget = qobject_cast<QWidget *>(watched);
+        if (targetWidget == nullptr || targetWidget->window() != window()) {
+            return false;
+        }
+
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() != Qt::Key_Tab && keyEvent->key() != Qt::Key_Backtab) {
+            return false;
+        }
+
+        const ToolInput input = makeKeyToolInput(keyEvent);
+        if (activeToolController_ != nullptr &&
+            activeToolController_->handleKey(input, toolContext_)) {
+            keyEvent->accept();
+            update();
+            emitCoordinateUpdate();
+            return true;
+        }
+        return false;
     }
 
 private:
@@ -4248,7 +4297,7 @@ private:
     {
         const bool serviceDrawingSnapActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
-            activeTool_ == Tool::Arc || activeTool_ == Tool::Circle ||
+            activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_) ||
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate ||
             isEllipseTool(activeTool_) || isRectangleTool(activeTool_) ||
             activeTool_ == Tool::Mirror ||
@@ -4264,7 +4313,7 @@ private:
         SnapResult best;
         const bool drawingSnapActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
-            activeTool_ == Tool::Arc || activeTool_ == Tool::Circle ||
+            activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_) ||
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate;
         if (!osnapEnabled_ || !drawingSnapActive) {
             return best;
@@ -4490,6 +4539,7 @@ private:
         const bool drawingConstraintActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Mirror ||
+            isCircleConstructionTool(activeTool_) ||
             isPolygonTool(activeTool_) ||
             (isEllipseTool(activeTool_) &&
              ellipseModeForTool(activeTool_) != EllipseMode::Corners) ||
@@ -6736,11 +6786,19 @@ private:
     void drawCircleToolPreview(QPainter &painter)
     {
         viewportOverlay_.drawCirclePreview(painter,
+                                           activeTool_,
                                            pendingPoints_,
                                            cursorWorld_,
                                            cursorValid_,
                                            currentSnap_,
                                            size());
+    }
+
+    void drawCircleTangentToolPreview(QPainter &painter)
+    {
+        if (controllerPreviewShapeVisible_) {
+            drawShape(painter, controllerPreviewShape_, true);
+        }
     }
 
     void drawEllipseToolPreview(QPainter &painter)
@@ -6947,6 +7005,21 @@ private:
             if (result.points.size() < 3) {
                 return false;
             }
+        } else if (isCircleConstructionTool(tool)) {
+            if (tool == ToolId::CircleDiameter) {
+                if (!makeCircleDefinitionFromDiameter(points[0],
+                                                      points[1],
+                                                      &result.points)) {
+                    return false;
+                }
+            } else if (tool == ToolId::CircleThreePoint) {
+                if (!makeCircleDefinitionFromThreePoints(points[0],
+                                                         points[1],
+                                                         points[2],
+                                                         &result.points)) {
+                    return false;
+                }
+            }
         }
 
         if (tool == Tool::Line) {
@@ -6955,8 +7028,11 @@ private:
             result.nurbs = makeArcNurbsCurve(result);
         } else if (tool == Tool::Bezier || tool == Tool::Nurbs) {
             result.nurbs = makeBezierNurbs(result.points);
-        } else if (tool == Tool::Circle) {
+        } else if (isCircleConstructionTool(tool)) {
             result.nurbs = makeCircleNurbs(result.points);
+            if (!isValidNurbsCurve(result.nurbs)) {
+                return false;
+            }
         } else if (isEllipseTool(tool)) {
             result.nurbs = makeEllipseNurbs(ellipseModeForTool(tool), points);
             if (!isValidNurbsCurve(result.nurbs)) {
@@ -6999,6 +7075,8 @@ private:
     // extracted into tools and services.
     Document &shapes_;
     QVector<QPointF> pendingPoints_;
+    Shape controllerPreviewShape_;
+    bool controllerPreviewShapeVisible_ = false;
     int polygonSideCount_ = 6;
     int polygonWheelRemainder_ = 0;
     QPointF &pan_;

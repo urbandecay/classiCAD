@@ -716,6 +716,9 @@ private:
         viewportCallbacks.coordinateUpdate = [this](const QString &text) {
             coordinateLabel_->setText(text);
         };
+        viewportCallbacks.toolStatusUpdate = [this](const QString &message) {
+            statusBar()->showMessage(message);
+        };
         viewportCallbacks.historyChanged = [this]() {
             updateHistoryActions();
         };
@@ -853,7 +856,11 @@ private:
                                            QStringLiteral("⬡\nPolygon"),
                                            Tool::PolygonCenterCorner);
         createPolygonToolMenu(polygonToolButton_);
-        addToolButton(layout, group, QStringLiteral("○\nCircle"), Tool::Circle);
+        circleToolButton_ = addToolButton(layout,
+                                         group,
+                                         QStringLiteral("○\nCircle"),
+                                         Tool::Circle);
+        createCircleToolMenu(circleToolButton_);
         ellipseToolButton_ = addToolButton(layout,
                                            group,
                                            QStringLiteral("⬭\nEllipse"),
@@ -1039,6 +1046,54 @@ private:
         }
         viewport_->setTool(tool);
         statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
+    }
+
+    void activateCircleTool(ToolId tool)
+    {
+        if (circleToolButton_ != nullptr) {
+            circleToolButton_->setChecked(true);
+        }
+        viewport_->setTool(tool);
+        QString message = QStringLiteral("Active tool: %1").arg(toolName(tool));
+        if (tool == Tool::CircleTangentTwo) {
+            message += QStringLiteral("  •  Click 2 curves, then move and click to place the circle");
+        } else if (tool == Tool::CircleTangentThree) {
+            message += QStringLiteral("  •  Click 3 curves, move to preview, Tab cycles tangent solutions, then click to place");
+        }
+        statusBar()->showMessage(message);
+    }
+
+    void createCircleToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+
+        auto *menu = new QMenu(button);
+        QAction *centerRadiusAction = menu->addAction(QStringLiteral("Center, Radius"));
+        QAction *diameterAction = menu->addAction(QStringLiteral("2 Points (Diameter)"));
+        QAction *threePointAction = menu->addAction(QStringLiteral("3 Points"));
+        menu->addSeparator();
+        QAction *tangentTwoAction = menu->addAction(QStringLiteral("Tangent to 2 Curves"));
+        QAction *tangentThreeAction = menu->addAction(QStringLiteral("Tangent to 3 Curves"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(centerRadiusAction, &QAction::triggered, this, [this]() {
+            activateCircleTool(Tool::Circle);
+        });
+        connect(diameterAction, &QAction::triggered, this, [this]() {
+            activateCircleTool(Tool::CircleDiameter);
+        });
+        connect(threePointAction, &QAction::triggered, this, [this]() {
+            activateCircleTool(Tool::CircleThreePoint);
+        });
+        connect(tangentTwoAction, &QAction::triggered, this, [this]() {
+            activateCircleTool(Tool::CircleTangentTwo);
+        });
+        connect(tangentThreeAction, &QAction::triggered, this, [this]() {
+            activateCircleTool(Tool::CircleTangentThree);
+        });
     }
 
     void createEllipseToolMenu(QToolButton *button)
@@ -1822,6 +1877,7 @@ private:
     QToolButton *arcToolButton_ = nullptr;
     QToolButton *rectangleToolButton_ = nullptr;
     QToolButton *polygonToolButton_ = nullptr;
+    QToolButton *circleToolButton_ = nullptr;
     QToolButton *ellipseToolButton_ = nullptr;
     QToolButton *eraseToolButton_ = nullptr;
     QToolButton *trimToolButton_ = nullptr;

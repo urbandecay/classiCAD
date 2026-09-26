@@ -33,6 +33,10 @@ enum class ToolId : int {
     PolygonCenterTangent = 22,
     PolygonCornerCorner = 23,
     PolygonEdge = 24,
+    CircleDiameter = 25,
+    CircleThreePoint = 26,
+    CircleTangentTwo = 27,
+    CircleTangentThree = 28,
 };
 
 enum class EllipseMode {
@@ -66,6 +70,9 @@ bool isRectangleTool(ToolId tool);
 RectangleMode rectangleModeForTool(ToolId tool);
 bool isPolygonTool(ToolId tool);
 PolygonMode polygonModeForTool(ToolId tool);
+bool isCircleConstructionTool(ToolId tool);
+bool isCircleTangentTool(ToolId tool);
+bool isCircleTool(ToolId tool);
 QString toolName(ToolId tool);
 int requiredPoints(ToolId tool);
 

@@ -49,6 +49,76 @@ int main(int argc, char **argv)
             }
         }
     }
+
+    const Shape sourceCircle{GeometryType::Circle,
+                             {},
+                             makeCircleNurbs({QPointF(0, 0), QPointF(100, 0)}),
+                             ArcMode::TwoPoint,
+                             0.0,
+                             {},
+                             {}};
+    const Shape crossingLine{GeometryType::Line,
+                             {},
+                             makeDegreeOneNurbs({QPointF(-150, 0), QPointF(150, 0)}),
+                             ArcMode::TwoPoint,
+                             0.0,
+                             {},
+                             {}};
+    view.shapes_ = {sourceCircle, crossingLine};
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0),
+                                  view.shapes_.objectIdAt(1)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
+    view.prepareEraseGeometryCache();
+    QVector<Shape> erasedCircle;
+    const bool erasedToUpperArc = view.trimShapeAtEraserStroke(
+        view.shapes_[0],
+        {view.worldToScreen(QPointF(0, -100))},
+        &erasedCircle,
+        0,
+        &view.eraseTargetCurveCaches_);
+    if (!erasedToUpperArc || erasedCircle.size() != 1 ||
+        erasedCircle.first().geometryType != GeometryType::PolyCurve ||
+        erasedCircle.first().components.isEmpty()) {
+        qWarning() << "Erasing a circle half must produce its trimmed NURBS components";
+        ++failures;
+    } else {
+        Document tangentDocument;
+        tangentDocument.append(erasedCircle.first());
+        SnapEngine tangentEngine;
+        tangentEngine.setSettings(
+            SnapSettings{true, false, false, false, false, false, true});
+        const QPointF tangentOrigin(0, 200);
+        const QVector<SnapCandidate> candidates = tangentEngine.tangentCandidates(
+            tangentDocument,
+            tangentOrigin,
+            view.viewportTransform_,
+            view.size());
+        const QPointF expectedTangent(86.6025403784, 50.0);
+        bool tangentFound = false;
+        QPointF tangentPoint;
+        for (const SnapCandidate &candidate : candidates) {
+            if (std::hypot(candidate.point.x() - expectedTangent.x(),
+                           candidate.point.y() - expectedTangent.y()) <= 0.1) {
+                tangentFound = true;
+                tangentPoint = candidate.point;
+                break;
+            }
+        }
+        const SnapResult snap = tangentEngine.findSnapPoint(
+            tangentDocument,
+            tangentPoint,
+            true,
+            {tangentOrigin},
+            view.viewportTransform_,
+            view.size());
+        if (!tangentFound || snap.type != SnapType::Tangent) {
+            qWarning() << "Tangent OSnap must find the tangent on an erased circular NURBS arc"
+                       << candidates.size() << tangentPoint
+                       << static_cast<int>(snap.type);
+            ++failures;
+        }
+    }
+
     const auto worldPoint = [&view](qreal x, qreal y) {
         return view.screenToWorld(QPointF(x, y));
     };

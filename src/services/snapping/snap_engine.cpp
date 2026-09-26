@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace classiCAD {
 
@@ -89,6 +90,134 @@ bool SnapEngine::nurbsCurvePointAtFraction(const Shape::NurbsCurve2D &curve,
                                   (lastParameter - firstParameter) *
                                       std::clamp(fraction, 0.0, 1.0),
                               point);
+}
+
+bool SnapEngine::nearestPointOnNurbsCurve(const Shape::NurbsCurve2D &curve,
+                                          const QPointF &cursorScreen,
+                                          const ViewportTransform &transform,
+                                          const QSize &viewportSize,
+                                          QPointF *nearestPoint,
+                                          qreal *distanceSquared) const
+{
+    if (nearestPoint == nullptr || distanceSquared == nullptr ||
+        !validateNurbsCurve(curve)) {
+        return false;
+    }
+
+    const QVector<double> fullKnots = expandedNurbsKnotVector(curve);
+    constexpr int samplesPerSpan = 32;
+    qreal bestSegmentDistanceSquared = std::numeric_limits<qreal>::infinity();
+    qreal bestParameterLow = 0.0;
+    qreal bestParameterHigh = 0.0;
+    qreal bestParameter = 0.0;
+    bool foundSegment = false;
+
+    for (int spanIndex = curve.degree;
+         spanIndex < curve.controlPoints.size();
+         ++spanIndex) {
+        const qreal spanStart = fullKnots[spanIndex];
+        const qreal spanEnd = fullKnots[spanIndex + 1];
+        if (spanEnd <= spanStart) {
+            continue;
+        }
+
+        QPointF previousWorld;
+        if (!evaluateNurbsPoint(curve, spanStart, &previousWorld)) {
+            continue;
+        }
+        QPointF previousScreen = transform.worldToScreen(previousWorld, viewportSize);
+        qreal previousParameter = spanStart;
+
+        for (int sample = 1; sample <= samplesPerSpan; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / samplesPerSpan;
+            const qreal parameter = spanStart + (spanEnd - spanStart) * fraction;
+            QPointF currentWorld;
+            if (!evaluateNurbsPoint(curve, parameter, &currentWorld)) {
+                continue;
+            }
+            const QPointF currentScreen = transform.worldToScreen(currentWorld, viewportSize);
+            const QPointF segment = currentScreen - previousScreen;
+            const qreal segmentLengthSquared = QPointF::dotProduct(segment, segment);
+            const qreal projection = segmentLengthSquared <= 1.0e-18
+                                         ? 0.0
+                                         : std::clamp(
+                                               QPointF::dotProduct(cursorScreen - previousScreen,
+                                                                   segment) /
+                                                   segmentLengthSquared,
+                                               0.0,
+                                               1.0);
+            const QPointF projectedScreen = previousScreen + segment * projection;
+            const QPointF screenDifference = projectedScreen - cursorScreen;
+            const qreal projectedDistanceSquared =
+                QPointF::dotProduct(screenDifference, screenDifference);
+            if (projectedDistanceSquared < bestSegmentDistanceSquared) {
+                bestSegmentDistanceSquared = projectedDistanceSquared;
+                bestParameterLow = previousParameter;
+                bestParameterHigh = parameter;
+                bestParameter = previousParameter +
+                                (parameter - previousParameter) * projection;
+                foundSegment = true;
+            }
+
+            previousScreen = currentScreen;
+            previousParameter = parameter;
+        }
+    }
+
+    if (!foundSegment) {
+        return false;
+    }
+
+    const auto distanceAtParameter = [&](qreal parameter, QPointF *worldPoint) {
+        QPointF evaluatedPoint;
+        if (!evaluateNurbsPoint(curve, parameter, &evaluatedPoint)) {
+            return std::numeric_limits<qreal>::infinity();
+        }
+        const QPointF screenDifference =
+            transform.worldToScreen(evaluatedPoint, viewportSize) - cursorScreen;
+        if (worldPoint != nullptr) {
+            *worldPoint = evaluatedPoint;
+        }
+        return QPointF::dotProduct(screenDifference, screenDifference);
+    };
+
+    qreal bestCurveDistanceSquared = distanceAtParameter(bestParameter, nearestPoint);
+    qreal low = bestParameterLow;
+    qreal high = bestParameterHigh;
+    constexpr qreal goldenRatioConjugate = 0.6180339887498948482;
+    qreal firstParameter = high - goldenRatioConjugate * (high - low);
+    qreal secondParameter = low + goldenRatioConjugate * (high - low);
+    qreal firstDistanceSquared = distanceAtParameter(firstParameter, nullptr);
+    qreal secondDistanceSquared = distanceAtParameter(secondParameter, nullptr);
+
+    for (int iteration = 0; iteration < 16; ++iteration) {
+        if (firstDistanceSquared <= secondDistanceSquared) {
+            high = secondParameter;
+            secondParameter = firstParameter;
+            secondDistanceSquared = firstDistanceSquared;
+            firstParameter = high - goldenRatioConjugate * (high - low);
+            firstDistanceSquared = distanceAtParameter(firstParameter, nullptr);
+        } else {
+            low = firstParameter;
+            firstParameter = secondParameter;
+            firstDistanceSquared = secondDistanceSquared;
+            secondParameter = low + goldenRatioConjugate * (high - low);
+            secondDistanceSquared = distanceAtParameter(secondParameter, nullptr);
+        }
+    }
+
+    for (const qreal candidateParameter : {low, high, firstParameter, secondParameter}) {
+        QPointF candidatePoint;
+        const qreal candidateDistanceSquared =
+            distanceAtParameter(candidateParameter, &candidatePoint);
+        if (candidateDistanceSquared < bestCurveDistanceSquared) {
+            bestCurveDistanceSquared = candidateDistanceSquared;
+            *nearestPoint = candidatePoint;
+        }
+    }
+
+    *distanceSquared = bestCurveDistanceSquared;
+    return std::isfinite(bestCurveDistanceSquared);
 }
 
 bool SnapEngine::makeCircularArcGeometry(
@@ -821,6 +950,138 @@ QVector<SnapCandidate> SnapEngine::tangentCandidates(
     return candidates;
 }
 
+QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
+    const Document &document,
+    const QPointF &cursor,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    const QVector<int> &excludedShapeIndices) const
+{
+    QVector<SnapCandidate> candidates;
+    if (!settings_.near) {
+        return candidates;
+    }
+
+    constexpr qreal snapRadiusPixels = 12.0;
+    const QPointF cursorScreen = transform.worldToScreen(cursor, viewportSize);
+    for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
+        if (excludedShapeIndices.contains(shapeIndex) ||
+            !document.isObjectVisible(document.objectIdAt(shapeIndex))) {
+            continue;
+        }
+
+        const Shape &shape = document[shapeIndex];
+        qreal nearestDistanceSquared = std::numeric_limits<qreal>::infinity();
+        QPointF nearestPoint;
+        const auto considerPoint = [&](const QPointF &worldPoint) {
+            const QPointF screenPoint = transform.worldToScreen(worldPoint, viewportSize);
+            const QPointF difference = screenPoint - cursorScreen;
+            const qreal distanceSquared = QPointF::dotProduct(difference, difference);
+            if (distanceSquared < nearestDistanceSquared) {
+                nearestDistanceSquared = distanceSquared;
+                nearestPoint = worldPoint;
+            }
+        };
+        const auto considerSegment = [&](const QPointF &start, const QPointF &end) {
+            const QPointF startScreen = transform.worldToScreen(start, viewportSize);
+            const QPointF endScreen = transform.worldToScreen(end, viewportSize);
+            const QPointF direction = endScreen - startScreen;
+            const qreal lengthSquared = QPointF::dotProduct(direction, direction);
+            const qreal fraction = lengthSquared <= 1.0e-18
+                                       ? 0.0
+                                       : std::clamp(
+                                             QPointF::dotProduct(cursorScreen - startScreen,
+                                                                 direction) /
+                                                 lengthSquared,
+                                             0.0,
+                                             1.0);
+            considerPoint(start + (end - start) * fraction);
+        };
+
+        if (shape.geometryType == GeometryType::Point) {
+            if (!shape.points.isEmpty()) {
+                considerPoint(shape.points.first());
+            }
+        } else if (shape.geometryType == GeometryType::Rectangle) {
+            const QVector<QPointF> vertices = rectangleVertices(shape);
+            for (int vertexIndex = 0; vertexIndex < vertices.size(); ++vertexIndex) {
+                considerSegment(vertices[vertexIndex],
+                                vertices[(vertexIndex + 1) % vertices.size()]);
+            }
+        } else if (shape.geometryType == GeometryType::PolyCurve) {
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                QPointF componentNearestPoint;
+                qreal componentDistanceSquared = 0.0;
+                if (nearestPointOnNurbsCurve(component,
+                                             cursorScreen,
+                                             transform,
+                                             viewportSize,
+                                             &componentNearestPoint,
+                                             &componentDistanceSquared) &&
+                    componentDistanceSquared < nearestDistanceSquared) {
+                    nearestDistanceSquared = componentDistanceSquared;
+                    nearestPoint = componentNearestPoint;
+                }
+            }
+        } else {
+            Shape::NurbsCurve2D curve;
+            if (subdivisionCurve(shape, &curve)) {
+                nearestPointOnNurbsCurve(curve,
+                                         cursorScreen,
+                                         transform,
+                                         viewportSize,
+                                         &nearestPoint,
+                                         &nearestDistanceSquared);
+            } else if (shape.geometryType == GeometryType::Arc) {
+                constexpr int arcSegments = 96;
+                QPointF previousPoint;
+                if (arcSnapPointAtFraction(shape,
+                                           0.0,
+                                           transform,
+                                           viewportSize,
+                                           &previousPoint)) {
+                    for (int segmentIndex = 1; segmentIndex <= arcSegments;
+                         ++segmentIndex) {
+                        QPointF currentPoint;
+                        if (!arcSnapPointAtFraction(
+                                shape,
+                                static_cast<qreal>(segmentIndex) / arcSegments,
+                                transform,
+                                viewportSize,
+                                &currentPoint)) {
+                            break;
+                        }
+                        considerSegment(previousPoint, currentPoint);
+                        previousPoint = currentPoint;
+                    }
+                }
+            } else if (shape.geometryType == GeometryType::Circle &&
+                       shape.points.size() >= 2) {
+                constexpr int circleSegments = 96;
+                const QPointF center = shape.points[0];
+                const QPointF radiusPoint = shape.points[1];
+                const qreal radius = std::hypot(radiusPoint.x() - center.x(),
+                                                radiusPoint.y() - center.y());
+                QPointF previousPoint = center + QPointF(radius, 0.0);
+                for (int segmentIndex = 1; segmentIndex <= circleSegments;
+                     ++segmentIndex) {
+                    const qreal angle = 6.28318530717958647692 * segmentIndex /
+                                        circleSegments;
+                    const QPointF currentPoint(center.x() + radius * std::cos(angle),
+                                               center.y() + radius * std::sin(angle));
+                    considerSegment(previousPoint, currentPoint);
+                    previousPoint = currentPoint;
+                }
+            }
+        }
+
+        if (nearestDistanceSquared <= snapRadiusPixels * snapRadiusPixels) {
+            candidates.append({SnapType::Near, nearestPoint});
+        }
+    }
+    return candidates;
+}
+
 SnapResult SnapEngine::findSnapPoint(const Document &document,
                                      const QPointF &rawPoint,
                                      bool drawingSnapActive,
@@ -849,6 +1110,15 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
             best.point = candidate.point;
         }
     };
+
+    for (const SnapCandidate &candidate :
+         nearCandidatesForScene(document,
+                                rawPoint,
+                                transform,
+                                viewportSize,
+                                excludedShapeIndices)) {
+        consider(candidate);
+    }
 
     for (const SnapCandidate &candidate :
          snapCandidatesForScene(document,

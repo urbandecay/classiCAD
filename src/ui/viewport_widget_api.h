@@ -104,7 +104,8 @@ public:
                               bool intersection,
                               bool center,
                               bool perpendicular,
-                              bool tangent) = 0;
+                              bool tangent,
+                              bool near) = 0;
 
     virtual QString subdivisionStatusText() const = 0;
     virtual QString joinStatusText() const = 0;

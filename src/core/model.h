@@ -28,6 +28,7 @@ enum class SnapType {
     Perpendicular,
     Tangent,
     ControlPoint,
+    Near,
 };
 
 struct SnapResult {

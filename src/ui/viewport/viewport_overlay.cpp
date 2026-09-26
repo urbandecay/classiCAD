@@ -51,6 +51,12 @@ void ViewportOverlay::drawSnapMarker(QPainter &painter,
         painter.drawEllipse(snapScreen, 6.0, 6.0);
         painter.drawLine(snapScreen + QPointF(-7.0, 4.0),
                          snapScreen + QPointF(7.0, -4.0));
+    } else if (type == SnapType::Near) {
+        const QPointF diamond[] = {snapScreen + QPointF(0.0, -7.0),
+                                   snapScreen + QPointF(7.0, 0.0),
+                                   snapScreen + QPointF(0.0, 7.0),
+                                   snapScreen + QPointF(-7.0, 0.0)};
+        painter.drawPolygon(diamond, 4);
     }
 }
 

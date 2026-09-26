@@ -179,7 +179,7 @@ int main(int argc, char **argv)
     view.shapes_ = {mirrorSource};
     view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
     view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
-    view.setSnapModes(true, false, false, false, false, false);
+    view.setSnapModes(true, false, false, false, false, false, false);
     view.setOsnapEnabled(true);
     const bool endpointMirrorStarted = view.beginMirror();
     const QPointF snappedAxisStart = view.constrainLinePoint(QPointF(1.1, 2.0));

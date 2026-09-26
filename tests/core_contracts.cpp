@@ -323,6 +323,22 @@ int main(int argc, char **argv)
                         std::hypot(endpointSnap.point.x(), endpointSnap.point.y()) <= 1.0e-9,
                     "snap engine must select the nearest enabled endpoint");
 
+    SnapSettings nearOnlySettings{true, false, false, false, false, false, false, true};
+    SnapEngine nearSnapEngine;
+    nearSnapEngine.setSettings(nearOnlySettings);
+    const QPointF nearLineCursor = viewportTransform.screenToWorld(
+        lineScreenPoint + QPointF(0.0, 5.0), viewportSize);
+    const SnapResult nearLineSnap = nearSnapEngine.findSnapPoint(serviceDocument,
+                                                                 nearLineCursor,
+                                                                 true,
+                                                                 {},
+                                                                 viewportTransform,
+                                                                 viewportSize);
+    passed &= check(nearLineSnap.type == SnapType::Near &&
+                        std::hypot(nearLineSnap.point.x() - 5.0,
+                                   nearLineSnap.point.y()) <= 1.0e-6,
+                    "Near OSnap must find the closest point along line geometry");
+
     Document controlPointSnapDocument;
     Shape movingControlPointLine = lineShape;
     movingControlPointLine.points = {QPointF(17.0, 50.0), QPointF(100.0, 100.0)};
@@ -365,6 +381,33 @@ int main(int argc, char **argv)
     const NurbsCurve2D nurbsOnlyBezier = makeBezierNurbs(
         {QPointF(50.0, 50.0), QPointF(60.0, 50.0),
          QPointF(70.0, 50.0), QPointF(80.0, 50.0)});
+    const NurbsCurve2D nearBezierCurve = makeBezierNurbs(
+        {QPointF(0.0, 0.0), QPointF(0.0, 10.0),
+         QPointF(10.0, 10.0), QPointF(10.0, 0.0)});
+    Document nearBezierDocument;
+    nearBezierDocument.append(Shape{GeometryType::Bezier,
+                                    {},
+                                    nearBezierCurve,
+                                    ArcMode::TwoPoint,
+                                    0.0,
+                                    {},
+                                    {}});
+    const QPointF nearBezierPoint(5.0, 7.5);
+    const QPointF nearBezierCursor = viewportTransform.screenToWorld(
+        viewportTransform.worldToScreen(nearBezierPoint, viewportSize),
+        viewportSize);
+    const SnapResult nearBezierSnap = nearSnapEngine.findSnapPoint(
+        nearBezierDocument,
+        nearBezierCursor,
+        true,
+        {},
+        viewportTransform,
+        viewportSize);
+    passed &= check(nearBezierSnap.type == SnapType::Near &&
+                        std::hypot(nearBezierSnap.point.x() - nearBezierPoint.x(),
+                                   nearBezierSnap.point.y() - nearBezierPoint.y()) <= 1.0e-6,
+                    "Near OSnap must find the closest evaluated point on stored NURBS curves");
+
     Document nurbsEndpointDocument;
     Shape nurbsEndpointSource = movingControlPointLine;
     nurbsEndpointSource.points = {QPointF(52.0, 50.0), QPointF(100.0, 100.0)};

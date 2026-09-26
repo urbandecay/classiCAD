@@ -15,6 +15,7 @@ struct SnapSettings {
     bool center = true;
     bool perpendicular = false;
     bool tangent = false;
+    bool near = false;
 };
 
 class SnapEngine final {
@@ -42,6 +43,12 @@ public:
     QVector<SnapCandidate> tangentCandidates(
         const Document &document,
         const QPointF &origin,
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        const QVector<int> &excludedShapeIndices = {}) const;
+    QVector<SnapCandidate> nearCandidatesForScene(
+        const Document &document,
+        const QPointF &cursor,
         const ViewportTransform &transform,
         const QSize &viewportSize,
         const QVector<int> &excludedShapeIndices = {}) const;
@@ -76,6 +83,12 @@ private:
     bool nurbsCurvePointAtFraction(const Shape::NurbsCurve2D &curve,
                                    qreal fraction,
                                    QPointF *point) const;
+    bool nearestPointOnNurbsCurve(const Shape::NurbsCurve2D &curve,
+                                  const QPointF &cursorScreen,
+                                  const ViewportTransform &transform,
+                                  const QSize &viewportSize,
+                                  QPointF *nearestPoint,
+                                  qreal *distanceSquared) const;
     bool makeCircularArcGeometry(const QPointF &startWorld,
                                  const QPointF &endWorld,
                                  const QPointF &throughWorld,

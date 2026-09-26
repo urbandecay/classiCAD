@@ -107,7 +107,8 @@ public:
                               bool center,
                               bool perpendicular,
                               bool tangent,
-                              bool near) = 0;
+                              bool near,
+                              bool controlPoint) = 0;
 
     virtual QString subdivisionStatusText() const = 0;
     virtual QString joinStatusText() const = 0;

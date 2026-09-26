@@ -780,6 +780,23 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             continue;
         }
 
+        if (settings_.controlPoint) {
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                for (const Shape::NurbsCurve2D &component : shape.components) {
+                    for (const QPointF &controlPoint : component.controlPoints) {
+                        candidates.append({SnapType::ControlPoint, controlPoint});
+                    }
+                }
+            } else if (shape.geometryType != GeometryType::Point) {
+                const QVector<QPointF> &controlPoints =
+                    shape.nurbs.controlPoints.isEmpty() ? shape.points
+                                                        : shape.nurbs.controlPoints;
+                for (const QPointF &controlPoint : controlPoints) {
+                    candidates.append({SnapType::ControlPoint, controlPoint});
+                }
+            }
+        }
+
         if (settings_.endpoint) {
             Shape::NurbsCurve2D subdivisionCurveData;
             if (subdivisionCurve(shape, &subdivisionCurveData)) {
@@ -1498,35 +1515,37 @@ DragSnapResult SnapEngine::findControlPointSnap(
         }
 
         const Shape &shape = document[shapeIndex];
-        QVector<QPointF> controlPoints;
-        if (shape.geometryType == GeometryType::PolyCurve) {
-            for (const Shape::NurbsCurve2D &component : shape.components) {
-                controlPoints += component.controlPoints;
+        if (settings_.controlPoint) {
+            QVector<QPointF> controlPoints;
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                for (const Shape::NurbsCurve2D &component : shape.components) {
+                    controlPoints += component.controlPoints;
+                }
+            } else if (!shape.nurbs.controlPoints.isEmpty()) {
+                controlPoints = shape.nurbs.controlPoints;
+            } else {
+                controlPoints = shape.points;
             }
-        } else if (!shape.nurbs.controlPoints.isEmpty()) {
-            controlPoints = shape.nurbs.controlPoints;
-        } else {
-            controlPoints = shape.points;
-        }
 
-        for (int pointIndex = 0; pointIndex < controlPoints.size(); ++pointIndex) {
-            if (shapeIndex == selectedShapeIndex &&
-                pointIndex == selectedControlPointIndex) {
-                continue;
-            }
-            consider(SnapType::ControlPoint, controlPoints[pointIndex]);
-        }
-
-        // A two-point rectangle stores only its diagonal construction points,
-        // but all four corners are visible geometric snap targets.
-        if (shape.geometryType == GeometryType::Rectangle) {
-            for (const QPointF &corner : rectangleVertices(shape)) {
-                const QPointF difference = corner - controlPoint;
+            for (int pointIndex = 0; pointIndex < controlPoints.size(); ++pointIndex) {
                 if (shapeIndex == selectedShapeIndex &&
-                    QPointF::dotProduct(difference, difference) <= 1.0e-18) {
+                    pointIndex == selectedControlPointIndex) {
                     continue;
                 }
-                consider(SnapType::ControlPoint, corner);
+                consider(SnapType::ControlPoint, controlPoints[pointIndex]);
+            }
+
+            // A two-point rectangle stores only its diagonal construction points,
+            // but all four corners are visible geometric snap targets.
+            if (shape.geometryType == GeometryType::Rectangle) {
+                for (const QPointF &corner : rectangleVertices(shape)) {
+                    const QPointF difference = corner - controlPoint;
+                    if (shapeIndex == selectedShapeIndex &&
+                        QPointF::dotProduct(difference, difference) <= 1.0e-18) {
+                        continue;
+                    }
+                    consider(SnapType::ControlPoint, corner);
+                }
             }
         }
     }

@@ -759,6 +759,7 @@ private:
         perpendicularSnapCheckBox_ = new QCheckBox(QStringLiteral("Perpendicular"));
         tangentSnapCheckBox_ = new QCheckBox(QStringLiteral("Tangent"));
         nearSnapCheckBox_ = new QCheckBox(QStringLiteral("Near"));
+        controlPointSnapCheckBox_ = new QCheckBox(QStringLiteral("Control Points"));
 
         for (QCheckBox *checkBox : {endpointSnapCheckBox_,
                                     midpointSnapCheckBox_,
@@ -766,7 +767,8 @@ private:
                                     centerSnapCheckBox_,
                                     perpendicularSnapCheckBox_,
                                     tangentSnapCheckBox_,
-                                    nearSnapCheckBox_}) {
+                                    nearSnapCheckBox_,
+                                    controlPointSnapCheckBox_}) {
             checkBox->setObjectName(QStringLiteral("osnapCheckBox"));
             checkBox->setChecked(true);
             osnapLane_->addWidget(checkBox);
@@ -774,6 +776,7 @@ private:
         perpendicularSnapCheckBox_->setChecked(false);
         tangentSnapCheckBox_->setChecked(false);
         nearSnapCheckBox_->setChecked(false);
+        controlPointSnapCheckBox_->setChecked(false);
 
         const auto syncSnapModes = [this]() {
             viewport_->setSnapModes(endpointSnapCheckBox_->isChecked(),
@@ -782,7 +785,8 @@ private:
                                     centerSnapCheckBox_->isChecked(),
                                     perpendicularSnapCheckBox_->isChecked(),
                                     tangentSnapCheckBox_->isChecked(),
-                                    nearSnapCheckBox_->isChecked());
+                                    nearSnapCheckBox_->isChecked(),
+                                    controlPointSnapCheckBox_->isChecked());
             QSettings settings;
             settings.setValue(QStringLiteral("osnap/endpoint"), endpointSnapCheckBox_->isChecked());
             settings.setValue(QStringLiteral("osnap/midpoint"), midpointSnapCheckBox_->isChecked());
@@ -793,6 +797,8 @@ private:
                               perpendicularSnapCheckBox_->isChecked());
             settings.setValue(QStringLiteral("osnap/tangent"), tangentSnapCheckBox_->isChecked());
             settings.setValue(QStringLiteral("osnap/near"), nearSnapCheckBox_->isChecked());
+            settings.setValue(QStringLiteral("osnap/controlPoint"),
+                              controlPointSnapCheckBox_->isChecked());
             settings.sync();
         };
 
@@ -803,6 +809,7 @@ private:
         connect(perpendicularSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
         connect(tangentSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
         connect(nearSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
+        connect(controlPointSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
 
         addToolBar(Qt::BottomToolBarArea, osnapLane_);
         osnapLane_->setVisible(false);
@@ -1038,6 +1045,8 @@ private:
                 settings.value(QStringLiteral("osnap/tangent"), false).toBool());
             nearSnapCheckBox_->setChecked(
                 settings.value(QStringLiteral("osnap/near"), false).toBool());
+            controlPointSnapCheckBox_->setChecked(
+                settings.value(QStringLiteral("osnap/controlPoint"), false).toBool());
         }
 
         if (osnapAction_ != nullptr) {
@@ -1717,6 +1726,7 @@ private:
     QCheckBox *perpendicularSnapCheckBox_ = nullptr;
     QCheckBox *tangentSnapCheckBox_ = nullptr;
     QCheckBox *nearSnapCheckBox_ = nullptr;
+    QCheckBox *controlPointSnapCheckBox_ = nullptr;
     QToolBar *osnapLane_ = nullptr;
     QProcess *updateProcess_ = nullptr;
 };

@@ -626,7 +626,8 @@ public:
                       bool center,
                       bool perpendicular,
                       bool tangent,
-                      bool near)
+                      bool near,
+                      bool controlPoint)
     {
         endpointSnapEnabled_ = endpoint;
         midpointSnapEnabled_ = midpoint;
@@ -635,9 +636,10 @@ public:
         perpendicularSnapEnabled_ = perpendicular;
         tangentSnapEnabled_ = tangent;
         nearSnapEnabled_ = near;
+        controlPointSnapEnabled_ = controlPoint;
         updateSnapEngineSettings();
         refreshCursorConstraint();
-        DebugLog::instance().write(QStringLiteral("setSnapModes endpoint=%1 midpoint=%2 intersection=%3 center=%4 perpendicular=%5 tangent=%6 near=%7 snap=%8")
+        DebugLog::instance().write(QStringLiteral("setSnapModes endpoint=%1 midpoint=%2 intersection=%3 center=%4 perpendicular=%5 tangent=%6 near=%7 controlPoint=%8 snap=%9")
                                        .arg(endpointSnapEnabled_)
                                        .arg(midpointSnapEnabled_)
                                        .arg(intersectionSnapEnabled_)
@@ -645,6 +647,7 @@ public:
                                        .arg(perpendicularSnapEnabled_)
                                        .arg(tangentSnapEnabled_)
                                        .arg(nearSnapEnabled_)
+                                       .arg(controlPointSnapEnabled_)
                                        .arg(snapTypeName(currentSnap_.type)));
         update();
     }
@@ -2514,7 +2517,8 @@ private:
                                              centerSnapEnabled_,
                                              perpendicularSnapEnabled_,
                                              tangentSnapEnabled_,
-                                             nearSnapEnabled_});
+                                             nearSnapEnabled_,
+                                             controlPointSnapEnabled_});
     }
 
     int objectIndex(ObjectId objectId) const
@@ -6917,6 +6921,7 @@ private:
     bool perpendicularSnapEnabled_ = false;
     bool tangentSnapEnabled_ = false;
     bool nearSnapEnabled_ = false;
+    bool controlPointSnapEnabled_ = false;
     bool subdivisionActive_ = false;
     ObjectId subdivisionShapeIndex_ = ObjectId::invalid();
     int subdivisionSections_ = 2;

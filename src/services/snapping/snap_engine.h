@@ -16,6 +16,7 @@ struct SnapSettings {
     bool perpendicular = false;
     bool tangent = false;
     bool near = false;
+    bool controlPoint = false;
 };
 
 class SnapEngine final {

@@ -495,6 +495,41 @@ int main(int argc, char **argv)
                                    nearLineSnap.point.y()) <= 1.0e-6,
                     "Near OSnap must find the closest point along line geometry");
 
+    SnapEngine controlPointOsnapEngine;
+    controlPointOsnapEngine.setSettings(
+        SnapSettings{true, false, false, false, false, false, false, false, true});
+    Document controlPointOsnapDocument;
+    controlPointOsnapDocument.append(archShape);
+    const SnapResult bezierControlPointSnap = controlPointOsnapEngine.findSnapPoint(
+        controlPointOsnapDocument,
+        archControlPoints[1] + QPointF(2.0, 1.0),
+        true,
+        {},
+        viewportTransform,
+        viewportSize);
+    passed &= check(bezierControlPointSnap.type == SnapType::ControlPoint &&
+                        bezierControlPointSnap.point == archControlPoints[1],
+                    "Control Points OSnap must target the stored NURBS control vertices");
+
+    controlPointOsnapEngine.setSettings(SnapSettings{true,
+                                                     false,
+                                                     false,
+                                                     false,
+                                                     false,
+                                                     false,
+                                                     false,
+                                                     false,
+                                                     false});
+    const SnapResult disabledControlPointSnap = controlPointOsnapEngine.findSnapPoint(
+        controlPointOsnapDocument,
+        archControlPoints[1],
+        true,
+        {},
+        viewportTransform,
+        viewportSize);
+    passed &= check(!disabledControlPointSnap.isValid(),
+                    "Control Points OSnap must not produce candidates when its mode is off");
+
     Document controlPointSnapDocument;
     Shape movingControlPointLine = lineShape;
     movingControlPointLine.points = {QPointF(17.0, 50.0), QPointF(100.0, 100.0)};
@@ -509,6 +544,8 @@ int main(int argc, char **argv)
               {},
               {}});
     SnapEngine controlPointSnapEngine;
+    controlPointSnapEngine.setSettings(
+        SnapSettings{false, false, false, false, false, false, false, false, true});
     const DragSnapResult rectangleCornerSnap =
         controlPointSnapEngine.findControlPointSnap(controlPointSnapDocument,
                                                     0,
@@ -518,7 +555,19 @@ int main(int argc, char **argv)
                                                     viewportSize);
     passed &= check(rectangleCornerSnap.type == SnapType::ControlPoint &&
                         rectangleCornerSnap.targetPoint == QPointF(0.0, 50.0),
-                    "control-point dragging must snap to any visible rectangle corner with OSnap disabled");
+                    "control-point dragging must snap to enabled control-point targets even when OSnap is disabled");
+
+    controlPointSnapEngine.setSettings(
+        SnapSettings{false, false, false, false, false, false, false, false, false});
+    const DragSnapResult disabledControlPointDragSnap =
+        controlPointSnapEngine.findControlPointSnap(controlPointSnapDocument,
+                                                    0,
+                                                    0,
+                                                    QPointF(17.0, 50.0),
+                                                    viewportTransform,
+                                                    viewportSize);
+    passed &= check(!disabledControlPointDragSnap.isValid(),
+                    "control-point dragging must not snap to control points when that OSnap mode is off");
 
     SnapEngine endpointControlPointSnapEngine;
     endpointControlPointSnapEngine.setSettings(

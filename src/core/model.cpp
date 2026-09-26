@@ -453,7 +453,7 @@ QString snapTypeName(SnapType type)
     case SnapType::Tangent:
         return QStringLiteral("Tangent");
     case SnapType::ControlPoint:
-        return QStringLiteral("ControlPoint");
+        return QStringLiteral("Control Point");
     case SnapType::Near:
         return QStringLiteral("Near");
     case SnapType::None:

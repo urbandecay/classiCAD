@@ -80,8 +80,10 @@ geometry.
 
 Selected-object movement also supports a Blender-style grab flow: press `G`,
 move the selection, press `X` or `Y` to constrain the axis, then click to
-confirm or press `Esc`/right-click to cancel. Ordinary click-drag movement
-continues to work as before.
+confirm or press `Esc`/right-click to cancel. Press `B` during Grab to choose
+an enabled OSnap point on the selection as the move base; that point can then
+be snapped onto another enabled OSnap point even when the global OSnap switch
+is off. Ordinary click-drag movement continues to work as before.
 
 Mirror is a copy command: select one or more editable objects, choose Mirror
 (`M`), then click two points for the axis. The axis uses the same Ortho and

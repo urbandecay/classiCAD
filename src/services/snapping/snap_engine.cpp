@@ -544,7 +544,8 @@ QVector<SnapCandidate> SnapEngine::perpendicularCandidates(
     const QPointF &origin,
     const QPointF &cursor,
     const ViewportTransform &transform,
-    const QSize &viewportSize) const
+    const QSize &viewportSize,
+    const QVector<int> &excludedShapeIndices) const
 {
     QVector<SnapCandidate> candidates;
     if (!settings_.perpendicular) {
@@ -552,6 +553,10 @@ QVector<SnapCandidate> SnapEngine::perpendicularCandidates(
     }
     constexpr qreal epsilon = 1.0e-9;
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
+        if (excludedShapeIndices.contains(shapeIndex) ||
+            !document.isObjectVisible(document.objectIdAt(shapeIndex))) {
+            continue;
+        }
         const Shape &shape = document[shapeIndex];
         if (shape.points.isEmpty()) {
             continue;
@@ -651,7 +656,8 @@ QVector<SnapCandidate> SnapEngine::tangentCandidates(
     const Document &document,
     const QPointF &origin,
     const ViewportTransform &transform,
-    const QSize &viewportSize) const
+    const QSize &viewportSize,
+    const QVector<int> &excludedShapeIndices) const
 {
     QVector<SnapCandidate> candidates;
     if (!settings_.tangent) {
@@ -659,6 +665,10 @@ QVector<SnapCandidate> SnapEngine::tangentCandidates(
     }
     constexpr qreal epsilon = 1.0e-9;
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
+        if (excludedShapeIndices.contains(shapeIndex) ||
+            !document.isObjectVisible(document.objectIdAt(shapeIndex))) {
+            continue;
+        }
         const Shape &shape = document[shapeIndex];
         if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
             const QPointF center = shape.points[0];
@@ -739,10 +749,12 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
                                      bool drawingSnapActive,
                                      const QVector<QPointF> &pendingPoints,
                                      const ViewportTransform &transform,
-                                     const QSize &viewportSize) const
+                                     const QSize &viewportSize,
+                                     const QVector<int> &excludedShapeIndices,
+                                     bool forceEnabled) const
 {
     SnapResult best;
-    if (!settings_.enabled || !drawingSnapActive) {
+    if ((!settings_.enabled && !forceEnabled) || !drawingSnapActive) {
         return best;
     }
 
@@ -762,7 +774,10 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
     };
 
     for (const SnapCandidate &candidate :
-         snapCandidatesForScene(document, {}, transform, viewportSize)) {
+         snapCandidatesForScene(document,
+                               excludedShapeIndices,
+                               transform,
+                               viewportSize)) {
         consider(candidate);
     }
     if (!pendingPoints.isEmpty()) {
@@ -771,14 +786,16 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
                                      pendingPoints.back(),
                                      rawPoint,
                                      transform,
-                                     viewportSize)) {
+                                     viewportSize,
+                                     excludedShapeIndices)) {
             consider(candidate);
         }
         for (const SnapCandidate &candidate :
              tangentCandidates(document,
                                pendingPoints.back(),
                                transform,
-                               viewportSize)) {
+                               viewportSize,
+                               excludedShapeIndices)) {
             consider(candidate);
         }
     }
@@ -837,34 +854,42 @@ DragSnapResult SnapEngine::findControlPointSnap(
     const Document &document,
     int selectedShapeIndex,
     const QPointF &controlPoint,
+    const QVector<QPointF> &otherControlPoints,
     const ViewportTransform &transform,
     const QSize &viewportSize) const
 {
     DragSnapResult best;
-    if (!settings_.enabled || selectedShapeIndex < 0 ||
-        selectedShapeIndex >= document.size()) {
-        return best;
-    }
-
     const QPointF sourceScreen = transform.worldToScreen(controlPoint, viewportSize);
-    const QVector<SnapCandidate> targetCandidates =
-        snapCandidatesForScene(document,
-                               {selectedShapeIndex},
-                               transform,
-                               viewportSize);
     constexpr qreal snapRadiusPixels = 12.0;
     qreal bestDistance = snapRadiusPixels;
-    for (const SnapCandidate &target : targetCandidates) {
-        const QPointF targetScreen = transform.worldToScreen(target.point, viewportSize);
+
+    const auto consider = [&](SnapType type, const QPointF &targetPoint) {
+        const QPointF targetScreen = transform.worldToScreen(targetPoint, viewportSize);
         const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
-                                           targetScreen.y() - sourceScreen.y());
+                                          targetScreen.y() - sourceScreen.y());
         if (distance <= bestDistance) {
             bestDistance = distance;
-            best.type = target.type;
+            best.type = type;
             best.sourcePoint = controlPoint;
-            best.targetPoint = target.point;
-            best.translation = target.point - controlPoint;
+            best.targetPoint = targetPoint;
+            best.translation = targetPoint - controlPoint;
         }
+    };
+
+    if (settings_.enabled && selectedShapeIndex >= 0 &&
+        selectedShapeIndex < document.size()) {
+        const QVector<SnapCandidate> targetCandidates =
+            snapCandidatesForScene(document,
+                                   {selectedShapeIndex},
+                                   transform,
+                                   viewportSize);
+        for (const SnapCandidate &target : targetCandidates) {
+            consider(target.type, target.point);
+        }
+    }
+
+    for (const QPointF &target : otherControlPoints) {
+        consider(SnapType::ControlPoint, target);
     }
     return best;
 }

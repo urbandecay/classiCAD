@@ -29,6 +29,9 @@ void ViewportOverlay::drawSnapMarker(QPainter &painter,
     } else if (type == SnapType::Midpoint) {
         painter.drawRect(QRectF(snapScreen - QPointF(6.0, 6.0),
                                 snapScreen + QPointF(6.0, 6.0)));
+    } else if (type == SnapType::ControlPoint) {
+        painter.drawRect(QRectF(snapScreen - QPointF(7.0, 7.0),
+                                snapScreen + QPointF(7.0, 7.0)));
     } else if (type == SnapType::Intersection) {
         painter.drawLine(snapScreen - QPointF(7.0, 7.0),
                          snapScreen + QPointF(7.0, 7.0));
@@ -474,7 +477,10 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                      bool joinActive,
                                      int joinCount,
                                      bool lineCommandActive,
-                                     int rotateStep) const
+                                     int rotateStep,
+                                     bool grabActive,
+                                     bool grabPickingBasePoint,
+                                     bool grabHasBasePoint) const
 {
     painter.setPen(QColor(QStringLiteral("#a0a0a0")));
     painter.setFont(QFont(QStringLiteral("Sans"), 10));
@@ -545,11 +551,19 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
         }
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18, viewportSize.height() - 18, hint);
+    } else if (grabActive) {
+        painter.setPen(QColor(QStringLiteral("#f0a45a")));
+        const QString grabHint = grabPickingBasePoint
+                                     ? QStringLiteral("Click an OSnap point on the selection for the move base  •  Esc/RMB cancels")
+                                     : grabHasBasePoint
+                                           ? QStringLiteral("Move base point to destination  •  X/Y: constrain  •  Click: confirm  •  Esc: cancel")
+                                           : QStringLiteral("Move selection  •  X/Y: constrain  •  B: choose base point  •  Click: confirm  •  Esc: cancel");
+        painter.drawText(18, viewportSize.height() - 18, grabHint);
     } else if (!joinActive) {
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,
                          viewportSize.height() - 18,
-                         QStringLiteral("Shift-click: add/remove  •  Drag empty: box select  •  G: grab selected  •  X/Y: lock axis"));
+                         QStringLiteral("Shift-click: add/remove  •  Drag empty: box select  •  G: grab  •  B: base point  •  X/Y: lock axis"));
     }
 }
 

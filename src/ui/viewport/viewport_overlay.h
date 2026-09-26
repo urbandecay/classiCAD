@@ -94,7 +94,10 @@ public:
                         bool joinActive,
                         int joinCount,
                         bool lineCommandActive,
-                        int rotateStep) const;
+                        int rotateStep,
+                        bool grabActive,
+                        bool grabPickingBasePoint,
+                        bool grabHasBasePoint) const;
 
 private:
     void drawSampledEraseIntervals(QPainter &painter,

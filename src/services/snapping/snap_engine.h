@@ -37,19 +37,23 @@ public:
         const QPointF &origin,
         const QPointF &cursor,
         const ViewportTransform &transform,
-        const QSize &viewportSize) const;
+        const QSize &viewportSize,
+        const QVector<int> &excludedShapeIndices = {}) const;
     QVector<SnapCandidate> tangentCandidates(
         const Document &document,
         const QPointF &origin,
         const ViewportTransform &transform,
-        const QSize &viewportSize) const;
+        const QSize &viewportSize,
+        const QVector<int> &excludedShapeIndices = {}) const;
 
     SnapResult findSnapPoint(const Document &document,
                              const QPointF &rawPoint,
                              bool drawingSnapActive,
                              const QVector<QPointF> &pendingPoints,
                              const ViewportTransform &transform,
-                             const QSize &viewportSize) const;
+                             const QSize &viewportSize,
+                             const QVector<int> &excludedShapeIndices = {},
+                             bool forceEnabled = false) const;
 
     DragSnapResult findDragSnap(const Document &document,
                                 const QVector<int> &selectedShapeIndices,
@@ -59,6 +63,7 @@ public:
         const Document &document,
         int selectedShapeIndex,
         const QPointF &controlPoint,
+        const QVector<QPointF> &otherControlPoints,
         const ViewportTransform &transform,
         const QSize &viewportSize) const;
 

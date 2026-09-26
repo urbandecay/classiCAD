@@ -819,6 +819,8 @@ public:
         grabStartSnapshot_ = document_.snapshot();
         grabActive_ = true;
         grabMoved_ = false;
+        grabPickingBasePoint_ = false;
+        grabHasBasePoint_ = false;
         draggingSelected_ = true;
         draggingShapeIndices_ = validSelection;
         if (!selectedShapeIndex_.isValid() || !validSelection.contains(selectedShapeIndex_)) {
@@ -828,6 +830,7 @@ public:
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
         dragAxisLock_ = DragAxisLock::None;
+        currentSnap_ = SnapResult{};
 
         const QPoint localCursor = mapFromGlobal(QCursor::pos());
         if (rect().contains(localCursor)) {
@@ -845,6 +848,28 @@ public:
         return true;
     }
 
+    void beginGrabBasePointMode()
+    {
+        if (!grabActive_) {
+            return;
+        }
+
+        if (grabMoved_) {
+            document_.restoreSnapshot(grabStartSnapshot_);
+            notifyLayersChanged();
+        }
+        grabMoved_ = false;
+        grabPickingBasePoint_ = true;
+        grabHasBasePoint_ = false;
+        grabCursorOffset_ = QPointF();
+        currentSnap_ = SnapResult{};
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        setCursor(Qt::CrossCursor);
+        update();
+        DebugLog::instance().write(QStringLiteral("grab base-point selection started"));
+    }
+
     void finishGrab()
     {
         if (!grabActive_) {
@@ -860,6 +885,7 @@ public:
         draggingShapeIndices_.clear();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
+        currentSnap_ = SnapResult{};
         dragSnapLocked_ = false;
         dragAxisLock_ = DragAxisLock::None;
         setCursor(Qt::ArrowCursor);
@@ -883,6 +909,7 @@ public:
         draggingShapeIndices_.clear();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
+        currentSnap_ = SnapResult{};
         dragSnapLocked_ = false;
         dragAxisLock_ = DragAxisLock::None;
         setCursor(Qt::ArrowCursor);
@@ -1448,6 +1475,9 @@ protected:
                       true);
         }
 
+        if (grabActive_ && currentSnap_.isValid()) {
+            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        }
         if ((draggingSelected_ || draggingControlPoint_) && currentDragSnap_.isValid()) {
             drawSnapMarker(painter,
                            currentDragSnap_.type,
@@ -1468,7 +1498,10 @@ protected:
                                          joinActive_,
                                          joinShapeIndices_.size(),
                                          lineCommandActive_,
-                                         rotateStep_);
+                                         rotateStep_,
+                                         grabActive_,
+                                         grabPickingBasePoint_,
+                                         grabHasBasePoint_);
     }
 
     void mousePressEvent(QMouseEvent *event) override
@@ -1490,8 +1523,37 @@ protected:
                 .arg(snapTypeName(currentSnap_.type)));
 
         if (grabActive_) {
+            rawCursorWorld_ = rawWorldPosition;
+            cursorWorld_ = rawWorldPosition;
+            lastWorldPosition_ = rawWorldPosition;
+            cursorValid_ = true;
             if (event->button() == Qt::LeftButton) {
-                finishGrab();
+                if (grabPickingBasePoint_) {
+                    const SnapResult baseSnap = findGrabBasePointSnap(rawWorldPosition);
+                    if (baseSnap.isValid()) {
+                        grabBasePoint_ = baseSnap.point;
+                        grabCursorOffset_ = rawWorldPosition - grabBasePoint_;
+                        grabHasBasePoint_ = true;
+                        grabPickingBasePoint_ = false;
+                        currentSnap_ = baseSnap;
+                        setCursor(Qt::SizeAllCursor);
+                        DebugLog::instance().write(
+                            QStringLiteral("grab base-point selected type=%1 point=%2 offset=%3")
+                                .arg(snapTypeName(baseSnap.type))
+                                .arg(pointText(grabBasePoint_))
+                                .arg(pointText(grabCursorOffset_)));
+                    } else {
+                        DebugLog::instance().write(
+                            QStringLiteral("grab base-point click ignored no snap candidate"));
+                    }
+                    update();
+                    emitCoordinateUpdate();
+                } else {
+                    if (grabHasBasePoint_) {
+                        updateGrabPosition(draggingShapeIndices_);
+                    }
+                    finishGrab();
+                }
             } else if (event->button() == Qt::RightButton) {
                 cancelGrab();
             }
@@ -1939,6 +2001,15 @@ protected:
             return;
         }
 
+        if (grabActive_ && grabPickingBasePoint_) {
+            currentSnap_ = findGrabBasePointSnap(rawCursorWorld_);
+            cursorWorld_ = currentSnap_.isValid() ? currentSnap_.point : rawCursorWorld_;
+            lastWorldPosition_ = cursorWorld_;
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
         const int selectedIndex = objectIndex(selectedShapeIndex_);
         if (draggingControlPoint_ && selectedIndex >= 0 && controlPointIndex_ >= 0) {
             const QPointF delta = rawCursorWorld_ - lastControlPointWorld_;
@@ -1974,7 +2045,9 @@ protected:
                         controlPointsForShape(shapes_[selectedIndex]);
                     if (controlPointIndex_ < controlPoints.size()) {
                         currentDragSnap_ = findControlPointSnap(
-                            selectedShapeIndex_, controlPoints[controlPointIndex_]);
+                            selectedShapeIndex_,
+                            controlPointIndex_,
+                            controlPoints[controlPointIndex_]);
                         if (currentDragSnap_.isValid()) {
                             translateControlPoint(selectedShapeIndex_,
                                                   controlPointIndex_,
@@ -2126,6 +2199,10 @@ protected:
                                        .arg(panMoved_)
                                        .arg(draggingSelected_)
                                        .arg(repeatToolOnRelease));
+        if (grabActive_) {
+            return;
+        }
+
         const bool releaseEraseCursor =
             isEraseLikeTool(activeTool_) && event->button() == Qt::LeftButton;
         if (releaseEraseCursor) {
@@ -2281,6 +2358,12 @@ protected:
 
         if (grabActive_ && event->key() == Qt::Key_Escape) {
             cancelGrab();
+            return;
+        }
+
+        if (grabActive_ && !event->isAutoRepeat() &&
+            event->modifiers() == Qt::NoModifier && event->key() == Qt::Key_B) {
+            beginGrabBasePointMode();
             return;
         }
 
@@ -3238,6 +3321,10 @@ private:
     {
         grabActive_ = false;
         grabMoved_ = false;
+        grabPickingBasePoint_ = false;
+        grabHasBasePoint_ = false;
+        grabBasePoint_ = QPointF();
+        grabCursorOffset_ = QPointF();
     }
 
     void resetInteractionAfterHistory()
@@ -4118,6 +4205,68 @@ private:
         return best;
     }
 
+    SnapResult closestSnapCandidate(const QPointF &rawPoint,
+                                    const QVector<SnapCandidate> &candidates) const
+    {
+        SnapResult best;
+        const QPointF cursorScreen = worldToScreen(rawPoint);
+        constexpr qreal snapRadiusPixels = 12.0;
+        qreal bestDistance = snapRadiusPixels;
+        for (const SnapCandidate &candidate : candidates) {
+            const QPointF candidateScreen = worldToScreen(candidate.point);
+            const qreal distance = std::hypot(candidateScreen.x() - cursorScreen.x(),
+                                              candidateScreen.y() - cursorScreen.y());
+            if (distance <= bestDistance) {
+                bestDistance = distance;
+                best.type = candidate.type;
+                best.point = candidate.point;
+            }
+        }
+        return best;
+    }
+
+    QVector<int> grabSelectedShapeIndices() const
+    {
+        QVector<int> selectedIndices;
+        selectedIndices.reserve(draggingShapeIndices_.size());
+        for (const ObjectId objectId : draggingShapeIndices_) {
+            const int shapeIndex = objectIndex(objectId);
+            if (shapeIndex >= 0) {
+                selectedIndices.append(shapeIndex);
+            }
+        }
+        return selectedIndices;
+    }
+
+    SnapResult findGrabBasePointSnap(const QPointF &rawPoint) const
+    {
+        QVector<int> excludedShapeIndices;
+        const QVector<int> selectedIndices = grabSelectedShapeIndices();
+        for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
+            if (!selectedIndices.contains(shapeIndex)) {
+                excludedShapeIndices.append(shapeIndex);
+            }
+        }
+        const QVector<SnapCandidate> candidates =
+            snapEngine_.snapCandidatesForScene(document_,
+                                               excludedShapeIndices,
+                                               viewportTransform_,
+                                               size());
+        return closestSnapCandidate(rawPoint, candidates);
+    }
+
+    SnapResult findGrabDestinationSnap(const QPointF &rawPoint) const
+    {
+        return snapEngine_.findSnapPoint(document_,
+                                         rawPoint,
+                                         true,
+                                         QVector<QPointF>{grabBasePoint_},
+                                         viewportTransform_,
+                                         size(),
+                                         grabSelectedShapeIndices(),
+                                         true);
+    }
+
     DragSnapResult findDragSnap(ObjectId selectedObjectId) const
     {
         return findDragSnap(QVector<ObjectId>{selectedObjectId});
@@ -4182,40 +4331,27 @@ private:
     }
 
     DragSnapResult findControlPointSnap(ObjectId selectedObjectId,
+                                        int selectedControlPointIndex,
                                         const QPointF &controlPoint) const
     {
-        return snapEngine_.findControlPointSnap(document_,
-                                                objectIndex(selectedObjectId),
-                                                controlPoint,
-                                                viewportTransform_,
-                                                size());
-
-        DragSnapResult best;
-        const int selectedShapeIndex = objectIndex(selectedObjectId);
-        if (!osnapEnabled_ || selectedShapeIndex < 0) {
-            return best;
-        }
-
-        const QPointF sourceScreen = worldToScreen(controlPoint);
-        const QVector<SnapCandidate> targetCandidates =
-            snapCandidatesForScene(selectedShapeIndex);
-        constexpr qreal snapRadiusPixels = 12.0;
-        qreal bestDistance = snapRadiusPixels;
-
-        for (const SnapCandidate &target : targetCandidates) {
-            const QPointF targetScreen = worldToScreen(target.point);
-            const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
-                                              targetScreen.y() - sourceScreen.y());
-            if (distance <= bestDistance) {
-                bestDistance = distance;
-                best.type = target.type;
-                best.sourcePoint = controlPoint;
-                best.targetPoint = target.point;
-                best.translation = target.point - controlPoint;
+        QVector<QPointF> otherControlPoints;
+        for (const int shapeIndex : controlPointShapeIndices()) {
+            const ObjectId objectId = document_.objectIdAt(shapeIndex);
+            const QVector<QPointF> controlPoints = controlPointsForShape(shapes_[shapeIndex]);
+            for (int index = 0; index < controlPoints.size(); ++index) {
+                if (objectId == selectedObjectId && index == selectedControlPointIndex) {
+                    continue;
+                }
+                otherControlPoints.append(controlPoints[index]);
             }
         }
 
-        return best;
+        return snapEngine_.findControlPointSnap(document_,
+                                                objectIndex(selectedObjectId),
+                                                controlPoint,
+                                                otherControlPoints,
+                                                viewportTransform_,
+                                                size());
     }
 
     QPointF constrainLinePoint(const QPointF &rawPoint)
@@ -4385,13 +4521,15 @@ private:
         QVector<int> indices;
         for (const ObjectId objectId : selectedShapeIndices_) {
             const int index = objectIndex(objectId);
-            if (index >= 0 && document_.isObjectEditable(objectId) &&
+            if (index >= 0 && document_.isObjectVisible(objectId) &&
+                document_.isObjectEditable(objectId) &&
                 !indices.contains(index)) {
                 indices.append(index);
             }
         }
         const int primaryIndex = objectIndex(selectedShapeIndex_);
-        if (primaryIndex >= 0 && document_.isObjectEditable(selectedShapeIndex_) &&
+        if (primaryIndex >= 0 && document_.isObjectVisible(selectedShapeIndex_) &&
+            document_.isObjectEditable(selectedShapeIndex_) &&
             !indices.contains(primaryIndex)) {
             indices.append(primaryIndex);
         }
@@ -6191,17 +6329,42 @@ private:
 
     void updateGrabPosition(const QVector<ObjectId> &dragIndices)
     {
-        if (!grabActive_) {
+        if (!grabActive_ || grabPickingBasePoint_) {
             return;
         }
 
-        const QPointF totalDelta = rawCursorWorld_ - grabStartWorld_;
-        const QPointF delta = constrainDragDelta(totalDelta);
-
-        // Grab movement is absolute from the point where G was pressed. Rebuild
-        // the preview from that snapshot so changing the axis never changes the
-        // movement origin or accumulates a second, incremental delta.
+        // Rebuild the preview from the saved document so axis changes and snap
+        // changes never accumulate an additional incremental delta.
         document_.restoreSnapshot(grabStartSnapshot_);
+        QPointF totalDelta;
+        QPointF freeDestination;
+        if (grabHasBasePoint_) {
+            const QPointF destinationCursor = rawCursorWorld_ - grabCursorOffset_;
+            currentSnap_ = findGrabDestinationSnap(destinationCursor);
+            const QPointF destination = currentSnap_.isValid()
+                                            ? currentSnap_.point
+                                            : destinationCursor;
+            cursorWorld_ = destination;
+            lastWorldPosition_ = destination;
+            freeDestination = destinationCursor;
+            totalDelta = destination - grabBasePoint_;
+        } else {
+            currentSnap_ = SnapResult{};
+            totalDelta = rawCursorWorld_ - grabStartWorld_;
+        }
+        QPointF delta = constrainDragDelta(totalDelta);
+        if (grabHasBasePoint_ && currentSnap_.isValid() &&
+            (!qFuzzyIsNull(delta.x() - totalDelta.x()) ||
+             !qFuzzyIsNull(delta.y() - totalDelta.y()))) {
+            // Do not show a snap marker for a destination the axis lock makes
+            // impossible to reach. The cursor still projects onto the locked
+            // axis, as it does for an ordinary constrained Grab.
+            currentSnap_ = SnapResult{};
+            cursorWorld_ = freeDestination;
+            lastWorldPosition_ = freeDestination;
+            totalDelta = freeDestination - grabBasePoint_;
+            delta = constrainDragDelta(totalDelta);
+        }
         if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
             translateShapes(dragIndices, delta);
             grabMoved_ = true;
@@ -6212,9 +6375,11 @@ private:
         dragSnapLocked_ = false;
         lastDragWorld_ = rawCursorWorld_;
         DebugLog::instance().write(
-            QStringLiteral("grab move delta=%1 cursorWorld=%2 axisLock=%3")
+            QStringLiteral("grab move delta=%1 cursorWorld=%2 basePoint=%3 snap=%4 axisLock=%5")
                 .arg(pointText(delta))
                 .arg(pointText(rawCursorWorld_))
+                .arg(grabHasBasePoint_ ? pointText(grabBasePoint_) : QStringLiteral("none"))
+                .arg(snapTypeName(currentSnap_.type))
                 .arg(dragAxisLockName(dragAxisLock_)));
     }
 
@@ -6677,8 +6842,12 @@ private:
     DragAxisLock dragAxisLock_ = DragAxisLock::None;
     bool grabActive_ = false;
     bool grabMoved_ = false;
+    bool grabPickingBasePoint_ = false;
+    bool grabHasBasePoint_ = false;
     Document::Snapshot grabStartSnapshot_;
     QPointF grabStartWorld_{0.0, 0.0};
+    QPointF grabBasePoint_{0.0, 0.0};
+    QPointF grabCursorOffset_{0.0, 0.0};
     QPointF dragSnapCursorWorld_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
     QPointF lastControlPointWorld_{0.0, 0.0};

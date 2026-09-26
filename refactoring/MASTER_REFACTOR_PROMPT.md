@@ -123,8 +123,10 @@ OSnap behavior as Line without introducing a second snapping model.
 Select-mode movement also supports an explicit Blender-style grab lifecycle:
 `G` starts a move for the selected editable objects, `X`/`Y` constrains the
 move independently of Ortho, left-click commits it, and Esc/right-click
-restores the pre-grab document snapshot. Ordinary selection dragging remains
-available as a separate path.
+restores the pre-grab document snapshot. Pressing `B` enters base-point mode:
+the user picks an enabled OSnap point on the selection and moves that anchor
+to another enabled OSnap point, even when global OSnap is off. Ordinary
+selection dragging remains available as a separate path.
 
 Do not begin by moving lines into arbitrary folders. First identify the owner of each piece of state and the direction of its dependencies.
 

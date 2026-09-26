@@ -452,6 +452,8 @@ QString snapTypeName(SnapType type)
         return QStringLiteral("Perpendicular");
     case SnapType::Tangent:
         return QStringLiteral("Tangent");
+    case SnapType::ControlPoint:
+        return QStringLiteral("ControlPoint");
     case SnapType::None:
         return QStringLiteral("None");
     }

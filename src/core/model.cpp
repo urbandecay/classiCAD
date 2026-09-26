@@ -610,6 +610,29 @@ QJsonObject shapeToJson(const Shape &shape)
         components.append(nurbsToJson(component));
     }
     object.insert(QStringLiteral("components"), components);
+
+    if (!shape.dimensionAnchors.isEmpty()) {
+        QJsonArray anchors;
+        for (const DimensionAnchorReference &anchor : shape.dimensionAnchors) {
+            QJsonObject serializedAnchor;
+            serializedAnchor.insert(QStringLiteral("kind"),
+                                    static_cast<int>(anchor.kind));
+            if (anchor.objectId.isValid()) {
+                serializedAnchor.insert(QStringLiteral("objectId"),
+                                        QString::number(anchor.objectId.value()));
+            }
+            serializedAnchor.insert(QStringLiteral("componentIndex"),
+                                    anchor.componentIndex);
+            serializedAnchor.insert(QStringLiteral("pointIndex"), anchor.pointIndex);
+            serializedAnchor.insert(QStringLiteral("parameterFraction"),
+                                    anchor.parameterFraction);
+            anchors.append(serializedAnchor);
+        }
+        object.insert(QStringLiteral("dimensionAnchors"), anchors);
+    }
+    if (shape.dimensionOffsetValid) {
+        object.insert(QStringLiteral("dimensionOffset"), shape.dimensionOffset);
+    }
     return object;
 }
 
@@ -691,6 +714,78 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         }
     }
 
+    QVector<DimensionAnchorReference> dimensionAnchors;
+    const QJsonValue dimensionAnchorsValue =
+        object.value(QStringLiteral("dimensionAnchors"));
+    if (!dimensionAnchorsValue.isUndefined()) {
+        if (!isDimensionGeometryType(geometryType) ||
+            !dimensionAnchorsValue.isArray() ||
+            dimensionAnchorsValue.toArray().size() > 3) {
+            return false;
+        }
+        for (const QJsonValue &anchorValue : dimensionAnchorsValue.toArray()) {
+            if (!anchorValue.isObject()) {
+                return false;
+            }
+            const QJsonObject anchorObject = anchorValue.toObject();
+            const int kindValue = anchorObject.value(QStringLiteral("kind")).toInt(-1);
+            if (kindValue < static_cast<int>(DimensionAnchorKind::None) ||
+                kindValue > static_cast<int>(DimensionAnchorKind::Center)) {
+                return false;
+            }
+            DimensionAnchorReference anchor;
+            anchor.kind = static_cast<DimensionAnchorKind>(kindValue);
+            const QJsonValue objectIdValue =
+                anchorObject.value(QStringLiteral("objectId"));
+            if (anchor.kind != DimensionAnchorKind::None) {
+                if (!objectIdValue.isString()) {
+                    return false;
+                }
+                bool objectIdValid = false;
+                const quint64 objectId = objectIdValue.toString().toULongLong(
+                    &objectIdValid);
+                if (!objectIdValid || objectId == 0) {
+                    return false;
+                }
+                anchor.objectId = ObjectId::fromValue(objectId);
+            }
+            anchor.componentIndex =
+                anchorObject.value(QStringLiteral("componentIndex")).toInt(-1);
+            anchor.pointIndex = anchorObject.value(QStringLiteral("pointIndex")).toInt(-1);
+            const QJsonValue parameterFractionValue =
+                anchorObject.value(QStringLiteral("parameterFraction"));
+            anchor.parameterFraction = parameterFractionValue.isDouble()
+                                           ? parameterFractionValue.toDouble()
+                                           : 0.0;
+            if (!std::isfinite(anchor.parameterFraction) ||
+                anchor.parameterFraction < 0.0 ||
+                anchor.parameterFraction > 1.0 ||
+                (anchor.kind == DimensionAnchorKind::ControlPoint &&
+                 anchor.pointIndex < 0) ||
+                (anchor.kind == DimensionAnchorKind::ShapePoint &&
+                 anchor.pointIndex < 0) ||
+                (anchor.kind == DimensionAnchorKind::CurveParameter &&
+                 anchor.componentIndex < -1)) {
+                return false;
+            }
+            dimensionAnchors.append(anchor);
+        }
+    }
+
+    qreal dimensionOffset = 0.0;
+    bool dimensionOffsetValid = false;
+    const QJsonValue dimensionOffsetValue =
+        object.value(QStringLiteral("dimensionOffset"));
+    if (!dimensionOffsetValue.isUndefined()) {
+        if (!isDimensionGeometryType(geometryType) ||
+            !dimensionOffsetValue.isDouble() ||
+            !std::isfinite(dimensionOffsetValue.toDouble())) {
+            return false;
+        }
+        dimensionOffset = dimensionOffsetValue.toDouble();
+        dimensionOffsetValid = true;
+    }
+
     shape->geometryType = geometryType;
     shape->points = points;
     shape->nurbs = nurbs;
@@ -698,6 +793,9 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->arcSweep = arcSweepValue.toDouble();
     shape->subdivisionParameters = subdivisionParameters;
     shape->components = components;
+    shape->dimensionAnchors = dimensionAnchors;
+    shape->dimensionOffset = dimensionOffset;
+    shape->dimensionOffsetValid = dimensionOffsetValid;
     return true;
 }
 

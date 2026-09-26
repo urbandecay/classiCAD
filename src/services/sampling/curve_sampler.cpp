@@ -130,6 +130,15 @@ QVector<Shape::NurbsCurve2D> CurveSampler::curvesForShape(const Shape &shape) co
         }
         return curves;
     }
+    if (shape.geometryType == GeometryType::Polygon && shape.points.size() >= 3) {
+        QVector<Shape::NurbsCurve2D> curves;
+        curves.reserve(shape.points.size());
+        for (int index = 0; index < shape.points.size(); ++index) {
+            curves.append(makeDegreeOneNurbs(
+                {shape.points[index], shape.points[(index + 1) % shape.points.size()]}));
+        }
+        return curves;
+    }
     return {};
 }
 

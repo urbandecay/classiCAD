@@ -23,6 +23,7 @@ private:
 
     ToolId tool_;
     QVector<QPointF> fixedPoints_;
+    QVector<DimensionAnchorReference> fixedAssociations_;
     QPointF cursor_;
     qreal minimumOffsetWorld_ = 2.0;
     bool cursorValid_ = false;

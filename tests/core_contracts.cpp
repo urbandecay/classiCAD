@@ -12,6 +12,7 @@
 #include "core/serialization/document_serializer.h"
 #include "core/tool_id.h"
 #include "services/hit_testing/curve_hit_tester.h"
+#include "services/dimensions/dimension_association.h"
 #include "services/dimensions/dimension_font.h"
 #include "services/dimensions/dimension_layout.h"
 #include "services/sampling/curve_sampler.h"
@@ -431,6 +432,161 @@ int main(int argc, char **argv)
                         restoredDimension.geometryType == GeometryType::AngularDimension &&
                         restoredDimension.points == angularDimension.points,
                     "angular dimension annotations must survive session serialization");
+
+    Document associativeDocument;
+    Shape associativeLine{GeometryType::Line,
+                          {QPointF(0.0, 0.0), QPointF(10.0, 0.0)},
+                          {},
+                          ArcMode::TwoPoint,
+                          0.0,
+                          {},
+                          {}};
+    associativeLine.nurbs = makeDegreeOneNurbs(associativeLine.points);
+    const ObjectId associativeLineId = associativeDocument.append(associativeLine);
+    CurveSampler associationSampler;
+    ViewportTransform associationTransform;
+    associationTransform.zoom() = 20.0;
+    const QSize associationViewportSize(320, 240);
+    const DimensionAnchorReference firstAssociation = captureDimensionAnchor(
+        associativeDocument,
+        QPointF(0.0, 0.0),
+        SnapType::Endpoint,
+        associationSampler,
+        associationTransform,
+        associationViewportSize);
+    const DimensionAnchorReference secondAssociation = captureDimensionAnchor(
+        associativeDocument,
+        QPointF(10.0, 0.0),
+        SnapType::Endpoint,
+        associationSampler,
+        associationTransform,
+        associationViewportSize);
+    Shape associativeDimension = linearDimension;
+    associativeDimension.dimensionAnchors = {firstAssociation, secondAssociation};
+    associativeDimension.dimensionOffset = 4.0;
+    associativeDimension.dimensionOffsetValid = true;
+    passed &= check(firstAssociation.objectId == associativeLineId &&
+                        secondAssociation.objectId == associativeLineId &&
+                        firstAssociation.kind == DimensionAnchorKind::CurveParameter &&
+                        secondAssociation.kind == DimensionAnchorKind::CurveParameter,
+                    "dimension clicks on a curve must capture stable geometry references");
+    const QJsonObject serializedAssociativeDimension = shapeToJson(associativeDimension);
+    Shape restoredAssociativeDimension;
+    passed &= check(shapeFromJson(serializedAssociativeDimension,
+                                  &restoredAssociativeDimension) &&
+                        restoredAssociativeDimension.dimensionAnchors.size() == 2 &&
+                        restoredAssociativeDimension.dimensionAnchors[1].objectId ==
+                            associativeLineId &&
+                        restoredAssociativeDimension.dimensionOffsetValid &&
+                        std::abs(restoredAssociativeDimension.dimensionOffset - 4.0) < 1.0e-9,
+                    "associative dimension targets and placement must survive serialization");
+    const ObjectId associativeDimensionId =
+        associativeDocument.append(associativeDimension);
+    Document restoredAssociationDocument;
+    QString associationDocumentError;
+    const bool associationDocumentRestored = documentFromJson(
+        documentToJson(associativeDocument),
+        &restoredAssociationDocument,
+        &associationDocumentError);
+    Shape *editedAssociativeLine =
+        restoredAssociationDocument.shape(associativeLineId);
+    const bool associationTargetEdited = editedAssociativeLine != nullptr;
+    if (associationTargetEdited) {
+        editedAssociativeLine->points = {QPointF(5.0, 2.0), QPointF(25.0, 2.0)};
+        editedAssociativeLine->nurbs = makeDegreeOneNurbs(editedAssociativeLine->points);
+    }
+    updateAssociativeDimensions(restoredAssociationDocument, associationSampler);
+    const Shape *updatedAssociativeDimension =
+        restoredAssociationDocument.shape(associativeDimensionId);
+    passed &= check(associationDocumentRestored && associationDocumentError.isEmpty() &&
+                        associationTargetEdited &&
+                        updatedAssociativeDimension != nullptr &&
+                        updatedAssociativeDimension->points.size() == 3 &&
+                        std::abs(updatedAssociativeDimension->points[0].x() - 5.0) < 1.0e-3 &&
+                        std::abs(updatedAssociativeDimension->points[0].y() - 2.0) < 1.0e-3 &&
+                        std::abs(updatedAssociativeDimension->points[1].x() - 25.0) < 1.0e-3 &&
+                        std::abs(updatedAssociativeDimension->points[1].y() - 2.0) < 1.0e-3 &&
+                        std::abs(updatedAssociativeDimension->points[2].x() - 15.0) < 1.0e-3 &&
+                        std::abs(updatedAssociativeDimension->points[2].y() - 6.0) < 1.0e-3,
+                    "associative dimensions must follow geometry edits and preserve their offset");
+
+    Shape associativeBezier{GeometryType::Bezier,
+                            {QPointF(0.0, 0.0),
+                             QPointF(5.0, 10.0),
+                             QPointF(10.0, 0.0)},
+                            {},
+                            ArcMode::TwoPoint,
+                            0.0,
+                            {},
+                            {}};
+    associativeBezier.nurbs = makeBezierNurbs(associativeBezier.points);
+    const ObjectId associativeBezierId = associativeDocument.append(associativeBezier);
+    qreal bezierDomainStart = 0.0;
+    qreal bezierDomainEnd = 0.0;
+    QPointF bezierAnchorPoint;
+    const bool bezierAnchorEvaluated =
+        nurbsParameterDomain(associativeBezier.nurbs,
+                             &bezierDomainStart,
+                             &bezierDomainEnd) &&
+        evaluateNurbsPoint(associativeBezier.nurbs,
+                           (bezierDomainStart + bezierDomainEnd) * 0.5,
+                           &bezierAnchorPoint);
+    const DimensionAnchorReference bezierAssociation = captureDimensionAnchor(
+        associativeDocument,
+        bezierAnchorPoint,
+        SnapType::Near,
+        associationSampler,
+        associationTransform,
+        associationViewportSize);
+    Shape *editedAssociativeBezier = associativeDocument.shape(associativeBezierId);
+    editedAssociativeBezier->points[1].setY(20.0);
+    editedAssociativeBezier->nurbs = makeBezierNurbs(editedAssociativeBezier->points);
+    QPointF movedBezierAnchor;
+    passed &= check(bezierAnchorEvaluated &&
+                        bezierAssociation.objectId == associativeBezierId &&
+                        resolveDimensionAnchor(associativeDocument,
+                                               bezierAssociation,
+                                               associationSampler,
+                                               &movedBezierAnchor) &&
+                        movedBezierAnchor.y() > bezierAnchorPoint.y() + 4.0,
+                    "associative curve anchors must reevaluate on edited NURBS geometry");
+
+    Shape associativeEllipse{GeometryType::Ellipse,
+                             {QPointF(-5.0, 0.0),
+                              QPointF(5.0, 0.0),
+                              QPointF(0.0, 3.0)},
+                             makeEllipseNurbs(EllipseMode::AxisEndpoints,
+                                              {QPointF(-5.0, 0.0),
+                                               QPointF(5.0, 0.0),
+                                               QPointF(0.0, 3.0)}),
+                             ArcMode::TwoPoint,
+                             0.0,
+                             {},
+                             {}};
+    const ObjectId associativeEllipseId = associativeDocument.append(associativeEllipse);
+    const DimensionAnchorReference ellipseCenterAssociation = captureDimensionAnchor(
+        associativeDocument,
+        QPointF(0.0, 0.0),
+        SnapType::Center,
+        associationSampler,
+        associationTransform,
+        associationViewportSize);
+    Shape *editedAssociativeEllipse = associativeDocument.shape(associativeEllipseId);
+    editedAssociativeEllipse->points = {QPointF(-3.0, 3.0),
+                                        QPointF(7.0, 3.0),
+                                        QPointF(2.0, 6.0)};
+    editedAssociativeEllipse->nurbs = makeEllipseNurbs(
+        EllipseMode::AxisEndpoints, editedAssociativeEllipse->points);
+    QPointF movedEllipseCenter;
+    passed &= check(ellipseCenterAssociation.objectId == associativeEllipseId &&
+                        resolveDimensionAnchor(associativeDocument,
+                                               ellipseCenterAssociation,
+                                               associationSampler,
+                                               &movedEllipseCenter) &&
+                        std::abs(movedEllipseCenter.x() - 2.0) < 1.0e-9 &&
+                        std::abs(movedEllipseCenter.y() - 3.0) < 1.0e-9,
+                    "ellipse center dimensions must follow the actual center across ellipse modes");
+
     Shape restoredEllipse{GeometryType::Invalid,
                           {},
                           {},

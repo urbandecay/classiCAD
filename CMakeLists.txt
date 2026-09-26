@@ -31,6 +31,7 @@ set(CLASSICAD_SERVICE_SOURCES
     src/services/viewport/viewport_transform.cpp
     src/services/sampling/curve_sampler.cpp
     src/services/hit_testing/curve_hit_tester.cpp
+    src/services/dimensions/dimension_association.cpp
     src/services/dimensions/dimension_layout.cpp
     src/services/dimensions/dimension_font.cpp
     src/services/dimensions/dimension_fonts.qrc

@@ -1,5 +1,6 @@
 #include "dimension_tool.h"
 
+#include "services/dimensions/dimension_association.h"
 #include "tool_context.h"
 
 #include <algorithm>
@@ -46,6 +47,7 @@ ToolId DimensionTool::id() const
 void DimensionTool::begin(ToolContext &context)
 {
     fixedPoints_.clear();
+    fixedAssociations_.clear();
     cursor_ = QPointF{};
     minimumOffsetWorld_ = 2.0 / std::max(context.viewportTransform().zoom(), 1.0e-6);
     cursorValid_ = false;
@@ -74,6 +76,12 @@ bool DimensionTool::handleMousePress(const ToolInput &input, ToolContext &contex
             return true;
         }
         fixedPoints_.append(cursor_);
+        fixedAssociations_.append(captureDimensionAnchor(context.document(),
+                                                         cursor_,
+                                                         input.snapType,
+                                                         context.curveSampler(),
+                                                         context.viewportTransform(),
+                                                         input.viewportSize));
         status_.text = nextPointPrompt(tool_, fixedPoints_.size());
         publish(context);
         return true;
@@ -88,11 +96,32 @@ bool DimensionTool::handleMousePress(const ToolInput &input, ToolContext &contex
         return true;
     }
 
+    shape.dimensionAnchors = fixedAssociations_;
+    if (tool_ == ToolId::AngularDimension) {
+        shape.dimensionAnchors.append(captureDimensionAnchor(context.document(),
+                                                              cursor_,
+                                                              input.snapType,
+                                                              context.curveSampler(),
+                                                              context.viewportTransform(),
+                                                              input.viewportSize));
+    } else {
+        const QPointF delta = points[1] - points[0];
+        const qreal measuredLength = length(delta);
+        if (measuredLength > kMinimumLength) {
+            const QPointF normal(-delta.y() / measuredLength,
+                                 delta.x() / measuredLength);
+            const QPointF midpoint = (points[0] + points[1]) * 0.5;
+            shape.dimensionOffset = QPointF::dotProduct(points[2] - midpoint, normal);
+            shape.dimensionOffsetValid = true;
+        }
+    }
+
     if (context.commitShape(tool_, shape)) {
         status_.state = ToolLifecycleState::Completed;
         status_.text = QStringLiteral("%1 committed").arg(toolName(tool_));
         status_.canCommit = false;
         fixedPoints_.clear();
+        fixedAssociations_.clear();
         publish(context);
         context.finishTool(ToolId::Select);
     }
@@ -114,6 +143,9 @@ bool DimensionTool::handleKey(const ToolInput &input, ToolContext &context)
     if (input.key == Qt::Key_Backspace || input.key == Qt::Key_Delete) {
         if (!fixedPoints_.isEmpty()) {
             fixedPoints_.removeLast();
+            if (!fixedAssociations_.isEmpty()) {
+                fixedAssociations_.removeLast();
+            }
         }
         status_.state = ToolLifecycleState::Active;
         status_.text = nextPointPrompt(tool_, fixedPoints_.size());
@@ -131,6 +163,7 @@ bool DimensionTool::handleKey(const ToolInput &input, ToolContext &context)
 void DimensionTool::cancel(ToolContext &context)
 {
     fixedPoints_.clear();
+    fixedAssociations_.clear();
     cursorValid_ = false;
     status_.state = ToolLifecycleState::Cancelled;
     status_.text = QStringLiteral("%1 cancelled").arg(toolName(tool_));

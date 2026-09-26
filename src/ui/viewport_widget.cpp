@@ -8,6 +8,7 @@
 #include "../core/history/history.h"
 #include "../core/serialization/document_serializer.h"
 #include "../services/hit_testing/curve_hit_tester.h"
+#include "../services/dimensions/dimension_association.h"
 #include "../services/sampling/curve_sampler.h"
 #include "../services/snapping/snap_engine.h"
 #include "../services/viewport/viewport_transform.h"
@@ -1427,6 +1428,7 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override
     {
+        updateAssociativeDimensions(document_, curveSampler_);
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
@@ -6977,6 +6979,7 @@ private:
         input.rawWorldPosition = rawWorldPosition;
         input.worldPosition = worldPosition;
         input.viewportSize = size();
+        input.snapType = currentSnap_.type;
         if (event != nullptr) {
             input.button = event->button();
             input.buttons = event->buttons();

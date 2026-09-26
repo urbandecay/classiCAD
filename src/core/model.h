@@ -2,6 +2,7 @@
 
 #include "geometry/geometry_type.h"
 #include "geometry/nurbs_curve.h"
+#include "document/object_id.h"
 #include "tool_id.h"
 
 #include <QJsonArray>
@@ -74,6 +75,24 @@ struct SampledNurbsCurve2D {
     QRectF bounds;
 };
 
+enum class DimensionAnchorKind {
+    None,
+    CurveParameter,
+    ControlPoint,
+    ShapePoint,
+    Center,
+};
+
+// Persistent dimensions refer to scene objects by stable identity. Curve
+// positions use normalized NURBS parameters to survive knot-domain changes.
+struct DimensionAnchorReference {
+    ObjectId objectId = ObjectId::invalid();
+    DimensionAnchorKind kind = DimensionAnchorKind::None;
+    int componentIndex = -1;
+    int pointIndex = -1;
+    qreal parameterFraction = 0.0;
+};
+
 HomogeneousControlPoint2D blendHomogeneousControlPoints(
     const HomogeneousControlPoint2D &first,
     const HomogeneousControlPoint2D &second,
@@ -106,6 +125,9 @@ struct Shape {
     // A joined spline remains a Rhino-style component curve collection. Each
     // component keeps its own degree, weights, knots, and parameter domain.
     QVector<NurbsCurve2D> components;
+    QVector<DimensionAnchorReference> dimensionAnchors;
+    qreal dimensionOffset = 0.0;
+    bool dimensionOffsetValid = false;
 };
 
 struct EraseCurveSampleCache {

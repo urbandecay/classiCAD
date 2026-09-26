@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/model.h"
+
 #include <QPointF>
 #include <QSize>
 #include <QString>
@@ -21,6 +23,7 @@ struct ToolInput {
     int wheelAngleDelta = 0;
     int wheelPixelDelta = 0;
     QSize viewportSize;
+    SnapType snapType = SnapType::None;
 };
 
 } // namespace classiCAD

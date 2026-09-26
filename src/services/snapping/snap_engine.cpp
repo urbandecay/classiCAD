@@ -7,6 +7,17 @@
 #include <limits>
 
 namespace classiCAD {
+namespace {
+
+QPointF ellipseCenter(const Shape &shape)
+{
+    if (validateNurbsCurve(shape.nurbs) && shape.nurbs.controlPoints.size() >= 5) {
+        return (shape.nurbs.controlPoints[0] + shape.nurbs.controlPoints[4]) * 0.5;
+    }
+    return shape.points.isEmpty() ? QPointF{} : shape.points.first();
+}
+
+} // namespace
 
 void SnapEngine::setSettings(const SnapSettings &settings)
 {
@@ -795,8 +806,8 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         return candidates;
     }
     if (shape.geometryType == GeometryType::Ellipse) {
-        if (!shape.points.isEmpty()) {
-            candidates.append({SnapType::Center, shape.points.first()});
+        if (!shape.points.isEmpty() || validateNurbsCurve(shape.nurbs)) {
+            candidates.append({SnapType::Center, ellipseCenter(shape)});
         }
         if (validateNurbsCurve(shape.nurbs) && shape.nurbs.controlPoints.size() >= 9) {
             for (const int controlPointIndex : {0, 2, 4, 6}) {
@@ -1001,8 +1012,9 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             continue;
         }
         if (shape.geometryType == GeometryType::Ellipse) {
-            if (settings_.center && !shape.points.isEmpty()) {
-                candidates.append({SnapType::Center, shape.points.first()});
+            if (settings_.center &&
+                (!shape.points.isEmpty() || validateNurbsCurve(shape.nurbs))) {
+                candidates.append({SnapType::Center, ellipseCenter(shape)});
             }
             if (settings_.endpoint && validateNurbsCurve(shape.nurbs) &&
                 shape.nurbs.controlPoints.size() >= 9) {

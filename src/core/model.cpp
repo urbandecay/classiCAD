@@ -648,6 +648,9 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     if (geometryType == GeometryType::Polygon && points.size() < 3) {
         return false;
     }
+    if (isDimensionGeometryType(geometryType) && points.size() != 3) {
+        return false;
+    }
 
     Shape::NurbsCurve2D nurbs;
     if (!nurbsFromJson(object.value(QStringLiteral("nurbs")), &nurbs)) {

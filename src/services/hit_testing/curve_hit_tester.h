@@ -9,6 +9,8 @@ namespace classiCAD {
 
 class CurveHitTester final {
 public:
+    void setArchitecturalDimensionFont(bool enabled);
+
     qreal distanceToSegment(const QPointF &point,
                             const QPointF &start,
                             const QPointF &end) const;
@@ -62,6 +64,8 @@ private:
     bool arcAngleIsOnSweep(qreal startAngle,
                            qreal sweepAngle,
                            qreal angle) const;
+
+    bool architecturalDimensionFont_ = false;
 };
 
 } // namespace classiCAD

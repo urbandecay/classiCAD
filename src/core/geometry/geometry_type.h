@@ -21,9 +21,12 @@ enum class GeometryType : int {
     PolyCurve = 8,
     Ellipse = 9,
     Polygon = 10,
+    LinearDimension = 11,
+    AngularDimension = 12,
 };
 
 bool isPersistentGeometryType(GeometryType type);
+bool isDimensionGeometryType(GeometryType type);
 QString geometryTypeName(GeometryType type);
 
 // The legacy field was named "tool" and stored these integer values. Keep

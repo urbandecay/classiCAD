@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/fonts">
+        <file alias="ArchitectsDaughter-Regular.ttf">../../../assets/fonts/architects_daughter/ArchitectsDaughter-Regular.ttf</file>
+        <file alias="OFL.txt">../../../assets/fonts/architects_daughter/OFL.txt</file>
+    </qresource>
+</RCC>

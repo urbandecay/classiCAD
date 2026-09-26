@@ -12,12 +12,15 @@
 #include "core/serialization/document_serializer.h"
 #include "core/tool_id.h"
 #include "services/hit_testing/curve_hit_tester.h"
+#include "services/dimensions/dimension_font.h"
+#include "services/dimensions/dimension_layout.h"
 #include "services/sampling/curve_sampler.h"
 #include "services/snapping/snap_engine.h"
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
 #include "tools/circle_tool.h"
 #include "tools/circle_tangent_tool.h"
+#include "tools/dimension_tool.h"
 #include "tools/perpendicular_from_curve_tool.h"
 #include "tools/point_tool.h"
 #include "tools/polygon_tool.h"
@@ -25,7 +28,7 @@
 #include "tools/tool_context.h"
 #include "tools/tool_registry.h"
 
-#include <QCoreApplication>
+#include <QApplication>
 #include <QJsonObject>
 
 #include <cmath>
@@ -47,13 +50,22 @@ bool check(bool condition, const char *message)
 
 int main(int argc, char **argv)
 {
-    QCoreApplication application(argc, argv);
+    QApplication application(argc, argv);
     bool passed = true;
 
     passed &= check(!std::is_same_v<ToolId, GeometryType>,
                     "tool and geometry vocabularies must be distinct types");
     passed &= check(geometryTypeForTool(ToolId::Line) == GeometryType::Line,
                     "line tool must map to line geometry");
+    passed &= check(isDimensionTool(ToolId::LinearDimension) &&
+                        isDimensionTool(ToolId::AngularDimension) &&
+                        geometryTypeForTool(ToolId::LinearDimension) ==
+                            GeometryType::LinearDimension &&
+                        geometryTypeForTool(ToolId::AngularDimension) ==
+                            GeometryType::AngularDimension &&
+                        requiredPoints(ToolId::LinearDimension) == 3 &&
+                        requiredPoints(ToolId::AngularDimension) == 3,
+                    "linear and angular dimension commands must be registered scene-annotation tools");
     passed &= check(geometryTypeForTool(ToolId::Trim) == GeometryType::Invalid,
                     "trim must not map to persisted geometry");
     passed &= check(geometryTypeForTool(ToolId::PerpendicularFromCurve) ==
@@ -387,6 +399,38 @@ int main(int argc, char **argv)
                         restoredPolygon.geometryType == GeometryType::Polygon &&
                         restoredPolygon.points == centerCornerPolygon,
                     "polygon geometry must use its canonical persisted type and survive session serialization");
+    const Shape linearDimension{GeometryType::LinearDimension,
+                                {QPointF(0.0, 0.0),
+                                 QPointF(12.0, 0.0),
+                                 QPointF(6.0, 4.0)},
+                                {},
+                                ArcMode::TwoPoint,
+                                0.0,
+                                {},
+                                {}};
+    Shape restoredDimension{GeometryType::Invalid, {}, {}, ArcMode::TwoPoint, 0.0, {}, {}};
+    const QJsonObject serializedDimension = shapeToJson(linearDimension);
+    passed &= check(serializedDimension.value(QStringLiteral("geometryType")).toInt(-1) == 11 &&
+                        serializedDimension.value(QStringLiteral("tool")).toInt(-1) == 0 &&
+                        shapeFromJson(serializedDimension, &restoredDimension) &&
+                        restoredDimension.geometryType == GeometryType::LinearDimension &&
+                        restoredDimension.points == linearDimension.points,
+                    "linear dimension annotations must persist their anchors without colliding with legacy tool values");
+    Shape angularDimension{GeometryType::AngularDimension,
+                           {QPointF(0.0, 0.0),
+                            QPointF(10.0, 0.0),
+                            QPointF(0.0, 10.0)},
+                           {},
+                           ArcMode::TwoPoint,
+                           0.0,
+                           {},
+                           {}};
+    const QJsonObject serializedAngularDimension = shapeToJson(angularDimension);
+    passed &= check(serializedAngularDimension.value(QStringLiteral("geometryType")).toInt(-1) == 12 &&
+                        shapeFromJson(serializedAngularDimension, &restoredDimension) &&
+                        restoredDimension.geometryType == GeometryType::AngularDimension &&
+                        restoredDimension.points == angularDimension.points,
+                    "angular dimension annotations must survive session serialization");
     Shape restoredEllipse{GeometryType::Invalid,
                           {},
                           {},
@@ -566,6 +610,45 @@ int main(int argc, char **argv)
                                            viewportTransform,
                                            viewportSize) == 0,
                     "curve hit tester must hit committed NURBS geometry");
+    const DimensionScreenLayout linearDimensionLayout =
+        buildDimensionScreenLayout(linearDimension, viewportTransform, viewportSize);
+    const DimensionScreenLayout angularDimensionLayout =
+        buildDimensionScreenLayout(angularDimension, viewportTransform, viewportSize);
+    const DimensionScreenLayout architecturalDimensionLayout =
+        buildDimensionScreenLayout(linearDimension,
+                                   viewportTransform,
+                                   viewportSize,
+                                   DimensionFontStyle::Architectural);
+    const QFont architecturalFont =
+        dimensionAnnotationFont(DimensionFontStyle::Architectural);
+    passed &= check(linearDimensionLayout.valid &&
+                        linearDimensionLayout.label.endsWith(QStringLiteral(" mm")) &&
+                        angularDimensionLayout.valid &&
+                        angularDimensionLayout.label == QStringLiteral("90°") &&
+                        architecturalDimensionLayout.valid &&
+                        architecturalDimensionLayout.label == linearDimensionLayout.label &&
+                        architecturalDimensionLayout.labelBounds.width() >
+                            linearDimensionLayout.labelBounds.width() &&
+                        architecturalFont.family() == QStringLiteral("Architects Daughter"),
+                    "dimension layout must display linear lengths and included angles");
+    Document dimensionDocument;
+    dimensionDocument.append(linearDimension);
+    const QPointF dimensionLabelPoint = linearDimensionLayout.labelCenter;
+    passed &= check(hitTester.hitTestShape(dimensionDocument,
+                                           dimensionLabelPoint,
+                                           viewportTransform,
+                                           viewportSize) == 0 &&
+                        hitTester.controlPointsForShape(linearDimension).isEmpty(),
+                    "dimension annotations must be selectable by their labels without exposing annotation anchors as control points");
+    SnapEngine dimensionSnapEngine;
+    dimensionSnapEngine.setSettings(SnapSettings{true, true, true, true, true,
+                                                  true, true, true, true});
+    passed &= check(dimensionSnapEngine.snapCandidatesForScene(dimensionDocument,
+                                                                {},
+                                                                viewportTransform,
+                                                                viewportSize)
+                            .isEmpty(),
+                    "dimension annotation anchors must not become geometry object snaps");
     int hitShapeIndex = -1;
     int hitControlPointIndex = -1;
     passed &= check(hitTester.hitTestSelectedControlPoint(
@@ -1120,6 +1203,8 @@ int main(int argc, char **argv)
                         toolRegistry.find(ToolId::CircleThreePoint) != nullptr &&
                         toolRegistry.find(ToolId::CircleTangentTwo) != nullptr &&
                         toolRegistry.find(ToolId::CircleTangentThree) != nullptr &&
+                        toolRegistry.find(ToolId::LinearDimension) != nullptr &&
+                        toolRegistry.find(ToolId::AngularDimension) != nullptr &&
                         toolRegistry.find(ToolId::Ellipse) != nullptr &&
                         toolRegistry.find(ToolId::EllipseFromEndpoints) != nullptr &&
                         toolRegistry.find(ToolId::EllipseFromCorners) != nullptr &&
@@ -1328,6 +1413,51 @@ int main(int argc, char **argv)
                         validateNurbsCurve(committedToolShapes.back().nurbs) &&
                         finishedTool == ToolId::Select,
                     "perpendicular-from-curve tool must commit the previewed line as NURBS geometry");
+
+    DimensionTool linearDimensionTool(ToolId::LinearDimension);
+    linearDimensionTool.begin(toolContext);
+    ToolInput dimensionInput;
+    dimensionInput.button = Qt::LeftButton;
+    dimensionInput.worldPosition = QPointF(0.0, 0.0);
+    linearDimensionTool.handleMousePress(dimensionInput, toolContext);
+    dimensionInput.worldPosition = QPointF(12.0, 0.0);
+    linearDimensionTool.handleMousePress(dimensionInput, toolContext);
+    ToolInput linearPlacementInput;
+    linearPlacementInput.worldPosition = QPointF(6.0, 4.0);
+    linearDimensionTool.handleMouseMove(linearPlacementInput, toolContext);
+    const ToolPreview linearPreview = linearDimensionTool.preview();
+    dimensionInput.worldPosition = QPointF(6.0, 4.0);
+    const bool linearDimensionCommitted =
+        linearDimensionTool.handleMousePress(dimensionInput, toolContext);
+    passed &= check(linearPreview.hasShape &&
+                        linearPreview.shape.geometryType == GeometryType::LinearDimension &&
+                        linearDimensionCommitted && committedToolShapes.size() == 6 &&
+                        committedToolShapes.back().geometryType == GeometryType::LinearDimension &&
+                        committedToolShapes.back().points ==
+                            QVector<QPointF>{QPointF(0.0, 0.0),
+                                             QPointF(12.0, 0.0),
+                                             QPointF(6.0, 4.0)},
+                    "linear dimension tool must preview and commit a three-click measurement");
+
+    DimensionTool angularDimensionTool(ToolId::AngularDimension);
+    angularDimensionTool.begin(toolContext);
+    dimensionInput.worldPosition = QPointF(0.0, 0.0);
+    angularDimensionTool.handleMousePress(dimensionInput, toolContext);
+    dimensionInput.worldPosition = QPointF(10.0, 0.0);
+    angularDimensionTool.handleMousePress(dimensionInput, toolContext);
+    ToolInput angularRayInput;
+    angularRayInput.worldPosition = QPointF(0.0, 10.0);
+    angularDimensionTool.handleMouseMove(angularRayInput, toolContext);
+    const ToolPreview angularPreview = angularDimensionTool.preview();
+    dimensionInput.worldPosition = QPointF(0.0, 10.0);
+    const bool angularDimensionCommitted =
+        angularDimensionTool.handleMousePress(dimensionInput, toolContext);
+    passed &= check(angularPreview.hasShape &&
+                        angularPreview.shape.geometryType == GeometryType::AngularDimension &&
+                        angularDimensionCommitted && committedToolShapes.size() == 7 &&
+                        committedToolShapes.back().geometryType == GeometryType::AngularDimension &&
+                        finishedTool == ToolId::Select,
+                    "angular dimension tool must preview and commit a vertex with two rays");
 
     Document circleToolDocument;
     SelectionModel circleToolSelection;

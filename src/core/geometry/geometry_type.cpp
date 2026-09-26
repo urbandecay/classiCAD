@@ -6,7 +6,13 @@ namespace classiCAD {
 
 bool isPersistentGeometryType(GeometryType type)
 {
-    return type >= GeometryType::Line && type <= GeometryType::Polygon;
+    return type >= GeometryType::Line && type <= GeometryType::AngularDimension;
+}
+
+bool isDimensionGeometryType(GeometryType type)
+{
+    return type == GeometryType::LinearDimension ||
+           type == GeometryType::AngularDimension;
 }
 
 QString geometryTypeName(GeometryType type)
@@ -32,6 +38,10 @@ QString geometryTypeName(GeometryType type)
         return QStringLiteral("Ellipse");
     case GeometryType::Polygon:
         return QStringLiteral("Polygon");
+    case GeometryType::LinearDimension:
+        return QStringLiteral("Linear Dimension");
+    case GeometryType::AngularDimension:
+        return QStringLiteral("Angular Dimension");
     case GeometryType::Invalid:
         return QStringLiteral("Invalid");
     }
@@ -53,7 +63,7 @@ bool geometryTypeFromLegacyValue(int value, GeometryType *type)
 bool geometryTypeFromValue(int value, GeometryType *type)
 {
     if (type == nullptr || value < static_cast<int>(GeometryType::Line) ||
-        value > static_cast<int>(GeometryType::Polygon)) {
+        value > static_cast<int>(GeometryType::AngularDimension)) {
         return false;
     }
 
@@ -73,6 +83,10 @@ int legacyValueForGeometryType(GeometryType type)
 GeometryType geometryTypeForTool(ToolId tool)
 {
     switch (tool) {
+    case ToolId::LinearDimension:
+        return GeometryType::LinearDimension;
+    case ToolId::AngularDimension:
+        return GeometryType::AngularDimension;
     case ToolId::Line:
         return GeometryType::Line;
     case ToolId::Arc:

@@ -1,7 +1,10 @@
 #include "viewport_renderer.h"
 
 #include "core/geometry/curve_evaluator.h"
+#include "services/dimensions/dimension_font.h"
+#include "services/dimensions/dimension_layout.h"
 
+#include <QFont>
 #include <QPainterPath>
 
 #include <algorithm>
@@ -19,6 +22,11 @@ ViewportRenderer::ViewportRenderer(const ViewportTransform &transform,
 void ViewportRenderer::setSmoothCurveDisplay(bool enabled)
 {
     smoothCurveDisplay_ = enabled;
+}
+
+void ViewportRenderer::setArchitecturalDimensionFont(bool enabled)
+{
+    architecturalDimensionFont_ = enabled;
 }
 
 QPointF ViewportRenderer::worldToScreen(const QPointF &world,
@@ -118,6 +126,40 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     painter.setPen(QPen(curveColor, curveWidth));
     painter.setBrush(Qt::NoBrush);
+
+    if (isDimensionGeometryType(shape.geometryType)) {
+        const DimensionScreenLayout layout =
+            buildDimensionScreenLayout(
+                shape,
+                transform_,
+                viewportSize,
+                architecturalDimensionFont_ ? DimensionFontStyle::Architectural
+                                            : DimensionFontStyle::Standard);
+        if (layout.valid) {
+            painter.save();
+            painter.setPen(QPen(curveColor,
+                                selected ? 2.0 : (preview ? 1.5 : 1.25),
+                                Qt::SolidLine,
+                                Qt::RoundCap,
+                                Qt::RoundJoin));
+            for (const QLineF &line : layout.lines) {
+                painter.drawLine(line);
+            }
+            painter.setBrush(curveColor);
+            for (const QPolygonF &arrowHead : layout.arrowHeads) {
+                painter.drawPolygon(arrowHead);
+            }
+
+            painter.setFont(dimensionAnnotationFont(
+                architecturalDimensionFont_ ? DimensionFontStyle::Architectural
+                                            : DimensionFontStyle::Standard));
+            painter.fillRect(layout.labelBounds, QColor(QStringLiteral("#282828")));
+            painter.setPen(curveColor);
+            painter.drawText(layout.labelBounds, Qt::AlignCenter, layout.label);
+            painter.restore();
+        }
+        return;
+    }
 
     if (shape.geometryType == GeometryType::PolyCurve && !shape.components.isEmpty()) {
         for (const Shape::NurbsCurve2D &component : shape.components) {
@@ -228,7 +270,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
         }
     }
 
-    if (preview && drawPreviewPoints) {
+    if (preview && drawPreviewPoints && !isDimensionGeometryType(shape.geometryType)) {
         painter.setBrush(controlColor);
         painter.setPen(Qt::NoPen);
         for (const QPointF &point : shape.points) {

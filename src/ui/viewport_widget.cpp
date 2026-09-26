@@ -584,6 +584,15 @@ public:
         update();
     }
 
+    void setArchitecturalDimensionFont(bool enabled) override
+    {
+        viewportRenderer_.setArchitecturalDimensionFont(enabled);
+        curveHitTester_.setArchitecturalDimensionFont(enabled);
+        DebugLog::instance().write(
+            QStringLiteral("setArchitecturalDimensionFont=%1").arg(enabled));
+        update();
+    }
+
     void setPanButton(Qt::MouseButton button)
     {
         if (button != Qt::MiddleButton && button != Qt::RightButton) {
@@ -1529,6 +1538,13 @@ protected:
             drawPointToolPreview(painter);
         } else if (activeTool_ == Tool::Rotate) {
             drawRotateToolPreview(painter);
+        } else if (isDimensionTool(activeTool_)) {
+            if (controllerPreviewShapeVisible_) {
+                drawShape(painter, controllerPreviewShape_, true);
+            }
+            if (currentSnap_.isValid()) {
+                drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+            }
         } else if (isEraseLikeTool(activeTool_)) {
             drawErasePreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
@@ -4300,7 +4316,7 @@ private:
             activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_) ||
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate ||
             isEllipseTool(activeTool_) || isRectangleTool(activeTool_) ||
-            activeTool_ == Tool::Mirror ||
+            activeTool_ == Tool::Mirror || isDimensionTool(activeTool_) ||
             activeTool_ == Tool::TangentFromCurve ||
             activeTool_ == Tool::PerpendicularFromCurve;
         return snapEngine_.findSnapPoint(document_,
@@ -4538,6 +4554,8 @@ private:
 
         const bool drawingConstraintActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
+            (activeTool_ == Tool::LinearDimension && pendingPoints_.size() == 1) ||
+            (activeTool_ == Tool::AngularDimension && !pendingPoints_.isEmpty()) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Mirror ||
             isCircleConstructionTool(activeTool_) ||
             isPolygonTool(activeTool_) ||
@@ -4560,7 +4578,9 @@ private:
             return constrainTwoPointArcThroughPoint(rawPoint);
         }
 
-        const QPointF origin = pendingPoints_.back();
+        const QPointF origin = activeTool_ == Tool::AngularDimension
+                                   ? pendingPoints_.first()
+                                   : pendingPoints_.back();
         const qreal deltaX = rawPoint.x() - origin.x();
         const qreal deltaY = rawPoint.y() - origin.y();
 

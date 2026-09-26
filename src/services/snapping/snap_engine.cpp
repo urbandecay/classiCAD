@@ -740,6 +740,9 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     const QSize &viewportSize) const
 {
     QVector<SnapCandidate> candidates;
+    if (isDimensionGeometryType(shape.geometryType)) {
+        return candidates;
+    }
     if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty()) {
         return candidates;
@@ -920,6 +923,9 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             continue;
         }
         const Shape &shape = document[shapeIndex];
+        if (isDimensionGeometryType(shape.geometryType)) {
+            continue;
+        }
         if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
             shape.components.isEmpty()) {
             continue;
@@ -1371,6 +1377,9 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
 {
     QVector<SnapCandidate> candidates;
     constexpr qreal epsilon = 1.0e-9;
+    if (isDimensionGeometryType(shape.geometryType)) {
+        return candidates;
+    }
     const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
 
     if (shape.geometryType == GeometryType::Circle &&
@@ -1501,6 +1510,9 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         }
 
         const Shape &shape = document[shapeIndex];
+        if (isDimensionGeometryType(shape.geometryType)) {
+            continue;
+        }
         qreal nearestDistanceSquared = std::numeric_limits<qreal>::infinity();
         QPointF nearestPoint;
         const auto considerPoint = [&](const QPointF &worldPoint) {

@@ -2,6 +2,7 @@
 #include "viewport_widget_api.h"
 #include "input_helpers.h"
 #include "../core/debug_log.h"
+#include "services/dimensions/dimension_font.h"
 
 #include <QApplication>
 #include <QAction>
@@ -28,6 +29,8 @@
 #include <QMainWindow>
 #include <QProcess>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -39,14 +42,70 @@
 #include <QVariant>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QWheelEvent>
 
 namespace classiCAD {
+
+class ToolShelfScrollArea final : public QScrollArea {
+public:
+    explicit ToolShelfScrollArea(QWidget *parent = nullptr)
+        : QScrollArea(parent)
+    {
+        setObjectName(QStringLiteral("toolShelfScrollArea"));
+        setFrameShape(QFrame::NoFrame);
+        setFixedWidth(98);
+        setWidgetResizable(true);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    }
+
+    void setShelfWidget(QWidget *shelf)
+    {
+        setWidget(shelf);
+        shelf->installEventFilter(this);
+        const auto descendants = shelf->findChildren<QWidget *>();
+        for (QWidget *widget : descendants) {
+            bool belongsToPopup = false;
+            for (QWidget *ancestor = widget;
+                 ancestor != nullptr && ancestor != shelf;
+                 ancestor = ancestor->parentWidget()) {
+                if (ancestor->isWindow()) {
+                    belongsToPopup = true;
+                    break;
+                }
+            }
+            if (!belongsToPopup) {
+                widget->installEventFilter(this);
+            }
+        }
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::Wheel) {
+            auto *wheelEvent = static_cast<QWheelEvent *>(event);
+            int scrollDelta = wheelEvent->pixelDelta().y();
+            if (scrollDelta == 0) {
+                scrollDelta = wheelEvent->angleDelta().y() * 48 / 120;
+            }
+            if (scrollDelta != 0) {
+                QScrollBar *bar = verticalScrollBar();
+                bar->setValue(bar->value() - scrollDelta);
+            }
+            wheelEvent->accept();
+            return true;
+        }
+        return QScrollArea::eventFilter(watched, event);
+    }
+};
 
 class PreferencesDialog final : public QDialog {
 public:
     explicit PreferencesDialog(Qt::MouseButton panButton,
                                bool snapLabelsVisible,
                                bool smoothCurveDisplay,
+                               bool architecturalDimensionFont,
                                QWidget *parent = nullptr)
         : QDialog(parent)
     {
@@ -68,6 +127,7 @@ public:
         const QStringList categoryNames{
             QStringLiteral("Interface"),
             QStringLiteral("Viewport"),
+            QStringLiteral("Dimensions"),
             QStringLiteral("Lights"),
             QStringLiteral("Editing"),
             QStringLiteral("Animation"),
@@ -90,6 +150,8 @@ public:
             if (category == QStringLiteral("Viewport")) {
                 pages_->addWidget(createViewportPage(snapLabelsVisible,
                                                      smoothCurveDisplay));
+            } else if (category == QStringLiteral("Dimensions")) {
+                pages_->addWidget(createDimensionPage(architecturalDimensionFont));
             } else if (category == QStringLiteral("Keymap")) {
                 pages_->addWidget(createKeymapPage(panButton));
             } else {
@@ -121,6 +183,11 @@ public:
     bool smoothCurveDisplay() const
     {
         return smoothCurveDisplayCheckBox_->isChecked();
+    }
+
+    bool architecturalDimensionFont() const
+    {
+        return dimensionFontCombo_->currentData().toBool();
     }
 
 private:
@@ -217,9 +284,54 @@ private:
         return page;
     }
 
+    QWidget *createDimensionPage(bool architecturalDimensionFont)
+    {
+        auto *page = new QWidget;
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 12, 18, 12);
+        layout->setSpacing(12);
+
+        auto *title = new QLabel(QStringLiteral("Dimensions"));
+        title->setObjectName(QStringLiteral("preferencesTitle"));
+        layout->addWidget(title);
+
+        auto *textBox = new QGroupBox(QStringLiteral("Annotation Text"));
+        auto *textLayout = new QFormLayout(textBox);
+        dimensionFontCombo_ = new QComboBox;
+        dimensionFontCombo_->addItem(QStringLiteral("Standard"), false);
+        dimensionFontCombo_->addItem(QStringLiteral("Architectural"), true);
+        dimensionFontCombo_->setCurrentIndex(architecturalDimensionFont ? 1 : 0);
+        textLayout->addRow(QStringLiteral("Font style"), dimensionFontCombo_);
+
+        auto *sample = new QLabel(QStringLiteral("123.45 mm   90°"));
+        sample->setAlignment(Qt::AlignCenter);
+        sample->setMinimumHeight(36);
+        textLayout->addRow(QStringLiteral("Preview"), sample);
+        const auto updateSampleFont = [this, sample]() {
+            const DimensionFontStyle style = dimensionFontCombo_->currentData().toBool()
+                                                 ? DimensionFontStyle::Architectural
+                                                 : DimensionFontStyle::Standard;
+            sample->setFont(dimensionAnnotationFont(style));
+        };
+        connect(dimensionFontCombo_, &QComboBox::currentTextChanged,
+                this, [updateSampleFont](const QString &) { updateSampleFont(); });
+        updateSampleFont();
+        layout->addWidget(textBox);
+
+        auto *hint = new QLabel(QStringLiteral(
+            "Architectural lettering uses a hand-drafted font for dimension labels. "
+            "It changes annotations only; the rest of the interface stays the same."));
+        hint->setObjectName(QStringLiteral("preferencesHint"));
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+        layout->addStretch(1);
+        return page;
+    }
+
     QListWidget *categoryList_ = nullptr;
     QStackedWidget *pages_ = nullptr;
     QComboBox *panButtonCombo_ = nullptr;
+    QComboBox *dimensionFontCombo_ = nullptr;
     QCheckBox *snapLabelsCheckBox_ = nullptr;
     QCheckBox *smoothCurveDisplayCheckBox_ = nullptr;
 };
@@ -649,6 +761,9 @@ private:
             }
         };
         viewportCallbacks.toolRepeated = [this](ToolId tool) {
+            if (isDimensionTool(tool) && dimensionToolButton_ != nullptr) {
+                dimensionToolButton_->setChecked(true);
+            }
             if ((tool == Tool::TangentFromCurve ||
                  tool == Tool::PerpendicularFromCurve) &&
                 lineToolButton_ != nullptr) {
@@ -822,11 +937,13 @@ private:
 
     QWidget *createToolShelf()
     {
+        auto *scrollArea = new ToolShelfScrollArea;
         auto *shelf = new QFrame;
         shelf->setObjectName(QStringLiteral("toolShelf"));
-        shelf->setFixedWidth(82);
+        shelf->setMinimumWidth(82);
 
         auto *layout = new QVBoxLayout(shelf);
+        layout->setSizeConstraint(QLayout::SetMinimumSize);
         layout->setContentsMargins(7, 10, 7, 10);
         layout->setSpacing(6);
 
@@ -866,6 +983,12 @@ private:
                                            QStringLiteral("⬭\nEllipse"),
                                            Tool::Ellipse);
         createEllipseToolMenu(ellipseToolButton_);
+        dimensionToolButton_ = addToolButton(layout,
+                                             group,
+                                             QStringLiteral("↔\nDim"),
+                                             Tool::LinearDimension);
+        dimensionToolButton_->setToolTip(QStringLiteral("Dimensions"));
+        createDimensionToolMenu(dimensionToolButton_);
         eraseToolButton_ = addToolButton(layout, group, QStringLiteral("Erase"), Tool::Erase);
         eraseToolButton_->setIcon(makeEraserIcon());
         eraseToolButton_->setIconSize(QSize(24, 24));
@@ -932,7 +1055,10 @@ private:
         layout->addWidget(toolHelp_);
         updateToolHelp();
 
-        return shelf;
+        layout->activate();
+        shelf->adjustSize();
+        scrollArea->setShelfWidget(shelf);
+        return scrollArea;
     }
 
     QToolButton *addToolButton(QVBoxLayout *layout,
@@ -989,6 +1115,35 @@ private:
         }
         viewport_->setTool(tool);
         statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
+    }
+
+    void activateDimensionTool(ToolId tool)
+    {
+        if (dimensionToolButton_ != nullptr) {
+            dimensionToolButton_->setChecked(true);
+        }
+        viewport_->setTool(tool);
+        statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
+    }
+
+    void createDimensionToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+
+        auto *menu = new QMenu(button);
+        QAction *linearAction = menu->addAction(QStringLiteral("Linear Dimension"));
+        QAction *angularAction = menu->addAction(QStringLiteral("Angular Dimension"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(linearAction, &QAction::triggered, this, [this]() {
+            activateDimensionTool(Tool::LinearDimension);
+        });
+        connect(angularAction, &QAction::triggered, this, [this]() {
+            activateDimensionTool(Tool::AngularDimension);
+        });
     }
 
     void createLineToolMenu(QToolButton *button)
@@ -1209,6 +1364,8 @@ private:
             settings.value(QStringLiteral("viewport/snapLabelsVisible"), true).toBool());
         viewport_->setSmoothCurveDisplay(
             settings.value(QStringLiteral("viewport/smoothCurveDisplay"), true).toBool());
+        viewport_->setArchitecturalDimensionFont(
+            settings.value(QStringLiteral("dimensions/architecturalFont"), false).toBool());
 
         if (orthoAction_ != nullptr) {
             orthoAction_->setChecked(settings.value(QStringLiteral("modeling/orthoEnabled"), false)
@@ -1252,11 +1409,27 @@ private:
             viewport_->panButton(),
             settings.value(QStringLiteral("viewport/snapLabelsVisible"), true).toBool(),
             settings.value(QStringLiteral("viewport/smoothCurveDisplay"), true).toBool(),
+            settings.value(QStringLiteral("dimensions/architecturalFont"), false).toBool(),
             this);
         if (dialog.exec() == QDialog::Accepted) {
             applyPanButton(dialog.panButton(), true);
             applySnapLabelsVisible(dialog.snapLabelsVisible(), true);
             applySmoothCurveDisplay(dialog.smoothCurveDisplay(), true);
+            applyArchitecturalDimensionFont(dialog.architecturalDimensionFont(), true);
+        }
+    }
+
+    void applyArchitecturalDimensionFont(bool enabled, bool save)
+    {
+        viewport_->setArchitecturalDimensionFont(enabled);
+        if (save) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("dimensions/architecturalFont"), enabled);
+            settings.sync();
+            statusBar()->showMessage(
+                QStringLiteral("Dimension lettering: %1")
+                    .arg(enabled ? QStringLiteral("Architectural")
+                                 : QStringLiteral("Standard")));
         }
     }
 
@@ -1879,6 +2052,7 @@ private:
     QToolButton *polygonToolButton_ = nullptr;
     QToolButton *circleToolButton_ = nullptr;
     QToolButton *ellipseToolButton_ = nullptr;
+    QToolButton *dimensionToolButton_ = nullptr;
     QToolButton *eraseToolButton_ = nullptr;
     QToolButton *trimToolButton_ = nullptr;
     QToolButton *controlPointsButton_ = nullptr;

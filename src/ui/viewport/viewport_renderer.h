@@ -39,6 +39,7 @@ public:
                                const QVector<double> &parameters,
                                const QSize &viewportSize,
                                bool preview) const;
+    void setArchitecturalDimensionFont(bool enabled);
 
     void drawCircularArc(QPainter &painter,
                          const QPointF &start,
@@ -80,6 +81,7 @@ private:
     const ViewportTransform &transform_;
     const CurveHitTester &curveHitTester_;
     bool smoothCurveDisplay_ = true;
+    bool architecturalDimensionFont_ = false;
 };
 
 } // namespace classiCAD

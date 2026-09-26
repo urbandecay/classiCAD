@@ -55,6 +55,8 @@ bool PerpendicularFromCurveTool::handleMousePress(const ToolInput &input,
         case GeometryType::Rectangle:
         case GeometryType::Polygon:
         case GeometryType::Point:
+        case GeometryType::LinearDimension:
+        case GeometryType::AngularDimension:
             status_.text = QStringLiteral("Choose a curve, not a point or rectangle");
             publish(context);
             return true;

@@ -31,6 +31,9 @@ set(CLASSICAD_SERVICE_SOURCES
     src/services/viewport/viewport_transform.cpp
     src/services/sampling/curve_sampler.cpp
     src/services/hit_testing/curve_hit_tester.cpp
+    src/services/dimensions/dimension_layout.cpp
+    src/services/dimensions/dimension_font.cpp
+    src/services/dimensions/dimension_fonts.qrc
     src/services/snapping/snap_engine.cpp
 )
 
@@ -56,6 +59,7 @@ set(CLASSICAD_TOOL_SOURCES
     src/tools/nurbs_tool.cpp
     src/tools/rotate_tool.cpp
     src/tools/trim_tool.cpp
+    src/tools/dimension_tool.cpp
 )
 
 set(CLASSICAD_VIEWPORT_SUPPORT_SOURCES

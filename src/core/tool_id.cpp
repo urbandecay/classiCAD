@@ -86,6 +86,11 @@ bool isCircleTool(ToolId tool)
     return isCircleConstructionTool(tool) || isCircleTangentTool(tool);
 }
 
+bool isDimensionTool(ToolId tool)
+{
+    return tool == ToolId::LinearDimension || tool == ToolId::AngularDimension;
+}
+
 QString toolName(ToolId tool)
 {
     switch (tool) {
@@ -145,6 +150,10 @@ QString toolName(ToolId tool)
         return QStringLiteral("Circle Tangent to 2 Curves");
     case ToolId::CircleTangentThree:
         return QStringLiteral("Circle Tangent to 3 Curves");
+    case ToolId::LinearDimension:
+        return QStringLiteral("Linear Dimension");
+    case ToolId::AngularDimension:
+        return QStringLiteral("Angular Dimension");
     }
 
     return QStringLiteral("Unknown");
@@ -155,6 +164,9 @@ int requiredPoints(ToolId tool)
     switch (tool) {
     case ToolId::Line:
         return 2;
+    case ToolId::LinearDimension:
+    case ToolId::AngularDimension:
+        return 3;
     case ToolId::Arc:
         return 3;
     case ToolId::Bezier:

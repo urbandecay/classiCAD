@@ -1,12 +1,18 @@
 #include "curve_hit_tester.h"
 
 #include "core/geometry/curve_evaluator.h"
+#include "services/dimensions/dimension_layout.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace classiCAD {
+
+void CurveHitTester::setArchitecturalDimensionFont(bool enabled)
+{
+    architecturalDimensionFont_ = enabled;
+}
 
 qreal CurveHitTester::distanceToSegment(const QPointF &point,
                                         const QPointF &start,
@@ -294,6 +300,16 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                       const ViewportTransform &transform,
                                       const QSize &viewportSize) const
 {
+    if (isDimensionGeometryType(shape.geometryType)) {
+        return distanceToDimensionLayout(
+            screenPosition,
+            buildDimensionScreenLayout(
+                shape,
+                transform,
+                viewportSize,
+                architecturalDimensionFont_ ? DimensionFontStyle::Architectural
+                                            : DimensionFontStyle::Standard));
+    }
     if (shape.geometryType == GeometryType::PolyCurve && !shape.components.isEmpty()) {
         qreal distance = 1.0e9;
         for (const Shape::NurbsCurve2D &component : shape.components) {
@@ -401,7 +417,8 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
 
 QVector<QPointF> CurveHitTester::controlPointsForShape(const Shape &shape) const
 {
-    if (shape.geometryType == GeometryType::Point) {
+    if (shape.geometryType == GeometryType::Point ||
+        isDimensionGeometryType(shape.geometryType)) {
         return {};
     }
     if (shape.geometryType == GeometryType::PolyCurve) {

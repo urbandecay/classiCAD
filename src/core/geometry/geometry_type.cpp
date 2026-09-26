@@ -80,6 +80,8 @@ GeometryType geometryTypeForTool(ToolId tool)
     case ToolId::Nurbs:
         return GeometryType::Nurbs;
     case ToolId::Rectangle:
+    case ToolId::RectangleFromCenter:
+    case ToolId::RectangleThreePoint:
         return GeometryType::Rectangle;
     case ToolId::Circle:
         return GeometryType::Circle;

@@ -340,6 +340,7 @@ void ViewportOverlay::drawEllipsePreview(QPainter &painter,
 }
 
 void ViewportOverlay::drawRectanglePreview(QPainter &painter,
+                                           ToolId tool,
                                            const QVector<QPointF> &pendingPoints,
                                            const QPointF &cursorWorld,
                                            bool cursorValid,
@@ -347,45 +348,80 @@ void ViewportOverlay::drawRectanglePreview(QPainter &painter,
                                            const QSize &viewportSize) const
 {
     if (pendingPoints.isEmpty()) {
+        if (currentSnap.isValid()) {
+            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        }
         return;
     }
 
     const QColor rectangleColor(QStringLiteral("#e6b85c"));
+    const QColor guideColor(QStringLiteral("#8aa7c7"));
     const QColor pointColor(QStringLiteral("#f0a45a"));
-    const QPointF firstWorld = pendingPoints.first();
-    const QPointF firstScreen = transform_.worldToScreen(firstWorld, viewportSize);
+    const RectangleMode mode = rectangleModeForTool(tool);
+    QVector<QPointF> candidatePoints = pendingPoints;
+    if (cursorValid) {
+        candidatePoints.append(cursorWorld);
+    }
+
+    QVector<QPointF> rectanglePoints;
+    if (candidatePoints.size() >= requiredPoints(tool)) {
+        rectanglePoints = makeRectanglePoints(mode, candidatePoints);
+    }
+
+    painter.save();
+    painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
+    painter.setBrush(Qt::NoBrush);
+    if (rectanglePoints.size() != 4 && cursorValid) {
+        painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
+                         transform_.worldToScreen(cursorWorld, viewportSize));
+    }
 
     painter.setPen(QPen(pointColor, 1.5));
     painter.setBrush(QColor(QStringLiteral("#282828")));
-    painter.drawEllipse(firstScreen, 5.0, 5.0);
-
-    if (!cursorValid) {
-        return;
+    for (const QPointF &point : pendingPoints) {
+        painter.drawEllipse(transform_.worldToScreen(point, viewportSize), 5.0, 5.0);
+    }
+    if (cursorValid) {
+        painter.setPen(QPen(pointColor, 2.0));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(transform_.worldToScreen(cursorWorld, viewportSize), 4.0, 4.0);
     }
 
-    const QPointF secondWorld = cursorWorld;
-    const QPointF secondScreen = transform_.worldToScreen(secondWorld, viewportSize);
-    const QRectF rectangle = QRectF(firstScreen, secondScreen).normalized();
-    painter.setPen(QPen(rectangleColor, 2.0));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRect(rectangle);
+    if (rectanglePoints.size() == 4) {
+        QVector<QPointF> screenPoints;
+        screenPoints.reserve(rectanglePoints.size());
+        for (const QPointF &point : rectanglePoints) {
+            screenPoints.append(transform_.worldToScreen(point, viewportSize));
+        }
 
-    painter.setPen(QPen(pointColor, 2.0));
-    painter.setBrush(pointColor);
-    painter.drawEllipse(secondScreen, 4.0, 4.0);
+        painter.setPen(QPen(rectangleColor, 2.0));
+        painter.setBrush(Qt::NoBrush);
+        for (int index = 0; index < screenPoints.size(); ++index) {
+            painter.drawLine(screenPoints[index],
+                             screenPoints[(index + 1) % screenPoints.size()]);
+        }
 
-    painter.setPen(QColor(QStringLiteral("#d0d0d0")));
-    painter.setFont(QFont(QStringLiteral("Sans"), 9));
-    const qreal width = std::abs(secondWorld.x() - firstWorld.x());
-    const qreal height = std::abs(secondWorld.y() - firstWorld.y());
-    const QString dimensions = QStringLiteral("W %1  H %2")
-                                   .arg(width, 0, 'f', 2)
-                                   .arg(height, 0, 'f', 2);
-    QPointF labelPosition = rectangle.topLeft() + QPointF(6.0, -8.0);
-    if (labelPosition.y() < 14.0) {
-        labelPosition.setY(rectangle.top() + 16.0);
+        const qreal width = std::hypot(rectanglePoints[1].x() - rectanglePoints[0].x(),
+                                       rectanglePoints[1].y() - rectanglePoints[0].y());
+        const qreal height = std::hypot(rectanglePoints[2].x() - rectanglePoints[1].x(),
+                                        rectanglePoints[2].y() - rectanglePoints[1].y());
+        QRectF bounds(screenPoints.first(), screenPoints.first());
+        for (const QPointF &point : screenPoints) {
+            bounds = bounds.united(QRectF(point, point));
+        }
+        painter.setPen(QColor(QStringLiteral("#d0d0d0")));
+        painter.setFont(QFont(QStringLiteral("Sans"), 9));
+        const QString dimensions = QStringLiteral("W %1  H %2")
+                                       .arg(width, 0, 'f', 2)
+                                       .arg(height, 0, 'f', 2);
+        QPointF labelPosition = bounds.topLeft() + QPointF(6.0, -8.0);
+        if (labelPosition.y() < 14.0) {
+            labelPosition.setY(bounds.top() + 16.0);
+        }
+        painter.drawText(labelPosition, dimensions);
     }
-    painter.drawText(labelPosition, dimensions);
+
+    painter.restore();
 
     if (currentSnap.isValid()) {
         drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
@@ -642,7 +678,22 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
             QStringLiteral("Click a curve, then click the perpendicular line endpoint  •  Esc cancels"));
     } else if (activeTool != Tool::Select) {
         QString hint;
-        if (isEllipseTool(activeTool)) {
+        if (isRectangleTool(activeTool)) {
+            QString inputDescription;
+            switch (rectangleModeForTool(activeTool)) {
+            case RectangleMode::CornerCorner:
+                inputDescription = QStringLiteral("first corner, opposite corner");
+                break;
+            case RectangleMode::CenterCorner:
+                inputDescription = QStringLiteral("center, corner");
+                break;
+            case RectangleMode::ThreePoint:
+                inputDescription = QStringLiteral("first edge point, second edge point, width point");
+                break;
+            }
+            hint = QStringLiteral("Click to place %1  •  Esc clears current tool input")
+                       .arg(inputDescription);
+        } else if (isEllipseTool(activeTool)) {
             QString inputDescription;
             switch (ellipseModeForTool(activeTool)) {
             case EllipseMode::CenterAxisRadius:

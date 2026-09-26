@@ -27,6 +27,8 @@ ToolRegistry::ToolRegistry()
     add(std::make_unique<PerpendicularFromCurveTool>());
     add(std::make_unique<ArcTool>());
     add(std::make_unique<RectangleTool>());
+    add(std::make_unique<RectangleTool>(ToolId::RectangleFromCenter));
+    add(std::make_unique<RectangleTool>(ToolId::RectangleThreePoint));
     add(std::make_unique<CircleTool>());
     add(std::make_unique<EllipseTool>(ToolId::Ellipse));
     add(std::make_unique<EllipseTool>(ToolId::EllipseFromEndpoints));

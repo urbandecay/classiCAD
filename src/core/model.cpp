@@ -273,6 +273,46 @@ Shape::NurbsCurve2D makeEllipseNurbs(EllipseMode mode, const QVector<QPointF> &p
     return curve;
 }
 
+QVector<QPointF> makeRectanglePoints(RectangleMode mode, const QVector<QPointF> &points)
+{
+    const int requiredPointCount = mode == RectangleMode::ThreePoint ? 3 : 2;
+    if (points.size() < requiredPointCount) {
+        return {};
+    }
+
+    if (mode == RectangleMode::CornerCorner) {
+        const QPointF first = points[0];
+        const QPointF second = points[1];
+        return {first,
+                QPointF(second.x(), first.y()),
+                second,
+                QPointF(first.x(), second.y())};
+    }
+
+    if (mode == RectangleMode::CenterCorner) {
+        const QPointF center = points[0];
+        const QPointF halfExtents = points[1] - center;
+        return {center + halfExtents,
+                center + QPointF(-halfExtents.x(), halfExtents.y()),
+                center - halfExtents,
+                center + QPointF(halfExtents.x(), -halfExtents.y())};
+    }
+
+    const QPointF first = points[0];
+    const QPointF second = points[1];
+    const QPointF edge = second - first;
+    const qreal edgeLength = std::hypot(edge.x(), edge.y());
+    if (edgeLength <= 1.0e-9) {
+        return {first, second, second, first};
+    }
+
+    const QPointF edgeUnit = edge / edgeLength;
+    const QPointF perpendicular(-edgeUnit.y(), edgeUnit.x());
+    const qreal width = QPointF::dotProduct(points[2] - second, perpendicular);
+    const QPointF offset = perpendicular * width;
+    return {first, second, second + offset, first + offset};
+}
+
 qreal crossProduct(const QPointF &a, const QPointF &b)
 {
     return a.x() * b.y() - a.y() * b.x();

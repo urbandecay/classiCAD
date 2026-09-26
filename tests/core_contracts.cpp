@@ -65,6 +65,15 @@ int main(int argc, char **argv)
                         geometryTypeForTool(ToolId::EllipseFromFoci) ==
                             GeometryType::Ellipse,
                     "all ellipse construction tools must create ellipse geometry");
+    passed &= check(geometryTypeForTool(ToolId::Rectangle) == GeometryType::Rectangle &&
+                        geometryTypeForTool(ToolId::RectangleFromCenter) ==
+                            GeometryType::Rectangle &&
+                        geometryTypeForTool(ToolId::RectangleThreePoint) ==
+                            GeometryType::Rectangle &&
+                        requiredPoints(ToolId::Rectangle) == 2 &&
+                        requiredPoints(ToolId::RectangleFromCenter) == 2 &&
+                        requiredPoints(ToolId::RectangleThreePoint) == 3,
+                    "rectangle construction tools must map to rectangle geometry and request the correct clicks");
     passed &= check(geometryTypeForTool(ToolId::Mirror) == GeometryType::Invalid &&
                         toolName(ToolId::Mirror) == QStringLiteral("Mirror"),
                     "mirror must remain a command rather than persisted geometry");
@@ -182,6 +191,41 @@ int main(int argc, char **argv)
                     "ellipse construction methods must produce equivalent NURBS geometry");
     passed &= check(ellipseQuarterPointsCorrect,
                     "ellipse evaluation must hit the four axis extrema over its full domain");
+
+    const QVector<QPointF> cornerRectangle = makeRectanglePoints(
+        RectangleMode::CornerCorner,
+        {QPointF(1.0, 2.0), QPointF(5.0, 6.0)});
+    const QVector<QPointF> centerRectangle = makeRectanglePoints(
+        RectangleMode::CenterCorner,
+        {QPointF(0.0, 0.0), QPointF(2.0, 1.0)});
+    const QVector<QPointF> threePointRectangle = makeRectanglePoints(
+        RectangleMode::ThreePoint,
+        {QPointF(1.0, 1.0), QPointF(3.0, 3.0), QPointF(0.0, 4.0)});
+    const auto pointListsAlmostEqual = [&pointsAlmostEqual](const QVector<QPointF> &first,
+                                                            const QVector<QPointF> &second) {
+        if (first.size() != second.size()) {
+            return false;
+        }
+        for (int index = 0; index < first.size(); ++index) {
+            if (!pointsAlmostEqual(first[index], second[index])) {
+                return false;
+            }
+        }
+        return true;
+    };
+    passed &= check(pointListsAlmostEqual(
+                        cornerRectangle,
+                        {QPointF(1.0, 2.0), QPointF(5.0, 2.0),
+                         QPointF(5.0, 6.0), QPointF(1.0, 6.0)}) &&
+                        pointListsAlmostEqual(
+                            centerRectangle,
+                            {QPointF(2.0, 1.0), QPointF(-2.0, 1.0),
+                             QPointF(-2.0, -1.0), QPointF(2.0, -1.0)}) &&
+                        pointListsAlmostEqual(
+                            threePointRectangle,
+                            {QPointF(1.0, 1.0), QPointF(3.0, 3.0),
+                             QPointF(1.0, 5.0), QPointF(-1.0, 3.0)}),
+                    "rectangle builders must support corner, center, and oriented three-point construction");
 
     const Shape ellipse{GeometryType::Ellipse,
                         {QPointF(0.0, 0.0)},
@@ -899,6 +943,8 @@ int main(int argc, char **argv)
                         toolRegistry.find(ToolId::PerpendicularFromCurve) != nullptr &&
                         toolRegistry.find(ToolId::Arc) != nullptr &&
                         toolRegistry.find(ToolId::Rectangle) != nullptr &&
+                        toolRegistry.find(ToolId::RectangleFromCenter) != nullptr &&
+                        toolRegistry.find(ToolId::RectangleThreePoint) != nullptr &&
                         toolRegistry.find(ToolId::Circle) != nullptr &&
                         toolRegistry.find(ToolId::Ellipse) != nullptr &&
                         toolRegistry.find(ToolId::EllipseFromEndpoints) != nullptr &&

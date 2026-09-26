@@ -4,8 +4,8 @@
 
 namespace classiCAD {
 
-RectangleTool::RectangleTool()
-    : ShapeCreationTool(ToolId::Rectangle, 2)
+RectangleTool::RectangleTool(ToolId tool)
+    : ShapeCreationTool(tool, requiredPoints(tool))
 {
 }
 

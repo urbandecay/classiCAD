@@ -6,7 +6,7 @@ namespace classiCAD {
 
 class RectangleTool final : public ShapeCreationTool {
 public:
-    RectangleTool();
+    explicit RectangleTool(ToolId tool = ToolId::Rectangle);
 
 protected:
     bool buildShape(const ToolContext &context, Shape *shape) const override;

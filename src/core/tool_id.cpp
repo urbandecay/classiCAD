@@ -28,6 +28,25 @@ EllipseMode ellipseModeForTool(ToolId tool)
     }
 }
 
+bool isRectangleTool(ToolId tool)
+{
+    return tool == ToolId::Rectangle || tool == ToolId::RectangleFromCenter ||
+           tool == ToolId::RectangleThreePoint;
+}
+
+RectangleMode rectangleModeForTool(ToolId tool)
+{
+    switch (tool) {
+    case ToolId::RectangleFromCenter:
+        return RectangleMode::CenterCorner;
+    case ToolId::RectangleThreePoint:
+        return RectangleMode::ThreePoint;
+    case ToolId::Rectangle:
+    default:
+        return RectangleMode::CornerCorner;
+    }
+}
+
 QString toolName(ToolId tool)
 {
     switch (tool) {
@@ -67,6 +86,10 @@ QString toolName(ToolId tool)
         return QStringLiteral("Ellipse (Bounding Corners)");
     case ToolId::EllipseFromFoci:
         return QStringLiteral("Ellipse (Foci and Point)");
+    case ToolId::RectangleFromCenter:
+        return QStringLiteral("Rectangle (Center, Corner)");
+    case ToolId::RectangleThreePoint:
+        return QStringLiteral("Rectangle (3 Points)");
     }
 
     return QStringLiteral("Unknown");
@@ -85,6 +108,7 @@ int requiredPoints(ToolId tool)
     case ToolId::Rectangle:
     case ToolId::Circle:
     case ToolId::EllipseFromCorners:
+    case ToolId::RectangleFromCenter:
         return 2;
     case ToolId::Point:
         return 1;
@@ -100,6 +124,8 @@ int requiredPoints(ToolId tool)
     case ToolId::TangentFromCurve:
     case ToolId::PerpendicularFromCurve:
         return 0;
+    case ToolId::RectangleThreePoint:
+        return 3;
     }
 
     return 0;

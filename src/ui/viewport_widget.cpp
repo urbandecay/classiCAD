@@ -1492,7 +1492,7 @@ protected:
             drawCircleToolPreview(painter);
         } else if (isEllipseTool(activeTool_)) {
             drawEllipseToolPreview(painter);
-        } else if (activeTool_ == Tool::Rectangle && !pendingPoints_.isEmpty()) {
+        } else if (isRectangleTool(activeTool_)) {
             drawRectangleToolPreview(painter);
         } else if (activeTool_ == Tool::Point) {
             drawPointToolPreview(painter);
@@ -1895,13 +1895,9 @@ protected:
                                  0.0,
                                  {},
                                  {}};
-            if (activeTool_ == Tool::Rectangle && completedShape.points.size() >= 2) {
-                const QPointF first = completedShape.points[0];
-                const QPointF second = completedShape.points[1];
-                completedShape.points = {first,
-                                         QPointF(second.x(), first.y()),
-                                         second,
-                                         QPointF(first.x(), second.y())};
+            if (isRectangleTool(activeTool_)) {
+                completedShape.points = makeRectanglePoints(
+                    rectangleModeForTool(activeTool_), pendingPoints_);
             }
             if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint) {
                 completedShape.arcSweep = arcPreviewSweepAngle_;
@@ -1974,8 +1970,7 @@ protected:
         const bool pointPreviewActive = activeTool_ == Tool::Point;
         const bool circlePreviewActive = activeTool_ == Tool::Circle && !pendingPoints_.isEmpty();
         const bool ellipsePreviewActive = isEllipseTool(activeTool_);
-        const bool rectanglePreviewActive =
-            activeTool_ == Tool::Rectangle && !pendingPoints_.isEmpty();
+        const bool rectanglePreviewActive = isRectangleTool(activeTool_);
         const bool arcPreviewActive = activeTool_ == Tool::Arc;
         const bool mirrorPreviewActive = activeTool_ == Tool::Mirror;
 
@@ -4211,7 +4206,7 @@ private:
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Circle ||
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate ||
-            isEllipseTool(activeTool_) ||
+            isEllipseTool(activeTool_) || isRectangleTool(activeTool_) ||
             activeTool_ == Tool::Mirror ||
             activeTool_ == Tool::TangentFromCurve ||
             activeTool_ == Tool::PerpendicularFromCurve;
@@ -4431,6 +4426,19 @@ private:
             }
         }
 
+        if (activeTool_ == Tool::RectangleThreePoint && pendingPoints_.size() >= 2) {
+            const QPointF edge = pendingPoints_[1] - pendingPoints_[0];
+            const qreal edgeLength = std::hypot(edge.x(), edge.y());
+            if (edgeLength > 1.0e-9) {
+                const QPointF edgeUnit = edge / edgeLength;
+                const QPointF perpendicular(-edgeUnit.y(), edgeUnit.x());
+                return pendingPoints_[1] + perpendicular *
+                                                QPointF::dotProduct(
+                                                    snappedOrRawPoint - pendingPoints_[1],
+                                                    perpendicular);
+            }
+        }
+
         if (currentSnap_.isValid()) {
             return currentSnap_.point;
         }
@@ -4440,6 +4448,7 @@ private:
             activeTool_ == Tool::Arc || activeTool_ == Tool::Mirror ||
             (isEllipseTool(activeTool_) &&
              ellipseModeForTool(activeTool_) != EllipseMode::Corners) ||
+            (activeTool_ == Tool::RectangleThreePoint && pendingPoints_.size() == 1) ||
             activeTool_ == Tool::TangentFromCurve ||
             activeTool_ == Tool::PerpendicularFromCurve;
         if (!orthoEnabled_ || panning_ || !drawingConstraintActive || pendingPoints_.isEmpty()) {
@@ -6696,6 +6705,7 @@ private:
     void drawRectangleToolPreview(QPainter &painter)
     {
         viewportOverlay_.drawRectanglePreview(painter,
+                                              activeTool_,
                                               pendingPoints_,
                                               cursorWorld_,
                                               cursorValid_,
@@ -6862,13 +6872,11 @@ private:
                      arcSweep,
                      {},
                      {}};
-        if (tool == Tool::Rectangle && result.points.size() >= 2) {
-            const QPointF first = result.points[0];
-            const QPointF second = result.points[1];
-            result.points = {first,
-                             QPointF(second.x(), first.y()),
-                             second,
-                             QPointF(first.x(), second.y())};
+        if (isRectangleTool(tool)) {
+            result.points = makeRectanglePoints(rectangleModeForTool(tool), points);
+            if (result.points.size() != 4) {
+                return false;
+            }
         }
 
         if (tool == Tool::Line) {

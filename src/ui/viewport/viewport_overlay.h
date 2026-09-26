@@ -63,6 +63,7 @@ public:
                             const SnapResult &currentSnap,
                             const QSize &viewportSize) const;
     void drawRectanglePreview(QPainter &painter,
+                              ToolId tool,
                               const QVector<QPointF> &pendingPoints,
                               const QPointF &cursorWorld,
                               bool cursorValid,

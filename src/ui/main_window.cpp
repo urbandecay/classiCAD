@@ -843,7 +843,11 @@ private:
         createArcToolMenu(arcToolButton_);
         addToolButton(layout, group, QStringLiteral("∿\nBezier"), Tool::Bezier);
         addToolButton(layout, group, QStringLiteral("N\nNURBS"), Tool::Nurbs);
-        addToolButton(layout, group, QStringLiteral("□\nRect"), Tool::Rectangle);
+        rectangleToolButton_ = addToolButton(layout,
+                                             group,
+                                             QStringLiteral("□\nRect"),
+                                             Tool::Rectangle);
+        createRectangleToolMenu(rectangleToolButton_);
         addToolButton(layout, group, QStringLiteral("○\nCircle"), Tool::Circle);
         ellipseToolButton_ = addToolButton(layout,
                                            group,
@@ -1057,6 +1061,39 @@ private:
         });
         connect(fociAction, &QAction::triggered, this, [this]() {
             activateEllipseTool(Tool::EllipseFromFoci);
+        });
+    }
+
+    void activateRectangleTool(ToolId tool)
+    {
+        if (rectangleToolButton_ != nullptr) {
+            rectangleToolButton_->setChecked(true);
+        }
+        viewport_->setTool(tool);
+        statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
+    }
+
+    void createRectangleToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+
+        auto *menu = new QMenu(button);
+        QAction *cornerAction = menu->addAction(QStringLiteral("Corner, Corner"));
+        QAction *centerAction = menu->addAction(QStringLiteral("Center, Corner"));
+        QAction *threePointAction = menu->addAction(QStringLiteral("3 Points"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(cornerAction, &QAction::triggered, this, [this]() {
+            activateRectangleTool(Tool::Rectangle);
+        });
+        connect(centerAction, &QAction::triggered, this, [this]() {
+            activateRectangleTool(Tool::RectangleFromCenter);
+        });
+        connect(threePointAction, &QAction::triggered, this, [this]() {
+            activateRectangleTool(Tool::RectangleThreePoint);
         });
     }
 
@@ -1739,6 +1776,7 @@ private:
     QToolButton *selectToolButton_ = nullptr;
     QToolButton *lineToolButton_ = nullptr;
     QToolButton *arcToolButton_ = nullptr;
+    QToolButton *rectangleToolButton_ = nullptr;
     QToolButton *ellipseToolButton_ = nullptr;
     QToolButton *eraseToolButton_ = nullptr;
     QToolButton *trimToolButton_ = nullptr;

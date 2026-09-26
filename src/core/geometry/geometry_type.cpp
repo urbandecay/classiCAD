@@ -6,7 +6,7 @@ namespace classiCAD {
 
 bool isPersistentGeometryType(GeometryType type)
 {
-    return type >= GeometryType::Line && type <= GeometryType::PolyCurve;
+    return type >= GeometryType::Line && type <= GeometryType::Ellipse;
 }
 
 QString geometryTypeName(GeometryType type)
@@ -28,6 +28,8 @@ QString geometryTypeName(GeometryType type)
         return QStringLiteral("Point");
     case GeometryType::PolyCurve:
         return QStringLiteral("PolyCurve");
+    case GeometryType::Ellipse:
+        return QStringLiteral("Ellipse");
     case GeometryType::Invalid:
         return QStringLiteral("Invalid");
     }
@@ -46,9 +48,24 @@ bool geometryTypeFromLegacyValue(int value, GeometryType *type)
     return true;
 }
 
+bool geometryTypeFromValue(int value, GeometryType *type)
+{
+    if (type == nullptr || value < static_cast<int>(GeometryType::Line) ||
+        value > static_cast<int>(GeometryType::Ellipse)) {
+        return false;
+    }
+
+    *type = static_cast<GeometryType>(value);
+    return true;
+}
+
 int legacyValueForGeometryType(GeometryType type)
 {
-    return isPersistentGeometryType(type) ? static_cast<int>(type) : 0;
+    // The version-1 "tool" field only encoded persistent geometry values 1..8.
+    // New geometry kinds must not be mistaken for active tool commands by old readers.
+    return type >= GeometryType::Line && type <= GeometryType::PolyCurve
+               ? static_cast<int>(type)
+               : 0;
 }
 
 GeometryType geometryTypeForTool(ToolId tool)
@@ -66,6 +83,11 @@ GeometryType geometryTypeForTool(ToolId tool)
         return GeometryType::Rectangle;
     case ToolId::Circle:
         return GeometryType::Circle;
+    case ToolId::Ellipse:
+    case ToolId::EllipseFromEndpoints:
+    case ToolId::EllipseFromCorners:
+    case ToolId::EllipseFromFoci:
+        return GeometryType::Ellipse;
     case ToolId::Point:
         return GeometryType::Point;
     case ToolId::Select:

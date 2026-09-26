@@ -1490,6 +1490,8 @@ protected:
             drawArcToolPreview(painter);
         } else if (activeTool_ == Tool::Circle && !pendingPoints_.isEmpty()) {
             drawCircleToolPreview(painter);
+        } else if (isEllipseTool(activeTool_)) {
+            drawEllipseToolPreview(painter);
         } else if (activeTool_ == Tool::Rectangle && !pendingPoints_.isEmpty()) {
             drawRectangleToolPreview(painter);
         } else if (activeTool_ == Tool::Point) {
@@ -1971,6 +1973,7 @@ protected:
         }
         const bool pointPreviewActive = activeTool_ == Tool::Point;
         const bool circlePreviewActive = activeTool_ == Tool::Circle && !pendingPoints_.isEmpty();
+        const bool ellipsePreviewActive = isEllipseTool(activeTool_);
         const bool rectanglePreviewActive =
             activeTool_ == Tool::Rectangle && !pendingPoints_.isEmpty();
         const bool arcPreviewActive = activeTool_ == Tool::Arc;
@@ -2203,12 +2206,14 @@ protected:
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
+            ellipsePreviewActive ||
             rectanglePreviewActive || mirrorPreviewActive || panning_ || draggingSelected_ ||
             draggingControlPoint_) {
             update();
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
+            ellipsePreviewActive ||
             rectanglePreviewActive || mirrorPreviewActive || activeTool_ == Tool::Erase || panning_ ||
             draggingSelected_ || draggingControlPoint_) {
             DebugLog::instance().write(
@@ -2550,7 +2555,8 @@ private:
         return shape.geometryType == GeometryType::Line ||
                shape.geometryType == GeometryType::Arc ||
                shape.geometryType == GeometryType::Bezier ||
-               shape.geometryType == GeometryType::Nurbs;
+               shape.geometryType == GeometryType::Nurbs ||
+               shape.geometryType == GeometryType::Ellipse;
     }
 
     bool appendJoinComponents(const Shape &shape,
@@ -3110,7 +3116,8 @@ private:
         return (shape.geometryType == GeometryType::Arc ||
                 shape.geometryType == GeometryType::Bezier ||
                 shape.geometryType == GeometryType::Nurbs ||
-                shape.geometryType == GeometryType::Circle) &&
+                shape.geometryType == GeometryType::Circle ||
+                shape.geometryType == GeometryType::Ellipse) &&
                isValidNurbsCurve(shape.nurbs);
     }
 
@@ -4204,6 +4211,7 @@ private:
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Circle ||
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate ||
+            isEllipseTool(activeTool_) ||
             activeTool_ == Tool::Mirror ||
             activeTool_ == Tool::TangentFromCurve ||
             activeTool_ == Tool::PerpendicularFromCurve;
@@ -4397,6 +4405,32 @@ private:
     QPointF constrainLinePoint(const QPointF &rawPoint)
     {
         currentSnap_ = findSnapPoint(rawPoint);
+        const QPointF snappedOrRawPoint = currentSnap_.isValid()
+                                              ? currentSnap_.point
+                                              : rawPoint;
+
+        if (isEllipseTool(activeTool_) && pendingPoints_.size() >= 2) {
+            const EllipseMode mode = ellipseModeForTool(activeTool_);
+            if (mode == EllipseMode::CenterAxisRadius ||
+                mode == EllipseMode::AxisEndpoints) {
+                const QPointF center = mode == EllipseMode::CenterAxisRadius
+                                           ? pendingPoints_[0]
+                                           : (pendingPoints_[0] + pendingPoints_[1]) * 0.5;
+                const QPointF axis = pendingPoints_[1] - pendingPoints_[0];
+                const qreal axisLength = std::hypot(axis.x(), axis.y());
+                if (axisLength > 1.0e-9) {
+                    const QPointF majorUnit = axis / axisLength;
+                    const QPointF minorUnit(-majorUnit.y(), majorUnit.x());
+                    return center + minorUnit *
+                                        QPointF::dotProduct(snappedOrRawPoint - center,
+                                                            minorUnit);
+                }
+            }
+            if (mode == EllipseMode::FociPoint) {
+                return snappedOrRawPoint;
+            }
+        }
+
         if (currentSnap_.isValid()) {
             return currentSnap_.point;
         }
@@ -4404,6 +4438,8 @@ private:
         const bool drawingConstraintActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Mirror ||
+            (isEllipseTool(activeTool_) &&
+             ellipseModeForTool(activeTool_) != EllipseMode::Corners) ||
             activeTool_ == Tool::TangentFromCurve ||
             activeTool_ == Tool::PerpendicularFromCurve;
         if (!orthoEnabled_ || panning_ || !drawingConstraintActive || pendingPoints_.isEmpty()) {
@@ -6646,6 +6682,17 @@ private:
                                            size());
     }
 
+    void drawEllipseToolPreview(QPainter &painter)
+    {
+        viewportOverlay_.drawEllipsePreview(painter,
+                                             activeTool_,
+                                             pendingPoints_,
+                                             cursorWorld_,
+                                             cursorValid_,
+                                             currentSnap_,
+                                             size());
+    }
+
     void drawRectangleToolPreview(QPainter &painter)
     {
         viewportOverlay_.drawRectanglePreview(painter,
@@ -6832,6 +6879,16 @@ private:
             result.nurbs = makeBezierNurbs(result.points);
         } else if (tool == Tool::Circle) {
             result.nurbs = makeCircleNurbs(result.points);
+        } else if (isEllipseTool(tool)) {
+            result.nurbs = makeEllipseNurbs(ellipseModeForTool(tool), points);
+            if (!isValidNurbsCurve(result.nurbs)) {
+                return false;
+            }
+            const EllipseMode mode = ellipseModeForTool(tool);
+            const QPointF center = mode == EllipseMode::CenterAxisRadius
+                                       ? points[0]
+                                       : (points[0] + points[1]) * 0.5;
+            result.points = {center};
         }
 
         *shape = result;

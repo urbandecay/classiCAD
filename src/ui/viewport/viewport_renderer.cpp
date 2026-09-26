@@ -161,6 +161,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 std::hypot(edge.x() - center.x(), edge.y() - center.y());
             painter.drawEllipse(center, radius, radius);
         }
+    } else if (shape.geometryType == GeometryType::Ellipse) {
+        if (isValidNurbsCurve(shape.nurbs)) {
+            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+        }
     } else if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
         if (isValidNurbsCurve(shape.nurbs)) {
             drawNurbsCurve(painter, shape.nurbs, viewportSize);

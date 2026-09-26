@@ -50,6 +50,7 @@ bool TangentFromCurveTool::handleMousePress(const ToolInput &input,
         case GeometryType::Bezier:
         case GeometryType::Nurbs:
         case GeometryType::Circle:
+        case GeometryType::Ellipse:
         case GeometryType::PolyCurve:
             break;
         case GeometryType::Invalid:

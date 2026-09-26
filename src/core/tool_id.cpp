@@ -7,6 +7,27 @@ bool isEraseLikeTool(ToolId tool)
     return tool == ToolId::Erase || tool == ToolId::Trim;
 }
 
+bool isEllipseTool(ToolId tool)
+{
+    return tool == ToolId::Ellipse || tool == ToolId::EllipseFromEndpoints ||
+           tool == ToolId::EllipseFromCorners || tool == ToolId::EllipseFromFoci;
+}
+
+EllipseMode ellipseModeForTool(ToolId tool)
+{
+    switch (tool) {
+    case ToolId::EllipseFromEndpoints:
+        return EllipseMode::AxisEndpoints;
+    case ToolId::EllipseFromCorners:
+        return EllipseMode::Corners;
+    case ToolId::EllipseFromFoci:
+        return EllipseMode::FociPoint;
+    case ToolId::Ellipse:
+    default:
+        return EllipseMode::CenterAxisRadius;
+    }
+}
+
 QString toolName(ToolId tool)
 {
     switch (tool) {
@@ -38,6 +59,14 @@ QString toolName(ToolId tool)
         return QStringLiteral("Tangent from Curve");
     case ToolId::PerpendicularFromCurve:
         return QStringLiteral("Perpendicular from Curve");
+    case ToolId::Ellipse:
+        return QStringLiteral("Ellipse (Center, Axis, Radius)");
+    case ToolId::EllipseFromEndpoints:
+        return QStringLiteral("Ellipse (Axis Endpoints)");
+    case ToolId::EllipseFromCorners:
+        return QStringLiteral("Ellipse (Bounding Corners)");
+    case ToolId::EllipseFromFoci:
+        return QStringLiteral("Ellipse (Foci and Point)");
     }
 
     return QStringLiteral("Unknown");
@@ -55,9 +84,14 @@ int requiredPoints(ToolId tool)
         return 4;
     case ToolId::Rectangle:
     case ToolId::Circle:
+    case ToolId::EllipseFromCorners:
         return 2;
     case ToolId::Point:
         return 1;
+    case ToolId::Ellipse:
+    case ToolId::EllipseFromEndpoints:
+    case ToolId::EllipseFromFoci:
+        return 3;
     case ToolId::Select:
     case ToolId::Erase:
     case ToolId::Trim:

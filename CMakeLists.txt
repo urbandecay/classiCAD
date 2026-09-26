@@ -48,6 +48,7 @@ set(CLASSICAD_TOOL_SOURCES
     src/tools/mirror_tool.cpp
     src/tools/rectangle_tool.cpp
     src/tools/circle_tool.cpp
+    src/tools/ellipse_tool.cpp
     src/tools/bezier_tool.cpp
     src/tools/nurbs_tool.cpp
     src/tools/rotate_tool.cpp

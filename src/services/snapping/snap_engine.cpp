@@ -791,6 +791,18 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         }
         return candidates;
     }
+    if (shape.geometryType == GeometryType::Ellipse) {
+        if (!shape.points.isEmpty()) {
+            candidates.append({SnapType::Center, shape.points.first()});
+        }
+        if (validateNurbsCurve(shape.nurbs) && shape.nurbs.controlPoints.size() >= 9) {
+            for (const int controlPointIndex : {0, 2, 4, 6}) {
+                candidates.append({SnapType::Endpoint,
+                                   shape.nurbs.controlPoints[controlPointIndex]});
+            }
+        }
+        return candidates;
+    }
     if (shape.geometryType == GeometryType::Circle) {
         if (!shape.points.isEmpty()) {
             candidates.append({SnapType::Center, shape.points.first()});
@@ -975,6 +987,19 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                 if (settings_.midpoint &&
                     nurbsCurvePointAtFraction(curve, 0.5, &midpoint)) {
                     candidates.append({SnapType::Midpoint, midpoint});
+                }
+            }
+            continue;
+        }
+        if (shape.geometryType == GeometryType::Ellipse) {
+            if (settings_.center && !shape.points.isEmpty()) {
+                candidates.append({SnapType::Center, shape.points.first()});
+            }
+            if (settings_.endpoint && validateNurbsCurve(shape.nurbs) &&
+                shape.nurbs.controlPoints.size() >= 9) {
+                for (const int controlPointIndex : {0, 2, 4, 6}) {
+                    candidates.append({SnapType::Endpoint,
+                                       shape.nurbs.controlPoints[controlPointIndex]});
                 }
             }
             continue;
@@ -1207,6 +1232,12 @@ QVector<SnapCandidate> SnapEngine::perpendicularCandidates(
             continue;
         }
         const Shape &shape = document[shapeIndex];
+        if (shape.geometryType == GeometryType::Ellipse) {
+            if (validateNurbsCurve(shape.nurbs)) {
+                candidates += perpendicularCandidatesForNurbsCurve(shape.nurbs, origin);
+            }
+            continue;
+        }
         if (shape.points.isEmpty()) {
             continue;
         }

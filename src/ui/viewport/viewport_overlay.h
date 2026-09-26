@@ -55,6 +55,13 @@ public:
                            bool cursorValid,
                            const SnapResult &currentSnap,
                            const QSize &viewportSize) const;
+    void drawEllipsePreview(QPainter &painter,
+                            ToolId tool,
+                            const QVector<QPointF> &pendingPoints,
+                            const QPointF &cursorWorld,
+                            bool cursorValid,
+                            const SnapResult &currentSnap,
+                            const QSize &viewportSize) const;
     void drawRectanglePreview(QPainter &painter,
                               const QVector<QPointF> &pendingPoints,
                               const QPointF &cursorWorld,

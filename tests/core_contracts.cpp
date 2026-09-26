@@ -57,6 +57,14 @@ int main(int argc, char **argv)
                         toolName(ToolId::PerpendicularFromCurve) ==
                             QStringLiteral("Perpendicular from Curve"),
                     "perpendicular-from-curve must remain a named line command, not persisted geometry");
+    passed &= check(geometryTypeForTool(ToolId::Ellipse) == GeometryType::Ellipse &&
+                        geometryTypeForTool(ToolId::EllipseFromEndpoints) ==
+                            GeometryType::Ellipse &&
+                        geometryTypeForTool(ToolId::EllipseFromCorners) ==
+                            GeometryType::Ellipse &&
+                        geometryTypeForTool(ToolId::EllipseFromFoci) ==
+                            GeometryType::Ellipse,
+                    "all ellipse construction tools must create ellipse geometry");
     passed &= check(geometryTypeForTool(ToolId::Mirror) == GeometryType::Invalid &&
                         toolName(ToolId::Mirror) == QStringLiteral("Mirror"),
                     "mirror must remain a command rather than persisted geometry");
@@ -108,6 +116,81 @@ int main(int argc, char **argv)
                         circleDerivative.x() < 0.0 && circleDerivative.y() > 0.0,
                     "rational NURBS derivative must match the exact circle tangent");
 
+    const QVector<QPointF> centerAxisEllipsePoints{QPointF(0.0, 0.0),
+                                                   QPointF(5.0, 0.0),
+                                                   QPointF(0.0, 4.0)};
+    const QVector<QPointF> axisEndpointEllipsePoints{QPointF(-5.0, 0.0),
+                                                     QPointF(5.0, 0.0),
+                                                     QPointF(0.0, 4.0)};
+    const QVector<QPointF> cornerEllipsePoints{QPointF(-5.0, -4.0),
+                                               QPointF(5.0, 4.0)};
+    const QVector<QPointF> fociEllipsePoints{QPointF(-3.0, 0.0),
+                                             QPointF(3.0, 0.0),
+                                             QPointF(0.0, 4.0)};
+    const NurbsCurve2D centerAxisEllipse = makeEllipseNurbs(
+        EllipseMode::CenterAxisRadius, centerAxisEllipsePoints);
+    const QVector<NurbsCurve2D> ellipseMethods{
+        centerAxisEllipse,
+        makeEllipseNurbs(EllipseMode::AxisEndpoints, axisEndpointEllipsePoints),
+        makeEllipseNurbs(EllipseMode::Corners, cornerEllipsePoints),
+        makeEllipseNurbs(EllipseMode::FociPoint, fociEllipsePoints)};
+    bool ellipseCurvesValid = true;
+    bool ellipseMethodsAgree = true;
+    bool ellipseQuarterPointsCorrect = true;
+    const auto pointsAlmostEqual = [](const QPointF &first, const QPointF &second) {
+        return std::hypot(first.x() - second.x(), first.y() - second.y()) <= 1.0e-8;
+    };
+    for (const NurbsCurve2D &ellipseCurve : ellipseMethods) {
+        bool thisMethodAgrees = true;
+        ellipseCurvesValid &= validateNurbsCurve(ellipseCurve) &&
+                              ellipseCurve.dimension == 2 && ellipseCurve.degree == 2 &&
+                              ellipseCurve.order == 3 && ellipseCurve.rational &&
+                              ellipseCurve.controlPoints.size() == 9 &&
+                              ellipseCurve.weights.size() == 9 &&
+                              ellipseCurve.knots.size() == 10;
+        for (int index = 0;
+             index < ellipseCurve.controlPoints.size() &&
+             index < centerAxisEllipse.controlPoints.size();
+             ++index) {
+            const QPointF actualPoint = ellipseCurve.controlPoints[index];
+            const QPointF expectedPoint = centerAxisEllipse.controlPoints[index];
+            thisMethodAgrees &= pointsAlmostEqual(actualPoint, expectedPoint);
+            thisMethodAgrees &= std::abs(ellipseCurve.weights[index] -
+                                         centerAxisEllipse.weights[index]) <= 1.0e-12;
+        }
+        thisMethodAgrees &= ellipseCurve.knots == centerAxisEllipse.knots;
+        ellipseMethodsAgree &= thisMethodAgrees;
+    }
+    const QVector<QPointF> ellipseExpectedQuarterPoints{QPointF(5.0, 0.0),
+                                                        QPointF(0.0, 4.0),
+                                                        QPointF(-5.0, 0.0),
+                                                        QPointF(0.0, -4.0),
+                                                        QPointF(5.0, 0.0)};
+    constexpr qreal ellipseQuarterTurn = 1.57079632679489661923;
+    for (int index = 0; index < ellipseExpectedQuarterPoints.size(); ++index) {
+        QPointF evaluatedPoint;
+        ellipseQuarterPointsCorrect &= evaluateNurbsPoint(centerAxisEllipse,
+                                                           ellipseQuarterTurn * index,
+                                                           &evaluatedPoint) &&
+                                       pointsAlmostEqual(
+                                           evaluatedPoint,
+                                           ellipseExpectedQuarterPoints[index]);
+    }
+    passed &= check(ellipseCurvesValid,
+                    "ellipse builder must create valid rational degree-2 NURBS data");
+    passed &= check(ellipseMethodsAgree,
+                    "ellipse construction methods must produce equivalent NURBS geometry");
+    passed &= check(ellipseQuarterPointsCorrect,
+                    "ellipse evaluation must hit the four axis extrema over its full domain");
+
+    const Shape ellipse{GeometryType::Ellipse,
+                        {QPointF(0.0, 0.0)},
+                        centerAxisEllipse,
+                        ArcMode::TwoPoint,
+                        0.0,
+                        {},
+                        {}};
+
     Shape mirroredLine;
     passed &= check(mirrorShapeAcrossLine(lineShape,
                                           QPointF(0.0, 0.0),
@@ -144,6 +227,22 @@ int main(int argc, char **argv)
                     "new sessions must write the geometry type field");
     passed &= check(serialized.value(QStringLiteral("tool")).toInt(-1) == 6,
                     "new sessions must retain the legacy compatibility field");
+
+    const QJsonObject serializedEllipse = shapeToJson(ellipse);
+    passed &= check(serializedEllipse.value(QStringLiteral("geometryType")).toInt(-1) == 9 &&
+                        serializedEllipse.value(QStringLiteral("tool")).toInt(-1) == 0,
+                    "ellipse sessions must use their canonical type without colliding with legacy tool values");
+    Shape restoredEllipse{GeometryType::Invalid,
+                          {},
+                          {},
+                          ArcMode::TwoPoint,
+                          0.0,
+                          {},
+                          {}};
+    passed &= check(shapeFromJson(serializedEllipse, &restoredEllipse) &&
+                        restoredEllipse.geometryType == GeometryType::Ellipse &&
+                        validateNurbsCurve(restoredEllipse.nurbs),
+                    "ellipse NURBS geometry must survive session serialization");
 
     Shape restored{GeometryType::Invalid,
                    {},
@@ -338,6 +437,31 @@ int main(int argc, char **argv)
     passed &= check(endpointSnap.type == SnapType::Endpoint &&
                         std::hypot(endpointSnap.point.x(), endpointSnap.point.y()) <= 1.0e-9,
                     "snap engine must select the nearest enabled endpoint");
+
+    Document ellipseSnapDocument;
+    ellipseSnapDocument.append(ellipse);
+    SnapEngine ellipseSnapEngine;
+    ellipseSnapEngine.setSettings(
+        SnapSettings{true, true, false, false, true, false, false});
+    const SnapResult ellipseEndpointSnap = ellipseSnapEngine.findSnapPoint(
+        ellipseSnapDocument,
+        QPointF(5.1, 0.1),
+        true,
+        {},
+        viewportTransform,
+        viewportSize);
+    const SnapResult ellipseCenterSnap = ellipseSnapEngine.findSnapPoint(
+        ellipseSnapDocument,
+        QPointF(0.1, 0.1),
+        true,
+        {},
+        viewportTransform,
+        viewportSize);
+    passed &= check(ellipseEndpointSnap.type == SnapType::Endpoint &&
+                        pointsAlmostEqual(ellipseEndpointSnap.point, QPointF(5.0, 0.0)) &&
+                        ellipseCenterSnap.type == SnapType::Center &&
+                        pointsAlmostEqual(ellipseCenterSnap.point, QPointF(0.0, 0.0)),
+                    "ellipse OSnap must expose its axis endpoints and construction center");
 
     Shape nurbsCircleShape{GeometryType::Nurbs,
                            {},
@@ -776,6 +900,10 @@ int main(int argc, char **argv)
                         toolRegistry.find(ToolId::Arc) != nullptr &&
                         toolRegistry.find(ToolId::Rectangle) != nullptr &&
                         toolRegistry.find(ToolId::Circle) != nullptr &&
+                        toolRegistry.find(ToolId::Ellipse) != nullptr &&
+                        toolRegistry.find(ToolId::EllipseFromEndpoints) != nullptr &&
+                        toolRegistry.find(ToolId::EllipseFromCorners) != nullptr &&
+                        toolRegistry.find(ToolId::EllipseFromFoci) != nullptr &&
                         toolRegistry.find(ToolId::Bezier) != nullptr &&
                         toolRegistry.find(ToolId::Nurbs) != nullptr &&
                         toolRegistry.find(ToolId::Rotate) != nullptr &&

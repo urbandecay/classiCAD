@@ -265,6 +265,80 @@ void ViewportOverlay::drawCirclePreview(QPainter &painter,
     }
 }
 
+void ViewportOverlay::drawEllipsePreview(QPainter &painter,
+                                         ToolId tool,
+                                         const QVector<QPointF> &pendingPoints,
+                                         const QPointF &cursorWorld,
+                                         bool cursorValid,
+                                         const SnapResult &currentSnap,
+                                         const QSize &viewportSize) const
+{
+    if (pendingPoints.isEmpty()) {
+        if (currentSnap.isValid()) {
+            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        }
+        return;
+    }
+
+    const QColor curveColor(QStringLiteral("#e6b85c"));
+    const QColor guideColor(QStringLiteral("#8aa7c7"));
+    const QColor pointColor(QStringLiteral("#f0a45a"));
+    QVector<QPointF> candidatePoints = pendingPoints;
+    if (cursorValid) {
+        candidatePoints.append(cursorWorld);
+    }
+
+    const EllipseMode mode = ellipseModeForTool(tool);
+    const int requiredPointCount = requiredPoints(tool);
+    if (candidatePoints.size() >= requiredPointCount) {
+        const Shape::NurbsCurve2D curve = makeEllipseNurbs(mode, candidatePoints);
+        if (validateNurbsCurve(curve)) {
+            painter.save();
+            painter.setPen(QPen(curveColor, 2.0));
+            painter.setBrush(Qt::NoBrush);
+            renderer_.drawNurbsCurve(painter, curve, viewportSize);
+            painter.restore();
+        }
+    }
+
+    painter.save();
+    painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
+    if (cursorValid) {
+        const QPointF cursorScreen = transform_.worldToScreen(cursorWorld, viewportSize);
+        if (mode == EllipseMode::Corners) {
+            const QPointF cornerScreen = transform_.worldToScreen(pendingPoints.first(),
+                                                                  viewportSize);
+            painter.drawRect(QRectF(cornerScreen, cursorScreen).normalized());
+        } else if (pendingPoints.size() == 1) {
+            painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
+                             cursorScreen);
+        } else if (mode == EllipseMode::AxisEndpoints ||
+                   mode == EllipseMode::FociPoint) {
+            painter.drawLine(transform_.worldToScreen(pendingPoints[0], viewportSize),
+                             transform_.worldToScreen(pendingPoints[1], viewportSize));
+        } else if (mode == EllipseMode::CenterAxisRadius) {
+            painter.drawLine(transform_.worldToScreen(pendingPoints[0], viewportSize),
+                             transform_.worldToScreen(pendingPoints[1], viewportSize));
+        }
+    }
+
+    painter.setPen(QPen(pointColor, 1.5));
+    painter.setBrush(QColor(QStringLiteral("#282828")));
+    for (const QPointF &point : pendingPoints) {
+        painter.drawEllipse(transform_.worldToScreen(point, viewportSize), 5.0, 5.0);
+    }
+    if (cursorValid) {
+        painter.setPen(QPen(pointColor, 2.0));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(transform_.worldToScreen(cursorWorld, viewportSize), 4.0, 4.0);
+    }
+    painter.restore();
+
+    if (currentSnap.isValid()) {
+        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+    }
+}
+
 void ViewportOverlay::drawRectanglePreview(QPainter &painter,
                                            const QVector<QPointF> &pendingPoints,
                                            const QPointF &cursorWorld,
@@ -568,7 +642,25 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
             QStringLiteral("Click a curve, then click the perpendicular line endpoint  •  Esc cancels"));
     } else if (activeTool != Tool::Select) {
         QString hint;
-        if (activeTool == Tool::Arc) {
+        if (isEllipseTool(activeTool)) {
+            QString inputDescription;
+            switch (ellipseModeForTool(activeTool)) {
+            case EllipseMode::CenterAxisRadius:
+                inputDescription = QStringLiteral("center, axis end, minor radius");
+                break;
+            case EllipseMode::AxisEndpoints:
+                inputDescription = QStringLiteral("first axis end, second axis end, minor radius");
+                break;
+            case EllipseMode::Corners:
+                inputDescription = QStringLiteral("opposite bounding-box corners");
+                break;
+            case EllipseMode::FociPoint:
+                inputDescription = QStringLiteral("first focus, second focus, point on ellipse");
+                break;
+            }
+            hint = QStringLiteral("Click to place %1  •  Esc clears current tool input")
+                       .arg(inputDescription);
+        } else if (activeTool == Tool::Arc) {
             const QString points = arcMode == ArcMode::OnePoint
                                         ? QStringLiteral("center, start, endpoint")
                                         : QStringLiteral("start, end, through point");

@@ -321,6 +321,14 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
         return std::abs(std::hypot(screenPosition.x() - center.x(),
                                    screenPosition.y() - center.y()) - radius);
     }
+    if (shape.geometryType == GeometryType::Ellipse) {
+        return validateNurbsCurve(shape.nurbs)
+                   ? distanceToNurbsCurve(screenPosition,
+                                         shape.nurbs,
+                                         transform,
+                                         viewportSize)
+                   : 1.0e9;
+    }
     if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
         return validateNurbsCurve(shape.nurbs)
                    ? distanceToNurbsCurve(screenPosition,

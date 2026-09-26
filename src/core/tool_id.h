@@ -23,6 +23,17 @@ enum class ToolId : int {
     Mirror = 12,
     TangentFromCurve = 13,
     PerpendicularFromCurve = 14,
+    Ellipse = 15,
+    EllipseFromEndpoints = 16,
+    EllipseFromCorners = 17,
+    EllipseFromFoci = 18,
+};
+
+enum class EllipseMode {
+    CenterAxisRadius,
+    AxisEndpoints,
+    Corners,
+    FociPoint,
 };
 
 // Transitional source alias for the existing UI implementation. New code
@@ -30,6 +41,8 @@ enum class ToolId : int {
 using Tool = ToolId;
 
 bool isEraseLikeTool(ToolId tool);
+bool isEllipseTool(ToolId tool);
+EllipseMode ellipseModeForTool(ToolId tool);
 QString toolName(ToolId tool);
 int requiredPoints(ToolId tool);
 

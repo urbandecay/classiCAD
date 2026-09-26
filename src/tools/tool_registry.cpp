@@ -4,6 +4,7 @@
 #include "arc_tool.h"
 #include "circle_tool.h"
 #include "erase_tool.h"
+#include "ellipse_tool.h"
 #include "line_tool.h"
 #include "mirror_tool.h"
 #include "nurbs_tool.h"
@@ -27,6 +28,10 @@ ToolRegistry::ToolRegistry()
     add(std::make_unique<ArcTool>());
     add(std::make_unique<RectangleTool>());
     add(std::make_unique<CircleTool>());
+    add(std::make_unique<EllipseTool>(ToolId::Ellipse));
+    add(std::make_unique<EllipseTool>(ToolId::EllipseFromEndpoints));
+    add(std::make_unique<EllipseTool>(ToolId::EllipseFromCorners));
+    add(std::make_unique<EllipseTool>(ToolId::EllipseFromFoci));
     add(std::make_unique<BezierTool>());
     add(std::make_unique<NurbsTool>());
     add(std::make_unique<RotateTool>());

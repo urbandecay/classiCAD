@@ -845,6 +845,11 @@ private:
         addToolButton(layout, group, QStringLiteral("N\nNURBS"), Tool::Nurbs);
         addToolButton(layout, group, QStringLiteral("□\nRect"), Tool::Rectangle);
         addToolButton(layout, group, QStringLiteral("○\nCircle"), Tool::Circle);
+        ellipseToolButton_ = addToolButton(layout,
+                                           group,
+                                           QStringLiteral("⬭\nEllipse"),
+                                           Tool::Ellipse);
+        createEllipseToolMenu(ellipseToolButton_);
         eraseToolButton_ = addToolButton(layout, group, QStringLiteral("Erase"), Tool::Erase);
         eraseToolButton_->setIcon(makeEraserIcon());
         eraseToolButton_->setIconSize(QSize(24, 24));
@@ -1015,6 +1020,43 @@ private:
         });
         connect(twoPointAction, &QAction::triggered, this, [this]() {
             activateArcMode(ArcMode::TwoPoint);
+        });
+    }
+
+    void activateEllipseTool(ToolId tool)
+    {
+        if (ellipseToolButton_ != nullptr) {
+            ellipseToolButton_->setChecked(true);
+        }
+        viewport_->setTool(tool);
+        statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
+    }
+
+    void createEllipseToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+
+        auto *menu = new QMenu(button);
+        QAction *centerAction = menu->addAction(QStringLiteral("Center, Axis, Radius"));
+        QAction *endpointsAction = menu->addAction(QStringLiteral("2 Axis Endpoints"));
+        QAction *cornersAction = menu->addAction(QStringLiteral("Bounding Corners"));
+        QAction *fociAction = menu->addAction(QStringLiteral("Foci + Point"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(centerAction, &QAction::triggered, this, [this]() {
+            activateEllipseTool(Tool::Ellipse);
+        });
+        connect(endpointsAction, &QAction::triggered, this, [this]() {
+            activateEllipseTool(Tool::EllipseFromEndpoints);
+        });
+        connect(cornersAction, &QAction::triggered, this, [this]() {
+            activateEllipseTool(Tool::EllipseFromCorners);
+        });
+        connect(fociAction, &QAction::triggered, this, [this]() {
+            activateEllipseTool(Tool::EllipseFromFoci);
         });
     }
 
@@ -1697,6 +1739,7 @@ private:
     QToolButton *selectToolButton_ = nullptr;
     QToolButton *lineToolButton_ = nullptr;
     QToolButton *arcToolButton_ = nullptr;
+    QToolButton *ellipseToolButton_ = nullptr;
     QToolButton *eraseToolButton_ = nullptr;
     QToolButton *trimToolButton_ = nullptr;
     QToolButton *controlPointsButton_ = nullptr;

@@ -3,6 +3,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 
+#include <algorithm>
 #include <cmath>
 
 namespace classiCAD {
@@ -122,6 +123,143 @@ Shape::NurbsCurve2D makeCircleNurbs(const QVector<QPointF> &points)
 
     // This is the same reduced knot array used by Rhino's documented
     // degree-2 rational NURBS circle construction.
+    curve.knots = {0.0,
+                   0.0,
+                   halfPi,
+                   halfPi,
+                   pi,
+                   pi,
+                   3.0 * halfPi,
+                   3.0 * halfPi,
+                   2.0 * pi,
+                   2.0 * pi};
+    return curve;
+}
+
+Shape::NurbsCurve2D makeEllipseNurbs(EllipseMode mode, const QVector<QPointF> &points)
+{
+    Shape::NurbsCurve2D curve;
+    curve.dimension = 2;
+    curve.degree = 2;
+    curve.order = 3;
+    curve.rational = true;
+
+    QPointF center;
+    QPointF majorAxis;
+    QPointF minorAxis;
+    constexpr qreal minimumRadius = 1.0e-9;
+    const auto length = [](const QPointF &vector) {
+        return std::hypot(vector.x(), vector.y());
+    };
+    const auto perpendicular = [](const QPointF &vector) {
+        return QPointF(-vector.y(), vector.x());
+    };
+
+    switch (mode) {
+    case EllipseMode::CenterAxisRadius: {
+        if (points.size() < 3) {
+            return curve;
+        }
+        center = points[0];
+        majorAxis = points[1] - center;
+        minorAxis = points[2] - center;
+        break;
+    }
+    case EllipseMode::AxisEndpoints: {
+        if (points.size() < 3) {
+            return curve;
+        }
+        center = (points[0] + points[1]) * 0.5;
+        majorAxis = points[1] - center;
+        minorAxis = points[2] - center;
+        break;
+    }
+    case EllipseMode::Corners: {
+        if (points.size() < 2) {
+            return curve;
+        }
+        center = (points[0] + points[1]) * 0.5;
+        majorAxis = QPointF((points[1].x() - points[0].x()) * 0.5, 0.0);
+        minorAxis = QPointF(0.0, (points[1].y() - points[0].y()) * 0.5);
+        break;
+    }
+    case EllipseMode::FociPoint: {
+        if (points.size() < 3) {
+            return curve;
+        }
+        const QPointF firstFocus = points[0];
+        const QPointF secondFocus = points[1];
+        center = (firstFocus + secondFocus) * 0.5;
+        const QPointF focusAxis = secondFocus - firstFocus;
+        const qreal focalDistance = length(focusAxis) * 0.5;
+        const QPointF pointFromCenter = points[2] - center;
+        const qreal majorRadius =
+            (length(points[2] - firstFocus) + length(points[2] - secondFocus)) * 0.5;
+        if (!std::isfinite(majorRadius) || majorRadius <= focalDistance + minimumRadius) {
+            return curve;
+        }
+
+        QPointF unitMajor;
+        if (focalDistance > minimumRadius) {
+            unitMajor = focusAxis / (2.0 * focalDistance);
+        } else {
+            const qreal pointRadius = length(pointFromCenter);
+            if (pointRadius <= minimumRadius) {
+                return curve;
+            }
+            unitMajor = pointFromCenter / pointRadius;
+        }
+
+        const QPointF unitMinor = perpendicular(unitMajor);
+        const qreal minorRadius =
+            std::sqrt(std::max<qreal>(0.0,
+                                      majorRadius * majorRadius -
+                                          focalDistance * focalDistance));
+        majorAxis = unitMajor * majorRadius;
+        minorAxis = unitMinor * minorRadius;
+        break;
+    }
+    }
+
+    const qreal majorRadius = length(majorAxis);
+    if (!std::isfinite(majorRadius) || majorRadius <= minimumRadius) {
+        return curve;
+    }
+    const QPointF unitMajor = majorAxis / majorRadius;
+    const QPointF unitMinor = perpendicular(unitMajor);
+    const qreal minorRadius = std::abs(QPointF::dotProduct(minorAxis, unitMinor));
+    if (!std::isfinite(minorRadius) || minorRadius <= minimumRadius) {
+        return curve;
+    }
+
+    constexpr qreal pi = 3.14159265358979323846;
+    constexpr qreal halfPi = pi / 2.0;
+    const qreal middleWeight = std::cos(pi / 4.0);
+    const auto ellipsePoint = [center, unitMajor, unitMinor](qreal major,
+                                                             qreal minor) {
+        return center + unitMajor * major + unitMinor * minor;
+    };
+
+    curve.controlPoints = {
+        ellipsePoint(majorRadius, 0.0),
+        ellipsePoint(majorRadius, minorRadius),
+        ellipsePoint(0.0, minorRadius),
+        ellipsePoint(-majorRadius, minorRadius),
+        ellipsePoint(-majorRadius, 0.0),
+        ellipsePoint(-majorRadius, -minorRadius),
+        ellipsePoint(0.0, -minorRadius),
+        ellipsePoint(majorRadius, -minorRadius),
+        ellipsePoint(majorRadius, 0.0),
+    };
+    curve.weights = {1.0,
+                     middleWeight,
+                     1.0,
+                     middleWeight,
+                     1.0,
+                     middleWeight,
+                     1.0,
+                     middleWeight,
+                     1.0};
     curve.knots = {0.0,
                    0.0,
                    halfPi,
@@ -319,11 +457,12 @@ bool nurbsFromJson(const QJsonValue &value, Shape::NurbsCurve2D *curve)
 QJsonObject shapeToJson(const Shape &shape)
 {
     QJsonObject object;
-    const int geometryTypeValue = legacyValueForGeometryType(shape.geometryType);
+    const int geometryTypeValue = static_cast<int>(shape.geometryType);
+    const int legacyGeometryTypeValue = legacyValueForGeometryType(shape.geometryType);
     // geometryType is the canonical field. Keep writing the old "tool"
     // integer as a compatibility bridge for version-1 session readers.
     object.insert(QStringLiteral("geometryType"), geometryTypeValue);
-    object.insert(QStringLiteral("tool"), geometryTypeValue);
+    object.insert(QStringLiteral("tool"), legacyGeometryTypeValue);
     object.insert(QStringLiteral("points"), pointsToJson(shape.points));
     object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
     object.insert(QStringLiteral("arcMode"), static_cast<int>(shape.arcMode));
@@ -354,7 +493,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     const QJsonValue geometryTypeValue = object.value(QStringLiteral("geometryType"));
     if (!geometryTypeValue.isUndefined()) {
         if (!geometryTypeValue.isDouble() ||
-            !geometryTypeFromLegacyValue(geometryTypeValue.toInt(), &geometryType)) {
+            !geometryTypeFromValue(geometryTypeValue.toInt(), &geometryType)) {
             return false;
         }
     } else {

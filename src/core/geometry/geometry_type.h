@@ -19,6 +19,7 @@ enum class GeometryType : int {
     Circle = 6,
     Point = 7,
     PolyCurve = 8,
+    Ellipse = 9,
 };
 
 bool isPersistentGeometryType(GeometryType type);
@@ -28,6 +29,7 @@ QString geometryTypeName(GeometryType type);
 // the conversion in the geometry vocabulary so active commands cannot leak
 // into persisted scene data.
 bool geometryTypeFromLegacyValue(int value, GeometryType *type);
+bool geometryTypeFromValue(int value, GeometryType *type);
 int legacyValueForGeometryType(GeometryType type);
 
 GeometryType geometryTypeForTool(ToolId tool);

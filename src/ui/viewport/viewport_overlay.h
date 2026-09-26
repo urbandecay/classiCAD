@@ -69,6 +69,14 @@ public:
                               bool cursorValid,
                               const SnapResult &currentSnap,
                               const QSize &viewportSize) const;
+    void drawPolygonPreview(QPainter &painter,
+                            ToolId tool,
+                            int sideCount,
+                            const QVector<QPointF> &pendingPoints,
+                            const QPointF &cursorWorld,
+                            bool cursorValid,
+                            const SnapResult &currentSnap,
+                            const QSize &viewportSize) const;
     void drawPointPreview(QPainter &painter,
                           const QPointF &cursorWorld,
                           bool cursorValid,

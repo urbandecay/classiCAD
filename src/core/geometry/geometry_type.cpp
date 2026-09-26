@@ -6,7 +6,7 @@ namespace classiCAD {
 
 bool isPersistentGeometryType(GeometryType type)
 {
-    return type >= GeometryType::Line && type <= GeometryType::Ellipse;
+    return type >= GeometryType::Line && type <= GeometryType::Polygon;
 }
 
 QString geometryTypeName(GeometryType type)
@@ -30,6 +30,8 @@ QString geometryTypeName(GeometryType type)
         return QStringLiteral("PolyCurve");
     case GeometryType::Ellipse:
         return QStringLiteral("Ellipse");
+    case GeometryType::Polygon:
+        return QStringLiteral("Polygon");
     case GeometryType::Invalid:
         return QStringLiteral("Invalid");
     }
@@ -51,7 +53,7 @@ bool geometryTypeFromLegacyValue(int value, GeometryType *type)
 bool geometryTypeFromValue(int value, GeometryType *type)
 {
     if (type == nullptr || value < static_cast<int>(GeometryType::Line) ||
-        value > static_cast<int>(GeometryType::Ellipse)) {
+        value > static_cast<int>(GeometryType::Polygon)) {
         return false;
     }
 
@@ -83,6 +85,11 @@ GeometryType geometryTypeForTool(ToolId tool)
     case ToolId::RectangleFromCenter:
     case ToolId::RectangleThreePoint:
         return GeometryType::Rectangle;
+    case ToolId::PolygonCenterCorner:
+    case ToolId::PolygonCenterTangent:
+    case ToolId::PolygonCornerCorner:
+    case ToolId::PolygonEdge:
+        return GeometryType::Polygon;
     case ToolId::Circle:
         return GeometryType::Circle;
     case ToolId::Ellipse:

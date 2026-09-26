@@ -47,6 +47,29 @@ RectangleMode rectangleModeForTool(ToolId tool)
     }
 }
 
+bool isPolygonTool(ToolId tool)
+{
+    return tool == ToolId::PolygonCenterCorner ||
+           tool == ToolId::PolygonCenterTangent ||
+           tool == ToolId::PolygonCornerCorner ||
+           tool == ToolId::PolygonEdge;
+}
+
+PolygonMode polygonModeForTool(ToolId tool)
+{
+    switch (tool) {
+    case ToolId::PolygonCenterTangent:
+        return PolygonMode::CenterTangent;
+    case ToolId::PolygonCornerCorner:
+        return PolygonMode::CornerCorner;
+    case ToolId::PolygonEdge:
+        return PolygonMode::Edge;
+    case ToolId::PolygonCenterCorner:
+    default:
+        return PolygonMode::CenterCorner;
+    }
+}
+
 QString toolName(ToolId tool)
 {
     switch (tool) {
@@ -90,6 +113,14 @@ QString toolName(ToolId tool)
         return QStringLiteral("Rectangle (Center, Corner)");
     case ToolId::RectangleThreePoint:
         return QStringLiteral("Rectangle (3 Points)");
+    case ToolId::PolygonCenterCorner:
+        return QStringLiteral("Polygon (Center, Corner)");
+    case ToolId::PolygonCenterTangent:
+        return QStringLiteral("Polygon (Center, Tangent)");
+    case ToolId::PolygonCornerCorner:
+        return QStringLiteral("Polygon (Corner, Corner)");
+    case ToolId::PolygonEdge:
+        return QStringLiteral("Polygon (Side Size)");
     }
 
     return QStringLiteral("Unknown");
@@ -109,6 +140,10 @@ int requiredPoints(ToolId tool)
     case ToolId::Circle:
     case ToolId::EllipseFromCorners:
     case ToolId::RectangleFromCenter:
+    case ToolId::PolygonCenterCorner:
+    case ToolId::PolygonCenterTangent:
+    case ToolId::PolygonCornerCorner:
+    case ToolId::PolygonEdge:
         return 2;
     case ToolId::Point:
         return 1;

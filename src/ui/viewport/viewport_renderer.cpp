@@ -151,6 +151,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
             rectanglePath.closeSubpath();
             painter.drawPath(rectanglePath);
         }
+    } else if (shape.geometryType == GeometryType::Polygon && shape.points.size() >= 3) {
+        QPainterPath polygonPath;
+        polygonPath.moveTo(worldToScreen(shape.points.first(), viewportSize));
+        for (int index = 1; index < shape.points.size(); ++index) {
+            polygonPath.lineTo(worldToScreen(shape.points[index], viewportSize));
+        }
+        polygonPath.closeSubpath();
+        painter.drawPath(polygonPath);
     } else if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
         if (isValidNurbsCurve(shape.nurbs)) {
             drawNurbsCurve(painter, shape.nurbs, viewportSize);

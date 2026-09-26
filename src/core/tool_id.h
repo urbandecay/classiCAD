@@ -29,6 +29,10 @@ enum class ToolId : int {
     EllipseFromFoci = 18,
     RectangleFromCenter = 19,
     RectangleThreePoint = 20,
+    PolygonCenterCorner = 21,
+    PolygonCenterTangent = 22,
+    PolygonCornerCorner = 23,
+    PolygonEdge = 24,
 };
 
 enum class EllipseMode {
@@ -44,6 +48,13 @@ enum class RectangleMode {
     ThreePoint,
 };
 
+enum class PolygonMode {
+    CenterCorner,
+    CenterTangent,
+    CornerCorner,
+    Edge,
+};
+
 // Transitional source alias for the existing UI implementation. New code
 // should name this type ToolId; Shape stores GeometryType instead.
 using Tool = ToolId;
@@ -53,6 +64,8 @@ bool isEllipseTool(ToolId tool);
 EllipseMode ellipseModeForTool(ToolId tool);
 bool isRectangleTool(ToolId tool);
 RectangleMode rectangleModeForTool(ToolId tool);
+bool isPolygonTool(ToolId tool);
+PolygonMode polygonModeForTool(ToolId tool);
 QString toolName(ToolId tool);
 int requiredPoints(ToolId tool);
 

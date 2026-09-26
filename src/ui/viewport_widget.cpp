@@ -140,6 +140,16 @@ public:
             cancelGrab();
         }
         const Tool previousTool = activeTool_;
+        if (previousTool != tool) {
+            polygonWheelRemainder_ = 0;
+        }
+        if (isPolygonTool(tool) && polygonModeForTool(tool) == PolygonMode::Edge &&
+            polygonSideCount_ % 2 == 0) {
+            --polygonSideCount_;
+        }
+        if (!isPolygonTool(tool)) {
+            polygonWheelRemainder_ = 0;
+        }
         if (activeToolController_ != nullptr && activeToolController_->id() != tool) {
             activeToolController_->cancel(toolContext_);
         }
@@ -1494,6 +1504,8 @@ protected:
             drawEllipseToolPreview(painter);
         } else if (isRectangleTool(activeTool_)) {
             drawRectangleToolPreview(painter);
+        } else if (isPolygonTool(activeTool_)) {
+            drawPolygonToolPreview(painter);
         } else if (activeTool_ == Tool::Point) {
             drawPointToolPreview(painter);
         } else if (activeTool_ == Tool::Rotate) {
@@ -1898,6 +1910,9 @@ protected:
             if (isRectangleTool(activeTool_)) {
                 completedShape.points = makeRectanglePoints(
                     rectangleModeForTool(activeTool_), pendingPoints_);
+            } else if (isPolygonTool(activeTool_)) {
+                completedShape.points = makeRegularPolygonPoints(
+                    polygonModeForTool(activeTool_), pendingPoints_, polygonSideCount_);
             }
             if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint) {
                 completedShape.arcSweep = arcPreviewSweepAngle_;
@@ -1971,6 +1986,7 @@ protected:
         const bool circlePreviewActive = activeTool_ == Tool::Circle && !pendingPoints_.isEmpty();
         const bool ellipsePreviewActive = isEllipseTool(activeTool_);
         const bool rectanglePreviewActive = isRectangleTool(activeTool_);
+        const bool polygonPreviewActive = isPolygonTool(activeTool_);
         const bool arcPreviewActive = activeTool_ == Tool::Arc;
         const bool mirrorPreviewActive = activeTool_ == Tool::Mirror;
 
@@ -2202,14 +2218,16 @@ protected:
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
             ellipsePreviewActive ||
-            rectanglePreviewActive || mirrorPreviewActive || panning_ || draggingSelected_ ||
+            rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive || panning_ ||
+            draggingSelected_ ||
             draggingControlPoint_) {
             update();
         }
 
         if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
             ellipsePreviewActive ||
-            rectanglePreviewActive || mirrorPreviewActive || activeTool_ == Tool::Erase || panning_ ||
+            rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive ||
+            activeTool_ == Tool::Erase || panning_ ||
             draggingSelected_ || draggingControlPoint_) {
             DebugLog::instance().write(
                 QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11 arcMode=%12 arcSweep=%13 snap=%14")
@@ -2334,6 +2352,32 @@ protected:
                     .arg(subdivisionWheelAccumulator_)
                     .arg(subdivisionPixelAccumulator_, 0, 'f', 2)
                     .arg(subdivisionSections_));
+            event->accept();
+            return;
+        }
+
+        if (isPolygonTool(activeTool_) && !pendingPoints_.isEmpty()) {
+            polygonWheelRemainder_ += event->angleDelta().y();
+            const int wheelSteps = polygonWheelRemainder_ / 120;
+            if (wheelSteps != 0) {
+                polygonWheelRemainder_ %= 120;
+                const int stepSize = polygonModeForTool(activeTool_) == PolygonMode::Edge
+                                         ? 2
+                                         : 1;
+                const int maximumSideCount = polygonModeForTool(activeTool_) ==
+                                                     PolygonMode::Edge
+                                                 ? 255
+                                                 : 256;
+                polygonSideCount_ = std::clamp(polygonSideCount_ + wheelSteps * stepSize,
+                                               3,
+                                               maximumSideCount);
+                if (polygonModeForTool(activeTool_) == PolygonMode::Edge &&
+                    polygonSideCount_ % 2 == 0) {
+                    polygonSideCount_ += wheelSteps > 0 ? 1 : -1;
+                }
+                update();
+                emitCoordinateUpdate();
+            }
             event->accept();
             return;
         }
@@ -4446,6 +4490,7 @@ private:
         const bool drawingConstraintActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Mirror ||
+            isPolygonTool(activeTool_) ||
             (isEllipseTool(activeTool_) &&
              ellipseModeForTool(activeTool_) != EllipseMode::Corners) ||
             (activeTool_ == Tool::RectangleThreePoint && pendingPoints_.size() == 1) ||
@@ -5087,9 +5132,14 @@ private:
             return {makeBezierNurbs(shape.points)};
         }
 
-        if (shape.geometryType == GeometryType::Rectangle && shape.points.size() >= 2) {
-            const QVector<QPointF> vertices = rectangleVertices(shape);
-            if (vertices.size() < 4) {
+        if ((shape.geometryType == GeometryType::Rectangle ||
+             shape.geometryType == GeometryType::Polygon) &&
+            shape.points.size() >= 2) {
+            const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
+                                                  ? shape.points
+                                                  : rectangleVertices(shape);
+            const int minimumVertices = shape.geometryType == GeometryType::Polygon ? 3 : 4;
+            if (vertices.size() < minimumVertices) {
                 return {};
             }
 
@@ -5816,7 +5866,9 @@ private:
         }
         replacement->clear();
 
-        if (shape.geometryType == GeometryType::Point || shape.geometryType == GeometryType::Rectangle) {
+        if (shape.geometryType == GeometryType::Point ||
+            shape.geometryType == GeometryType::Rectangle ||
+            shape.geometryType == GeometryType::Polygon) {
             return true;
         }
 
@@ -6713,6 +6765,18 @@ private:
                                               size());
     }
 
+    void drawPolygonToolPreview(QPainter &painter)
+    {
+        viewportOverlay_.drawPolygonPreview(painter,
+                                            activeTool_,
+                                            polygonSideCount_,
+                                            pendingPoints_,
+                                            cursorWorld_,
+                                            cursorValid_,
+                                            currentSnap_,
+                                            size());
+    }
+
     void drawControlPoints(QPainter &painter, const Shape &shape, int shapeIndex)
     {
         viewportOverlay_.drawControlPoints(painter,
@@ -6877,6 +6941,12 @@ private:
             if (result.points.size() != 4) {
                 return false;
             }
+        } else if (isPolygonTool(tool)) {
+            result.points = makeRegularPolygonPoints(
+                polygonModeForTool(tool), points, polygonSideCount_);
+            if (result.points.size() < 3) {
+                return false;
+            }
         }
 
         if (tool == Tool::Line) {
@@ -6929,6 +6999,8 @@ private:
     // extracted into tools and services.
     Document &shapes_;
     QVector<QPointF> pendingPoints_;
+    int polygonSideCount_ = 6;
+    int polygonWheelRemainder_ = 0;
     QPointF &pan_;
     QPointF lastWorldPosition_{0.0, 0.0};
     QPointF rawCursorWorld_{0.0, 0.0};

@@ -20,6 +20,7 @@ enum class GeometryType : int {
     Point = 7,
     PolyCurve = 8,
     Ellipse = 9,
+    Polygon = 10,
 };
 
 bool isPersistentGeometryType(GeometryType type);

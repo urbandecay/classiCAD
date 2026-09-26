@@ -428,6 +428,75 @@ void ViewportOverlay::drawRectanglePreview(QPainter &painter,
     }
 }
 
+void ViewportOverlay::drawPolygonPreview(QPainter &painter,
+                                         ToolId tool,
+                                         int sideCount,
+                                         const QVector<QPointF> &pendingPoints,
+                                         const QPointF &cursorWorld,
+                                         bool cursorValid,
+                                         const SnapResult &currentSnap,
+                                         const QSize &viewportSize) const
+{
+    if (pendingPoints.isEmpty()) {
+        if (currentSnap.isValid()) {
+            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        }
+        return;
+    }
+
+    const QColor polygonColor(QStringLiteral("#e6b85c"));
+    const QColor guideColor(QStringLiteral("#8aa7c7"));
+    const QColor pointColor(QStringLiteral("#f0a45a"));
+    QVector<QPointF> candidatePoints = pendingPoints;
+    if (cursorValid) {
+        candidatePoints.append(cursorWorld);
+    }
+
+    const QVector<QPointF> vertices = candidatePoints.size() >= 2
+                                          ? makeRegularPolygonPoints(
+                                                polygonModeForTool(tool),
+                                                candidatePoints,
+                                                sideCount)
+                                          : QVector<QPointF>{};
+
+    painter.save();
+    painter.setBrush(Qt::NoBrush);
+    if (vertices.size() < 3 && cursorValid) {
+        painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
+        painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
+                         transform_.worldToScreen(cursorWorld, viewportSize));
+    } else if (vertices.size() >= 3) {
+        painter.setPen(QPen(polygonColor, 2.0));
+        for (int index = 0; index < vertices.size(); ++index) {
+            painter.drawLine(transform_.worldToScreen(vertices[index], viewportSize),
+                             transform_.worldToScreen(
+                                 vertices[(index + 1) % vertices.size()], viewportSize));
+        }
+    }
+
+    painter.setPen(QPen(pointColor, 1.5));
+    painter.setBrush(QColor(QStringLiteral("#282828")));
+    for (const QPointF &point : pendingPoints) {
+        painter.drawEllipse(transform_.worldToScreen(point, viewportSize), 5.0, 5.0);
+    }
+    if (cursorValid) {
+        const QPointF cursorScreen = transform_.worldToScreen(cursorWorld, viewportSize);
+        painter.setPen(QPen(pointColor, 2.0));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(cursorScreen, 4.0, 4.0);
+
+        painter.setPen(QColor(QStringLiteral("#d0d0d0")));
+        painter.setFont(QFont(QStringLiteral("Sans"), 9));
+        painter.drawText(cursorScreen + QPointF(10.0, -10.0),
+                         QStringLiteral("%1 sides").arg(sideCount));
+    }
+    painter.restore();
+
+    if (currentSnap.isValid()) {
+        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+    }
+}
+
 void ViewportOverlay::drawPointPreview(QPainter &painter,
                                        const QPointF &cursorWorld,
                                        bool cursorValid,

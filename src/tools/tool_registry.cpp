@@ -10,6 +10,7 @@
 #include "nurbs_tool.h"
 #include "perpendicular_from_curve_tool.h"
 #include "point_tool.h"
+#include "polygon_tool.h"
 #include "rectangle_tool.h"
 #include "rotate_tool.h"
 #include "select_tool.h"
@@ -29,6 +30,10 @@ ToolRegistry::ToolRegistry()
     add(std::make_unique<RectangleTool>());
     add(std::make_unique<RectangleTool>(ToolId::RectangleFromCenter));
     add(std::make_unique<RectangleTool>(ToolId::RectangleThreePoint));
+    add(std::make_unique<PolygonTool>(ToolId::PolygonCenterCorner));
+    add(std::make_unique<PolygonTool>(ToolId::PolygonCenterTangent));
+    add(std::make_unique<PolygonTool>(ToolId::PolygonCornerCorner));
+    add(std::make_unique<PolygonTool>(ToolId::PolygonEdge));
     add(std::make_unique<CircleTool>());
     add(std::make_unique<EllipseTool>(ToolId::Ellipse));
     add(std::make_unique<EllipseTool>(ToolId::EllipseFromEndpoints));

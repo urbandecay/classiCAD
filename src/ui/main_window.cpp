@@ -848,6 +848,11 @@ private:
                                              QStringLiteral("□\nRect"),
                                              Tool::Rectangle);
         createRectangleToolMenu(rectangleToolButton_);
+        polygonToolButton_ = addToolButton(layout,
+                                           group,
+                                           QStringLiteral("⬡\nPolygon"),
+                                           Tool::PolygonCenterCorner);
+        createPolygonToolMenu(polygonToolButton_);
         addToolButton(layout, group, QStringLiteral("○\nCircle"), Tool::Circle);
         ellipseToolButton_ = addToolButton(layout,
                                            group,
@@ -1094,6 +1099,45 @@ private:
         });
         connect(threePointAction, &QAction::triggered, this, [this]() {
             activateRectangleTool(Tool::RectangleThreePoint);
+        });
+    }
+
+    void activatePolygonTool(ToolId tool)
+    {
+        if (polygonToolButton_ != nullptr) {
+            polygonToolButton_->setChecked(true);
+        }
+        viewport_->setTool(tool);
+        statusBar()->showMessage(
+            QStringLiteral("Active tool: %1  •  Scroll to change the side count")
+                .arg(toolName(tool)));
+    }
+
+    void createPolygonToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+
+        auto *menu = new QMenu(button);
+        QAction *centerCornerAction = menu->addAction(QStringLiteral("Center, Corner"));
+        QAction *centerTangentAction = menu->addAction(QStringLiteral("Center, Tangent"));
+        QAction *cornerCornerAction = menu->addAction(QStringLiteral("Corner, Corner"));
+        QAction *edgeAction = menu->addAction(QStringLiteral("Edge / Side Size"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+
+        connect(centerCornerAction, &QAction::triggered, this, [this]() {
+            activatePolygonTool(Tool::PolygonCenterCorner);
+        });
+        connect(centerTangentAction, &QAction::triggered, this, [this]() {
+            activatePolygonTool(Tool::PolygonCenterTangent);
+        });
+        connect(cornerCornerAction, &QAction::triggered, this, [this]() {
+            activatePolygonTool(Tool::PolygonCornerCorner);
+        });
+        connect(edgeAction, &QAction::triggered, this, [this]() {
+            activatePolygonTool(Tool::PolygonEdge);
         });
     }
 
@@ -1777,6 +1821,7 @@ private:
     QToolButton *lineToolButton_ = nullptr;
     QToolButton *arcToolButton_ = nullptr;
     QToolButton *rectangleToolButton_ = nullptr;
+    QToolButton *polygonToolButton_ = nullptr;
     QToolButton *ellipseToolButton_ = nullptr;
     QToolButton *eraseToolButton_ = nullptr;
     QToolButton *trimToolButton_ = nullptr;

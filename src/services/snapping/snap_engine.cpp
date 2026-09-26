@@ -809,8 +809,11 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         }
         return candidates;
     }
-    if (shape.geometryType == GeometryType::Rectangle) {
-        const QVector<QPointF> vertices = rectangleVertices(shape);
+    if (shape.geometryType == GeometryType::Rectangle ||
+        shape.geometryType == GeometryType::Polygon) {
+        const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
+                                              ? shape.points
+                                              : rectangleVertices(shape);
         for (const QPointF &vertex : vertices) {
             candidates.append({SnapType::Endpoint, vertex});
         }
@@ -1010,8 +1013,11 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             }
             continue;
         }
-        if (shape.geometryType == GeometryType::Rectangle) {
-            const QVector<QPointF> vertices = rectangleVertices(shape);
+        if (shape.geometryType == GeometryType::Rectangle ||
+            shape.geometryType == GeometryType::Polygon) {
+            const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
+                                                  ? shape.points
+                                                  : rectangleVertices(shape);
             for (int index = 0; index < vertices.size(); ++index) {
                 const QPointF start = vertices[index];
                 const QPointF end = vertices[(index + 1) % vertices.size()];
@@ -1125,7 +1131,8 @@ bool SnapEngine::perpendicularPointForShape(const Shape &shape,
                                             QPointF *point) const
 {
     if (point == nullptr || shape.geometryType == GeometryType::Point ||
-        shape.geometryType == GeometryType::Rectangle) {
+        shape.geometryType == GeometryType::Rectangle ||
+        shape.geometryType == GeometryType::Polygon) {
         return false;
     }
 
@@ -1525,8 +1532,11 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
             if (!shape.points.isEmpty()) {
                 considerPoint(shape.points.first());
             }
-        } else if (shape.geometryType == GeometryType::Rectangle) {
-            const QVector<QPointF> vertices = rectangleVertices(shape);
+        } else if (shape.geometryType == GeometryType::Rectangle ||
+                   shape.geometryType == GeometryType::Polygon) {
+            const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
+                                                  ? shape.points
+                                                  : rectangleVertices(shape);
             for (int vertexIndex = 0; vertexIndex < vertices.size(); ++vertexIndex) {
                 considerSegment(vertices[vertexIndex],
                                 vertices[(vertexIndex + 1) % vertices.size()]);

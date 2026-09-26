@@ -55,6 +55,7 @@ bool TangentFromCurveTool::handleMousePress(const ToolInput &input,
             break;
         case GeometryType::Invalid:
         case GeometryType::Rectangle:
+        case GeometryType::Polygon:
         case GeometryType::Point:
             status_.text = QStringLiteral("Choose a curve, not a point or rectangle");
             publish(context);

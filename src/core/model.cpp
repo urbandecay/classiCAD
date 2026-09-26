@@ -313,6 +313,97 @@ QVector<QPointF> makeRectanglePoints(RectangleMode mode, const QVector<QPointF> 
     return {first, second, second + offset, first + offset};
 }
 
+QVector<QPointF> makeRegularPolygonPoints(PolygonMode mode,
+                                          const QVector<QPointF> &points,
+                                          int sides)
+{
+    if (points.size() < 2) {
+        return {};
+    }
+
+    sides = std::clamp(sides, 3, 256);
+    if (mode == PolygonMode::Edge && sides % 2 == 0) {
+        sides = sides == 256 ? 255 : sides + 1;
+    }
+
+    constexpr qreal pi = 3.14159265358979323846;
+    constexpr qreal twoPi = 2.0 * pi;
+    constexpr qreal minimumLength = 1.0e-9;
+    QPointF center;
+    qreal radius = 0.0;
+    qreal startAngle = 0.0;
+
+    if (mode == PolygonMode::CenterCorner) {
+        center = points[0];
+        const QPointF radiusVector = points[1] - center;
+        radius = std::hypot(radiusVector.x(), radiusVector.y());
+        if (radius <= minimumLength) {
+            return {};
+        }
+        startAngle = std::atan2(radiusVector.y(), radiusVector.x());
+    } else if (mode == PolygonMode::CenterTangent) {
+        center = points[0];
+        const QPointF apothemVector = points[1] - center;
+        const qreal apothem = std::hypot(apothemVector.x(), apothemVector.y());
+        if (apothem <= minimumLength) {
+            return {};
+        }
+        const qreal halfStep = pi / sides;
+        const qreal cosine = std::cos(halfStep);
+        if (cosine <= minimumLength) {
+            return {};
+        }
+        radius = apothem / cosine;
+        startAngle = std::atan2(apothemVector.y(), apothemVector.x()) - halfStep;
+    } else if (mode == PolygonMode::CornerCorner) {
+        const QPointF first = points[0];
+        const QPointF edge = points[1] - first;
+        const qreal edgeLength = std::hypot(edge.x(), edge.y());
+        if (edgeLength <= minimumLength) {
+            return {};
+        }
+        const qreal halfStep = pi / sides;
+        const qreal sine = std::sin(halfStep);
+        if (sine <= minimumLength) {
+            return {};
+        }
+        radius = edgeLength / (2.0 * sine);
+        const qreal apothem = radius * std::cos(halfStep);
+        const QPointF edgeUnit = edge / edgeLength;
+        const QPointF leftNormal(-edgeUnit.y(), edgeUnit.x());
+        center = (first + points[1]) * 0.5 + leftNormal * apothem;
+        const QPointF toFirst = first - center;
+        startAngle = std::atan2(toFirst.y(), toFirst.x());
+    } else {
+        // This construction uses a corner and the midpoint of its opposite
+        // side, so it is defined for odd-sided polygons only.
+        const QPointF first = points[0];
+        const QPointF span = points[1] - first;
+        const qreal spanLength = std::hypot(span.x(), span.y());
+        if (spanLength <= minimumLength) {
+            return {};
+        }
+        const qreal halfStep = pi / sides;
+        const qreal denominator = 1.0 + std::cos(halfStep);
+        if (denominator <= minimumLength) {
+            return {};
+        }
+        radius = spanLength / denominator;
+        center = first + span * (radius / spanLength);
+        const QPointF toFirst = first - center;
+        startAngle = std::atan2(toFirst.y(), toFirst.x());
+    }
+
+    QVector<QPointF> vertices;
+    vertices.reserve(sides);
+    for (int index = 0; index < sides; ++index) {
+        const qreal angle = startAngle + twoPi * index / sides;
+        vertices.append(center + QPointF(std::cos(angle) * radius,
+                                         std::sin(angle) * radius));
+    }
+    return vertices;
+}
+
 qreal crossProduct(const QPointF &a, const QPointF &b)
 {
     return a.x() * b.y() - a.y() * b.x();
@@ -482,7 +573,7 @@ bool nurbsFromJson(const QJsonValue &value, Shape::NurbsCurve2D *curve)
     curve->controlPoints = controlPoints;
     curve->weights = weights;
     curve->knots = knots;
-    // Point and rectangle records historically carried an empty placeholder
+    // Point, rectangle, and polygon records carry an empty placeholder
     // NURBS object. Preserve that representation, but reject any populated
     // curve that does not satisfy the shared core invariants.
     if (!curve->controlPoints.isEmpty() || !curve->weights.isEmpty() ||
@@ -552,6 +643,9 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
 
     QVector<QPointF> points;
     if (!pointsFromJson(object.value(QStringLiteral("points")), &points)) {
+        return false;
+    }
+    if (geometryType == GeometryType::Polygon && points.size() < 3) {
         return false;
     }
 

@@ -123,6 +123,9 @@ Shape::NurbsCurve2D makeBezierNurbs(const QVector<QPointF> &points);
 Shape::NurbsCurve2D makeCircleNurbs(const QVector<QPointF> &points);
 Shape::NurbsCurve2D makeEllipseNurbs(EllipseMode mode, const QVector<QPointF> &points);
 QVector<QPointF> makeRectanglePoints(RectangleMode mode, const QVector<QPointF> &points);
+QVector<QPointF> makeRegularPolygonPoints(PolygonMode mode,
+                                          const QVector<QPointF> &points,
+                                          int sides);
 
 qreal crossProduct(const QPointF &a, const QPointF &b);
 bool segmentIntersection(const QPointF &a,

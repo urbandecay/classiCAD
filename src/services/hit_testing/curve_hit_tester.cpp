@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace classiCAD {
 
@@ -362,6 +363,19 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                   transform.worldToScreen(vertices[index], viewportSize),
                                   transform.worldToScreen(vertices[(index + 1) % vertices.size()],
                                                          viewportSize)));
+        }
+        return distance;
+    }
+    if (shape.geometryType == GeometryType::Polygon && shape.points.size() >= 3) {
+        qreal distance = std::numeric_limits<qreal>::infinity();
+        for (int index = 0; index < shape.points.size(); ++index) {
+            distance = std::min(
+                distance,
+                distanceToSegment(screenPosition,
+                                  transform.worldToScreen(shape.points[index], viewportSize),
+                                  transform.worldToScreen(
+                                      shape.points[(index + 1) % shape.points.size()],
+                                      viewportSize)));
         }
         return distance;
     }

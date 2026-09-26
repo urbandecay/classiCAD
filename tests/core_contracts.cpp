@@ -17,6 +17,7 @@
 #include "tools/line_tool.h"
 #include "tools/perpendicular_from_curve_tool.h"
 #include "tools/point_tool.h"
+#include "tools/polygon_tool.h"
 #include "tools/tangent_from_curve_tool.h"
 #include "tools/tool_context.h"
 #include "tools/tool_registry.h"
@@ -74,6 +75,19 @@ int main(int argc, char **argv)
                         requiredPoints(ToolId::RectangleFromCenter) == 2 &&
                         requiredPoints(ToolId::RectangleThreePoint) == 3,
                     "rectangle construction tools must map to rectangle geometry and request the correct clicks");
+    passed &= check(isPolygonTool(ToolId::PolygonCenterCorner) &&
+                        geometryTypeForTool(ToolId::PolygonCenterCorner) ==
+                            GeometryType::Polygon &&
+                        geometryTypeForTool(ToolId::PolygonCenterTangent) ==
+                            GeometryType::Polygon &&
+                        geometryTypeForTool(ToolId::PolygonCornerCorner) ==
+                            GeometryType::Polygon &&
+                        geometryTypeForTool(ToolId::PolygonEdge) == GeometryType::Polygon &&
+                        requiredPoints(ToolId::PolygonCenterCorner) == 2 &&
+                        requiredPoints(ToolId::PolygonCenterTangent) == 2 &&
+                        requiredPoints(ToolId::PolygonCornerCorner) == 2 &&
+                        requiredPoints(ToolId::PolygonEdge) == 2,
+                    "each polygon construction mode must create polygon geometry from two clicks");
     passed &= check(geometryTypeForTool(ToolId::Mirror) == GeometryType::Invalid &&
                         toolName(ToolId::Mirror) == QStringLiteral("Mirror"),
                     "mirror must remain a command rather than persisted geometry");
@@ -227,6 +241,49 @@ int main(int argc, char **argv)
                              QPointF(1.0, 5.0), QPointF(-1.0, 3.0)}),
                     "rectangle builders must support corner, center, and oriented three-point construction");
 
+    const QVector<QPointF> centerCornerPolygon = makeRegularPolygonPoints(
+        PolygonMode::CenterCorner,
+        {QPointF(0.0, 0.0), QPointF(2.0, 0.0)},
+        6);
+    const QVector<QPointF> centerTangentPolygon = makeRegularPolygonPoints(
+        PolygonMode::CenterTangent,
+        {QPointF(0.0, 0.0), QPointF(0.0, 2.0)},
+        4);
+    const QVector<QPointF> cornerCornerPolygon = makeRegularPolygonPoints(
+        PolygonMode::CornerCorner,
+        {QPointF(0.0, 0.0), QPointF(2.0, 0.0)},
+        4);
+    const QVector<QPointF> edgePolygon = makeRegularPolygonPoints(
+        PolygonMode::Edge,
+        {QPointF(0.0, 0.0), QPointF(0.0, 5.0)},
+        6);
+    const QPointF centerTangentSideMidpoint =
+        (centerTangentPolygon.value(0) + centerTangentPolygon.value(1)) * 0.5;
+    const QPointF oppositeEdgeMidpoint =
+        (edgePolygon.value(3) + edgePolygon.value(4)) * 0.5;
+    bool centerCornerRadiusIsConsistent = centerCornerPolygon.size() == 6;
+    for (const QPointF &vertex : centerCornerPolygon) {
+        centerCornerRadiusIsConsistent &=
+            std::abs(std::hypot(vertex.x(), vertex.y()) - 2.0) <= 1.0e-8;
+    }
+    passed &= check(centerCornerRadiusIsConsistent &&
+                        pointsAlmostEqual(centerCornerPolygon.value(0), QPointF(2.0, 0.0)) &&
+                        pointsAlmostEqual(centerTangentSideMidpoint, QPointF(0.0, 2.0)) &&
+                        pointsAlmostEqual(cornerCornerPolygon.value(0), QPointF(0.0, 0.0)) &&
+                        pointsAlmostEqual(cornerCornerPolygon.value(1), QPointF(2.0, 0.0)) &&
+                        edgePolygon.size() == 7 &&
+                        pointsAlmostEqual(edgePolygon.value(0), QPointF(0.0, 0.0)) &&
+                        pointsAlmostEqual(oppositeEdgeMidpoint, QPointF(0.0, 5.0)),
+                    "polygon builders must honor center/corner, center/tangent, corner/edge, and odd-side span construction");
+
+    const Shape polygonShape{GeometryType::Polygon,
+                             centerCornerPolygon,
+                             {},
+                             ArcMode::TwoPoint,
+                             0.0,
+                             {},
+                             {}};
+
     const Shape ellipse{GeometryType::Ellipse,
                         {QPointF(0.0, 0.0)},
                         centerAxisEllipse,
@@ -276,6 +333,20 @@ int main(int argc, char **argv)
     passed &= check(serializedEllipse.value(QStringLiteral("geometryType")).toInt(-1) == 9 &&
                         serializedEllipse.value(QStringLiteral("tool")).toInt(-1) == 0,
                     "ellipse sessions must use their canonical type without colliding with legacy tool values");
+    const QJsonObject serializedPolygon = shapeToJson(polygonShape);
+    Shape restoredPolygon{GeometryType::Invalid,
+                          {},
+                          {},
+                          ArcMode::TwoPoint,
+                          0.0,
+                          {},
+                          {}};
+    passed &= check(serializedPolygon.value(QStringLiteral("geometryType")).toInt(-1) == 10 &&
+                        serializedPolygon.value(QStringLiteral("tool")).toInt(-1) == 0 &&
+                        shapeFromJson(serializedPolygon, &restoredPolygon) &&
+                        restoredPolygon.geometryType == GeometryType::Polygon &&
+                        restoredPolygon.points == centerCornerPolygon,
+                    "polygon geometry must use its canonical persisted type and survive session serialization");
     Shape restoredEllipse{GeometryType::Invalid,
                           {},
                           {},
@@ -482,6 +553,35 @@ int main(int argc, char **argv)
                         std::hypot(endpointSnap.point.x(), endpointSnap.point.y()) <= 1.0e-9,
                     "snap engine must select the nearest enabled endpoint");
 
+    Document polygonSnapDocument;
+    polygonSnapDocument.append(polygonShape);
+    const QVector<SnapCandidate> polygonCandidates = snapEngine.snapCandidatesForShape(
+        polygonShape,
+        viewportTransform,
+        viewportSize);
+    int polygonEndpointCount = 0;
+    int polygonMidpointCount = 0;
+    for (const SnapCandidate &candidate : polygonCandidates) {
+        polygonEndpointCount += candidate.type == SnapType::Endpoint ? 1 : 0;
+        polygonMidpointCount += candidate.type == SnapType::Midpoint ? 1 : 0;
+    }
+    SnapEngine polygonEndpointEngine;
+    polygonEndpointEngine.setSettings(
+        SnapSettings{true, true, false, false, false, false, false});
+    const SnapResult polygonEndpointSnap = polygonEndpointEngine.findSnapPoint(
+        polygonSnapDocument,
+        polygonShape.points.first() + QPointF(0.1, 0.1),
+        true,
+        {},
+        viewportTransform,
+        viewportSize);
+    passed &= check(polygonEndpointCount == polygonShape.points.size() &&
+                        polygonMidpointCount == polygonShape.points.size() &&
+                        polygonEndpointSnap.type == SnapType::Endpoint &&
+                        pointsAlmostEqual(polygonEndpointSnap.point,
+                                          polygonShape.points.first()),
+                    "polygon OSnap must expose every corner and side midpoint and snap to its corners");
+
     Document ellipseSnapDocument;
     ellipseSnapDocument.append(ellipse);
     SnapEngine ellipseSnapEngine;
@@ -668,6 +768,18 @@ int main(int argc, char **argv)
                         std::hypot(nearLineSnap.point.x() - 5.0,
                                    nearLineSnap.point.y()) <= 1.0e-6,
                     "Near OSnap must find the closest point along line geometry");
+    const QPointF polygonEdgeMidpoint =
+        (polygonShape.points[0] + polygonShape.points[1]) * 0.5;
+    const SnapResult nearPolygonSnap = nearSnapEngine.findSnapPoint(
+        polygonSnapDocument,
+        polygonEdgeMidpoint,
+        true,
+        {},
+        viewportTransform,
+        viewportSize);
+    passed &= check(nearPolygonSnap.type == SnapType::Near &&
+                        pointsAlmostEqual(nearPolygonSnap.point, polygonEdgeMidpoint),
+                    "Near OSnap must project onto polygon sides");
 
     SnapEngine controlPointOsnapEngine;
     controlPointOsnapEngine.setSettings(
@@ -945,6 +1057,10 @@ int main(int argc, char **argv)
                         toolRegistry.find(ToolId::Rectangle) != nullptr &&
                         toolRegistry.find(ToolId::RectangleFromCenter) != nullptr &&
                         toolRegistry.find(ToolId::RectangleThreePoint) != nullptr &&
+                        toolRegistry.find(ToolId::PolygonCenterCorner) != nullptr &&
+                        toolRegistry.find(ToolId::PolygonCenterTangent) != nullptr &&
+                        toolRegistry.find(ToolId::PolygonCornerCorner) != nullptr &&
+                        toolRegistry.find(ToolId::PolygonEdge) != nullptr &&
                         toolRegistry.find(ToolId::Circle) != nullptr &&
                         toolRegistry.find(ToolId::Ellipse) != nullptr &&
                         toolRegistry.find(ToolId::EllipseFromEndpoints) != nullptr &&

@@ -12,12 +12,15 @@
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
 #include <QFont>
@@ -31,6 +34,7 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QMainWindow>
 #include <QPainter>
 #include <QPainterPath>
@@ -481,7 +485,7 @@ class MainWindow final : public QMainWindow {
 public:
     MainWindow()
     {
-        setWindowTitle(QStringLiteral("classiCAD — 2D NURBS Modeler"));
+        setWindowTitle(QStringLiteral("Untitled — Vignola"));
         resize(1440, 900);
         setMinimumSize(980, 620);
 
@@ -505,7 +509,165 @@ public:
         return true;
     }
 
+protected:
+    void closeEvent(QCloseEvent *event) override
+    {
+        if (maybeSaveDocument()) {
+            event->accept();
+        } else {
+            event->ignore();
+        }
+    }
+
 private:
+    bool maybeSaveDocument()
+    {
+        if (!documentModified_) {
+            return true;
+        }
+
+        const QString documentName = currentProjectPath_.isEmpty()
+                                         ? QStringLiteral("Untitled")
+                                         : QFileInfo(currentProjectPath_).fileName();
+        const QMessageBox::StandardButton answer = QMessageBox::warning(
+            this,
+            QStringLiteral("Unsaved Changes"),
+            QStringLiteral("Save changes to %1 before continuing?").arg(documentName),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save);
+        if (answer == QMessageBox::Save) {
+            return saveDocument(false);
+        }
+        return answer == QMessageBox::Discard;
+    }
+
+    QString projectSavePath()
+    {
+        QSettings settings;
+        QString initialPath = currentProjectPath_;
+        if (initialPath.isEmpty()) {
+            const QString lastDirectory = settings.value(
+                QStringLiteral("files/lastProjectDirectory"),
+                QDir::homePath()).toString();
+            initialPath = QDir(lastDirectory).filePath(QStringLiteral("Untitled.vignola"));
+        }
+
+        return QFileDialog::getSaveFileName(this,
+                                            QStringLiteral("Save Vignola Project"),
+                                            initialPath,
+                                            QStringLiteral("Vignola Project (*.vignola)"));
+    }
+
+    bool saveDocument(bool saveAs)
+    {
+        if (viewport_ == nullptr) {
+            return false;
+        }
+
+        QString path = currentProjectPath_;
+        if (saveAs || path.isEmpty()) {
+            path = projectSavePath();
+            if (path.isEmpty()) {
+                return false;
+            }
+        }
+        if (QFileInfo(path).suffix().compare(QStringLiteral("vignola"), Qt::CaseInsensitive) != 0) {
+            path += QStringLiteral(".vignola");
+        }
+
+        QString errorMessage;
+        if (!viewport_->saveVignolaDocument(path, &errorMessage)) {
+            QMessageBox::critical(this,
+                                  QStringLiteral("Could Not Save Project"),
+                                  errorMessage.isEmpty()
+                                      ? QStringLiteral("The project could not be saved.")
+                                      : errorMessage);
+            return false;
+        }
+
+        currentProjectPath_ = QFileInfo(path).absoluteFilePath();
+        documentModified_ = false;
+        QSettings settings;
+        settings.setValue(QStringLiteral("files/lastProjectDirectory"),
+                          QFileInfo(currentProjectPath_).absolutePath());
+        updateWindowTitle();
+        statusBar()->showMessage(QStringLiteral("Saved %1").arg(currentProjectPath_), 5000);
+        return true;
+    }
+
+    void openDocument()
+    {
+        QString initialPath = currentProjectPath_;
+        if (initialPath.isEmpty()) {
+            QSettings settings;
+            initialPath = settings.value(QStringLiteral("files/lastProjectDirectory"),
+                                         QDir::homePath()).toString();
+        }
+        const QString path = QFileDialog::getOpenFileName(
+            this,
+            QStringLiteral("Open Vignola Project"),
+            initialPath,
+            QStringLiteral("Vignola Project (*.vignola)"));
+        if (path.isEmpty() || !maybeSaveDocument()) {
+            return;
+        }
+
+        QString errorMessage;
+        suppressDirtyTracking_ = true;
+        const bool loaded = viewport_ != nullptr &&
+                            viewport_->loadVignolaDocument(path, &errorMessage);
+        suppressDirtyTracking_ = false;
+        if (!loaded) {
+            QMessageBox::critical(this,
+                                  QStringLiteral("Could Not Open Project"),
+                                  errorMessage.isEmpty()
+                                      ? QStringLiteral("The project could not be opened.")
+                                      : errorMessage);
+            return;
+        }
+
+        currentProjectPath_ = QFileInfo(path).absoluteFilePath();
+        documentModified_ = false;
+        QSettings settings;
+        settings.setValue(QStringLiteral("files/lastProjectDirectory"),
+                          QFileInfo(currentProjectPath_).absolutePath());
+        updateWindowTitle();
+        statusBar()->showMessage(QStringLiteral("Opened %1").arg(currentProjectPath_), 5000);
+    }
+
+    void newDocument()
+    {
+        if (viewport_ == nullptr || !maybeSaveDocument()) {
+            return;
+        }
+        suppressDirtyTracking_ = true;
+        viewport_->createNewDocument();
+        suppressDirtyTracking_ = false;
+        currentProjectPath_.clear();
+        documentModified_ = false;
+        updateWindowTitle();
+        statusBar()->showMessage(QStringLiteral("New Vignola project"), 3000);
+    }
+
+    void markDocumentModified()
+    {
+        if (suppressDirtyTracking_ || documentModified_) {
+            return;
+        }
+        documentModified_ = true;
+        updateWindowTitle();
+    }
+
+    void updateWindowTitle()
+    {
+        const QString documentName = currentProjectPath_.isEmpty()
+                                         ? QStringLiteral("Untitled")
+                                         : QFileInfo(currentProjectPath_).completeBaseName();
+        setWindowTitle(QStringLiteral("%1%2 — Vignola")
+                           .arg(documentName, documentModified_ ? QStringLiteral("*")
+                                                               : QString()));
+    }
+
     void updateApplication()
     {
         if (updateProcess_ != nullptr) {
@@ -769,11 +931,27 @@ private:
     void createMenus()
     {
         QMenu *fileMenu = menuBar()->addMenu(QStringLiteral("File"));
-        fileMenu->addAction(QStringLiteral("New Document"));
-        fileMenu->addAction(QStringLiteral("Open…"));
+        QAction *newDocumentAction = fileMenu->addAction(QStringLiteral("New Document"));
+        newDocumentAction->setShortcut(QKeySequence::New);
+        connect(newDocumentAction, &QAction::triggered, this, [this]() {
+            newDocument();
+        });
+        QAction *openDocumentAction = fileMenu->addAction(QStringLiteral("Open…"));
+        openDocumentAction->setShortcut(QKeySequence::Open);
+        connect(openDocumentAction, &QAction::triggered, this, [this]() {
+            openDocument();
+        });
         fileMenu->addSeparator();
-        fileMenu->addAction(QStringLiteral("Save"));
-        fileMenu->addAction(QStringLiteral("Save As…"));
+        QAction *saveDocumentAction = fileMenu->addAction(QStringLiteral("Save"));
+        saveDocumentAction->setShortcut(QKeySequence::Save);
+        connect(saveDocumentAction, &QAction::triggered, this, [this]() {
+            saveDocument(false);
+        });
+        QAction *saveAsDocumentAction = fileMenu->addAction(QStringLiteral("Save As…"));
+        saveAsDocumentAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")));
+        connect(saveAsDocumentAction, &QAction::triggered, this, [this]() {
+            saveDocument(true);
+        });
         fileMenu->addSeparator();
         fileMenu->addAction(QStringLiteral("Quit"), this, &QWidget::close);
 
@@ -1158,9 +1336,11 @@ private:
         };
         viewportCallbacks.historyChanged = [this]() {
             updateHistoryActions();
+            markDocumentModified();
         };
         viewportCallbacks.layersChanged = [this]() {
             refreshLayers();
+            markDocumentModified();
         };
         viewportCallbacks.subdivisionStatusUpdate = [this](const QString &message) {
             if (message.isEmpty()) {
@@ -2874,6 +3054,9 @@ private:
     QPushButton *moveSelectedToLayerButton_ = nullptr;
     bool refreshingLayers_ = false;
     QVector<QToolButton *> toolButtons_;
+    QString currentProjectPath_;
+    bool documentModified_ = false;
+    bool suppressDirtyTracking_ = false;
     QAction *undoAction_ = nullptr;
     QAction *redoAction_ = nullptr;
     QAction *subdivideAction_ = nullptr;

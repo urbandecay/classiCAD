@@ -7,6 +7,7 @@
 #include "../core/geometry/geometry_transform.h"
 #include "../core/history/history.h"
 #include "../core/serialization/document_serializer.h"
+#include "../core/serialization/vignola_document_file.h"
 #include "../services/hit_testing/curve_hit_tester.h"
 #include "../services/dimensions/dimension_association.h"
 #include "../services/sampling/curve_sampler.h"
@@ -1705,6 +1706,43 @@ public:
         return true;
     }
 
+    bool saveVignolaDocument(const QString &path, QString *errorMessage) const override
+    {
+        return classiCAD::saveVignolaDocument(path, document_, errorMessage);
+    }
+
+    bool loadVignolaDocument(const QString &path, QString *errorMessage) override
+    {
+        Document restoredDocument;
+        if (!classiCAD::loadVignolaDocument(path, &restoredDocument, errorMessage)) {
+            return false;
+        }
+
+        document_ = std::move(restoredDocument);
+        resetForDocumentReplacement();
+        pan_ = QPointF(0.0, 0.0);
+        zoom_ = 1.0;
+        setCursor(Qt::ArrowCursor);
+        update();
+        emitCoordinateUpdate();
+        notifyHistoryChanged();
+        notifyLayersChanged();
+        return true;
+    }
+
+    void createNewDocument() override
+    {
+        document_ = Document{};
+        resetForDocumentReplacement();
+        pan_ = QPointF(0.0, 0.0);
+        zoom_ = 1.0;
+        setCursor(Qt::ArrowCursor);
+        update();
+        emitCoordinateUpdate();
+        notifyHistoryChanged();
+        notifyLayersChanged();
+    }
+
 protected:
     void paintEvent(QPaintEvent *) override
     {
@@ -2991,6 +3029,49 @@ protected:
     }
 
 private:
+    void resetForDocumentReplacement()
+    {
+        history_.clear();
+        pendingPoints_.clear();
+        controllerPreviewShape_ = Shape{};
+        controllerPreviewShapeVisible_ = false;
+        resetArcPreviewTracking();
+        selectedShapeIndices_.clear();
+        selectedShapeIndex_ = ObjectId::invalid();
+        controlPointIndex_ = -1;
+        selectionBoxActive_ = false;
+        selectionBoxMoved_ = false;
+        selectionBoxAdditive_ = false;
+        draggingSelected_ = false;
+        dragGestureStarted_ = false;
+        draggingShapeIndices_.clear();
+        draggingControlPoint_ = false;
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        eraseStrokeActive_ = false;
+        eraseCursorPressed_ = false;
+        eraseCandidateShapeIndices_.clear();
+        eraseStrokeScreenPath_.clear();
+        eraseTargetShapeIndices_.clear();
+        eraseSceneCurveCaches_.clear();
+        eraseTargetCurveCaches_.clear();
+        eraseGeometryCachePrepared_ = false;
+        trimHoverPositionValid_ = false;
+        currentSnap_ = SnapResult{};
+        joinActive_ = false;
+        joinShapeIndices_.clear();
+        resetRotateInteraction();
+        resetMirrorInteraction();
+        subdivisionActive_ = false;
+        subdivisionShapeIndex_ = ObjectId::invalid();
+        subdivisionSections_ = 2;
+        resetSubdivisionWheelTracking();
+        lineCommandActive_ = false;
+        activeTool_ = Tool::Select;
+        repeatTool_ = Tool::Select;
+    }
+
     void updateSnapEngineSettings()
     {
         snapEngine_.setSettings(SnapSettings{osnapEnabled_,

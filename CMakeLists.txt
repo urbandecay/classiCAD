@@ -12,6 +12,19 @@ set(CMAKE_AUTORCC ON)
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 
+include(FetchContent)
+FetchContent_Declare(
+    opennurbs
+    GIT_REPOSITORY https://github.com/mcneel/opennurbs.git
+    GIT_TAG eb92af3ba1806b0a34a99aba0d3bda83e3d46083
+    GIT_SHALLOW FALSE
+)
+FetchContent_GetProperties(opennurbs)
+if (NOT opennurbs_POPULATED)
+    FetchContent_Populate(opennurbs)
+    add_subdirectory(${opennurbs_SOURCE_DIR} ${opennurbs_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif ()
+
 set(CLASSICAD_CORE_SOURCES
     src/core/debug_log.cpp
     src/core/tool_id.cpp
@@ -24,6 +37,7 @@ set(CLASSICAD_CORE_SOURCES
     src/core/document/selection_model.cpp
     src/core/history/history.cpp
     src/core/serialization/document_serializer.cpp
+    src/core/serialization/vignola_document_file.cpp
     src/core/model.cpp
 )
 
@@ -99,6 +113,9 @@ target_include_directories(classiCAD PRIVATE
 
 target_link_libraries(classiCAD PRIVATE
     Qt${QT_VERSION_MAJOR}::Widgets
+    opennurbsStatic
+    zlib
+    opennurbsStatic
 )
 
 if (MSVC)
@@ -143,7 +160,12 @@ if (CLASSICAD_BUILD_TESTS)
     target_include_directories(classicad_trim_seam_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
-    target_link_libraries(classicad_trim_seam_test PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+    target_link_libraries(classicad_trim_seam_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+        opennurbsStatic
+        zlib
+        opennurbsStatic
+    )
     add_test(NAME trim_seam COMMAND classicad_trim_seam_test)
     set_tests_properties(trim_seam PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
@@ -154,7 +176,33 @@ if (CLASSICAD_BUILD_TESTS)
     target_include_directories(classicad_core_contracts_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
-    target_link_libraries(classicad_core_contracts_test PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+    target_link_libraries(classicad_core_contracts_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+        opennurbsStatic
+        zlib
+        opennurbsStatic
+    )
     add_test(NAME core_contracts COMMAND classicad_core_contracts_test)
     set_tests_properties(core_contracts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(classicad_vignola_file_test
+        tests/vignola_file.cpp
+        src/core/geometry/geometry_type.cpp
+        src/core/geometry/nurbs_curve.cpp
+        src/core/document/document.cpp
+        src/core/serialization/document_serializer.cpp
+        src/core/serialization/vignola_document_file.cpp
+        src/core/model.cpp
+    )
+    target_include_directories(classicad_vignola_file_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(classicad_vignola_file_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+        opennurbsStatic
+        zlib
+        opennurbsStatic
+    )
+    add_test(NAME vignola_file COMMAND classicad_vignola_file_test)
+    set_tests_properties(vignola_file PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

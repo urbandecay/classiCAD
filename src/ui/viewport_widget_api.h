@@ -135,6 +135,12 @@ public:
     virtual bool saveUpdateSession(const QString &path) const = 0;
     virtual bool restoreUpdateSession(const QString &path) = 0;
 
+    virtual bool saveVignolaDocument(const QString &path,
+                                     QString *errorMessage = nullptr) const = 0;
+    virtual bool loadVignolaDocument(const QString &path,
+                                     QString *errorMessage = nullptr) = 0;
+    virtual void createNewDocument() = 0;
+
     void setUiCallbacks(const ViewportUiCallbacks &callbacks)
     {
         coordinateUpdate_ = callbacks.coordinateUpdate;

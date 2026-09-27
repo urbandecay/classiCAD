@@ -71,12 +71,14 @@ public:
                              const ViewportTransform &transform,
                              const QSize &viewportSize,
                              const QVector<int> &excludedShapeIndices = {},
-                             bool forceEnabled = false) const;
+                             bool forceEnabled = false,
+                             bool includeTangentCandidates = true) const;
 
     DragSnapResult findDragSnap(const Document &document,
                                 const QVector<int> &selectedShapeIndices,
                                 const ViewportTransform &transform,
-                                const QSize &viewportSize) const;
+                                const QSize &viewportSize,
+                                bool forceEnabled = false) const;
     DragSnapResult findControlPointSnap(
         const Document &document,
         int selectedShapeIndex,

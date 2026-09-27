@@ -1646,7 +1646,8 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
                                      const ViewportTransform &transform,
                                      const QSize &viewportSize,
                                      const QVector<int> &excludedShapeIndices,
-                                     bool forceEnabled) const
+                                     bool forceEnabled,
+                                     bool includeTangentCandidates) const
 {
     SnapResult best;
     if ((!settings_.enabled && !forceEnabled) || !drawingSnapActive) {
@@ -1694,13 +1695,15 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
                                      excludedShapeIndices)) {
             consider(candidate);
         }
-        for (const SnapCandidate &candidate :
-             tangentCandidates(document,
-                               pendingPoints.back(),
-                               transform,
-                               viewportSize,
-                               excludedShapeIndices)) {
-            consider(candidate);
+        if (includeTangentCandidates) {
+            for (const SnapCandidate &candidate :
+                 tangentCandidates(document,
+                                   pendingPoints.back(),
+                                   transform,
+                                   viewportSize,
+                                   excludedShapeIndices)) {
+                consider(candidate);
+            }
         }
     }
     return best;
@@ -1710,10 +1713,11 @@ DragSnapResult SnapEngine::findDragSnap(
     const Document &document,
     const QVector<int> &selectedShapeIndices,
     const ViewportTransform &transform,
-    const QSize &viewportSize) const
+    const QSize &viewportSize,
+    bool forceEnabled) const
 {
     DragSnapResult best;
-    if (!settings_.enabled || selectedShapeIndices.isEmpty()) {
+    if ((!settings_.enabled && !forceEnabled) || selectedShapeIndices.isEmpty()) {
         return best;
     }
 
@@ -1736,18 +1740,58 @@ DragSnapResult SnapEngine::findDragSnap(
                                viewportSize);
     constexpr qreal snapRadiusPixels = 12.0;
     qreal bestDistance = snapRadiusPixels;
+    const auto consider = [&](SnapType type,
+                              const QPointF &sourcePoint,
+                              const QPointF &targetPoint) {
+        const QPointF sourceScreen = transform.worldToScreen(sourcePoint, viewportSize);
+        const QPointF targetScreen = transform.worldToScreen(targetPoint, viewportSize);
+        const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
+                                           targetScreen.y() - sourceScreen.y());
+        if (distance <= bestDistance) {
+            bestDistance = distance;
+            best.type = type;
+            best.sourcePoint = sourcePoint;
+            best.targetPoint = targetPoint;
+            best.translation = targetPoint - sourcePoint;
+        }
+    };
+
     for (const SnapCandidate &source : sourceCandidates) {
-        const QPointF sourceScreen = transform.worldToScreen(source.point, viewportSize);
         for (const SnapCandidate &target : targetCandidates) {
-            const QPointF targetScreen = transform.worldToScreen(target.point, viewportSize);
-            const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
-                                               targetScreen.y() - sourceScreen.y());
-            if (distance <= bestDistance) {
-                bestDistance = distance;
-                best.type = source.type;
-                best.sourcePoint = source.point;
-                best.targetPoint = target.point;
-                best.translation = target.point - source.point;
+            consider(source.type, source.point, target.point);
+        }
+    }
+
+    // When moving a line, its endpoints are the source snap points. Generate
+    // tangent targets from the opposite endpoint so translating an already
+    // tangent line can attach its endpoint to the curve's tangent point.
+    if (settings_.endpoint && settings_.tangent) {
+        for (const int shapeIndex : selectedShapeIndices) {
+            if (shapeIndex < 0 || shapeIndex >= document.size()) {
+                continue;
+            }
+            const Shape &shape = document[shapeIndex];
+            if (shape.geometryType != GeometryType::Line) {
+                continue;
+            }
+
+            const QVector<QPointF> &linePoints = shape.nurbs.controlPoints.isEmpty()
+                                                     ? shape.points
+                                                     : shape.nurbs.controlPoints;
+            for (int segment = 0; segment + 1 < linePoints.size(); ++segment) {
+                const QPointF endpoints[2]{linePoints[segment], linePoints[segment + 1]};
+                for (int endpoint = 0; endpoint < 2; ++endpoint) {
+                    const QPointF &sourcePoint = endpoints[endpoint];
+                    const QPointF &fixedPoint = endpoints[1 - endpoint];
+                    for (const SnapCandidate &target :
+                         tangentCandidates(document,
+                                           fixedPoint,
+                                           transform,
+                                           viewportSize,
+                                           selectedShapeIndices)) {
+                        consider(SnapType::Tangent, sourcePoint, target.point);
+                    }
+                }
             }
         }
     }

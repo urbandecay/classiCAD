@@ -1299,6 +1299,18 @@ int main(int argc, char **argv)
                                    draggedEndpointTangentSnap.targetPoint.y() -
                                        circleTangentPoint.y()) <= 1.0e-6,
                     "dragged line endpoints must snap to curve tangencies when Tangent OSnap is enabled");
+    const DragSnapResult movedLineTangentSnap =
+        tangentControlPointSnapEngine.findDragSnap(tangentControlPointDocument,
+                                                   {0},
+                                                   viewportTransform,
+                                                   viewportSize);
+    passed &= check(movedLineTangentSnap.type == SnapType::Tangent &&
+                        movedLineTangentSnap.sourcePoint == draggedLineEndpoint &&
+                        std::hypot(movedLineTangentSnap.targetPoint.x() -
+                                       circleTangentPoint.x(),
+                                   movedLineTangentSnap.targetPoint.y() -
+                                       circleTangentPoint.y()) <= 1.0e-6,
+                    "moving a line must snap its endpoint to a curve tangent when Endpoint and Tangent OSnaps are enabled");
 
     const NurbsCurve2D nurbsOnlyBezier = makeBezierNurbs(
         {QPointF(50.0, 50.0), QPointF(60.0, 50.0),

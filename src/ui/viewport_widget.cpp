@@ -4554,22 +4554,34 @@ private:
 
     SnapResult findGrabDestinationSnap(const QPointF &rawPoint) const
     {
+        const QVector<int> selectedIndices = grabSelectedShapeIndices();
+        bool selectedLine = false;
+        for (const int shapeIndex : selectedIndices) {
+            if (shapeIndex >= 0 && shapeIndex < document_.size() &&
+                document_[shapeIndex].geometryType == GeometryType::Line) {
+                selectedLine = true;
+                break;
+            }
+        }
         return snapEngine_.findSnapPoint(document_,
                                          rawPoint,
                                          true,
                                          QVector<QPointF>{grabBasePoint_},
                                          viewportTransform_,
                                          size(),
-                                         grabSelectedShapeIndices(),
-                                         true);
+                                         selectedIndices,
+                                         true,
+                                         !selectedLine);
     }
 
-    DragSnapResult findDragSnap(ObjectId selectedObjectId) const
+    DragSnapResult findDragSnap(ObjectId selectedObjectId,
+                                bool forceEnabled = false) const
     {
-        return findDragSnap(QVector<ObjectId>{selectedObjectId});
+        return findDragSnap(QVector<ObjectId>{selectedObjectId}, forceEnabled);
     }
 
-    DragSnapResult findDragSnap(const QVector<ObjectId> &selectedObjectIds) const
+    DragSnapResult findDragSnap(const QVector<ObjectId> &selectedObjectIds,
+                                bool forceEnabled = false) const
     {
         QVector<int> serviceSelectedShapeIndices;
         serviceSelectedShapeIndices.reserve(selectedObjectIds.size());
@@ -4582,7 +4594,8 @@ private:
         return snapEngine_.findDragSnap(document_,
                                         serviceSelectedShapeIndices,
                                         viewportTransform_,
-                                        size());
+                                        size(),
+                                        forceEnabled);
 
         DragSnapResult best;
         if (!osnapEnabled_ || selectedObjectIds.isEmpty()) {
@@ -7024,6 +7037,20 @@ private:
             return;
         }
 
+        if (dragSnapLocked_) {
+            constexpr qreal dragSnapBreakawayPixels = 18.0;
+            const QPointF cursorScreen = worldToScreen(rawCursorWorld_);
+            const QPointF snapScreen = worldToScreen(dragSnapCursorWorld_);
+            const qreal cursorDistanceFromSnap =
+                std::hypot(cursorScreen.x() - snapScreen.x(),
+                           cursorScreen.y() - snapScreen.y());
+            if (cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
+                return;
+            }
+            dragSnapLocked_ = false;
+            currentDragSnap_ = DragSnapResult{};
+        }
+
         // Rebuild the preview from the saved document so axis changes and snap
         // changes never accumulate an additional incremental delta.
         document_.restoreSnapshot(grabStartSnapshot_);
@@ -7063,7 +7090,61 @@ private:
             grabMoved_ = false;
         }
         currentDragSnap_ = DragSnapResult{};
-        dragSnapLocked_ = false;
+        if (grabHasBasePoint_ && dragAxisLock_ == DragAxisLock::None) {
+            constexpr int maximumTangentRefinements = 12;
+            constexpr qreal tangentSnapPrecisionPixels = 0.01;
+            QPointF totalTangentCorrection;
+            for (int iteration = 0; iteration < maximumTangentRefinements; ++iteration) {
+                const DragSnapResult dragSnap = findDragSnap(dragIndices, true);
+                if (dragSnap.type != SnapType::Tangent) {
+                    break;
+                }
+
+                currentDragSnap_ = dragSnap;
+                const QPointF sourceScreen = worldToScreen(dragSnap.sourcePoint);
+                const QPointF targetScreen = worldToScreen(dragSnap.targetPoint);
+                const qreal remainingError =
+                    std::hypot(targetScreen.x() - sourceScreen.x(),
+                               targetScreen.y() - sourceScreen.y());
+                if (remainingError <= tangentSnapPrecisionPixels) {
+                    break;
+                }
+
+                translateShapes(dragIndices, dragSnap.translation);
+                totalTangentCorrection += dragSnap.translation;
+                grabMoved_ = true;
+            }
+
+            const DragSnapResult finalTangentSnap = findDragSnap(dragIndices, true);
+            bool preciselySnapped = finalTangentSnap.type == SnapType::Tangent;
+            if (preciselySnapped) {
+                const QPointF sourceScreen = worldToScreen(finalTangentSnap.sourcePoint);
+                const QPointF targetScreen = worldToScreen(finalTangentSnap.targetPoint);
+                preciselySnapped =
+                    std::hypot(targetScreen.x() - sourceScreen.x(),
+                               targetScreen.y() - sourceScreen.y()) <=
+                    tangentSnapPrecisionPixels;
+            }
+
+            if (preciselySnapped) {
+                currentDragSnap_ = finalTangentSnap;
+                currentSnap_ = SnapResult{};
+                grabMoved_ = true;
+                dragSnapLocked_ = true;
+                dragSnapCursorWorld_ = rawCursorWorld_;
+                DebugLog::instance().write(
+                    QStringLiteral("grab endpoint tangent snap source=%1 target=%2 delta=%3")
+                        .arg(pointText(currentDragSnap_.sourcePoint))
+                        .arg(pointText(currentDragSnap_.targetPoint))
+                        .arg(pointText(currentDragSnap_.translation)));
+            } else {
+                if (!qFuzzyIsNull(totalTangentCorrection.x()) ||
+                    !qFuzzyIsNull(totalTangentCorrection.y())) {
+                    translateShapes(dragIndices, -totalTangentCorrection);
+                }
+                currentDragSnap_ = DragSnapResult{};
+            }
+        }
         lastDragWorld_ = rawCursorWorld_;
         DebugLog::instance().write(
             QStringLiteral("grab move delta=%1 cursorWorld=%2 basePoint=%3 snap=%4 axisLock=%5")

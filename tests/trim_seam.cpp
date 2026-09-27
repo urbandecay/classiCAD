@@ -119,6 +119,94 @@ int main(int argc, char **argv)
         }
     }
 
+    const auto circleWithSeam = [](const QPointF &center,
+                                   qreal radius,
+                                   qreal seamAngle) {
+        const QPointF edge(center.x() + radius * std::cos(seamAngle),
+                           center.y() + radius * std::sin(seamAngle));
+        return Shape{GeometryType::Circle,
+                     {center, edge},
+                     makeCircleNurbs({center, edge}),
+                     ArcMode::TwoPoint,
+                     0.0,
+                     {},
+                     {}};
+    };
+    view.shapes_ = {circleWithSeam(QPointF(0, 0), 60.0, 0.31),
+                    circleWithSeam(QPointF(-120, 0), 60.0, 0.83),
+                    circleWithSeam(QPointF(120, 0), 60.0, 1.27)};
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
+    view.prepareEraseGeometryCache();
+    const EraseCurveSampleCache *tangentCircleCache = nullptr;
+    for (const EraseCurveSampleCache &cache : view.eraseTargetCurveCaches_) {
+        if (cache.shapeIndex == 0 && cache.componentIndex == 0) {
+            tangentCircleCache = &cache;
+            break;
+        }
+    }
+    const QVector<qreal> tangentContacts = tangentCircleCache != nullptr
+                                               ? tangentCircleCache->intersectionParameters
+                                               : QVector<qreal>{};
+    QVector<QPointF> tangentContactPoints;
+    for (const qreal parameter : tangentContacts) {
+        QPointF point;
+        if (view.evaluateNurbsPoint(view.shapes_[0].nurbs, parameter, &point)) {
+            tangentContactPoints.append(point);
+        }
+    }
+    std::sort(tangentContactPoints.begin(), tangentContactPoints.end(),
+              [](const QPointF &first, const QPointF &second) {
+                  return first.x() < second.x();
+              });
+    bool foundBothTangencies = tangentContactPoints.size() == 2;
+    if (foundBothTangencies) {
+        foundBothTangencies =
+            std::abs(tangentContactPoints[0].x() + 60.0) <= 0.1 &&
+            std::abs(tangentContactPoints[0].y()) <= 0.1 &&
+            std::abs(tangentContactPoints[1].x() - 60.0) <= 0.1 &&
+            std::abs(tangentContactPoints[1].y()) <= 0.1;
+    }
+    if (!foundBothTangencies) {
+        qWarning() << "Erase must recognize both tangent-only circle contacts"
+                   << tangentContactPoints;
+        ++failures;
+    }
+
+    QVector<Shape> tangentCircleRemainder;
+    if (!view.trimShapeAtEraserStroke(
+            view.shapes_[0],
+            {view.worldToScreen(QPointF(0, 60))},
+            &tangentCircleRemainder,
+            0,
+            &view.eraseTargetCurveCaches_) ||
+        tangentCircleRemainder.size() != 1 ||
+        tangentCircleRemainder.first().components.isEmpty()) {
+        qWarning() << "Erasing between two tangent contacts must preserve the rest of the circle";
+        ++failures;
+    } else {
+        const Shape::NurbsCurve2D &remainder =
+            tangentCircleRemainder.first().components.first();
+        const QVector<double> knots = view.expandedKnotVector(remainder);
+        const qreal start = knots[remainder.degree];
+        const qreal end = knots[remainder.controlPoints.size()];
+        bool keptLowerArc = true;
+        for (int sample = 0; sample <= 100; ++sample) {
+            QPointF point;
+            const qreal parameter = start + (end - start) * sample / 100.0;
+            if (!view.evaluateNurbsPoint(remainder, parameter, &point) ||
+                point.y() > 0.1 ||
+                std::abs(std::hypot(point.x(), point.y()) - 60.0) > 0.1) {
+                keptLowerArc = false;
+                break;
+            }
+        }
+        if (!keptLowerArc) {
+            qWarning() << "Tangency-bounded erase must retain the lower circular arc";
+            ++failures;
+        }
+    }
+
     const auto worldPoint = [&view](qreal x, qreal y) {
         return view.screenToWorld(QPointF(x, y));
     };

@@ -6,6 +6,7 @@
 #include "services/viewport/viewport_transform.h"
 
 #include <QPainter>
+#include <QColor>
 #include <QSize>
 
 namespace classiCAD {
@@ -22,7 +23,10 @@ public:
                    const QSize &viewportSize,
                    bool preview,
                    bool selected = false,
-                   bool drawPreviewPoints = true) const;
+                   bool drawPreviewPoints = true,
+                   const QColor &layerColor = QColor(),
+                   const QString &layerLineType = QString(),
+                   qreal layerLineWeightMm = 0.0) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,

@@ -1,5 +1,6 @@
 #include "main_window.h"
 #include "viewport_widget_api.h"
+#include "viewport/line_type_style.h"
 #include "input_helpers.h"
 #include "../core/debug_log.h"
 #include "services/dimensions/dimension_font.h"
@@ -9,6 +10,7 @@
 #include <QAbstractItemView>
 #include <QButtonGroup>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -18,24 +20,36 @@
 #include <QFile>
 #include <QFormLayout>
 #include <QFrame>
+#include <QFont>
 #include <QGroupBox>
+#include <QHeaderView>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMainWindow>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPen>
 #include <QProcess>
 #include <QPushButton>
+#include <QPixmap>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QStyleOptionComboBox>
+#include <QStylePainter>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -45,6 +59,133 @@
 #include <QWheelEvent>
 
 namespace classiCAD {
+
+enum class LayerHeaderIcon {
+    Visibility,
+    Freeze,
+    Lock,
+    Color,
+    Plot,
+};
+
+QIcon makeLayerHeaderIcon(LayerHeaderIcon kind)
+{
+    QPixmap pixmap(16, 16);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor(185, 190, 198), 1.0,
+                        Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    switch (kind) {
+    case LayerHeaderIcon::Visibility:
+        painter.drawEllipse(QRectF(1.5, 4.0, 13.0, 8.0));
+        painter.setBrush(QColor(185, 190, 198));
+        painter.drawEllipse(QRectF(6.0, 6.0, 4.0, 4.0));
+        break;
+    case LayerHeaderIcon::Freeze:
+        painter.drawLine(QPointF(8, 1.5), QPointF(8, 14.5));
+        painter.drawLine(QPointF(2.4, 4.8), QPointF(13.6, 11.2));
+        painter.drawLine(QPointF(2.4, 11.2), QPointF(13.6, 4.8));
+        painter.drawLine(QPointF(8, 1.5), QPointF(6.4, 3.2));
+        painter.drawLine(QPointF(8, 1.5), QPointF(9.6, 3.2));
+        painter.drawLine(QPointF(8, 14.5), QPointF(6.4, 12.8));
+        painter.drawLine(QPointF(8, 14.5), QPointF(9.6, 12.8));
+        break;
+    case LayerHeaderIcon::Lock: {
+        QPainterPath shackle;
+        shackle.moveTo(5, 7.5);
+        shackle.lineTo(5, 5.5);
+        shackle.cubicTo(5, 1.7, 11, 1.7, 11, 5.5);
+        shackle.lineTo(11, 7.5);
+        painter.drawPath(shackle);
+        painter.drawRoundedRect(QRectF(3.5, 7, 9, 7), 1, 1);
+        painter.drawLine(QPointF(8, 9.2), QPointF(8, 11.4));
+        break;
+    }
+    case LayerHeaderIcon::Color:
+        painter.setBrush(QColor(235, 235, 235));
+        painter.drawRect(QRectF(3, 3, 10, 10));
+        break;
+    case LayerHeaderIcon::Plot:
+        painter.drawRect(QRectF(4, 1.8, 8, 5.2));
+        painter.drawRoundedRect(QRectF(2, 5.5, 12, 6.3), 1, 1);
+        painter.drawRect(QRectF(4, 9.5, 8, 4.5));
+        painter.drawLine(QPointF(5.5, 11.5), QPointF(10.5, 11.5));
+        painter.drawPoint(QPointF(11.5, 7.8));
+        break;
+    }
+
+    return QIcon(pixmap);
+}
+
+QIcon makeLayerLineTypeIcon(const QString &lineType)
+{
+    QPixmap pixmap(64, 14);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(layerLineTypePen(QColor(220, 220, 220), 1.4, lineType));
+    painter.drawLine(QPointF(1, 7), QPointF(63, 7));
+    return QIcon(pixmap);
+}
+
+QString layerLineTypeDescription(const QString &lineType)
+{
+    const QString canonical = canonicalLayerLineTypeName(lineType);
+    if (canonical == QStringLiteral("Continuous")) {
+        return QStringLiteral("Solid line");
+    }
+
+    QString baseName = canonical;
+    QString scaleDescription;
+    if (baseName.endsWith(QStringLiteral("X2"))) {
+        baseName.chop(2);
+        scaleDescription = QStringLiteral(" (2x)");
+    } else if (baseName.endsWith(QLatin1Char('2'))) {
+        baseName.chop(1);
+        scaleDescription = QStringLiteral(" (0.5x)");
+    }
+    return QStringLiteral("%1 pattern%2")
+        .arg(baseName.toLower(), scaleDescription);
+}
+
+void populateLayerLineTypeCombo(QComboBox *combo, bool includeByLayer)
+{
+    combo->setIconSize(QSize(includeByLayer ? 48 : 40, 14));
+    if (includeByLayer) {
+        combo->addItem(makeLayerLineTypeIcon(QStringLiteral("Continuous")),
+                       QStringLiteral("ByLayer"),
+                       QStringLiteral("Continuous"));
+        combo->setItemData(0, QStringLiteral("Use the layer's line style"), Qt::ToolTipRole);
+    }
+
+    for (const QString &lineType : standardLayerLineTypes()) {
+        const int index = combo->count();
+        combo->addItem(makeLayerLineTypeIcon(lineType), lineType, lineType);
+        combo->setItemData(index, layerLineTypeDescription(lineType), Qt::ToolTipRole);
+    }
+}
+
+class LayerLineTypeComboBox final : public QComboBox {
+public:
+    using QComboBox::QComboBox;
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        Q_UNUSED(event)
+        QStylePainter painter(this);
+        QStyleOptionComboBox option;
+        initStyleOption(&option);
+        option.currentText.clear();
+        painter.drawComplexControl(QStyle::CC_ComboBox, option);
+        painter.drawControl(QStyle::CE_ComboBoxLabel, option);
+    }
+};
 
 class ToolShelfScrollArea final : public QScrollArea {
 public:
@@ -346,6 +487,7 @@ public:
 
         createMenus();
         createWorkspaceBar();
+        createLayerPropertiesBar();
         createMainLayout();
         loadPreferences();
         applyTheme();
@@ -743,6 +885,147 @@ private:
         addToolBar(Qt::TopToolBarArea, bar);
     }
 
+    void createLayerPropertiesBar()
+    {
+        addToolBarBreak(Qt::TopToolBarArea);
+        auto *bar = new QToolBar(QStringLiteral("Layer Properties"), this);
+        bar->setObjectName(QStringLiteral("layerPropertiesBar"));
+        bar->setMovable(false);
+        bar->setFloatable(false);
+        bar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+        currentLayerCombo_ = new QComboBox;
+        currentLayerCombo_->setObjectName(QStringLiteral("currentLayerCombo"));
+        currentLayerCombo_->setMinimumWidth(150);
+        currentLayerCombo_->setMaximumWidth(190);
+        currentLayerCombo_->setToolTip(QStringLiteral("Current drawing layer"));
+        bar->addWidget(currentLayerCombo_);
+        bar->addSeparator();
+
+        layerColorCombo_ = new QComboBox;
+        layerColorCombo_->setObjectName(QStringLiteral("layerColorCombo"));
+        layerColorCombo_->setMinimumWidth(110);
+        layerColorCombo_->setToolTip(
+            QStringLiteral("Active layer color used by ByLayer geometry"));
+        const auto addColorOption = [this](const QString &name, const QColor &color) {
+            QPixmap swatch(12, 12);
+            swatch.fill(color);
+            layerColorCombo_->addItem(QIcon(swatch), name, color);
+        };
+        addColorOption(QStringLiteral("ByLayer"), QColor(QStringLiteral("#d28b45")));
+        addColorOption(QStringLiteral("Red"), QColor(QStringLiteral("#ff3030")));
+        addColorOption(QStringLiteral("Yellow"), QColor(QStringLiteral("#f0d030")));
+        addColorOption(QStringLiteral("Green"), QColor(QStringLiteral("#40c060")));
+        addColorOption(QStringLiteral("Cyan"), QColor(QStringLiteral("#40c8d8")));
+        addColorOption(QStringLiteral("Blue"), QColor(QStringLiteral("#4d83e6")));
+        addColorOption(QStringLiteral("Magenta"), QColor(QStringLiteral("#d45adc")));
+        addColorOption(QStringLiteral("White"), QColor(QStringLiteral("#ffffff")));
+        layerColorCombo_->addItem(QStringLiteral("Custom…"), QColor());
+        layerColorCombo_->setItemData(layerColorCombo_->count() - 1,
+                                      true,
+                                      Qt::UserRole + 1);
+        bar->addWidget(layerColorCombo_);
+
+        layerLineTypeCombo_ = new QComboBox;
+        layerLineTypeCombo_->setObjectName(QStringLiteral("layerLineTypeCombo"));
+        layerLineTypeCombo_->setMinimumWidth(125);
+        layerLineTypeCombo_->setToolTip(
+            QStringLiteral("Active layer linetype used by ByLayer geometry"));
+        populateLayerLineTypeCombo(layerLineTypeCombo_, true);
+        bar->addWidget(layerLineTypeCombo_);
+
+        layerLineWeightCombo_ = new QComboBox;
+        layerLineWeightCombo_->setObjectName(QStringLiteral("layerLineWeightCombo"));
+        layerLineWeightCombo_->setMinimumWidth(125);
+        layerLineWeightCombo_->setToolTip(
+            QStringLiteral("Active layer lineweight used by ByLayer geometry"));
+        layerLineWeightCombo_->addItem(QStringLiteral("ByLayer"), 0.0);
+        for (const auto &lineWeight : QList<QPair<QString, qreal>>{
+                 {QStringLiteral("0.13 mm"), 0.13},
+                 {QStringLiteral("0.18 mm"), 0.18},
+                 {QStringLiteral("0.25 mm"), 0.25},
+                 {QStringLiteral("0.35 mm"), 0.35},
+                 {QStringLiteral("0.50 mm"), 0.50},
+                 {QStringLiteral("0.70 mm"), 0.70},
+                 {QStringLiteral("1.00 mm"), 1.00},
+                 {QStringLiteral("1.40 mm"), 1.40},
+                 {QStringLiteral("2.00 mm"), 2.00},
+                 {QStringLiteral("2.11 mm"), 2.11}}) {
+            layerLineWeightCombo_->addItem(lineWeight.first, lineWeight.second);
+        }
+        bar->addWidget(layerLineWeightCombo_);
+
+        connect(currentLayerCombo_, qOverload<int>(&QComboBox::activated),
+                this, [this](int index) {
+                    if (index < 0 || viewport_ == nullptr) {
+                        return;
+                    }
+                    const LayerId layerId = LayerId::fromValue(
+                        currentLayerCombo_->itemData(index).toULongLong());
+                    QTimer::singleShot(0, this, [this, layerId]() {
+                        ViewportLayerCommandRequest request;
+                        request.command = ViewportLayerCommand::Activate;
+                        request.layerId = layerId;
+                        executeLayerCommand(request, QString(),
+                                            QStringLiteral("Could not change current layer"));
+                    });
+                });
+        connect(layerColorCombo_, qOverload<int>(&QComboBox::activated),
+                this, [this](int index) {
+                    if (index < 0 || viewport_ == nullptr) {
+                        return;
+                    }
+                    const LayerId layerId = currentLayerId();
+                    if (!layerId.isValid()) {
+                        return;
+                    }
+                    QColor color = layerColorCombo_->itemData(index).value<QColor>();
+                    const bool chooseCustom =
+                        layerColorCombo_->itemData(index, Qt::UserRole + 1).toBool();
+                    QTimer::singleShot(0, this, [this, layerId, color, chooseCustom]() {
+                        QColor selectedColor = color;
+                        if (chooseCustom) {
+                            QColor currentColor;
+                            for (const ViewportLayerInfo &info : viewport_->layerInfos()) {
+                                if (info.id == layerId) {
+                                    currentColor = info.color;
+                                    break;
+                                }
+                            }
+                            selectedColor = QColorDialog::getColor(
+                                currentColor, this, QStringLiteral("Layer Color"));
+                        }
+                        if (selectedColor.isValid()) {
+                            setLayerColor(layerId, selectedColor);
+                        }
+                    });
+                });
+        connect(layerLineTypeCombo_, qOverload<int>(&QComboBox::activated),
+                this, [this](int index) {
+                    if (index >= 0) {
+                        const LayerId layerId = currentLayerId();
+                        const QString lineType =
+                            layerLineTypeCombo_->itemData(index).toString();
+                        QTimer::singleShot(0, this, [this, layerId, lineType]() {
+                            setLayerLineType(layerId, lineType);
+                        });
+                    }
+                });
+        connect(layerLineWeightCombo_, qOverload<int>(&QComboBox::activated),
+                this, [this](int index) {
+                    if (index >= 0) {
+                        const LayerId layerId = currentLayerId();
+                        const qreal lineWeightMm =
+                            layerLineWeightCombo_->itemData(index).toDouble();
+                        QTimer::singleShot(0, this, [this, layerId, lineWeightMm]() {
+                            setLayerLineWeight(layerId, lineWeightMm);
+                        });
+                    }
+                });
+
+        addToolBar(Qt::TopToolBarArea, bar);
+    }
+
     void createMainLayout()
     {
         auto *root = new QWidget;
@@ -752,7 +1035,12 @@ private:
 
         rootLayout->addWidget(createToolShelf());
 
-        viewport_ = createViewportWidget(root);
+        auto *workspaceSplitter = new QSplitter(Qt::Horizontal, root);
+        workspaceSplitter->setObjectName(QStringLiteral("workspaceSplitter"));
+        workspaceSplitter->setHandleWidth(6);
+        workspaceSplitter->setChildrenCollapsible(false);
+
+        viewport_ = createViewportWidget(workspaceSplitter);
         ViewportUiCallbacks viewportCallbacks;
         viewportCallbacks.commandFinished = [this](ToolId tool) {
             if (tool == Tool::Select && selectToolButton_ != nullptr) {
@@ -777,10 +1065,13 @@ private:
             }
             statusBar()->showMessage(QStringLiteral("Repeated tool: %1").arg(toolName(tool)));
         };
-        rootLayout->addWidget(viewport_, 1);
-
-        rootLayout->addWidget(createRightPanel());
+        workspaceSplitter->addWidget(viewport_);
+        workspaceSplitter->addWidget(createRightPanel());
+        workspaceSplitter->setStretchFactor(0, 1);
+        workspaceSplitter->setStretchFactor(1, 0);
+        rootLayout->addWidget(workspaceSplitter, 1);
         setCentralWidget(root);
+        workspaceSplitter->setSizes({800, 540});
         createOsnapLane();
 
         coordinateLabel_ = new QLabel(QStringLiteral("X 0.00   Y 0.00   Zoom 100%"));
@@ -1482,16 +1773,111 @@ private:
 
     LayerId selectedLayerId() const
     {
-        if (layerList_ == nullptr || layerList_->currentItem() == nullptr) {
+        if (layerTable_ == nullptr || layerTable_->currentRow() < 0) {
             return LayerId::invalid();
         }
-        return LayerId::fromValue(
-            layerList_->currentItem()->data(Qt::UserRole).toULongLong());
+        const QTableWidgetItem *nameItem = layerTable_->item(layerTable_->currentRow(), 1);
+        return nameItem == nullptr
+                   ? LayerId::invalid()
+                   : LayerId::fromValue(nameItem->data(Qt::UserRole).toULongLong());
+    }
+
+    LayerId currentLayerId() const
+    {
+        return currentLayerCombo_ == nullptr || currentLayerCombo_->currentIndex() < 0
+                   ? LayerId::invalid()
+                   : LayerId::fromValue(
+                         currentLayerCombo_->currentData().toULongLong());
+    }
+
+    void refreshLayerToolbar(const QVector<ViewportLayerInfo> &infos)
+    {
+        if (currentLayerCombo_ == nullptr) {
+            return;
+        }
+
+        const QSignalBlocker currentBlocker(currentLayerCombo_);
+        const QSignalBlocker colorBlocker(layerColorCombo_);
+        const QSignalBlocker lineTypeBlocker(layerLineTypeCombo_);
+        const QSignalBlocker lineWeightBlocker(layerLineWeightCombo_);
+        currentLayerCombo_->clear();
+        int currentIndex = -1;
+        const ViewportLayerInfo *activeLayer = nullptr;
+        for (const ViewportLayerInfo &info : infos) {
+            QPixmap swatch(12, 12);
+            swatch.fill(info.color);
+            currentLayerCombo_->addItem(
+                QIcon(swatch),
+                info.name,
+                QVariant::fromValue<qulonglong>(info.id.value()));
+            if (info.active) {
+                currentIndex = currentLayerCombo_->count() - 1;
+                activeLayer = &info;
+            }
+        }
+        if (currentIndex >= 0) {
+            currentLayerCombo_->setCurrentIndex(currentIndex);
+        }
+        if (activeLayer == nullptr) {
+            return;
+        }
+
+        int colorIndex = -1;
+        for (int index = 0; index < layerColorCombo_->count(); ++index) {
+            if (!layerColorCombo_->itemData(index, Qt::UserRole + 1).toBool() &&
+                layerColorCombo_->itemData(index).value<QColor>() == activeLayer->color) {
+                colorIndex = index;
+                break;
+            }
+        }
+        const int customIndex = layerColorCombo_->count() - 1;
+        if (colorIndex < 0 && customIndex >= 0) {
+            colorIndex = customIndex;
+            layerColorCombo_->setItemText(customIndex,
+                                          activeLayer->color.name(QColor::HexRgb).toUpper());
+            layerColorCombo_->setItemData(customIndex,
+                                          activeLayer->color,
+                                          Qt::UserRole);
+            QPixmap swatch(12, 12);
+            swatch.fill(activeLayer->color);
+            layerColorCombo_->setItemIcon(customIndex, QIcon(swatch));
+        } else if (customIndex >= 0) {
+            layerColorCombo_->setItemText(customIndex, QStringLiteral("Custom…"));
+            layerColorCombo_->setItemData(customIndex, QColor(), Qt::UserRole);
+            layerColorCombo_->setItemData(customIndex, true, Qt::UserRole + 1);
+            layerColorCombo_->setItemIcon(customIndex, QIcon());
+        }
+        if (colorIndex >= 0) {
+            layerColorCombo_->setCurrentIndex(colorIndex);
+        }
+
+        const QString activeLineType =
+            canonicalLayerLineTypeName(activeLayer->lineType);
+        int lineTypeIndex = layerLineTypeCombo_->findData(activeLineType);
+        if (lineTypeIndex < 0) {
+            layerLineTypeCombo_->addItem(makeLayerLineTypeIcon(activeLayer->lineType),
+                                         activeLayer->lineType,
+                                         activeLayer->lineType);
+            lineTypeIndex = layerLineTypeCombo_->count() - 1;
+        }
+        layerLineTypeCombo_->setCurrentIndex(lineTypeIndex);
+
+        int lineWeightIndex = -1;
+        for (int index = 0; index < layerLineWeightCombo_->count(); ++index) {
+            if (qFuzzyCompare(layerLineWeightCombo_->itemData(index).toDouble() + 1.0,
+                              activeLayer->lineWeightMm + 1.0)) {
+                lineWeightIndex = index;
+                break;
+            }
+        }
+        if (lineWeightIndex >= 0) {
+            layerLineWeightCombo_->setCurrentIndex(lineWeightIndex);
+        }
     }
 
     void updateLayerControls()
     {
-        if (layerList_ == nullptr || viewport_ == nullptr) {
+        if (layerTable_ == nullptr || viewport_ == nullptr) {
             return;
         }
 
@@ -1506,77 +1892,202 @@ private:
             }
         }
 
-        if (layerVisibleCheckBox_ != nullptr) {
-            const QSignalBlocker blocker(layerVisibleCheckBox_);
-            layerVisibleCheckBox_->setChecked(found && selectedInfo.visible);
-            layerVisibleCheckBox_->setEnabled(found);
-        }
-        if (layerLockedCheckBox_ != nullptr) {
-            const QSignalBlocker blocker(layerLockedCheckBox_);
-            layerLockedCheckBox_->setChecked(found && selectedInfo.locked);
-            layerLockedCheckBox_->setEnabled(found);
-        }
         if (activateLayerButton_ != nullptr) {
             activateLayerButton_->setEnabled(found && !selectedInfo.active);
         }
-        if (renameLayerButton_ != nullptr) {
-            renameLayerButton_->setEnabled(found);
-        }
         if (removeLayerButton_ != nullptr) {
-            removeLayerButton_->setEnabled(found && layerList_->count() > 1);
+            removeLayerButton_->setEnabled(found && layerTable_->rowCount() > 1);
         }
         if (moveLayerUpButton_ != nullptr) {
-            moveLayerUpButton_->setEnabled(found && layerList_->currentRow() > 0);
+            moveLayerUpButton_->setEnabled(found && layerTable_->currentRow() > 0);
         }
         if (moveLayerDownButton_ != nullptr) {
             moveLayerDownButton_->setEnabled(found &&
-                                              layerList_->currentRow() + 1 < layerList_->count());
+                                              layerTable_->currentRow() + 1 <
+                                                  layerTable_->rowCount());
         }
         if (moveSelectedToLayerButton_ != nullptr) {
             moveSelectedToLayerButton_->setEnabled(found && selectedInfo.visible &&
+                                                   !selectedInfo.frozen &&
                                                    !selectedInfo.locked);
         }
     }
 
     void refreshLayers()
     {
-        if (layerList_ == nullptr || viewport_ == nullptr) {
+        if (layerTable_ == nullptr || viewport_ == nullptr) {
             return;
         }
 
+        const LayerId previousSelection = selectedLayerId();
         refreshingLayers_ = true;
         const QVector<ViewportLayerInfo> infos = viewport_->layerInfos();
-        layerList_->clear();
+        const QSignalBlocker blocker(layerTable_);
+        layerTable_->setRowCount(infos.size());
         int activeRow = -1;
+        int previousRow = -1;
+        const QString filter = layerFilter_ == nullptr
+                                   ? QString()
+                                   : layerFilter_->text().trimmed();
         for (int index = 0; index < infos.size(); ++index) {
             const ViewportLayerInfo &info = infos[index];
-            QString prefix;
+            if (info.id == previousSelection) {
+                previousRow = index;
+            }
             if (info.active) {
-                prefix += QStringLiteral("◆ ");
                 activeRow = index;
             }
-            if (!info.visible) {
-                prefix += QStringLiteral("[hidden] ");
-            }
-            if (info.locked) {
-                prefix += QStringLiteral("[locked] ");
+
+            auto *currentItem = new QTableWidgetItem(info.active ? QStringLiteral("✓")
+                                                                  : QString());
+            currentItem->setTextAlignment(Qt::AlignCenter);
+            currentItem->setToolTip(info.active ? QStringLiteral("Current layer")
+                                                 : QStringLiteral("Click to make current"));
+            auto *nameItem = new QTableWidgetItem(info.name);
+            nameItem->setToolTip(QStringLiteral("%1 object%2 — double-click to rename")
+                                     .arg(info.objectCount)
+                                     .arg(info.objectCount == 1 ? QString() : QStringLiteral("s")));
+            if (info.active) {
+                QFont activeFont = nameItem->font();
+                activeFont.setBold(true);
+                nameItem->setFont(activeFont);
             }
 
-            auto *item = new QListWidgetItem(
-                QStringLiteral("%1%2  (%3 objects)")
-                    .arg(prefix, info.name)
-                    .arg(info.objectCount));
-            item->setData(Qt::UserRole,
-                          QVariant::fromValue<qulonglong>(info.id.value()));
-            layerList_->addItem(item);
+            const auto makeCheckItem = [](bool checked, const QString &tooltip) {
+                auto *item = new QTableWidgetItem;
+                item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
+                               Qt::ItemIsUserCheckable);
+                item->setCheckState(checked ? Qt::Checked : Qt::Unchecked);
+                item->setTextAlignment(Qt::AlignCenter);
+                item->setToolTip(tooltip);
+                return item;
+            };
+            auto *visibleItem = makeCheckItem(info.visible, QStringLiteral("Layer visibility"));
+            auto *frozenItem = makeCheckItem(info.frozen, QStringLiteral("Freeze layer"));
+            auto *lockedItem = makeCheckItem(info.locked, QStringLiteral("Lock layer"));
+            auto *plottedItem = makeCheckItem(info.plotted, QStringLiteral("Plot this layer"));
+
+            QPixmap colorSwatch(12, 12);
+            colorSwatch.fill(Qt::transparent);
+            {
+                QPainter swatchPainter(&colorSwatch);
+                swatchPainter.fillRect(QRect(1, 1, 10, 10), info.color);
+                swatchPainter.setPen(QColor(80, 80, 80));
+                swatchPainter.drawRect(QRect(0, 0, 11, 11));
+            }
+            auto *colorItem = new QTableWidgetItem;
+            colorItem->setIcon(QIcon(colorSwatch));
+            colorItem->setTextAlignment(Qt::AlignCenter);
+            colorItem->setToolTip(
+                QStringLiteral("%1 — click to change layer color")
+                    .arg(info.color.name().toUpper()));
+
+            auto *lineTypeCombo = new LayerLineTypeComboBox;
+            populateLayerLineTypeCombo(lineTypeCombo, false);
+            const QString rowLineType = canonicalLayerLineTypeName(info.lineType);
+            int rowLineTypeIndex = lineTypeCombo->findData(rowLineType);
+            if (rowLineTypeIndex < 0) {
+                lineTypeCombo->addItem(makeLayerLineTypeIcon(info.lineType),
+                                       info.lineType,
+                                       info.lineType);
+                rowLineTypeIndex = lineTypeCombo->count() - 1;
+            }
+            lineTypeCombo->setCurrentIndex(rowLineTypeIndex);
+            lineTypeCombo->setToolTip(
+                QStringLiteral("Linetype: %1").arg(info.lineType));
+
+            auto *lineWeightCombo = new QComboBox;
+            const QList<QPair<QString, qreal>> lineWeights{
+                {QStringLiteral("Default"), 0.0},
+                {QStringLiteral("0.13 mm"), 0.13},
+                {QStringLiteral("0.18 mm"), 0.18},
+                {QStringLiteral("0.25 mm"), 0.25},
+                {QStringLiteral("0.35 mm"), 0.35},
+                {QStringLiteral("0.50 mm"), 0.50},
+                {QStringLiteral("0.70 mm"), 0.70},
+                {QStringLiteral("1.00 mm"), 1.00},
+                {QStringLiteral("1.40 mm"), 1.40},
+                {QStringLiteral("2.00 mm"), 2.00},
+                {QStringLiteral("2.11 mm"), 2.11}};
+            for (const auto &lineWeight : lineWeights) {
+                lineWeightCombo->addItem(lineWeight.first, lineWeight.second);
+            }
+            for (int weightIndex = 0; weightIndex < lineWeightCombo->count(); ++weightIndex) {
+                if (qFuzzyCompare(lineWeightCombo->itemData(weightIndex).toDouble() + 1.0,
+                                  info.lineWeightMm + 1.0)) {
+                    lineWeightCombo->setCurrentIndex(weightIndex);
+                    break;
+                }
+            }
+            lineWeightCombo->setToolTip(QStringLiteral("Layer lineweight"));
+
+            auto *descriptionItem = new QTableWidgetItem(info.description);
+            descriptionItem->setToolTip(
+                info.description.isEmpty()
+                    ? QStringLiteral("Double-click to edit description")
+                    : QStringLiteral("%1\nDouble-click to edit description")
+                          .arg(info.description));
+
+            const QList<QTableWidgetItem *> rowItems{
+                currentItem, nameItem, visibleItem, frozenItem, lockedItem,
+                colorItem, nullptr, nullptr, plottedItem, descriptionItem};
+            for (int column = 0; column < rowItems.size(); ++column) {
+                QTableWidgetItem *item = rowItems[column];
+                if (item != nullptr) {
+                    item->setData(Qt::UserRole,
+                                  QVariant::fromValue<qulonglong>(info.id.value()));
+                    layerTable_->setItem(index, column, item);
+                }
+            }
+            lineTypeCombo->setProperty("layerId", QVariant::fromValue<qulonglong>(info.id.value()));
+            lineWeightCombo->setProperty("layerId", QVariant::fromValue<qulonglong>(info.id.value()));
+            layerTable_->setCellWidget(index, 6, lineTypeCombo);
+            layerTable_->setCellWidget(index, 7, lineWeightCombo);
+            connect(lineTypeCombo, qOverload<int>(&QComboBox::activated),
+                    this, [this, id = info.id, lineTypeCombo](int lineTypeIndex) {
+                        if (lineTypeIndex < 0) {
+                            return;
+                        }
+                        const QString lineType =
+                            lineTypeCombo->itemData(lineTypeIndex).toString();
+                        QTimer::singleShot(0, this, [this, id, lineType]() {
+                            setLayerLineType(id, lineType);
+                        });
+                    });
+            connect(lineWeightCombo, &QComboBox::activated,
+                    this, [this, id = info.id, lineWeightCombo](int) {
+                        const qreal lineWeightMm =
+                            lineWeightCombo->currentData().toDouble();
+                        QTimer::singleShot(0, this, [this, id, lineWeightMm]() {
+                            setLayerLineWeight(id, lineWeightMm);
+                        });
+                    });
+            layerTable_->setRowHeight(index, 24);
+            const bool matchesFilter = filter.isEmpty() ||
+                                       info.name.contains(filter, Qt::CaseInsensitive);
+            layerTable_->setRowHidden(index, !matchesFilter);
         }
-        if (activeRow >= 0) {
-            layerList_->setCurrentRow(activeRow);
-        } else if (layerList_->count() > 0) {
-            layerList_->setCurrentRow(0);
+        int targetRow = previousRow;
+        if (targetRow < 0 || layerTable_->isRowHidden(targetRow)) {
+            targetRow = activeRow;
+        }
+        if (targetRow >= 0 && layerTable_->isRowHidden(targetRow)) {
+            targetRow = -1;
+            for (int row = 0; row < layerTable_->rowCount(); ++row) {
+                if (!layerTable_->isRowHidden(row)) {
+                    targetRow = row;
+                    break;
+                }
+            }
+        }
+        if (targetRow >= 0) {
+            layerTable_->setCurrentCell(targetRow, 1);
+        } else {
+            layerTable_->setCurrentCell(-1, 0);
         }
         refreshingLayers_ = false;
         updateLayerControls();
+        refreshLayerToolbar(infos);
     }
 
     bool executeLayerCommand(const ViewportLayerCommandRequest &request,
@@ -1675,41 +2186,179 @@ private:
                              QStringLiteral("A layer must be visible and unlocked to become active"));
     }
 
-    void setSelectedLayerVisible(bool visible)
+    void setLayerVisible(LayerId layerId, bool visible)
     {
-        if (refreshingLayers_) {
+        if (refreshingLayers_ || !layerId.isValid()) {
             return;
         }
         ViewportLayerCommandRequest request;
         request.command = ViewportLayerCommand::SetVisible;
-        request.layerId = selectedLayerId();
+        request.layerId = layerId;
         request.enabled = visible;
         executeLayerCommand(request,
                              visible ? QStringLiteral("Layer shown") : QStringLiteral("Layer hidden"),
                              QStringLiteral("At least one other visible, unlocked layer is required"));
     }
 
-    void setSelectedLayerLocked(bool locked)
+    void setLayerLocked(LayerId layerId, bool locked)
     {
-        if (refreshingLayers_) {
+        if (refreshingLayers_ || !layerId.isValid()) {
             return;
         }
         ViewportLayerCommandRequest request;
         request.command = ViewportLayerCommand::SetLocked;
-        request.layerId = selectedLayerId();
+        request.layerId = layerId;
         request.enabled = locked;
         executeLayerCommand(request,
                              locked ? QStringLiteral("Layer locked") : QStringLiteral("Layer unlocked"),
-                             QStringLiteral("At least one other visible, unlocked layer is required"));
+                            QStringLiteral("At least one other visible, unlocked layer is required"));
+    }
+
+    void setLayerColor(LayerId layerId, const QColor &color)
+    {
+        if (!layerId.isValid() || !color.isValid()) {
+            return;
+        }
+        ViewportLayerCommandRequest request;
+        request.command = ViewportLayerCommand::SetColor;
+        request.layerId = layerId;
+        request.color = color;
+        executeLayerCommand(request, QString(), QStringLiteral("Could not update layer color"));
+    }
+
+    void setLayerFrozen(LayerId layerId, bool frozen)
+    {
+        if (refreshingLayers_ || !layerId.isValid()) {
+            return;
+        }
+        ViewportLayerCommandRequest request;
+        request.command = ViewportLayerCommand::SetFrozen;
+        request.layerId = layerId;
+        request.enabled = frozen;
+        executeLayerCommand(request,
+                            frozen ? QStringLiteral("Layer frozen")
+                                   : QStringLiteral("Layer thawed"),
+                            QStringLiteral("Another visible, thawed, unlocked layer is required"));
+    }
+
+    void setLayerPlotted(LayerId layerId, bool plotted)
+    {
+        if (refreshingLayers_ || !layerId.isValid()) {
+            return;
+        }
+        ViewportLayerCommandRequest request;
+        request.command = ViewportLayerCommand::SetPlotted;
+        request.layerId = layerId;
+        request.enabled = plotted;
+        executeLayerCommand(request, QString(), QStringLiteral("Could not update plot setting"));
+    }
+
+    void setLayerLineType(LayerId layerId, const QString &lineType)
+    {
+        if (refreshingLayers_ || !layerId.isValid()) {
+            return;
+        }
+        ViewportLayerCommandRequest request;
+        request.command = ViewportLayerCommand::SetLineType;
+        request.layerId = layerId;
+        request.name = lineType;
+        executeLayerCommand(request, QString(), QStringLiteral("Could not update linetype"));
+    }
+
+    void setLayerLineWeight(LayerId layerId, qreal lineWeightMm)
+    {
+        if (refreshingLayers_ || !layerId.isValid()) {
+            return;
+        }
+        ViewportLayerCommandRequest request;
+        request.command = ViewportLayerCommand::SetLineWeight;
+        request.layerId = layerId;
+        request.lineWeightMm = lineWeightMm;
+        executeLayerCommand(request, QString(), QStringLiteral("Could not update lineweight"));
+    }
+
+    void setLayerDescription(LayerId layerId, const QString &description)
+    {
+        if (!layerId.isValid()) {
+            return;
+        }
+        ViewportLayerCommandRequest request;
+        request.command = ViewportLayerCommand::SetDescription;
+        request.layerId = layerId;
+        request.name = description;
+        executeLayerCommand(request,
+                            QStringLiteral("Layer description updated"),
+                            QStringLiteral("Could not update description"));
+    }
+
+    void editLayerDescription(int row)
+    {
+        if (layerTable_ == nullptr || viewport_ == nullptr || row < 0 ||
+            row >= layerTable_->rowCount()) {
+            return;
+        }
+        const QTableWidgetItem *nameItem = layerTable_->item(row, 1);
+        if (nameItem == nullptr) {
+            return;
+        }
+        const LayerId layerId = LayerId::fromValue(nameItem->data(Qt::UserRole).toULongLong());
+        QString description;
+        for (const ViewportLayerInfo &info : viewport_->layerInfos()) {
+            if (info.id == layerId) {
+                description = info.description;
+                break;
+            }
+        }
+        bool accepted = false;
+        const QString updatedDescription = QInputDialog::getMultiLineText(
+            this,
+            QStringLiteral("Layer Description"),
+            QStringLiteral("Description:"),
+            description,
+            &accepted);
+        if (accepted && updatedDescription != description) {
+            setLayerDescription(layerId, updatedDescription);
+        }
+    }
+
+    void chooseLayerColor(int row)
+    {
+        if (layerTable_ == nullptr || viewport_ == nullptr || row < 0 ||
+            row >= layerTable_->rowCount()) {
+            return;
+        }
+        const QTableWidgetItem *nameItem = layerTable_->item(row, 1);
+        if (nameItem == nullptr) {
+            return;
+        }
+        const LayerId layerId = LayerId::fromValue(nameItem->data(Qt::UserRole).toULongLong());
+        QColor currentColor;
+        for (const ViewportLayerInfo &info : viewport_->layerInfos()) {
+            if (info.id == layerId) {
+                currentColor = info.color;
+                break;
+            }
+        }
+        if (!currentColor.isValid()) {
+            return;
+        }
+
+        const QColor color = QColorDialog::getColor(currentColor,
+                                                    this,
+                                                    QStringLiteral("Layer Color"));
+        if (!color.isValid() || color == currentColor) {
+            return;
+        }
+        setLayerColor(layerId, color);
     }
 
     void moveSelectedLayer(int delta)
     {
-        if (layerList_ == nullptr) {
+        if (layerTable_ == nullptr) {
             return;
         }
-        const int targetIndex = layerList_->currentRow() + delta;
-        if (targetIndex < 0 || targetIndex >= layerList_->count()) {
+        const int targetIndex = layerTable_->currentRow() + delta;
+        if (targetIndex < 0 || targetIndex >= layerTable_->rowCount()) {
             return;
         }
 
@@ -1747,7 +2396,7 @@ private:
     {
         auto *panel = new QFrame;
         panel->setObjectName(QStringLiteral("rightPanel"));
-        panel->setFixedWidth(286);
+        panel->setMinimumWidth(240);
 
         auto *layout = new QVBoxLayout(panel);
         layout->setContentsMargins(8, 8, 8, 8);
@@ -1755,52 +2404,132 @@ private:
 
         auto *layersBox = new QGroupBox(QStringLiteral("Layers"));
         auto *layersLayout = new QVBoxLayout(layersBox);
-        layerList_ = new QListWidget;
-        layerList_->setObjectName(QStringLiteral("layerList"));
-        layerList_->setSelectionMode(QAbstractItemView::SingleSelection);
-        layerList_->setMinimumHeight(170);
-        layersLayout->addWidget(layerList_, 1);
-
-        auto *layerOrderLayout = new QHBoxLayout;
+        auto *layerActionsLayout = new QHBoxLayout;
         addLayerButton_ = new QPushButton(QStringLiteral("+"));
         addLayerButton_->setToolTip(QStringLiteral("Add layer"));
-        renameLayerButton_ = new QPushButton(QStringLiteral("Rename"));
         removeLayerButton_ = new QPushButton(QStringLiteral("-"));
-        removeLayerButton_->setToolTip(QStringLiteral("Remove empty layer"));
-        moveLayerUpButton_ = new QPushButton(QStringLiteral("Up"));
-        moveLayerDownButton_ = new QPushButton(QStringLiteral("Down"));
-        layerOrderLayout->addWidget(addLayerButton_);
-        layerOrderLayout->addWidget(renameLayerButton_);
-        layerOrderLayout->addWidget(removeLayerButton_);
-        layerOrderLayout->addWidget(moveLayerUpButton_);
-        layerOrderLayout->addWidget(moveLayerDownButton_);
-        layersLayout->addLayout(layerOrderLayout);
+        removeLayerButton_->setToolTip(QStringLiteral("Remove selected empty layer"));
+        activateLayerButton_ = new QPushButton(QStringLiteral("✓"));
+        activateLayerButton_->setToolTip(QStringLiteral("Set selected layer as current"));
+        moveLayerUpButton_ = new QPushButton(QStringLiteral("↑"));
+        moveLayerUpButton_->setToolTip(QStringLiteral("Move layer up"));
+        moveLayerDownButton_ = new QPushButton(QStringLiteral("↓"));
+        moveLayerDownButton_->setToolTip(QStringLiteral("Move layer down"));
+        for (QPushButton *button : {addLayerButton_,
+                                    removeLayerButton_,
+                                    activateLayerButton_,
+                                    moveLayerUpButton_,
+                                    moveLayerDownButton_}) {
+            button->setFixedWidth(34);
+            layerActionsLayout->addWidget(button);
+        }
+        layerActionsLayout->addStretch(1);
+        layersLayout->addLayout(layerActionsLayout);
 
-        auto *layerStateLayout = new QHBoxLayout;
-        layerVisibleCheckBox_ = new QCheckBox(QStringLiteral("Visible"));
-        layerLockedCheckBox_ = new QCheckBox(QStringLiteral("Locked"));
-        activateLayerButton_ = new QPushButton(QStringLiteral("Set Active"));
-        layerStateLayout->addWidget(layerVisibleCheckBox_);
-        layerStateLayout->addWidget(layerLockedCheckBox_);
-        layerStateLayout->addWidget(activateLayerButton_);
-        layersLayout->addLayout(layerStateLayout);
+        layerFilter_ = new QLineEdit;
+        layerFilter_->setObjectName(QStringLiteral("layerFilter"));
+        layerFilter_->setPlaceholderText(QStringLiteral("Filter layers"));
+        layersLayout->addWidget(layerFilter_);
+
+        layerTable_ = new QTableWidget(0, 10);
+        layerTable_->setObjectName(QStringLiteral("layerTable"));
+        QFont layerHeaderFont = layerTable_->horizontalHeader()->font();
+        layerHeaderFont.setBold(false);
+        layerHeaderFont.setWeight(QFont::Normal);
+        layerTable_->horizontalHeader()->setFont(layerHeaderFont);
+        layerTable_->setHorizontalHeaderLabels(
+            {QString(), QStringLiteral("Name"), QString(),
+             QString(), QString(), QString(),
+             QStringLiteral("Linetype"), QStringLiteral("Lineweight"),
+             QString(), QStringLiteral("Description")});
+        const auto setIconHeader = [this](int column, LayerHeaderIcon icon,
+                                          const QString &tooltip) {
+            QTableWidgetItem *header = layerTable_->horizontalHeaderItem(column);
+            header->setIcon(makeLayerHeaderIcon(icon));
+            header->setTextAlignment(Qt::AlignCenter);
+            header->setToolTip(tooltip);
+        };
+        setIconHeader(2, LayerHeaderIcon::Visibility, QStringLiteral("Visibility"));
+        setIconHeader(3, LayerHeaderIcon::Freeze, QStringLiteral("Freeze / thaw"));
+        setIconHeader(4, LayerHeaderIcon::Lock, QStringLiteral("Lock / unlock"));
+        setIconHeader(5, LayerHeaderIcon::Color, QStringLiteral("Layer color"));
+        setIconHeader(8, LayerHeaderIcon::Plot, QStringLiteral("Plot / do not plot"));
+        layerTable_->verticalHeader()->setVisible(false);
+        layerTable_->horizontalHeader()->setStretchLastSection(false);
+        layerTable_->horizontalHeader()->setMinimumSectionSize(20);
+        for (int column = 0; column < 10; ++column) {
+            layerTable_->horizontalHeader()->setSectionResizeMode(column, QHeaderView::Fixed);
+        }
+        layerTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
+        layerTable_->horizontalHeader()->setSectionResizeMode(9, QHeaderView::Stretch);
+        layerTable_->setColumnWidth(0, 22);
+        layerTable_->setColumnWidth(1, 110);
+        layerTable_->setColumnWidth(2, 22);
+        layerTable_->setColumnWidth(3, 22);
+        layerTable_->setColumnWidth(4, 22);
+        layerTable_->setColumnWidth(5, 22);
+        layerTable_->setColumnWidth(6, 68);
+        layerTable_->setColumnWidth(7, 72);
+        layerTable_->setColumnWidth(8, 22);
+        layerTable_->setColumnWidth(9, 75);
+        layerTable_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        layerTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        layerTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+        layerTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        layerTable_->setShowGrid(false);
+        layerTable_->setMinimumHeight(190);
+        layersLayout->addWidget(layerTable_, 1);
 
         moveSelectedToLayerButton_ = new QPushButton(QStringLiteral("Move Selected Here"));
+        moveSelectedToLayerButton_->setToolTip(
+            QStringLiteral("Move the selected geometry to this layer"));
         layersLayout->addWidget(moveSelectedToLayerButton_);
 
-        connect(layerList_, &QListWidget::currentRowChanged,
-                this, [this](int) {
+        connect(layerTable_, &QTableWidget::currentCellChanged,
+                this, [this](int, int, int, int) {
                     updateLayerControls();
                 });
-        connect(layerList_, &QListWidget::itemDoubleClicked,
-                this, [this](QListWidgetItem *) {
-                    activateSelectedLayer();
+        connect(layerTable_, &QTableWidget::itemChanged,
+                this, [this](QTableWidgetItem *item) {
+                    if (refreshingLayers_ || item == nullptr) {
+                        return;
+                    }
+                    const LayerId layerId = LayerId::fromValue(
+                        item->data(Qt::UserRole).toULongLong());
+                    if (item->column() == 2) {
+                        setLayerVisible(layerId, item->checkState() == Qt::Checked);
+                    } else if (item->column() == 3) {
+                        setLayerFrozen(layerId, item->checkState() == Qt::Checked);
+                    } else if (item->column() == 4) {
+                        setLayerLocked(layerId, item->checkState() == Qt::Checked);
+                    } else if (item->column() == 8) {
+                        setLayerPlotted(layerId, item->checkState() == Qt::Checked);
+                    }
+                });
+        connect(layerTable_, &QTableWidget::cellClicked,
+                this, [this](int row, int column) {
+                    layerTable_->setCurrentCell(row, column);
+                    if (column == 0) {
+                        activateSelectedLayer();
+                    } else if (column == 5) {
+                        chooseLayerColor(row);
+                    }
+                });
+        connect(layerTable_, &QTableWidget::cellDoubleClicked,
+                this, [this](int row, int column) {
+                    if (column == 1) {
+                        layerTable_->setCurrentCell(row, column);
+                        renameSelectedLayer();
+                    } else if (column == 9) {
+                        editLayerDescription(row);
+                    }
+                });
+        connect(layerFilter_, &QLineEdit::textChanged,
+                this, [this](const QString &) {
+                    refreshLayers();
                 });
         connect(addLayerButton_, &QPushButton::clicked, this, [this]() {
             addLayer();
-        });
-        connect(renameLayerButton_, &QPushButton::clicked, this, [this]() {
-            renameSelectedLayer();
         });
         connect(removeLayerButton_, &QPushButton::clicked, this, [this]() {
             removeSelectedLayer();
@@ -1814,33 +2543,12 @@ private:
         connect(activateLayerButton_, &QPushButton::clicked, this, [this]() {
             activateSelectedLayer();
         });
-        connect(layerVisibleCheckBox_, &QCheckBox::toggled,
-                this, [this](bool visible) {
-                    setSelectedLayerVisible(visible);
-                });
-        connect(layerLockedCheckBox_, &QCheckBox::toggled,
-                this, [this](bool locked) {
-                    setSelectedLayerLocked(locked);
-                });
         connect(moveSelectedToLayerButton_, &QPushButton::clicked,
                 this, [this]() {
                     moveSelectedObjectsToLayer();
                 });
 
         layout->addWidget(layersBox, 1);
-
-        auto *propertiesBox = new QGroupBox(QStringLiteral("Properties"));
-        auto *propertiesLayout = new QFormLayout(propertiesBox);
-        propertiesLayout->addRow(QStringLiteral("Active tool"), new QLabel(QStringLiteral("Select")));
-        propertiesLayout->addRow(QStringLiteral("Selection"), new QLabel(QStringLiteral("None")));
-        propertiesLayout->addRow(QStringLiteral("Degree"), new QLabel(QStringLiteral("3")));
-        propertiesLayout->addRow(QStringLiteral("Units"), new QLabel(QStringLiteral("Millimeters")));
-        layout->addWidget(propertiesBox);
-
-        auto *notes = new QLabel(QStringLiteral("NURBS geometry and command history will appear here."));
-        notes->setObjectName(QStringLiteral("panelHint"));
-        notes->setWordWrap(true);
-        layout->addWidget(notes);
 
         return panel;
     }
@@ -1879,6 +2587,19 @@ private:
                 border-bottom: 1px solid #171717;
                 spacing: 5px;
                 padding: 4px 8px;
+            }
+            QToolBar#layerPropertiesBar {
+                background: #242424;
+                border: 0;
+                border-bottom: 1px solid #171717;
+                spacing: 5px;
+                padding: 4px 8px;
+            }
+            QToolBar#layerPropertiesBar QComboBox {
+                min-height: 22px;
+                padding: 2px 5px;
+                background: #303030;
+                border: 1px solid #444444;
             }
             QLabel#brand {
                 color: #f0a45a;
@@ -1943,6 +2664,15 @@ private:
             QFrame#rightPanel {
                 border-left: 1px solid #151515;
             }
+            QSplitter#workspaceSplitter::handle {
+                background: #202020;
+            }
+            QSplitter#workspaceSplitter::handle:horizontal {
+                width: 6px;
+            }
+            QSplitter#workspaceSplitter::handle:horizontal:hover {
+                background: #303030;
+            }
             QLabel#shelfLabel {
                 color: #777777;
                 font-size: 9px;
@@ -1992,6 +2722,33 @@ private:
             }
             QListWidget::item:selected {
                 background: #5a3824;
+            }
+            QTableWidget#layerTable {
+                background: #2b2b2b;
+                alternate-background-color: #303030;
+                border: 0;
+                selection-background-color: #5a3824;
+                selection-color: #ffffff;
+            }
+            QTableWidget#layerTable QComboBox {
+                min-height: 20px;
+                padding: 1px 3px;
+                background: #303030;
+                border: 0;
+            }
+            QTableWidget#layerTable::item {
+                padding: 2px 3px;
+            }
+            QHeaderView::section {
+                background: #303030;
+                border: 0;
+                color: #999999;
+                padding: 3px;
+            }
+            QLineEdit#layerFilter {
+                background: #222222;
+                border: 1px solid #444444;
+                padding: 4px;
             }
             QListWidget#preferencesCategories {
                 background: #3a3a3a;
@@ -2061,16 +2818,18 @@ private:
     QToolButton *explodeButton_ = nullptr;
     QToolButton *rotateToolButton_ = nullptr;
     QToolButton *mirrorToolButton_ = nullptr;
-    QListWidget *layerList_ = nullptr;
+    QComboBox *currentLayerCombo_ = nullptr;
+    QComboBox *layerColorCombo_ = nullptr;
+    QComboBox *layerLineTypeCombo_ = nullptr;
+    QComboBox *layerLineWeightCombo_ = nullptr;
+    QTableWidget *layerTable_ = nullptr;
+    QLineEdit *layerFilter_ = nullptr;
     QPushButton *addLayerButton_ = nullptr;
-    QPushButton *renameLayerButton_ = nullptr;
     QPushButton *removeLayerButton_ = nullptr;
     QPushButton *moveLayerUpButton_ = nullptr;
     QPushButton *moveLayerDownButton_ = nullptr;
     QPushButton *activateLayerButton_ = nullptr;
     QPushButton *moveSelectedToLayerButton_ = nullptr;
-    QCheckBox *layerVisibleCheckBox_ = nullptr;
-    QCheckBox *layerLockedCheckBox_ = nullptr;
     bool refreshingLayers_ = false;
     QVector<QToolButton *> toolButtons_;
     QAction *undoAction_ = nullptr;

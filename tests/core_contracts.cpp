@@ -19,6 +19,7 @@
 #include "services/snapping/snap_engine.h"
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
+#include "ui/viewport/line_type_style.h"
 #include "tools/circle_tool.h"
 #include "tools/circle_tangent_tool.h"
 #include "tools/dimension_tool.h"
@@ -30,6 +31,7 @@
 #include "tools/tool_registry.h"
 
 #include <QApplication>
+#include <QJsonArray>
 #include <QJsonObject>
 
 #include <cmath>
@@ -53,6 +55,27 @@ int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
     bool passed = true;
+
+    const QStringList layerLineTypes = standardLayerLineTypes();
+    const QVector<qreal> dashedPattern = layerLineTypePattern(QStringLiteral("DASHED"));
+    const QVector<qreal> dashedHalfPattern = layerLineTypePattern(QStringLiteral("DASHED2"));
+    const QVector<qreal> dashedDoublePattern = layerLineTypePattern(QStringLiteral("DASHEDX2"));
+    const QPen dashedPen = layerLineTypePen(Qt::white, 1.0, QStringLiteral("DASHED"));
+    passed &= check(layerLineTypes.size() >= 24 &&
+                        layerLineTypes.contains(QStringLiteral("CENTER")) &&
+                        layerLineTypes.contains(QStringLiteral("DIVIDEX2")) &&
+                        layerLineTypes.contains(QStringLiteral("DOTX2")) &&
+                        canonicalLayerLineTypeName(QStringLiteral("Dash-Dot")) ==
+                            QStringLiteral("DASHDOT"),
+                    "layer linetype picker must include standard CAD pattern variants and legacy aliases");
+    passed &= check(dashedPattern.size() == 2 && dashedHalfPattern.size() == 2 &&
+                        dashedDoublePattern.size() == 2 &&
+                        qFuzzyCompare(dashedHalfPattern.first() * 2.0 + 1.0,
+                                      dashedPattern.first() + 1.0) &&
+                        qFuzzyCompare(dashedDoublePattern.first() + 1.0,
+                                      dashedPattern.first() * 2.0 + 1.0) &&
+                        dashedPen.style() == Qt::CustomDashLine,
+                    "linetype size variants must use scaled, visibly distinct custom dash patterns");
 
     passed &= check(!std::is_same_v<ToolId, GeometryType>,
                     "tool and geometry vocabularies must be distinct types");
@@ -666,6 +689,11 @@ int main(int argc, char **argv)
                     "serialized curves with non-positive weights must be rejected");
 
     Document document;
+    passed &= check(document.layers().size() == 2 &&
+                        document.layers().first().name == QStringLiteral("0") &&
+                        document.layers().last().name == QStringLiteral("Defpoints") &&
+                        !document.layers().last().plotted,
+                    "new drawings must start with layer 0 and a non-plot Defpoints layer");
     const LayerId sketchLayer = document.createLayer(QStringLiteral("Sketch"));
     const ObjectId lineObject = document.append(lineShape);
     const ObjectId circleObject = document.append(circle);
@@ -706,8 +734,16 @@ int main(int argc, char **argv)
     const LayerId layeredSketch = layerDocument.createLayer(QStringLiteral("Sketch"));
     const LayerId layeredConstruction =
         layerDocument.createLayer(QStringLiteral("Construction"));
+    const QColor sketchLayerColor(QStringLiteral("#56aaff"));
     const ObjectId layeredObject = layerDocument.append(lineShape);
     passed &= check(layerDocument.moveObjectToLayer(layeredObject, layeredSketch) &&
+                        layerDocument.setLayerColor(layeredSketch, sketchLayerColor) &&
+                        layerDocument.setLayerLineType(layeredSketch,
+                                                       QStringLiteral("Dashed")) &&
+                        layerDocument.setLayerLineWeight(layeredSketch, 0.35) &&
+                        layerDocument.setLayerPlotted(layeredSketch, false) &&
+                        layerDocument.setLayerDescription(layeredSketch,
+                                                          QStringLiteral("Sketch geometry")) &&
                         layerDocument.renameLayer(layeredSketch, QStringLiteral("Sketch Curves")) &&
                         layerDocument.moveLayer(layeredConstruction, 0),
                     "document must support stable layer rename and reorder operations");
@@ -723,6 +759,11 @@ int main(int argc, char **argv)
                         !layerDocument.isObjectEditable(layeredObject) &&
                         !layerDocument.moveObjectToLayer(layeredObject, layeredConstruction),
                     "layer locking must prevent object movement from a locked layer");
+    passed &= check(layerDocument.setLayerFrozen(layeredSketch, true) &&
+                        !layerDocument.isObjectVisible(layeredObject) &&
+                        !layerDocument.isObjectEditable(layeredObject) &&
+                        !layerDocument.setLayerLineWeight(layeredSketch, 2.5),
+                    "frozen layers must hide and protect their geometry and reject invalid lineweights");
 
     const QJsonObject serializedDocument = documentToJson(layerDocument);
     Document restoredLayerDocument;
@@ -737,8 +778,60 @@ int main(int argc, char **argv)
                         restoredLayerDocument.layer(layeredSketch) != nullptr &&
                         restoredLayerDocument.layer(layeredSketch)->name ==
                             QStringLiteral("Sketch Curves") &&
+                        restoredLayerDocument.layer(layeredSketch)->color == sketchLayerColor &&
+                        restoredLayerDocument.layer(layeredSketch)->lineType ==
+                            QStringLiteral("Dashed") &&
+                        qFuzzyCompare(restoredLayerDocument.layer(layeredSketch)->lineWeightMm + 1.0,
+                                      1.35) &&
+                        restoredLayerDocument.layer(layeredSketch)->description ==
+                            QStringLiteral("Sketch geometry") &&
+                        restoredLayerDocument.layer(layeredSketch)->frozen &&
+                        !restoredLayerDocument.layer(layeredSketch)->plotted &&
                         restoredLayerDocument.layer(layeredSketch)->locked,
-                    "document serialization must preserve layer IDs, flags, active layer, and object membership");
+                    "document serialization must preserve layer identity, style, flags, and object membership");
+
+    QJsonObject versionOneDocument = serializedDocument;
+    versionOneDocument.insert(QStringLiteral("version"), 1);
+    QJsonArray versionOneLayers;
+    for (const QJsonValue &layerValue : serializedDocument.value(QStringLiteral("layers")).toArray()) {
+        QJsonObject versionOneLayer = layerValue.toObject();
+        versionOneLayer.remove(QStringLiteral("color"));
+        versionOneLayers.append(versionOneLayer);
+    }
+    versionOneDocument.insert(QStringLiteral("layers"), versionOneLayers);
+    Document restoredVersionOneDocument;
+    passed &= check(documentFromJson(versionOneDocument,
+                                     &restoredVersionOneDocument,
+                                     &documentError) &&
+                        restoredVersionOneDocument.layer(layeredSketch) != nullptr &&
+                        restoredVersionOneDocument.layer(layeredSketch)->color ==
+                            QColor(QStringLiteral("#d28b45")),
+                    "version-1 drawings must load with the legacy default layer color");
+
+    QJsonObject versionTwoDocument = serializedDocument;
+    versionTwoDocument.insert(QStringLiteral("version"), 2);
+    QJsonArray versionTwoLayers;
+    for (const QJsonValue &layerValue : serializedDocument.value(QStringLiteral("layers")).toArray()) {
+        QJsonObject versionTwoLayer = layerValue.toObject();
+        versionTwoLayer.remove(QStringLiteral("lineType"));
+        versionTwoLayer.remove(QStringLiteral("lineWeightMm"));
+        versionTwoLayer.remove(QStringLiteral("description"));
+        versionTwoLayer.remove(QStringLiteral("frozen"));
+        versionTwoLayer.remove(QStringLiteral("plotted"));
+        versionTwoLayers.append(versionTwoLayer);
+    }
+    versionTwoDocument.insert(QStringLiteral("layers"), versionTwoLayers);
+    Document restoredVersionTwoDocument;
+    passed &= check(documentFromJson(versionTwoDocument,
+                                     &restoredVersionTwoDocument,
+                                     &documentError) &&
+                        restoredVersionTwoDocument.layer(layeredSketch) != nullptr &&
+                        restoredVersionTwoDocument.layer(layeredSketch)->color ==
+                            sketchLayerColor &&
+                        restoredVersionTwoDocument.layer(layeredSketch)->lineType ==
+                            QStringLiteral("Continuous") &&
+                        !restoredVersionTwoDocument.layer(layeredSketch)->frozen,
+                    "version-2 drawings must retain color and receive defaults for new layer properties");
 
     Document historyDocument;
     History history(historyDocument);

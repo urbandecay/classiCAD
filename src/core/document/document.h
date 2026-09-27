@@ -59,7 +59,13 @@ public:
     Layer *layer(LayerId id);
     const Layer *layer(LayerId id) const;
     bool setLayerVisible(LayerId id, bool visible);
+    bool setLayerFrozen(LayerId id, bool frozen);
     bool setLayerLocked(LayerId id, bool locked);
+    bool setLayerColor(LayerId id, const QColor &color);
+    bool setLayerLineType(LayerId id, const QString &lineType);
+    bool setLayerLineWeight(LayerId id, qreal lineWeightMm);
+    bool setLayerPlotted(LayerId id, bool plotted);
+    bool setLayerDescription(LayerId id, const QString &description);
     bool isLayerEditable(LayerId id) const;
     bool moveObjectToLayer(ObjectId objectId, LayerId layerId);
     bool isObjectVisible(ObjectId objectId) const;

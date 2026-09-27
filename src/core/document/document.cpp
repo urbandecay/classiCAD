@@ -1,6 +1,7 @@
 #include "document.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace classiCAD {
 
@@ -222,7 +223,8 @@ bool Document::removeLayer(LayerId id)
     LayerId replacement = LayerId::invalid();
     if (activeLayerId_ == id) {
         for (const Layer &candidate : layers_) {
-            if (candidate.id != id && candidate.visible && !candidate.locked) {
+            if (candidate.id != id && candidate.visible && !candidate.frozen &&
+                !candidate.locked) {
                 replacement = candidate.id;
                 break;
             }
@@ -303,7 +305,7 @@ bool Document::setLayerVisible(LayerId id, bool visible)
     if (!visible && id == activeLayerId_) {
         LayerId replacement = LayerId::invalid();
         for (const Layer &other : layers_) {
-            if (other.id != id && other.visible && !other.locked) {
+            if (other.id != id && other.visible && !other.frozen && !other.locked) {
                 replacement = other.id;
                 break;
             }
@@ -318,6 +320,31 @@ bool Document::setLayerVisible(LayerId id, bool visible)
     return true;
 }
 
+bool Document::setLayerFrozen(LayerId id, bool frozen)
+{
+    Layer *candidate = layer(id);
+    if (candidate == nullptr) {
+        return false;
+    }
+
+    if (frozen && id == activeLayerId_) {
+        LayerId replacement = LayerId::invalid();
+        for (const Layer &other : layers_) {
+            if (other.id != id && other.visible && !other.frozen && !other.locked) {
+                replacement = other.id;
+                break;
+            }
+        }
+        if (!replacement.isValid()) {
+            return false;
+        }
+        activeLayerId_ = replacement;
+    }
+
+    candidate->frozen = frozen;
+    return true;
+}
+
 bool Document::setLayerLocked(LayerId id, bool locked)
 {
     Layer *candidate = layer(id);
@@ -328,7 +355,7 @@ bool Document::setLayerLocked(LayerId id, bool locked)
     if (locked && id == activeLayerId_) {
         LayerId replacement = LayerId::invalid();
         for (const Layer &other : layers_) {
-            if (other.id != id && other.visible && !other.locked) {
+            if (other.id != id && other.visible && !other.frozen && !other.locked) {
                 replacement = other.id;
                 break;
             }
@@ -343,10 +370,64 @@ bool Document::setLayerLocked(LayerId id, bool locked)
     return true;
 }
 
+bool Document::setLayerColor(LayerId id, const QColor &color)
+{
+    Layer *candidate = layer(id);
+    if (candidate == nullptr || !color.isValid()) {
+        return false;
+    }
+
+    candidate->color = color;
+    return true;
+}
+
+bool Document::setLayerLineType(LayerId id, const QString &lineType)
+{
+    Layer *candidate = layer(id);
+    const QString trimmedLineType = lineType.trimmed();
+    if (candidate == nullptr || trimmedLineType.isEmpty()) {
+        return false;
+    }
+    candidate->lineType = trimmedLineType;
+    return true;
+}
+
+bool Document::setLayerLineWeight(LayerId id, qreal lineWeightMm)
+{
+    Layer *candidate = layer(id);
+    if (candidate == nullptr || !std::isfinite(lineWeightMm) || lineWeightMm < 0.0 ||
+        lineWeightMm > 2.11) {
+        return false;
+    }
+    candidate->lineWeightMm = lineWeightMm;
+    return true;
+}
+
+bool Document::setLayerPlotted(LayerId id, bool plotted)
+{
+    Layer *candidate = layer(id);
+    if (candidate == nullptr) {
+        return false;
+    }
+    candidate->plotted = plotted;
+    return true;
+}
+
+bool Document::setLayerDescription(LayerId id, const QString &description)
+{
+    Layer *candidate = layer(id);
+    if (candidate == nullptr) {
+        return false;
+    }
+    candidate->description = description;
+    return true;
+}
+
 bool Document::isLayerEditable(LayerId id) const
 {
     const Layer *candidate = layer(id);
-    return candidate != nullptr && candidate->visible && !candidate->locked;
+    return candidate != nullptr && candidate->visible && !candidate->frozen &&
+           !candidate->locked;
 }
 
 bool Document::moveObjectToLayer(ObjectId objectId, LayerId layerId)
@@ -365,14 +446,15 @@ bool Document::isObjectVisible(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
     const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
-    return objectLayer != nullptr && objectLayer->visible;
+    return objectLayer != nullptr && objectLayer->visible && !objectLayer->frozen;
 }
 
 bool Document::isObjectEditable(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
     const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
-    return objectLayer != nullptr && objectLayer->visible && !objectLayer->locked;
+    return objectLayer != nullptr && objectLayer->visible && !objectLayer->frozen &&
+           !objectLayer->locked;
 }
 
 Document::Snapshot Document::snapshot() const
@@ -452,9 +534,17 @@ void Document::ensureDefaultLayer()
 
     Layer defaultLayer;
     defaultLayer.id = allocateLayerId();
-    defaultLayer.name = QStringLiteral("Default");
+    defaultLayer.name = QStringLiteral("0");
     layers_.append(defaultLayer);
     activeLayerId_ = defaultLayer.id;
+
+    Layer definitionPointsLayer;
+    definitionPointsLayer.id = allocateLayerId();
+    definitionPointsLayer.name = QStringLiteral("Defpoints");
+    definitionPointsLayer.color = QColor(QStringLiteral("#ffffff"));
+    definitionPointsLayer.description = QStringLiteral("Non-plot definition points");
+    definitionPointsLayer.plotted = false;
+    layers_.append(definitionPointsLayer);
 }
 
 } // namespace classiCAD

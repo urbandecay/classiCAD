@@ -290,12 +290,20 @@ public:
         QVector<ViewportLayerInfo> infos;
         infos.reserve(document_.layers().size());
         for (const Layer &layer : document_.layers()) {
-            infos.append(ViewportLayerInfo{layer.id,
-                                           layer.name,
-                                           layer.visible,
-                                           layer.locked,
-                                           layer.id == document_.activeLayerId(),
-                                           static_cast<int>(layer.objectIds.size())});
+            ViewportLayerInfo info;
+            info.id = layer.id;
+            info.name = layer.name;
+            info.visible = layer.visible;
+            info.locked = layer.locked;
+            info.active = layer.id == document_.activeLayerId();
+            info.objectCount = static_cast<int>(layer.objectIds.size());
+            info.color = layer.color;
+            info.lineType = layer.lineType;
+            info.lineWeightMm = layer.lineWeightMm;
+            info.description = layer.description;
+            info.frozen = layer.frozen;
+            info.plotted = layer.plotted;
+            infos.append(info);
         }
         return infos;
     }
@@ -305,7 +313,8 @@ public:
     {
         const auto hasEditableAlternative = [this](LayerId excludedLayer) {
             for (const Layer &layer : document_.layers()) {
-                if (layer.id != excludedLayer && layer.visible && !layer.locked) {
+                if (layer.id != excludedLayer && layer.visible && !layer.frozen &&
+                    !layer.locked) {
                     return true;
                 }
             }
@@ -391,6 +400,101 @@ public:
             pruneSelectionToEditableLayers();
             notifyLayersChanged();
             update();
+            return {true, request.layerId, 0};
+        }
+        case ViewportLayerCommand::SetFrozen: {
+            const Layer *layer = document_.layer(request.layerId);
+            if (layer == nullptr || layer->frozen == request.enabled) {
+                return layer == nullptr ? ViewportLayerCommandResult{}
+                                        : ViewportLayerCommandResult{true, request.layerId, 0};
+            }
+            if (request.enabled && document_.activeLayerId() == request.layerId &&
+                !hasEditableAlternative(request.layerId)) {
+                return {};
+            }
+            recordLayerChange();
+            if (!document_.setLayerFrozen(request.layerId, request.enabled)) {
+                return {};
+            }
+            pruneSelectionToEditableLayers();
+            notifyLayersChanged();
+            update();
+            return {true, request.layerId, 0};
+        }
+        case ViewportLayerCommand::SetColor: {
+            const Layer *layer = document_.layer(request.layerId);
+            if (layer == nullptr || !request.color.isValid()) {
+                return {};
+            }
+            if (layer->color == request.color) {
+                return {true, request.layerId, 0};
+            }
+            recordLayerChange();
+            if (!document_.setLayerColor(request.layerId, request.color)) {
+                return {};
+            }
+            notifyLayersChanged();
+            update();
+            return {true, request.layerId, 0};
+        }
+        case ViewportLayerCommand::SetLineType: {
+            const Layer *layer = document_.layer(request.layerId);
+            const QString lineType = request.name.trimmed();
+            if (layer == nullptr || lineType.isEmpty()) {
+                return {};
+            }
+            if (layer->lineType == lineType) {
+                return {true, request.layerId, 0};
+            }
+            recordLayerChange();
+            if (!document_.setLayerLineType(request.layerId, lineType)) {
+                return {};
+            }
+            notifyLayersChanged();
+            update();
+            return {true, request.layerId, 0};
+        }
+        case ViewportLayerCommand::SetLineWeight: {
+            const Layer *layer = document_.layer(request.layerId);
+            if (layer == nullptr || layer->lineWeightMm == request.lineWeightMm) {
+                return layer == nullptr ? ViewportLayerCommandResult{}
+                                        : ViewportLayerCommandResult{true, request.layerId, 0};
+            }
+            recordLayerChange();
+            if (!document_.setLayerLineWeight(request.layerId, request.lineWeightMm)) {
+                return {};
+            }
+            notifyLayersChanged();
+            update();
+            return {true, request.layerId, 0};
+        }
+        case ViewportLayerCommand::SetPlotted: {
+            const Layer *layer = document_.layer(request.layerId);
+            if (layer == nullptr || layer->plotted == request.enabled) {
+                return layer == nullptr ? ViewportLayerCommandResult{}
+                                        : ViewportLayerCommandResult{true, request.layerId, 0};
+            }
+            recordLayerChange();
+            if (!document_.setLayerPlotted(request.layerId, request.enabled)) {
+                return {};
+            }
+            notifyLayersChanged();
+            update();
+            return {true, request.layerId, 0};
+        }
+        case ViewportLayerCommand::SetDescription: {
+            const Layer *layer = document_.layer(request.layerId);
+            if (layer == nullptr) {
+                return {};
+            }
+            if (layer->description == request.name) {
+                return {true, request.layerId, 0};
+            }
+            recordLayerChange();
+            if (!document_.setLayerDescription(request.layerId, request.name)) {
+                return {};
+            }
+            notifyLayersChanged();
             return {true, request.layerId, 0};
         }
         case ViewportLayerCommand::Rename: {
@@ -1442,6 +1546,18 @@ protected:
             if (!document_.isObjectVisible(objectId)) {
                 continue;
             }
+            QColor layerColor;
+            QString layerLineType;
+            qreal layerLineWeightMm = 0.0;
+            const SceneObject *sceneObject = document_.object(objectId);
+            const Layer *objectLayer = sceneObject == nullptr
+                                           ? nullptr
+                                           : document_.layer(sceneObject->layerId);
+            if (objectLayer != nullptr) {
+                layerColor = objectLayer->color;
+                layerLineType = objectLayer->lineType;
+                layerLineWeightMm = objectLayer->lineWeightMm;
+            }
             const bool selected = selectedShapeIndices_.contains(objectId) ||
                                   objectId == selectedShapeIndex_ ||
                                   joinShapeIndices_.contains(objectId);
@@ -1453,7 +1569,14 @@ protected:
                 rotateShapeGeometry(&previewShape,
                                     rotateBaseWorld_,
                                     rotatePreviewAngle_);
-                drawShape(painter, previewShape, false, true);
+                drawShape(painter,
+                          previewShape,
+                          false,
+                          true,
+                          true,
+                          layerColor,
+                          layerLineType,
+                          layerLineWeightMm);
                 if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
                     drawSubdivisionPoints(painter,
                                           previewShape,
@@ -1461,7 +1584,14 @@ protected:
                                           false);
                 }
             } else {
-                drawShape(painter, shapes_[index], false, selected);
+                drawShape(painter,
+                          shapes_[index],
+                          false,
+                          selected,
+                          true,
+                          layerColor,
+                          layerLineType,
+                          layerLineWeightMm);
                 if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
                     drawSubdivisionPoints(painter,
                                           shapes_[index],
@@ -7301,14 +7431,20 @@ private:
                    const Shape &shape,
                    bool preview,
                    bool selected = false,
-                   bool drawPreviewPoints = true)
+                   bool drawPreviewPoints = true,
+                   const QColor &layerColor = QColor(),
+                   const QString &layerLineType = QString(),
+                   qreal layerLineWeightMm = 0.0)
     {
         viewportRenderer_.drawShape(painter,
                                     shape,
                                     size(),
                                     preview,
                                     selected,
-                                    drawPreviewPoints);
+                                    drawPreviewPoints,
+                                    layerColor,
+                                    layerLineType,
+                                    layerLineWeightMm);
     }
 
     void emitCoordinateUpdate()

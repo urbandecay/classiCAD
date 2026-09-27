@@ -1,6 +1,7 @@
 #include "viewport_renderer.h"
 
 #include "core/geometry/curve_evaluator.h"
+#include "line_type_style.h"
 #include "services/dimensions/dimension_font.h"
 #include "services/dimensions/dimension_layout.h"
 
@@ -112,7 +113,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  const QSize &viewportSize,
                                  bool preview,
                                  bool selected,
-                                 bool drawPreviewPoints) const
+                                 bool drawPreviewPoints,
+                                 const QColor &layerColor,
+                                 const QString &layerLineType,
+                                 qreal layerLineWeightMm) const
 {
     if (shape.points.isEmpty()) {
         return;
@@ -120,11 +124,19 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     const QColor curveColor = selected ? QColor(QStringLiteral("#5da9e9"))
                                        : preview ? QColor(QStringLiteral("#e6b85c"))
-                                                 : QColor(QStringLiteral("#d28b45"));
+                                                 : layerColor.isValid()
+                                                     ? layerColor
+                                                     : QColor(QStringLiteral("#d28b45"));
     const QColor controlColor = QColor(QStringLiteral("#8aa7c7"));
-    const qreal curveWidth = selected ? 3.5 : (preview ? 1.5 : 2.0);
+    const qreal storedWidth = layerLineWeightMm > 0.0
+                                  ? std::clamp(layerLineWeightMm * 6.0, 1.0, 10.0)
+                                  : 2.0;
+    const qreal curveWidth = selected ? 3.5 : (preview ? 1.5 : storedWidth);
+    const QPen layerPen = selected || preview
+                              ? QPen(curveColor, curveWidth)
+                              : layerLineTypePen(curveColor, curveWidth, layerLineType);
 
-    painter.setPen(QPen(curveColor, curveWidth));
+    painter.setPen(layerPen);
     painter.setBrush(Qt::NoBrush);
 
     if (isDimensionGeometryType(shape.geometryType)) {
@@ -137,11 +149,19 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                             : DimensionFontStyle::Standard);
         if (layout.valid) {
             painter.save();
-            painter.setPen(QPen(curveColor,
-                                selected ? 2.0 : (preview ? 1.5 : 1.25),
-                                Qt::SolidLine,
-                                Qt::RoundCap,
-                                Qt::RoundJoin));
+            const qreal dimensionLineWidth =
+                selected ? 2.0 : (preview ? 1.5 : 1.25);
+            const QPen dimensionPen = selected || preview
+                                          ? QPen(curveColor,
+                                                 dimensionLineWidth,
+                                                 Qt::SolidLine,
+                                                 Qt::RoundCap,
+                                                 Qt::RoundJoin)
+                                          : layerLineTypePen(curveColor,
+                                                             dimensionLineWidth,
+                                                             layerLineType,
+                                                             Qt::RoundCap);
+            painter.setPen(dimensionPen);
             for (const QLineF &line : layout.lines) {
                 painter.drawLine(line);
             }
@@ -168,7 +188,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
         }
     } else if (shape.geometryType == GeometryType::Point && !shape.points.isEmpty()) {
-        painter.setPen(QPen(curveColor, selected ? 2.0 : 1.5));
+        const qreal pointWidth = selected ? 2.0 : curveWidth;
+        painter.setPen(selected || preview
+                           ? QPen(curveColor, pointWidth)
+                           : layerLineTypePen(curveColor, pointWidth, layerLineType));
         painter.setBrush(curveColor);
         painter.drawEllipse(worldToScreen(shape.points.first(), viewportSize),
                             selected ? 5.0 : 4.5,
@@ -251,7 +274,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                              worldToScreen(controlPoints[index + 1], viewportSize));
         }
 
-        painter.setPen(QPen(curveColor, curveWidth));
+        painter.setPen(layerPen);
         if (isValidNurbsCurve(shape.nurbs)) {
             drawNurbsCurve(painter, shape.nurbs, viewportSize);
         } else {

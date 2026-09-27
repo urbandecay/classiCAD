@@ -58,7 +58,7 @@ bool idFromJson(const QJsonValue &value, quint64 *id)
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 1);
+    serialized.insert(QStringLiteral("version"), 3);
     serialized.insert(QStringLiteral("activeLayerId"),
                       idToJson(document.activeLayerId().value()));
 
@@ -67,8 +67,14 @@ QJsonObject documentToJson(const Document &document)
         QJsonObject serializedLayer;
         serializedLayer.insert(QStringLiteral("id"), idToJson(layer.id.value()));
         serializedLayer.insert(QStringLiteral("name"), layer.name);
+        serializedLayer.insert(QStringLiteral("color"), layer.color.name(QColor::HexArgb));
+        serializedLayer.insert(QStringLiteral("lineType"), layer.lineType);
+        serializedLayer.insert(QStringLiteral("lineWeightMm"), layer.lineWeightMm);
+        serializedLayer.insert(QStringLiteral("description"), layer.description);
         serializedLayer.insert(QStringLiteral("visible"), layer.visible);
+        serializedLayer.insert(QStringLiteral("frozen"), layer.frozen);
         serializedLayer.insert(QStringLiteral("locked"), layer.locked);
+        serializedLayer.insert(QStringLiteral("plotted"), layer.plotted);
 
         QJsonArray objectIds;
         for (const ObjectId objectId : layer.objectIds) {
@@ -101,7 +107,8 @@ bool documentFromJson(const QJsonValue &value,
     }
 
     const QJsonObject serialized = value.toObject();
-    if (serialized.value(QStringLiteral("version")).toInt(-1) != 1) {
+    const int version = serialized.value(QStringLiteral("version")).toInt(-1);
+    if (version < 1 || version > 3) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -136,6 +143,49 @@ bool documentFromJson(const QJsonValue &value,
         Layer layer;
         layer.id = LayerId::fromValue(layerValueId);
         layer.name = name;
+        const QJsonValue colorValue = serializedLayer.value(QStringLiteral("color"));
+        if (colorValue.isUndefined()) {
+            if (version >= 2) {
+                setError(errorMessage, QStringLiteral("layer color is missing"));
+                return false;
+            }
+        } else {
+            if (!colorValue.isString()) {
+                setError(errorMessage, QStringLiteral("invalid layer color"));
+                return false;
+            }
+            const QColor color(colorValue.toString());
+            if (!color.isValid()) {
+                setError(errorMessage, QStringLiteral("invalid layer color"));
+                return false;
+            }
+            layer.color = color;
+        }
+        if (version >= 3) {
+            const QJsonValue lineTypeValue =
+                serializedLayer.value(QStringLiteral("lineType"));
+            const QJsonValue lineWeightValue =
+                serializedLayer.value(QStringLiteral("lineWeightMm"));
+            const QJsonValue descriptionValue =
+                serializedLayer.value(QStringLiteral("description"));
+            const QJsonValue frozenValue = serializedLayer.value(QStringLiteral("frozen"));
+            const QJsonValue plottedValue = serializedLayer.value(QStringLiteral("plotted"));
+            const QString lineType = lineTypeValue.toString().trimmed();
+            const qreal lineWeightMm = lineWeightValue.toDouble(-1.0);
+            if (!lineTypeValue.isString() || lineType.isEmpty() ||
+                !lineWeightValue.isDouble() || !std::isfinite(lineWeightMm) ||
+                lineWeightMm < 0.0 || lineWeightMm > 2.11 ||
+                !descriptionValue.isString() || !frozenValue.isBool() ||
+                !plottedValue.isBool()) {
+                setError(errorMessage, QStringLiteral("invalid layer properties"));
+                return false;
+            }
+            layer.lineType = lineType;
+            layer.lineWeightMm = lineWeightMm;
+            layer.description = descriptionValue.toString();
+            layer.frozen = frozenValue.toBool();
+            layer.plotted = plottedValue.toBool();
+        }
         layer.visible = serializedLayer.value(QStringLiteral("visible")).toBool();
         layer.locked = serializedLayer.value(QStringLiteral("locked")).toBool();
         snapshot.layers.append(layer);
@@ -163,7 +213,8 @@ bool documentFromJson(const QJsonValue &value,
         [activeLayerValue](const Layer &layer) {
             return layer.id.value() == activeLayerValue;
         });
-    if (activeLayer == snapshot.layers.cend() || !activeLayer->visible || activeLayer->locked) {
+    if (activeLayer == snapshot.layers.cend() || !activeLayer->visible ||
+        activeLayer->frozen || activeLayer->locked) {
         setError(errorMessage, QStringLiteral("active layer must be visible and unlocked"));
         return false;
     }

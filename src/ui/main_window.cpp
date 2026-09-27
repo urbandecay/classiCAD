@@ -667,6 +667,30 @@ private:
         statusBar()->showMessage(QStringLiteral("Mirror: click the first and second points of the axis"));
     }
 
+    void startDuplicate()
+    {
+        if (viewport_ == nullptr ||
+            !viewport_->executeCommand(ViewportCommand::BeginDuplicate).accepted) {
+            statusBar()->showMessage(QStringLiteral("Select something to duplicate first"), 4000);
+            return;
+        }
+
+        statusBar()->showMessage(
+            QStringLiteral("Duplicate: click a base point, then click where to place the copy"));
+    }
+
+    void duplicateInPlace()
+    {
+        if (viewport_ == nullptr ||
+            !viewport_->executeCommand(ViewportCommand::DuplicateInPlace).accepted) {
+            statusBar()->showMessage(QStringLiteral("Select something to duplicate first"), 4000);
+            return;
+        }
+
+        statusBar()->showMessage(
+            QStringLiteral("Copy created in place — press G to move it; X/Y locks the axis, B picks a base point"));
+    }
+
     void explodeSelectedShapes()
     {
         if (viewport_ == nullptr) {
@@ -803,6 +827,13 @@ private:
         mirrorAction->setShortcutContext(Qt::WindowShortcut);
         connect(mirrorAction, &QAction::triggered, this, [this]() {
             startMirror();
+        });
+
+        QAction *duplicateAction = editMenu->addAction(QStringLiteral("Duplicate in Place"));
+        duplicateAction->setShortcut(QKeySequence(QStringLiteral("Shift+D")));
+        duplicateAction->setShortcutContext(Qt::WindowShortcut);
+        connect(duplicateAction, &QAction::triggered, this, [this]() {
+            duplicateInPlace();
         });
 
         eraseAction_ = editMenu->addAction(QStringLiteral("Erase"));
@@ -1290,6 +1321,17 @@ private:
         trimToolButton_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         rotateToolButton_ = addToolButton(layout, group, QStringLiteral("↻\nRotate"), Tool::Rotate);
         mirrorToolButton_ = addToolButton(layout, group, QStringLiteral("⇄\nMirror"), Tool::Mirror);
+
+        auto *duplicateToolButton = new QToolButton;
+        duplicateToolButton->setObjectName(QStringLiteral("toolButton"));
+        duplicateToolButton->setText(QStringLiteral("⧉\nDuplicate"));
+        duplicateToolButton->setToolTip(
+            QStringLiteral("Interactive Duplicate: choose a base point and placement"));
+        duplicateToolButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        layout->addWidget(duplicateToolButton);
+        connect(duplicateToolButton, &QToolButton::clicked, this, [this]() {
+            startDuplicate();
+        });
 
         layout->addSpacing(8);
         controlPointsButton_ = new QToolButton;

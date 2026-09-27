@@ -23,6 +23,8 @@ enum class ViewportCommand {
     Explode,
     BeginRotate,
     BeginMirror,
+    BeginDuplicate,
+    DuplicateInPlace,
 };
 
 struct ViewportCommandResult {

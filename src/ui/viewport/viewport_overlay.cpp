@@ -733,7 +733,10 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                      int rotateStep,
                                      bool grabActive,
                                      bool grabPickingBasePoint,
-                                     bool grabHasBasePoint) const
+                                     bool grabHasBasePoint,
+                                     bool duplicateActive,
+                                     bool duplicatePickingBasePoint,
+                                     bool duplicateHasBasePoint) const
 {
     painter.setPen(QColor(QStringLiteral("#a0a0a0")));
     painter.setFont(QFont(QStringLiteral("Sans"), 10));
@@ -799,6 +802,14 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
             18,
             viewportSize.height() - 18,
             QStringLiteral("Click a curve, then click the perpendicular line endpoint  •  Esc cancels"));
+    } else if (duplicateActive) {
+        painter.setPen(QColor(QStringLiteral("#f0a45a")));
+        const QString duplicateHint = duplicatePickingBasePoint
+                                          ? QStringLiteral("DUPLICATE  •  Click a base point on the selection  •  Esc/RMB cancels")
+                                          : duplicateHasBasePoint
+                                                ? QStringLiteral("DUPLICATE  •  Move preview to destination  •  Click to place  •  Esc cancels")
+                                                : QStringLiteral("DUPLICATE  •  Click a base point on the selection  •  Esc/RMB cancels");
+        painter.drawText(18, viewportSize.height() - 18, duplicateHint);
     } else if (activeTool != Tool::Select) {
         QString hint;
         if (isRectangleTool(activeTool)) {
@@ -860,7 +871,7 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,
                          viewportSize.height() - 18,
-                         QStringLiteral("Shift-click: add/remove  •  Drag empty: box select  •  G: grab  •  B: base point  •  X/Y: lock axis"));
+                         QStringLiteral("Shift-click: add/remove  •  Box select  •  G: Grab  •  Shift+D: copy in place  •  B: base point  •  X/Y: axis lock"));
     }
 }
 

@@ -115,7 +115,10 @@ public:
                         int rotateStep,
                         bool grabActive,
                         bool grabPickingBasePoint,
-                        bool grabHasBasePoint) const;
+                        bool grabHasBasePoint,
+                        bool duplicateActive,
+                        bool duplicatePickingBasePoint,
+                        bool duplicateHasBasePoint) const;
 
 private:
     void drawSampledEraseIntervals(QPainter &painter,

@@ -150,6 +150,9 @@ public:
     {
         DebugLog::instance().write(QStringLiteral("setTool requested=%1 previous=%2")
                                        .arg(toolName(tool), toolName(activeTool_)));
+        if (duplicateActive_) {
+            cancelDuplicate();
+        }
         if (grabActive_ && tool != Tool::Select) {
             cancelGrab();
         }
@@ -254,11 +257,17 @@ public:
     {
         switch (command) {
         case ViewportCommand::Undo: {
+            if (duplicateActive_) {
+                cancelDuplicate();
+            }
             const bool accepted = history_.canUndo();
             undo();
             return {accepted, 0};
         }
         case ViewportCommand::Redo: {
+            if (duplicateActive_) {
+                cancelDuplicate();
+            }
             const bool accepted = history_.canRedo();
             redo();
             return {accepted, 0};
@@ -280,6 +289,10 @@ public:
             return {beginRotate(), 0};
         case ViewportCommand::BeginMirror:
             return {beginMirror(), 0};
+        case ViewportCommand::BeginDuplicate:
+            return {beginDuplicate(), 0};
+        case ViewportCommand::DuplicateInPlace:
+            return {duplicateInPlace(), 0};
         }
 
         return {};
@@ -1082,6 +1095,168 @@ public:
         DebugLog::instance().write(QStringLiteral("grab canceled moved=%1").arg(moved));
     }
 
+    bool beginDuplicate()
+    {
+        if (activeTool_ != Tool::Select || duplicateActive_ || grabActive_ ||
+            draggingSelected_ || joinActive_ || subdivisionActive_) {
+            return false;
+        }
+
+        QVector<ObjectId> selected = selectedShapeIndices_;
+        if (selectedShapeIndex_.isValid() && !selected.contains(selectedShapeIndex_)) {
+            selected.append(selectedShapeIndex_);
+        }
+
+        duplicateSourceObjects_.clear();
+        duplicateSourceObjects_.reserve(selected.size());
+        for (const ObjectId objectId : selected) {
+            const SceneObject *sceneObject = document_.object(objectId);
+            if (sceneObject != nullptr && document_.isObjectEditable(objectId)) {
+                duplicateSourceObjects_.append(*sceneObject);
+            }
+        }
+        if (duplicateSourceObjects_.isEmpty()) {
+            return false;
+        }
+
+        duplicateActive_ = true;
+        duplicatePickingBasePoint_ = true;
+        duplicateHasBasePoint_ = false;
+        duplicateBasePoint_ = QPointF();
+        duplicateCursorOffset_ = QPointF();
+        duplicateDestination_ = QPointF();
+        duplicatePreviewShapes_.clear();
+        currentSnap_ = SnapResult{};
+        setFocus(Qt::OtherFocusReason);
+        setCursor(Qt::CrossCursor);
+        update();
+        DebugLog::instance().write(
+            QStringLiteral("beginDuplicate objects=%1")
+                .arg(duplicateSourceObjects_.size()));
+        return true;
+    }
+
+    bool duplicateInPlace()
+    {
+        if (!beginDuplicate()) {
+            return false;
+        }
+
+        duplicatePickingBasePoint_ = false;
+        duplicateHasBasePoint_ = true;
+        duplicateBasePoint_ = QPointF();
+        duplicateCursorOffset_ = QPointF();
+        duplicateDestination_ = QPointF();
+        duplicatePreviewShapes_.reserve(duplicateSourceObjects_.size());
+        for (const SceneObject &source : duplicateSourceObjects_) {
+            duplicatePreviewShapes_.append(source.geometry);
+        }
+        finishDuplicate();
+        return true;
+    }
+
+    void updateDuplicatePreview(const QPointF &rawPoint)
+    {
+        if (!duplicateActive_ || !duplicateHasBasePoint_) {
+            return;
+        }
+
+        const QPointF destinationCursor = rawPoint - duplicateCursorOffset_;
+        currentSnap_ = findDuplicateDestinationSnap(destinationCursor);
+        duplicateDestination_ = currentSnap_.isValid()
+                                    ? currentSnap_.point
+                                    : destinationCursor;
+        cursorWorld_ = duplicateDestination_;
+        lastWorldPosition_ = duplicateDestination_;
+
+        const QPointF delta = duplicateDestination_ - duplicateBasePoint_;
+        duplicatePreviewShapes_.clear();
+        duplicatePreviewShapes_.reserve(duplicateSourceObjects_.size());
+        for (const SceneObject &source : duplicateSourceObjects_) {
+            Shape preview = source.geometry;
+            translateShapeGeometry(preview, delta);
+            duplicatePreviewShapes_.append(preview);
+        }
+        update();
+    }
+
+    void finishDuplicate()
+    {
+        if (!duplicateActive_ || !duplicateHasBasePoint_ ||
+            duplicatePreviewShapes_.isEmpty()) {
+            return;
+        }
+
+        const Document::Snapshot before = document_.snapshot();
+        QVector<ObjectId> duplicateIds;
+        duplicateIds.reserve(duplicatePreviewShapes_.size());
+        for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
+            SceneObject duplicate = duplicateSourceObjects_[index];
+            duplicate.id = ObjectId::invalid();
+            duplicate.geometry = duplicatePreviewShapes_[index];
+            duplicateIds.append(shapes_.insertObject(shapes_.size(), duplicate));
+        }
+
+        for (int duplicateIndex = 0; duplicateIndex < duplicateIds.size(); ++duplicateIndex) {
+            Shape *duplicateGeometry = document_.shape(duplicateIds[duplicateIndex]);
+            if (duplicateGeometry == nullptr ||
+                !isDimensionGeometryType(duplicateGeometry->geometryType)) {
+                continue;
+            }
+            for (DimensionAnchorReference &anchor : duplicateGeometry->dimensionAnchors) {
+                bool remapped = false;
+                for (int sourceIndex = 0;
+                     sourceIndex < duplicateSourceObjects_.size();
+                     ++sourceIndex) {
+                    if (anchor.objectId == duplicateSourceObjects_[sourceIndex].id) {
+                        anchor.objectId = duplicateIds[sourceIndex];
+                        remapped = true;
+                        break;
+                    }
+                }
+                if (!remapped) {
+                    // A copied dimension without its referenced geometry is a
+                    // positioned copy, not a second annotation tied to the
+                    // original objects.
+                    anchor = DimensionAnchorReference{};
+                }
+            }
+        }
+
+        recordGeometrySnapshot(before);
+        selection_.setObjectIds(duplicateIds,
+                                duplicateIds.isEmpty() ? ObjectId::invalid()
+                                                       : duplicateIds.back());
+        selectedShapeIndex_ = selection_.primaryObjectId();
+        const int duplicateCount = duplicateIds.size();
+        const QPointF committedDelta = duplicateDestination_ - duplicateBasePoint_;
+        resetDuplicateInteraction();
+        currentSnap_ = SnapResult{};
+        setCursor(Qt::ArrowCursor);
+        notifyLayersChanged();
+        update();
+        emitCoordinateUpdate();
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        DebugLog::instance().write(
+            QStringLiteral("duplicate committed objects=%1 delta=%2")
+                .arg(duplicateCount)
+                .arg(pointText(committedDelta)));
+    }
+
+    void cancelDuplicate()
+    {
+        if (!duplicateActive_) {
+            return;
+        }
+        resetDuplicateInteraction();
+        currentSnap_ = SnapResult{};
+        setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
+        update();
+        DebugLog::instance().write(QStringLiteral("duplicate canceled"));
+    }
+
     bool beginJoinMode()
     {
         if (subdivisionActive_) {
@@ -1601,6 +1776,12 @@ protected:
             }
         }
 
+        if (duplicateActive_) {
+            for (const Shape &previewShape : duplicatePreviewShapes_) {
+                drawShape(painter, previewShape, true);
+            }
+        }
+
         if (isEraseLikeTool(activeTool_) &&
             (!eraseStrokeScreenPath_.isEmpty() || eraseStrokeActive_)) {
             for (const ObjectId objectId : eraseCandidateShapeIndices_) {
@@ -1692,7 +1873,7 @@ protected:
                       true);
         }
 
-        if (grabActive_ && currentSnap_.isValid()) {
+        if ((grabActive_ || duplicateActive_) && currentSnap_.isValid()) {
             drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
         }
         if ((draggingSelected_ || draggingControlPoint_) && currentDragSnap_.isValid()) {
@@ -1718,7 +1899,10 @@ protected:
                                          rotateStep_,
                                          grabActive_,
                                          grabPickingBasePoint_,
-                                         grabHasBasePoint_);
+                                         grabHasBasePoint_,
+                                         duplicateActive_,
+                                         duplicatePickingBasePoint_,
+                                         duplicateHasBasePoint_);
     }
 
     void mousePressEvent(QMouseEvent *event) override
@@ -1738,6 +1922,35 @@ protected:
                 .arg(inputButtonName(panButton_))
                 .arg(static_cast<int>(event->modifiers()), 0, 16)
                 .arg(snapTypeName(currentSnap_.type)));
+
+        if (duplicateActive_) {
+            rawCursorWorld_ = rawWorldPosition;
+            cursorWorld_ = rawWorldPosition;
+            lastWorldPosition_ = rawWorldPosition;
+            cursorValid_ = true;
+            if (event->button() == Qt::LeftButton) {
+                if (duplicatePickingBasePoint_) {
+                    const SnapResult baseSnap = findDuplicateBasePointSnap(rawWorldPosition);
+                    duplicateBasePoint_ = baseSnap.isValid()
+                                              ? baseSnap.point
+                                              : rawWorldPosition;
+                    duplicateCursorOffset_ = rawWorldPosition - duplicateBasePoint_;
+                    duplicateHasBasePoint_ = true;
+                    duplicatePickingBasePoint_ = false;
+                    currentSnap_ = baseSnap;
+                    setCursor(Qt::SizeAllCursor);
+                    updateDuplicatePreview(rawWorldPosition);
+                } else {
+                    updateDuplicatePreview(rawWorldPosition);
+                    finishDuplicate();
+                }
+                update();
+                emitCoordinateUpdate();
+            } else if (event->button() == Qt::RightButton) {
+                cancelDuplicate();
+            }
+            return;
+        }
 
         if (grabActive_) {
             rawCursorWorld_ = rawWorldPosition;
@@ -2222,6 +2435,22 @@ protected:
             return;
         }
 
+        if (duplicateActive_) {
+            if (duplicatePickingBasePoint_) {
+                currentSnap_ = findDuplicateBasePointSnap(rawCursorWorld_);
+                cursorWorld_ = currentSnap_.isValid()
+                                   ? currentSnap_.point
+                                   : rawCursorWorld_;
+                lastWorldPosition_ = cursorWorld_;
+                update();
+                emitCoordinateUpdate();
+            } else {
+                updateDuplicatePreview(rawCursorWorld_);
+                emitCoordinateUpdate();
+            }
+            return;
+        }
+
         if (grabActive_ && grabPickingBasePoint_) {
             currentSnap_ = findGrabBasePointSnap(rawCursorWorld_);
             cursorWorld_ = currentSnap_.isValid() ? currentSnap_.point : rawCursorWorld_;
@@ -2620,6 +2849,11 @@ protected:
 
         if (grabActive_ && event->key() == Qt::Key_Escape) {
             cancelGrab();
+            return;
+        }
+
+        if (duplicateActive_ && event->key() == Qt::Key_Escape) {
+            cancelDuplicate();
             return;
         }
 
@@ -3621,6 +3855,18 @@ private:
         grabCursorOffset_ = QPointF();
     }
 
+    void resetDuplicateInteraction()
+    {
+        duplicateActive_ = false;
+        duplicatePickingBasePoint_ = false;
+        duplicateHasBasePoint_ = false;
+        duplicateSourceObjects_.clear();
+        duplicatePreviewShapes_.clear();
+        duplicateBasePoint_ = QPointF();
+        duplicateCursorOffset_ = QPointF();
+        duplicateDestination_ = QPointF();
+    }
+
     void resetInteractionAfterHistory()
     {
         pendingPoints_.clear();
@@ -4550,6 +4796,58 @@ private:
                                                viewportTransform_,
                                                size());
         return closestSnapCandidate(rawPoint, candidates);
+    }
+
+    QVector<int> duplicateSourceShapeIndices() const
+    {
+        QVector<int> selectedIndices;
+        selectedIndices.reserve(duplicateSourceObjects_.size());
+        for (const SceneObject &source : duplicateSourceObjects_) {
+            const int shapeIndex = objectIndex(source.id);
+            if (shapeIndex >= 0) {
+                selectedIndices.append(shapeIndex);
+            }
+        }
+        return selectedIndices;
+    }
+
+    SnapResult findDuplicateBasePointSnap(const QPointF &rawPoint) const
+    {
+        QVector<int> excludedShapeIndices;
+        const QVector<int> selectedIndices = duplicateSourceShapeIndices();
+        for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
+            if (!selectedIndices.contains(shapeIndex)) {
+                excludedShapeIndices.append(shapeIndex);
+            }
+        }
+        const QVector<SnapCandidate> candidates =
+            snapEngine_.snapCandidatesForScene(document_,
+                                               excludedShapeIndices,
+                                               viewportTransform_,
+                                               size());
+        return closestSnapCandidate(rawPoint, candidates);
+    }
+
+    SnapResult findDuplicateDestinationSnap(const QPointF &rawPoint) const
+    {
+        const QVector<int> selectedIndices = duplicateSourceShapeIndices();
+        bool selectedLine = false;
+        for (const int shapeIndex : selectedIndices) {
+            if (shapeIndex >= 0 && shapeIndex < document_.size() &&
+                document_[shapeIndex].geometryType == GeometryType::Line) {
+                selectedLine = true;
+                break;
+            }
+        }
+        return snapEngine_.findSnapPoint(document_,
+                                         rawPoint,
+                                         true,
+                                         QVector<QPointF>{duplicateBasePoint_},
+                                         viewportTransform_,
+                                         size(),
+                                         selectedIndices,
+                                         true,
+                                         !selectedLine);
     }
 
     SnapResult findGrabDestinationSnap(const QPointF &rawPoint) const
@@ -7010,6 +7308,21 @@ private:
         }
     }
 
+    void translateShapeGeometry(Shape &shape, const QPointF &delta) const
+    {
+        for (QPointF &point : shape.points) {
+            point += delta;
+        }
+        for (QPointF &point : shape.nurbs.controlPoints) {
+            point += delta;
+        }
+        for (Shape::NurbsCurve2D &component : shape.components) {
+            for (QPointF &point : component.controlPoints) {
+                point += delta;
+            }
+        }
+    }
+
     void translateShapes(const QVector<ObjectId> &objectIds, const QPointF &delta)
     {
         for (const ObjectId objectId : objectIds) {
@@ -7702,6 +8015,14 @@ private:
     QPointF dragStartScreen_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
     QPointF lastControlPointWorld_{0.0, 0.0};
+    bool duplicateActive_ = false;
+    bool duplicatePickingBasePoint_ = false;
+    bool duplicateHasBasePoint_ = false;
+    QVector<SceneObject> duplicateSourceObjects_;
+    QVector<Shape> duplicatePreviewShapes_;
+    QPointF duplicateBasePoint_{0.0, 0.0};
+    QPointF duplicateCursorOffset_{0.0, 0.0};
+    QPointF duplicateDestination_{0.0, 0.0};
     bool selectionBoxActive_ = false;
     bool selectionBoxMoved_ = false;
     bool selectionBoxAdditive_ = false;

@@ -13,6 +13,8 @@
 
 namespace classiCAD {
 
+struct Rhino3dmImportReport;
+
 enum class ViewportCommand {
     Undo,
     Redo,
@@ -22,6 +24,7 @@ enum class ViewportCommand {
     BeginJoin,
     Explode,
     BeginRotate,
+    BeginScale,
     BeginMirror,
     BeginDuplicate,
     DuplicateInPlace,
@@ -139,6 +142,9 @@ public:
                                      QString *errorMessage = nullptr) const = 0;
     virtual bool loadVignolaDocument(const QString &path,
                                      QString *errorMessage = nullptr) = 0;
+    virtual bool importRhino3dmDocument(const QString &path,
+                                        Rhino3dmImportReport *report = nullptr,
+                                        QString *errorMessage = nullptr) = 0;
     virtual void createNewDocument() = 0;
 
     void setUiCallbacks(const ViewportUiCallbacks &callbacks)

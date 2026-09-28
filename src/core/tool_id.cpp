@@ -116,6 +116,8 @@ QString toolName(ToolId tool)
         return QStringLiteral("Trim");
     case ToolId::Rotate:
         return QStringLiteral("Rotate");
+    case ToolId::Scale:
+        return QStringLiteral("Scale");
     case ToolId::Mirror:
         return QStringLiteral("Mirror");
     case ToolId::TangentFromCurve:
@@ -159,6 +161,17 @@ QString toolName(ToolId tool)
     return QStringLiteral("Unknown");
 }
 
+QString scaleModeName(ScaleMode mode)
+{
+    switch (mode) {
+    case ScaleMode::OneD:
+        return QStringLiteral("Scale 1D");
+    case ScaleMode::TwoD:
+        return QStringLiteral("Scale 2D");
+    }
+    return QStringLiteral("Scale");
+}
+
 int requiredPoints(ToolId tool)
 {
     switch (tool) {
@@ -192,6 +205,7 @@ int requiredPoints(ToolId tool)
     case ToolId::Erase:
     case ToolId::Trim:
     case ToolId::Rotate:
+    case ToolId::Scale:
     case ToolId::Mirror:
     case ToolId::TangentFromCurve:
     case ToolId::PerpendicularFromCurve:

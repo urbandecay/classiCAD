@@ -39,6 +39,7 @@ enum class ToolId : int {
     CircleTangentThree = 28,
     LinearDimension = 29,
     AngularDimension = 30,
+    Scale = 31,
 };
 
 enum class EllipseMode {
@@ -61,6 +62,11 @@ enum class PolygonMode {
     Edge,
 };
 
+enum class ScaleMode {
+    OneD,
+    TwoD,
+};
+
 // Transitional source alias for the existing UI implementation. New code
 // should name this type ToolId; Shape stores GeometryType instead.
 using Tool = ToolId;
@@ -77,6 +83,7 @@ bool isCircleTangentTool(ToolId tool);
 bool isCircleTool(ToolId tool);
 bool isDimensionTool(ToolId tool);
 QString toolName(ToolId tool);
+QString scaleModeName(ScaleMode mode);
 int requiredPoints(ToolId tool);
 
 } // namespace classiCAD

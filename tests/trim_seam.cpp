@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QKeyEvent>
 #define private public
 #define protected public
 #include "../src/ui/viewport_widget.cpp"
@@ -324,6 +325,75 @@ int main(int argc, char **argv)
         !near(view.shapes_[1].nurbs.controlPoints[0].x(), -1.0) ||
         !near(view.shapes_[1].nurbs.controlPoints[0].y(), 0.0)) {
         qWarning() << "Rotate must apply one angle to every selected shape";
+        ++failures;
+    }
+
+    Shape scaleLine{GeometryType::Line,
+                    {QPointF(0, 0), QPointF(2, 3)},
+                    makeDegreeOneNurbs({QPointF(0, 0), QPointF(2, 3)}),
+                    ArcMode::TwoPoint,
+                    0.0,
+                    {},
+                    {}};
+    view.shapes_ = {scaleLine};
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
+    const bool scaleOneDStarted = view.beginScale(ScaleMode::OneD);
+    view.handleScalePoint(QPointF(0, 0));
+    view.handleScalePoint(QPointF(2, 0));
+    view.updateScalePreview(QPointF(4, 0));
+    const bool scalePreviewIsNonDestructive =
+        near(view.shapes_[0].nurbs.controlPoints[1].x(), 2.0) &&
+        near(view.shapes_[0].nurbs.controlPoints[1].y(), 3.0);
+    view.handleScalePoint(QPointF(4, 0));
+    if (!scaleOneDStarted || !scalePreviewIsNonDestructive ||
+        view.activeTool_ != Tool::Select ||
+        !near(view.shapes_[0].nurbs.controlPoints[1].x(), 4.0) ||
+        !near(view.shapes_[0].nurbs.controlPoints[1].y(), 3.0)) {
+        qWarning() << "Scale 1D must preview without mutation and stretch only along its picked axis";
+        ++failures;
+    }
+
+    scaleLine = Shape{GeometryType::Line,
+                      {QPointF(1, 1), QPointF(2, 1)},
+                      makeDegreeOneNurbs({QPointF(1, 1), QPointF(2, 1)}),
+                      ArcMode::TwoPoint,
+                      0.0,
+                      {},
+                      {}};
+    view.shapes_ = {scaleLine};
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
+    const bool scaleTwoDStarted = view.beginScale(ScaleMode::TwoD);
+    view.handleScalePoint(QPointF(0, 0));
+    view.handleScalePoint(QPointF(1, 0));
+    view.handleScalePoint(QPointF(0, 2));
+    if (!scaleTwoDStarted || view.activeTool_ != Tool::Select ||
+        !near(view.shapes_[0].nurbs.controlPoints[0].x(), 2.0) ||
+        !near(view.shapes_[0].nurbs.controlPoints[0].y(), 2.0) ||
+        !near(view.shapes_[0].nurbs.controlPoints[1].x(), 4.0) ||
+        !near(view.shapes_[0].nurbs.controlPoints[1].y(), 2.0)) {
+        qWarning() << "Scale 2D must resize equally in X and Y around its base point";
+        ++failures;
+    }
+
+    view.shapes_ = {scaleLine};
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
+    const bool scaleTypedOneDStarted = view.beginScale(ScaleMode::OneD);
+    view.handleScalePoint(QPointF(0, 0));
+    QKeyEvent typedFactor(QEvent::KeyPress,
+                          Qt::Key_2,
+                          Qt::NoModifier,
+                          QStringLiteral("2"));
+    QKeyEvent confirmFactor(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    view.keyPressEvent(&typedFactor);
+    view.keyPressEvent(&confirmFactor);
+    view.handleScalePoint(QPointF(1, 0));
+    if (!scaleTypedOneDStarted || view.activeTool_ != Tool::Select ||
+        !near(view.shapes_[0].nurbs.controlPoints[1].x(), 4.0) ||
+        !near(view.shapes_[0].nurbs.controlPoints[1].y(), 1.0)) {
+        qWarning() << "Scale 1D must accept a typed factor and a picked scale direction";
         ++failures;
     }
 

@@ -121,6 +121,7 @@ GeometryType geometryTypeForTool(ToolId tool)
     case ToolId::Erase:
     case ToolId::Trim:
     case ToolId::Rotate:
+    case ToolId::Scale:
     case ToolId::Mirror:
     case ToolId::TangentFromCurve:
     case ToolId::PerpendicularFromCurve:

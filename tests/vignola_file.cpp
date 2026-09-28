@@ -143,5 +143,92 @@ int main(int argc, char **argv)
                         "the 3DM archive must carry the Vignola document metadata");
     }
 
+    ONX_Model rhinoModel;
+    rhinoModel.m_settings.m_ModelUnitsAndTolerances.m_unit_system =
+        ON::LengthUnitSystem::Inches;
+    ON_Layer rhinoLayer;
+    rhinoLayer.SetName(L"Imported Layer");
+    rhinoLayer.SetColor(ON_Color(40, 120, 210));
+    const ON_ModelComponentReference addedLayer = rhinoModel.AddModelComponent(rhinoLayer, true);
+    const ON_ModelComponent *layerComponent = addedLayer.ModelComponent();
+    passed &= check(layerComponent != nullptr && layerComponent->Index() >= 0,
+                    "plain Rhino test model must contain its custom layer");
+    if (layerComponent != nullptr) {
+        ON_3dmObjectAttributes curveAttributes;
+        curveAttributes.m_layer_index = layerComponent->Index();
+        rhinoModel.AddManagedModelGeometryComponent(
+            new ON_ArcCurve(ON_Circle(ON_3dPoint(1.0, 2.0, 0.0), 0.5)),
+            new ON_3dmObjectAttributes(curveAttributes));
+
+        ON_3dmObjectAttributes pointAttributes;
+        pointAttributes.m_layer_index = layerComponent->Index();
+        rhinoModel.AddManagedModelGeometryComponent(
+            new ON_Point(ON_3dPoint(2.0, 0.0, 0.0)),
+            new ON_3dmObjectAttributes(pointAttributes));
+
+        ON_3dmObjectAttributes spatialCurveAttributes;
+        spatialCurveAttributes.m_layer_index = layerComponent->Index();
+        rhinoModel.AddManagedModelGeometryComponent(
+            new ON_LineCurve(ON_3dPoint(0.0, 0.0, 2.0), ON_3dPoint(1.0, 0.0, 2.0)),
+            new ON_3dmObjectAttributes(spatialCurveAttributes));
+    }
+
+    const QString rhinoPath = QDir(temporaryDirectory.path()).filePath(
+        QStringLiteral("ordinary-rhino-model.3dm"));
+    const std::wstring wideRhinoPath = rhinoPath.toStdWString();
+    passed &= check(rhinoModel.Write(wideRhinoPath.c_str(), 0, &textLog),
+                    "test fixture must be a plain Rhino 3DM without Vignola metadata");
+
+    Document importTarget;
+    importTarget.append(line);
+    Rhino3dmImportReport importReport;
+    errorMessage.clear();
+    const bool imported = importRhino3dmDocument(rhinoPath,
+                                                 &importTarget,
+                                                 &importReport,
+                                                 &errorMessage);
+    if (!imported) {
+        qCritical("Could not import ordinary Rhino test model: %s", qPrintable(errorMessage));
+    }
+    passed &= check(imported,
+                    "ordinary Rhino 3DM files must import without Vignola metadata");
+    passed &= check(importTarget.size() == 3 && importReport.importedObjectCount == 2,
+                    "Rhino import must merge planar curves and points into the existing document");
+    passed &= check(importReport.skippedObjectCount == 1 &&
+                        !importReport.warningMessage.isEmpty(),
+                    "Rhino import must explicitly report skipped non-planar geometry");
+
+    const Layer *importedLayer = nullptr;
+    for (const Layer &layer : importTarget.layers()) {
+        if (layer.name == QStringLiteral("Imported Layer")) {
+            importedLayer = &layer;
+            break;
+        }
+    }
+    passed &= check(importedLayer != nullptr && importedLayer->color == QColor(40, 120, 210),
+                    "Rhino import must preserve source layer names and colors");
+
+    bool foundRationalCurve = false;
+    bool foundScaledPoint = false;
+    for (const SceneObject &object : importTarget.objects()) {
+        if ((object.geometry.geometryType == GeometryType::Nurbs ||
+             object.geometry.geometryType == GeometryType::Circle) &&
+            validateNurbsCurve(object.geometry.nurbs) && object.geometry.nurbs.rational) {
+            foundRationalCurve = true;
+            const QPointF controlPoint = object.geometry.nurbs.controlPoints.first();
+            passed &= check(std::abs(controlPoint.x() - 38.1) < 1.0e-8 &&
+                                std::abs(controlPoint.y() - 50.8) < 1.0e-8,
+                            "Rhino rational curve control vertices must be converted from inches to millimeters");
+        }
+        if (object.geometry.geometryType == GeometryType::Point &&
+            !object.geometry.points.isEmpty()) {
+            foundScaledPoint = std::abs(object.geometry.points.first().x() - 50.8) < 1.0e-8;
+        }
+    }
+    passed &= check(foundRationalCurve,
+                    "Rhino arcs must import as valid rational NURBS curves");
+    passed &= check(foundScaledPoint,
+                    "Rhino points must be converted from source units to millimeters");
+
     return passed ? 0 : 1;
 }

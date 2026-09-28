@@ -180,6 +180,9 @@ public:
         if (tool != Tool::Rotate) {
             resetRotateInteraction();
         }
+        if (tool != Tool::Scale) {
+            resetScaleInteraction();
+        }
         if (tool != Tool::Mirror) {
             resetMirrorInteraction();
         }
@@ -204,13 +207,15 @@ public:
 
         if (tool != Tool::Select) {
             repeatTool_ = tool;
-            if (!isEraseLikeTool(tool) && tool != Tool::Rotate && tool != Tool::Mirror) {
+            if (!isEraseLikeTool(tool) && tool != Tool::Rotate &&
+                tool != Tool::Scale && tool != Tool::Mirror) {
                 selectedShapeIndices_.clear();
                 selectedShapeIndex_ = ObjectId::invalid();
             }
             selectionBoxActive_ = false;
             selectionBoxMoved_ = false;
             selectionBoxAdditive_ = false;
+            trimBoxSelectionActive_ = false;
             draggingSelected_ = false;
             dragGestureStarted_ = false;
             draggingShapeIndices_.clear();
@@ -288,6 +293,12 @@ public:
         }
         case ViewportCommand::BeginRotate:
             return {beginRotate(), 0};
+        case ViewportCommand::BeginScale:
+            if (argument < static_cast<int>(ScaleMode::OneD) ||
+                argument > static_cast<int>(ScaleMode::TwoD)) {
+                return {};
+            }
+            return {beginScale(static_cast<ScaleMode>(argument)), 0};
         case ViewportCommand::BeginMirror:
             return {beginMirror(), 0};
         case ViewportCommand::BeginDuplicate:
@@ -636,6 +647,12 @@ public:
             }
             return;
         }
+        if (tool == Tool::Scale) {
+            if (beginScale(scaleMode_) && toolRepeated_) {
+                toolRepeated_(tool);
+            }
+            return;
+        }
         if (tool == Tool::Mirror) {
             if (beginMirror() && toolRepeated_) {
                 toolRepeated_(tool);
@@ -939,6 +956,39 @@ public:
         update();
         DebugLog::instance().write(QStringLiteral("beginRotate shapes=%1")
                                        .arg(rotateShapeIndices_.size()));
+        return true;
+    }
+
+    bool beginScale(ScaleMode mode)
+    {
+        QVector<ObjectId> selected = selectedShapeIndices_;
+        if (selectedShapeIndex_.isValid() && !selected.contains(selectedShapeIndex_)) {
+            selected.append(selectedShapeIndex_);
+        }
+
+        QVector<ObjectId> validSelection;
+        for (const ObjectId objectId : selected) {
+            if (document_.isObjectEditable(objectId) && !validSelection.contains(objectId)) {
+                validSelection.append(objectId);
+            }
+        }
+        if (validSelection.isEmpty()) {
+            DebugLog::instance().write(QStringLiteral("beginScale ignored no editable selection"));
+            return false;
+        }
+
+        resetScaleInteraction();
+        setTool(Tool::Scale);
+        scaleMode_ = mode;
+        scaleShapeIds_ = validSelection;
+        scaleStep_ = 0;
+        setFocus(Qt::OtherFocusReason);
+        setCursor(Qt::CrossCursor);
+        publishScalePrompt();
+        update();
+        DebugLog::instance().write(QStringLiteral("beginScale mode=%1 shapes=%2")
+                                       .arg(scaleModeName(scaleMode_))
+                                       .arg(scaleShapeIds_.size()));
         return true;
     }
 
@@ -1277,6 +1327,7 @@ public:
         selectionBoxActive_ = false;
         selectionBoxMoved_ = false;
         selectionBoxAdditive_ = false;
+        trimBoxSelectionActive_ = false;
         draggingSelected_ = false;
         draggingShapeIndices_.clear();
         draggingControlPoint_ = false;
@@ -1549,18 +1600,13 @@ public:
         }
 
         QJsonObject root;
-        // Version 3 adds the document/layer record while retaining the
-        // legacy shape array as a compatibility aid for older tooling.
+        // Version 3 stores the document once, including its layers and object
+        // identities. The version 1/2 restore path below still reads legacy
+        // shape-only sessions.
         root.insert(QStringLiteral("version"), 3);
         root.insert(QStringLiteral("zoom"), zoom_);
         root.insert(QStringLiteral("pan"), pointToJson(pan_));
         root.insert(QStringLiteral("document"), documentToJson(document_));
-
-        QJsonArray shapes;
-        for (const Shape &shape : shapes_) {
-            shapes.append(shapeToJson(shape));
-        }
-        root.insert(QStringLiteral("shapes"), shapes);
 
         const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Compact);
         if (file.write(data) != data.size()) {
@@ -1682,6 +1728,7 @@ public:
         currentSnap_ = SnapResult{};
         joinActive_ = false;
         joinShapeIndices_.clear();
+        resetScaleInteraction();
         resetRotateInteraction();
         resetMirrorInteraction();
         subdivisionActive_ = false;
@@ -1730,6 +1777,23 @@ public:
         return true;
     }
 
+    bool importRhino3dmDocument(const QString &path,
+                                Rhino3dmImportReport *report,
+                                QString *errorMessage) override
+    {
+        const Document::Snapshot beforeImport = document_.snapshot();
+        if (!classiCAD::importRhino3dmDocument(path,
+                                              &document_,
+                                              report,
+                                              errorMessage)) {
+            return false;
+        }
+
+        recordGeometrySnapshot(beforeImport);
+        update();
+        return true;
+    }
+
     void createNewDocument() override
     {
         document_ = Document{};
@@ -1774,10 +1838,34 @@ protected:
             const bool selected = selectedShapeIndices_.contains(objectId) ||
                                   objectId == selectedShapeIndex_ ||
                                   joinShapeIndices_.contains(objectId);
+            const bool scalePreview = activeTool_ == Tool::Scale &&
+                                      scalePreviewValid_ &&
+                                      scaleShapeIds_.contains(objectId);
             const bool rotatePreview = activeTool_ == Tool::Rotate &&
                                         rotateStep_ == 2 &&
                                         rotateShapeIndices_.contains(objectId);
-            if (rotatePreview) {
+            if (scalePreview) {
+                Shape previewShape = shapes_[index];
+                scaleShapeGeometry(&previewShape,
+                                   scaleBaseWorld_,
+                                   scalePreviewAxis_,
+                                   scalePreviewFactor_,
+                                   scaleMode_);
+                drawShape(painter,
+                          previewShape,
+                          false,
+                          true,
+                          true,
+                          layerColor,
+                          layerLineType,
+                          layerLineWeightMm);
+                if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
+                    drawSubdivisionPoints(painter,
+                                          previewShape,
+                                          previewShape.subdivisionParameters,
+                                          false);
+                }
+            } else if (rotatePreview) {
                 Shape previewShape = shapes_[index];
                 rotateShapeGeometry(&previewShape,
                                     rotateBaseWorld_,
@@ -1843,7 +1931,16 @@ protected:
         if (controlPointsVisible_) {
             for (const int shapeIndex : controlPointShapeIndices()) {
                 if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
-                    if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
+                    if (activeTool_ == Tool::Scale && scalePreviewValid_ &&
+                        scaleShapeIds_.contains(shapes_.objectIdAt(shapeIndex))) {
+                        Shape previewShape = shapes_[shapeIndex];
+                        scaleShapeGeometry(&previewShape,
+                                           scaleBaseWorld_,
+                                           scalePreviewAxis_,
+                                           scalePreviewFactor_,
+                                           scaleMode_);
+                        drawControlPoints(painter, previewShape, shapeIndex);
+                    } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
                         rotateShapeIndices_.contains(shapes_.objectIdAt(shapeIndex))) {
                         Shape previewShape = shapes_[shapeIndex];
                         rotateShapeGeometry(&previewShape,
@@ -1890,6 +1987,8 @@ protected:
             drawPointToolPreview(painter);
         } else if (activeTool_ == Tool::Rotate) {
             drawRotateToolPreview(painter);
+        } else if (activeTool_ == Tool::Scale && scaleStep_ == 2) {
+            drawScaleToolGuide(painter);
         } else if (isDimensionTool(activeTool_)) {
             if (controllerPreviewShapeVisible_) {
                 drawShape(painter, controllerPreviewShape_, true);
@@ -1911,7 +2010,8 @@ protected:
                       true);
         }
 
-        if ((grabActive_ || duplicateActive_) && currentSnap_.isValid()) {
+        if ((grabActive_ || duplicateActive_ || activeTool_ == Tool::Scale) &&
+            currentSnap_.isValid()) {
             drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
         }
         if ((draggingSelected_ || draggingControlPoint_) && currentDragSnap_.isValid()) {
@@ -2064,6 +2164,11 @@ protected:
             return;
         }
 
+        if (event->button() == Qt::RightButton && activeTool_ == Tool::Scale) {
+            cancelScale();
+            return;
+        }
+
         if (event->button() == Qt::RightButton && activeTool_ == Tool::Mirror) {
             cancelMirror();
             return;
@@ -2104,6 +2209,16 @@ protected:
             lastWorldPosition_ = worldPosition;
             cursorValid_ = true;
             handleRotatePoint(worldPosition);
+            emitCoordinateUpdate();
+            return;
+        }
+
+        if (event->button() == Qt::LeftButton && activeTool_ == Tool::Scale) {
+            rawCursorWorld_ = rawWorldPosition;
+            cursorWorld_ = worldPosition;
+            lastWorldPosition_ = worldPosition;
+            cursorValid_ = true;
+            handleScalePoint(worldPosition);
             emitCoordinateUpdate();
             return;
         }
@@ -2177,15 +2292,17 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton && activeTool_ == Tool::Trim) {
-            eraseCursorPressed_ = true;
+            eraseCursorPressed_ = false;
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
             eraseCursorScreen_ = screenPosition;
-            trimAtScreenPosition(screenPosition);
-            setCursor(Qt::CrossCursor);
-            emitCoordinateUpdate();
+            eraseCandidateShapeIndices_.clear();
+            eraseStrokeScreenPath_.clear();
+            trimHoverPositionValid_ = false;
+            beginSelectionBox(screenPosition, false);
+            trimBoxSelectionActive_ = true;
             return;
         }
 
@@ -2433,6 +2550,9 @@ protected:
             if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
                 selectionBoxMoved_ = true;
             }
+            if (trimBoxSelectionActive_) {
+                updateTrimBoxPreview();
+            }
             update();
             emitCoordinateUpdate();
             return;
@@ -2453,6 +2573,13 @@ protected:
 
         if (activeTool_ == Tool::Trim && !panning_) {
             updateTrimHover(screenPosition);
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
+        if (activeTool_ == Tool::Scale) {
+            updateScalePreview(cursorWorld_);
             update();
             emitCoordinateUpdate();
             return;
@@ -2737,7 +2864,17 @@ protected:
         }
 
         if (selectionBoxActive_ && event->button() == Qt::LeftButton) {
-            finishSelectionBox();
+            if (trimBoxSelectionActive_) {
+                selectionBoxCurrentScreen_ = eventPosition(event);
+                const QPointF totalDelta =
+                    selectionBoxCurrentScreen_ - selectionBoxStartScreen_;
+                if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
+                    selectionBoxMoved_ = true;
+                }
+                finishTrimBoxSelection();
+            } else {
+                finishSelectionBox();
+            }
             return;
         }
 
@@ -2878,6 +3015,68 @@ protected:
         if (activeTool_ == Tool::Rotate && event->key() == Qt::Key_Escape) {
             cancelRotate();
             return;
+        }
+
+        if (activeTool_ == Tool::Scale && event->key() == Qt::Key_Escape) {
+            cancelScale();
+            return;
+        }
+
+        if (activeTool_ == Tool::Scale &&
+            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+            if (scaleStep_ == 0) {
+                handleScalePoint(scaleSelectionBoundsCenter());
+            } else if (scaleStep_ == 1 && !scaleFactorText_.isEmpty()) {
+                bool validFactor = false;
+                const qreal factor = scaleFactorText_.toDouble(&validFactor);
+                if (validFactor && std::isfinite(factor)) {
+                    scaleFactorText_.clear();
+                    if (scaleMode_ == ScaleMode::OneD) {
+                        scaleUsingTypedFactor_ = true;
+                        scaleTypedFactor_ = factor;
+                        scaleStep_ = 2;
+                        updateScalePreview(cursorWorld_);
+                        publishScalePrompt();
+                        update();
+                    } else {
+                        commitScale(factor, QPointF());
+                    }
+                }
+            } else if (scaleStep_ == 2) {
+                updateScalePreview(cursorWorld_);
+                if (scalePreviewValid_) {
+                    commitScale(scalePreviewFactor_, scalePreviewAxis_);
+                }
+            }
+            event->accept();
+            return;
+        }
+
+        if (activeTool_ == Tool::Scale && scaleStep_ == 1) {
+            if (event->key() == Qt::Key_Backspace) {
+                scaleFactorText_.chop(1);
+                publishScalePrompt();
+                event->accept();
+                return;
+            }
+            QString typedText = event->text();
+            if (typedText == QStringLiteral(",")) {
+                typedText = QStringLiteral(".");
+            }
+            if (typedText.size() == 1) {
+                const QChar character = typedText.front();
+                const bool digit = character.isDigit();
+                const bool decimal = character == QLatin1Char('.') &&
+                                     !scaleFactorText_.contains(QLatin1Char('.'));
+                const bool sign = character == QLatin1Char('-') &&
+                                  scaleFactorText_.isEmpty();
+                if (digit || decimal || sign) {
+                    scaleFactorText_.append(character);
+                    publishScalePrompt();
+                    event->accept();
+                    return;
+                }
+            }
         }
 
         if (activeTool_ == Tool::Mirror && event->key() == Qt::Key_Escape) {
@@ -3042,6 +3241,7 @@ private:
         selectionBoxActive_ = false;
         selectionBoxMoved_ = false;
         selectionBoxAdditive_ = false;
+        trimBoxSelectionActive_ = false;
         draggingSelected_ = false;
         dragGestureStarted_ = false;
         draggingShapeIndices_.clear();
@@ -3061,6 +3261,7 @@ private:
         currentSnap_ = SnapResult{};
         joinActive_ = false;
         joinShapeIndices_.clear();
+        resetScaleInteraction();
         resetRotateInteraction();
         resetMirrorInteraction();
         subdivisionActive_ = false;
@@ -3566,6 +3767,7 @@ private:
         selectionBoxActive_ = true;
         selectionBoxMoved_ = false;
         selectionBoxAdditive_ = additive;
+        trimBoxSelectionActive_ = false;
         selectionBoxStartScreen_ = screenPosition;
         selectionBoxCurrentScreen_ = screenPosition;
         draggingSelected_ = false;
@@ -3639,6 +3841,7 @@ private:
         selectionBoxActive_ = false;
         selectionBoxMoved_ = false;
         selectionBoxAdditive_ = false;
+        trimBoxSelectionActive_ = false;
         setCursor(joinActive_ ? Qt::CrossCursor : Qt::ArrowCursor);
         update();
         emitCoordinateUpdate();
@@ -3650,10 +3853,23 @@ private:
             return;
         }
 
+        const bool cancelingTrimBox = trimBoxSelectionActive_;
         selectionBoxActive_ = false;
         selectionBoxMoved_ = false;
         selectionBoxAdditive_ = false;
-        setCursor(joinActive_ ? Qt::CrossCursor : Qt::ArrowCursor);
+        trimBoxSelectionActive_ = false;
+        if (cancelingTrimBox) {
+            eraseCandidateShapeIndices_.clear();
+            eraseStrokeScreenPath_.clear();
+            eraseTargetShapeIndices_.clear();
+            eraseSceneCurveCaches_.clear();
+            eraseTargetCurveCaches_.clear();
+            eraseGeometryCachePrepared_ = false;
+            trimHoverPositionValid_ = false;
+        }
+        setCursor(joinActive_ || activeTool_ == Tool::Trim
+                      ? Qt::CrossCursor
+                      : Qt::ArrowCursor);
         update();
         DebugLog::instance().write(QStringLiteral("selection box canceled"));
     }
@@ -3956,6 +4172,7 @@ private:
         selectionBoxActive_ = false;
         selectionBoxMoved_ = false;
         selectionBoxAdditive_ = false;
+        trimBoxSelectionActive_ = false;
         draggingSelected_ = false;
         draggingShapeIndices_.clear();
         dragHistoryRecorded_ = false;
@@ -3977,6 +4194,7 @@ private:
         trimHoverPositionValid_ = false;
         joinActive_ = false;
         joinShapeIndices_.clear();
+        resetScaleInteraction();
         resetRotateInteraction();
         resetMirrorInteraction();
         subdivisionActive_ = false;
@@ -4775,6 +4993,7 @@ private:
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_) ||
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate ||
+            activeTool_ == Tool::Scale ||
             isEllipseTool(activeTool_) || isRectangleTool(activeTool_) ||
             activeTool_ == Tool::Mirror || isDimensionTool(activeTool_) ||
             activeTool_ == Tool::TangentFromCurve ||
@@ -6439,6 +6658,109 @@ private:
         DebugLog::instance().write(QStringLiteral("trim click applied"));
     }
 
+    void updateTrimBoxPreview()
+    {
+        if (!trimBoxSelectionActive_) {
+            return;
+        }
+        if (!eraseGeometryCachePrepared_) {
+            prepareEraseGeometryCache();
+        }
+
+        const QRectF box =
+            QRectF(selectionBoxStartScreen_, selectionBoxCurrentScreen_).normalized();
+        const QPointF drag = selectionBoxCurrentScreen_ - selectionBoxStartScreen_;
+        // Trim's window/crossing gesture follows the diagonal the user draws:
+        // top-left to bottom-right contains; bottom-left to top-right crosses.
+        const bool crossingSelection = drag.x() * drag.y() < 0.0;
+        eraseCandidateShapeIndices_.clear();
+        for (const ObjectId objectId : eraseTargetShapeIndices_) {
+            const int shapeIndex = objectIndex(objectId);
+            if (shapeIndex >= 0 && shapeIndex < shapes_.size() &&
+                shapeMatchesSelectionBox(shapes_[shapeIndex], box, crossingSelection)) {
+                eraseCandidateShapeIndices_.append(objectId);
+            }
+        }
+
+        // A non-empty marker enables the existing orange trim preview; the
+        // actual interval calculation and commit use the box region below.
+        eraseStrokeScreenPath_.clear();
+        eraseStrokeScreenPath_.append(selectionBoxStartScreen_);
+        for (EraseCurveSampleCache &targetCurve : eraseTargetCurveCaches_) {
+            targetCurve.previewStrokePointCount = 0;
+            const ObjectId objectId = shapes_.objectIdAt(targetCurve.shapeIndex);
+            if (!eraseCandidateShapeIndices_.contains(objectId)) {
+                targetCurve.previewIntervals.clear();
+                continue;
+            }
+
+            const QVector<ParameterInterval> hitIntervals =
+                curveIntervalsInsideScreenBox(targetCurve.curve,
+                                              targetCurve.sampled,
+                                              box);
+            targetCurve.previewIntervals = boundEraseIntervals(
+                targetCurve.curve,
+                hitIntervals,
+                targetCurve.intersectionParameters);
+        }
+    }
+
+    void finishTrimBoxSelection()
+    {
+        if (!selectionBoxActive_ || !trimBoxSelectionActive_) {
+            return;
+        }
+
+        const QRectF box =
+            QRectF(selectionBoxStartScreen_, selectionBoxCurrentScreen_).normalized();
+        const QPointF drag = selectionBoxCurrentScreen_ - selectionBoxStartScreen_;
+        const bool crossingSelection = drag.x() * drag.y() < 0.0;
+        const bool moved = selectionBoxMoved_ || box.width() >= 3.0 ||
+                           box.height() >= 3.0;
+        const QPointF clickPosition = selectionBoxCurrentScreen_;
+        if (!moved) {
+            selectionBoxActive_ = false;
+            selectionBoxMoved_ = false;
+            selectionBoxAdditive_ = false;
+            trimBoxSelectionActive_ = false;
+            eraseCandidateShapeIndices_.clear();
+            eraseStrokeScreenPath_.clear();
+            trimHoverPositionValid_ = false;
+            trimAtScreenPosition(clickPosition);
+            setCursor(Qt::CrossCursor);
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
+        updateTrimBoxPreview();
+        const int candidateCount = eraseCandidateShapeIndices_.size();
+        selectionBoxActive_ = false;
+        selectionBoxMoved_ = false;
+        selectionBoxAdditive_ = false;
+        trimBoxSelectionActive_ = false;
+        if (!eraseCandidateShapeIndices_.isEmpty()) {
+            applyEraseCandidates(&box);
+        }
+
+        eraseStrokeActive_ = false;
+        eraseCursorPressed_ = false;
+        eraseCandidateShapeIndices_.clear();
+        eraseStrokeScreenPath_.clear();
+        eraseTargetShapeIndices_.clear();
+        eraseSceneCurveCaches_.clear();
+        eraseTargetCurveCaches_.clear();
+        eraseGeometryCachePrepared_ = false;
+        trimHoverPositionValid_ = false;
+        setCursor(Qt::CrossCursor);
+        update();
+        emitCoordinateUpdate();
+        DebugLog::instance().write(
+            QStringLiteral("trim box applied crossing=%1 candidates=%2")
+                .arg(crossingSelection)
+                .arg(candidateCount));
+    }
+
     QVector<ParameterInterval> eraserIntervalsForCurve(
         const Shape::NurbsCurve2D &curve,
         const QVector<QPointF> &stroke) const
@@ -6718,6 +7040,73 @@ private:
         return merged;
     }
 
+    QVector<ParameterInterval> curveIntervalsInsideScreenBox(
+        const Shape::NurbsCurve2D &curve,
+        const SampledNurbsCurve2D &sampled,
+        const QRectF &box) const
+    {
+        QVector<ParameterInterval> intervals;
+        if (!isValidNurbsCurve(curve) || sampled.parameters.size() < 2 ||
+            sampled.parameters.size() != sampled.screenPoints.size()) {
+            return intervals;
+        }
+
+        const QRectF region = box.normalized();
+        const auto isInside = [&](qreal parameter) {
+            QPointF worldPoint;
+            return evaluateNurbsPoint(curve, parameter, &worldPoint) &&
+                   region.contains(worldToScreen(worldPoint));
+        };
+        const auto refineBoundary = [&](qreal first,
+                                        qreal second,
+                                        bool firstInside) {
+            qreal low = first;
+            qreal high = second;
+            for (int iteration = 0; iteration < 32; ++iteration) {
+                const qreal middle = (low + high) * 0.5;
+                if (isInside(middle) == firstInside) {
+                    low = middle;
+                } else {
+                    high = middle;
+                }
+            }
+            return (low + high) * 0.5;
+        };
+
+        qreal intervalStart = sampled.parameters.first();
+        bool previousInside = region.contains(sampled.screenPoints.first());
+        bool insideInterval = previousInside;
+        for (int sample = 1; sample < sampled.parameters.size(); ++sample) {
+            const bool currentInside = region.contains(sampled.screenPoints[sample]);
+            if (currentInside != previousInside) {
+                const qreal boundary = refineBoundary(sampled.parameters[sample - 1],
+                                                       sampled.parameters[sample],
+                                                       previousInside);
+                if (currentInside) {
+                    intervalStart = boundary;
+                    insideInterval = true;
+                } else if (insideInterval) {
+                    intervals.append({intervalStart, boundary});
+                    insideInterval = false;
+                }
+            }
+            previousInside = currentInside;
+        }
+        if (insideInterval) {
+            intervals.append({intervalStart, sampled.parameters.last()});
+        }
+
+        const qreal domainLength = sampled.parameters.last() -
+                                   sampled.parameters.first();
+        const qreal tolerance = std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
+        intervals.erase(std::remove_if(intervals.begin(), intervals.end(),
+                                       [tolerance](const ParameterInterval &interval) {
+                                           return interval.end - interval.start <= tolerance;
+                                       }),
+                        intervals.end());
+        return intervals;
+    }
+
     void updateErasePreviewIntervals(bool reset)
     {
         if (eraseStrokeScreenPath_.isEmpty()) {
@@ -6797,7 +7186,8 @@ private:
                                  const QVector<QPointF> &stroke,
                                  QVector<Shape> *replacement,
                                  int sourceShapeIndex = -1,
-                                 const QVector<EraseCurveSampleCache> *cachedTargets = nullptr) const
+                                 const QVector<EraseCurveSampleCache> *cachedTargets = nullptr,
+                                 const QRectF *trimBox = nullptr) const
     {
         if (replacement == nullptr) {
             return false;
@@ -6828,22 +7218,49 @@ private:
              ++sourceComponentIndex) {
             const Shape::NurbsCurve2D &sourceCurve = sourceCurves[sourceComponentIndex];
             const QVector<qreal> *cachedIntersectionParameters = nullptr;
+            const EraseCurveSampleCache *cachedTargetCurve = nullptr;
             if (cachedTargets != nullptr) {
                 for (const EraseCurveSampleCache &cachedTarget : *cachedTargets) {
                     if (cachedTarget.shapeIndex == sourceShapeIndex &&
                         cachedTarget.componentIndex == sourceComponentIndex) {
+                        cachedTargetCurve = &cachedTarget;
                         cachedIntersectionParameters =
                             &cachedTarget.intersectionParameters;
                         break;
                     }
                 }
             }
-            const QVector<ParameterInterval> removedIntervals =
-                eraseIntervalsBoundedByIntersections(sourceShapeIndex,
-                                                     sourceComponentIndex,
-                                                     sourceCurve,
-                                                     stroke,
-                                                     cachedIntersectionParameters);
+            QVector<ParameterInterval> removedIntervals;
+            if (trimBox != nullptr) {
+                SampledNurbsCurve2D fallbackSamples;
+                const SampledNurbsCurve2D *samples =
+                    cachedTargetCurve != nullptr ? &cachedTargetCurve->sampled
+                                                 : &fallbackSamples;
+                if (cachedTargetCurve == nullptr &&
+                    !sampleNurbsCurveForErase(sourceCurve, &fallbackSamples)) {
+                    remainingCurves.append(sourceCurve);
+                    continue;
+                }
+                const QVector<ParameterInterval> hitIntervals =
+                    curveIntervalsInsideScreenBox(sourceCurve, *samples, *trimBox);
+                QVector<qreal> fallbackIntersections;
+                const QVector<qreal> *intersections = cachedIntersectionParameters;
+                if (intersections == nullptr) {
+                    fallbackIntersections = eraseIntersectionParameters(
+                        sourceShapeIndex, sourceComponentIndex, sourceCurve);
+                    intersections = &fallbackIntersections;
+                }
+                removedIntervals = boundEraseIntervals(sourceCurve,
+                                                       hitIntervals,
+                                                       *intersections);
+            } else {
+                removedIntervals = eraseIntervalsBoundedByIntersections(
+                    sourceShapeIndex,
+                    sourceComponentIndex,
+                    sourceCurve,
+                    stroke,
+                    cachedIntersectionParameters);
+            }
             if (removedIntervals.isEmpty()) {
                 remainingCurves.append(sourceCurve);
                 continue;
@@ -6939,7 +7356,7 @@ private:
         }
     }
 
-    void applyEraseCandidates()
+    void applyEraseCandidates(const QRectF *trimBox = nullptr)
     {
         if (eraseCandidateShapeIndices_.isEmpty()) {
             return;
@@ -6966,7 +7383,8 @@ private:
                                         eraseStrokeScreenPath_,
                                         &replacement,
                                         *iterator,
-                                        &eraseTargetCurveCaches_)) {
+                                        &eraseTargetCurveCaches_,
+                                        trimBox)) {
                 changes.append(qMakePair(*iterator, replacement));
             }
         }
@@ -7043,6 +7461,245 @@ private:
             commandFinished_(Tool::Select);
         }
         DebugLog::instance().write(QStringLiteral("erase-like tool exited"));
+    }
+
+    void resetScaleInteraction()
+    {
+        scaleShapeIds_.clear();
+        scaleStep_ = 0;
+        scaleBaseWorld_ = QPointF();
+        scaleReferenceWorld_ = QPointF();
+        scaleAxisDirection_ = QPointF();
+        scaleReferenceLength_ = 0.0;
+        scaleUsingTypedFactor_ = false;
+        scaleTypedFactor_ = 1.0;
+        scaleFactorText_.clear();
+        scalePreviewFactor_ = 1.0;
+        scalePreviewAxis_ = QPointF();
+        scalePreviewValid_ = false;
+    }
+
+    QString scalePrompt() const
+    {
+        if (scaleStep_ == 0) {
+            return QStringLiteral("%1: click a base point, or press Enter for the selection center")
+                .arg(scaleModeName(scaleMode_));
+        }
+        if (scaleStep_ == 1) {
+            const QString numeric = scaleFactorText_.isEmpty()
+                                        ? QString()
+                                        : QStringLiteral("  Factor: %1").arg(scaleFactorText_);
+            return QStringLiteral("%1: type a factor + Enter, or click the first reference point%2")
+                .arg(scaleModeName(scaleMode_), numeric);
+        }
+        if (scaleUsingTypedFactor_) {
+            return QStringLiteral("Scale 1D: click the scale direction  •  Factor %1")
+                .arg(scaleTypedFactor_, 0, 'g', 8);
+        }
+        return scaleMode_ == ScaleMode::OneD
+                   ? QStringLiteral("Scale 1D: click the second reference point along the first-point axis")
+                   : QStringLiteral("%1: click the second reference point")
+                         .arg(scaleModeName(scaleMode_));
+    }
+
+    void publishScalePrompt()
+    {
+        if (toolStatusUpdate_ != nullptr) {
+            toolStatusUpdate_(scalePrompt());
+        }
+    }
+
+    QPointF scaleSelectionBoundsCenter() const
+    {
+        QRectF combinedBounds;
+        bool hasBounds = false;
+        for (const ObjectId objectId : scaleShapeIds_) {
+            const int shapeIndex = objectIndex(objectId);
+            if (shapeIndex < 0) {
+                continue;
+            }
+            const QRectF bounds = selectionBoundsForShape(shapes_[shapeIndex]);
+            if (bounds.isNull()) {
+                continue;
+            }
+            combinedBounds = hasBounds ? combinedBounds.united(bounds) : bounds;
+            hasBounds = true;
+        }
+        return hasBounds ? screenToWorld(combinedBounds.center()) : QPointF();
+    }
+
+    void scaleShapeGeometry(Shape *shape,
+                            const QPointF &base,
+                            const QPointF &axisDirection,
+                            qreal factor,
+                            ScaleMode mode) const
+    {
+        if (shape == nullptr) {
+            return;
+        }
+
+        if (mode == ScaleMode::OneD &&
+            shape->geometryType == GeometryType::Rectangle && shape->points.size() == 2) {
+            shape->points = rectangleVertices(*shape);
+        }
+
+        const auto scaledPoint = [base, axisDirection, factor, mode](const QPointF &point) {
+            const QPointF offset = point - base;
+            if (mode != ScaleMode::OneD) {
+                return base + offset * factor;
+            }
+            const qreal alongAxis = QPointF::dotProduct(offset, axisDirection);
+            return base + offset + axisDirection * (alongAxis * (factor - 1.0));
+        };
+
+        for (QPointF &point : shape->points) {
+            point = scaledPoint(point);
+        }
+        for (QPointF &point : shape->nurbs.controlPoints) {
+            point = scaledPoint(point);
+        }
+        for (Shape::NurbsCurve2D &component : shape->components) {
+            for (QPointF &point : component.controlPoints) {
+                point = scaledPoint(point);
+            }
+        }
+    }
+
+    qreal scaleFactorAtPoint(const QPointF &point) const
+    {
+        if (scaleReferenceLength_ <= 1.0e-12) {
+            return 1.0;
+        }
+        const QPointF offset = point - scaleBaseWorld_;
+        if (scaleMode_ == ScaleMode::OneD) {
+            return QPointF::dotProduct(offset, scaleAxisDirection_) /
+                   scaleReferenceLength_;
+        }
+        return std::hypot(offset.x(), offset.y()) / scaleReferenceLength_;
+    }
+
+    void updateScalePreview(const QPointF &point)
+    {
+        scalePreviewValid_ = false;
+        if (activeTool_ != Tool::Scale || scaleStep_ != 2) {
+            return;
+        }
+
+        if (scaleUsingTypedFactor_) {
+            const QPointF direction = point - scaleBaseWorld_;
+            const qreal length = std::hypot(direction.x(), direction.y());
+            if (length <= 1.0e-12) {
+                return;
+            }
+            scalePreviewAxis_ = direction / length;
+            scalePreviewFactor_ = scaleTypedFactor_;
+        } else {
+            scalePreviewAxis_ = scaleAxisDirection_;
+            scalePreviewFactor_ = scaleFactorAtPoint(point);
+        }
+
+        scalePreviewValid_ = std::isfinite(scalePreviewFactor_) &&
+                             (scaleMode_ != ScaleMode::OneD ||
+                              std::hypot(scalePreviewAxis_.x(),
+                                         scalePreviewAxis_.y()) > 1.0e-12);
+    }
+
+    void finishScale()
+    {
+        resetScaleInteraction();
+        currentSnap_ = SnapResult{};
+        setTool(Tool::Select);
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        update();
+    }
+
+    void commitScale(qreal factor, const QPointF &axisDirection)
+    {
+        if (!std::isfinite(factor)) {
+            return;
+        }
+
+        const bool changed = std::abs(factor - 1.0) > 1.0e-12;
+        if (changed) {
+            recordGeometryChange();
+            for (const ObjectId objectId : scaleShapeIds_) {
+                const int shapeIndex = objectIndex(objectId);
+                if (shapeIndex >= 0 && document_.isObjectEditable(objectId)) {
+                    scaleShapeGeometry(&shapes_[shapeIndex],
+                                       scaleBaseWorld_,
+                                       axisDirection,
+                                       factor,
+                                       scaleMode_);
+                }
+            }
+            updateAssociativeDimensions(document_, curveSampler_);
+            notifyLayersChanged();
+        }
+
+        DebugLog::instance().write(QStringLiteral("scale committed mode=%1 factor=%2 base=%3 objects=%4 changed=%5")
+                                       .arg(scaleModeName(scaleMode_))
+                                       .arg(factor, 0, 'g', 10)
+                                       .arg(pointText(scaleBaseWorld_))
+                                       .arg(scaleShapeIds_.size())
+                                       .arg(changed));
+        finishScale();
+    }
+
+    bool handleScalePoint(const QPointF &worldPoint)
+    {
+        if (activeTool_ != Tool::Scale || scaleShapeIds_.isEmpty()) {
+            return false;
+        }
+
+        if (scaleStep_ == 0) {
+            scaleBaseWorld_ = worldPoint;
+            scaleStep_ = 1;
+            pendingPoints_ = {scaleBaseWorld_};
+            publishScalePrompt();
+            update();
+            return true;
+        }
+
+        if (scaleStep_ == 1) {
+            const QPointF reference = worldPoint - scaleBaseWorld_;
+            scaleReferenceLength_ = std::hypot(reference.x(), reference.y());
+            if (scaleReferenceLength_ <= 1.0e-12) {
+                return false;
+            }
+            scaleReferenceWorld_ = worldPoint;
+            scaleAxisDirection_ = reference / scaleReferenceLength_;
+            scaleUsingTypedFactor_ = false;
+            scaleStep_ = 2;
+            updateScalePreview(worldPoint);
+            publishScalePrompt();
+            update();
+            return true;
+        }
+
+        updateScalePreview(worldPoint);
+        if (!scalePreviewValid_) {
+            return false;
+        }
+        commitScale(scalePreviewFactor_, scalePreviewAxis_);
+        return true;
+    }
+
+    void cancelScale()
+    {
+        if (activeTool_ != Tool::Scale && scaleShapeIds_.isEmpty()) {
+            return;
+        }
+        resetScaleInteraction();
+        pendingPoints_.clear();
+        currentSnap_ = SnapResult{};
+        setTool(Tool::Select);
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        update();
+        DebugLog::instance().write(QStringLiteral("scale canceled"));
     }
 
     void resetRotateInteraction()
@@ -7884,6 +8541,29 @@ private:
                                            size());
     }
 
+    void drawScaleToolGuide(QPainter &painter)
+    {
+        if (!cursorValid_ || scaleStep_ != 2) {
+            return;
+        }
+
+        QPointF guideEnd = cursorWorld_;
+        if (scaleMode_ == ScaleMode::OneD && !scaleUsingTypedFactor_) {
+            const QPointF offset = cursorWorld_ - scaleBaseWorld_;
+            guideEnd = scaleBaseWorld_ +
+                       scaleAxisDirection_ *
+                           QPointF::dotProduct(offset, scaleAxisDirection_);
+        }
+
+        painter.save();
+        painter.setPen(QPen(QColor(QStringLiteral("#8aa7c7")), 1.0, Qt::DashLine));
+        painter.drawLine(worldToScreen(scaleBaseWorld_), worldToScreen(guideEnd));
+        painter.setPen(QPen(QColor(QStringLiteral("#e6b85c")), 1.5));
+        painter.setBrush(QColor(QStringLiteral("#282828")));
+        painter.drawEllipse(worldToScreen(scaleBaseWorld_), 4.0, 4.0);
+        painter.restore();
+    }
+
     void drawEraseCandidatePreview(QPainter &painter, int shapeIndex)
     {
         viewportOverlay_.drawEraseCandidatePreview(painter,
@@ -8107,6 +8787,7 @@ private:
     bool selectionBoxActive_ = false;
     bool selectionBoxMoved_ = false;
     bool selectionBoxAdditive_ = false;
+    bool trimBoxSelectionActive_ = false;
     QPointF selectionBoxStartScreen_{0.0, 0.0};
     QPointF selectionBoxCurrentScreen_{0.0, 0.0};
     bool eraseStrokeActive_ = false;
@@ -8146,11 +8827,24 @@ private:
     bool joinActive_ = false;
     QVector<ObjectId> joinShapeIndices_;
     QVector<ObjectId> rotateShapeIndices_;
+    QVector<ObjectId> scaleShapeIds_;
     QVector<ObjectId> mirrorShapeIndices_;
     int rotateStep_ = 0;
     QPointF rotateBaseWorld_{0.0, 0.0};
     QPointF rotateReferenceWorld_{0.0, 0.0};
     qreal rotatePreviewAngle_ = 0.0;
+    ScaleMode scaleMode_ = ScaleMode::TwoD;
+    int scaleStep_ = 0;
+    QPointF scaleBaseWorld_{0.0, 0.0};
+    QPointF scaleReferenceWorld_{0.0, 0.0};
+    QPointF scaleAxisDirection_{0.0, 0.0};
+    qreal scaleReferenceLength_ = 0.0;
+    bool scaleUsingTypedFactor_ = false;
+    qreal scaleTypedFactor_ = 1.0;
+    QString scaleFactorText_;
+    qreal scalePreviewFactor_ = 1.0;
+    QPointF scalePreviewAxis_{0.0, 0.0};
+    bool scalePreviewValid_ = false;
 };
 
 ViewportWidgetApi *createViewportWidget(QWidget *parent)

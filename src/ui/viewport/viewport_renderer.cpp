@@ -262,28 +262,35 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shape.points[2],
                             viewportSize);
         }
-    } else if ((shape.geometryType == GeometryType::Bezier ||
-                shape.geometryType == GeometryType::Nurbs) &&
-               shape.points.size() >= 4) {
+    } else if (shape.geometryType == GeometryType::Bezier ||
+               shape.geometryType == GeometryType::Nurbs) {
         const QVector<QPointF> controlPoints = shape.nurbs.controlPoints.isEmpty()
                                                    ? shape.points
                                                    : shape.nurbs.controlPoints;
-        painter.setPen(QPen(controlColor, 1, Qt::DashLine));
-        for (int index = 0; index + 1 < controlPoints.size(); ++index) {
-            painter.drawLine(worldToScreen(controlPoints[index], viewportSize),
-                             worldToScreen(controlPoints[index + 1], viewportSize));
+        const bool hasStoredCurve = isValidNurbsCurve(shape.nurbs);
+        if (controlPoints.size() >= 2) {
+            painter.setPen(QPen(controlColor, 1, Qt::DashLine));
+            for (int index = 0; index + 1 < controlPoints.size(); ++index) {
+                painter.drawLine(worldToScreen(controlPoints[index], viewportSize),
+                                 worldToScreen(controlPoints[index + 1], viewportSize));
+            }
         }
 
         painter.setPen(layerPen);
-        if (isValidNurbsCurve(shape.nurbs)) {
+        if (hasStoredCurve) {
             drawNurbsCurve(painter, shape.nurbs, viewportSize);
-        } else {
+        } else if (shape.geometryType == GeometryType::Bezier && shape.points.size() >= 4) {
             QPainterPath curve;
             curve.moveTo(worldToScreen(shape.points[0], viewportSize));
             curve.cubicTo(worldToScreen(shape.points[1], viewportSize),
                           worldToScreen(shape.points[2], viewportSize),
                           worldToScreen(shape.points[3], viewportSize));
             painter.drawPath(curve);
+        } else if (shape.geometryType == GeometryType::Nurbs) {
+            for (int index = 0; index + 1 < controlPoints.size(); ++index) {
+                painter.drawLine(worldToScreen(controlPoints[index], viewportSize),
+                                 worldToScreen(controlPoints[index + 1], viewportSize));
+            }
         }
     } else {
         painter.setPen(QPen(controlColor, 1, Qt::DashLine));

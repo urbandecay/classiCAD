@@ -3,6 +3,7 @@
 #include "viewport/line_type_style.h"
 #include "input_helpers.h"
 #include "../core/debug_log.h"
+#include "../core/serialization/vignola_document_file.h"
 #include "services/dimensions/dimension_font.h"
 
 #include <QApplication>
@@ -635,6 +636,63 @@ private:
         statusBar()->showMessage(QStringLiteral("Opened %1").arg(currentProjectPath_), 5000);
     }
 
+    void importRhino3dm()
+    {
+        QString initialDirectory;
+        if (!currentProjectPath_.isEmpty()) {
+            initialDirectory = QFileInfo(currentProjectPath_).absolutePath();
+        } else {
+            QSettings settings;
+            initialDirectory = settings.value(QStringLiteral("files/lastProjectDirectory"),
+                                              QDir::homePath()).toString();
+        }
+
+        QFileDialog dialog(this,
+                           QStringLiteral("Import Rhino 3DM"),
+                           initialDirectory,
+                           QStringLiteral("Rhino 3D Model (*.3dm)"));
+        dialog.setOption(QFileDialog::DontUseNativeDialog);
+        dialog.setFileMode(QFileDialog::ExistingFile);
+        dialog.setAcceptMode(QFileDialog::AcceptOpen);
+        dialog.setLabelText(QFileDialog::FileName,
+                            QStringLiteral("File name or path:"));
+        if (dialog.exec() != QDialog::Accepted || viewport_ == nullptr) {
+            return;
+        }
+        const QStringList selectedFiles = dialog.selectedFiles();
+        if (selectedFiles.isEmpty() || selectedFiles.first().isEmpty()) {
+            return;
+        }
+        const QString path = selectedFiles.first();
+
+        Rhino3dmImportReport report;
+        QString errorMessage;
+        if (!viewport_->importRhino3dmDocument(path, &report, &errorMessage)) {
+            QMessageBox::critical(this,
+                                  QStringLiteral("Could Not Import Rhino Model"),
+                                  errorMessage.isEmpty()
+                                      ? QStringLiteral("The Rhino model could not be imported.")
+                                      : errorMessage);
+            return;
+        }
+
+        QSettings settings;
+        settings.setValue(QStringLiteral("files/lastProjectDirectory"),
+                          QFileInfo(path).absolutePath());
+        const QString status = QStringLiteral("Imported %1 object(s) from %2")
+                                   .arg(report.importedObjectCount)
+                                   .arg(QFileInfo(path).fileName());
+        statusBar()->showMessage(status, 6000);
+        if (!report.warningMessage.isEmpty()) {
+            QMessageBox::warning(
+                this,
+                QStringLiteral("Rhino Import Completed With Skipped Objects"),
+                QStringLiteral("Imported %1 object(s). %2")
+                    .arg(report.importedObjectCount)
+                    .arg(report.warningMessage));
+        }
+    }
+
     void newDocument()
     {
         if (viewport_ == nullptr || !maybeSaveDocument()) {
@@ -767,7 +825,10 @@ private:
                 });
 
         process->start(QStringLiteral("cmake"),
-                       QStringList{QStringLiteral("--build"), buildDirectory});
+                       QStringList{QStringLiteral("--build"),
+                                   buildDirectory,
+                                   QStringLiteral("--target"),
+                                   QStringLiteral("classiCAD")});
     }
 
     void startSubdivisionWheelMode()
@@ -810,6 +871,51 @@ private:
             rotateToolButton_->setChecked(true);
         }
         statusBar()->showMessage(QStringLiteral("Rotate: click center, start direction, then end direction"));
+    }
+
+    void startScale(ScaleMode mode)
+    {
+        scaleMode_ = mode;
+        if (viewport_ == nullptr ||
+            !viewport_->executeCommand(ViewportCommand::BeginScale,
+                                       static_cast<int>(mode)).accepted) {
+            if (scaleToolButton_ != nullptr) {
+                scaleToolButton_->setChecked(false);
+            }
+            if (selectToolButton_ != nullptr) {
+                selectToolButton_->setChecked(true);
+            }
+            statusBar()->showMessage(QStringLiteral("Select something to scale first"), 4000);
+            return;
+        }
+
+        if (scaleToolButton_ != nullptr) {
+            scaleToolButton_->setChecked(true);
+        }
+        statusBar()->showMessage(
+            QStringLiteral("%1: click a base point; press Enter to use the selection center")
+                .arg(scaleModeName(mode)));
+    }
+
+    void createScaleToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+
+        auto *menu = new QMenu(button);
+        QAction *oneDimensionalAction = menu->addAction(QStringLiteral("Scale 1D"));
+        QAction *twoDimensionalAction = menu->addAction(QStringLiteral("Scale 2D"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+        button->setToolTip(QStringLiteral("Scale — hold for 1D or 2D mode"));
+
+        connect(oneDimensionalAction, &QAction::triggered, this, [this]() {
+            startScale(ScaleMode::OneD);
+        });
+        connect(twoDimensionalAction, &QAction::triggered, this, [this]() {
+            startScale(ScaleMode::TwoD);
+        });
     }
 
     void startMirror()
@@ -943,6 +1049,12 @@ private:
         openDocumentAction->setShortcut(QKeySequence::Open);
         connect(openDocumentAction, &QAction::triggered, this, [this]() {
             openDocument();
+        });
+        QMenu *importMenu = fileMenu->addMenu(QStringLiteral("Import"));
+        QAction *importRhinoAction = importMenu->addAction(
+            QStringLiteral("Rhino 3DM…"));
+        connect(importRhinoAction, &QAction::triggered, this, [this]() {
+            importRhino3dm();
         });
         fileMenu->addSeparator();
         QAction *saveDocumentAction = fileMenu->addAction(QStringLiteral("Save"));
@@ -1261,6 +1373,9 @@ private:
             }
         };
         viewportCallbacks.toolRepeated = [this](ToolId tool) {
+            if (tool == Tool::Scale && scaleToolButton_ != nullptr) {
+                scaleToolButton_->setChecked(true);
+            }
             if (isDimensionTool(tool) && dimensionToolButton_ != nullptr) {
                 dimensionToolButton_->setChecked(true);
             }
@@ -1504,6 +1619,8 @@ private:
         trimToolButton_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         rotateToolButton_ = addToolButton(layout, group, QStringLiteral("↻\nRotate"), Tool::Rotate);
         mirrorToolButton_ = addToolButton(layout, group, QStringLiteral("⇄\nMirror"), Tool::Mirror);
+        scaleToolButton_ = addToolButton(layout, group, QStringLiteral("⤢\nScale"), Tool::Scale);
+        createScaleToolMenu(scaleToolButton_);
 
         auto *duplicateToolButton = new QToolButton;
         duplicateToolButton->setObjectName(QStringLiteral("toolButton"));
@@ -1601,6 +1718,10 @@ private:
             }
             if (tool == Tool::Mirror) {
                 startMirror();
+                return;
+            }
+            if (tool == Tool::Scale) {
+                startScale(scaleMode_);
                 return;
             }
             if (tool == Tool::Arc) {
@@ -3043,6 +3164,8 @@ private:
     QToolButton *explodeButton_ = nullptr;
     QToolButton *rotateToolButton_ = nullptr;
     QToolButton *mirrorToolButton_ = nullptr;
+    QToolButton *scaleToolButton_ = nullptr;
+    ScaleMode scaleMode_ = ScaleMode::TwoD;
     QComboBox *currentLayerCombo_ = nullptr;
     QComboBox *layerColorCombo_ = nullptr;
     QComboBox *layerLineTypeCombo_ = nullptr;

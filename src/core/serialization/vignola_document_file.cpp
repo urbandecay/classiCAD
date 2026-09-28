@@ -8,9 +8,11 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QStringList>
 #include <QTemporaryFile>
 
 #include <algorithm>
@@ -357,6 +359,168 @@ bool writeModelAtomically(const QString &path,
     return true;
 }
 
+QString layerNameForImport(const ON_Layer &layer)
+{
+    const ON_wString name = layer.Name();
+    const wchar_t *text = name.Array();
+    const QString value = text == nullptr ? QString{} : QString::fromWCharArray(text);
+    return value.trimmed().isEmpty() ? QStringLiteral("Imported") : value.trimmed();
+}
+
+LayerId matchingLayer(const Document &document, const QString &name)
+{
+    for (const Layer &layer : document.layers()) {
+        if (layer.name.compare(name, Qt::CaseInsensitive) == 0) {
+            return layer.id;
+        }
+    }
+    return LayerId::invalid();
+}
+
+bool importNurbsCurve(const ON_Curve &source,
+                      double unitScale,
+                      double planarTolerance,
+                      Shape::NurbsCurve2D *destination,
+                      QString *reason)
+{
+    ON_NurbsCurve converted;
+    const ON_NurbsCurve *nurbs = ON_NurbsCurve::Cast(&source);
+    if (nurbs != nullptr) {
+        converted = *nurbs;
+    } else if (source.GetNurbForm(converted, planarTolerance) <= 0) {
+        if (reason != nullptr) {
+            *reason = QStringLiteral("curve has no NURBS representation");
+        }
+        return false;
+    }
+
+    if (!converted.IsValid() || converted.CVCount() < 2 || converted.Dimension() < 2 ||
+        converted.Dimension() > 3 || converted.Order() < 2) {
+        if (reason != nullptr) {
+            *reason = QStringLiteral("curve has invalid or unsupported NURBS data");
+        }
+        return false;
+    }
+
+    Shape::NurbsCurve2D result;
+    result.dimension = 2;
+    result.order = converted.Order();
+    result.degree = result.order - 1;
+    result.rational = converted.IsRational();
+    result.controlPoints.reserve(converted.CVCount());
+    result.weights.reserve(converted.CVCount());
+    for (int index = 0; index < converted.CVCount(); ++index) {
+        ON_3dPoint point;
+        if (!converted.GetCV(index, point) || !std::isfinite(point.x) ||
+            !std::isfinite(point.y) || !std::isfinite(point.z) ||
+            std::abs(point.z) > planarTolerance) {
+            if (reason != nullptr) {
+                *reason = QStringLiteral("curve is not in the XY plane");
+            }
+            return false;
+        }
+
+        const double weight = result.rational ? converted.Weight(index) : 1.0;
+        if (!std::isfinite(weight) || weight <= 0.0) {
+            if (reason != nullptr) {
+                *reason = QStringLiteral("curve has a non-positive rational weight");
+            }
+            return false;
+        }
+        result.controlPoints.append(QPointF(point.x * unitScale, point.y * unitScale));
+        result.weights.append(weight);
+    }
+
+    result.knots.reserve(converted.KnotCount());
+    for (int index = 0; index < converted.KnotCount(); ++index) {
+        result.knots.append(converted.Knot(index));
+    }
+
+    QString validationError;
+    if (!validateNurbsCurve(result, &validationError)) {
+        if (reason != nullptr) {
+            *reason = QStringLiteral("curve NURBS data is invalid: %1").arg(validationError);
+        }
+        return false;
+    }
+
+    *destination = std::move(result);
+    return true;
+}
+
+bool importCurve(const ON_Curve &curve,
+                 double unitScale,
+                 double planarTolerance,
+                 Shape *shape,
+                 QString *reason)
+{
+    if (shape == nullptr) {
+        return false;
+    }
+
+    if (const ON_PolyCurve *polyCurve = ON_PolyCurve::Cast(&curve)) {
+        Shape result;
+        result.geometryType = GeometryType::PolyCurve;
+        result.components.reserve(polyCurve->Count());
+        for (int index = 0; index < polyCurve->Count(); ++index) {
+            const ON_Curve *segment = polyCurve->SegmentCurve(index);
+            Shape::NurbsCurve2D converted;
+            if (segment == nullptr ||
+                !importNurbsCurve(*segment,
+                                  unitScale,
+                                  planarTolerance,
+                                  &converted,
+                                  reason)) {
+                return false;
+            }
+            if (result.points.isEmpty()) {
+                result.points.append(converted.controlPoints.first());
+            }
+            result.points.append(converted.controlPoints.last());
+            result.components.append(std::move(converted));
+        }
+        if (result.components.isEmpty()) {
+            if (reason != nullptr) {
+                *reason = QStringLiteral("polycurve has no segments");
+            }
+            return false;
+        }
+        *shape = std::move(result);
+        return true;
+    }
+
+    Shape result;
+    if (!importNurbsCurve(curve, unitScale, planarTolerance, &result.nurbs, reason)) {
+        return false;
+    }
+
+    if (const ON_ArcCurve *arcCurve = ON_ArcCurve::Cast(&curve);
+        arcCurve != nullptr && arcCurve->IsCircle()) {
+        const ON_3dPoint center = arcCurve->m_arc.Center();
+        const ON_3dPoint edge = arcCurve->m_arc.PointAt(0.0);
+        result.geometryType = GeometryType::Circle;
+        result.points = {QPointF(center.x * unitScale, center.y * unitScale),
+                         QPointF(edge.x * unitScale, edge.y * unitScale)};
+        *shape = std::move(result);
+        return true;
+    }
+
+    result.geometryType = curve.IsLinear(planarTolerance)
+                              ? GeometryType::Line
+                              : GeometryType::Nurbs;
+    result.points = result.nurbs.controlPoints;
+    *shape = std::move(result);
+    return true;
+}
+
+void addImportWarning(QStringList *warnings, const QString &reason)
+{
+    if (warnings != nullptr && !reason.isEmpty() && !warnings->contains(reason) &&
+        warnings->size() < 5) {
+        warnings->append(reason);
+    }
+}
+
 } // namespace
 
 bool saveVignolaDocument(const QString &path,
@@ -508,6 +672,183 @@ bool loadVignolaDocument(const QString &path,
     }
 
     *document = restored;
+    return true;
+}
+
+bool importRhino3dmDocument(const QString &path,
+                            Document *document,
+                            Rhino3dmImportReport *report,
+                            QString *errorMessage)
+{
+    Q_UNUSED(openNurbsRuntime())
+    if (report != nullptr) {
+        *report = Rhino3dmImportReport{};
+    }
+    if (document == nullptr || path.trimmed().isEmpty()) {
+        setError(errorMessage, QStringLiteral("A destination document and 3DM file path are required"));
+        return false;
+    }
+
+    const std::wstring widePath = toWide(path);
+    ON_wString readLog;
+    ON_TextLog textLog(readLog);
+    ONX_Model model;
+    if (!model.Read(widePath.c_str(), &textLog)) {
+        setError(errorMessage,
+                 openNurbsError(readLog,
+                                QStringLiteral("openNURBS could not read this Rhino 3DM file")));
+        return false;
+    }
+
+    const double unitScale = ON::UnitScale(
+        model.m_settings.m_ModelUnitsAndTolerances.m_unit_system,
+        ON::LengthUnitSystem::Millimeters);
+    if (!std::isfinite(unitScale) || unitScale <= 0.0) {
+        setError(errorMessage,
+                 QStringLiteral("The Rhino file uses an unknown model unit system"));
+        return false;
+    }
+    const double planarTolerance = std::max(
+        1.0e-9,
+        std::abs(model.m_settings.m_ModelUnitsAndTolerances.m_absolute_tolerance));
+
+    Document candidate = *document;
+    QHash<int, LayerId> importedLayerIds;
+    ONX_ModelComponentIterator layerIterator(model, ON_ModelComponent::Type::Layer);
+    for (ON_ModelComponentReference reference = layerIterator.FirstComponentReference();
+         !reference.IsEmpty();
+         reference = layerIterator.NextComponentReference()) {
+        const ON_Layer *sourceLayer = ON_Layer::FromModelComponentRef(reference, nullptr);
+        if (sourceLayer == nullptr) {
+            continue;
+        }
+
+        const QString layerName = layerNameForImport(*sourceLayer);
+        LayerId destinationLayerId = matchingLayer(candidate, layerName);
+        if (!destinationLayerId.isValid()) {
+            destinationLayerId = candidate.createLayer(layerName);
+            const ON_Color sourceColor = sourceLayer->Color();
+            candidate.setLayerColor(destinationLayerId,
+                                    QColor(sourceColor.Red(),
+                                           sourceColor.Green(),
+                                           sourceColor.Blue(),
+                                           255 - sourceColor.Alpha()));
+            candidate.setLayerVisible(destinationLayerId, sourceLayer->IsVisible());
+            candidate.setLayerLocked(destinationLayerId, sourceLayer->IsLocked());
+
+            const double plotWeight = sourceLayer->PlotWeight();
+            candidate.setLayerPlotted(destinationLayerId, plotWeight >= 0.0);
+            candidate.setLayerLineWeight(destinationLayerId,
+                                         std::clamp(plotWeight, 0.0, 2.11));
+
+            const int linePatternIndex = sourceLayer->LinetypeIndex();
+            if (linePatternIndex >= 0) {
+                const ON_ModelComponentReference pattern = model.ComponentFromIndex(
+                    ON_ModelComponent::Type::LinePattern,
+                    linePatternIndex);
+                if (const ON_ModelComponent *patternComponent = pattern.ModelComponent()) {
+                    const ON_wString patternName = patternComponent->Name();
+                    if (patternName.Array() != nullptr && patternName.Array()[0] != L'\0') {
+                        candidate.setLayerLineType(destinationLayerId,
+                                                   QString::fromWCharArray(patternName.Array()));
+                    }
+                }
+            }
+        }
+        importedLayerIds.insert(sourceLayer->Index(), destinationLayerId);
+    }
+
+    QStringList warnings;
+    Rhino3dmImportReport completedReport;
+    ONX_ModelComponentIterator geometryIterator(model,
+                                                 ON_ModelComponent::Type::ModelGeometry);
+    for (ON_ModelComponentReference reference = geometryIterator.FirstComponentReference();
+         !reference.IsEmpty();
+         reference = geometryIterator.NextComponentReference()) {
+        const ON_ModelGeometryComponent *modelGeometry =
+            ON_ModelGeometryComponent::FromModelComponentRef(reference, nullptr);
+        if (modelGeometry == nullptr) {
+            continue;
+        }
+        if (modelGeometry->IsInstanceDefinitionGeometry()) {
+            continue;
+        }
+
+        const ON_Geometry *geometry = modelGeometry->Geometry(nullptr);
+        const ON_3dmObjectAttributes *attributes = modelGeometry->Attributes(nullptr);
+        if (geometry == nullptr) {
+            ++completedReport.skippedObjectCount;
+            addImportWarning(&warnings, QStringLiteral("empty Rhino object"));
+            continue;
+        }
+
+        Shape importedShape;
+        QString reason;
+        if (const ON_Point *point = ON_Point::Cast(geometry)) {
+            if (!std::isfinite(point->point.x) || !std::isfinite(point->point.y) ||
+                !std::isfinite(point->point.z) ||
+                std::abs(point->point.z) > planarTolerance) {
+                reason = QStringLiteral("point is not in the XY plane");
+            } else {
+                importedShape.geometryType = GeometryType::Point;
+                importedShape.points.append(QPointF(point->point.x * unitScale,
+                                                    point->point.y * unitScale));
+            }
+        } else if (const ON_Curve *curve = ON_Curve::Cast(geometry)) {
+            if (!importCurve(*curve,
+                             unitScale,
+                             planarTolerance,
+                             &importedShape,
+                             &reason)) {
+                // The helper provides a specific reason for unsupported curves.
+            }
+        } else if (ON_InstanceRef::Cast(geometry) != nullptr) {
+            reason = QStringLiteral("block instances are not supported yet");
+        } else {
+            reason = QStringLiteral("surfaces, meshes, and annotations are not supported yet");
+        }
+
+        if (!reason.isEmpty()) {
+            ++completedReport.skippedObjectCount;
+            addImportWarning(&warnings, reason);
+            continue;
+        }
+
+        SceneObject importedObject;
+        importedObject.layerId = attributes == nullptr
+                                     ? candidate.activeLayerId()
+                                     : importedLayerIds.value(attributes->m_layer_index,
+                                                              candidate.activeLayerId());
+        importedObject.geometry = std::move(importedShape);
+        candidate.insertObject(candidate.size(), std::move(importedObject));
+        ++completedReport.importedObjectCount;
+    }
+
+    if (completedReport.importedObjectCount == 0) {
+        setError(errorMessage,
+                 completedReport.skippedObjectCount == 0
+                     ? QStringLiteral("The Rhino 3DM file contains no importable geometry")
+                     : QStringLiteral("No supported 2D curves or points were found in the Rhino 3DM file"));
+        if (report != nullptr) {
+            *report = completedReport;
+        }
+        return false;
+    }
+
+    if (completedReport.skippedObjectCount > 0) {
+        completedReport.warningMessage =
+            QStringLiteral("Skipped %1 unsupported object(s): %2")
+                .arg(completedReport.skippedObjectCount)
+                .arg(warnings.join(QStringLiteral("; ")));
+    }
+
+    document->restoreSnapshot(candidate.snapshot());
+    if (report != nullptr) {
+        *report = completedReport;
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
     return true;
 }
 

@@ -51,6 +51,47 @@ int main(int argc, char **argv)
         }
     }
 
+    const Shape::NurbsCurve2D firstPolyCurvePart =
+        makeDegreeOneNurbs({QPointF(-100, 0), QPointF(100, 0)});
+    const Shape::NurbsCurve2D secondPolyCurvePart =
+        makeDegreeOneNurbs({QPointF(-100, 100), QPointF(100, 100)});
+    Shape joinedCurves{GeometryType::PolyCurve,
+                       view.polyCurvePoints({firstPolyCurvePart, secondPolyCurvePart}),
+                       {},
+                       ArcMode::TwoPoint,
+                       0.0,
+                       {},
+                       {firstPolyCurvePart, secondPolyCurvePart}};
+    view.shapes_ = {joinedCurves};
+    view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0)};
+    view.selectedShapeIndex_ = view.shapes_.objectIdAt(0);
+    view.eraseGeometryCachePrepared_ = false;
+    view.trimHoverPositionValid_ = false;
+    view.prepareEraseGeometryCache();
+    view.updateTrimHover(view.worldToScreen(QPointF(0, 0)));
+    bool previewTargetsNearestComponent = view.trimHoverComponentIndex_ == 0;
+    for (const EraseCurveSampleCache &cache : view.eraseTargetCurveCaches_) {
+        if (cache.componentIndex == 0) {
+            previewTargetsNearestComponent &= !cache.previewIntervals.isEmpty();
+        } else if (cache.componentIndex == 1) {
+            previewTargetsNearestComponent &= cache.previewIntervals.isEmpty();
+        }
+    }
+    if (!previewTargetsNearestComponent) {
+        qWarning() << "Point trim preview must target only the nearest PolyCurve component";
+        ++failures;
+    }
+
+    view.applyEraseCandidates(nullptr, view.trimHoverComponentIndex_);
+    if (view.shapes_.size() != 1 ||
+        view.shapes_[0].geometryType != GeometryType::PolyCurve ||
+        view.shapes_[0].components.size() != 1 ||
+        view.shapes_[0].components[0].controlPoints !=
+            secondPolyCurvePart.controlPoints) {
+        qWarning() << "Point trim must leave other PolyCurve components untouched";
+        ++failures;
+    }
+
     const Shape sourceCircle{GeometryType::Circle,
                              {},
                              makeCircleNurbs({QPointF(0, 0), QPointF(100, 0)}),
@@ -267,8 +308,33 @@ int main(int argc, char **argv)
     QVector<Shape> remaining;
     if (!view.trimShapeAtEraserStroke(view.shapes_[1], middleStroke,
                                      &remaining, 1, &view.eraseTargetCurveCaches_) ||
-        remaining.size() != 1 || remaining.first().components.size() != 2) {
-        qWarning() << "Middle cut must preserve both outer line tails";
+        remaining.size() != 2 ||
+        remaining[0].geometryType != GeometryType::Line ||
+        remaining[1].geometryType != GeometryType::Line ||
+        !view.isValidNurbsCurve(remaining[0].nurbs) ||
+        !view.isValidNurbsCurve(remaining[1].nurbs)) {
+        qWarning() << "Middle cut must produce two independently selectable line tails";
+        ++failures;
+    }
+
+    const ObjectId originalLineId = view.shapes_.objectIdAt(1);
+    const LayerId originalLineLayer = view.document_.object(originalLineId)->layerId;
+    view.history_.clear();
+    view.eraseCandidateShapeIndices_ = {originalLineId};
+    view.eraseStrokeScreenPath_ = middleStroke;
+    view.applyEraseCandidates();
+    if (view.shapes_.size() != 3 ||
+        view.shapes_.objectIdAt(1) != originalLineId ||
+        view.shapes_.objectIdAt(2) == originalLineId ||
+        view.document_.object(view.shapes_.objectIdAt(2))->layerId != originalLineLayer ||
+        view.shapes_[1].geometryType != GeometryType::Line ||
+        view.shapes_[2].geometryType != GeometryType::Line) {
+        qWarning() << "Trim must insert the second line tail as a separate same-layer object";
+        ++failures;
+    }
+    view.undo();
+    if (view.shapes_.size() != 2 || view.shapes_.objectIdAt(1) != originalLineId) {
+        qWarning() << "Undo must restore the original object after a multi-piece trim";
         ++failures;
     }
 

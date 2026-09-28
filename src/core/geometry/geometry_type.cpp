@@ -6,7 +6,7 @@ namespace classiCAD {
 
 bool isPersistentGeometryType(GeometryType type)
 {
-    return type >= GeometryType::Line && type <= GeometryType::AngularDimension;
+    return type >= GeometryType::Line && type <= GeometryType::Picture;
 }
 
 bool isDimensionGeometryType(GeometryType type)
@@ -42,6 +42,8 @@ QString geometryTypeName(GeometryType type)
         return QStringLiteral("Linear Dimension");
     case GeometryType::AngularDimension:
         return QStringLiteral("Angular Dimension");
+    case GeometryType::Picture:
+        return QStringLiteral("Picture");
     case GeometryType::Invalid:
         return QStringLiteral("Invalid");
     }
@@ -63,7 +65,7 @@ bool geometryTypeFromLegacyValue(int value, GeometryType *type)
 bool geometryTypeFromValue(int value, GeometryType *type)
 {
     if (type == nullptr || value < static_cast<int>(GeometryType::Line) ||
-        value > static_cast<int>(GeometryType::AngularDimension)) {
+        value > static_cast<int>(GeometryType::Picture)) {
         return false;
     }
 
@@ -117,6 +119,8 @@ GeometryType geometryTypeForTool(ToolId tool)
         return GeometryType::Ellipse;
     case ToolId::Point:
         return GeometryType::Point;
+    case ToolId::Picture:
+        return GeometryType::Picture;
     case ToolId::Select:
     case ToolId::Erase:
     case ToolId::Trim:

@@ -22,6 +22,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QBuffer>
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
@@ -31,6 +32,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QImageReader>
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPaintEvent>
@@ -158,6 +160,12 @@ public:
             cancelGrab();
         }
         const Tool previousTool = activeTool_;
+        if (previousTool == Tool::Picture && tool != Tool::Picture) {
+            pendingPictureImage_ = QImage();
+            pendingPictureImageData_.clear();
+            pendingPicturePath_.clear();
+            repeatTool_ = Tool::Select;
+        }
         if (previousTool != tool) {
             polygonWheelRemainder_ = 0;
         }
@@ -203,6 +211,7 @@ public:
             eraseTargetCurveCaches_.clear();
             eraseGeometryCachePrepared_ = false;
             trimHoverPositionValid_ = false;
+            trimHoverComponentIndex_ = -1;
         }
 
         if (tool != Tool::Select) {
@@ -256,6 +265,48 @@ public:
                                        .arg(cursorValid_)
                                        .arg(pointText(cursorWorld_)));
         update();
+    }
+
+    bool beginPicturePlacement(const QString &imagePath,
+                               QString *errorMessage) override
+    {
+        QFile imageFile(imagePath);
+        if (!imageFile.open(QIODevice::ReadOnly)) {
+            if (errorMessage != nullptr) {
+                *errorMessage = imageFile.errorString();
+            }
+            return false;
+        }
+        QByteArray imageData = imageFile.readAll();
+        if (imageData.isEmpty() || imageFile.error() != QFileDevice::NoError) {
+            if (errorMessage != nullptr) {
+                *errorMessage = imageFile.errorString().isEmpty()
+                                    ? QStringLiteral("The selected image file is empty.")
+                                    : imageFile.errorString();
+            }
+            return false;
+        }
+        QBuffer imageBuffer;
+        imageBuffer.setData(imageData);
+        imageBuffer.open(QIODevice::ReadOnly);
+        QImageReader reader(&imageBuffer);
+        reader.setAutoTransform(true);
+        QImage image = reader.read();
+        if (image.isNull()) {
+            if (errorMessage != nullptr) {
+                *errorMessage = reader.errorString().isEmpty()
+                                    ? QStringLiteral("The selected file is not a readable image.")
+                                    : reader.errorString();
+            }
+            return false;
+        }
+
+        pendingPictureImage_ = std::move(image);
+        pendingPictureImageData_ = std::move(imageData);
+        pendingPicturePath_ = imagePath;
+        setTool(Tool::Picture);
+        setFocus(Qt::OtherFocusReason);
+        return true;
     }
 
     ViewportCommandResult executeCommand(ViewportCommand command,
@@ -1701,6 +1752,7 @@ public:
             }
             shapes_ = restoredShapes;
         }
+        normalizeDisconnectedPolyCurveObjects();
         history_.clear();
         pendingPoints_.clear();
         resetArcPreviewTracking();
@@ -1766,6 +1818,7 @@ public:
         }
 
         document_ = std::move(restoredDocument);
+        normalizeDisconnectedPolyCurveObjects();
         resetForDocumentReplacement();
         pan_ = QPointF(0.0, 0.0);
         zoom_ = 1.0;
@@ -1789,6 +1842,7 @@ public:
             return false;
         }
 
+        normalizeDisconnectedPolyCurveObjects();
         recordGeometrySnapshot(beforeImport);
         update();
         return true;
@@ -1954,7 +2008,13 @@ protected:
             }
         }
 
-        if (activeTool_ == Tool::TangentFromCurve) {
+        if (activeTool_ == Tool::Picture && pendingPoints_.size() == 1 &&
+            cursorValid_ && !pendingPictureImage_.isNull()) {
+            const Shape picturePreview = pictureShapeForCorner(cursorWorld_);
+            if (picturePreview.points.size() == 4) {
+                drawShape(painter, picturePreview, true, false, false);
+            }
+        } else if (activeTool_ == Tool::TangentFromCurve) {
             drawLineToolPreview(painter);
             if (!pendingPoints_.isEmpty()) {
                 drawSnapMarker(painter, SnapType::Tangent, pendingPoints_.first());
@@ -2010,7 +2070,8 @@ protected:
                       true);
         }
 
-        if ((grabActive_ || duplicateActive_ || activeTool_ == Tool::Scale) &&
+        if ((grabActive_ || duplicateActive_ || activeTool_ == Tool::Scale ||
+             activeTool_ == Tool::Picture) &&
             currentSnap_.isValid()) {
             drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
         }
@@ -2174,6 +2235,11 @@ protected:
             return;
         }
 
+        if (event->button() == Qt::RightButton && activeTool_ == Tool::Picture) {
+            cancelPicturePlacement();
+            return;
+        }
+
         if (event->button() == panButton_ ||
             (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::AltModifier))) {
             panning_ = true;
@@ -2301,6 +2367,7 @@ protected:
             eraseCandidateShapeIndices_.clear();
             eraseStrokeScreenPath_.clear();
             trimHoverPositionValid_ = false;
+            trimHoverComponentIndex_ = -1;
             beginSelectionBox(screenPosition, false);
             trimBoxSelectionActive_ = true;
             return;
@@ -2406,6 +2473,42 @@ protected:
         lastWorldPosition_ = worldPosition;
         cursorWorld_ = worldPosition;
         cursorValid_ = true;
+
+        if (activeTool_ == Tool::Picture) {
+            if (pendingPictureImage_.isNull()) {
+                cancelPicturePlacement();
+                return;
+            }
+            if (pendingPoints_.isEmpty()) {
+                pendingPoints_.append(worldPosition);
+                DebugLog::instance().write(
+                    QStringLiteral("picture first corner=%1 image=%2x%3")
+                        .arg(pointText(worldPosition))
+                        .arg(pendingPictureImage_.width())
+                        .arg(pendingPictureImage_.height()));
+            } else {
+                Shape picture = pictureShapeForCorner(worldPosition);
+                if (picture.points.size() == 4 &&
+                    std::hypot(picture.points[1].x() - picture.points[0].x(),
+                               picture.points[1].y() - picture.points[0].y()) > 1.0e-9 &&
+                    std::hypot(picture.points[2].x() - picture.points[1].x(),
+                               picture.points[2].y() - picture.points[1].y()) > 1.0e-9) {
+                    recordGeometryChange();
+                    shapes_.append(picture);
+                    DebugLog::instance().write(
+                        QStringLiteral("picture committed image=%1 frameCorners=%2")
+                            .arg(pendingPicturePath_)
+                            .arg(picture.points.size()));
+                    setTool(Tool::Select);
+                    if (commandFinished_) {
+                        commandFinished_(Tool::Select);
+                    }
+                }
+            }
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
 
         if (activeTool_ == Tool::Line) {
             pendingPoints_.append(lastWorldPosition_);
@@ -2519,6 +2622,8 @@ protected:
             activeToolController_->handleMouseMove(input, toolContext_);
         }
         const bool pointPreviewActive = activeTool_ == Tool::Point;
+        const bool picturePreviewActive = activeTool_ == Tool::Picture &&
+                                          pendingPoints_.size() == 1;
         const bool circlePreviewActive = isCircleConstructionTool(activeTool_) &&
                                          !pendingPoints_.isEmpty();
         const bool tangentCirclePreviewActive = isCircleTangentTool(activeTool_);
@@ -2780,7 +2885,8 @@ protected:
             }
         }
 
-        if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
+        if (pointPreviewActive || picturePreviewActive || lineCommandActive_ ||
+            arcPreviewActive || circlePreviewActive ||
             tangentCirclePreviewActive || ellipsePreviewActive ||
             rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive || panning_ ||
             draggingSelected_ ||
@@ -2788,7 +2894,8 @@ protected:
             update();
         }
 
-        if (pointPreviewActive || lineCommandActive_ || arcPreviewActive || circlePreviewActive ||
+        if (pointPreviewActive || picturePreviewActive || lineCommandActive_ ||
+            arcPreviewActive || circlePreviewActive ||
             tangentCirclePreviewActive || ellipsePreviewActive ||
             rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive ||
             activeTool_ == Tool::Erase || panning_ ||
@@ -2987,6 +3094,11 @@ protected:
                                        .arg(pendingPoints_.size()));
         if (selectionBoxActive_ && event->key() == Qt::Key_Escape) {
             cancelSelectionBox();
+            return;
+        }
+
+        if (activeTool_ == Tool::Picture && event->key() == Qt::Key_Escape) {
+            cancelPicturePlacement();
             return;
         }
 
@@ -3232,6 +3344,9 @@ private:
     {
         history_.clear();
         pendingPoints_.clear();
+        pendingPictureImage_ = QImage();
+        pendingPictureImageData_.clear();
+        pendingPicturePath_.clear();
         controllerPreviewShape_ = Shape{};
         controllerPreviewShapeVisible_ = false;
         resetArcPreviewTracking();
@@ -3584,6 +3699,152 @@ private:
             points.append(end);
         }
         return points;
+    }
+
+    QVector<QVector<Shape::NurbsCurve2D>> connectedCurveGroups(
+        const QVector<Shape::NurbsCurve2D> &curves) const
+    {
+        QVector<QPointF> starts;
+        QVector<QPointF> ends;
+        starts.reserve(curves.size());
+        ends.reserve(curves.size());
+        qreal coordinateScale = 1.0;
+        for (const Shape::NurbsCurve2D &curve : curves) {
+            QPointF start;
+            QPointF end;
+            if (!nurbsCurveEndpoints(curve, &start, &end)) {
+                starts.append(QPointF());
+                ends.append(QPointF());
+                continue;
+            }
+            starts.append(start);
+            ends.append(end);
+            coordinateScale = std::max({coordinateScale,
+                                        std::abs(start.x()),
+                                        std::abs(start.y()),
+                                        std::abs(end.x()),
+                                        std::abs(end.y())});
+        }
+
+        const qreal endpointTolerance = std::max<qreal>(1.0e-8,
+                                                        coordinateScale * 1.0e-12);
+        const auto endpointsMatch = [endpointTolerance](const QPointF &first,
+                                                        const QPointF &second) {
+            return std::hypot(first.x() - second.x(),
+                              first.y() - second.y()) <= endpointTolerance;
+        };
+        QVector<QVector<Shape::NurbsCurve2D>> groups;
+        QVector<bool> grouped(curves.size(), false);
+        for (int seed = 0; seed < curves.size(); ++seed) {
+            if (grouped[seed]) {
+                continue;
+            }
+
+            QVector<int> connectedIndices{seed};
+            grouped[seed] = true;
+            for (int cursor = 0; cursor < connectedIndices.size(); ++cursor) {
+                const int current = connectedIndices[cursor];
+                if (!isValidNurbsCurve(curves[current])) {
+                    continue;
+                }
+                for (int candidate = 0; candidate < curves.size(); ++candidate) {
+                    if (grouped[candidate] || !isValidNurbsCurve(curves[candidate])) {
+                        continue;
+                    }
+                    if (endpointsMatch(starts[current], starts[candidate]) ||
+                        endpointsMatch(starts[current], ends[candidate]) ||
+                        endpointsMatch(ends[current], starts[candidate]) ||
+                        endpointsMatch(ends[current], ends[candidate])) {
+                        grouped[candidate] = true;
+                        connectedIndices.append(candidate);
+                    }
+                }
+            }
+
+            std::sort(connectedIndices.begin(), connectedIndices.end());
+            QVector<Shape::NurbsCurve2D> group;
+            group.reserve(connectedIndices.size());
+            for (const int index : connectedIndices) {
+                group.append(curves[index]);
+            }
+            QVector<Shape::NurbsCurve2D> ordered;
+            if (group.size() > 1 && orderJoinComponents(group, &ordered)) {
+                group = ordered;
+            }
+            groups.append(group);
+        }
+        return groups;
+    }
+
+    Shape polyCurveShapeForComponents(
+        const Shape &source,
+        const QVector<Shape::NurbsCurve2D> &components) const
+    {
+        Shape result = source;
+        result.geometryType = GeometryType::PolyCurve;
+        result.points = polyCurvePoints(components);
+        result.nurbs = Shape::NurbsCurve2D{};
+        result.arcMode = ArcMode::TwoPoint;
+        result.arcSweep = 0.0;
+        result.subdivisionParameters.clear();
+        result.components = components;
+        return result;
+    }
+
+    void normalizeDisconnectedPolyCurveObjects()
+    {
+        QVector<SceneObject> normalizedObjects;
+        normalizedObjects.reserve(document_.size());
+        bool changed = false;
+        int splitCount = 0;
+        for (const SceneObject &sceneObject : document_.objects()) {
+            const Shape &source = sceneObject.geometry;
+            if (source.geometryType != GeometryType::PolyCurve ||
+                source.components.size() < 2) {
+                normalizedObjects.append(sceneObject);
+                continue;
+            }
+
+            const auto connectedGroups = connectedCurveGroups(source.components);
+            QVector<QVector<Shape::NurbsCurve2D>> validGroups;
+            for (const auto &group : connectedGroups) {
+                QVector<Shape::NurbsCurve2D> ordered;
+                if (group.size() > 1 && !orderJoinComponents(group, &ordered)) {
+                    // A connected branch is not one continuous spline. Keep
+                    // each branch as its own selectable curve object.
+                    for (const Shape::NurbsCurve2D &curve : group) {
+                        validGroups.append({curve});
+                    }
+                } else {
+                    validGroups.append(group.size() > 1 ? ordered : group);
+                }
+            }
+
+            if (validGroups.size() <= 1) {
+                normalizedObjects.append(sceneObject);
+                continue;
+            }
+
+            changed = true;
+            ++splitCount;
+            SceneObject firstPiece = sceneObject;
+            firstPiece.geometry = polyCurveShapeForComponents(source, validGroups.first());
+            normalizedObjects.append(firstPiece);
+            for (int groupIndex = 1; groupIndex < validGroups.size(); ++groupIndex) {
+                SceneObject piece = sceneObject;
+                piece.id = ObjectId::invalid();
+                piece.geometry = polyCurveShapeForComponents(source, validGroups[groupIndex]);
+                normalizedObjects.append(piece);
+            }
+        }
+
+        if (changed) {
+            document_.replaceObjects(normalizedObjects);
+            DebugLog::instance().write(
+                QStringLiteral("disconnected PolyCurve repair splitObjects=%1 objects=%2")
+                    .arg(splitCount)
+                    .arg(document_.size()));
+        }
     }
 
     void notifyJoinStatus(const QString &message = QString())
@@ -4995,6 +5256,7 @@ private:
             activeTool_ == Tool::Point || activeTool_ == Tool::Rotate ||
             activeTool_ == Tool::Scale ||
             isEllipseTool(activeTool_) || isRectangleTool(activeTool_) ||
+            activeTool_ == Tool::Picture ||
             activeTool_ == Tool::Mirror || isDimensionTool(activeTool_) ||
             activeTool_ == Tool::TangentFromCurve ||
             activeTool_ == Tool::PerpendicularFromCurve;
@@ -6559,15 +6821,20 @@ private:
     }
 
     qreal distanceToCachedEraseShape(const QPointF &screenPosition,
-                                     int shapeIndex) const
+                                     int shapeIndex,
+                                     int *closestComponentIndex = nullptr) const
     {
         constexpr qreal eraserRadiusPixels = 10.0;
         qreal distance = 1.0e9;
+        if (closestComponentIndex != nullptr) {
+            *closestComponentIndex = -1;
+        }
         for (const EraseCurveSampleCache &targetCurve : eraseTargetCurveCaches_) {
             if (targetCurve.shapeIndex != shapeIndex) {
                 continue;
             }
 
+            qreal componentDistance = 1.0e9;
             for (int sample = 1;
                  sample < targetCurve.sampled.screenPoints.size();
                  ++sample) {
@@ -6583,11 +6850,17 @@ private:
                     }
                 }
 
-                distance = std::min(
-                    distance,
+                componentDistance = std::min(
+                    componentDistance,
                     distanceToSegment(screenPosition,
                                       targetCurve.sampled.screenPoints[sample - 1],
                                       targetCurve.sampled.screenPoints[sample]));
+            }
+            if (componentDistance < distance) {
+                distance = componentDistance;
+                if (closestComponentIndex != nullptr) {
+                    *closestComponentIndex = targetCurve.componentIndex;
+                }
             }
         }
         return distance;
@@ -6613,13 +6886,16 @@ private:
         constexpr qreal trimHitRadiusPixels = 10.0;
         qreal closestDistance = trimHitRadiusPixels;
         int closestShapeIndex = -1;
+        int closestComponentIndex = -1;
         for (const ObjectId objectId : eraseTargetShapeIndices_) {
             const int shapeIndex = objectIndex(objectId);
             if (shapeIndex < 0) {
                 continue;
             }
+            int componentIndex = -1;
             const qreal distance = distanceToCachedEraseShape(screenPosition,
-                                                              shapeIndex);
+                                                              shapeIndex,
+                                                              &componentIndex);
             const bool closer = distance < closestDistance - 1.0e-6;
             const bool tieOnActiveSelection =
                 std::abs(distance - closestDistance) <= 1.0e-6 &&
@@ -6627,13 +6903,15 @@ private:
             if (closer || tieOnActiveSelection) {
                 closestDistance = distance;
                 closestShapeIndex = shapeIndex;
+                closestComponentIndex = componentIndex;
             }
         }
 
         if (closestShapeIndex >= 0) {
             eraseCandidateShapeIndices_.append(shapes_.objectIdAt(closestShapeIndex));
         }
-        updateErasePreviewIntervals(true);
+        trimHoverComponentIndex_ = closestComponentIndex;
+        updateErasePreviewIntervals(true, closestShapeIndex, closestComponentIndex);
     }
 
     void trimAtScreenPosition(const QPointF &screenPosition)
@@ -6645,7 +6923,7 @@ private:
             return;
         }
 
-        applyEraseCandidates();
+        applyEraseCandidates(nullptr, trimHoverComponentIndex_);
         eraseStrokeActive_ = false;
         eraseCandidateShapeIndices_.clear();
         eraseStrokeScreenPath_.clear();
@@ -6654,6 +6932,7 @@ private:
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = false;
         trimHoverPositionValid_ = false;
+        trimHoverComponentIndex_ = -1;
         update();
         DebugLog::instance().write(QStringLiteral("trim click applied"));
     }
@@ -6723,6 +7002,7 @@ private:
             selectionBoxMoved_ = false;
             selectionBoxAdditive_ = false;
             trimBoxSelectionActive_ = false;
+            trimHoverComponentIndex_ = -1;
             eraseCandidateShapeIndices_.clear();
             eraseStrokeScreenPath_.clear();
             trimHoverPositionValid_ = false;
@@ -6739,6 +7019,7 @@ private:
         selectionBoxMoved_ = false;
         selectionBoxAdditive_ = false;
         trimBoxSelectionActive_ = false;
+        trimHoverComponentIndex_ = -1;
         if (!eraseCandidateShapeIndices_.isEmpty()) {
             applyEraseCandidates(&box);
         }
@@ -7107,7 +7388,9 @@ private:
         return intervals;
     }
 
-    void updateErasePreviewIntervals(bool reset)
+    void updateErasePreviewIntervals(bool reset,
+                                     int onlyShapeIndex = -1,
+                                     int onlyComponentIndex = -1)
     {
         if (eraseStrokeScreenPath_.isEmpty()) {
             return;
@@ -7121,6 +7404,13 @@ private:
             }
             if (!eraseCandidateShapeIndices_.contains(
                     shapes_.objectIdAt(targetCurve.shapeIndex))) {
+                continue;
+            }
+            if (onlyShapeIndex >= 0 &&
+                (targetCurve.shapeIndex != onlyShapeIndex ||
+                 targetCurve.componentIndex != onlyComponentIndex)) {
+                targetCurve.previewIntervals.clear();
+                targetCurve.previewStrokePointCount = strokePointCount;
                 continue;
             }
 
@@ -7187,7 +7477,8 @@ private:
                                  QVector<Shape> *replacement,
                                  int sourceShapeIndex = -1,
                                  const QVector<EraseCurveSampleCache> *cachedTargets = nullptr,
-                                 const QRectF *trimBox = nullptr) const
+                                 const QRectF *trimBox = nullptr,
+                                 int onlyComponentIndex = -1) const
     {
         if (replacement == nullptr) {
             return false;
@@ -7217,6 +7508,11 @@ private:
              sourceComponentIndex < sourceCurves.size();
              ++sourceComponentIndex) {
             const Shape::NurbsCurve2D &sourceCurve = sourceCurves[sourceComponentIndex];
+            if (onlyComponentIndex >= 0 &&
+                sourceComponentIndex != onlyComponentIndex) {
+                remainingCurves.append(sourceCurve);
+                continue;
+            }
             const QVector<qreal> *cachedIntersectionParameters = nullptr;
             const EraseCurveSampleCache *cachedTargetCurve = nullptr;
             if (cachedTargets != nullptr) {
@@ -7299,23 +7595,22 @@ private:
             return true;
         }
 
-        if (shape.geometryType == GeometryType::Line && remainingCurves.size() == 1) {
+        for (const QVector<Shape::NurbsCurve2D> &connectedCurves :
+             connectedCurveGroups(remainingCurves)) {
+            // Keep fragments that still meet at a closed curve's seam in one
+            // selectable object, but separate disconnected trim remainders.
             Shape updated = shape;
-            updated.nurbs = remainingCurves.first();
-            updated.points = updated.nurbs.controlPoints;
-            updated.subdivisionParameters.clear();
+            if (shape.geometryType == GeometryType::Line && connectedCurves.size() == 1) {
+                updated.geometryType = GeometryType::Line;
+                updated.nurbs = connectedCurves.first();
+                updated.points = updated.nurbs.controlPoints;
+                updated.subdivisionParameters.clear();
+                updated.components.clear();
+            } else {
+                updated = polyCurveShapeForComponents(shape, connectedCurves);
+            }
             replacement->append(updated);
-            return true;
         }
-
-        Shape updated{GeometryType::PolyCurve,
-                      polyCurvePoints(remainingCurves),
-                      Shape::NurbsCurve2D{},
-                      ArcMode::TwoPoint,
-                      0.0,
-                      {},
-                      remainingCurves};
-        replacement->append(updated);
         return true;
     }
 
@@ -7356,7 +7651,8 @@ private:
         }
     }
 
-    void applyEraseCandidates(const QRectF *trimBox = nullptr)
+    void applyEraseCandidates(const QRectF *trimBox = nullptr,
+                              int onlyComponentIndex = -1)
     {
         if (eraseCandidateShapeIndices_.isEmpty()) {
             return;
@@ -7384,7 +7680,8 @@ private:
                                         &replacement,
                                         *iterator,
                                         &eraseTargetCurveCaches_,
-                                        trimBox)) {
+                                        trimBox,
+                                        onlyComponentIndex)) {
                 changes.append(qMakePair(*iterator, replacement));
             }
         }
@@ -7409,7 +7706,17 @@ private:
                 removedObjectIds.append(objectId);
                 ++removedCount;
             } else {
+                const SceneObject *sourceObject = document_.object(objectId);
+                const SceneObject sourceObjectCopy = sourceObject != nullptr
+                                                         ? *sourceObject
+                                                         : SceneObject{};
                 shapes_.replace(objectId, change.second.first());
+                for (int pieceIndex = 1; pieceIndex < change.second.size(); ++pieceIndex) {
+                    SceneObject piece = sourceObjectCopy;
+                    piece.id = ObjectId::invalid();
+                    piece.geometry = change.second[pieceIndex];
+                    shapes_.insertObject(shapeIndex + pieceIndex, piece);
+                }
             }
         }
 
@@ -8610,6 +8917,36 @@ private:
     }
 
 private:
+    Shape pictureShapeForCorner(const QPointF &cursorCorner) const
+    {
+        Shape picture;
+        picture.geometryType = GeometryType::Picture;
+        if (pendingPictureImage_.isNull() || pendingPoints_.isEmpty()) {
+            return picture;
+        }
+        const qreal aspectRatio = static_cast<qreal>(pendingPictureImage_.width()) /
+                                  pendingPictureImage_.height();
+        picture.points = makePictureFramePoints(pendingPoints_.first(),
+                                                cursorCorner,
+                                                aspectRatio);
+        picture.pictureImage = pendingPictureImage_;
+        picture.pictureImageData = pendingPictureImageData_;
+        return picture;
+    }
+
+    void cancelPicturePlacement()
+    {
+        if (activeTool_ != Tool::Picture) {
+            return;
+        }
+        pendingPoints_.clear();
+        setTool(Tool::Select);
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        update();
+    }
+
     ToolInput makeToolInput(const QMouseEvent *event,
                             const QPointF &screenPosition,
                             const QPointF &rawWorldPosition,
@@ -8739,6 +9076,9 @@ private:
     // extracted into tools and services.
     Document &shapes_;
     QVector<QPointF> pendingPoints_;
+    QImage pendingPictureImage_;
+    QByteArray pendingPictureImageData_;
+    QString pendingPicturePath_;
     Shape controllerPreviewShape_;
     bool controllerPreviewShapeVisible_ = false;
     int polygonSideCount_ = 6;
@@ -8801,6 +9141,7 @@ private:
     QVector<EraseCurveSampleCache> eraseTargetCurveCaches_;
     bool eraseGeometryCachePrepared_ = false;
     bool trimHoverPositionValid_ = false;
+    int trimHoverComponentIndex_ = -1;
     QPointF trimHoverScreenPosition_{0.0, 0.0};
     qreal &zoom_;
     bool panning_ = false;

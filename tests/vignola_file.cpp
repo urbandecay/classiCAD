@@ -105,6 +105,16 @@ int main(int argc, char **argv)
                                  0.75}};
     source.append(dimension);
 
+    Shape picture;
+    picture.geometryType = GeometryType::Picture;
+    picture.points = {QPointF(-12.0, 5.0),
+                      QPointF(-8.0, 5.0),
+                      QPointF(-8.0, 3.0),
+                      QPointF(-12.0, 3.0)};
+    picture.pictureImage = QImage(4, 2, QImage::Format_ARGB32);
+    picture.pictureImage.fill(QColor(QStringLiteral("#4c86b8")));
+    source.append(picture);
+
     QTemporaryDir temporaryDirectory;
     passed &= check(temporaryDirectory.isValid(), "temporary directory must be available");
     if (!temporaryDirectory.isValid()) {

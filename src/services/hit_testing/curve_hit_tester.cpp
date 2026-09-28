@@ -3,6 +3,8 @@
 #include "core/geometry/curve_evaluator.h"
 #include "services/dimensions/dimension_layout.h"
 
+#include <QPolygonF>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -379,6 +381,30 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                   transform.worldToScreen(vertices[index], viewportSize),
                                   transform.worldToScreen(vertices[(index + 1) % vertices.size()],
                                                          viewportSize)));
+        }
+        return distance;
+    }
+    if (shape.geometryType == GeometryType::Picture) {
+        const QVector<QPointF> vertices = pictureFrameCorners(shape);
+        if (vertices.size() != 4) {
+            return 1.0e9;
+        }
+        QPolygonF frame;
+        for (const QPointF &vertex : vertices) {
+            frame.append(transform.worldToScreen(vertex, viewportSize));
+        }
+        if (frame.containsPoint(screenPosition, Qt::OddEvenFill)) {
+            // The bitmap's face must remain selectable, but vector geometry
+            // drawn over it should win when the cursor is actually on a curve.
+            return 8.0;
+        }
+        qreal distance = 1.0e9;
+        for (int index = 0; index < frame.size(); ++index) {
+            distance = std::min(
+                distance,
+                distanceToSegment(screenPosition,
+                                  frame[index],
+                                  frame[(index + 1) % frame.size()]));
         }
         return distance;
     }

@@ -227,7 +227,8 @@ bool makeObjectGeometry(const Shape &shape,
 
     QVector<QPointF> points = shape.points;
     if ((shape.geometryType == GeometryType::Rectangle ||
-         shape.geometryType == GeometryType::Polygon) &&
+         shape.geometryType == GeometryType::Polygon ||
+         shape.geometryType == GeometryType::Picture) &&
         points.size() >= 3 && !samePoint(points.first(), points.last())) {
         points.append(points.first());
     }

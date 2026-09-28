@@ -156,6 +156,8 @@ QString toolName(ToolId tool)
         return QStringLiteral("Linear Dimension");
     case ToolId::AngularDimension:
         return QStringLiteral("Angular Dimension");
+    case ToolId::Picture:
+        return QStringLiteral("Picture");
     }
 
     return QStringLiteral("Unknown");
@@ -197,6 +199,8 @@ int requiredPoints(ToolId tool)
         return 2;
     case ToolId::Point:
         return 1;
+    case ToolId::Picture:
+        return 2;
     case ToolId::Ellipse:
     case ToolId::EllipseFromEndpoints:
     case ToolId::EllipseFromFoci:

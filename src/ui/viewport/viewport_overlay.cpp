@@ -791,6 +791,11 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
         painter.drawText(18,
                          viewportSize.height() - 18,
                          QStringLiteral("Click to place connected points  •  Right-click to finish"));
+    } else if (activeTool == Tool::Picture) {
+        painter.setPen(QColor(QStringLiteral("#777777")));
+        painter.drawText(18,
+                         viewportSize.height() - 18,
+                         QStringLiteral("Click the first corner, then the opposite corner  •  Aspect ratio is preserved  •  Esc cancels"));
     } else if (activeTool == Tool::TangentFromCurve) {
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,

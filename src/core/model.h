@@ -8,6 +8,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QByteArray>
+#include <QImage>
 #include <QPointF>
 #include <QRectF>
 #include <QString>
@@ -128,6 +130,10 @@ struct Shape {
     QVector<DimensionAnchorReference> dimensionAnchors;
     qreal dimensionOffset = 0.0;
     bool dimensionOffsetValid = false;
+    // Picture images are embedded raster scene objects. Their frame is stored
+    // as four ordered 2D corners in points (top-left clockwise).
+    QImage pictureImage;
+    QByteArray pictureImageData;
 };
 
 struct EraseCurveSampleCache {
@@ -148,6 +154,10 @@ QVector<QPointF> makeRectanglePoints(RectangleMode mode, const QVector<QPointF> 
 QVector<QPointF> makeRegularPolygonPoints(PolygonMode mode,
                                           const QVector<QPointF> &points,
                                           int sides);
+QVector<QPointF> makePictureFramePoints(const QPointF &firstCorner,
+                                         const QPointF &cursorCorner,
+                                         qreal imageAspectRatio);
+QVector<QPointF> pictureFrameCorners(const Shape &shape);
 
 qreal crossProduct(const QPointF &a, const QPointF &b);
 bool segmentIntersection(const QPointF &a,

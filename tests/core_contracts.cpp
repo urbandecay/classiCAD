@@ -20,6 +20,7 @@
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
 #include "ui/viewport/line_type_style.h"
+#include "ui/viewport/viewport_renderer.h"
 #include "tools/circle_tool.h"
 #include "tools/circle_tangent_tool.h"
 #include "tools/dimension_tool.h"
@@ -33,6 +34,7 @@
 #include <QApplication>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPainter>
 
 #include <cmath>
 #include <type_traits>
@@ -81,6 +83,11 @@ int main(int argc, char **argv)
                     "tool and geometry vocabularies must be distinct types");
     passed &= check(geometryTypeForTool(ToolId::Line) == GeometryType::Line,
                     "line tool must map to line geometry");
+    passed &= check(geometryTypeForTool(ToolId::Picture) == GeometryType::Picture &&
+                        toolName(ToolId::Picture) == QStringLiteral("Picture") &&
+                        requiredPoints(ToolId::Picture) == 2 &&
+                        isPersistentGeometryType(GeometryType::Picture),
+                    "Picture must be a persisted two-corner placement tool");
     passed &= check(isDimensionTool(ToolId::LinearDimension) &&
                         isDimensionTool(ToolId::AngularDimension) &&
                         geometryTypeForTool(ToolId::LinearDimension) ==
@@ -451,6 +458,32 @@ int main(int argc, char **argv)
                         restoredPolygon.geometryType == GeometryType::Polygon &&
                         restoredPolygon.points == centerCornerPolygon,
                     "polygon geometry must use its canonical persisted type and survive session serialization");
+
+    Shape picture;
+    picture.geometryType = GeometryType::Picture;
+    picture.points = makePictureFramePoints(QPointF(5.0, 8.0),
+                                            QPointF(10.0, 2.0),
+                                            2.0);
+    picture.pictureImage = QImage(4, 2, QImage::Format_ARGB32);
+    picture.pictureImage.fill(QColor(QStringLiteral("#d06040")));
+    const qreal pictureWidth = picture.points[1].x() - picture.points[0].x();
+    const qreal pictureHeight = picture.points[0].y() - picture.points[3].y();
+    Shape restoredPicture;
+    const QJsonObject serializedPicture = shapeToJson(picture);
+    passed &= check(picture.points.size() == 4 &&
+                        qFuzzyCompare(pictureWidth / pictureHeight, 2.0) &&
+                        serializedPicture.value(QStringLiteral("geometryType")).toInt(-1) == 13 &&
+                        shapeFromJson(serializedPicture, &restoredPicture) &&
+                        restoredPicture.geometryType == GeometryType::Picture &&
+                        restoredPicture.points == picture.points &&
+                        restoredPicture.pictureImage.size() == picture.pictureImage.size() &&
+                        restoredPicture.pictureImage.pixelColor(0, 0) ==
+                            picture.pictureImage.pixelColor(0, 0),
+                    "Picture frames must preserve image aspect ratio and embed their pixels in shape JSON");
+    QJsonObject pictureWithoutImage = serializedPicture;
+    pictureWithoutImage.remove(QStringLiteral("pictureImage"));
+    passed &= check(!shapeFromJson(pictureWithoutImage, &restoredPicture),
+                    "a persisted Picture without embedded image data must be rejected");
     const Shape linearDimension{GeometryType::LinearDimension,
                                 {QPointF(0.0, 0.0),
                                  QPointF(12.0, 0.0),
@@ -887,6 +920,56 @@ int main(int argc, char **argv)
                                            viewportTransform,
                                            viewportSize) == 0,
                     "curve hit tester must hit committed NURBS geometry");
+    Document pictureDocument;
+    pictureDocument.append(picture);
+    const QPointF pictureCenter =
+        viewportTransform.worldToScreen(QPointF(7.5, 6.75), viewportSize);
+    passed &= check(hitTester.hitTestShape(pictureDocument,
+                                           pictureCenter,
+                                           viewportTransform,
+                                           viewportSize) == 0 &&
+                        hitTester.controlPointsForShape(picture).size() == 4,
+                    "a placed Picture must be selectable throughout its image area with four frame controls");
+    QImage renderedPicture(viewportSize, QImage::Format_ARGB32);
+    renderedPicture.fill(QColor(QStringLiteral("#202020")));
+    ViewportRenderer pictureRenderer(viewportTransform, hitTester);
+    {
+        QPainter picturePainter(&renderedPicture);
+        pictureRenderer.drawShape(picturePainter,
+                                  picture,
+                                  viewportSize,
+                                  false,
+                                  false,
+                                  false,
+                                  QColor(QStringLiteral("#ffffff")));
+    }
+    const QPoint picturePixel(qRound(pictureCenter.x()), qRound(pictureCenter.y()));
+    passed &= check(renderedPicture.pixelColor(picturePixel) ==
+                        picture.pictureImage.pixelColor(0, 0),
+                    "the viewport renderer must draw the embedded image inside its placed frame");
+    Shape tracingLine{GeometryType::Line,
+                      {QPointF(5.0, 6.75), QPointF(10.0, 6.75)},
+                      makeDegreeOneNurbs({QPointF(5.0, 6.75), QPointF(10.0, 6.75)})};
+    pictureDocument.append(tracingLine);
+    passed &= check(hitTester.hitTestShape(pictureDocument,
+                                           pictureCenter,
+                                           viewportTransform,
+                                           viewportSize) == 1,
+                    "curves drawn over a Picture must remain selectable instead of being masked by the image face");
+    SnapEngine pictureSnapEngine;
+    const QVector<SnapCandidate> pictureSnaps = pictureSnapEngine.snapCandidatesForShape(
+        picture, viewportTransform, viewportSize);
+    passed &= check(std::count_if(pictureSnaps.cbegin(),
+                                  pictureSnaps.cend(),
+                                  [](const SnapCandidate &candidate) {
+                                      return candidate.type == SnapType::Endpoint;
+                                  }) == 4 &&
+                        std::count_if(pictureSnaps.cbegin(),
+                                      pictureSnaps.cend(),
+                                      [](const SnapCandidate &candidate) {
+                                          return candidate.type == SnapType::Midpoint;
+                                      }) == 4,
+                    "Picture frame corners and side midpoints must participate in object snaps");
     const DimensionScreenLayout linearDimensionLayout =
         buildDimensionScreenLayout(linearDimension, viewportTransform, viewportSize);
     const DimensionScreenLayout angularDimensionLayout =

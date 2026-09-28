@@ -40,6 +40,7 @@ enum class ToolId : int {
     LinearDimension = 29,
     AngularDimension = 30,
     Scale = 31,
+    Picture = 32,
 };
 
 enum class EllipseMode {

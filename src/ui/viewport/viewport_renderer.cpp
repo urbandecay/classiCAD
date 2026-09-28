@@ -7,6 +7,8 @@
 
 #include <QFont>
 #include <QPainterPath>
+#include <QPolygonF>
+#include <QTransform>
 
 #include <algorithm>
 #include <cmath>
@@ -176,6 +178,48 @@ void ViewportRenderer::drawShape(QPainter &painter,
             painter.fillRect(layout.labelBounds, QColor(QStringLiteral("#282828")));
             painter.setPen(curveColor);
             painter.drawText(layout.labelBounds, Qt::AlignCenter, layout.label);
+            painter.restore();
+        }
+        return;
+    }
+
+    if (shape.geometryType == GeometryType::Picture) {
+        const QVector<QPointF> corners = pictureFrameCorners(shape);
+        if (shape.pictureImage.isNull() || corners.size() != 4) {
+            return;
+        }
+
+        QPolygonF sourceCorners;
+        sourceCorners << QPointF(0.0, 0.0)
+                      << QPointF(shape.pictureImage.width(), 0.0)
+                      << QPointF(shape.pictureImage.width(), shape.pictureImage.height())
+                      << QPointF(0.0, shape.pictureImage.height());
+        QPolygonF screenCorners;
+        for (const QPointF &corner : corners) {
+            screenCorners.append(worldToScreen(corner, viewportSize));
+        }
+
+        QTransform imageTransform;
+        if (QTransform::quadToQuad(sourceCorners, screenCorners, imageTransform)) {
+            painter.save();
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+            if (preview) {
+                painter.setOpacity(0.78);
+            }
+            painter.setTransform(imageTransform, true);
+            painter.drawImage(QPointF(0.0, 0.0), shape.pictureImage);
+            painter.restore();
+        }
+
+        if (selected || preview) {
+            QPolygonF outline = screenCorners;
+            outline.append(screenCorners.first());
+            painter.save();
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(curveColor,
+                                selected ? 1.5 : 1.25,
+                                preview ? Qt::DashLine : Qt::SolidLine));
+            painter.drawPolyline(outline);
             painter.restore();
         }
         return;

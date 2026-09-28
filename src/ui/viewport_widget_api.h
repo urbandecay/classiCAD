@@ -104,6 +104,8 @@ public:
     ~ViewportWidgetApi() override = default;
 
     virtual void setTool(ToolId tool) = 0;
+    virtual bool beginPicturePlacement(const QString &imagePath,
+                                       QString *errorMessage = nullptr) = 0;
     virtual ViewportCommandResult executeCommand(ViewportCommand command,
                                                   int argument = 0) = 0;
     virtual QVector<ViewportLayerInfo> layerInfos() const = 0;

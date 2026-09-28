@@ -1645,6 +1645,10 @@ private:
                                            QStringLiteral("⬭\nEllipse"),
                                            Tool::Ellipse);
         createEllipseToolMenu(ellipseToolButton_);
+        addToolButton(layout,
+                      group,
+                      QStringLiteral("▧\nPicture"),
+                      Tool::Picture);
         dimensionToolButton_ = addToolButton(layout,
                                              group,
                                              QStringLiteral("↔\nDim"),
@@ -1754,6 +1758,10 @@ private:
         toolButtons_.append(button);
 
         connect(button, &QToolButton::clicked, this, [this, tool]() {
+            if (tool == Tool::Picture) {
+                startPicturePlacement();
+                return;
+            }
             if (tool == Tool::Rotate) {
                 startRotate();
                 return;
@@ -1775,6 +1783,64 @@ private:
         });
 
         return button;
+    }
+
+    void startPicturePlacement()
+    {
+        if (viewport_ == nullptr) {
+            return;
+        }
+
+        QSettings settings;
+        QString initialDirectory = settings.value(
+            QStringLiteral("files/lastPictureDirectory"),
+            QDir::homePath()).toString();
+        if (!currentProjectPath_.isEmpty()) {
+            initialDirectory = QFileInfo(currentProjectPath_).absolutePath();
+        }
+
+        QFileDialog dialog(this,
+                           QStringLiteral("Place Picture"),
+                           initialDirectory,
+                           QStringLiteral("Images (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;All files (*)"));
+        dialog.setOption(QFileDialog::DontUseNativeDialog);
+        dialog.setFileMode(QFileDialog::ExistingFile);
+        dialog.setAcceptMode(QFileDialog::AcceptOpen);
+        dialog.setLabelText(QFileDialog::FileName,
+                            QStringLiteral("Image file or path:"));
+        if (dialog.exec() != QDialog::Accepted) {
+            if (selectToolButton_ != nullptr) {
+                selectToolButton_->setChecked(true);
+            }
+            return;
+        }
+
+        const QStringList selectedFiles = dialog.selectedFiles();
+        if (selectedFiles.isEmpty() || selectedFiles.first().isEmpty()) {
+            if (selectToolButton_ != nullptr) {
+                selectToolButton_->setChecked(true);
+            }
+            return;
+        }
+
+        const QString imagePath = selectedFiles.first();
+        QString errorMessage;
+        if (!viewport_->beginPicturePlacement(imagePath, &errorMessage)) {
+            if (selectToolButton_ != nullptr) {
+                selectToolButton_->setChecked(true);
+            }
+            QMessageBox::critical(this,
+                                  QStringLiteral("Could Not Open Picture"),
+                                  errorMessage.isEmpty()
+                                      ? QStringLiteral("The selected image could not be opened.")
+                                      : errorMessage);
+            return;
+        }
+
+        settings.setValue(QStringLiteral("files/lastPictureDirectory"),
+                          QFileInfo(imagePath).absolutePath());
+        statusBar()->showMessage(
+            QStringLiteral("Picture: click the first corner, then the opposite corner"));
     }
 
     void activateArcMode(ArcMode mode)

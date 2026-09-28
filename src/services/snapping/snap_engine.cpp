@@ -824,10 +824,14 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         return candidates;
     }
     if (shape.geometryType == GeometryType::Rectangle ||
-        shape.geometryType == GeometryType::Polygon) {
-        const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
-                                              ? shape.points
-                                              : rectangleVertices(shape);
+        shape.geometryType == GeometryType::Polygon ||
+        shape.geometryType == GeometryType::Picture) {
+        const QVector<QPointF> vertices =
+            shape.geometryType == GeometryType::Polygon
+                ? shape.points
+                : shape.geometryType == GeometryType::Picture
+                      ? pictureFrameCorners(shape)
+                      : rectangleVertices(shape);
         for (const QPointF &vertex : vertices) {
             candidates.append({SnapType::Endpoint, vertex});
         }
@@ -1032,10 +1036,14 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             continue;
         }
         if (shape.geometryType == GeometryType::Rectangle ||
-            shape.geometryType == GeometryType::Polygon) {
-            const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
-                                                  ? shape.points
-                                                  : rectangleVertices(shape);
+            shape.geometryType == GeometryType::Polygon ||
+            shape.geometryType == GeometryType::Picture) {
+            const QVector<QPointF> vertices =
+                shape.geometryType == GeometryType::Polygon
+                    ? shape.points
+                    : shape.geometryType == GeometryType::Picture
+                          ? pictureFrameCorners(shape)
+                          : rectangleVertices(shape);
             for (int index = 0; index < vertices.size(); ++index) {
                 const QPointF start = vertices[index];
                 const QPointF end = vertices[(index + 1) % vertices.size()];
@@ -1150,7 +1158,8 @@ bool SnapEngine::perpendicularPointForShape(const Shape &shape,
 {
     if (point == nullptr || shape.geometryType == GeometryType::Point ||
         shape.geometryType == GeometryType::Rectangle ||
-        shape.geometryType == GeometryType::Polygon) {
+        shape.geometryType == GeometryType::Polygon ||
+        shape.geometryType == GeometryType::Picture) {
         return false;
     }
 
@@ -1557,10 +1566,14 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
                 considerPoint(shape.points.first());
             }
         } else if (shape.geometryType == GeometryType::Rectangle ||
-                   shape.geometryType == GeometryType::Polygon) {
-            const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
-                                                  ? shape.points
-                                                  : rectangleVertices(shape);
+                   shape.geometryType == GeometryType::Polygon ||
+                   shape.geometryType == GeometryType::Picture) {
+            const QVector<QPointF> vertices =
+                shape.geometryType == GeometryType::Polygon
+                    ? shape.points
+                    : shape.geometryType == GeometryType::Picture
+                          ? pictureFrameCorners(shape)
+                          : rectangleVertices(shape);
             for (int vertexIndex = 0; vertexIndex < vertices.size(); ++vertexIndex) {
                 considerSegment(vertices[vertexIndex],
                                 vertices[(vertexIndex + 1) % vertices.size()]);
@@ -1755,6 +1768,20 @@ DragSnapResult SnapEngine::findDragSnap(
             best.translation = targetPoint - sourcePoint;
         }
     };
+
+    if (settings_.near) {
+        for (const SnapCandidate &source : sourceCandidates) {
+            const QVector<SnapCandidate> nearTargets = nearCandidatesForScene(
+                document,
+                source.point,
+                transform,
+                viewportSize,
+                selectedShapeIndices);
+            for (const SnapCandidate &target : nearTargets) {
+                consider(SnapType::Near, source.point, target.point);
+            }
+        }
+    }
 
     for (const SnapCandidate &source : sourceCandidates) {
         for (const SnapCandidate &target : targetCandidates) {

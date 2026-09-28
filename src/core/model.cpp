@@ -1,7 +1,10 @@
 #include "model.h"
 
+#include <QBuffer>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QIODevice>
 
 #include <algorithm>
 #include <cmath>
@@ -404,6 +407,55 @@ QVector<QPointF> makeRegularPolygonPoints(PolygonMode mode,
     return vertices;
 }
 
+QVector<QPointF> makePictureFramePoints(const QPointF &firstCorner,
+                                         const QPointF &cursorCorner,
+                                         qreal imageAspectRatio)
+{
+    if (!std::isfinite(firstCorner.x()) || !std::isfinite(firstCorner.y()) ||
+        !std::isfinite(cursorCorner.x()) || !std::isfinite(cursorCorner.y()) ||
+        !std::isfinite(imageAspectRatio) || imageAspectRatio <= 0.0) {
+        return {};
+    }
+
+    const qreal requestedWidth = std::abs(cursorCorner.x() - firstCorner.x());
+    const qreal requestedHeight = std::abs(cursorCorner.y() - firstCorner.y());
+    if (requestedWidth <= 1.0e-12 && requestedHeight <= 1.0e-12) {
+        return {};
+    }
+
+    qreal width = requestedWidth;
+    qreal height = requestedHeight;
+    if (requestedWidth <= 1.0e-12) {
+        width = requestedHeight * imageAspectRatio;
+    } else if (requestedHeight <= 1.0e-12) {
+        height = requestedWidth / imageAspectRatio;
+    } else if (requestedWidth / requestedHeight > imageAspectRatio) {
+        width = requestedHeight * imageAspectRatio;
+    } else {
+        height = requestedWidth / imageAspectRatio;
+    }
+
+    const qreal directionX = cursorCorner.x() < firstCorner.x() ? -1.0 : 1.0;
+    const qreal directionY = cursorCorner.y() < firstCorner.y() ? -1.0 : 1.0;
+    const QPointF opposite(firstCorner.x() + directionX * width,
+                           firstCorner.y() + directionY * height);
+    const qreal left = std::min(firstCorner.x(), opposite.x());
+    const qreal right = std::max(firstCorner.x(), opposite.x());
+    const qreal bottom = std::min(firstCorner.y(), opposite.y());
+    const qreal top = std::max(firstCorner.y(), opposite.y());
+    return {QPointF(left, top),
+            QPointF(right, top),
+            QPointF(right, bottom),
+            QPointF(left, bottom)};
+}
+
+QVector<QPointF> pictureFrameCorners(const Shape &shape)
+{
+    return shape.geometryType == GeometryType::Picture && shape.points.size() == 4
+               ? shape.points
+               : QVector<QPointF>{};
+}
+
 qreal crossProduct(const QPointF &a, const QPointF &b)
 {
     return a.x() * b.y() - a.y() * b.x();
@@ -599,6 +651,20 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("arcMode"), static_cast<int>(shape.arcMode));
     object.insert(QStringLiteral("arcSweep"), shape.arcSweep);
 
+    if (shape.geometryType == GeometryType::Picture) {
+        QByteArray encodedImage = shape.pictureImageData;
+        if (encodedImage.isEmpty() && !shape.pictureImage.isNull()) {
+            QBuffer imageBuffer(&encodedImage);
+            if (imageBuffer.open(QIODevice::WriteOnly)) {
+                shape.pictureImage.save(&imageBuffer, "PNG");
+            }
+        }
+        if (!encodedImage.isEmpty()) {
+            object.insert(QStringLiteral("pictureImage"),
+                          QString::fromLatin1(encodedImage.toBase64()));
+        }
+    }
+
     QJsonArray subdivisionParameters;
     for (const double parameter : shape.subdivisionParameters) {
         subdivisionParameters.append(parameter);
@@ -673,6 +739,28 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     }
     if (isDimensionGeometryType(geometryType) && points.size() != 3) {
         return false;
+    }
+
+    QImage pictureImage;
+    if (geometryType == GeometryType::Picture) {
+        const QJsonValue imageValue = object.value(QStringLiteral("pictureImage"));
+        if (points.size() != 4 || !imageValue.isString() ||
+            imageValue.toString().isEmpty()) {
+            return false;
+        }
+        const QByteArray imageBytes = QByteArray::fromBase64(
+            imageValue.toString().toLatin1());
+        QBuffer imageBuffer;
+        imageBuffer.setData(imageBytes);
+        if (!imageBuffer.open(QIODevice::ReadOnly)) {
+            return false;
+        }
+        QImageReader reader(&imageBuffer);
+        reader.setAutoTransform(true);
+        pictureImage = reader.read();
+        if (pictureImage.isNull()) {
+            return false;
+        }
     }
 
     Shape::NurbsCurve2D nurbs;
@@ -805,6 +893,13 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->dimensionAnchors = dimensionAnchors;
     shape->dimensionOffset = dimensionOffset;
     shape->dimensionOffsetValid = dimensionOffsetValid;
+    shape->pictureImage = pictureImage;
+    shape->pictureImageData = geometryType == GeometryType::Picture
+                                  ? QByteArray::fromBase64(
+                                        object.value(QStringLiteral("pictureImage"))
+                                            .toString()
+                                            .toLatin1())
+                                  : QByteArray{};
     return true;
 }
 

@@ -1252,6 +1252,77 @@ int main(int argc, char **argv)
                                    nearLineSnap.point.y()) <= 1.0e-6,
                     "Near OSnap must find the closest point along line geometry");
 
+    Document centerAndNearDocument;
+    Shape centerAndNearCircle;
+    centerAndNearCircle.geometryType = GeometryType::Circle;
+    centerAndNearCircle.points = {QPointF(0.0, 0.0), QPointF(5.0, 0.0)};
+    centerAndNearDocument.append(centerAndNearCircle);
+    Shape nearbyLine;
+    nearbyLine.geometryType = GeometryType::Line;
+    nearbyLine.points = {QPointF(-10.0, 1.0), QPointF(10.0, 1.0)};
+    nearbyLine.nurbs = makeDegreeOneNurbs(nearbyLine.points);
+    centerAndNearDocument.append(nearbyLine);
+    SnapEngine centerAndNearSnapEngine;
+    centerAndNearSnapEngine.setSettings(
+        SnapSettings{true, false, false, false, true, false, false, true, false});
+    const SnapResult centerPreferredOverNear = centerAndNearSnapEngine.findSnapPoint(
+        centerAndNearDocument,
+        QPointF(0.0, 1.0),
+        true,
+        {},
+        viewportTransform,
+        viewportSize);
+    passed &= check(centerPreferredOverNear.type == SnapType::Center &&
+                        pointsAlmostEqual(centerPreferredOverNear.point,
+                                          QPointF(0.0, 0.0)),
+                    "an enabled Center OSnap must take priority over a closer Near result");
+
+    Document endpointAndNearDragDocument;
+    Shape endpointAndNearDragSource;
+    endpointAndNearDragSource.geometryType = GeometryType::Point;
+    endpointAndNearDragSource.points = {QPointF(5.0, 0.0)};
+    endpointAndNearDragDocument.append(endpointAndNearDragSource);
+    Shape endpointAndNearDragTarget;
+    endpointAndNearDragTarget.geometryType = GeometryType::Line;
+    endpointAndNearDragTarget.points = {QPointF(0.0, 4.0), QPointF(10.0, 4.0)};
+    endpointAndNearDragTarget.nurbs =
+        makeDegreeOneNurbs(endpointAndNearDragTarget.points);
+    endpointAndNearDragDocument.append(endpointAndNearDragTarget);
+    SnapEngine endpointAndNearDragEngine;
+    endpointAndNearDragEngine.setSettings(
+        SnapSettings{true, true, false, false, false, false, false, true, false});
+    const DragSnapResult endpointPreferredOverNear =
+        endpointAndNearDragEngine.findDragSnap(
+            endpointAndNearDragDocument, {0}, viewportTransform, viewportSize);
+    const DragSnapResult endpointRecheckedDuringNearLock =
+        endpointAndNearDragEngine.findDragSnap(
+            endpointAndNearDragDocument,
+            {0},
+            viewportTransform,
+            viewportSize,
+            false,
+            false);
+    const QPointF dragNearPoint(5.0, 4.0);
+    const qreal dragNearDistance = std::hypot(
+        viewportTransform.worldToScreen(dragNearPoint, viewportSize).x() -
+            viewportTransform.worldToScreen(QPointF(5.0, 0.0), viewportSize).x(),
+        viewportTransform.worldToScreen(dragNearPoint, viewportSize).y() -
+            viewportTransform.worldToScreen(QPointF(5.0, 0.0), viewportSize).y());
+    const qreal dragEndpointDistance = std::hypot(
+        viewportTransform.worldToScreen(QPointF(0.0, 4.0), viewportSize).x() -
+            viewportTransform.worldToScreen(QPointF(5.0, 0.0), viewportSize).x(),
+        viewportTransform.worldToScreen(QPointF(0.0, 4.0), viewportSize).y() -
+            viewportTransform.worldToScreen(QPointF(5.0, 0.0), viewportSize).y());
+    passed &= check(endpointPreferredOverNear.type == SnapType::Endpoint &&
+                        (pointsAlmostEqual(endpointPreferredOverNear.targetPoint,
+                                           QPointF(0.0, 4.0)) ||
+                         pointsAlmostEqual(endpointPreferredOverNear.targetPoint,
+                                           QPointF(10.0, 4.0))) &&
+                        dragNearDistance < dragEndpointDistance &&
+                        dragEndpointDistance < 12.0 &&
+                        endpointRecheckedDuringNearLock.type == SnapType::Endpoint,
+                    "object dragging must prefer Endpoint over a closer Near result and be able to recheck specific snaps while Near is latched");
+
     Document nearDragDocument;
     Shape nearDragSource;
     nearDragSource.geometryType = GeometryType::Line;

@@ -81,7 +81,8 @@ public:
                                 const QVector<int> &selectedShapeIndices,
                                 const ViewportTransform &transform,
                                 const QSize &viewportSize,
-                                bool forceEnabled = false) const;
+                                bool forceEnabled = false,
+                                bool includeNear = true) const;
     DragSnapResult trackNearDragSnap(const Document &document,
                                      const QVector<int> &selectedShapeIndices,
                                      const QPointF &sourcePoint,

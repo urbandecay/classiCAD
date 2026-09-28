@@ -1685,13 +1685,21 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
     const QPointF cursorScreen = transform.worldToScreen(rawPoint, viewportSize);
     constexpr qreal snapRadiusPixels = 12.0;
     qreal bestDistance = snapRadiusPixels;
+    int bestPriority = -1;
     const auto consider = [&](const SnapCandidate &candidate) {
         const QPointF candidateScreen = transform.worldToScreen(candidate.point,
                                                                 viewportSize);
         const qreal distance = std::hypot(candidateScreen.x() - cursorScreen.x(),
                                            candidateScreen.y() - cursorScreen.y());
-        if (distance <= bestDistance) {
+        // Near is the fallback snap. If a specific enabled OSnap such as
+        // Center is also within range, do not let a closer point on the curve
+        // hide that intentional target.
+        const int priority = candidate.type == SnapType::Near ? 0 : 1;
+        if (distance <= snapRadiusPixels &&
+            (priority > bestPriority ||
+             (priority == bestPriority && distance <= bestDistance))) {
             bestDistance = distance;
+            bestPriority = priority;
             best.type = candidate.type;
             best.point = candidate.point;
         }
@@ -1742,7 +1750,8 @@ DragSnapResult SnapEngine::findDragSnap(
     const QVector<int> &selectedShapeIndices,
     const ViewportTransform &transform,
     const QSize &viewportSize,
-    bool forceEnabled) const
+    bool forceEnabled,
+    bool includeNear) const
 {
     DragSnapResult best;
     if ((!settings_.enabled && !forceEnabled) || selectedShapeIndices.isEmpty()) {
@@ -1768,6 +1777,7 @@ DragSnapResult SnapEngine::findDragSnap(
                                transform,
                                viewportSize);
     qreal bestDistance = snapRadiusPixels;
+    int bestPriority = -1;
     const auto consider = [&](SnapType type,
                               const QPointF &sourcePoint,
                               const QPointF &targetPoint,
@@ -1777,8 +1787,14 @@ DragSnapResult SnapEngine::findDragSnap(
         const QPointF targetScreen = transform.worldToScreen(targetPoint, viewportSize);
         const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
                                            targetScreen.y() - sourceScreen.y());
-        if (distance <= snapRadiusPixels && distance <= bestDistance) {
+        // As in point snapping, Near is a fallback: an enabled, specific
+        // target such as Endpoint wins whenever it is within snap range.
+        const int priority = type == SnapType::Near ? 0 : 1;
+        if (distance <= snapRadiusPixels &&
+            (priority > bestPriority ||
+             (priority == bestPriority && distance <= bestDistance))) {
             bestDistance = distance;
+            bestPriority = priority;
             best.type = type;
             best.sourcePoint = sourcePoint;
             best.targetPoint = targetPoint;
@@ -1788,7 +1804,7 @@ DragSnapResult SnapEngine::findDragSnap(
         }
     };
 
-    if (settings_.near) {
+    if (includeNear && settings_.near) {
         for (const SnapCandidate &source : sourceCandidates) {
             const QVector<SnapCandidate> nearTargets = nearCandidatesForScene(
                 document,

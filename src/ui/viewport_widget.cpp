@@ -2885,23 +2885,44 @@ protected:
                             translateShapes(dragIndices, delta);
                             QElapsedTimer snapTimer;
                             snapTimer.start();
-                            currentDragSnap_ = trackNearDragSnap(
-                                dragIndices,
-                                freeSourcePoint,
-                                nearTargetShapeIndex,
-                                nearTargetComponentIndex,
-                                nearSnapReleaseRadiusPixels);
+                            // A Near lock must not mask a more specific target
+                            // that enters range later in the same drag. Check
+                            // explicit OSnaps first; only keep riding the Near
+                            // rail when none of them currently applies.
+                            const DragSnapResult specificDragSnap =
+                                findDragSnap(dragIndices, false, false);
+                            if (specificDragSnap.isValid()) {
+                                currentDragSnap_ = specificDragSnap;
+                                translateShapes(dragIndices,
+                                                specificDragSnap.translation);
+                                dragSnapCursorWorld_ = rawCursorWorld_;
+                                nearDragFreeSourcePointValid_ = false;
+                                DebugLog::instance().write(
+                                    QStringLiteral("selection drag near-promoted snap=%1 source=%2 target=%3")
+                                        .arg(snapTypeName(specificDragSnap.type))
+                                        .arg(pointText(specificDragSnap.sourcePoint))
+                                        .arg(pointText(specificDragSnap.targetPoint)));
+                            } else {
+                                currentDragSnap_ = trackNearDragSnap(
+                                    dragIndices,
+                                    freeSourcePoint,
+                                    nearTargetShapeIndex,
+                                    nearTargetComponentIndex,
+                                    nearSnapReleaseRadiusPixels);
+                            }
                             snapEvaluationMicroseconds =
                                 snapTimer.nsecsElapsed() / 1000;
                             if (currentDragSnap_.isValid()) {
-                                // The tracked result's source is the free point;
-                                // correct from the selection's actual moved point.
-                                currentDragSnap_.sourcePoint = movedSourcePoint;
-                                currentDragSnap_.translation =
-                                    currentDragSnap_.targetPoint - movedSourcePoint;
-                                translateShapes(dragIndices,
-                                                currentDragSnap_.translation);
-                                dragSnapCursorWorld_ = rawCursorWorld_;
+                                if (currentDragSnap_.type == SnapType::Near) {
+                                    // The tracked result's source is the free point;
+                                    // correct from the selection's actual moved point.
+                                    currentDragSnap_.sourcePoint = movedSourcePoint;
+                                    currentDragSnap_.translation =
+                                        currentDragSnap_.targetPoint - movedSourcePoint;
+                                    translateShapes(dragIndices,
+                                                    currentDragSnap_.translation);
+                                    dragSnapCursorWorld_ = rawCursorWorld_;
+                                }
                             } else {
                                 // Leave the rail at the accumulated free position.
                                 translateShapes(dragIndices,
@@ -5563,7 +5584,8 @@ private:
     }
 
     DragSnapResult findDragSnap(const QVector<ObjectId> &selectedObjectIds,
-                                bool forceEnabled = false) const
+                                bool forceEnabled = false,
+                                bool includeNear = true) const
     {
         QVector<int> serviceSelectedShapeIndices;
         serviceSelectedShapeIndices.reserve(selectedObjectIds.size());
@@ -5577,7 +5599,8 @@ private:
                                         serviceSelectedShapeIndices,
                                         viewportTransform_,
                                         size(),
-                                        forceEnabled);
+                                        forceEnabled,
+                                        includeNear);
     }
 
     DragSnapResult trackNearDragSnap(const QVector<ObjectId> &selectedObjectIds,

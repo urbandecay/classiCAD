@@ -1515,17 +1515,20 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
     const QPointF &cursor,
     const ViewportTransform &transform,
     const QSize &viewportSize,
-    const QVector<int> &excludedShapeIndices) const
+    const QVector<int> &excludedShapeIndices,
+    qreal snapRadiusPixels,
+    int targetShapeIndex,
+    int targetComponentIndex) const
 {
     QVector<SnapCandidate> candidates;
     if (!settings_.near) {
         return candidates;
     }
 
-    constexpr qreal snapRadiusPixels = 12.0;
     const QPointF cursorScreen = transform.worldToScreen(cursor, viewportSize);
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
-        if (excludedShapeIndices.contains(shapeIndex) ||
+        if ((targetShapeIndex >= 0 && shapeIndex != targetShapeIndex) ||
+            excludedShapeIndices.contains(shapeIndex) ||
             !document.isObjectVisible(document.objectIdAt(shapeIndex))) {
             continue;
         }
@@ -1536,6 +1539,7 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         }
         qreal nearestDistanceSquared = std::numeric_limits<qreal>::infinity();
         QPointF nearestPoint;
+        int nearestComponentIndex = -1;
         const auto considerPoint = [&](const QPointF &worldPoint) {
             const QPointF screenPoint = transform.worldToScreen(worldPoint, viewportSize);
             const QPointF difference = screenPoint - cursorScreen;
@@ -1579,7 +1583,14 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
                                 vertices[(vertexIndex + 1) % vertices.size()]);
             }
         } else if (shape.geometryType == GeometryType::PolyCurve) {
-            for (const Shape::NurbsCurve2D &component : shape.components) {
+            for (int componentIndex = 0;
+                 componentIndex < shape.components.size();
+                 ++componentIndex) {
+                if (targetComponentIndex >= 0 &&
+                    componentIndex != targetComponentIndex) {
+                    continue;
+                }
+                const Shape::NurbsCurve2D &component = shape.components[componentIndex];
                 QPointF componentNearestPoint;
                 qreal componentDistanceSquared = 0.0;
                 if (nearestPointOnNurbsCurve(component,
@@ -1591,6 +1602,7 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
                     componentDistanceSquared < nearestDistanceSquared) {
                     nearestDistanceSquared = componentDistanceSquared;
                     nearestPoint = componentNearestPoint;
+                    nearestComponentIndex = componentIndex;
                 }
             }
         } else {
@@ -1646,7 +1658,10 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         }
 
         if (nearestDistanceSquared <= snapRadiusPixels * snapRadiusPixels) {
-            candidates.append({SnapType::Near, nearestPoint});
+            candidates.append({SnapType::Near,
+                               nearestPoint,
+                               shapeIndex,
+                               nearestComponentIndex});
         }
     }
     return candidates;
@@ -1746,26 +1761,30 @@ DragSnapResult SnapEngine::findDragSnap(
         return best;
     }
 
+    constexpr qreal snapRadiusPixels = 12.0;
     const QVector<SnapCandidate> targetCandidates =
         snapCandidatesForScene(document,
                                selectedShapeIndices,
                                transform,
                                viewportSize);
-    constexpr qreal snapRadiusPixels = 12.0;
     qreal bestDistance = snapRadiusPixels;
     const auto consider = [&](SnapType type,
                               const QPointF &sourcePoint,
-                              const QPointF &targetPoint) {
+                              const QPointF &targetPoint,
+                              int targetShapeIndex,
+                              int targetComponentIndex) {
         const QPointF sourceScreen = transform.worldToScreen(sourcePoint, viewportSize);
         const QPointF targetScreen = transform.worldToScreen(targetPoint, viewportSize);
         const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
                                            targetScreen.y() - sourceScreen.y());
-        if (distance <= bestDistance) {
+        if (distance <= snapRadiusPixels && distance <= bestDistance) {
             bestDistance = distance;
             best.type = type;
             best.sourcePoint = sourcePoint;
             best.targetPoint = targetPoint;
             best.translation = targetPoint - sourcePoint;
+            best.targetShapeIndex = targetShapeIndex;
+            best.targetComponentIndex = targetComponentIndex;
         }
     };
 
@@ -1778,14 +1797,22 @@ DragSnapResult SnapEngine::findDragSnap(
                 viewportSize,
                 selectedShapeIndices);
             for (const SnapCandidate &target : nearTargets) {
-                consider(SnapType::Near, source.point, target.point);
+                consider(SnapType::Near,
+                         source.point,
+                         target.point,
+                         target.shapeIndex,
+                         target.componentIndex);
             }
         }
     }
 
     for (const SnapCandidate &source : sourceCandidates) {
         for (const SnapCandidate &target : targetCandidates) {
-            consider(source.type, source.point, target.point);
+            consider(source.type,
+                     source.point,
+                     target.point,
+                     target.shapeIndex,
+                     target.componentIndex);
         }
     }
 
@@ -1816,13 +1843,57 @@ DragSnapResult SnapEngine::findDragSnap(
                                            transform,
                                            viewportSize,
                                            selectedShapeIndices)) {
-                        consider(SnapType::Tangent, sourcePoint, target.point);
+                        consider(SnapType::Tangent,
+                                 sourcePoint,
+                                 target.point,
+                                 -1,
+                                 -1);
                     }
                 }
             }
         }
     }
     return best;
+}
+
+DragSnapResult SnapEngine::trackNearDragSnap(
+    const Document &document,
+    const QVector<int> &selectedShapeIndices,
+    const QPointF &sourcePoint,
+    int targetShapeIndex,
+    int targetComponentIndex,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal snapRadiusPixels) const
+{
+    DragSnapResult result;
+    if (!settings_.enabled || !settings_.near || targetShapeIndex < 0 ||
+        targetShapeIndex >= document.size() ||
+        selectedShapeIndices.contains(targetShapeIndex)) {
+        return result;
+    }
+
+    const QVector<SnapCandidate> targets = nearCandidatesForScene(
+        document,
+        sourcePoint,
+        transform,
+        viewportSize,
+        selectedShapeIndices,
+        snapRadiusPixels,
+        targetShapeIndex,
+        targetComponentIndex);
+    if (targets.isEmpty()) {
+        return result;
+    }
+
+    const SnapCandidate &target = targets.first();
+    result.type = SnapType::Near;
+    result.sourcePoint = sourcePoint;
+    result.targetPoint = target.point;
+    result.translation = target.point - sourcePoint;
+    result.targetShapeIndex = target.shapeIndex;
+    result.targetComponentIndex = target.componentIndex;
+    return result;
 }
 
 DragSnapResult SnapEngine::findControlPointSnap(

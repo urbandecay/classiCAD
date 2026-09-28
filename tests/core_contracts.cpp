@@ -1251,6 +1251,61 @@ int main(int argc, char **argv)
                         std::hypot(nearLineSnap.point.x() - 5.0,
                                    nearLineSnap.point.y()) <= 1.0e-6,
                     "Near OSnap must find the closest point along line geometry");
+
+    Document nearDragDocument;
+    Shape nearDragSource;
+    nearDragSource.geometryType = GeometryType::Line;
+    nearDragSource.points = {QPointF(0.0, 15.0), QPointF(5.0, 15.0)};
+    nearDragSource.nurbs = makeDegreeOneNurbs(nearDragSource.points);
+    nearDragDocument.append(nearDragSource);
+    Shape firstNearRail;
+    firstNearRail.geometryType = GeometryType::Line;
+    firstNearRail.points = {QPointF(-50.0, 0.0), QPointF(50.0, 0.0)};
+    firstNearRail.nurbs = makeDegreeOneNurbs(firstNearRail.points);
+    nearDragDocument.append(firstNearRail);
+    Shape activeNearRail;
+    activeNearRail.geometryType = GeometryType::Line;
+    activeNearRail.points = {QPointF(-50.0, 10.0), QPointF(50.0, 10.0)};
+    activeNearRail.nurbs = makeDegreeOneNurbs(activeNearRail.points);
+    nearDragDocument.append(activeNearRail);
+    SnapEngine nearDragEngine;
+    nearDragEngine.setSettings(
+        SnapSettings{true, true, false, false, false, false, false, true, false});
+    const DragSnapResult acquiredNearRail = nearDragEngine.findDragSnap(
+        nearDragDocument, {0}, viewportTransform, viewportSize);
+    const QPointF acquiredNearRailScreen =
+        viewportTransform.worldToScreen(acquiredNearRail.targetPoint, viewportSize);
+    const QPointF farAlongNearRail = viewportTransform.screenToWorld(
+        acquiredNearRailScreen + QPointF(30.0, 0.0), viewportSize);
+    const DragSnapResult trackedNearRail = nearDragEngine.trackNearDragSnap(
+        nearDragDocument,
+        {0},
+        farAlongNearRail,
+        acquiredNearRail.targetShapeIndex,
+        acquiredNearRail.targetComponentIndex,
+        viewportTransform,
+        viewportSize,
+        12.0);
+    const QPointF outsideNearRail = viewportTransform.screenToWorld(
+        acquiredNearRailScreen + QPointF(0.0, 13.0), viewportSize);
+    const DragSnapResult releasedNearRail = nearDragEngine.trackNearDragSnap(
+        nearDragDocument,
+        {0},
+        outsideNearRail,
+        acquiredNearRail.targetShapeIndex,
+        acquiredNearRail.targetComponentIndex,
+        viewportTransform,
+        viewportSize,
+        12.0);
+    passed &= check(acquiredNearRail.type == SnapType::Near &&
+                        acquiredNearRail.targetShapeIndex == 2 &&
+                        trackedNearRail.type == SnapType::Near &&
+                        trackedNearRail.targetShapeIndex == 2 &&
+                        std::hypot(trackedNearRail.targetPoint.x() - farAlongNearRail.x(),
+                                   trackedNearRail.targetPoint.y() - 10.0) <= 1.0e-6 &&
+                        !releasedNearRail.isValid(),
+                    "Near drag tracking must follow the same rail regardless of travel distance and release outside its screen tolerance");
+
     const QPointF polygonEdgeMidpoint =
         (polygonShape.points[0] + polygonShape.points[1]) * 0.5;
     const SnapResult nearPolygonSnap = nearSnapEngine.findSnapPoint(

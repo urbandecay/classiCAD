@@ -47,6 +47,8 @@ struct SnapResult {
 struct SnapCandidate {
     SnapType type = SnapType::None;
     QPointF point;
+    int shapeIndex = -1;
+    int componentIndex = -1;
 };
 
 struct LineSegment {
@@ -105,6 +107,8 @@ struct DragSnapResult {
     QPointF sourcePoint;
     QPointF targetPoint;
     QPointF translation;
+    int targetShapeIndex = -1;
+    int targetComponentIndex = -1;
 
     bool isValid() const
     {

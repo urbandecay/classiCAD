@@ -62,7 +62,10 @@ public:
         const QPointF &cursor,
         const ViewportTransform &transform,
         const QSize &viewportSize,
-        const QVector<int> &excludedShapeIndices = {}) const;
+        const QVector<int> &excludedShapeIndices = {},
+        qreal snapRadiusPixels = 12.0,
+        int targetShapeIndex = -1,
+        int targetComponentIndex = -1) const;
 
     SnapResult findSnapPoint(const Document &document,
                              const QPointF &rawPoint,
@@ -79,6 +82,14 @@ public:
                                 const ViewportTransform &transform,
                                 const QSize &viewportSize,
                                 bool forceEnabled = false) const;
+    DragSnapResult trackNearDragSnap(const Document &document,
+                                     const QVector<int> &selectedShapeIndices,
+                                     const QPointF &sourcePoint,
+                                     int targetShapeIndex,
+                                     int targetComponentIndex,
+                                     const ViewportTransform &transform,
+                                     const QSize &viewportSize,
+                                     qreal snapRadiusPixels = 18.0) const;
     DragSnapResult findControlPointSnap(
         const Document &document,
         int selectedShapeIndex,

@@ -26,6 +26,7 @@
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QHash>
 #include <QInputDialog>
@@ -66,6 +67,13 @@ QString dragAxisLockName(DragAxisLock lock)
     }
 
     return QStringLiteral("None");
+}
+
+QString precisePointText(const QPointF &point)
+{
+    return QStringLiteral("(%1, %2)")
+        .arg(point.x(), 0, 'g', 12)
+        .arg(point.y(), 0, 'g', 12);
 }
 
 class ViewportWidget final : public ViewportWidgetApi {
@@ -2741,8 +2749,12 @@ protected:
         const int selectedIndex = objectIndex(selectedShapeIndex_);
         if (draggingControlPoint_ && dragGestureStarted_ && selectedIndex >= 0 &&
             controlPointIndex_ >= 0) {
+            const QPointF previousControlPointCursorWorld = lastControlPointWorld_;
+            const QPointF cursorStepScreen =
+                screenPosition - worldToScreen(previousControlPointCursorWorld);
             const QPointF delta = rawCursorWorld_ - lastControlPointWorld_;
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+                qint64 snapEvaluationMicroseconds = -1;
                 constexpr qreal dragSnapBreakawayPixels = 18.0;
                 const qreal cursorDistanceFromSnap =
                     std::hypot(screenPosition.x() - worldToScreen(dragSnapCursorWorld_).x(),
@@ -2773,10 +2785,13 @@ protected:
                     const QVector<QPointF> controlPoints =
                         controlPointsForShape(shapes_[selectedIndex]);
                     if (controlPointIndex_ < controlPoints.size()) {
+                        QElapsedTimer snapTimer;
+                        snapTimer.start();
                         currentDragSnap_ = findControlPointSnap(
                             selectedShapeIndex_,
                             controlPointIndex_,
                             controlPoints[controlPointIndex_]);
+                        snapEvaluationMicroseconds = snapTimer.nsecsElapsed() / 1000;
                         if (currentDragSnap_.isValid()) {
                             translateControlPoint(selectedShapeIndex_,
                                                   controlPointIndex_,
@@ -2794,12 +2809,33 @@ protected:
                 }
 
                 lastControlPointWorld_ = rawCursorWorld_;
+                qreal snapCorrectionPixels = -1.0;
+                if (currentDragSnap_.isValid()) {
+                    const QPointF sourceScreen =
+                        worldToScreen(currentDragSnap_.sourcePoint);
+                    const QPointF targetScreen =
+                        worldToScreen(currentDragSnap_.targetPoint);
+                    snapCorrectionPixels =
+                        std::hypot(targetScreen.x() - sourceScreen.x(),
+                                   targetScreen.y() - sourceScreen.y());
+                }
+                const quint64 traceSequence = ++dragSnapTraceSequence_;
                 DebugLog::instance().write(
-                    QStringLiteral("control point drag shape=%1 index=%2 delta=%3 world=%4")
+                    QStringLiteral("drag-snap-trace seq=%1 mode=control-point shape=%2 index=%3 cursorScreen=%4 cursorStepPx=%5 cursorWorld=%6 worldDelta=%7 snapEvalUs=%8 locked=%9 snap=%10 snapSource=%11 snapTarget=%12 snapTranslation=%13 snapCorrectionPx=%14")
+                        .arg(traceSequence)
                         .arg(selectedIndex)
                         .arg(controlPointIndex_)
-                        .arg(pointText(delta))
-                        .arg(pointText(rawCursorWorld_)));
+                        .arg(precisePointText(screenPosition))
+                        .arg(precisePointText(cursorStepScreen))
+                        .arg(precisePointText(rawCursorWorld_))
+                        .arg(precisePointText(delta))
+                        .arg(snapEvaluationMicroseconds)
+                        .arg(dragSnapLocked_)
+                        .arg(snapTypeName(currentDragSnap_.type))
+                        .arg(precisePointText(currentDragSnap_.sourcePoint))
+                        .arg(precisePointText(currentDragSnap_.targetPoint))
+                        .arg(precisePointText(currentDragSnap_.translation))
+                        .arg(snapCorrectionPixels, 0, 'f', 4));
             }
         } else if (draggingSelected_ && dragGestureStarted_ && selectedIndex >= 0) {
             const QVector<ObjectId> dragIndices = draggingShapeIndices_.isEmpty()
@@ -2809,9 +2845,13 @@ protected:
                 updateGrabPosition(dragIndices);
             } else {
                 const bool groupDrag = dragIndices.size() > 1;
+                const QPointF previousDragCursorWorld = lastDragWorld_;
+                const QPointF cursorStepScreen =
+                    screenPosition - worldToScreen(previousDragCursorWorld);
                 const QPointF rawDelta = rawCursorWorld_ - lastDragWorld_;
                 const QPointF delta = constrainDragDelta(rawDelta);
                 if (!qFuzzyIsNull(rawDelta.x()) || !qFuzzyIsNull(rawDelta.y())) {
+                    qint64 snapEvaluationMicroseconds = -1;
                     if (dragAxisLock_ != DragAxisLock::None) {
                         if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
                             beginDragHistory();
@@ -2822,22 +2862,73 @@ protected:
                         currentDragSnap_ = DragSnapResult{};
                         dragSnapLocked_ = false;
                     } else {
-                        constexpr qreal dragSnapBreakawayPixels = 18.0;
-                        const qreal cursorDistanceFromSnap =
-                            std::hypot(screenPosition.x() - worldToScreen(dragSnapCursorWorld_).x(),
-                                       screenPosition.y() - worldToScreen(dragSnapCursorWorld_).y());
-
-                        if (dragSnapLocked_ && cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
-                            // Keep the geometry attached while the cursor is still near the
-                            // snap point. This prevents a one-pixel mouse move from
-                            // repeatedly attaching and detaching the line.
-                            DebugLog::instance().write(
-                                QStringLiteral("selection drag snap-hold shape=%1 cursorDistance=%2 breakaway=%3")
-                                    .arg(selectedIndex)
-                                    .arg(cursorDistanceFromSnap, 0, 'f', 2)
-                                    .arg(dragSnapBreakawayPixels, 0, 'f', 2));
+                        if (dragSnapLocked_ && currentDragSnap_.type == SnapType::Near) {
+                            // Track the snapped point on the moving selection, not
+                            // the mouse cursor: the cursor can be far from that
+                            // point when dragging a whole curve. Keep an
+                            // unconstrained copy so small moves away from the rail
+                            // accumulate instead of being snapped back forever.
+                            constexpr qreal nearSnapReleaseRadiusPixels = 12.0;
+                            const QPointF movedSourcePoint =
+                                currentDragSnap_.targetPoint + delta;
+                            const QPointF freeSourcePoint =
+                                (nearDragFreeSourcePointValid_
+                                     ? nearDragFreeSourcePoint_
+                                     : currentDragSnap_.targetPoint) + delta;
+                            nearDragFreeSourcePoint_ = freeSourcePoint;
+                            nearDragFreeSourcePointValid_ = true;
+                            const int nearTargetShapeIndex =
+                                currentDragSnap_.targetShapeIndex;
+                            const int nearTargetComponentIndex =
+                                currentDragSnap_.targetComponentIndex;
+                            beginDragHistory();
+                            translateShapes(dragIndices, delta);
+                            QElapsedTimer snapTimer;
+                            snapTimer.start();
+                            currentDragSnap_ = trackNearDragSnap(
+                                dragIndices,
+                                freeSourcePoint,
+                                nearTargetShapeIndex,
+                                nearTargetComponentIndex,
+                                nearSnapReleaseRadiusPixels);
+                            snapEvaluationMicroseconds =
+                                snapTimer.nsecsElapsed() / 1000;
+                            if (currentDragSnap_.isValid()) {
+                                // The tracked result's source is the free point;
+                                // correct from the selection's actual moved point.
+                                currentDragSnap_.sourcePoint = movedSourcePoint;
+                                currentDragSnap_.translation =
+                                    currentDragSnap_.targetPoint - movedSourcePoint;
+                                translateShapes(dragIndices,
+                                                currentDragSnap_.translation);
+                                dragSnapCursorWorld_ = rawCursorWorld_;
+                            } else {
+                                // Leave the rail at the accumulated free position.
+                                translateShapes(dragIndices,
+                                                freeSourcePoint - movedSourcePoint);
+                                currentDragSnap_ = DragSnapResult{};
+                                dragSnapLocked_ = false;
+                                nearDragFreeSourcePointValid_ = false;
+                            }
                         } else {
-                            if (dragSnapLocked_) {
+                            constexpr qreal dragSnapBreakawayPixels = 18.0;
+                            const qreal cursorDistanceFromSnap =
+                                std::hypot(
+                                    screenPosition.x() -
+                                        worldToScreen(dragSnapCursorWorld_).x(),
+                                    screenPosition.y() -
+                                        worldToScreen(dragSnapCursorWorld_).y());
+
+                            if (dragSnapLocked_ &&
+                                cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
+                                // Keep the geometry attached while the cursor is still near
+                                // the snap point for non-Near snaps.
+                                DebugLog::instance().write(
+                                    QStringLiteral("selection drag snap-hold shape=%1 cursorDistance=%2 breakaway=%3")
+                                        .arg(selectedIndex)
+                                        .arg(cursorDistanceFromSnap, 0, 'f', 2)
+                                        .arg(dragSnapBreakawayPixels, 0, 'f', 2));
+                            } else if (dragSnapLocked_) {
                                 // Release from the snap using the complete cursor movement
                                 // since the snap was acquired, so the line leaves cleanly.
                                 const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
@@ -2852,13 +2943,25 @@ protected:
                             } else {
                                 beginDragHistory();
                                 translateShapes(dragIndices, delta);
+                                QElapsedTimer snapTimer;
+                                snapTimer.start();
                                 currentDragSnap_ = groupDrag
                                                         ? findDragSnap(dragIndices)
                                                         : findDragSnap(selectedShapeIndex_);
+                                snapEvaluationMicroseconds =
+                                    snapTimer.nsecsElapsed() / 1000;
                                 if (currentDragSnap_.isValid()) {
                                     translateShapes(dragIndices, currentDragSnap_.translation);
                                     dragSnapLocked_ = true;
                                     dragSnapCursorWorld_ = rawCursorWorld_;
+                                    nearDragFreeSourcePointValid_ =
+                                        currentDragSnap_.type == SnapType::Near;
+                                    if (nearDragFreeSourcePointValid_) {
+                                        // This is the geometry point placed on the
+                                        // target rail, independent of the grab location.
+                                        nearDragFreeSourcePoint_ =
+                                            currentDragSnap_.targetPoint;
+                                    }
                                 }
                             }
                         }
@@ -2866,15 +2969,34 @@ protected:
 
                     lastDragWorld_ = rawCursorWorld_;
 
+                    qreal snapCorrectionPixels = -1.0;
+                    if (currentDragSnap_.isValid()) {
+                        const QPointF sourceScreen =
+                            worldToScreen(currentDragSnap_.sourcePoint);
+                        const QPointF targetScreen =
+                            worldToScreen(currentDragSnap_.targetPoint);
+                        snapCorrectionPixels =
+                            std::hypot(targetScreen.x() - sourceScreen.x(),
+                                       targetScreen.y() - sourceScreen.y());
+                    }
+                    const quint64 traceSequence = ++dragSnapTraceSequence_;
                     DebugLog::instance().write(
-                        QStringLiteral("selection drag shape=%1 delta=%2 cursorWorld=%3 snap=%4 snapSource=%5 snapTarget=%6 snapTranslation=%7 axisLock=%8")
+                        QStringLiteral("drag-snap-trace seq=%1 mode=object shape=%2 selectedCount=%3 sceneCount=%4 cursorScreen=%5 cursorStepPx=%6 cursorWorld=%7 worldDelta=%8 snapEvalUs=%9 locked=%10 snap=%11 snapSource=%12 snapTarget=%13 snapTranslation=%14 snapCorrectionPx=%15 axisLock=%16")
+                            .arg(traceSequence)
                             .arg(selectedIndex)
-                            .arg(pointText(delta))
-                            .arg(pointText(rawCursorWorld_))
+                            .arg(dragIndices.size())
+                            .arg(shapes_.size())
+                            .arg(precisePointText(screenPosition))
+                            .arg(precisePointText(cursorStepScreen))
+                            .arg(precisePointText(rawCursorWorld_))
+                            .arg(precisePointText(delta))
+                            .arg(snapEvaluationMicroseconds)
+                            .arg(dragSnapLocked_)
                             .arg(snapTypeName(currentDragSnap_.type))
-                            .arg(pointText(currentDragSnap_.sourcePoint))
-                            .arg(pointText(currentDragSnap_.targetPoint))
-                            .arg(pointText(currentDragSnap_.translation))
+                            .arg(precisePointText(currentDragSnap_.sourcePoint))
+                            .arg(precisePointText(currentDragSnap_.targetPoint))
+                            .arg(precisePointText(currentDragSnap_.translation))
+                            .arg(snapCorrectionPixels, 0, 'f', 4)
                             .arg(dragAxisLockName(dragAxisLock_)));
                     if (groupDrag) {
                         DebugLog::instance().write(
@@ -5456,48 +5578,30 @@ private:
                                         viewportTransform_,
                                         size(),
                                         forceEnabled);
+    }
 
-        DragSnapResult best;
-        if (!osnapEnabled_ || selectedObjectIds.isEmpty()) {
-            return best;
-        }
-
-        QVector<SnapCandidate> sourceCandidates;
-        QVector<int> selectedShapeIndices;
+    DragSnapResult trackNearDragSnap(const QVector<ObjectId> &selectedObjectIds,
+                                     const QPointF &sourcePoint,
+                                     int targetShapeIndex,
+                                     int targetComponentIndex,
+                                     qreal snapRadiusPixels) const
+    {
+        QVector<int> serviceSelectedShapeIndices;
+        serviceSelectedShapeIndices.reserve(selectedObjectIds.size());
         for (const ObjectId objectId : selectedObjectIds) {
             const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex < 0) {
-                continue;
-            }
-            selectedShapeIndices.append(shapeIndex);
-            sourceCandidates += snapCandidatesForShape(shapes_[shapeIndex]);
-        }
-        if (sourceCandidates.isEmpty()) {
-            return best;
-        }
-
-        const QVector<SnapCandidate> targetCandidates =
-            snapCandidatesForScene(selectedShapeIndices);
-        constexpr qreal snapRadiusPixels = 12.0;
-        qreal bestDistance = snapRadiusPixels;
-
-        for (const SnapCandidate &source : sourceCandidates) {
-            const QPointF sourceScreen = worldToScreen(source.point);
-            for (const SnapCandidate &target : targetCandidates) {
-                const QPointF targetScreen = worldToScreen(target.point);
-                const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
-                                                   targetScreen.y() - sourceScreen.y());
-                if (distance <= bestDistance) {
-                    bestDistance = distance;
-                    best.type = source.type;
-                    best.sourcePoint = source.point;
-                    best.targetPoint = target.point;
-                    best.translation = target.point - source.point;
-                }
+            if (shapeIndex >= 0) {
+                serviceSelectedShapeIndices.append(shapeIndex);
             }
         }
-
-        return best;
+        return snapEngine_.trackNearDragSnap(document_,
+                                             serviceSelectedShapeIndices,
+                                             sourcePoint,
+                                             targetShapeIndex,
+                                             targetComponentIndex,
+                                             viewportTransform_,
+                                             size(),
+                                             snapRadiusPixels);
     }
 
     DragSnapResult findControlPointSnap(ObjectId selectedObjectId,
@@ -9103,6 +9207,7 @@ private:
     int &controlPointIndex_;
     bool dragHistoryRecorded_ = false;
     bool dragSnapLocked_ = false;
+    quint64 dragSnapTraceSequence_ = 0;
     DragAxisLock dragAxisLock_ = DragAxisLock::None;
     bool grabActive_ = false;
     bool grabMoved_ = false;
@@ -9113,6 +9218,8 @@ private:
     QPointF grabBasePoint_{0.0, 0.0};
     QPointF grabCursorOffset_{0.0, 0.0};
     QPointF dragSnapCursorWorld_{0.0, 0.0};
+    QPointF nearDragFreeSourcePoint_{0.0, 0.0};
+    bool nearDragFreeSourcePointValid_ = false;
     QPointF dragStartScreen_{0.0, 0.0};
     QPointF lastDragWorld_{0.0, 0.0};
     QPointF lastControlPointWorld_{0.0, 0.0};

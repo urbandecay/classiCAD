@@ -18,6 +18,7 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -388,7 +389,7 @@ private:
         layout->addWidget(modelingBox);
 
         auto *hint = new QLabel(QStringLiteral(
-            "Choose which mouse button pans the 2D viewport. The mouse wheel continues to zoom, "
+            "Choose which mouse button pans the viewport. The mouse wheel continues to zoom, "
             "and Alt + Left Mouse Button remains available as an alternate pan shortcut."));
         hint->setObjectName(QStringLiteral("preferencesHint"));
         hint->setWordWrap(true);
@@ -1236,9 +1237,70 @@ private:
         }
 
         bar->addSeparator();
-        QLabel *mode = new QLabel(QStringLiteral("2D NURBS"));
+        QLabel *mode = new QLabel(QStringLiteral("3D • planar curves"));
         mode->setObjectName(QStringLiteral("modeLabel"));
         bar->addWidget(mode);
+
+        bar->addSeparator();
+        bar->addWidget(new QLabel(QStringLiteral("Plane")));
+        workPlaneCombo_ = new QComboBox;
+        workPlaneCombo_->setObjectName(QStringLiteral("workPlaneCombo"));
+        workPlaneCombo_->setToolTip(QStringLiteral("Active 2D drawing plane in world XYZ"));
+        workPlaneCombo_->addItem(QStringLiteral("XY"), static_cast<int>(WorkPlane::XY));
+        workPlaneCombo_->addItem(QStringLiteral("XZ"), static_cast<int>(WorkPlane::XZ));
+        workPlaneCombo_->addItem(QStringLiteral("YZ"), static_cast<int>(WorkPlane::YZ));
+        connect(workPlaneCombo_, qOverload<int>(&QComboBox::activated),
+                this, [this](int index) {
+                    if (viewport_ != nullptr && index >= 0) {
+                        viewport_->setWorkPlane(static_cast<WorkPlane>(
+                                                    workPlaneCombo_->itemData(index).toInt()),
+                                                workPlaneOffsetSpin_->value());
+                    }
+                });
+        bar->addWidget(workPlaneCombo_);
+
+        bar->addWidget(new QLabel(QStringLiteral("Offset")));
+        workPlaneOffsetSpin_ = new QDoubleSpinBox;
+        workPlaneOffsetSpin_->setObjectName(QStringLiteral("workPlaneOffsetSpin"));
+        workPlaneOffsetSpin_->setToolTip(QStringLiteral(
+            "Distance of the active XY/XZ/YZ drawing plane from the world origin"));
+        workPlaneOffsetSpin_->setRange(-1.0e9, 1.0e9);
+        workPlaneOffsetSpin_->setDecimals(3);
+        workPlaneOffsetSpin_->setSingleStep(1.0);
+        workPlaneOffsetSpin_->setValue(0.0);
+        connect(workPlaneOffsetSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, [this](double offset) {
+                    if (viewport_ != nullptr) {
+                        viewport_->setWorkPlane(viewport_->workPlane(), offset);
+                    }
+                });
+        bar->addWidget(workPlaneOffsetSpin_);
+
+        bar->addWidget(new QLabel(QStringLiteral("View")));
+        viewPresetCombo_ = new QComboBox;
+        viewPresetCombo_->setObjectName(QStringLiteral("viewPresetCombo"));
+        viewPresetCombo_->setToolTip(QStringLiteral(
+            "Top, front, side, isometric, or perspective view; Shift+pan-button drag orbits"));
+        viewPresetCombo_->addItem(QStringLiteral("Top"),
+                                  static_cast<int>(ViewportViewPreset::Top));
+        viewPresetCombo_->addItem(QStringLiteral("Front"),
+                                  static_cast<int>(ViewportViewPreset::Front));
+        viewPresetCombo_->addItem(QStringLiteral("Right"),
+                                  static_cast<int>(ViewportViewPreset::Right));
+        viewPresetCombo_->addItem(QStringLiteral("Iso"),
+                                  static_cast<int>(ViewportViewPreset::Isometric));
+        viewPresetCombo_->addItem(QStringLiteral("Perspective"),
+                                  static_cast<int>(ViewportViewPreset::Perspective));
+        viewPresetCombo_->addItem(QStringLiteral("Custom"),
+                                  static_cast<int>(ViewportViewPreset::Custom));
+        connect(viewPresetCombo_, qOverload<int>(&QComboBox::activated),
+                this, [this](int index) {
+                    if (viewport_ != nullptr && index >= 0) {
+                        viewport_->setViewPreset(static_cast<ViewportViewPreset>(
+                            viewPresetCombo_->itemData(index).toInt()));
+                    }
+                });
+        bar->addWidget(viewPresetCombo_);
 
         bar->addSeparator();
         updateAction_ = new QAction(QStringLiteral("Update"), this);
@@ -1516,7 +1578,26 @@ private:
                 statusBar()->showMessage(message);
             }
         };
+        viewportCallbacks.viewStateUpdate = [this](WorkPlane plane,
+                                                   qreal offset,
+                                                   ViewportViewPreset preset) {
+            const QSignalBlocker planeBlocker(workPlaneCombo_);
+            const QSignalBlocker offsetBlocker(workPlaneOffsetSpin_);
+            const QSignalBlocker viewBlocker(viewPresetCombo_);
+            const int planeIndex = workPlaneCombo_->findData(static_cast<int>(plane));
+            const int viewIndex = viewPresetCombo_->findData(static_cast<int>(preset));
+            if (planeIndex >= 0) {
+                workPlaneCombo_->setCurrentIndex(planeIndex);
+            }
+            workPlaneOffsetSpin_->setValue(offset);
+            if (viewIndex >= 0) {
+                viewPresetCombo_->setCurrentIndex(viewIndex);
+            }
+        };
         viewport_->setUiCallbacks(viewportCallbacks);
+        viewportCallbacks.viewStateUpdate(viewport_->workPlane(),
+                                          viewport_->workPlaneOffset(),
+                                          viewport_->viewPreset());
         refreshLayers();
         updateHistoryActions();
     }
@@ -3275,6 +3356,9 @@ private:
     QToolButton *scaleToolButton_ = nullptr;
     ScaleMode scaleMode_ = ScaleMode::TwoD;
     QComboBox *currentLayerCombo_ = nullptr;
+    QComboBox *workPlaneCombo_ = nullptr;
+    QDoubleSpinBox *workPlaneOffsetSpin_ = nullptr;
+    QComboBox *viewPresetCombo_ = nullptr;
     QComboBox *layerColorCombo_ = nullptr;
     QComboBox *layerLineTypeCombo_ = nullptr;
     QComboBox *layerLineWeightCombo_ = nullptr;

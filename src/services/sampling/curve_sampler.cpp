@@ -152,7 +152,14 @@ QVector<EraseCurveSampleCache> CurveSampler::sampleDocument(
         if (!document.isObjectVisible(document.objectIdAt(shapeIndex))) {
             continue;
         }
-        const QVector<Shape::NurbsCurve2D> curves = curvesForShape(document[shapeIndex]);
+        const Shape &shape = document[shapeIndex];
+        if (!workPlaneMatches(shape.workPlane,
+                              shape.workPlaneOffset,
+                              transform.workPlane(),
+                              transform.workPlaneOffset())) {
+            continue;
+        }
+        const QVector<Shape::NurbsCurve2D> curves = curvesForShape(shape);
         for (int componentIndex = 0; componentIndex < curves.size(); ++componentIndex) {
             if (!validateNurbsCurve(curves[componentIndex])) {
                 continue;

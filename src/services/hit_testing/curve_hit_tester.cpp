@@ -520,8 +520,15 @@ int CurveHitTester::hitTestShape(const Document &document,
             (editableOnly && !document.isObjectEditable(objectId))) {
             continue;
         }
+        const Shape &shape = document[index];
+        if (!workPlaneMatches(shape.workPlane,
+                              shape.workPlaneOffset,
+                              transform.workPlane(),
+                              transform.workPlaneOffset())) {
+            continue;
+        }
         const qreal distance = distanceToShape(screenPosition,
-                                               document[index],
+                                               shape,
                                                transform,
                                                viewportSize);
         if (distance <= closestDistance) {

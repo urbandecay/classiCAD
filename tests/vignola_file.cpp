@@ -87,6 +87,8 @@ int main(int argc, char **argv)
     line.geometryType = GeometryType::Line;
     line.points = {QPointF(-3.0, 1.5), QPointF(8.0, 6.0)};
     line.nurbs = makeDegreeOneNurbs(line.points);
+    line.workPlane = WorkPlane::XZ;
+    line.workPlaneOffset = 2.5;
     source.append(line);
 
     Shape dimension;
@@ -148,6 +150,34 @@ int main(int argc, char **argv)
         passed &= check(nativeModel.ActiveComponentCount(
                             ON_ModelComponent::Type::ModelGeometry) >= 3,
                         "the 3DM archive must contain native curve and dimension geometry");
+        bool foundExportedXzCurve = false;
+        ONX_ModelComponentIterator geometryIterator(
+            nativeModel, ON_ModelComponent::Type::ModelGeometry);
+        for (ON_ModelComponentReference reference =
+                 geometryIterator.FirstComponentReference();
+             !reference.IsEmpty();
+             reference = geometryIterator.NextComponentReference()) {
+            const ON_ModelGeometryComponent *modelGeometry =
+                ON_ModelGeometryComponent::FromModelComponentRef(reference, nullptr);
+            const ON_NurbsCurve *curve = modelGeometry == nullptr
+                                             ? nullptr
+                                             : ON_NurbsCurve::Cast(
+                                                   modelGeometry->Geometry(nullptr));
+            if (curve == nullptr || curve->CVCount() < 2) {
+                continue;
+            }
+            ON_3dPoint first;
+            ON_3dPoint last;
+            if (curve->GetCV(0, first) && curve->GetCV(curve->CVCount() - 1, last) &&
+                std::abs(first.y - 2.5) < 1.0e-9 &&
+                std::abs(last.y - 2.5) < 1.0e-9 &&
+                std::abs(first.z - 1.5) < 1.0e-9 &&
+                std::abs(last.z - 6.0) < 1.0e-9) {
+                foundExportedXzCurve = true;
+            }
+        }
+        passed &= check(foundExportedXzCurve,
+                        "3DM export must lift local XZ NURBS coordinates into world XYZ");
         ON_wString documentData;
         passed &= check(nativeModel.GetDocumentUserString(L"Vignola.DocumentData", documentData),
                         "the 3DM archive must carry the Vignola document metadata");
@@ -181,6 +211,9 @@ int main(int argc, char **argv)
         rhinoModel.AddManagedModelGeometryComponent(
             new ON_LineCurve(ON_3dPoint(0.0, 0.0, 2.0), ON_3dPoint(1.0, 0.0, 2.0)),
             new ON_3dmObjectAttributes(spatialCurveAttributes));
+        rhinoModel.AddManagedModelGeometryComponent(
+            new ON_LineCurve(ON_3dPoint(0.0, 0.0, 0.0), ON_3dPoint(1.0, 1.0, 2.0)),
+            new ON_3dmObjectAttributes(spatialCurveAttributes));
     }
 
     const QString rhinoPath = QDir(temporaryDirectory.path()).filePath(
@@ -202,8 +235,8 @@ int main(int argc, char **argv)
     }
     passed &= check(imported,
                     "ordinary Rhino 3DM files must import without Vignola metadata");
-    passed &= check(importTarget.size() == 3 && importReport.importedObjectCount == 2,
-                    "Rhino import must merge planar curves and points into the existing document");
+    passed &= check(importTarget.size() == 4 && importReport.importedObjectCount == 3,
+                    "Rhino import must merge XY, offset-XY, and point geometry into the existing document");
     passed &= check(importReport.skippedObjectCount == 1 &&
                         !importReport.warningMessage.isEmpty(),
                     "Rhino import must explicitly report skipped non-planar geometry");
@@ -220,6 +253,7 @@ int main(int argc, char **argv)
 
     bool foundRationalCurve = false;
     bool foundScaledPoint = false;
+    bool foundOffsetPlaneCurve = false;
     for (const SceneObject &object : importTarget.objects()) {
         if ((object.geometry.geometryType == GeometryType::Nurbs ||
              object.geometry.geometryType == GeometryType::Circle) &&
@@ -234,11 +268,17 @@ int main(int argc, char **argv)
             !object.geometry.points.isEmpty()) {
             foundScaledPoint = std::abs(object.geometry.points.first().x() - 50.8) < 1.0e-8;
         }
+        if (object.geometry.geometryType == GeometryType::Line &&
+            object.geometry.workPlane == WorkPlane::XY) {
+            foundOffsetPlaneCurve = std::abs(object.geometry.workPlaneOffset - 50.8) < 1.0e-8;
+        }
     }
     passed &= check(foundRationalCurve,
                     "Rhino arcs must import as valid rational NURBS curves");
     passed &= check(foundScaledPoint,
                     "Rhino points must be converted from source units to millimeters");
+    passed &= check(foundOffsetPlaneCurve,
+                    "Rhino import must preserve principal-plane offsets and convert them to millimeters");
 
     return passed ? 0 : 1;
 }

@@ -1,23 +1,27 @@
 # classiCAD
 
-An initial Qt/C++ desktop shell for a 2D NURBS modeler.
+A Qt/C++ CAD modeler with a 3D camera and exact 2D NURBS geometry drawn on
+selectable world XY, XZ, and YZ workplanes. Spatial curves and mesh modeling
+are not implemented yet.
 
 The first pass is intentionally a Blender-inspired layout:
 
 - top menu and workspace bar
 - left vertical tool shelf
-- central 2D viewport with grid, pan, and zoom
+- central 3D viewport with workplane grid, pan, zoom, standard views, and orbit
 - right outliner and properties panel
 - bottom coordinate/status bar
 - Rhino-style Ortho and OSnap toggles; enabling OSnap reveals Endpoint, Midpoint, Intersection, Center, Perpendicular, and Tangent controls for drawing and moving geometry
 - Edit > Preferences with Blender-style categories and a Keymap page for choosing MMB or RMB panning
 - Edit > Undo and Redo actions with Ctrl+Z/Ctrl+Y shortcuts for geometry changes
-- A stationary click of the configured pan button repeats the last completed tool; moving while holding it pans the viewport
+- A stationary click of the configured pan button repeats the last completed tool; moving while holding it pans the viewport. Shift+pan-button drag orbits the camera.
 - A Control Points toggle on the tool shelf displays handles for the selected line or curve; the setting is remembered
 
-The drawing buttons are placeholders. The Line tool behaves as a continuous point-placement command: left-click plants points, the next segment previews under the cursor, and right-click finishes the chain. Finished chains are stored as open, clamped, degree-1 NURBS curves with unit weights and the Rhino/openNURBS knot-array convention. In Select mode, a left-click near a finished line highlights it and dragging translates the connected chain and its NURBS control points together. Move snapping allows any source point to snap to any enabled target type (for example, an endpoint to a midpoint), with a short breakaway distance so snapped geometry can be separated without fighting the snap correction.
+The workspace bar selects the active XY/XZ/YZ drawing plane, its offset, and Top/Front/Right, Isometric, or Perspective camera views. Existing tools create and edit plane-local curves; selection, object snaps, trimming, and erase operate on the active plane. The native `.vignola` document stores each object’s workplane and offset. Rhino `.3dm` interchange lifts those planar NURBS curves into world XYZ; import accepts curves lying in XY, XZ, or YZ planes. Exported curves are still curves, not meshes, and arbitrary spatial NURBS and mesh modeling are not implemented yet.
 
-Arc has a press-and-hold flyout. A normal click starts the default 1 Point Arc (center, start/radius, endpoint); holding the Arc button exposes 1 Point Arc and 2 Point Arc. Arc input uses the same OSnap and Ortho constraints as Line, including endpoint, midpoint, intersection, center, perpendicular, and tangent candidates. With Ortho enabled, a 1 Point Arc endpoint stays on its fixed-radius circle and snaps to 90-degree sweep increments. The 1 Point Arc preserves the cursor's rotation direction through 180 degrees and stores the resulting sweep. The 2 Point Arc uses start, end, and a through point; with Ortho enabled, the through point snaps to either exact semicircle only when the cursor is near that semicircle snap point, while remaining free elsewhere. Finished arcs are stored as exact rational degree-2 NURBS curves: spans are joined at shared vertices, middle vertices use the circular-arc weights, and the curve stores a clamped Rhino/openNURBS knot array. Circles use the same rational degree-2 NURBS representation as Rhino's four-quarter-span circle. The Control Points toggle displays those NURBS control vertices, including the outer weighted vertices that are not the construction center/start/end points. The Bezier and NURBS buttons currently commit a single-span cubic NURBS from four control vertices, with degree, order, weights, and knots stored using the same representation; arbitrary multi-span NURBS editing is still ahead of the placeholder interaction. Rhino `.3dm` reader/writer support is still planned.
+The Line tool behaves as a continuous point-placement command: left-click plants points, the next segment previews under the cursor, and right-click finishes the chain. Finished chains are stored as open, clamped, degree-1 NURBS curves with unit weights and the Rhino/openNURBS knot-array convention. In Select mode, dragging a finished line translates its connected chain and its NURBS control points together. Move snapping allows any source point to snap to any enabled target type (for example, an endpoint to a midpoint), with a short breakaway distance so snapped geometry can be separated without fighting the snap correction.
+
+Arc has a press-and-hold flyout. A normal click starts the default 1 Point Arc (center, start/radius, endpoint); holding the Arc button exposes 1 Point Arc and 2 Point Arc. Arc input uses the same OSnap and Ortho constraints as Line, including endpoint, midpoint, intersection, center, perpendicular, and tangent candidates. With Ortho enabled, a 1 Point Arc endpoint stays on its fixed-radius circle and snaps to 90-degree sweep increments. The 1 Point Arc preserves the cursor's rotation direction through 180 degrees and stores the resulting sweep. The 2 Point Arc uses start, end, and a through point; with Ortho enabled, the through point snaps to either exact semicircle only when the cursor is near that semicircle snap point, while remaining free elsewhere. Finished arcs are stored as exact rational degree-2 NURBS curves: spans are joined at shared vertices, middle vertices use the circular-arc weights, and the curve stores a clamped Rhino/openNURBS knot array. Circles use the same rational degree-2 NURBS representation as Rhino's four-quarter-span circle. The Control Points toggle displays those NURBS control vertices, including the outer weighted vertices that are not the construction center/start/end points. The Bezier and NURBS buttons currently commit a single-span cubic NURBS from four control vertices, with degree, order, weights, and knots stored using the same representation; arbitrary multi-span NURBS editing is still ahead of the placeholder interaction.
 
 ## Build
 
@@ -44,7 +48,7 @@ The current source layout follows that boundary:
 
 ```text
 src/main.cpp                 application entry point
-src/core/geometry/*          shared NurbsCurve2D storage, evaluation, validation, and transforms
+src/core/geometry/*          shared NurbsCurve2D storage, workplane mapping, evaluation, validation, and transforms
 src/core/model.*             compatibility shape records, factories, and legacy helpers
 src/core/document/*          document, layers, scene objects, and stable selection IDs
 src/core/history/*            document-level undo/redo snapshots
@@ -74,9 +78,9 @@ The remaining compatibility paths are intentional migration boundaries: the
 legacy `Shape` factories/JSON helpers in `core/model.*`, the document's
 container-style viewport bridge, and the viewport's selection/state aliases
 are still used by live editing and session-compatibility tests. There is one
-committed curve representation (`NurbsCurve2D`); homogeneous Bezier spans and
-sample caches are transient algorithm/rendering data, not alternate stored
-geometry.
+committed curve representation (`NurbsCurve2D`); each shape stores its
+principal workplane mapping. Homogeneous Bezier spans and sample caches are
+transient algorithm/rendering data, not alternate stored geometry.
 
 Selected-object movement also supports a Blender-style grab flow: press `G`,
 move the selection, press `X` or `Y` to constrain the axis, then click to

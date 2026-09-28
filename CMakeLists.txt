@@ -30,6 +30,7 @@ set(CLASSICAD_CORE_SOURCES
     src/core/tool_id.cpp
     src/core/geometry/geometry_type.cpp
     src/core/geometry/nurbs_curve.cpp
+    src/core/geometry/work_plane.cpp
     src/core/geometry/curve_evaluator.cpp
     src/core/geometry/circle_construction.cpp
     src/core/geometry/geometry_transform.cpp
@@ -189,6 +190,7 @@ if (CLASSICAD_BUILD_TESTS)
         tests/vignola_file.cpp
         src/core/geometry/geometry_type.cpp
         src/core/geometry/nurbs_curve.cpp
+        src/core/geometry/work_plane.cpp
         src/core/document/document.cpp
         src/core/serialization/document_serializer.cpp
         src/core/serialization/vignola_document_file.cpp

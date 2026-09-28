@@ -6,6 +6,7 @@
 #include "services/dimensions/dimension_layout.h"
 
 #include <QFont>
+#include <QLineF>
 #include <QPainterPath>
 #include <QPolygonF>
 #include <QTransform>
@@ -59,37 +60,133 @@ bool ViewportRenderer::evaluateNurbsPoint(const Shape::NurbsCurve2D &curve,
 void ViewportRenderer::drawGrid(QPainter &painter,
                                 const QSize &viewportSize) const
 {
-    const QPointF topLeft = screenToWorld(QPointF(0, 0), viewportSize);
-    const QPointF bottomRight =
-        screenToWorld(QPointF(viewportSize.width(), viewportSize.height()), viewportSize);
-    constexpr qreal step = 25.0;
-
-    painter.setPen(QPen(QColor(QStringLiteral("#353535")), 1));
-
-    const qreal firstX = std::floor(topLeft.x() / step) * step;
-    const qreal firstY = std::floor(bottomRight.y() / step) * step;
-
-    for (qreal x = firstX; x <= bottomRight.x(); x += step) {
-        const int screenX =
-            qRound(worldToScreen(QPointF(x, 0), viewportSize).x());
-        painter.drawLine(screenX, 0, screenX, viewportSize.height());
+    QPointF corners[4];
+    const QPointF screenCorners[] = {{0.0, 0.0},
+                                     {static_cast<qreal>(viewportSize.width()), 0.0},
+                                     {static_cast<qreal>(viewportSize.width()),
+                                      static_cast<qreal>(viewportSize.height())},
+                                     {0.0, static_cast<qreal>(viewportSize.height())}};
+    int cornerCount = 0;
+    for (int index = 0; index < 4; ++index) {
+        if (!transform_.screenToWorkPlane(screenCorners[index],
+                                          viewportSize,
+                                          transform_.workPlane(),
+                                          transform_.workPlaneOffset(),
+                                          &corners[cornerCount])) {
+            continue;
+        }
+        ++cornerCount;
+    }
+    if (cornerCount < 2) {
+        return;
     }
 
-    for (qreal y = firstY; y <= topLeft.y(); y += step) {
-        const int screenY =
-            qRound(worldToScreen(QPointF(0, y), viewportSize).y());
-        painter.drawLine(0, screenY, viewportSize.width(), screenY);
+    qreal minimumU = corners[0].x();
+    qreal maximumU = corners[0].x();
+    qreal minimumV = corners[0].y();
+    qreal maximumV = corners[0].y();
+    for (int index = 0; index < cornerCount; ++index) {
+        minimumU = std::min(minimumU, corners[index].x());
+        maximumU = std::max(maximumU, corners[index].x());
+        minimumV = std::min(minimumV, corners[index].y());
+        maximumV = std::max(maximumV, corners[index].y());
     }
+
+    qreal step = 25.0;
+    const qreal spacing = QLineF(worldToScreen({}, viewportSize),
+                                 worldToScreen(QPointF(step, 0.0), viewportSize))
+                              .length();
+    if (spacing > 1.0e-6) {
+        while (step * 0.5 >= 1.0 && spacing * (step * 0.5 / 25.0) > 90.0) {
+            step *= 0.5;
+        }
+        while (spacing * (step / 25.0) < 18.0) {
+            step *= 2.0;
+        }
+    }
+    step = std::max(step,
+                    std::max(maximumU - minimumU, maximumV - minimumV) / 300.0);
+
+    const qreal firstU = std::floor(minimumU / step) * step;
+    const qreal firstV = std::floor(minimumV / step) * step;
+    painter.save();
+    painter.setClipRect(QRect(QPoint(0, 0), viewportSize));
+    for (int index = 0; index < 320; ++index) {
+        const qreal u = firstU + index * step;
+        if (u > maximumU) {
+            break;
+        }
+        painter.setPen(QPen(std::abs(std::remainder(u, step * 5.0)) < step * 1.0e-6
+                                ? QColor(QStringLiteral("#3d3d3d"))
+                                : QColor(QStringLiteral("#323232")),
+                            1));
+        painter.drawLine(worldToScreen(QPointF(u, minimumV), viewportSize),
+                         worldToScreen(QPointF(u, maximumV), viewportSize));
+    }
+    for (int index = 0; index < 320; ++index) {
+        const qreal v = firstV + index * step;
+        if (v > maximumV) {
+            break;
+        }
+        painter.setPen(QPen(std::abs(std::remainder(v, step * 5.0)) < step * 1.0e-6
+                                ? QColor(QStringLiteral("#3d3d3d"))
+                                : QColor(QStringLiteral("#323232")),
+                            1));
+        painter.drawLine(worldToScreen(QPointF(minimumU, v), viewportSize),
+                         worldToScreen(QPointF(maximumU, v), viewportSize));
+    }
+    painter.restore();
 }
 
 void ViewportRenderer::drawOrigin(QPainter &painter,
                                   const QSize &viewportSize) const
 {
-    const QPointF origin = worldToScreen(QPointF(0, 0), viewportSize);
-    painter.setPen(QPen(QColor(QStringLiteral("#a85b5b")), 1));
-    painter.drawLine(0, qRound(origin.y()), viewportSize.width(), qRound(origin.y()));
-    painter.setPen(QPen(QColor(QStringLiteral("#628e65")), 1));
-    painter.drawLine(qRound(origin.x()), 0, qRound(origin.x()), viewportSize.height());
+    QPointF corners[4];
+    const QPointF screenCorners[] = {{0.0, 0.0},
+                                     {static_cast<qreal>(viewportSize.width()), 0.0},
+                                     {static_cast<qreal>(viewportSize.width()),
+                                      static_cast<qreal>(viewportSize.height())},
+                                     {0.0, static_cast<qreal>(viewportSize.height())}};
+    int cornerCount = 0;
+    for (int index = 0; index < 4; ++index) {
+        if (!transform_.screenToWorkPlane(screenCorners[index],
+                                          viewportSize,
+                                          transform_.workPlane(),
+                                          transform_.workPlaneOffset(),
+                                          &corners[cornerCount])) {
+            continue;
+        }
+        ++cornerCount;
+    }
+    if (cornerCount < 2) {
+        return;
+    }
+    qreal minimumU = corners[0].x();
+    qreal maximumU = corners[0].x();
+    qreal minimumV = corners[0].y();
+    qreal maximumV = corners[0].y();
+    for (int index = 0; index < cornerCount; ++index) {
+        minimumU = std::min(minimumU, corners[index].x());
+        maximumU = std::max(maximumU, corners[index].x());
+        minimumV = std::min(minimumV, corners[index].y());
+        maximumV = std::max(maximumV, corners[index].y());
+    }
+    painter.save();
+    painter.setClipRect(QRect(QPoint(0, 0), viewportSize));
+    const WorkPlane plane = transform_.workPlane();
+    const QColor uColor = plane == WorkPlane::YZ
+                              ? QColor(QStringLiteral("#628e65"))
+                              : QColor(QStringLiteral("#a85b5b"));
+    const QColor vColor = plane == WorkPlane::XY
+                              ? QColor(QStringLiteral("#628e65"))
+                              : QColor(QStringLiteral("#6280a8"));
+    painter.setPen(QPen(uColor, 1.25));
+    painter.drawLine(worldToScreen(QPointF(minimumU, 0.0), viewportSize),
+                     worldToScreen(QPointF(maximumU, 0.0), viewportSize));
+    painter.setPen(QPen(vColor, 1.25));
+    painter.drawLine(worldToScreen(QPointF(0.0, minimumV), viewportSize),
+                     worldToScreen(QPointF(0.0, maximumV), viewportSize));
+    painter.restore();
 }
 
 QVector<QPointF> ViewportRenderer::rectangleVertices(const Shape &shape) const

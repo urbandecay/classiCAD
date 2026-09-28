@@ -2,6 +2,7 @@
 
 #include "geometry/geometry_type.h"
 #include "geometry/nurbs_curve.h"
+#include "geometry/work_plane.h"
 #include "document/object_id.h"
 #include "tool_id.h"
 
@@ -138,6 +139,8 @@ struct Shape {
     // as four ordered 2D corners in points (top-left clockwise).
     QImage pictureImage;
     QByteArray pictureImageData;
+    WorkPlane workPlane = WorkPlane::XY;
+    qreal workPlaneOffset = 0.0;
 };
 
 struct EraseCurveSampleCache {

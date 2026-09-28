@@ -74,7 +74,33 @@ QString openNurbsError(const ON_wString &log, const QString &fallback)
     return QString::fromStdWString(text).trimmed();
 }
 
+Point3D worldPoint(const QPointF &point, const Shape &shape)
+{
+    return workPlanePointToWorld(point, shape.workPlane, shape.workPlaneOffset);
+}
+
+ON_3dVector workPlaneXAxis(WorkPlane plane)
+{
+    return plane == WorkPlane::YZ ? ON_3dVector::YAxis : ON_3dVector::XAxis;
+}
+
+ON_3dVector workPlaneYAxis(WorkPlane plane)
+{
+    return plane == WorkPlane::XY ? ON_3dVector::YAxis : ON_3dVector::ZAxis;
+}
+
+ON_Plane openNurbsPlane(const Shape &shape)
+{
+    const Point3D origin = workPlanePointToWorld({},
+                                                 shape.workPlane,
+                                                 shape.workPlaneOffset);
+    return ON_Plane(ON_3dPoint(origin.x, origin.y, origin.z),
+                    workPlaneXAxis(shape.workPlane),
+                    workPlaneYAxis(shape.workPlane));
+}
+
 bool makeNurbsCurve(const Shape::NurbsCurve2D &source,
+                    const Shape &owner,
                     std::unique_ptr<ON_NurbsCurve> *curve,
                     QString *errorMessage)
 {
@@ -87,18 +113,18 @@ bool makeNurbsCurve(const Shape::NurbsCurve2D &source,
                                                   source.order,
                                                   source.controlPoints.size());
     for (int index = 0; index < source.controlPoints.size(); ++index) {
-        const QPointF point = source.controlPoints[index];
+        const Point3D point = worldPoint(source.controlPoints[index], owner);
         if (source.rational) {
             const double weight = source.weights[index];
-            const ON_4dPoint homogeneous(point.x() * weight,
-                                         point.y() * weight,
-                                         0.0,
+            const ON_4dPoint homogeneous(point.x * weight,
+                                         point.y * weight,
+                                         point.z * weight,
                                          weight);
             if (!result->SetCV(index, homogeneous)) {
                 setError(errorMessage, QStringLiteral("Could not write a NURBS control vertex"));
                 return false;
             }
-        } else if (!result->SetCV(index, ON_3dPoint(point.x(), point.y(), 0.0))) {
+        } else if (!result->SetCV(index, ON_3dPoint(point.x, point.y, point.z))) {
             setError(errorMessage, QStringLiteral("Could not write a NURBS control vertex"));
             return false;
         }
@@ -140,7 +166,10 @@ bool makeObjectGeometry(const Shape &shape,
             return true;
         }
         const QPointF point = shape.points.first();
-        geometry->push_back(std::make_unique<ON_Point>(ON_3dPoint(point.x(), point.y(), 0.0)));
+        const Point3D world = worldPoint(point, shape);
+        geometry->push_back(std::make_unique<ON_Point>(ON_3dPoint(world.x,
+                                                                  world.y,
+                                                                  world.z)));
         return true;
     }
 
@@ -150,14 +179,17 @@ bool makeObjectGeometry(const Shape &shape,
             return false;
         }
         auto dimension = std::make_unique<ON_DimLinear>();
+        const Point3D first = worldPoint(shape.points[0], shape);
+        const Point3D second = worldPoint(shape.points[1], shape);
+        const Point3D offset = worldPoint(shape.points[2], shape);
         const bool created = dimension->Create(
             ON::AnnotationType::Aligned,
             dimensionStyleId,
-            ON_Plane::World_xy,
-            ON_3dVector::XAxis,
-            ON_3dPoint(shape.points[0].x(), shape.points[0].y(), 0.0),
-            ON_3dPoint(shape.points[1].x(), shape.points[1].y(), 0.0),
-            ON_3dPoint(shape.points[2].x(), shape.points[2].y(), 0.0));
+            openNurbsPlane(shape),
+            workPlaneXAxis(shape.workPlane),
+            ON_3dPoint(first.x, first.y, first.z),
+            ON_3dPoint(second.x, second.y, second.z),
+            ON_3dPoint(offset.x, offset.y, offset.z));
         if (!created) {
             setError(errorMessage, QStringLiteral("Could not create the linear dimension"));
             return false;
@@ -186,18 +218,27 @@ bool makeObjectGeometry(const Shape &shape,
         const double firstAngle = std::atan2(firstRay.y(), firstRay.x());
         const double middleAngle = firstAngle + sweep * 0.5;
         const double radius = std::min(firstLength, secondLength);
-        const ON_3dPoint arcPoint(vertex.x() + std::cos(middleAngle) * radius,
-                                 vertex.y() + std::sin(middleAngle) * radius,
-                                 0.0);
+        const QPointF arcPointLocal(vertex.x() + std::cos(middleAngle) * radius,
+                                    vertex.y() + std::sin(middleAngle) * radius);
+        const Point3D worldVertex = worldPoint(vertex, shape);
+        const Point3D worldFirstRay = worldPoint(shape.points[1], shape);
+        const Point3D worldSecondRay = worldPoint(shape.points[2], shape);
+        const Point3D worldArcPoint = worldPoint(arcPointLocal, shape);
 
         auto dimension = std::make_unique<ON_DimAngular>();
         if (!dimension->Create(dimensionStyleId,
-                               ON_Plane::World_xy,
-                               ON_3dVector::XAxis,
-                               ON_3dPoint(vertex.x(), vertex.y(), 0.0),
-                               ON_3dPoint(shape.points[1].x(), shape.points[1].y(), 0.0),
-                               ON_3dPoint(shape.points[2].x(), shape.points[2].y(), 0.0),
-                               arcPoint)) {
+                               openNurbsPlane(shape),
+                               workPlaneXAxis(shape.workPlane),
+                               ON_3dPoint(worldVertex.x, worldVertex.y, worldVertex.z),
+                               ON_3dPoint(worldFirstRay.x,
+                                          worldFirstRay.y,
+                                          worldFirstRay.z),
+                               ON_3dPoint(worldSecondRay.x,
+                                          worldSecondRay.y,
+                                          worldSecondRay.z),
+                               ON_3dPoint(worldArcPoint.x,
+                                          worldArcPoint.y,
+                                          worldArcPoint.z))) {
             setError(errorMessage, QStringLiteral("Could not create the angular dimension"));
             return false;
         }
@@ -208,7 +249,7 @@ bool makeObjectGeometry(const Shape &shape,
     if (!shape.components.isEmpty()) {
         for (const Shape::NurbsCurve2D &component : shape.components) {
             std::unique_ptr<ON_NurbsCurve> curve;
-            if (!makeNurbsCurve(component, &curve, errorMessage)) {
+            if (!makeNurbsCurve(component, shape, &curve, errorMessage)) {
                 return false;
             }
             geometry->push_back(std::move(curve));
@@ -218,7 +259,7 @@ bool makeObjectGeometry(const Shape &shape,
 
     if (!shape.nurbs.controlPoints.isEmpty()) {
         std::unique_ptr<ON_NurbsCurve> curve;
-        if (!makeNurbsCurve(shape.nurbs, &curve, errorMessage)) {
+        if (!makeNurbsCurve(shape.nurbs, shape, &curve, errorMessage)) {
             return false;
         }
         geometry->push_back(std::move(curve));
@@ -235,7 +276,7 @@ bool makeObjectGeometry(const Shape &shape,
     if (points.size() >= 2) {
         const Shape::NurbsCurve2D polyline = makeDegreeOneNurbs(points);
         std::unique_ptr<ON_NurbsCurve> curve;
-        if (!makeNurbsCurve(polyline, &curve, errorMessage)) {
+        if (!makeNurbsCurve(polyline, shape, &curve, errorMessage)) {
             return false;
         }
         geometry->push_back(std::move(curve));
@@ -382,6 +423,8 @@ bool importNurbsCurve(const ON_Curve &source,
                       double unitScale,
                       double planarTolerance,
                       Shape::NurbsCurve2D *destination,
+                      WorkPlane *destinationPlane,
+                      qreal *destinationOffset,
                       QString *reason)
 {
     ON_NurbsCurve converted;
@@ -410,16 +453,18 @@ bool importNurbsCurve(const ON_Curve &source,
     result.rational = converted.IsRational();
     result.controlPoints.reserve(converted.CVCount());
     result.weights.reserve(converted.CVCount());
+    QVector<Point3D> worldControlPoints;
+    worldControlPoints.reserve(converted.CVCount());
     for (int index = 0; index < converted.CVCount(); ++index) {
         ON_3dPoint point;
         if (!converted.GetCV(index, point) || !std::isfinite(point.x) ||
-            !std::isfinite(point.y) || !std::isfinite(point.z) ||
-            std::abs(point.z) > planarTolerance) {
+            !std::isfinite(point.y) || !std::isfinite(point.z)) {
             if (reason != nullptr) {
-                *reason = QStringLiteral("curve is not in the XY plane");
+                *reason = QStringLiteral("curve has a non-finite control vertex");
             }
             return false;
         }
+        worldControlPoints.append({point.x, point.y, point.z});
 
         const double weight = result.rational ? converted.Weight(index) : 1.0;
         if (!std::isfinite(weight) || weight <= 0.0) {
@@ -428,8 +473,44 @@ bool importNurbsCurve(const ON_Curve &source,
             }
             return false;
         }
-        result.controlPoints.append(QPointF(point.x * unitScale, point.y * unitScale));
         result.weights.append(weight);
+    }
+
+    qreal minX = worldControlPoints.first().x;
+    qreal maxX = minX;
+    qreal minY = worldControlPoints.first().y;
+    qreal maxY = minY;
+    qreal minZ = worldControlPoints.first().z;
+    qreal maxZ = minZ;
+    for (const Point3D &point : worldControlPoints) {
+        minX = std::min(minX, point.x);
+        maxX = std::max(maxX, point.x);
+        minY = std::min(minY, point.y);
+        maxY = std::max(maxY, point.y);
+        minZ = std::min(minZ, point.z);
+        maxZ = std::max(maxZ, point.z);
+    }
+    WorkPlane plane = WorkPlane::XY;
+    qreal offset = worldControlPoints.first().z;
+    if (maxZ - minZ <= planarTolerance) {
+        plane = WorkPlane::XY;
+        offset = worldControlPoints.first().z;
+    } else if (maxY - minY <= planarTolerance) {
+        plane = WorkPlane::XZ;
+        offset = worldControlPoints.first().y;
+    } else if (maxX - minX <= planarTolerance) {
+        plane = WorkPlane::YZ;
+        offset = worldControlPoints.first().x;
+    } else {
+        if (reason != nullptr) {
+            *reason = QStringLiteral("curve is not in an XY, XZ, or YZ workplane");
+        }
+        return false;
+    }
+    result.controlPoints.reserve(worldControlPoints.size());
+    for (const Point3D &point : worldControlPoints) {
+        const QPointF local = worldPointToWorkPlane(point, plane);
+        result.controlPoints.append(local * unitScale);
     }
 
     result.knots.reserve(converted.KnotCount());
@@ -446,6 +527,12 @@ bool importNurbsCurve(const ON_Curve &source,
     }
 
     *destination = std::move(result);
+    if (destinationPlane != nullptr) {
+        *destinationPlane = plane;
+    }
+    if (destinationOffset != nullptr) {
+        *destinationOffset = offset * unitScale;
+    }
     return true;
 }
 
@@ -463,17 +550,34 @@ bool importCurve(const ON_Curve &curve,
         Shape result;
         result.geometryType = GeometryType::PolyCurve;
         result.components.reserve(polyCurve->Count());
+        bool hasPlane = false;
         for (int index = 0; index < polyCurve->Count(); ++index) {
             const ON_Curve *segment = polyCurve->SegmentCurve(index);
             Shape::NurbsCurve2D converted;
+            WorkPlane segmentPlane = WorkPlane::XY;
+            qreal segmentOffset = 0.0;
             if (segment == nullptr ||
                 !importNurbsCurve(*segment,
                                   unitScale,
                                   planarTolerance,
                                   &converted,
+                                  &segmentPlane,
+                                  &segmentOffset,
                                   reason)) {
                 return false;
             }
+            if (hasPlane && !workPlaneMatches(result.workPlane,
+                                               result.workPlaneOffset,
+                                               segmentPlane,
+                                               segmentOffset)) {
+                if (reason != nullptr) {
+                    *reason = QStringLiteral("polycurve segments use different workplanes");
+                }
+                return false;
+            }
+            result.workPlane = segmentPlane;
+            result.workPlaneOffset = segmentOffset;
+            hasPlane = true;
             if (result.points.isEmpty()) {
                 result.points.append(converted.controlPoints.first());
             }
@@ -491,7 +595,13 @@ bool importCurve(const ON_Curve &curve,
     }
 
     Shape result;
-    if (!importNurbsCurve(curve, unitScale, planarTolerance, &result.nurbs, reason)) {
+    if (!importNurbsCurve(curve,
+                          unitScale,
+                          planarTolerance,
+                          &result.nurbs,
+                          &result.workPlane,
+                          &result.workPlaneOffset,
+                          reason)) {
         return false;
     }
 
@@ -500,8 +610,10 @@ bool importCurve(const ON_Curve &curve,
         const ON_3dPoint center = arcCurve->m_arc.Center();
         const ON_3dPoint edge = arcCurve->m_arc.PointAt(0.0);
         result.geometryType = GeometryType::Circle;
-        result.points = {QPointF(center.x * unitScale, center.y * unitScale),
-                         QPointF(edge.x * unitScale, edge.y * unitScale)};
+        result.points = {worldPointToWorkPlane({center.x, center.y, center.z},
+                                               result.workPlane) * unitScale,
+                         worldPointToWorkPlane({edge.x, edge.y, edge.z},
+                                               result.workPlane) * unitScale};
         *shape = std::move(result);
         return true;
     }
@@ -787,11 +899,12 @@ bool importRhino3dmDocument(const QString &path,
         QString reason;
         if (const ON_Point *point = ON_Point::Cast(geometry)) {
             if (!std::isfinite(point->point.x) || !std::isfinite(point->point.y) ||
-                !std::isfinite(point->point.z) ||
-                std::abs(point->point.z) > planarTolerance) {
-                reason = QStringLiteral("point is not in the XY plane");
+                !std::isfinite(point->point.z)) {
+                reason = QStringLiteral("point has non-finite coordinates");
             } else {
                 importedShape.geometryType = GeometryType::Point;
+                importedShape.workPlane = WorkPlane::XY;
+                importedShape.workPlaneOffset = point->point.z * unitScale;
                 importedShape.points.append(QPointF(point->point.x * unitScale,
                                                     point->point.y * unitScale));
             }

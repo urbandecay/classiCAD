@@ -3,6 +3,7 @@
 #include "core/document/layer_id.h"
 #include "core/document/object_id.h"
 #include "core/model.h"
+#include "services/viewport/viewport_transform.h"
 
 #include <QString>
 #include <QColor>
@@ -92,6 +93,7 @@ struct ViewportUiCallbacks {
     std::function<void()> layersChanged;
     std::function<void(const QString &)> subdivisionStatusUpdate;
     std::function<void(const QString &)> joinStatusUpdate;
+    std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate;
 };
 
 class ViewportWidgetApi : public QWidget {
@@ -148,6 +150,11 @@ public:
                                         Rhino3dmImportReport *report = nullptr,
                                         QString *errorMessage = nullptr) = 0;
     virtual void createNewDocument() = 0;
+    virtual void setWorkPlane(WorkPlane plane, qreal offset = 0.0) = 0;
+    virtual WorkPlane workPlane() const = 0;
+    virtual qreal workPlaneOffset() const = 0;
+    virtual void setViewPreset(ViewportViewPreset preset) = 0;
+    virtual ViewportViewPreset viewPreset() const = 0;
 
     void setUiCallbacks(const ViewportUiCallbacks &callbacks)
     {
@@ -159,6 +166,7 @@ public:
         layersChanged_ = callbacks.layersChanged;
         subdivisionStatusUpdate_ = callbacks.subdivisionStatusUpdate;
         joinStatusUpdate_ = callbacks.joinStatusUpdate;
+        viewStateUpdate_ = callbacks.viewStateUpdate;
     }
 
 protected:
@@ -170,6 +178,7 @@ protected:
     std::function<void()> layersChanged_;
     std::function<void(const QString &)> subdivisionStatusUpdate_;
     std::function<void(const QString &)> joinStatusUpdate_;
+    std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate_;
 };
 
 ViewportWidgetApi *createViewportWidget(QWidget *parent = nullptr);

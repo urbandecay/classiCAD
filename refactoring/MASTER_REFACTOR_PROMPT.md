@@ -32,6 +32,7 @@ src/main.cpp                       application entry point
 src/core/tool_id.*                 active interaction vocabulary and tool metadata
 src/core/geometry/geometry_type.*  persistent geometry vocabulary and legacy mapping
 src/core/geometry/nurbs_curve.*    shared NURBS storage, knot expansion, validation
+src/core/geometry/work_plane.*     principal XY/XZ/YZ local-2D to world-3D mapping
 src/core/geometry/curve_evaluator.* NURBS evaluation and parameter-domain operations
 src/core/geometry/geometry_transform.* reflected geometry transforms
 src/core/document/object_id.h      stable scene-object identity value type
@@ -44,7 +45,7 @@ src/core/history/history.*          document-level snapshot undo/redo ownership
 src/core/serialization/document_serializer.* versioned document/layer/object save/restore
 src/core/model.*                   compatibility model, factories, serialization, helpers
 src/core/debug_log.*               application logging
-src/services/viewport/viewport_transform.* world/screen conversion, zoom, and pan
+src/services/viewport/viewport_transform.* 3D camera projection, ray/workplane picking, presets, zoom, pan, and orbit
 src/services/sampling/curve_sampler.* NURBS display/erase sampling and scene cache generation
 src/services/hit_testing/curve_hit_tester.* curve and control-point hit-testing
 src/services/snapping/snap_engine.* endpoint, midpoint, center, intersection, perpendicular, and tangent snapping
@@ -68,7 +69,7 @@ src/tools/erase_tool.*              erase lifecycle bridge
 src/ui/input_helpers.*             Qt event-position and icon helpers
 src/ui/viewport_widget_api.h       typed viewport settings, command, status, and callback boundary
 src/ui/viewport_widget.cpp         current viewport state, tools, editing, snapping, and paint orchestration
-src/ui/viewport/viewport_renderer.* committed geometry, grid, control-point, and subdivision drawing
+src/ui/viewport/viewport_renderer.* committed-geometry projection, active-workplane grid/axes, control-point, and subdivision drawing
 src/ui/viewport/viewport_overlay.*  snap markers, tool previews, selection boxes, labels, and erase/trim overlays
 src/ui/main_window.*               menus, tool shelf, preferences, and window wiring
 tests/trim_seam.cpp                current geometry/editing regression coverage
@@ -127,6 +128,15 @@ restores the pre-grab document snapshot. Pressing `B` enters base-point mode:
 the user picks an enabled OSnap point on the selection and moves that anchor
 to another enabled OSnap point, even when global OSnap is off. Ordinary
 selection dragging remains available as a separate path.
+
+The current 3D viewport milestone keeps curves as local `NurbsCurve2D` data
+with each `Shape` carrying a principal workplane and offset. It provides
+Top/Front/Right/Isometric/Perspective views and ray-picking onto active XY/XZ/YZ
+planes. Existing 2D editing, object snaps, trimming, and erase are restricted
+to the active plane so local 2D operations cannot unintentionally distort
+geometry on another plane. `.vignola` persistence and `.3dm` curve interchange
+preserve this mapping; arbitrary spatial NURBS and mesh modeling remain future
+work.
 
 Do not begin by moving lines into arbitrary folders. First identify the owner of each piece of state and the direction of its dependencies.
 
@@ -487,6 +497,7 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 | 7. Application/UI wiring | Complete | Replaced the wide viewport edit-method surface used by `MainWindow` with typed `ViewportCommand` dispatch and `ViewportCommandResult` values for undo/redo, subdivision, join, explode, and rotate. Encapsulated viewport-to-window notifications behind `ViewportUiCallbacks` and `setUiCallbacks`; `MainWindow` remains responsible for menus, controls, preferences, status presentation, and update-session orchestration without geometry algorithms or direct document mutation methods. Build, both registered tests, diff check, and offscreen startup smoke passed. Next: phase 8, add the Layers UI. |
 | 8. Layers UI | Complete | Added `core/serialization/document_serializer.*` and regression coverage for stable layer IDs, object membership, active layer, visibility, locking, rename, reorder, and NURBS-bearing document records. Added the right-panel Layers UI with add/remove, rename, reorder, active-layer selection, visibility/locking controls, and move-selected-objects commands routed through `ViewportWidgetApi`; rendering, sampling, snapping, and editable selection now respect layer state. Version-3 update sessions persist the document/layer model while versions 1 and 2 remain readable. Build, both registered tests, diff check, and offscreen startup smoke passed. Next: phase 9, cleanup and enforce the architecture. |
 | 9. Cleanup and enforcement | Complete | Removed unreachable duplicate viewport rendering, hit-testing, NURBS-evaluation, and preview fallback implementations after confirming their extracted renderer/service/overlay paths are live. Retained only compatibility bridges still referenced by editing, session migration, or regression tests. Added CMake source groups mirroring `src/core`, `src/services`, `src/tools`, and `src/ui`; audited core/services/tools for forbidden UI dependencies and confirmed `NurbsCurve2D` is the sole committed curve representation. Updated the architecture map and README. `git diff --check`, `cmake --build build`, both registered tests, and the offscreen startup smoke passed. Refactoring phases 0–9 are complete; future extraction of the remaining explicit bridges is optional follow-up work. |
+| 10. 3D camera and planar workplanes | Complete | Added per-shape XY/XZ/YZ plane and offset metadata, 3D camera projection with orthographic/perspective presets and orbit, workplane ray-picking, plane-aware rendering/grid/axes, active-plane selection/snapping/erase/dimension anchors, an active-plane offset control, and plane-aware `.vignola`/`.3dm` geometry mapping. Existing curves remain local 2D NURBS; no mesh or arbitrary spatial NURBS was added. `cmake --build build`, all three offscreen CTest suites, `git diff --check`, and offscreen application startup passed. |
 
 ## Required iteration report
 

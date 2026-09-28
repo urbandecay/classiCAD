@@ -12,8 +12,14 @@ representation and conform to Rhino/openNURBS conventions.
   `control_vertex_count + order - 2`; do not store the two redundant outer
   entries from the mathematical full knot vector.
 - Store rational curves as Euclidean 2D control-vertex positions plus weights
-  internally. When exporting to Rhino/openNURBS, convert rational vertices to
-  homogeneous form `(weight * x, weight * y, weight * z, weight)` with `z = 0`.
+  internally. `Shape::workPlane` and `Shape::workPlaneOffset` lift those local
+  coordinates onto the world XY, XZ, or YZ plane; legacy records default to
+  XY at offset zero. When exporting to Rhino/openNURBS, lift each CV to world
+  `(x, y, z)` first, then write rational homogeneous form
+  `(weight * x, weight * y, weight * z, weight)`.
+- The current 3D scope supports curves on the three principal workplanes only.
+  Keep local curves as `NurbsCurve2D`; do not add arbitrary spatial NURBS or
+  mesh geometry until their modeling and interchange contracts are designed.
 - Use positive rational weights and nondecreasing knots. Preserve the curve's
   parameter domain when editing, evaluating, or exporting it.
 - Circles and circular arcs must be exact rational degree-2 NURBS curves. Split
@@ -21,8 +27,9 @@ representation and conform to Rhino/openNURBS conventions.
   between adjacent spans, and use the correct circular-arc weights.
 - A Bezier curve is a clamped single-span NURBS with degree equal to the number
   of control vertices minus one. A polyline is an open clamped degree-1 NURBS.
-- The renderer, hit-testing, control-point display, transforms, and future
-  export code must use the stored NURBS curve as their source of truth. Direct
+- The renderer, hit-testing, control-point display, transforms, and export code
+  must use the stored NURBS curve plus its workplane mapping as their source of
+  truth. Direct
   `QPainterPath`, ellipse, or cubic approximations are preview/fallback logic
   only and must not replace committed curve data.
 - Do not silently merge separate curve objects. A future Join/PolyCurve command

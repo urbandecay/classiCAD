@@ -648,6 +648,8 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("tool"), legacyGeometryTypeValue);
     object.insert(QStringLiteral("points"), pointsToJson(shape.points));
     object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
+    object.insert(QStringLiteral("workPlane"), static_cast<int>(shape.workPlane));
+    object.insert(QStringLiteral("workPlaneOffset"), shape.workPlaneOffset);
     object.insert(QStringLiteral("arcMode"), static_cast<int>(shape.arcMode));
     object.insert(QStringLiteral("arcSweep"), shape.arcSweep);
 
@@ -709,6 +711,22 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     }
 
     const QJsonObject object = value.toObject();
+    WorkPlane workPlane = WorkPlane::XY;
+    const QJsonValue workPlaneValue = object.value(QStringLiteral("workPlane"));
+    if (!workPlaneValue.isUndefined() &&
+        (!workPlaneValue.isDouble() ||
+         !workPlaneFromValue(workPlaneValue.toInt(-1), &workPlane))) {
+        return false;
+    }
+    const QJsonValue workPlaneOffsetValue =
+        object.value(QStringLiteral("workPlaneOffset"));
+    const qreal workPlaneOffset = workPlaneOffsetValue.isUndefined()
+                                      ? 0.0
+                                      : workPlaneOffsetValue.toDouble(
+                                            std::numeric_limits<qreal>::quiet_NaN());
+    if (!std::isfinite(workPlaneOffset)) {
+        return false;
+    }
     GeometryType geometryType = GeometryType::Invalid;
     const QJsonValue geometryTypeValue = object.value(QStringLiteral("geometryType"));
     if (!geometryTypeValue.isUndefined()) {
@@ -900,6 +918,8 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
                                             .toString()
                                             .toLatin1())
                                   : QByteArray{};
+    shape->workPlane = workPlane;
+    shape->workPlaneOffset = workPlaneOffset;
     return true;
 }
 

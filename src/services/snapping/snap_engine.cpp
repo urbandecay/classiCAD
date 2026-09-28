@@ -938,6 +938,12 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             continue;
         }
         const Shape &shape = document[shapeIndex];
+        if (!workPlaneMatches(shape.workPlane,
+                              shape.workPlaneOffset,
+                              transform.workPlane(),
+                              transform.workPlaneOffset())) {
+            continue;
+        }
         if (isDimensionGeometryType(shape.geometryType)) {
             continue;
         }
@@ -1266,6 +1272,12 @@ QVector<SnapCandidate> SnapEngine::perpendicularCandidates(
             continue;
         }
         const Shape &shape = document[shapeIndex];
+        if (!workPlaneMatches(shape.workPlane,
+                              shape.workPlaneOffset,
+                              transform.workPlane(),
+                              transform.workPlaneOffset())) {
+            continue;
+        }
         if (shape.geometryType == GeometryType::Ellipse) {
             if (validateNurbsCurve(shape.nurbs)) {
                 candidates += perpendicularCandidatesForNurbsCurve(shape.nurbs, origin);
@@ -1382,7 +1394,14 @@ QVector<SnapCandidate> SnapEngine::tangentCandidates(
             !document.isObjectVisible(document.objectIdAt(shapeIndex))) {
             continue;
         }
-        candidates += tangentCandidatesForShape(document[shapeIndex],
+        const Shape &shape = document[shapeIndex];
+        if (!workPlaneMatches(shape.workPlane,
+                              shape.workPlaneOffset,
+                              transform.workPlane(),
+                              transform.workPlaneOffset())) {
+            continue;
+        }
+        candidates += tangentCandidatesForShape(shape,
                                                 origin,
                                                 transform,
                                                 viewportSize);
@@ -1399,6 +1418,12 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
     QVector<SnapCandidate> candidates;
     constexpr qreal epsilon = 1.0e-9;
     if (isDimensionGeometryType(shape.geometryType)) {
+        return candidates;
+    }
+    if (!workPlaneMatches(shape.workPlane,
+                          shape.workPlaneOffset,
+                          transform.workPlane(),
+                          transform.workPlaneOffset())) {
         return candidates;
     }
     const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
@@ -1534,6 +1559,12 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         }
 
         const Shape &shape = document[shapeIndex];
+        if (!workPlaneMatches(shape.workPlane,
+                              shape.workPlaneOffset,
+                              transform.workPlane(),
+                              transform.workPlaneOffset())) {
+            continue;
+        }
         if (isDimensionGeometryType(shape.geometryType)) {
             continue;
         }

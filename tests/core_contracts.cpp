@@ -440,6 +440,15 @@ int main(int argc, char **argv)
     passed &= check(serialized.value(QStringLiteral("tool")).toInt(-1) == 6,
                     "new sessions must retain the legacy compatibility field");
 
+    Shape xzCircle = circle;
+    xzCircle.workPlane = WorkPlane::XZ;
+    xzCircle.workPlaneOffset = 12.5;
+    Shape restoredXzCircle;
+    passed &= check(shapeFromJson(shapeToJson(xzCircle), &restoredXzCircle) &&
+                        restoredXzCircle.workPlane == WorkPlane::XZ &&
+                        qFuzzyCompare(restoredXzCircle.workPlaneOffset + 1.0, 13.5),
+                    "geometry serialization must preserve a curve's construction plane and offset");
+
     const QJsonObject serializedEllipse = shapeToJson(ellipse);
     passed &= check(serializedEllipse.value(QStringLiteral("geometryType")).toInt(-1) == 9 &&
                         serializedEllipse.value(QStringLiteral("tool")).toInt(-1) == 0,
@@ -894,6 +903,35 @@ int main(int argc, char **argv)
                                roundTripWorld.y() - serviceWorldPoint.y()) <= 1.0e-9,
                     "viewport transform must preserve world/screen round trips");
 
+    ViewportTransform xzTransform;
+    xzTransform.setWorkPlane(WorkPlane::XZ, 7.0);
+    xzTransform.setViewPreset(ViewportViewPreset::Front);
+    const QPointF xzPoint(14.0, -9.0);
+    const QPointF xzScreen = xzTransform.worldToScreen(xzPoint, viewportSize);
+    const QPointF xzRoundTrip = xzTransform.screenToWorld(xzScreen, viewportSize);
+    passed &= check(std::hypot(xzRoundTrip.x() - xzPoint.x(),
+                               xzRoundTrip.y() - xzPoint.y()) <= 1.0e-9,
+                    "front view must project and pick points on the offset XZ workplane");
+    xzTransform.setViewPreset(ViewportViewPreset::Isometric);
+    const QPointF isoScreen = xzTransform.worldToScreen(xzPoint, viewportSize);
+    const QPointF isoRoundTrip = xzTransform.screenToWorld(isoScreen, viewportSize);
+    passed &= check(std::hypot(isoRoundTrip.x() - xzPoint.x(),
+                               isoRoundTrip.y() - xzPoint.y()) <= 1.0e-8,
+                    "isometric view must ray-pick back onto the active workplane");
+    xzTransform.setViewPreset(ViewportViewPreset::Front);
+    QPointF edgeOnPick;
+    passed &= check(!xzTransform.screenToWorkPlane(QPointF(320.0, 240.0),
+                                                   viewportSize,
+                                                   WorkPlane::XY,
+                                                   0.0,
+                                                   &edgeOnPick),
+                    "a workplane viewed edge-on must report that screen points cannot be picked onto it");
+    const Point3D xzWorldPoint = workPlanePointToWorld(xzPoint, WorkPlane::XZ, 7.0);
+    passed &= check(xzWorldPoint.x == xzPoint.x() && xzWorldPoint.y == 7.0 &&
+                        xzWorldPoint.z == xzPoint.y() &&
+                        worldPointToWorkPlane(xzWorldPoint, WorkPlane::XZ) == xzPoint,
+                    "2D NURBS coordinates must lift consistently into world XYZ on XZ");
+
     Document serviceDocument;
     serviceDocument.append(lineShape);
     CurveSampler sampler;
@@ -920,6 +958,51 @@ int main(int argc, char **argv)
                                            viewportTransform,
                                            viewportSize) == 0,
                     "curve hit tester must hit committed NURBS geometry");
+
+    Shape xzLine = lineShape;
+    xzLine.workPlane = WorkPlane::XZ;
+    Document xzDocument;
+    xzDocument.append(xzLine);
+    passed &= check(hitTester.hitTestShape(xzDocument,
+                                           viewportTransform.worldToScreen(
+                                               QPointF(5.0, 0.0), viewportSize),
+                                           viewportTransform,
+                                           viewportSize) == -1,
+                    "XY-plane selection must not treat an XZ curve as local XY geometry");
+    ViewportTransform frontTransform;
+    frontTransform.setWorkPlane(WorkPlane::XZ);
+    frontTransform.setViewPreset(ViewportViewPreset::Front);
+    const QPointF frontLineScreen = frontTransform.worldToScreen(QPointF(5.0, 0.0),
+                                                                 viewportSize);
+    passed &= check(hitTester.hitTestShape(xzDocument,
+                                           frontLineScreen,
+                                           frontTransform,
+                                           viewportSize) == 0,
+                    "front-view selection must hit curves on the active XZ workplane");
+    passed &= check(sampler.sampleDocument(xzDocument,
+                                           viewportTransform,
+                                           viewportSize).isEmpty() &&
+                        sampler.sampleDocument(xzDocument,
+                                               frontTransform,
+                                               viewportSize).size() == 1,
+                    "erase sampling must only include curves on the active workplane");
+    SnapEngine planeSnapEngine;
+    SnapSettings planeSnapSettings;
+    planeSnapSettings.enabled = true;
+    planeSnapSettings.midpoint = false;
+    planeSnapSettings.intersection = false;
+    planeSnapSettings.center = false;
+    planeSnapEngine.setSettings(planeSnapSettings);
+    passed &= check(planeSnapEngine.snapCandidatesForScene(xzDocument,
+                                                           {},
+                                                           viewportTransform,
+                                                           viewportSize).isEmpty() &&
+                        !planeSnapEngine.snapCandidatesForScene(xzDocument,
+                                                                {},
+                                                                frontTransform,
+                                                                viewportSize).isEmpty(),
+                    "object snaps must target only curves on the active workplane");
+
     Document pictureDocument;
     pictureDocument.append(picture);
     const QPointF pictureCenter =

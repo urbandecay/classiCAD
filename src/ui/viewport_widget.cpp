@@ -105,10 +105,13 @@ public:
                    qreal arcSweep,
                    Shape *shape) {
                 return makeToolShape(tool, points, arcMode, arcSweep, shape);
-            });
+        });
         toolContext_.setShapeCommitter([this](ToolId tool, const Shape &shape) {
             recordGeometryChange();
-            shapes_.append(shape);
+            Shape committedShape = shape;
+            committedShape.workPlane = viewportTransform_.workPlane();
+            committedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
+            shapes_.append(committedShape);
             DebugLog::instance().write(QStringLiteral("tool commit tool=%1 shapes=%2")
                                            .arg(toolName(tool))
                                            .arg(shapes_.size()));
@@ -745,6 +748,74 @@ public:
         return arcMode_;
     }
 
+    void setWorkPlane(WorkPlane plane, qreal offset = 0.0) override
+    {
+        if (!std::isfinite(offset)) {
+            return;
+        }
+        const bool planeChanged = viewportTransform_.workPlane() != plane;
+        const bool offsetChanged = !workPlaneMatches(viewportTransform_.workPlane(),
+                                                     viewportTransform_.workPlaneOffset(),
+                                                     plane,
+                                                     offset);
+        if (!planeChanged && !offsetChanged) {
+            return;
+        }
+
+        setTool(Tool::Select);
+        selection_.clear();
+        controlPointIndex_ = -1;
+        currentSnap_ = SnapResult{};
+        currentDragSnap_ = DragSnapResult{};
+        viewportTransform_.setWorkPlane(plane, offset);
+        if (planeChanged) {
+            switch (plane) {
+            case WorkPlane::XY:
+                viewportTransform_.setViewPreset(ViewportViewPreset::Top);
+                break;
+            case WorkPlane::XZ:
+                viewportTransform_.setViewPreset(ViewportViewPreset::Front);
+                break;
+            case WorkPlane::YZ:
+                viewportTransform_.setViewPreset(ViewportViewPreset::Right);
+                break;
+            }
+        }
+        const QPoint localCursor = mapFromGlobal(QCursor::pos());
+        if (rect().contains(localCursor)) {
+            rawCursorWorld_ = screenToWorld(localCursor);
+            cursorWorld_ = rawCursorWorld_;
+        }
+        DebugLog::instance().write(QStringLiteral("work plane changed plane=%1")
+                                       .arg(workPlaneName(plane)));
+        notifyViewStateChanged();
+        update();
+        emitCoordinateUpdate();
+    }
+
+    WorkPlane workPlane() const override
+    {
+        return viewportTransform_.workPlane();
+    }
+
+    qreal workPlaneOffset() const override
+    {
+        return viewportTransform_.workPlaneOffset();
+    }
+
+    void setViewPreset(ViewportViewPreset preset) override
+    {
+        viewportTransform_.setViewPreset(preset);
+        notifyViewStateChanged();
+        update();
+        emitCoordinateUpdate();
+    }
+
+    ViewportViewPreset viewPreset() const override
+    {
+        return viewportTransform_.viewPreset();
+    }
+
     void setControlPointsVisible(bool visible)
     {
         controlPointsVisible_ = visible;
@@ -886,8 +957,16 @@ public:
 
     QString coordinateText() const
     {
-        return QStringLiteral("X %1   Y %2   Zoom %3%")
+        const QString firstAxis = viewportTransform_.workPlane() == WorkPlane::YZ
+                                      ? QStringLiteral("Y")
+                                      : QStringLiteral("X");
+        const QString secondAxis = viewportTransform_.workPlane() == WorkPlane::XY
+                                       ? QStringLiteral("Y")
+                                       : QStringLiteral("Z");
+        return QStringLiteral("%1 %2   %3 %4   Zoom %5%")
+            .arg(firstAxis)
             .arg(lastWorldPosition_.x(), 0, 'f', 2)
+            .arg(secondAxis)
             .arg(lastWorldPosition_.y(), 0, 'f', 2)
             .arg(zoom_ * 100.0, 0, 'f', 0);
     }
@@ -1505,6 +1584,8 @@ public:
                      0.0,
                      {},
                      components};
+        joined.workPlane = viewportTransform_.workPlane();
+        joined.workPlaneOffset = viewportTransform_.workPlaneOffset();
         const ObjectId joinedObjectId = shapes_.insert(insertIndex, joined);
 
         joinActive_ = false;
@@ -1618,6 +1699,8 @@ public:
                     0.0,
                     {},
                     {component}};
+                componentObject.geometry.workPlane = source.workPlane;
+                componentObject.geometry.workPlaneOffset = source.workPlaneOffset;
                 explodedObjects.append(componentObject);
                 explodedSelectionIndices.append(newIndex);
             }
@@ -1828,8 +1911,8 @@ public:
         document_ = std::move(restoredDocument);
         normalizeDisconnectedPolyCurveObjects();
         resetForDocumentReplacement();
-        pan_ = QPointF(0.0, 0.0);
-        zoom_ = 1.0;
+        viewportTransform_.resetView();
+        notifyViewStateChanged();
         setCursor(Qt::ArrowCursor);
         update();
         emitCoordinateUpdate();
@@ -1860,8 +1943,8 @@ public:
     {
         document_ = Document{};
         resetForDocumentReplacement();
-        pan_ = QPointF(0.0, 0.0);
-        zoom_ = 1.0;
+        viewportTransform_.resetView();
+        notifyViewStateChanged();
         setCursor(Qt::ArrowCursor);
         update();
         emitCoordinateUpdate();
@@ -2067,15 +2150,16 @@ protected:
         } else if (isEraseLikeTool(activeTool_)) {
             drawErasePreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
-            drawShape(painter,
-                      Shape{geometryTypeForTool(activeTool_),
-                            pendingPoints_,
-                            Shape::NurbsCurve2D{},
-                            ArcMode::TwoPoint,
-                            0.0,
-                            {},
-                            {}},
-                      true);
+            Shape previewShape{geometryTypeForTool(activeTool_),
+                               pendingPoints_,
+                               Shape::NurbsCurve2D{},
+                               ArcMode::TwoPoint,
+                               0.0,
+                               {},
+                               {}};
+            previewShape.workPlane = viewportTransform_.workPlane();
+            previewShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
+            drawShape(painter, previewShape, true);
         }
 
         if ((grabActive_ || duplicateActive_ || activeTool_ == Tool::Scale ||
@@ -2115,7 +2199,16 @@ protected:
     void mousePressEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
-        const QPointF rawWorldPosition = screenToWorld(screenPosition);
+        QPointF rawWorldPosition;
+        const bool worldPositionValid = viewportTransform_.screenToWorkPlane(
+            screenPosition,
+            size(),
+            viewportTransform_.workPlane(),
+            viewportTransform_.workPlaneOffset(),
+            &rawWorldPosition);
+        if (!worldPositionValid) {
+            rawWorldPosition = {};
+        }
         const QPointF worldPosition = constrainLinePoint(rawWorldPosition);
         DebugLog::instance().write(
             QStringLiteral("mousePress button=%1 screen=%2 worldRaw=%3 worldUsed=%4 tool=%5 lineActive=%6 ortho=%7 panButton=%8 modifiers=0x%9 snap=%10")
@@ -2129,6 +2222,12 @@ protected:
                 .arg(inputButtonName(panButton_))
                 .arg(static_cast<int>(event->modifiers()), 0, 16)
                 .arg(snapTypeName(currentSnap_.type)));
+
+        if (!worldPositionValid && event->button() == Qt::LeftButton &&
+            event->button() != panButton_) {
+            event->ignore();
+            return;
+        }
 
         if (duplicateActive_) {
             rawCursorWorld_ = rawWorldPosition;
@@ -2251,11 +2350,15 @@ protected:
         if (event->button() == panButton_ ||
             (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::AltModifier))) {
             panning_ = true;
+            orbiting_ = event->button() == panButton_ &&
+                        event->modifiers().testFlag(Qt::ShiftModifier);
             panMoved_ = false;
             panStartPosition_ = screenPosition.toPoint();
             lastMousePosition_ = screenPosition.toPoint();
-            DebugLog::instance().write(QStringLiteral("mousePress branch=start-pan at=%1")
-                                           .arg(pointText(screenPosition)));
+            DebugLog::instance().write(
+                QStringLiteral("mousePress branch=start-%1 at=%2")
+                    .arg(orbiting_ ? QStringLiteral("orbit") : QStringLiteral("pan"))
+                    .arg(pointText(screenPosition)));
             setCursor(Qt::ClosedHandCursor);
             return;
         }
@@ -2554,6 +2657,8 @@ protected:
                                  0.0,
                                  {},
                                  {}};
+            completedShape.workPlane = viewportTransform_.workPlane();
+            completedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
             if (isRectangleTool(activeTool_)) {
                 completedShape.points = makeRectanglePoints(
                     rectangleModeForTool(activeTool_), pendingPoints_);
@@ -2617,8 +2722,39 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
+        if (panning_) {
+            const QPoint current = screenPosition.toPoint();
+            const QPoint delta = current - lastMousePosition_;
+            const QPoint totalDelta = current - panStartPosition_;
+            if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
+                panMoved_ = true;
+            }
+            if (orbiting_) {
+                const ViewportViewPreset previousPreset = viewportTransform_.viewPreset();
+                viewportTransform_.orbitByPixels(QPointF(delta));
+                if (previousPreset != viewportTransform_.viewPreset()) {
+                    notifyViewStateChanged();
+                }
+            } else {
+                viewportTransform_.panByPixels(QPointF(delta), size());
+            }
+            lastMousePosition_ = current;
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
         eraseCursorScreen_ = screenPosition;
-        rawCursorWorld_ = screenToWorld(screenPosition);
+        if (!viewportTransform_.screenToWorkPlane(screenPosition,
+                                                  size(),
+                                                  viewportTransform_.workPlane(),
+                                                  viewportTransform_.workPlaneOffset(),
+                                                  &rawCursorWorld_)) {
+            cursorValid_ = false;
+            currentSnap_ = SnapResult{};
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
         cursorWorld_ = constrainLinePoint(rawCursorWorld_);
         lastWorldPosition_ = cursorWorld_;
         cursorValid_ = true;
@@ -2644,17 +2780,6 @@ protected:
         if (!panning_ && activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
             pendingPoints_.size() >= 2) {
             updateArcPreviewTracking(cursorWorld_);
-        }
-
-        if (panning_) {
-            const QPoint current = screenPosition.toPoint();
-            const QPoint delta = current - lastMousePosition_;
-            const QPoint totalPanDelta = current - panStartPosition_;
-            if (std::hypot(totalPanDelta.x(), totalPanDelta.y()) >= 3.0) {
-                panMoved_ = true;
-            }
-            pan_ += QPointF(delta.x() / zoom_, -delta.y() / zoom_);
-            lastMousePosition_ = current;
         }
 
         if (selectionBoxActive_) {
@@ -3088,8 +3213,9 @@ protected:
         }
         if (panning_ && (event->button() == panButton_ || event->button() == Qt::LeftButton)) {
             panning_ = false;
+            orbiting_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
-            DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-pan"));
+            DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-pan-orbit"));
         }
         panMoved_ = false;
 
@@ -4209,6 +4335,12 @@ private:
                 if (!document_.isObjectEditable(objectId)) {
                     continue;
                 }
+                if (!workPlaneMatches(shapes_[index].workPlane,
+                                      shapes_[index].workPlaneOffset,
+                                      viewportTransform_.workPlane(),
+                                      viewportTransform_.workPlaneOffset())) {
+                    continue;
+                }
                 if (shapeMatchesSelectionBox(shapes_[index],
                                               selectionBox,
                                               crossingSelection)) {
@@ -4620,13 +4752,16 @@ private:
         if (pendingPoints_.size() >= 2) {
             const Shape::NurbsCurve2D curve = makeDegreeOneNurbs(pendingPoints_);
             recordGeometryChange();
-            shapes_.append(Shape{GeometryType::Line,
-                                 pendingPoints_,
-                                 curve,
-                                 ArcMode::TwoPoint,
-                                 0.0,
-                                 {},
-                                 {}});
+            Shape line{GeometryType::Line,
+                       pendingPoints_,
+                       curve,
+                       ArcMode::TwoPoint,
+                       0.0,
+                       {},
+                       {}};
+            line.workPlane = viewportTransform_.workPlane();
+            line.workPlaneOffset = viewportTransform_.workPlaneOffset();
+            shapes_.append(line);
             DebugLog::instance().write(
                 QStringLiteral("finishLineCommand committed dimension=%1 degree=%2 order=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7 shapes=%8")
                     .arg(curve.dimension)
@@ -8905,6 +9040,9 @@ private:
 
     void drawControlPoints(QPainter &painter, const Shape &shape, int shapeIndex)
     {
+        const WorkPlane previousPlane = viewportTransform_.workPlane();
+        const qreal previousOffset = viewportTransform_.workPlaneOffset();
+        viewportTransform_.setWorkPlane(shape.workPlane, shape.workPlaneOffset);
         viewportOverlay_.drawControlPoints(painter,
                                            shape,
                                            size(),
@@ -8912,6 +9050,7 @@ private:
                                            selectedShapeIndex_,
                                            draggingControlPoint_,
                                            controlPointIndex_);
+        viewportTransform_.setWorkPlane(previousPlane, previousOffset);
     }
 
     void drawGrid(QPainter &painter)
@@ -8946,11 +9085,15 @@ private:
                                const QVector<double> &parameters,
                                bool preview)
     {
+        const WorkPlane previousPlane = viewportTransform_.workPlane();
+        const qreal previousOffset = viewportTransform_.workPlaneOffset();
+        viewportTransform_.setWorkPlane(shape.workPlane, shape.workPlaneOffset);
         viewportOverlay_.drawSubdivisionPoints(painter,
                                                shape,
                                                parameters,
                                                size(),
                                                preview);
+        viewportTransform_.setWorkPlane(previousPlane, previousOffset);
     }
 
     void drawPointToolPreview(QPainter &painter)
@@ -9025,6 +9168,9 @@ private:
                    const QString &layerLineType = QString(),
                    qreal layerLineWeightMm = 0.0)
     {
+        const WorkPlane previousPlane = viewportTransform_.workPlane();
+        const qreal previousOffset = viewportTransform_.workPlaneOffset();
+        viewportTransform_.setWorkPlane(shape.workPlane, shape.workPlaneOffset);
         viewportRenderer_.drawShape(painter,
                                     shape,
                                     size(),
@@ -9034,6 +9180,7 @@ private:
                                     layerColor,
                                     layerLineType,
                                     layerLineWeightMm);
+        viewportTransform_.setWorkPlane(previousPlane, previousOffset);
     }
 
     void emitCoordinateUpdate()
@@ -9043,11 +9190,22 @@ private:
         }
     }
 
+    void notifyViewStateChanged()
+    {
+        if (viewStateUpdate_) {
+            viewStateUpdate_(viewportTransform_.workPlane(),
+                             viewportTransform_.workPlaneOffset(),
+                             viewportTransform_.viewPreset());
+        }
+    }
+
 private:
     Shape pictureShapeForCorner(const QPointF &cursorCorner) const
     {
         Shape picture;
         picture.geometryType = GeometryType::Picture;
+        picture.workPlane = viewportTransform_.workPlane();
+        picture.workPlaneOffset = viewportTransform_.workPlaneOffset();
         if (pendingPictureImage_.isNull() || pendingPoints_.isEmpty()) {
             return picture;
         }
@@ -9122,6 +9280,8 @@ private:
                      arcSweep,
                      {},
                      {}};
+        result.workPlane = viewportTransform_.workPlane();
+        result.workPlaneOffset = viewportTransform_.workPlaneOffset();
         if (isRectangleTool(tool)) {
             result.points = makeRectanglePoints(rectangleModeForTool(tool), points);
             if (result.points.size() != 4) {
@@ -9275,6 +9435,7 @@ private:
     QPointF trimHoverScreenPosition_{0.0, 0.0};
     qreal &zoom_;
     bool panning_ = false;
+    bool orbiting_ = false;
     bool panMoved_ = false;
     QPoint panStartPosition_;
     Qt::MouseButton panButton_ = Qt::MiddleButton;

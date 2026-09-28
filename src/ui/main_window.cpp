@@ -512,7 +512,7 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override
     {
-        if (maybeSaveDocument()) {
+        if (updateRestartInProgress_ || maybeSaveDocument()) {
             event->accept();
         } else {
             event->ignore();
@@ -758,9 +758,12 @@ private:
                     updateProcess_ = nullptr;
                     process->deleteLater();
                     statusBar()->showMessage(QStringLiteral("Update complete — restarting classiCAD"));
-                    QTimer::singleShot(0, []() {
-                        QCoreApplication::quit();
-                    });
+                    // The scene is already preserved in the temporary JSON
+                    // update session. Close this old window without invoking
+                    // the normal unsaved-document prompt; the restarted
+                    // process will restore that session.
+                    updateRestartInProgress_ = true;
+                    close();
                 });
 
         process->start(QStringLiteral("cmake"),
@@ -3057,6 +3060,7 @@ private:
     QString currentProjectPath_;
     bool documentModified_ = false;
     bool suppressDirtyTracking_ = false;
+    bool updateRestartInProgress_ = false;
     QAction *undoAction_ = nullptr;
     QAction *redoAction_ = nullptr;
     QAction *subdivideAction_ = nullptr;

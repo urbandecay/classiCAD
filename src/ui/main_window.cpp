@@ -43,6 +43,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QPixmap>
+#include <QShortcut>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -376,6 +377,16 @@ private:
         navigationLayout->addRow(QStringLiteral("Pan with"), panButtonCombo_);
         layout->addWidget(navigationBox);
 
+        auto *modelingBox = new QGroupBox(QStringLiteral("Modeling Shortcuts"));
+        auto *modelingLayout = new QFormLayout(modelingBox);
+        modelingLayout->addRow(QStringLiteral("Scale 1D"),
+                               new QLabel(QStringLiteral("S, then 1"), modelingBox));
+        modelingLayout->addRow(QStringLiteral("Scale 2D"),
+                               new QLabel(QStringLiteral("S, then 2"), modelingBox));
+        modelingLayout->addRow(QStringLiteral("Control Points"),
+                               new QLabel(QStringLiteral("C, then P (toggle)"), modelingBox));
+        layout->addWidget(modelingBox);
+
         auto *hint = new QLabel(QStringLiteral(
             "Choose which mouse button pans the 2D viewport. The mouse wheel continues to zoom, "
             "and Alt + Left Mouse Button remains available as an alternate pan shortcut."));
@@ -494,6 +505,7 @@ public:
         createWorkspaceBar();
         createLayerPropertiesBar();
         createMainLayout();
+        createModelingShortcuts();
         loadPreferences();
         applyTheme();
     }
@@ -897,6 +909,36 @@ private:
                 .arg(scaleModeName(mode)));
     }
 
+    void createModelingShortcuts()
+    {
+        if (viewport_ == nullptr) {
+            return;
+        }
+
+        auto *scaleOneDimensionalShortcut =
+            new QShortcut(QKeySequence(QStringLiteral("S,1")), viewport_);
+        scaleOneDimensionalShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(scaleOneDimensionalShortcut, &QShortcut::activated, this, [this]() {
+            startScale(ScaleMode::OneD);
+        });
+
+        auto *scaleTwoDimensionalShortcut =
+            new QShortcut(QKeySequence(QStringLiteral("S,2")), viewport_);
+        scaleTwoDimensionalShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(scaleTwoDimensionalShortcut, &QShortcut::activated, this, [this]() {
+            startScale(ScaleMode::TwoD);
+        });
+
+        auto *controlPointsShortcut =
+            new QShortcut(QKeySequence(QStringLiteral("C,P")), viewport_);
+        controlPointsShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(controlPointsShortcut, &QShortcut::activated, this, [this]() {
+            if (controlPointsButton_ != nullptr) {
+                controlPointsButton_->toggle();
+            }
+        });
+    }
+
     void createScaleToolMenu(QToolButton *button)
     {
         if (button == nullptr) {
@@ -908,7 +950,7 @@ private:
         QAction *twoDimensionalAction = menu->addAction(QStringLiteral("Scale 2D"));
         button->setMenu(menu);
         button->setPopupMode(QToolButton::DelayedPopup);
-        button->setToolTip(QStringLiteral("Scale — hold for 1D or 2D mode"));
+        button->setToolTip(QStringLiteral("Scale — S, then 1 for 1D or 2 for 2D; hold for menu"));
 
         connect(oneDimensionalAction, &QAction::triggered, this, [this]() {
             startScale(ScaleMode::OneD);
@@ -1637,7 +1679,7 @@ private:
         controlPointsButton_ = new QToolButton;
         controlPointsButton_->setObjectName(QStringLiteral("toolButton"));
         controlPointsButton_->setText(QStringLiteral("CP\nPoints"));
-        controlPointsButton_->setToolTip(QStringLiteral("Control Points"));
+        controlPointsButton_->setToolTip(QStringLiteral("Control Points — C, then P to toggle"));
         controlPointsButton_->setCheckable(true);
         controlPointsButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         layout->addWidget(controlPointsButton_);

@@ -102,8 +102,11 @@ geometry transform while their curve structure is retained.
 The 3D viewport grid uses a standalone OpenGL adaptation of Blender's 3D View
 overlay grid shaders. It retains Blender's procedural line generation,
 camera-relative snapping, three-level grid transitions, perspective/ortho
-fades, low-alpha stipple, and additive passes; classiCAD's scene geometry and
-editing overlays continue to use Qt painting. A GPU depth prepass lets scene
+fades, low-alpha stipple, and additive passes. On desktop OpenGL systems, a
+native viewport surface presents the grid, CAD curve strokes, and points directly
+through OpenGL, including dashed Bézier/NURBS control guides. Pictures,
+dimensions, tool previews, and other screen overlays still use Qt painting.
+The offscreen fallback uses the original Qt scene path. A GPU depth prepass lets scene
 curves, points, and picture planes occlude the grid, with Blender-style
 perspective depth bias. The adapted shader sources and upstream references are
 documented in `THIRD_PARTY_NOTICES.md`. The combined

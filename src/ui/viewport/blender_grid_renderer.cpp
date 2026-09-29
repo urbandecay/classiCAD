@@ -54,15 +54,6 @@ qreal dot(const Point3D &first, const Point3D &second)
     return first.x * second.x + first.y * second.y + first.z * second.z;
 }
 
-Point3D normalized(const Point3D &point)
-{
-    const qreal length = std::sqrt(dot(point, point));
-    if (length <= 1.0e-15) {
-        return {};
-    }
-    return multiply(point, 1.0 / length);
-}
-
 QVector4D colorVector(const QColor &color, qreal opacity)
 {
     return {static_cast<float>(color.redF()),
@@ -77,14 +68,8 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
 {
     const ViewportCameraState camera = transform.cameraState();
     const ViewportCameraPreferences cameraPreferences = transform.cameraPreferences();
-    const qreal cosineYaw = std::cos(camera.yawRadians);
-    const qreal sineYaw = std::sin(camera.yawRadians);
-    const Point3D right{cosineYaw, sineYaw, 0.0};
     const Point3D outward = transform.viewDirection();
-    const Point3D forward = multiply(outward, -1.0);
-    const Point3D up = normalized({right.y * forward.z - right.z * forward.y,
-                                   right.z * forward.x - right.x * forward.z,
-                                   right.x * forward.y - right.y * forward.x});
+    const Point3D up = transform.viewUp();
     const Point3D target = transform.viewTarget();
     Point3D eye = transform.cameraPosition(viewportSize);
     if (!camera.perspective) {
@@ -130,11 +115,24 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
 
 } // namespace
 
+QMatrix4x4 viewportViewProjection(const ViewportTransform &transform,
+                                   const QSize &viewportSize)
+{
+    return viewProjection(transform, viewportSize, nullptr);
+}
+
 BlenderGridRenderer::~BlenderGridRenderer()
 {
-    if (context_.isValid() && surface_.isValid() &&
-        context_.makeCurrent(&surface_)) {
+    const bool current = usingWidgetContext_
+                             ? QOpenGLContext::currentContext() != nullptr
+                             : context_.isValid() && surface_.isValid() &&
+                                   context_.makeCurrent(&surface_);
+    if (current) {
         framebuffer_.reset();
+        resolvedFramebuffer_.reset();
+        if (textureBlitter_.isCreated()) {
+            textureBlitter_.destroy();
+        }
         if (sceneDepthVertexBuffer_.isCreated()) {
             sceneDepthVertexBuffer_.destroy();
         }
@@ -146,7 +144,9 @@ BlenderGridRenderer::~BlenderGridRenderer()
         }
         program_.removeAllShaders();
         sceneDepthProgram_.removeAllShaders();
-        context_.doneCurrent();
+        if (!usingWidgetContext_) {
+            context_.doneCurrent();
+        }
     }
 }
 
@@ -184,9 +184,15 @@ bool BlenderGridRenderer::initialize()
         return false;
     }
 
+    const bool ready = initializeResources();
+    context_.doneCurrent();
+    return ready;
+}
+
+bool BlenderGridRenderer::initializeResources()
+{
     if (!initializeOpenGLFunctions()) {
         qWarning() << "Blender grid renderer: OpenGL 3.3 functions unavailable";
-        context_.doneCurrent();
         return false;
     }
     if (!program_.addShaderFromSourceFile(QOpenGLShader::Vertex,
@@ -195,7 +201,6 @@ bool BlenderGridRenderer::initialize()
                                           QStringLiteral(":/classiCAD/shaders/blender_grid.frag")) ||
         !program_.link()) {
         qWarning().noquote() << "Blender grid shader setup failed:" << program_.log();
-        context_.doneCurrent();
         return false;
     }
     if (!sceneDepthProgram_.addShaderFromSourceFile(
@@ -207,42 +212,25 @@ bool BlenderGridRenderer::initialize()
         !sceneDepthProgram_.link()) {
         qWarning().noquote() << "Viewport scene-depth shader setup failed:"
                              << sceneDepthProgram_.log();
-        context_.doneCurrent();
         return false;
     }
     if (!vertexArray_.create()) {
         qWarning() << "Blender grid renderer: could not create vertex array";
-        context_.doneCurrent();
         return false;
     }
     if (!sceneDepthVertexArray_.create() || !sceneDepthVertexBuffer_.create()) {
         qWarning() << "Blender grid renderer: could not create scene-depth buffers";
-        context_.doneCurrent();
         return false;
     }
     initialized_ = true;
-    context_.doneCurrent();
     return true;
 }
 
-QImage BlenderGridRenderer::render(const ViewportTransform &transform,
-                                   const QSize &viewportSize,
-                                   qreal devicePixelRatio,
-                                   const QVector<Shape> &visibleSceneShapes,
-                                   qreal baseGridStep,
-                                   const BlenderGridAppearance &appearance)
+bool BlenderGridRenderer::ensureFramebuffer(const QSize &pixelSize)
 {
-    if (viewportSize.width() <= 0 || viewportSize.height() <= 0 ||
-        !initialize() ||
-        !context_.makeCurrent(&surface_)) {
-        return {};
-    }
-
-    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
-    const QSize pixelSize(qRound(viewportSize.width() * dpr),
-                          qRound(viewportSize.height() * dpr));
     if (framebuffer_ == nullptr || framebuffer_->size() != pixelSize ||
         framebufferSampleRequest_ != antiAliasingSamples_) {
+        resolvedFramebuffer_.reset();
         framebuffer_.reset();
         QOpenGLFramebufferObjectFormat format;
         format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
@@ -259,15 +247,28 @@ QImage BlenderGridRenderer::render(const ViewportTransform &transform,
                                                                       format);
         }
     }
-    if (!framebuffer_->isValid() || !framebuffer_->bind()) {
-        context_.doneCurrent();
-        return {};
+    return framebuffer_ != nullptr && framebuffer_->isValid();
+}
+
+bool BlenderGridRenderer::renderGridLayer(
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector<Shape> &visibleSceneShapes,
+    qreal baseGridStep,
+    const BlenderGridAppearance &appearance)
+{
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    const QSize pixelSize(qRound(viewportSize.width() * dpr),
+                          qRound(viewportSize.height() * dpr));
+    if (!ensureFramebuffer(pixelSize) || !framebuffer_->bind()) {
+        return false;
     }
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClearDepth(1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    if (antiAliasingSamples_ > 0) {
+    if (framebuffer_->format().samples() > 0) {
         glEnable(GL_MULTISAMPLE);
     } else {
         glDisable(GL_MULTISAMPLE);
@@ -275,27 +276,113 @@ QImage BlenderGridRenderer::render(const ViewportTransform &transform,
 
     const QByteArray depthGeometryKey =
         viewportDepthGeometryCacheKey(visibleSceneShapes);
-    if (!depthGeometryCacheValid_ ||
-        depthGeometryCacheKey_ != depthGeometryKey) {
-        cachedDepthGeometry_ =
-            buildViewportDepthGeometry(visibleSceneShapes);
+    if (!depthGeometryCacheValid_ || depthGeometryCacheKey_ != depthGeometryKey) {
+        cachedDepthGeometry_ = buildViewportDepthGeometry(visibleSceneShapes);
         depthGeometryCacheKey_ = depthGeometryKey;
         depthGeometryCacheValid_ = true;
         uploadSceneDepthGeometry(cachedDepthGeometry_);
     }
     drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
-    const bool rendered = drawGrid(transform,
-                                   viewportSize,
-                                   dpr,
-                                   baseGridStep,
-                                   appearance);
+    return drawGrid(transform, viewportSize, dpr, baseGridStep, appearance);
+}
+
+QImage BlenderGridRenderer::render(const ViewportTransform &transform,
+                                   const QSize &viewportSize,
+                                   qreal devicePixelRatio,
+                                   const QVector<Shape> &visibleSceneShapes,
+                                   qreal baseGridStep,
+                                   const BlenderGridAppearance &appearance)
+{
+    if (viewportSize.width() <= 0 || viewportSize.height() <= 0 ||
+        !initialize() ||
+        !context_.makeCurrent(&surface_)) {
+        return {};
+    }
+
+    const bool rendered = renderGridLayer(transform, viewportSize,
+                                          devicePixelRatio, visibleSceneShapes,
+                                          baseGridStep, appearance);
     QImage image = rendered ? framebuffer_->toImage(true) : QImage();
-    framebuffer_->release();
+    if (framebuffer_ != nullptr && framebuffer_->isBound()) {
+        framebuffer_->release();
+    }
     context_.doneCurrent();
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
     if (!image.isNull()) {
         image.setDevicePixelRatio(dpr);
     }
     return image;
+}
+
+bool BlenderGridRenderer::renderToCurrentFramebuffer(
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector<Shape> &visibleSceneShapes,
+    qreal baseGridStep,
+    const BlenderGridAppearance &appearance)
+{
+    if (viewportSize.isEmpty() || QOpenGLContext::currentContext() == nullptr) {
+        return false;
+    }
+    if (!initializationAttempted_) {
+        initializationAttempted_ = true;
+        usingWidgetContext_ = true;
+        if (!initializeResources()) {
+            return false;
+        }
+    }
+    if (!initialized_ || (!textureBlitter_.isCreated() &&
+                          !textureBlitter_.create())) {
+        return false;
+    }
+
+    GLint destinationFramebuffer = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &destinationFramebuffer);
+    const bool rendered = renderGridLayer(transform, viewportSize,
+                                          devicePixelRatio, visibleSceneShapes,
+                                          baseGridStep, appearance);
+    if (!rendered) {
+        glBindFramebuffer(GL_FRAMEBUFFER,
+                          static_cast<GLuint>(destinationFramebuffer));
+        return false;
+    }
+
+    QOpenGLFramebufferObject *textureSource = framebuffer_.get();
+    if (framebuffer_->format().samples() > 0) {
+        if (resolvedFramebuffer_ == nullptr ||
+            resolvedFramebuffer_->size() != framebuffer_->size()) {
+            QOpenGLFramebufferObjectFormat format;
+            format.setInternalTextureFormat(GL_RGBA8);
+            resolvedFramebuffer_ = std::make_unique<QOpenGLFramebufferObject>(
+                framebuffer_->size(), format);
+        }
+        if (resolvedFramebuffer_ == nullptr ||
+            !resolvedFramebuffer_->isValid()) {
+            glBindFramebuffer(GL_FRAMEBUFFER,
+                              static_cast<GLuint>(destinationFramebuffer));
+            return false;
+        }
+        QOpenGLFramebufferObject::blitFramebuffer(resolvedFramebuffer_.get(),
+                                                  framebuffer_.get());
+        textureSource = resolvedFramebuffer_.get();
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER,
+                      static_cast<GLuint>(destinationFramebuffer));
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    glViewport(0, 0, qRound(viewportSize.width() * dpr),
+               qRound(viewportSize.height() * dpr));
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    textureBlitter_.bind();
+    textureBlitter_.blit(textureSource->texture(), QMatrix4x4(),
+                         QOpenGLTextureBlitter::OriginBottomLeft);
+    textureBlitter_.release();
+    glDisable(GL_BLEND);
+    return true;
 }
 
 void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,

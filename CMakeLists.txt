@@ -14,6 +14,10 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS OpenGL)
 
 set(CLASSICAD_QT_OPENGL_LIBRARIES Qt${QT_VERSION_MAJOR}::OpenGL)
+if (QT_VERSION_MAJOR EQUAL 6)
+    find_package(Qt6 REQUIRED COMPONENTS OpenGLWidgets)
+    list(APPEND CLASSICAD_QT_OPENGL_LIBRARIES Qt6::OpenGLWidgets)
+endif ()
 
 include(FetchContent)
 FetchContent_Declare(
@@ -91,6 +95,8 @@ set(CLASSICAD_VIEWPORT_SUPPORT_SOURCES
     src/ui/viewport/blender_grid_scale.cpp
     src/ui/viewport/blender_grid_shaders.qrc
     src/ui/viewport/viewport_depth_geometry.cpp
+    src/ui/viewport/viewport_gpu_surface.cpp
+    src/ui/viewport/viewport_scene_renderer.cpp
     src/ui/viewport/viewport_renderer.cpp
     src/ui/viewport/viewport_overlay.cpp
     src/ui/viewport/blender_navigation_icons.qrc

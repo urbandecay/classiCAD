@@ -18,7 +18,7 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 | 4. Theme, units, and appearance | Feed grid spacing from explicit document units/grid settings; match axis/grid theme colors, opacity, stipple, and perspective/orthographic fades without hard-coded renderer-only colors. | Complete |
 | 5. Parity regression and interaction validation | Compare a fixed matrix of Blender and classiCAD views (six axis views, isometric ortho, perspective, close/far zoom, pan, and orbit), add durable render/scale regressions, and verify the existing mouse navigation and CPU fallback remain intact. | In progress |
 | 6. Blender camera and navigation parity | Port Blender's viewport projection multiplier, wheel distance step, zoom-to-cursor depth rule, smooth-view timing/easing, and zoom distance range. Compare orbit/pan and saved navigation settings with Blender. | In progress |
-| 7. Native GPU viewport composition | Draw the grid and scene in the widget's GPU presentation path so camera motion does not synchronously read the framebuffer back into a Qt image on every repaint. Retain a tested CPU fallback. | Pending |
+| 7. Native GPU viewport composition | Draw the grid and scene in the widget's GPU presentation path so camera motion does not synchronously read the framebuffer back into a Qt image on every repaint. Retain a tested CPU fallback. | In progress |
 
 ## Stage 1 implementation notes
 
@@ -146,14 +146,43 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   use those values; only the prior exact hard-coded palette is migrated on
   preference load, so edited colors remain untouched.
 - The viewport still uses a 60-unit initial view distance for the CAD scene;
-  Blender's saved startup file opens near 18 units. The current yaw/pitch orbit
-  state and pointer-gesture scaling have not been proven equivalent to
-  Blender's quaternion navigation. The screenshot comparison in Stage 5 and
+  Blender's saved startup file opens near 18 units. Quaternion turntable orbit
+  and quaternion smooth-view interpolation now cross the poles without a pitch
+  clamp. Orbit-start depth selection tests visible shapes on their own offset
+  workplanes, with sampled committed NURBS points supplying curve depth,
+  rather than projecting onto the active construction plane, and
+  pivot changes preserve the perspective eye position. This is sampled CPU
+  depth picking, not a GPU depth-buffer equivalent; Blender's trackball mode
+  and pointer-gesture scaling have not been proven equivalent. The screenshot
+  comparison in Stage 5 and
   native GPU composition in Stage 7 remain required before claiming parity.
 - Validation passed: `cmake --build build -j2`, all four CTest suites,
   `git diff --check`, the XCB/Mesa software-OpenGL interaction test, and a
   five-second offscreen application startup. The offscreen platform cannot
   create an OpenGL context, so it exercised the CPU fallback as expected.
+
+## Stage 7 progress
+
+- A `QOpenGLWidget` now presents the viewport on desktop OpenGL systems. The
+  procedural grid remains in a GPU framebuffer and is resolved/composited into
+  the widget framebuffer without a `toImage()` readback during normal camera
+  navigation. The offscreen/minimal Qt path still uses the previous raster
+  composition and grid fallback.
+- Common committed CAD curves (lines, rectangles, polygons, circles, ellipses,
+  arcs, PolyCurves, Béziers, and NURBS) use an OpenGL stroke pass when their
+  stored geometry and line style support it. The pass caches sampled geometry
+  across camera moves and applies per-shape color and width. Bézier/NURBS
+  control polygon guides use the same pass with a dashed pattern.
+- Qt still paints pictures, dimensions, edit/creation previews, other
+  screen overlays, and noncontinuous layer line styles. Unsupported GL systems
+  use the established Qt rendering path. The native scene stroke path still
+  uses fixed NURBS tessellation rather than the painter's adaptive smooth
+  display setting, so close zoom curve quality needs a direct visual check.
+- Desktop interaction checks cover wheel zoom, pan/orbit, a drawn rectangle,
+  a Bézier with visible control guides, and a point marker. Full build, all
+  four CTest suites, XCB/Mesa interaction check, offscreen startup/fallback,
+  and `git diff --check` passed. Stage 7 remains in progress until
+  remaining scene items and close-zoom curve quality are addressed.
 
 ## Upstream behavioral references
 

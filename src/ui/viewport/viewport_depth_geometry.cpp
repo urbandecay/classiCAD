@@ -97,29 +97,28 @@ void writeCurve(QDataStream &stream, const Shape::NurbsCurve2D &curve)
 
 } // namespace
 
-ViewportDepthGeometry buildViewportDepthGeometry(
-    const QVector<Shape> &visibleSceneShapes)
-{
-    ViewportDepthGeometry geometry;
-    CurveSampler sampler;
+namespace {
 
-    for (const Shape &shape : visibleSceneShapes) {
+void appendShapeDepthGeometry(const Shape &shape,
+                              CurveSampler &sampler,
+                              ViewportDepthGeometry &geometry)
+{
         if (isDimensionGeometryType(shape.geometryType)) {
             // Dimension text and leaders are viewport annotations, not scene
             // surfaces; they are drawn in the foreground overlay pass.
-            continue;
+            return;
         }
         if (shape.geometryType == GeometryType::Point) {
             if (!shape.points.isEmpty()) {
                 geometry.pointVertices.append(asVector(workPlanePointToWorld(
                     shape.points.first(), shape.workPlane, shape.workPlaneOffset)));
             }
-            continue;
+            return;
         }
         if (shape.geometryType == GeometryType::Picture) {
             const QVector<QPointF> corners = pictureFrameCorners(shape);
             if (shape.pictureImage.isNull() || corners.size() != 4) {
-                continue;
+                return;
             }
             const QVector<QVector3D> worldCorners{
                 asVector(workPlanePointToWorld(corners[0], shape.workPlane,
@@ -137,7 +136,7 @@ ViewportDepthGeometry buildViewportDepthGeometry(
             geometry.surfaceVertices.append(worldCorners[0]);
             geometry.surfaceVertices.append(worldCorners[2]);
             geometry.surfaceVertices.append(worldCorners[3]);
-            continue;
+            return;
         }
 
         const QVector<Shape::NurbsCurve2D> curves = sampler.curvesForShape(shape);
@@ -146,6 +145,25 @@ ViewportDepthGeometry buildViewportDepthGeometry(
                                      curve,
                                      &geometry.lineVertices);
         }
+}
+
+} // namespace
+
+ViewportDepthGeometry buildViewportDepthGeometry(const Shape &shape)
+{
+    ViewportDepthGeometry geometry;
+    CurveSampler sampler;
+    appendShapeDepthGeometry(shape, sampler, geometry);
+    return geometry;
+}
+
+ViewportDepthGeometry buildViewportDepthGeometry(
+    const QVector<Shape> &visibleSceneShapes)
+{
+    ViewportDepthGeometry geometry;
+    CurveSampler sampler;
+    for (const Shape &shape : visibleSceneShapes) {
+        appendShapeDepthGeometry(shape, sampler, geometry);
     }
 
     return geometry;

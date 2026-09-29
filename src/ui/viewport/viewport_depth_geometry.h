@@ -19,6 +19,7 @@ struct ViewportDepthGeometry {
 
 ViewportDepthGeometry buildViewportDepthGeometry(
     const QVector<Shape> &visibleSceneShapes);
+ViewportDepthGeometry buildViewportDepthGeometry(const Shape &shape);
 QByteArray viewportDepthGeometryCacheKey(
     const QVector<Shape> &visibleSceneShapes);
 

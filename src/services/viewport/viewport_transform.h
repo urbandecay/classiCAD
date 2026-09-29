@@ -53,6 +53,23 @@ struct ViewportDirectionProjection {
     qreal towardCamera = 0.0;
 };
 
+struct ViewportOrientation {
+    // Qt's QQuaternion stores floats; CAD projection/picking needs qreal precision.
+    qreal w = 1.0;
+    qreal x = 0.0;
+    qreal y = 0.0;
+    qreal z = 0.0;
+
+    static ViewportOrientation fromAxisAngle(qreal axisX, qreal axisY,
+                                              qreal axisZ, qreal radians);
+    static ViewportOrientation slerp(const ViewportOrientation &start,
+                                     const ViewportOrientation &end,
+                                     qreal fraction);
+    ViewportOrientation normalized() const;
+    ViewportOrientation operator*(const ViewportOrientation &other) const;
+    qreal dot(const ViewportOrientation &other) const;
+};
+
 struct ViewportCameraState {
     qreal zoom = 1.0;
     QPointF pan;
@@ -64,6 +81,8 @@ struct ViewportCameraState {
     // Blender's rv3d->dist drives free-angle orthographic grid LOD. The
     // orthographic projection itself remains controlled by zoom.
     qreal gridViewDistance = 60.0;
+    ViewportOrientation orientation;
+    bool hasOrientation = false;
 };
 
 class ViewportTransform final {
@@ -99,6 +118,7 @@ public:
     ViewportViewPreset viewPreset() const;
     ViewportDirectionProjection worldDirectionToView(const Point3D &direction) const;
     Point3D viewDirection() const;
+    Point3D viewUp() const;
     Point3D viewTarget() const;
     // Returns the finite eye position used by the perspective projection.
     Point3D cameraPosition(const QSize &viewportSize) const;
@@ -130,8 +150,7 @@ private:
     qreal workPlaneOffset_ = 0.0;
     Point3D orbitPivot_{};
     ViewportViewPreset viewPreset_ = ViewportViewPreset::Top;
-    qreal yawRadians_ = 0.0;
-    qreal pitchRadians_ = 1.5707963267948966;
+    ViewportOrientation orientation_;
     bool perspective_ = false;
     qreal gridViewDistance_ = 60.0;
     ViewportCameraPreferences cameraPreferences_;

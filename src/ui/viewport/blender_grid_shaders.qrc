@@ -4,5 +4,10 @@
         <file alias="blender_grid.frag">shaders/blender_grid.frag</file>
         <file alias="scene_depth.vert">shaders/scene_depth.vert</file>
         <file alias="scene_depth.frag">shaders/scene_depth.frag</file>
+        <file alias="scene_stroke.vert">shaders/scene_stroke.vert</file>
+        <file alias="scene_stroke.geom">shaders/scene_stroke.geom</file>
+        <file alias="scene_stroke.frag">shaders/scene_stroke.frag</file>
+        <file alias="scene_point.vert">shaders/scene_point.vert</file>
+        <file alias="scene_point.frag">shaders/scene_point.frag</file>
     </qresource>
 </RCC>

@@ -18,6 +18,9 @@
 #include "../tools/tool_registry.h"
 #include "input_helpers.h"
 #include "viewport/blender_grid_renderer.h"
+#include "viewport/viewport_gpu_surface.h"
+#include "viewport/line_type_style.h"
+#include "viewport/viewport_scene_renderer.h"
 #include "viewport/viewport_overlay.h"
 #include "viewport/viewport_renderer.h"
 
@@ -40,6 +43,7 @@
 #include <QKeyEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QResizeEvent>
 #include <QPixmap>
 #include <QSettings>
 #include <QTextStream>
@@ -167,10 +171,6 @@ public:
                     const qreal time = value.toReal();
                     // Blender's smooth view uses 3*t*t - 2*t*t*t.
                     const qreal progress = time * time * (3.0 - 2.0 * time);
-                    const auto interpolateAngle = [progress](qreal start, qreal end) {
-                        constexpr qreal turn = 6.28318530717958647692;
-                        return start + std::remainder(end - start, turn) * progress;
-                    };
                     ViewportCameraState state;
                     const qreal startDistance = 1.0 / navigationAnimationStart_.zoom;
                     const qreal endDistance = 1.0 / navigationAnimationEnd_.zoom;
@@ -188,13 +188,11 @@ public:
                             navigationAnimationEnd_.orbitPivot.y * progress,
                         navigationAnimationStart_.orbitPivot.z * (1.0 - progress) +
                             navigationAnimationEnd_.orbitPivot.z * progress};
-                    state.yawRadians = interpolateAngle(
-                        navigationAnimationStart_.yawRadians,
-                        navigationAnimationEnd_.yawRadians);
-                    state.pitchRadians = navigationAnimationStart_.pitchRadians +
-                                         (navigationAnimationEnd_.pitchRadians -
-                                          navigationAnimationStart_.pitchRadians) *
-                                             progress;
+                    state.orientation = ViewportOrientation::slerp(
+                        navigationAnimationStart_.orientation,
+                        navigationAnimationEnd_.orientation,
+                        progress);
+                    state.hasOrientation = true;
                     state.perspective = navigationAnimationStart_.perspective;
                     state.preset = progress >= 1.0
                                        ? navigationAnimationEnd_.preset
@@ -210,12 +208,35 @@ public:
                     update();
                     emitCoordinateUpdate();
                 });
+        if (ViewportGpuSurface::isSupported()) {
+            gpuSurface_ = new ViewportGpuSurface(this);
+            gpuSurface_->setGeometry(rect());
+            gpuSurface_->setAntiAliasingSamples(
+                blenderGridRenderer_.antiAliasingSamples());
+            gpuSurface_->setDrawCallback(
+                [this](QPainter &painter, BlenderGridRenderer &gridRenderer,
+                       ViewportSceneRenderer &sceneRenderer) {
+                    paintViewport(painter, &gridRenderer, &sceneRenderer);
+                });
+            gpuSurface_->show();
+        }
         DebugLog::instance().write(QStringLiteral("viewport constructed"));
     }
 
     ~ViewportWidget() override
     {
         qApp->removeEventFilter(this);
+    }
+
+    // Navigation updates the GPU surface directly, so its frame uses the
+    // camera state from this event instead of waiting for a parent repaint.
+    void update()
+    {
+        if (gpuSurface_ != nullptr) {
+            gpuSurface_->update();
+        } else {
+            QWidget::update();
+        }
     }
 
     void setTool(ToolId tool)
@@ -983,6 +1004,9 @@ public:
     void setViewportAntiAliasingSamples(int samples) override
     {
         blenderGridRenderer_.setAntiAliasingSamples(samples);
+        if (gpuSurface_ != nullptr) {
+            gpuSurface_->setAntiAliasingSamples(samples);
+        }
         update();
     }
 
@@ -2090,6 +2114,26 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override
     {
+        if (gpuSurface_ != nullptr) {
+            return;
+        }
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        paintViewport(painter, nullptr, nullptr);
+    }
+
+    void resizeEvent(QResizeEvent *event) override
+    {
+        if (gpuSurface_ != nullptr) {
+            gpuSurface_->setGeometry(rect());
+        }
+        QWidget::resizeEvent(event);
+    }
+
+    void paintViewport(QPainter &painter,
+                       BlenderGridRenderer *nativeRenderer,
+                       ViewportSceneRenderer *sceneRenderer)
+    {
         updateAssociativeDimensions(document_, curveSampler_);
         const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
         viewportRenderer_.setGridBaseStep(baseGridStep);
@@ -2117,24 +2161,38 @@ protected:
             }
             visibleDepthShapes.append(std::move(depthShape));
         }
-        const QImage gpuViewportBackground = blenderGridRenderer_.render(
-            viewportTransform_, size(), devicePixelRatioF(), visibleDepthShapes,
-            baseGridStep, gridAppearance_);
-        const qreal devicePixelRatio = std::max<qreal>(devicePixelRatioF(), 1.0);
-        const QSize scenePixelSize(qRound(size().width() * devicePixelRatio),
-                                   qRound(size().height() * devicePixelRatio));
-        QImage committedSceneLayer(scenePixelSize,
-                                   QImage::Format_ARGB32_Premultiplied);
-        committedSceneLayer.setDevicePixelRatio(devicePixelRatio);
-        committedSceneLayer.fill(Qt::transparent);
-        QPainter scenePainter(&committedSceneLayer);
-        scenePainter.setRenderHint(QPainter::Antialiasing, true);
+        QImage gpuViewportBackground;
+        QImage committedSceneLayer;
+        QPainter rasterScenePainter;
+        if (nativeRenderer == nullptr) {
+            gpuViewportBackground = blenderGridRenderer_.render(
+                viewportTransform_, size(), devicePixelRatioF(), visibleDepthShapes,
+                baseGridStep, gridAppearance_);
+            const qreal devicePixelRatio =
+                std::max<qreal>(devicePixelRatioF(), 1.0);
+            const QSize scenePixelSize(qRound(size().width() * devicePixelRatio),
+                                       qRound(size().height() * devicePixelRatio));
+            committedSceneLayer = QImage(scenePixelSize,
+                                         QImage::Format_ARGB32_Premultiplied);
+            committedSceneLayer.setDevicePixelRatio(devicePixelRatio);
+            committedSceneLayer.fill(Qt::transparent);
+            rasterScenePainter.begin(&committedSceneLayer);
+            rasterScenePainter.setRenderHint(QPainter::Antialiasing, true);
+        } else {
+            painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
+        }
+        QPainter &scenePainter = nativeRenderer == nullptr
+                                     ? rasterScenePainter
+                                     : painter;
+        QVector<ViewportSceneStroke> gpuStrokes;
+        int visibleShapeIndex = 0;
 
         for (int index = 0; index < shapes_.size(); ++index) {
             const ObjectId objectId = shapes_.objectIdAt(index);
             if (!document_.isObjectVisible(objectId)) {
                 continue;
             }
+            const Shape &visibleShape = visibleDepthShapes[visibleShapeIndex++];
             if (isDimensionGeometryType(shapes_[index].geometryType)) {
                 continue;
             }
@@ -2159,6 +2217,59 @@ protected:
             const bool rotatePreview = activeTool_ == Tool::Rotate &&
                                         rotateStep_ == 2 &&
                                         rotateShapeIndices_.contains(objectId);
+            const GeometryType geometryType = visibleShape.geometryType;
+            const bool gpuStrokeType =
+                geometryType == GeometryType::Point ||
+                geometryType == GeometryType::Line ||
+                geometryType == GeometryType::Rectangle ||
+                geometryType == GeometryType::Polygon ||
+                geometryType == GeometryType::Circle ||
+                geometryType == GeometryType::Ellipse ||
+                geometryType == GeometryType::Arc ||
+                geometryType == GeometryType::PolyCurve ||
+                geometryType == GeometryType::Bezier ||
+                geometryType == GeometryType::Nurbs;
+            const bool nativeCurve = sceneRenderer != nullptr &&
+                                     gpuStrokeType &&
+                                     (geometryType == GeometryType::Point ||
+                                      selected || scalePreview || rotatePreview ||
+                                      layerLineTypePattern(layerLineType).isEmpty()) &&
+                                     (geometryType != GeometryType::Arc ||
+                                      validateNurbsCurve(visibleShape.nurbs)) &&
+                                     (geometryType != GeometryType::Circle ||
+                                      validateNurbsCurve(visibleShape.nurbs)) &&
+                                     (geometryType != GeometryType::Ellipse ||
+                                      validateNurbsCurve(visibleShape.nurbs)) &&
+                                     ((geometryType != GeometryType::Bezier &&
+                                       geometryType != GeometryType::Nurbs) ||
+                                      validateNurbsCurve(visibleShape.nurbs)) &&
+                                     (geometryType != GeometryType::PolyCurve ||
+                                      !visibleShape.components.isEmpty());
+            if (nativeCurve) {
+                const bool highlighted = selected || scalePreview || rotatePreview;
+                const qreal storedWidth = layerLineWeightMm > 0.0
+                                              ? std::clamp(layerLineWeightMm * 6.0,
+                                                           1.0, 10.0)
+                                              : 2.0;
+                if (geometryType == GeometryType::Bezier ||
+                    geometryType == GeometryType::Nurbs) {
+                    gpuStrokes.append({&visibleShape,
+                                       QColor(QStringLiteral("#8aa7c7")),
+                                       1.0f, true});
+                }
+                gpuStrokes.append({&visibleShape,
+                                   highlighted ? QColor(QStringLiteral("#5da9e9"))
+                                               : layerColor.isValid()
+                                                     ? layerColor
+                                                     : QColor(QStringLiteral("#d28b45")),
+                                   static_cast<float>(highlighted ? 3.5
+                                                                  : storedWidth),
+                                   false,
+                                   geometryType == GeometryType::Point
+                                       ? (highlighted ? 10.0f : 9.0f)
+                                       : 0.0f});
+                continue;
+            }
             if (scalePreview) {
                 Shape previewShape = shapes_[index];
                 scaleShapeGeometry(&previewShape,
@@ -2198,23 +2309,40 @@ protected:
                           layerLineWeightMm);
             }
         }
-        scenePainter.end();
-
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        if (gpuViewportBackground.isNull()) {
-            painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
-            drawGrid(painter);
-            drawOrigin(painter);
+        if (nativeRenderer != nullptr) {
+            painter.beginNativePainting();
+            const bool sceneDrawn = sceneRenderer == nullptr ||
+                                    sceneRenderer->draw(gpuStrokes,
+                                                        viewportTransform_, size(),
+                                                        devicePixelRatioF());
+            const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
+                viewportTransform_, size(), devicePixelRatioF(),
+                visibleDepthShapes, baseGridStep, gridAppearance_);
+            painter.endNativePainting();
+            if (!sceneDrawn) {
+                for (const ViewportSceneStroke &stroke : gpuStrokes) {
+                    if (stroke.shape != nullptr && !stroke.controlGuide) {
+                        drawShape(painter, *stroke.shape, false,
+                                  stroke.color == QColor(QStringLiteral("#5da9e9")),
+                                  true, stroke.color);
+                    }
+                }
+            }
+            if (!gridDrawn) {
+                drawGrid(painter);
+                drawOrigin(painter);
+            }
         } else {
+            rasterScenePainter.end();
             painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
-        }
-        painter.drawImage(QPoint(0, 0), committedSceneLayer);
-        if (!gpuViewportBackground.isNull()) {
-            // The GPU layer is transparent and contains only fragments that
-            // pass against scene depth, so it composites over scene pixels
-            // only when the grid is in front.
-            painter.drawImage(QPoint(0, 0), gpuViewportBackground);
+            if (gpuViewportBackground.isNull()) {
+                drawGrid(painter);
+                drawOrigin(painter);
+            }
+            painter.drawImage(QPoint(0, 0), committedSceneLayer);
+            if (!gpuViewportBackground.isNull()) {
+                painter.drawImage(QPoint(0, 0), gpuViewportBackground);
+            }
         }
 
         for (int index = 0; index < shapes_.size(); ++index) {
@@ -4011,19 +4139,14 @@ private:
     {
         const ViewportNavigationPreferences preferences =
             viewportTransform_.navigationPreferences();
-        QPointF workPlanePosition;
+        Point3D depthPoint;
         if (preferences.useMouseDepthNavigate &&
-            hitTestShape(screenPosition) >= 0 &&
-            viewportTransform_.screenToWorkPlane(
-                screenPosition,
-                size(),
-                viewportTransform_.workPlane(),
-                viewportTransform_.workPlaneOffset(),
-                &workPlanePosition)) {
-            viewportTransform_.setOrbitPivotPreservingView(
-                workPlanePointToWorld(workPlanePosition,
-                                      viewportTransform_.workPlane(),
-                                      viewportTransform_.workPlaneOffset()));
+            curveHitTester_.hitTestVisibleDepth(document_,
+                                                 screenPosition,
+                                                 viewportTransform_,
+                                                 size(),
+                                                 &depthPoint)) {
+            viewportTransform_.setOrbitPivotPreservingView(depthPoint);
             return;
         }
 
@@ -4089,7 +4212,7 @@ private:
         const ViewportCameraState original = viewportTransform_.cameraState();
         setTarget();
         const ViewportCameraState target = viewportTransform_.cameraState();
-        constexpr qreal angleTolerance = 1.0e-8;
+        constexpr qreal angleTolerance = 1.0e-7;
         const bool poseChanged =
             std::abs(original.zoom - target.zoom) > 1.0e-8 ||
             std::abs(original.gridViewDistance - target.gridViewDistance) > 1.0e-8 ||
@@ -4098,9 +4221,8 @@ private:
             std::abs(original.orbitPivot.x - target.orbitPivot.x) > 1.0e-8 ||
             std::abs(original.orbitPivot.y - target.orbitPivot.y) > 1.0e-8 ||
             std::abs(original.orbitPivot.z - target.orbitPivot.z) > 1.0e-8 ||
-            std::abs(std::remainder(target.yawRadians - original.yawRadians,
-                                    6.28318530717958647692)) > angleTolerance ||
-            std::abs(target.pitchRadians - original.pitchRadians) > angleTolerance;
+            1.0 - std::abs(original.orientation.dot(target.orientation)) >
+                angleTolerance;
 
         ViewportCameraState start = original;
         start.perspective = target.perspective;
@@ -9907,6 +10029,7 @@ private:
     SnapEngine snapEngine_;
     ViewportRenderer viewportRenderer_;
     BlenderGridRenderer blenderGridRenderer_;
+    ViewportGpuSurface *gpuSurface_ = nullptr;
     ViewportOverlay viewportOverlay_;
     BlenderGridAppearance gridAppearance_;
     ToolContext toolContext_;

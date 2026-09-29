@@ -31,6 +31,12 @@ public:
                      const QSize &viewportSize,
                      bool editableOnly = false) const;
 
+    bool hitTestVisibleDepth(const Document &document,
+                             const QPointF &screenPosition,
+                             const ViewportTransform &transform,
+                             const QSize &viewportSize,
+                             Point3D *worldPoint) const;
+
     QVector<QPointF> controlPointsForShape(const Shape &shape) const;
 
     bool hitTestSelectedControlPoint(

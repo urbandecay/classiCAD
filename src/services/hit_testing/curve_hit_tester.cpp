@@ -539,4 +539,113 @@ int CurveHitTester::hitTestShape(const Document &document,
     return closestShape;
 }
 
+bool CurveHitTester::hitTestVisibleDepth(const Document &document,
+                                         const QPointF &screenPosition,
+                                         const ViewportTransform &transform,
+                                         const QSize &viewportSize,
+                                         Point3D *worldPoint) const
+{
+    if (worldPoint == nullptr) {
+        return false;
+    }
+    constexpr qreal hitRadiusPixels = 9.0;
+    qreal nearestDepth = -std::numeric_limits<qreal>::infinity();
+    qreal nearestScreenDistance = hitRadiusPixels;
+    bool found = false;
+    for (int index = 0; index < document.size(); ++index) {
+        if (!document.isObjectVisible(document.objectIdAt(index))) {
+            continue;
+        }
+        const Shape &shape = document[index];
+        ViewportTransform shapeTransform = transform;
+        shapeTransform.setWorkPlane(shape.workPlane, shape.workPlaneOffset);
+        const qreal screenDistance = distanceToShape(screenPosition,
+                                                      shape,
+                                                      shapeTransform,
+                                                      viewportSize);
+        if (!std::isfinite(screenDistance) || screenDistance > hitRadiusPixels) {
+            continue;
+        }
+        QPointF planePoint;
+        if (!transform.screenToWorkPlane(screenPosition,
+                                         viewportSize,
+                                         shape.workPlane,
+                                         shape.workPlaneOffset,
+                                         &planePoint)) {
+            continue;
+        }
+        Point3D candidate = workPlanePointToWorld(
+            planePoint, shape.workPlane, shape.workPlaneOffset);
+        // Curves are unfilled geometry: the closest sampled stroke point is
+        // their actual scene depth, while a picture face uses the ray/plane hit.
+        qreal closestStrokeDistance = hitRadiusPixels;
+        const auto considerCurve = [&](const Shape::NurbsCurve2D &curve) {
+            qreal firstParameter = 0.0;
+            qreal lastParameter = 0.0;
+            if (!validateNurbsCurve(curve) ||
+                !nurbsParameterDomain(curve, &firstParameter, &lastParameter)) {
+                return;
+            }
+            constexpr int samples = 128;
+            QPointF previousLocal;
+            if (!evaluateNurbsPoint(curve, firstParameter, &previousLocal)) {
+                return;
+            }
+            QPointF previousScreen = shapeTransform.worldToScreen(
+                previousLocal, viewportSize);
+            for (int sample = 1; sample <= samples; ++sample) {
+                QPointF currentLocal;
+                const qreal parameter = firstParameter +
+                    (lastParameter - firstParameter) * sample / samples;
+                if (!evaluateNurbsPoint(curve, parameter, &currentLocal)) {
+                    continue;
+                }
+                const QPointF currentScreen = shapeTransform.worldToScreen(
+                    currentLocal, viewportSize);
+                const QPointF segment = currentScreen - previousScreen;
+                const qreal lengthSquared = QPointF::dotProduct(segment, segment);
+                const qreal fraction = lengthSquared > 1.0e-12
+                    ? std::clamp(QPointF::dotProduct(
+                                     screenPosition - previousScreen, segment) /
+                                     lengthSquared, 0.0, 1.0)
+                    : 0.0;
+                const QPointF closestScreen = previousScreen + segment * fraction;
+                const qreal distance = std::hypot(
+                    closestScreen.x() - screenPosition.x(),
+                    closestScreen.y() - screenPosition.y());
+                if (std::isfinite(distance) && distance <= closestStrokeDistance) {
+                    closestStrokeDistance = distance;
+                    candidate = workPlanePointToWorld(
+                        previousLocal + (currentLocal - previousLocal) * fraction,
+                        shape.workPlane, shape.workPlaneOffset);
+                }
+                previousLocal = currentLocal;
+                previousScreen = currentScreen;
+            }
+        };
+        if (shape.geometryType == GeometryType::PolyCurve) {
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                considerCurve(component);
+            }
+        } else {
+            considerCurve(shape.nurbs);
+        }
+        if (shape.geometryType == GeometryType::Point &&
+            !shape.points.isEmpty()) {
+            candidate = workPlanePointToWorld(
+                shape.points.first(), shape.workPlane, shape.workPlaneOffset);
+        }
+        const qreal depth = transform.worldDirectionToView(candidate).towardCamera;
+        if (!found || depth > nearestDepth + 1.0e-6 ||
+            (std::abs(depth - nearestDepth) <= 1.0e-6 &&
+             screenDistance < nearestScreenDistance)) {
+            *worldPoint = candidate;
+            nearestDepth = depth;
+            nearestScreenDistance = screenDistance;
+            found = true;
+        }
+    }
+    return found;
+}
+
 } // namespace classiCAD

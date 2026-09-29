@@ -1706,6 +1706,48 @@ int main(int argc, char **argv)
                                            frontTransform,
                                            viewportSize) == 0,
                     "front-view selection must hit curves on the active XZ workplane");
+    xzLine.workPlaneOffset = 7.0;
+    Document depthDocument;
+    depthDocument.append(xzLine);
+    ViewportTransform depthTransform;
+    depthTransform.setViewPreset(ViewportViewPreset::Front);
+    depthTransform.setPerspectiveEnabled(true);
+    const QPointF depthScreen = depthTransform.workPlaneToScreen(
+        QPointF(5.0, 0.0), viewportSize, WorkPlane::XZ, 7.0);
+    Point3D pickedDepth;
+    const bool depthHit = hitTester.hitTestVisibleDepth(
+        depthDocument, depthScreen, depthTransform, viewportSize, &pickedDepth);
+    passed &= check(depthHit && std::abs(pickedDepth.x - 5.0) < 1.0e-6 &&
+                        std::abs(pickedDepth.y - 7.0) < 1.0e-6 &&
+                        std::abs(pickedDepth.z) < 1.0e-6,
+                    "mouse-depth orbit must pick visible geometry on its own offset plane, not the active drawing plane");
+    Shape foregroundLine = xzLine;
+    foregroundLine.workPlaneOffset = -7.0;
+    depthDocument.append(foregroundLine);
+    Point3D frontmostDepth;
+    const QPointF overlapScreen = depthTransform.workPlaneToScreen(
+        QPointF(0.0, 0.0), viewportSize, WorkPlane::XZ, 7.0);
+    passed &= check(hitTester.hitTestVisibleDepth(
+                        depthDocument, overlapScreen, depthTransform, viewportSize,
+                        &frontmostDepth) &&
+                        std::abs(frontmostDepth.y + 7.0) < 1.0e-6,
+                    "overlapping orbit targets must choose the nearest visible stroke depth");
+    const Point3D eyeBeforePivot = depthTransform.cameraPosition(viewportSize);
+    if (depthHit) {
+        depthTransform.setOrbitPivotPreservingView(pickedDepth);
+    }
+    const Point3D eyeAfterPivot = depthTransform.cameraPosition(viewportSize);
+    passed &= check(std::abs(eyeAfterPivot.x - eyeBeforePivot.x) < 1.0e-5 &&
+                        std::abs(eyeAfterPivot.y - eyeBeforePivot.y) < 1.0e-5 &&
+                        std::abs(eyeAfterPivot.z - eyeBeforePivot.z) < 1.0e-5,
+                    "choosing an off-plane orbit pivot must not jump the perspective camera");
+    ViewportTransform poleOrbit;
+    poleOrbit.setViewPreset(ViewportViewPreset::Front);
+    poleOrbit.orbitByPixels(QPointF(0.0, 300.0));
+    passed &= check(poleOrbit.viewDirection().z > 0.0 &&
+                        poleOrbit.viewDirection().y > 0.0 &&
+                        std::abs(poleOrbit.viewUp().z) > 0.1,
+                    "quaternion turntable orbit must rotate through the pole without a pitch clamp");
     passed &= check(sampler.sampleDocument(xzDocument,
                                            viewportTransform,
                                            viewportSize).isEmpty() &&

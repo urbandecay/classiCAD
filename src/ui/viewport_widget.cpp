@@ -26,6 +26,7 @@
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
+#include <QEasingCurve>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QHash>
@@ -33,6 +34,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLineF>
 #include <QImageReader>
 #include <QKeyEvent>
 #include <QPainter>
@@ -41,6 +43,8 @@
 #include <QSettings>
 #include <QTextStream>
 #include <QTimer>
+#include <QToolTip>
+#include <QVariantAnimation>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -152,6 +156,54 @@ public:
         setFocusPolicy(Qt::StrongFocus);
         qApp->installEventFilter(this);
         setCursor(Qt::CrossCursor);
+        navigationAnimation_ = new QVariantAnimation(this);
+        navigationAnimation_->setDuration(300);
+        navigationAnimation_->setStartValue(0.0);
+        navigationAnimation_->setEndValue(1.0);
+        navigationAnimation_->setEasingCurve(QEasingCurve::InOutCubic);
+        connect(navigationAnimation_, &QVariantAnimation::valueChanged,
+                this, [this](const QVariant &value) {
+                    const qreal progress = value.toReal();
+                    const auto interpolateAngle = [progress](qreal start, qreal end) {
+                        constexpr qreal turn = 6.28318530717958647692;
+                        return start + std::remainder(end - start, turn) * progress;
+                    };
+                    ViewportCameraState state;
+                    state.zoom = std::exp(std::log(navigationAnimationStart_.zoom) +
+                                          (std::log(navigationAnimationEnd_.zoom) -
+                                           std::log(navigationAnimationStart_.zoom)) *
+                                              progress);
+                    state.pan = navigationAnimationStart_.pan * (1.0 - progress) +
+                                navigationAnimationEnd_.pan * progress;
+                    state.orbitPivot = {
+                        navigationAnimationStart_.orbitPivot.x * (1.0 - progress) +
+                            navigationAnimationEnd_.orbitPivot.x * progress,
+                        navigationAnimationStart_.orbitPivot.y * (1.0 - progress) +
+                            navigationAnimationEnd_.orbitPivot.y * progress,
+                        navigationAnimationStart_.orbitPivot.z * (1.0 - progress) +
+                            navigationAnimationEnd_.orbitPivot.z * progress};
+                    state.yawRadians = interpolateAngle(
+                        navigationAnimationStart_.yawRadians,
+                        navigationAnimationEnd_.yawRadians);
+                    state.pitchRadians = navigationAnimationStart_.pitchRadians +
+                                         (navigationAnimationEnd_.pitchRadians -
+                                          navigationAnimationStart_.pitchRadians) *
+                                             progress;
+                    state.perspective = navigationAnimationStart_.perspective;
+                    state.preset = progress >= 1.0
+                                       ? navigationAnimationEnd_.preset
+                                       : ViewportViewPreset::Custom;
+                    viewportTransform_.setCameraState(state);
+                    update();
+                    emitCoordinateUpdate();
+                });
+        connect(navigationAnimation_, &QVariantAnimation::finished,
+                this, [this]() {
+                    viewportTransform_.setCameraState(navigationAnimationEnd_);
+                    notifyViewStateChanged();
+                    update();
+                    emitCoordinateUpdate();
+                });
         DebugLog::instance().write(QStringLiteral("viewport constructed"));
     }
 
@@ -750,6 +802,7 @@ public:
 
     void setWorkPlane(WorkPlane plane, qreal offset = 0.0) override
     {
+        stopNavigationAnimation();
         if (!std::isfinite(offset)) {
             return;
         }
@@ -805,10 +858,9 @@ public:
 
     void setViewPreset(ViewportViewPreset preset) override
     {
-        viewportTransform_.setViewPreset(preset);
-        notifyViewStateChanged();
-        update();
-        emitCoordinateUpdate();
+        animateCameraChange([this, preset]() {
+            viewportTransform_.setViewPreset(preset);
+        });
     }
 
     ViewportViewPreset viewPreset() const override
@@ -2194,11 +2246,32 @@ protected:
                                          duplicateActive_,
                                          duplicatePickingBasePoint_,
                                          duplicateHasBasePoint_);
+        viewportOverlay_.drawBlenderNavigationGizmo(
+            painter, size(), navigationHoverPosition_);
     }
 
     void mousePressEvent(QMouseEvent *event) override
     {
+        stopNavigationAnimation();
         const QPointF screenPosition = eventPosition(event);
+        if (event->button() == Qt::LeftButton) {
+            const BlenderNavigationHit hit =
+                viewportOverlay_.blenderNavigationGizmoHitAt(screenPosition, size());
+            if (hit.action != BlenderNavigationAction::None) {
+                navigationPressedAction_ = hit.action;
+                navigationPressHit_ = hit;
+                navigationPressPosition_ = screenPosition;
+                navigationLastPosition_ = screenPosition;
+                navigationMoved_ = false;
+                setCursor(hit.action == BlenderNavigationAction::Camera ||
+                                  hit.action == BlenderNavigationAction::Projection
+                              ? Qt::PointingHandCursor
+                              : Qt::OpenHandCursor);
+                update();
+                event->accept();
+                return;
+            }
+        }
         QPointF rawWorldPosition;
         const bool worldPositionValid = viewportTransform_.screenToWorkPlane(
             screenPosition,
@@ -2347,11 +2420,20 @@ protected:
             return;
         }
 
-        if (event->button() == panButton_ ||
-            (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::AltModifier))) {
+        const bool middleMouseNavigation = event->button() == Qt::MiddleButton;
+        const bool configuredPanButton = event->button() == panButton_;
+        const bool altLeftNavigation =
+            event->button() == Qt::LeftButton &&
+            event->modifiers().testFlag(Qt::AltModifier);
+        if (middleMouseNavigation || configuredPanButton || altLeftNavigation) {
             panning_ = true;
-            orbiting_ = event->button() == panButton_ &&
-                        event->modifiers().testFlag(Qt::ShiftModifier);
+            if (middleMouseNavigation) {
+                // Blender-style navigation: MMB orbits; Shift+MMB pans.
+                orbiting_ = !event->modifiers().testFlag(Qt::ShiftModifier);
+            } else {
+                orbiting_ = configuredPanButton &&
+                            event->modifiers().testFlag(Qt::ShiftModifier);
+            }
             panMoved_ = false;
             panStartPosition_ = screenPosition.toPoint();
             lastMousePosition_ = screenPosition.toPoint();
@@ -2722,6 +2804,50 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
+        navigationHoverPosition_ = screenPosition;
+        if (navigationPressedAction_ != BlenderNavigationAction::None &&
+            (event->buttons() & Qt::LeftButton) != 0) {
+            const QPointF delta = screenPosition - navigationLastPosition_;
+            if (QLineF(navigationPressPosition_, screenPosition).length() >= 3.0) {
+                navigationMoved_ = true;
+            }
+            if (navigationMoved_) {
+                setCursor(Qt::ClosedHandCursor);
+                const ViewportViewPreset previousPreset = viewportTransform_.viewPreset();
+                switch (navigationPressedAction_) {
+                case BlenderNavigationAction::Orbit:
+                case BlenderNavigationAction::Axis:
+                    viewportTransform_.orbitByPixels(delta);
+                    break;
+                case BlenderNavigationAction::Zoom: {
+                    const qreal factor = std::exp(-delta.y() * 0.012);
+                    viewportTransform_.zoomAt(QPointF(width() * 0.5,
+                                                      height() * 0.5),
+                                              factor,
+                                              size(),
+                                              0.15,
+                                              12.0);
+                    break;
+                }
+                case BlenderNavigationAction::Pan:
+                    viewportTransform_.panByPixels(delta, size());
+                    break;
+                case BlenderNavigationAction::Camera:
+                case BlenderNavigationAction::Projection:
+                case BlenderNavigationAction::None:
+                    break;
+                }
+                if (previousPreset != viewportTransform_.viewPreset()) {
+                    notifyViewStateChanged();
+                }
+                update();
+                emitCoordinateUpdate();
+            }
+            navigationLastPosition_ = screenPosition;
+            update();
+            event->accept();
+            return;
+        }
         if (panning_) {
             const QPoint current = screenPosition.toPoint();
             const QPoint delta = current - lastMousePosition_;
@@ -2742,6 +2868,21 @@ protected:
             update();
             emitCoordinateUpdate();
             return;
+        }
+        const BlenderNavigationHit navigationHit =
+            viewportOverlay_.blenderNavigationGizmoHitAt(screenPosition, size());
+        if (navigationHit.action != BlenderNavigationAction::None) {
+            setToolTip(navigationTooltip(navigationHit));
+            setCursor(navigationHit.action == BlenderNavigationAction::Camera ||
+                              navigationHit.action == BlenderNavigationAction::Projection
+                          ? Qt::PointingHandCursor
+                          : Qt::OpenHandCursor);
+            update();
+            return;
+        }
+        setToolTip(QString());
+        if (!grabActive_ && !duplicateActive_) {
+            setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
         }
         eraseCursorScreen_ = screenPosition;
         if (!viewportTransform_.screenToWorkPlane(screenPosition,
@@ -3189,10 +3330,76 @@ protected:
         emitCoordinateUpdate();
     }
 
+    void leaveEvent(QEvent *event) override
+    {
+        navigationHoverPosition_ = QPointF(-1000.0, -1000.0);
+        if (navigationPressedAction_ == BlenderNavigationAction::None) {
+            setToolTip(QString());
+        }
+        update();
+        QWidget::leaveEvent(event);
+    }
+
     void mouseReleaseEvent(QMouseEvent *event) override
     {
+        if (event->button() == Qt::LeftButton &&
+            navigationPressedAction_ != BlenderNavigationAction::None) {
+            const BlenderNavigationAction action = navigationPressedAction_;
+            const BlenderNavigationHit hit = navigationPressHit_;
+            const QPointF releasePosition = eventPosition(event);
+            if (!navigationMoved_) {
+                switch (action) {
+                case BlenderNavigationAction::Axis: {
+                    Point3D targetDirection = hit.direction;
+                    if (directionDot(viewportTransform_.viewDirection(),
+                                     targetDirection) > 0.999) {
+                        targetDirection.x = -targetDirection.x;
+                        targetDirection.y = -targetDirection.y;
+                        targetDirection.z = -targetDirection.z;
+                    }
+                    animateCameraChange([this, targetDirection]() {
+                        viewportTransform_.setViewDirection(targetDirection);
+                    });
+                    break;
+                }
+                case BlenderNavigationAction::Projection:
+                    viewportTransform_.setPerspectiveEnabled(
+                        !viewportTransform_.isPerspectiveEnabled());
+                    notifyViewStateChanged();
+                    update();
+                    emitCoordinateUpdate();
+                    break;
+                case BlenderNavigationAction::Camera:
+                    QToolTip::showText(
+                        mapToGlobal(releasePosition.toPoint()),
+                        QStringLiteral("No active scene camera is available."),
+                        this);
+                    break;
+                case BlenderNavigationAction::Orbit:
+                case BlenderNavigationAction::Zoom:
+                case BlenderNavigationAction::Pan:
+                case BlenderNavigationAction::None:
+                    break;
+                }
+            }
+            navigationPressedAction_ = BlenderNavigationAction::None;
+            navigationPressHit_ = {};
+            navigationMoved_ = false;
+            const BlenderNavigationHit hoverHit =
+                viewportOverlay_.blenderNavigationGizmoHitAt(releasePosition, size());
+            if (hoverHit.action == BlenderNavigationAction::None) {
+                setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor
+                                                      : Qt::CrossCursor);
+                setToolTip(QString());
+            }
+            update();
+            event->accept();
+            return;
+        }
+
         const bool repeatToolOnRelease =
-            panning_ && event->button() == panButton_ && !panMoved_ &&
+            panning_ && event->button() == panButton_ &&
+            event->button() != Qt::MiddleButton && !panMoved_ &&
             activeTool_ == Tool::Select && repeatTool_ != Tool::Select;
 
         DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 panMoved=%4 draggingBefore=%5 repeat=%6")
@@ -3211,7 +3418,9 @@ protected:
         if (releaseEraseCursor) {
             eraseCursorPressed_ = false;
         }
-        if (panning_ && (event->button() == panButton_ || event->button() == Qt::LeftButton)) {
+        if (panning_ && (event->button() == panButton_ ||
+                         event->button() == Qt::MiddleButton ||
+                         event->button() == Qt::LeftButton)) {
             panning_ = false;
             orbiting_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
@@ -3287,6 +3496,7 @@ protected:
 
     void wheelEvent(QWheelEvent *event) override
     {
+        stopNavigationAnimation();
         if (subdivisionActive_) {
             const int angleDelta = event->angleDelta().y();
             const int pixelDelta = event->pixelDelta().y();
@@ -3355,6 +3565,7 @@ protected:
 
     void keyPressEvent(QKeyEvent *event) override
     {
+        stopNavigationAnimation();
         DebugLog::instance().write(QStringLiteral("keyPress key=%1 text=%2 tool=%3 lineActive=%4 points=%5")
                                        .arg(event->key())
                                        .arg(event->text())
@@ -3609,6 +3820,87 @@ protected:
     }
 
 private:
+    static qreal directionDot(const Point3D &first, const Point3D &second)
+    {
+        return first.x * second.x + first.y * second.y + first.z * second.z;
+    }
+
+    void stopNavigationAnimation()
+    {
+        if (navigationAnimation_ != nullptr) {
+            navigationAnimation_->stop();
+        }
+    }
+
+    void animateCameraChange(const std::function<void()> &setTarget)
+    {
+        stopNavigationAnimation();
+        const ViewportCameraState original = viewportTransform_.cameraState();
+        setTarget();
+        const ViewportCameraState target = viewportTransform_.cameraState();
+        constexpr qreal angleTolerance = 1.0e-8;
+        const bool poseChanged =
+            std::abs(original.zoom - target.zoom) > 1.0e-8 ||
+            std::hypot(original.pan.x() - target.pan.x(),
+                       original.pan.y() - target.pan.y()) > 1.0e-8 ||
+            std::abs(original.orbitPivot.x - target.orbitPivot.x) > 1.0e-8 ||
+            std::abs(original.orbitPivot.y - target.orbitPivot.y) > 1.0e-8 ||
+            std::abs(original.orbitPivot.z - target.orbitPivot.z) > 1.0e-8 ||
+            std::abs(std::remainder(target.yawRadians - original.yawRadians,
+                                    6.28318530717958647692)) > angleTolerance ||
+            std::abs(target.pitchRadians - original.pitchRadians) > angleTolerance;
+
+        ViewportCameraState start = original;
+        start.perspective = target.perspective;
+        if (!poseChanged || navigationAnimation_ == nullptr) {
+            viewportTransform_.setCameraState(target);
+            notifyViewStateChanged();
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+        navigationAnimationStart_ = start;
+        navigationAnimationEnd_ = target;
+        viewportTransform_.setCameraState(start);
+        navigationAnimation_->start();
+    }
+
+    QString navigationTooltip(const BlenderNavigationHit &hit) const
+    {
+        switch (hit.action) {
+        case BlenderNavigationAction::Axis: {
+            const qreal component = std::abs(hit.direction.x) > 0.5
+                                        ? hit.direction.x
+                                        : std::abs(hit.direction.y) > 0.5
+                                              ? hit.direction.y
+                                              : hit.direction.z;
+            const QString axis = std::abs(hit.direction.x) > 0.5
+                                     ? QStringLiteral("X")
+                                     : std::abs(hit.direction.y) > 0.5
+                                           ? QStringLiteral("Y")
+                                           : QStringLiteral("Z");
+            return QStringLiteral("Align to %1%2 view; drag to orbit")
+                .arg(component >= 0.0 ? QStringLiteral("+") : QStringLiteral("-"),
+                     axis);
+        }
+        case BlenderNavigationAction::Orbit:
+            return QStringLiteral("Drag to orbit the view");
+        case BlenderNavigationAction::Zoom:
+            return QStringLiteral("Drag to zoom the view");
+        case BlenderNavigationAction::Pan:
+            return QStringLiteral("Drag to pan the view");
+        case BlenderNavigationAction::Camera:
+            return QStringLiteral("Camera view (no active scene camera)");
+        case BlenderNavigationAction::Projection:
+            return viewportTransform_.isPerspectiveEnabled()
+                       ? QStringLiteral("Switch to orthographic projection")
+                       : QStringLiteral("Switch to perspective projection");
+        case BlenderNavigationAction::None:
+            break;
+        }
+        return {};
+    }
+
     void resetForDocumentReplacement()
     {
         history_.clear();
@@ -9349,6 +9641,15 @@ private:
     SelectionModel selection_;
     History history_;
     ViewportTransform viewportTransform_;
+    QVariantAnimation *navigationAnimation_ = nullptr;
+    ViewportCameraState navigationAnimationStart_;
+    ViewportCameraState navigationAnimationEnd_;
+    QPointF navigationHoverPosition_{-1000.0, -1000.0};
+    QPointF navigationPressPosition_;
+    QPointF navigationLastPosition_;
+    BlenderNavigationHit navigationPressHit_;
+    BlenderNavigationAction navigationPressedAction_ = BlenderNavigationAction::None;
+    bool navigationMoved_ = false;
     CurveSampler curveSampler_;
     CurveHitTester curveHitTester_;
     SnapEngine snapEngine_;

@@ -21,6 +21,7 @@
 #include "tools/line_tool.h"
 #include "ui/viewport/line_type_style.h"
 #include "ui/viewport/viewport_renderer.h"
+#include "ui/viewport/viewport_overlay.h"
 #include "tools/circle_tool.h"
 #include "tools/circle_tangent_tool.h"
 #include "tools/dimension_tool.h"
@@ -32,6 +33,7 @@
 #include "tools/tool_registry.h"
 
 #include <QApplication>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPainter>
@@ -902,6 +904,129 @@ int main(int argc, char **argv)
     passed &= check(std::hypot(roundTripWorld.x() - serviceWorldPoint.x(),
                                roundTripWorld.y() - serviceWorldPoint.y()) <= 1.0e-9,
                     "viewport transform must preserve world/screen round trips");
+
+    ViewportTransform blenderViewTransform;
+    const QVector<QPair<ViewportViewPreset, Point3D>> axisViews{
+        {ViewportViewPreset::Top, {0.0, 0.0, 1.0}},
+        {ViewportViewPreset::Bottom, {0.0, 0.0, -1.0}},
+        {ViewportViewPreset::Front, {0.0, -1.0, 0.0}},
+        {ViewportViewPreset::Back, {0.0, 1.0, 0.0}},
+        {ViewportViewPreset::Right, {1.0, 0.0, 0.0}},
+        {ViewportViewPreset::Left, {-1.0, 0.0, 0.0}},
+    };
+    for (const auto &axisView : axisViews) {
+        blenderViewTransform.setViewPreset(axisView.first);
+        const Point3D direction = blenderViewTransform.viewDirection();
+        passed &= check(direction.x * axisView.second.x +
+                                direction.y * axisView.second.y +
+                                direction.z * axisView.second.z > 1.0 - 1.0e-8,
+                        "Blender gizmo axis views must align the camera with all six world axes");
+    }
+    blenderViewTransform.setPerspectiveEnabled(true);
+    blenderViewTransform.setViewDirection({1.0, 0.0, 0.0});
+    passed &= check(!blenderViewTransform.isPerspectiveEnabled() &&
+                        blenderViewTransform.viewPreset() == ViewportViewPreset::Right,
+                    "selecting a Blender gizmo axis must enter its orthographic axis view");
+
+    ViewportTransform customViewTransform;
+    customViewTransform.zoom() = 2.5;
+    customViewTransform.pan() = QPointF(12.0, -8.0);
+    const ViewportCameraState beforeCustomPreset = customViewTransform.cameraState();
+    customViewTransform.setViewPreset(ViewportViewPreset::Custom);
+    const ViewportCameraState afterCustomPreset = customViewTransform.cameraState();
+    passed &= check(afterCustomPreset.zoom == beforeCustomPreset.zoom &&
+                        afterCustomPreset.pan == beforeCustomPreset.pan &&
+                        afterCustomPreset.orbitPivot.x == beforeCustomPreset.orbitPivot.x &&
+                        afterCustomPreset.orbitPivot.y == beforeCustomPreset.orbitPivot.y &&
+                        afterCustomPreset.orbitPivot.z == beforeCustomPreset.orbitPivot.z,
+                    "selecting the custom view must not alter the existing camera pose");
+
+    blenderViewTransform.setViewPreset(ViewportViewPreset::Top);
+    CurveHitTester blenderGizmoHitTester;
+    ViewportRenderer blenderGizmoRenderer(blenderViewTransform,
+                                          blenderGizmoHitTester);
+    ViewportOverlay blenderGizmoOverlay(blenderGizmoRenderer,
+                                        blenderViewTransform);
+    const QPointF blenderGizmoCenter(viewportSize.width() - 50.0, 50.0);
+    const BlenderNavigationHit centerAxisHit =
+        blenderGizmoOverlay.blenderNavigationGizmoHitAt(blenderGizmoCenter,
+                                                        viewportSize);
+    const BlenderNavigationHit positiveXAxisHit =
+        blenderGizmoOverlay.blenderNavigationGizmoHitAt(
+            blenderGizmoCenter + QPointF(32.0, 0.0), viewportSize);
+    const BlenderNavigationHit orbitHit =
+        blenderGizmoOverlay.blenderNavigationGizmoHitAt(
+            blenderGizmoCenter + QPointF(0.0, 18.0), viewportSize);
+    const BlenderNavigationHit zoomHit =
+        blenderGizmoOverlay.blenderNavigationGizmoHitAt(QPointF(618.0, 116.0),
+                                                        viewportSize);
+    const BlenderNavigationHit panHit =
+        blenderGizmoOverlay.blenderNavigationGizmoHitAt(QPointF(618.0, 144.0),
+                                                        viewportSize);
+    const BlenderNavigationHit cameraHit =
+        blenderGizmoOverlay.blenderNavigationGizmoHitAt(QPointF(618.0, 172.0),
+                                                        viewportSize);
+    const BlenderNavigationHit projectionHit =
+        blenderGizmoOverlay.blenderNavigationGizmoHitAt(QPointF(618.0, 200.0),
+                                                        viewportSize);
+    passed &= check(centerAxisHit.action == BlenderNavigationAction::Axis &&
+                        centerAxisHit.direction.z > 0.99 &&
+                        positiveXAxisHit.action == BlenderNavigationAction::Axis &&
+                        positiveXAxisHit.direction.x > 0.99 &&
+                        orbitHit.action == BlenderNavigationAction::Orbit &&
+                        zoomHit.action == BlenderNavigationAction::Zoom &&
+                        panHit.action == BlenderNavigationAction::Pan &&
+                        cameraHit.action == BlenderNavigationAction::Camera &&
+                        projectionHit.action == BlenderNavigationAction::Projection,
+                    "Blender navigation gizmo must hit its axis, orbit, zoom, pan, camera, and projection controls");
+
+    blenderViewTransform.setViewDirection({-0.8, 0.6, 0.1});
+    QImage gizmoTransparencyImage(viewportSize,
+                                  QImage::Format_ARGB32_Premultiplied);
+    gizmoTransparencyImage.fill(Qt::white);
+    {
+        QPainter gizmoPainter(&gizmoTransparencyImage);
+        blenderGizmoOverlay.drawBlenderNavigationGizmo(
+            gizmoPainter, viewportSize, QPointF(-1000.0, -1000.0));
+    }
+    const Point3D negativeXAxisDirection{-1.0, 0.0, 0.0};
+    const ViewportDirectionProjection negativeXAxisProjection =
+        blenderViewTransform.worldDirectionToView(negativeXAxisDirection);
+    const QPointF gizmoCenter(viewportSize.width() - 50.0, 50.0);
+    const QPointF negativeXAxisPosition =
+        gizmoCenter + QPointF(negativeXAxisProjection.horizontal,
+                              -negativeXAxisProjection.vertical) * 32.0;
+    const QPointF negativeXAxisVector = negativeXAxisPosition - gizmoCenter;
+    const qreal negativeXAxisVectorLength =
+        std::hypot(negativeXAxisVector.x(), negativeXAxisVector.y());
+    const QPointF negativeXAxisInteriorSample =
+        negativeXAxisPosition +
+        QPointF(-negativeXAxisVector.y() / negativeXAxisVectorLength,
+               negativeXAxisVector.x() / negativeXAxisVectorLength) * 3.0;
+    const QColor negativeMarkerCenter = gizmoTransparencyImage.pixelColor(
+        negativeXAxisPosition.toPoint());
+    const QColor negativeMarkerInterior = gizmoTransparencyImage.pixelColor(
+        negativeXAxisInteriorSample.toPoint());
+    const ViewportDirectionProjection positiveXAxisProjection =
+        blenderViewTransform.worldDirectionToView({1.0, 0.0, 0.0});
+    const QPointF positiveXAxisPosition =
+        gizmoCenter + QPointF(positiveXAxisProjection.horizontal,
+                              -positiveXAxisProjection.vertical) * 32.0;
+    const QPointF positiveXAxisVector = positiveXAxisPosition - gizmoCenter;
+    const qreal positiveXAxisVectorLength =
+        std::hypot(positiveXAxisVector.x(), positiveXAxisVector.y());
+    const QPointF positiveXAxisInteriorSample =
+        positiveXAxisPosition +
+        QPointF(-positiveXAxisVector.y() / positiveXAxisVectorLength,
+               positiveXAxisVector.x() / positiveXAxisVectorLength) * 5.0;
+    const QColor positiveMarkerInterior = gizmoTransparencyImage.pixelColor(
+        positiveXAxisInteriorSample.toPoint());
+    passed &= check(negativeXAxisProjection.towardCamera > 0.0 &&
+                        positiveXAxisProjection.towardCamera < 0.0 &&
+                        negativeMarkerCenter == QColor(Qt::white) &&
+                        negativeMarkerInterior == QColor(Qt::white) &&
+                        positiveMarkerInterior == QColor(QStringLiteral("#e75b61")),
+                    "Blender axis marker fill must stay fixed to positive/negative axis signs as the camera orbits");
 
     ViewportTransform xzTransform;
     xzTransform.setWorkPlane(WorkPlane::XZ, 7.0);

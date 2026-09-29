@@ -372,10 +372,10 @@ private:
         auto *navigationBox = new QGroupBox(QStringLiteral("Viewport Navigation"));
         auto *navigationLayout = new QFormLayout(navigationBox);
         panButtonCombo_ = new QComboBox;
-        panButtonCombo_->addItem(QStringLiteral("Middle Mouse Button"));
+        panButtonCombo_->addItem(QStringLiteral("None (MMB only)"));
         panButtonCombo_->addItem(QStringLiteral("Right Mouse Button"));
         panButtonCombo_->setCurrentIndex(panButton == Qt::RightButton ? 1 : 0);
-        navigationLayout->addRow(QStringLiteral("Pan with"), panButtonCombo_);
+        navigationLayout->addRow(QStringLiteral("Additional pan button"), panButtonCombo_);
         layout->addWidget(navigationBox);
 
         auto *modelingBox = new QGroupBox(QStringLiteral("Modeling Shortcuts"));
@@ -1280,13 +1280,19 @@ private:
         viewPresetCombo_ = new QComboBox;
         viewPresetCombo_->setObjectName(QStringLiteral("viewPresetCombo"));
         viewPresetCombo_->setToolTip(QStringLiteral(
-            "Top, front, side, isometric, or perspective view; Shift+pan-button drag orbits"));
+            "Choose a view preset. In the viewport, middle-drag orbits and Shift+middle-drag pans."));
         viewPresetCombo_->addItem(QStringLiteral("Top"),
                                   static_cast<int>(ViewportViewPreset::Top));
         viewPresetCombo_->addItem(QStringLiteral("Front"),
                                   static_cast<int>(ViewportViewPreset::Front));
         viewPresetCombo_->addItem(QStringLiteral("Right"),
                                   static_cast<int>(ViewportViewPreset::Right));
+        viewPresetCombo_->addItem(QStringLiteral("Bottom"),
+                                  static_cast<int>(ViewportViewPreset::Bottom));
+        viewPresetCombo_->addItem(QStringLiteral("Back"),
+                                  static_cast<int>(ViewportViewPreset::Back));
+        viewPresetCombo_->addItem(QStringLiteral("Left"),
+                                  static_cast<int>(ViewportViewPreset::Left));
         viewPresetCombo_->addItem(QStringLiteral("Iso"),
                                   static_cast<int>(ViewportViewPreset::Isometric));
         viewPresetCombo_->addItem(QStringLiteral("Perspective"),
@@ -2294,15 +2300,22 @@ private:
                               button == Qt::RightButton ? QStringLiteral("right")
                                                         : QStringLiteral("middle"));
             settings.sync();
-            statusBar()->showMessage(QStringLiteral("Viewport pan: %1").arg(mouseButtonName(button)));
+            statusBar()->showMessage(
+                button == Qt::RightButton
+                    ? QStringLiteral("Right mouse pans; Shift+right mouse orbits.")
+                    : QStringLiteral("Middle mouse orbits; Shift+middle mouse pans."));
         }
     }
 
     void updateToolHelp()
     {
         if (toolHelp_ != nullptr && viewport_ != nullptr) {
-            toolHelp_->setText(QStringLiteral("LMB\nDraw\n\n%1\nPan\n\nWheel\nZoom")
-                                   .arg(mouseButtonName(viewport_->panButton())));
+            const QString alternatePan = viewport_->panButton() == Qt::RightButton
+                                             ? QStringLiteral("\n\nRMB\nAlternate pan")
+                                             : QString();
+            toolHelp_->setText(QStringLiteral(
+                                   "LMB\nDraw\n\nMMB\nOrbit\n\nShift+MMB\nPan%1\n\nWheel\nZoom")
+                                   .arg(alternatePan));
         }
     }
 

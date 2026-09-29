@@ -67,10 +67,13 @@ CameraBasis cameraBasis(qreal yaw, qreal pitch)
     return {right, up, forward};
 }
 
-Vec3 cameraTarget(const CameraBasis &basis, const QPointF &pan)
+Vec3 cameraTarget(const CameraBasis &basis,
+                  const QPointF &pan,
+                  const Point3D &orbitPivot)
 {
-    return add(multiply(basis.right, -pan.x()),
-               multiply(basis.up, -pan.y()));
+    return add(asVec(orbitPivot),
+               add(multiply(basis.right, -pan.x()),
+                   multiply(basis.up, -pan.y())));
 }
 
 } // namespace
@@ -130,7 +133,7 @@ bool ViewportTransform::screenToWorkPlane(const QPointF &screenPosition,
     }
 
     const CameraBasis basis = cameraBasis(yawRadians_, pitchRadians_);
-    const Vec3 target = cameraTarget(basis, pan_);
+    const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
 
     const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0;
     const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y();
@@ -196,7 +199,7 @@ bool ViewportTransform::worldPointToScreen(const Point3D &worldPosition,
     }
 
     const CameraBasis basis = cameraBasis(yawRadians_, pitchRadians_);
-    const Vec3 target = cameraTarget(basis, pan_);
+    const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
     const Vec3 relative = subtract(asVec(worldPosition), target);
     const qreal viewX = dot(relative, basis.right);
     const qreal viewY = dot(relative, basis.up);
@@ -238,14 +241,78 @@ ViewportViewPreset ViewportTransform::viewPreset() const
     return viewPreset_;
 }
 
+ViewportDirectionProjection ViewportTransform::worldDirectionToView(
+    const Point3D &direction) const
+{
+    const CameraBasis basis = cameraBasis(yawRadians_, pitchRadians_);
+    const Vec3 vector = asVec(direction);
+    return {dot(vector, basis.right),
+            dot(vector, basis.up),
+            -dot(vector, basis.forward)};
+}
+
+Point3D ViewportTransform::viewDirection() const
+{
+    const qreal elevationCos = std::cos(pitchRadians_);
+    return {elevationCos * std::sin(yawRadians_),
+            -elevationCos * std::cos(yawRadians_),
+            std::sin(pitchRadians_)};
+}
+
+ViewportCameraState ViewportTransform::cameraState() const
+{
+    return {zoom_, pan_, orbitPivot_, yawRadians_, pitchRadians_,
+            perspective_, viewPreset_};
+}
+
+void ViewportTransform::setCameraState(const ViewportCameraState &state)
+{
+    if (!std::isfinite(state.zoom) || state.zoom <= 0.0 ||
+        !std::isfinite(state.pan.x()) || !std::isfinite(state.pan.y()) ||
+        !std::isfinite(state.orbitPivot.x) ||
+        !std::isfinite(state.orbitPivot.y) ||
+        !std::isfinite(state.orbitPivot.z) ||
+        !std::isfinite(state.yawRadians) ||
+        !std::isfinite(state.pitchRadians)) {
+        return;
+    }
+    zoom_ = std::clamp(state.zoom, 0.01, 12.0);
+    pan_ = state.pan;
+    orbitPivot_ = state.orbitPivot;
+    yawRadians_ = state.yawRadians;
+    pitchRadians_ = state.pitchRadians;
+    perspective_ = state.perspective;
+    viewPreset_ = state.preset;
+}
+
+bool ViewportTransform::isPerspectiveEnabled() const
+{
+    return perspective_;
+}
+
+void ViewportTransform::setPerspectiveEnabled(bool enabled)
+{
+    perspective_ = enabled;
+    if (enabled && viewPreset_ == ViewportViewPreset::Isometric) {
+        viewPreset_ = ViewportViewPreset::Perspective;
+    } else if (!enabled && viewPreset_ == ViewportViewPreset::Perspective) {
+        viewPreset_ = ViewportViewPreset::Isometric;
+    }
+}
+
 void ViewportTransform::setViewPreset(ViewportViewPreset preset)
 {
     constexpr qreal halfPi = 1.57079632679489661923;
     constexpr qreal radians = 0.01745329251994329577;
-    viewPreset_ = preset;
     if (preset == ViewportViewPreset::Custom) {
+        viewPreset_ = preset;
         return;
     }
+    const CameraBasis previousBasis = cameraBasis(yawRadians_, pitchRadians_);
+    const Vec3 previousTarget = cameraTarget(previousBasis, pan_, orbitPivot_);
+    orbitPivot_ = {previousTarget.x, previousTarget.y, previousTarget.z};
+    pan_ = {};
+    viewPreset_ = preset;
     perspective_ = preset == ViewportViewPreset::Perspective;
     switch (preset) {
     case ViewportViewPreset::Top:
@@ -258,6 +325,18 @@ void ViewportTransform::setViewPreset(ViewportViewPreset preset)
         break;
     case ViewportViewPreset::Right:
         yawRadians_ = halfPi;
+        pitchRadians_ = 0.0;
+        break;
+    case ViewportViewPreset::Bottom:
+        yawRadians_ = 0.0;
+        pitchRadians_ = -halfPi;
+        break;
+    case ViewportViewPreset::Back:
+        yawRadians_ = 180.0 * radians;
+        pitchRadians_ = 0.0;
+        break;
+    case ViewportViewPreset::Left:
+        yawRadians_ = -halfPi;
         pitchRadians_ = 0.0;
         break;
     case ViewportViewPreset::Isometric:
@@ -273,10 +352,46 @@ void ViewportTransform::setViewPreset(ViewportViewPreset preset)
     }
 }
 
+void ViewportTransform::setViewDirection(const Point3D &cameraDirection)
+{
+    const Vec3 direction = normalized(asVec(cameraDirection));
+    if (dot(direction, direction) <= 1.0e-15) {
+        return;
+    }
+
+    const CameraBasis previousBasis = cameraBasis(yawRadians_, pitchRadians_);
+    const Vec3 previousTarget = cameraTarget(previousBasis, pan_, orbitPivot_);
+    orbitPivot_ = {previousTarget.x, previousTarget.y, previousTarget.z};
+    pan_ = {};
+    yawRadians_ = std::atan2(direction.x, -direction.y);
+    pitchRadians_ = std::asin(std::clamp(direction.z, -1.0, 1.0));
+    perspective_ = false;
+    viewPreset_ = ViewportViewPreset::Custom;
+
+    constexpr qreal axisTolerance = 1.0e-8;
+    if (direction.x > 1.0 - axisTolerance) {
+        viewPreset_ = ViewportViewPreset::Right;
+    } else if (direction.x < -1.0 + axisTolerance) {
+        viewPreset_ = ViewportViewPreset::Left;
+    } else if (direction.y > 1.0 - axisTolerance) {
+        viewPreset_ = ViewportViewPreset::Back;
+    } else if (direction.y < -1.0 + axisTolerance) {
+        viewPreset_ = ViewportViewPreset::Front;
+    } else if (direction.z > 1.0 - axisTolerance) {
+        viewPreset_ = ViewportViewPreset::Top;
+    } else if (direction.z < -1.0 + axisTolerance) {
+        viewPreset_ = ViewportViewPreset::Bottom;
+    }
+}
+
 void ViewportTransform::orbitByPixels(const QPointF &delta)
 {
     constexpr qreal radiansPerPixel = 0.008;
     constexpr qreal pitchLimit = 1.5690509975;
+    const CameraBasis previousBasis = cameraBasis(yawRadians_, pitchRadians_);
+    const Vec3 previousTarget = cameraTarget(previousBasis, pan_, orbitPivot_);
+    orbitPivot_ = {previousTarget.x, previousTarget.y, previousTarget.z};
+    pan_ = {};
     yawRadians_ += delta.x() * radiansPerPixel;
     pitchRadians_ = std::clamp(pitchRadians_ + delta.y() * radiansPerPixel,
                                -pitchLimit,
@@ -295,6 +410,7 @@ void ViewportTransform::resetView()
 {
     zoom_ = 1.0;
     pan_ = {};
+    orbitPivot_ = {};
     workPlane_ = WorkPlane::XY;
     workPlaneOffset_ = 0.0;
     setViewPreset(ViewportViewPreset::Top);

@@ -9,6 +9,21 @@
 
 namespace classiCAD {
 
+enum class BlenderNavigationAction {
+    None,
+    Orbit,
+    Axis,
+    Zoom,
+    Pan,
+    Camera,
+    Projection,
+};
+
+struct BlenderNavigationHit {
+    BlenderNavigationAction action = BlenderNavigationAction::None;
+    Point3D direction;
+};
+
 class ViewportOverlay {
 public:
     ViewportOverlay(const ViewportRenderer &renderer,
@@ -119,6 +134,12 @@ public:
                         bool duplicateActive,
                         bool duplicatePickingBasePoint,
                         bool duplicateHasBasePoint) const;
+    void drawBlenderNavigationGizmo(QPainter &painter,
+                                    const QSize &viewportSize,
+                                    const QPointF &hoverPosition) const;
+    BlenderNavigationHit blenderNavigationGizmoHitAt(
+        const QPointF &screenPosition,
+        const QSize &viewportSize) const;
 
 private:
     void drawSampledEraseIntervals(QPainter &painter,

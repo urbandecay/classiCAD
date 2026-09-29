@@ -14,6 +14,25 @@ enum class ViewportViewPreset {
     Isometric = 3,
     Perspective = 4,
     Custom = 5,
+    Bottom = 6,
+    Back = 7,
+    Left = 8,
+};
+
+struct ViewportDirectionProjection {
+    qreal horizontal = 0.0;
+    qreal vertical = 0.0;
+    qreal towardCamera = 0.0;
+};
+
+struct ViewportCameraState {
+    qreal zoom = 1.0;
+    QPointF pan;
+    Point3D orbitPivot;
+    qreal yawRadians = 0.0;
+    qreal pitchRadians = 0.0;
+    bool perspective = false;
+    ViewportViewPreset preset = ViewportViewPreset::Top;
 };
 
 class ViewportTransform final {
@@ -47,7 +66,14 @@ public:
     void setWorkPlane(WorkPlane plane, qreal offset = 0.0);
 
     ViewportViewPreset viewPreset() const;
+    ViewportDirectionProjection worldDirectionToView(const Point3D &direction) const;
+    Point3D viewDirection() const;
+    ViewportCameraState cameraState() const;
+    void setCameraState(const ViewportCameraState &state);
+    bool isPerspectiveEnabled() const;
+    void setPerspectiveEnabled(bool enabled);
     void setViewPreset(ViewportViewPreset preset);
+    void setViewDirection(const Point3D &cameraDirection);
     void orbitByPixels(const QPointF &delta);
     void panByPixels(const QPointF &delta, const QSize &viewportSize);
     void resetView();
@@ -63,6 +89,7 @@ private:
     QPointF pan_{0.0, 0.0};
     WorkPlane workPlane_ = WorkPlane::XY;
     qreal workPlaneOffset_ = 0.0;
+    Point3D orbitPivot_{};
     ViewportViewPreset viewPreset_ = ViewportViewPreset::Top;
     qreal yawRadians_ = 0.0;
     qreal pitchRadians_ = 1.5707963267948966;

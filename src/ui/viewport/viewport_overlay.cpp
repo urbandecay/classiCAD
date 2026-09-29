@@ -3,12 +3,200 @@
 #include "core/geometry/circle_construction.h"
 
 #include <QFont>
+#include <QLineF>
 #include <QPainterPath>
+#include <QPolygonF>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <utility>
 
 namespace classiCAD {
+namespace {
+
+struct ViewCubeFace {
+    QString label;
+    Point3D normal;
+    std::array<Point3D, 4> corners;
+    QColor color;
+};
+
+struct ProjectedCubeTile {
+    Point3D direction;
+    QString label;
+    QPolygonF polygon;
+    QColor color;
+    qreal depth = 0.0;
+    bool mainFace = false;
+};
+
+const std::array<ViewCubeFace, 6> &viewCubeFaces()
+{
+    static const std::array<ViewCubeFace, 6> faces = {{
+        {QStringLiteral("TOP"),
+         {0.0, 0.0, 1.0},
+         {{{-1.0, -1.0, 1.0}, {1.0, -1.0, 1.0},
+           {1.0, 1.0, 1.0}, {-1.0, 1.0, 1.0}}},
+         QColor(QStringLiteral("#64696f"))},
+        {QStringLiteral("BOTTOM"),
+         {0.0, 0.0, -1.0},
+         {{{-1.0, 1.0, -1.0}, {1.0, 1.0, -1.0},
+           {1.0, -1.0, -1.0}, {-1.0, -1.0, -1.0}}},
+         QColor(QStringLiteral("#3d4146"))},
+        {QStringLiteral("FRONT"),
+         {0.0, -1.0, 0.0},
+         {{{-1.0, -1.0, -1.0}, {-1.0, -1.0, 1.0},
+           {1.0, -1.0, 1.0}, {1.0, -1.0, -1.0}}},
+         QColor(QStringLiteral("#555a60"))},
+        {QStringLiteral("BACK"),
+         {0.0, 1.0, 0.0},
+         {{{1.0, 1.0, -1.0}, {1.0, 1.0, 1.0},
+           {-1.0, 1.0, 1.0}, {-1.0, 1.0, -1.0}}},
+         QColor(QStringLiteral("#44494f"))},
+        {QStringLiteral("RIGHT"),
+         {1.0, 0.0, 0.0},
+         {{{1.0, -1.0, -1.0}, {1.0, -1.0, 1.0},
+           {1.0, 1.0, 1.0}, {1.0, 1.0, -1.0}}},
+         QColor(QStringLiteral("#4b5056"))},
+        {QStringLiteral("LEFT"),
+         {-1.0, 0.0, 0.0},
+         {{{-1.0, 1.0, -1.0}, {-1.0, 1.0, 1.0},
+           {-1.0, -1.0, 1.0}, {-1.0, -1.0, -1.0}}},
+         QColor(QStringLiteral("#41464c"))},
+    }};
+    return faces;
+}
+
+QPointF viewCubeCenter(const QSize &viewportSize, const QPointF &placementOffset)
+{
+    return {viewportSize.width() - 76.0 + placementOffset.x(),
+            70.0 + placementOffset.y()};
+}
+
+QPointF projectedCubePoint(const ViewportTransform &transform,
+                           const Point3D &point,
+                           const QPointF &center,
+                           qreal scale)
+{
+    const ViewportDirectionProjection projected =
+        transform.worldDirectionToView(point);
+    return {center.x() + projected.horizontal * scale,
+            center.y() - projected.vertical * scale};
+}
+
+Point3D addDirection(const Point3D &first, const Point3D &second)
+{
+    return {first.x + second.x, first.y + second.y, first.z + second.z};
+}
+
+Point3D scaledDirection(const Point3D &direction, qreal factor)
+{
+    return {direction.x * factor, direction.y * factor, direction.z * factor};
+}
+
+Point3D unitDirection(const Point3D &direction)
+{
+    const qreal length = std::sqrt(direction.x * direction.x +
+                                   direction.y * direction.y +
+                                   direction.z * direction.z);
+    if (length <= 1.0e-12) {
+        return {};
+    }
+    return scaledDirection(direction, 1.0 / length);
+}
+
+Point3D interpolate(const Point3D &first, const Point3D &second, qreal amount)
+{
+    return {first.x + (second.x - first.x) * amount,
+            first.y + (second.y - first.y) * amount,
+            first.z + (second.z - first.z) * amount};
+}
+
+Point3D facePoint(const ViewCubeFace &face, qreal u, qreal v)
+{
+    const Point3D left = interpolate(face.corners[0], face.corners[3], v);
+    const Point3D right = interpolate(face.corners[1], face.corners[2], v);
+    return interpolate(left, right, u);
+}
+
+QVector<ProjectedCubeTile> projectedCubeTiles(const ViewportTransform &transform,
+                                               const QSize &viewportSize,
+                                               const QPointF &placementOffset)
+{
+    constexpr qreal cubeScale = 25.0;
+    const QPointF center = viewCubeCenter(viewportSize, placementOffset);
+    QVector<ProjectedCubeTile> projected;
+    for (const ViewCubeFace &face : viewCubeFaces()) {
+        const ViewportDirectionProjection facing =
+            transform.worldDirectionToView(face.normal);
+        if (facing.towardCamera <= 1.0e-6) {
+            continue;
+        }
+        const Point3D uAxis = unitDirection({face.corners[1].x - face.corners[0].x,
+                                             face.corners[1].y - face.corners[0].y,
+                                             face.corners[1].z - face.corners[0].z});
+        const Point3D vAxis = unitDirection({face.corners[3].x - face.corners[0].x,
+                                             face.corners[3].y - face.corners[0].y,
+                                             face.corners[3].z - face.corners[0].z});
+        constexpr std::array<qreal, 4> tileBounds = {0.0, 0.22, 0.78, 1.0};
+        for (int row = 0; row < 3; ++row) {
+            for (int column = 0; column < 3; ++column) {
+                const qreal u0 = tileBounds[column];
+                const qreal u1 = tileBounds[column + 1];
+                const qreal v0 = tileBounds[row];
+                const qreal v1 = tileBounds[row + 1];
+                ProjectedCubeTile tile;
+                tile.direction = face.normal;
+                if (column == 0) {
+                    tile.direction = addDirection(tile.direction, scaledDirection(uAxis, -1.0));
+                } else if (column == 2) {
+                    tile.direction = addDirection(tile.direction, uAxis);
+                }
+                if (row == 0) {
+                    tile.direction = addDirection(tile.direction, scaledDirection(vAxis, -1.0));
+                } else if (row == 2) {
+                    tile.direction = addDirection(tile.direction, vAxis);
+                }
+                tile.direction = unitDirection(tile.direction);
+                tile.label = face.label;
+                tile.color = face.color;
+                tile.depth = facing.towardCamera;
+                tile.mainFace = row == 1 && column == 1;
+                tile.polygon << projectedCubePoint(transform, facePoint(face, u0, v0), center, cubeScale)
+                              << projectedCubePoint(transform, facePoint(face, u1, v0), center, cubeScale)
+                              << projectedCubePoint(transform, facePoint(face, u1, v1), center, cubeScale)
+                              << projectedCubePoint(transform, facePoint(face, u0, v1), center, cubeScale);
+                projected.append(tile);
+            }
+        }
+    }
+    std::sort(projected.begin(), projected.end(), [](const ProjectedCubeTile &first,
+                                                     const ProjectedCubeTile &second) {
+        return first.depth < second.depth;
+    });
+    return projected;
+}
+
+QRectF navigationPanelRect(const QSize &viewportSize, const QPointF &placementOffset)
+{
+    return QRectF(viewportSize.width() - 151.0 + placementOffset.x(),
+                  7.0 + placementOffset.y(),
+                  143.0,
+                  127.0);
+}
+
+bool withinButton(const QPointF &position, const QPointF &center, qreal radius = 9.0)
+{
+    return QLineF(position, center).length() <= radius;
+}
+
+QPointF axisScreenDirection(const ViewportDirectionProjection &direction)
+{
+    return {direction.horizontal, -direction.vertical};
+}
+
+} // namespace
 
 ViewportOverlay::ViewportOverlay(const ViewportRenderer &renderer,
                                  const ViewportTransform &transform)
@@ -878,6 +1066,294 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                          viewportSize.height() - 18,
                          QStringLiteral("Shift-click: add/remove  •  Box select  •  G: Grab  •  Shift+D: copy in place  •  B: base point  •  X/Y: axis lock"));
     }
+}
+
+void ViewportOverlay::drawNavigationGizmo(QPainter &painter,
+                                          const QSize &viewportSize,
+                                          const QPointF &hoverPosition,
+                                          const QPointF &placementOffset) const
+{
+    if (viewportSize.width() < 180 || viewportSize.height() < 150) {
+        return;
+    }
+
+    painter.save();
+    const QPointF cubeCenter = viewCubeCenter(viewportSize, placementOffset);
+    const QRectF panel = navigationPanelRect(viewportSize, placementOffset);
+    painter.setPen(QPen(QColor(255, 255, 255, 28), 1.0));
+    painter.setBrush(QColor(22, 22, 22, 110));
+    painter.drawRoundedRect(panel, 6.0, 6.0);
+
+    const NavigationGizmoHit hoveredHit = navigationGizmoHitAt(
+        hoverPosition, viewportSize, placementOffset);
+    const QVector<ProjectedCubeTile> tiles =
+        projectedCubeTiles(transform_, viewportSize, placementOffset);
+    for (const ProjectedCubeTile &tile : tiles) {
+        const bool hovered = hoveredHit.action == NavigationGizmoAction::SetViewDirection &&
+            std::abs(tile.direction.x * hoveredHit.direction.x +
+                     tile.direction.y * hoveredHit.direction.y +
+                     tile.direction.z * hoveredHit.direction.z - 1.0) <= 1.0e-5;
+        painter.setPen(QPen(hovered ? QColor(QStringLiteral("#e9b16b"))
+                                    : QColor(20, 20, 20, 115),
+                            hovered ? 1.5 : 0.8));
+        QColor tileColor = tile.color;
+        if (!tile.mainFace) {
+            tileColor = tileColor.darker(112);
+        }
+        if (hovered) {
+            tileColor = QColor(QStringLiteral("#a66d3c"));
+        }
+        painter.setBrush(tileColor);
+        painter.drawPolygon(tile.polygon);
+        if (tile.mainFace) {
+            painter.setPen(QColor(QStringLiteral("#e0e2e4")));
+            painter.setFont(QFont(QStringLiteral("Sans"), 7, QFont::DemiBold));
+            painter.drawText(tile.polygon.boundingRect(), Qt::AlignCenter, tile.label);
+        }
+    }
+
+    const auto drawArrow = [&painter](const QPointF &center,
+                                     const QPointF &direction,
+                                     bool hovered) {
+        const QPointF perpendicular(-direction.y(), direction.x());
+        QPolygonF triangle;
+        triangle << center + direction * 6.5
+                 << center - direction * 4.5 + perpendicular * 4.0
+                 << center - direction * 4.5 - perpendicular * 4.0;
+        painter.setPen(QPen(QColor(10, 10, 10, 130), 0.8));
+        painter.setBrush(hovered ? QColor(QStringLiteral("#e9b16b"))
+                                 : QColor(QStringLiteral("#aeb3b8")));
+        painter.drawPolygon(triangle);
+    };
+    drawArrow(cubeCenter + QPointF(-51.0, 0.0), QPointF(-1.0, 0.0),
+              hoveredHit.action == NavigationGizmoAction::Orbit &&
+                  hoveredHit.arrowDirection == QPointF(-1.0, 0.0));
+    drawArrow(cubeCenter + QPointF(51.0, 0.0), QPointF(1.0, 0.0),
+              hoveredHit.action == NavigationGizmoAction::Orbit &&
+                  hoveredHit.arrowDirection == QPointF(1.0, 0.0));
+    drawArrow(cubeCenter + QPointF(0.0, -51.0), QPointF(0.0, -1.0),
+              hoveredHit.action == NavigationGizmoAction::Orbit &&
+                  hoveredHit.arrowDirection == QPointF(0.0, -1.0));
+    drawArrow(cubeCenter + QPointF(0.0, 51.0), QPointF(0.0, 1.0),
+              hoveredHit.action == NavigationGizmoAction::Orbit &&
+                  hoveredHit.arrowDirection == QPointF(0.0, 1.0));
+
+    const auto drawButton = [&painter](const QPointF &center, bool hovered) {
+        painter.setPen(QPen(QColor(0, 0, 0, 125), 0.8));
+        painter.setBrush(hovered ? QColor(QStringLiteral("#6f747a"))
+                                 : QColor(QStringLiteral("#33373b")));
+        painter.drawEllipse(center, 8.5, 8.5);
+    };
+    const QPointF homeCenter = cubeCenter + QPointF(-55.0, -53.0);
+    const QPointF reverseCenter = cubeCenter + QPointF(55.0, -53.0);
+    const QPointF menuCenter = cubeCenter + QPointF(55.0, 53.0);
+    const QPointF rollLeftCenter = cubeCenter + QPointF(-30.0, -53.0);
+    const QPointF rollRightCenter = cubeCenter + QPointF(30.0, -53.0);
+    const auto isHovered = [&hoveredHit](NavigationGizmoAction action, qreal amount = 0.0) {
+        return hoveredHit.action == action &&
+               std::abs(hoveredHit.amount - amount) <= 1.0e-6;
+    };
+
+    drawButton(homeCenter, isHovered(NavigationGizmoAction::Home));
+    QPolygonF house;
+    house << homeCenter + QPointF(-4.2, 0.0)
+          << homeCenter + QPointF(0.0, -3.8)
+          << homeCenter + QPointF(4.2, 0.0)
+          << homeCenter + QPointF(3.2, 0.0)
+          << homeCenter + QPointF(3.2, 3.4)
+          << homeCenter + QPointF(-3.2, 3.4)
+          << homeCenter + QPointF(-3.2, 0.0);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(QStringLiteral("#d8dbde")));
+    painter.drawPolygon(house);
+
+    drawButton(reverseCenter, isHovered(NavigationGizmoAction::Reverse));
+    painter.setPen(QPen(QColor(QStringLiteral("#d8dbde")), 1.5, Qt::SolidLine,
+                        Qt::RoundCap));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawArc(QRectF(reverseCenter.x() - 4.5, reverseCenter.y() - 4.5,
+                           9.0, 9.0), 35 * 16, 285 * 16);
+    QPolygonF reverseArrow;
+    reverseArrow << reverseCenter + QPointF(4.7, -1.2)
+                 << reverseCenter + QPointF(1.5, -1.2)
+                 << reverseCenter + QPointF(4.1, -4.0);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(QStringLiteral("#d8dbde")));
+    painter.drawPolygon(reverseArrow);
+
+    drawButton(rollLeftCenter, isHovered(NavigationGizmoAction::Roll, -45.0));
+    drawButton(rollRightCenter, isHovered(NavigationGizmoAction::Roll, 45.0));
+    const auto drawRollArrow = [&painter](const QPointF &center, bool clockwise) {
+        const QRectF bounds(center.x() - 4.3, center.y() - 4.3, 8.6, 8.6);
+        painter.setPen(QPen(QColor(QStringLiteral("#c9cdd1")), 1.3,
+                            Qt::SolidLine, Qt::RoundCap));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawArc(bounds, clockwise ? -15 * 16 : 195 * 16, 235 * 16);
+        const qreal sign = clockwise ? 1.0 : -1.0;
+        const QPointF tip = center + QPointF(sign * 4.0, -1.4);
+        QPolygonF head;
+        head << tip << tip + QPointF(-sign * 3.0, -0.2)
+             << tip + QPointF(-sign * 0.8, 2.8);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#c9cdd1")));
+        painter.drawPolygon(head);
+    };
+    drawRollArrow(rollLeftCenter, false);
+    drawRollArrow(rollRightCenter, true);
+
+    drawButton(menuCenter, isHovered(NavigationGizmoAction::Menu));
+    const QPointF miniCubeTop = menuCenter + QPointF(0.0, -4.1);
+    const QPointF miniCubeLeft = menuCenter + QPointF(-3.7, -2.0);
+    const QPointF miniCubeRight = menuCenter + QPointF(3.7, -2.0);
+    const QPointF miniCubeCenter = menuCenter + QPointF(0.0, 0.1);
+    const QPointF miniCubeBottomLeft = menuCenter + QPointF(-3.7, 2.2);
+    const QPointF miniCubeBottom = menuCenter + QPointF(0.0, 4.2);
+    const QPointF miniCubeBottomRight = menuCenter + QPointF(3.7, 2.2);
+    painter.setPen(QPen(QColor(QStringLiteral("#d8dbde")), 0.9));
+    painter.setBrush(QColor(QStringLiteral("#777d83")));
+    QPolygonF miniCubeLeftFace;
+    miniCubeLeftFace << miniCubeLeft << miniCubeCenter
+                     << miniCubeBottom << miniCubeBottomLeft;
+    painter.drawPolygon(miniCubeLeftFace);
+    painter.setBrush(QColor(QStringLiteral("#555b61")));
+    QPolygonF miniCubeRightFace;
+    miniCubeRightFace << miniCubeCenter << miniCubeRight
+                      << miniCubeBottomRight << miniCubeBottom;
+    painter.drawPolygon(miniCubeRightFace);
+    painter.setBrush(QColor(QStringLiteral("#a0a5aa")));
+    QPolygonF miniCubeTopFace;
+    miniCubeTopFace << miniCubeTop << miniCubeRight
+                    << miniCubeCenter << miniCubeLeft;
+    painter.drawPolygon(miniCubeTopFace);
+
+    // The compact lower-right triad follows the camera, as in Blender. An
+    // axis aimed directly toward/away from the camera is shown as a dot.
+    const QPointF triadOrigin(viewportSize.width() - 35.0,
+                              viewportSize.height() - 32.0);
+    struct AxisMark {
+        Point3D direction;
+        QString label;
+        QColor color;
+    };
+    const std::array<AxisMark, 3> axes = {{
+        {{1.0, 0.0, 0.0}, QStringLiteral("X"), QColor(QStringLiteral("#df5260"))},
+        {{0.0, 1.0, 0.0}, QStringLiteral("Y"), QColor(QStringLiteral("#86c84a"))},
+        {{0.0, 0.0, 1.0}, QStringLiteral("Z"), QColor(QStringLiteral("#438ce0"))},
+    }};
+    painter.setFont(QFont(QStringLiteral("Sans"), 8, QFont::Bold));
+    for (const AxisMark &axis : axes) {
+        const ViewportDirectionProjection projected =
+            transform_.worldDirectionToView(axis.direction);
+        QPointF direction = axisScreenDirection(projected);
+        const qreal length = std::hypot(direction.x(), direction.y());
+        if (length <= 0.08) {
+            painter.setPen(QPen(QColor(QStringLiteral("#202020")), 1.0));
+            painter.setBrush(axis.color);
+            painter.drawEllipse(triadOrigin, 3.2, 3.2);
+            painter.setPen(axis.color);
+            painter.drawText(QRectF(triadOrigin.x() - 10.0,
+                                    triadOrigin.y() - 16.0,
+                                    20.0,
+                                    12.0),
+                             Qt::AlignCenter,
+                             axis.label);
+            continue;
+        }
+
+        direction /= length;
+        const QPointF tip = triadOrigin + direction * 22.0;
+        const QPointF perpendicular(-direction.y(), direction.x());
+        painter.setPen(QPen(QColor(QStringLiteral("#1a1a1a")), 4.0,
+                            Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(triadOrigin, tip);
+        painter.setPen(QPen(axis.color, 2.2, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(triadOrigin, tip);
+        QPolygonF arrowHead;
+        arrowHead << tip
+                  << tip - direction * 6.5 + perpendicular * 3.2
+                  << tip - direction * 6.5 - perpendicular * 3.2;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(axis.color);
+        painter.drawPolygon(arrowHead);
+        painter.setPen(axis.color);
+        const QPointF labelPosition = tip + direction * 8.0;
+        painter.drawText(QRectF(labelPosition.x() - 6.0,
+                                labelPosition.y() - 6.0,
+                                12.0,
+                                12.0),
+                         Qt::AlignCenter,
+                         axis.label);
+    }
+    painter.restore();
+}
+
+NavigationGizmoHit ViewportOverlay::navigationGizmoHitAt(
+    const QPointF &screenPosition,
+    const QSize &viewportSize,
+    const QPointF &placementOffset) const
+{
+    if (!navigationCubeContains(screenPosition, viewportSize, placementOffset)) {
+        return {};
+    }
+
+    const QPointF center = viewCubeCenter(viewportSize, placementOffset);
+    const std::array<std::pair<QPointF, NavigationGizmoHit>, 9> buttons = {{
+        {center + QPointF(-55.0, -53.0), {NavigationGizmoAction::Home, {}, 0.0, {}}},
+        {center + QPointF(55.0, -53.0), {NavigationGizmoAction::Reverse, {}, 0.0, {}}},
+        {center + QPointF(55.0, 53.0), {NavigationGizmoAction::Menu, {}, 0.0, {}}},
+        {center + QPointF(-51.0, 0.0),
+         {NavigationGizmoAction::Orbit, {}, 45.0, QPointF(-1.0, 0.0)}},
+        {center + QPointF(51.0, 0.0),
+         {NavigationGizmoAction::Orbit, {}, 45.0, QPointF(1.0, 0.0)}},
+        {center + QPointF(0.0, -51.0),
+         {NavigationGizmoAction::Orbit, {}, -45.0, QPointF(0.0, -1.0)}},
+        {center + QPointF(0.0, 51.0),
+         {NavigationGizmoAction::Orbit, {}, -45.0, QPointF(0.0, 1.0)}},
+        {center + QPointF(-30.0, -53.0), {NavigationGizmoAction::Roll, {}, -45.0, {}}},
+        {center + QPointF(30.0, -53.0), {NavigationGizmoAction::Roll, {}, 45.0, {}}},
+    }};
+    for (const auto &button : buttons) {
+        if (withinButton(screenPosition, button.first)) {
+            return button.second;
+        }
+    }
+
+    const QVector<ProjectedCubeTile> tiles =
+        projectedCubeTiles(transform_, viewportSize, placementOffset);
+    for (auto tile = tiles.crbegin(); tile != tiles.crend(); ++tile) {
+        if (tile->polygon.containsPoint(screenPosition, Qt::OddEvenFill)) {
+            return {NavigationGizmoAction::SetViewDirection,
+                    tile->direction,
+                    0.0,
+                    {}};
+        }
+    }
+    return {};
+}
+
+bool ViewportOverlay::navigationCubeContains(const QPointF &screenPosition,
+                                             const QSize &viewportSize,
+                                             const QPointF &placementOffset) const
+{
+    if (viewportSize.width() < 180 || viewportSize.height() < 150) {
+        return false;
+    }
+    return navigationPanelRect(viewportSize, placementOffset).contains(screenPosition);
+}
+
+bool ViewportOverlay::navigationCubeSurfaceContains(
+    const QPointF &screenPosition,
+    const QSize &viewportSize,
+    const QPointF &placementOffset) const
+{
+    if (!navigationCubeContains(screenPosition, viewportSize, placementOffset)) {
+        return false;
+    }
+    if (navigationGizmoHitAt(screenPosition, viewportSize, placementOffset).action !=
+        NavigationGizmoAction::SetViewDirection) {
+        return false;
+    }
+    return true;
 }
 
 } // namespace classiCAD

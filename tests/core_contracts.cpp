@@ -20,6 +20,7 @@
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
 #include "ui/viewport/line_type_style.h"
+#include "ui/viewport/viewport_overlay.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "tools/circle_tool.h"
 #include "tools/circle_tangent_tool.h"
@@ -36,7 +37,9 @@
 #include <QJsonObject>
 #include <QPainter>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 
 using namespace classiCAD;
@@ -894,6 +897,139 @@ int main(int argc, char **argv)
 
     const QSize viewportSize(640, 480);
     ViewportTransform viewportTransform;
+    ViewportTransform cameraStateTransform;
+    ViewportCameraState cameraState = cameraStateTransform.cameraState();
+    cameraState.zoom = 2.5;
+    cameraState.pan = QPointF(12.0, -7.0);
+    cameraState.orbitPivot = {3.0, 4.0, 5.0};
+    cameraState.yawRadians = 0.7;
+    cameraState.pitchRadians = 0.4;
+    cameraState.rollRadians = -0.2;
+    cameraState.perspective = true;
+    cameraState.preset = ViewportViewPreset::Custom;
+    cameraStateTransform.setCameraState(cameraState);
+    const ViewportCameraState restoredCameraState =
+        cameraStateTransform.cameraState();
+    passed &= check(std::abs(restoredCameraState.zoom - cameraState.zoom) < 1.0e-9 &&
+                        restoredCameraState.pan == cameraState.pan &&
+                        std::abs(restoredCameraState.orbitPivot.z -
+                                 cameraState.orbitPivot.z) < 1.0e-9 &&
+                        std::abs(restoredCameraState.yawRadians -
+                                 cameraState.yawRadians) < 1.0e-9 &&
+                        std::abs(restoredCameraState.pitchRadians -
+                                 cameraState.pitchRadians) < 1.0e-9 &&
+                        std::abs(restoredCameraState.rollRadians -
+                                 cameraState.rollRadians) < 1.0e-9 &&
+                        restoredCameraState.perspective &&
+                        restoredCameraState.preset == ViewportViewPreset::Custom,
+                    "viewport camera state must round-trip for smooth navigation transitions");
+    const ViewportDirectionProjection topViewX =
+        viewportTransform.worldDirectionToView({1.0, 0.0, 0.0});
+    const ViewportDirectionProjection topViewY =
+        viewportTransform.worldDirectionToView({0.0, 1.0, 0.0});
+    const ViewportDirectionProjection topViewZ =
+        viewportTransform.worldDirectionToView({0.0, 0.0, 1.0});
+    passed &= check(std::abs(topViewX.horizontal - 1.0) <= 1.0e-9 &&
+                        std::abs(topViewY.vertical - 1.0) <= 1.0e-9 &&
+                        std::abs(topViewZ.towardCamera - 1.0) <= 1.0e-9,
+                    "top-view axis gizmo must project world X, Y, and Z consistently");
+    ViewportTransform cameraControlTransform;
+    cameraControlTransform.setViewDirection({1.0, 1.0, 1.0});
+    const ViewportDirectionProjection alignedDirection =
+        cameraControlTransform.worldDirectionToView({1.0, 1.0, 1.0});
+    passed &= check(std::abs(alignedDirection.horizontal) <= 1.0e-9 &&
+                        std::abs(alignedDirection.vertical) <= 1.0e-9,
+                    "cube corner selection must align the camera with the diagonal");
+    cameraControlTransform.setViewPreset(ViewportViewPreset::Top);
+    cameraControlTransform.rollByDegrees(90.0);
+    const ViewportDirectionProjection rolledX =
+        cameraControlTransform.worldDirectionToView({1.0, 0.0, 0.0});
+    passed &= check(std::abs(rolledX.horizontal) <= 1.0e-9 &&
+                        std::abs(rolledX.vertical + 1.0) <= 1.0e-9,
+                    "view-axis roll must rotate the screen-space axis triad");
+    cameraControlTransform.setPerspectiveEnabled(true);
+    passed &= check(cameraControlTransform.isPerspectiveEnabled(),
+                    "navigation menu projection action must enable perspective");
+    cameraControlTransform.setPerspectiveEnabled(false);
+    passed &= check(!cameraControlTransform.isPerspectiveEnabled(),
+                    "navigation menu projection action must restore orthographic mode");
+    cameraControlTransform.setViewPreset(ViewportViewPreset::Top);
+    cameraControlTransform.reverseView();
+    const ViewportDirectionProjection reversedTop =
+        cameraControlTransform.worldDirectionToView({0.0, 0.0, 1.0});
+    passed &= check(reversedTop.towardCamera < -0.99,
+                    "reverse-view control must rotate around screen vertical");
+    cameraControlTransform.setViewPreset(ViewportViewPreset::Top);
+    cameraControlTransform.rotateViewAroundScreenAxis(QPointF(1.0, 0.0), 45.0);
+    const ViewportDirectionProjection arrowTilt =
+        cameraControlTransform.worldDirectionToView({0.0, 0.0, 1.0});
+    passed &= check(arrowTilt.towardCamera > 0.6 && arrowTilt.towardCamera < 0.8,
+                    "directional arrow rotation must tilt around the perpendicular view axis");
+    const QVector<Point3D> framePoints = {
+        {-10.0, -8.0, -4.0}, {12.0, -8.0, 4.0},
+        {12.0, 8.0, 4.0}, {-10.0, 8.0, -4.0}};
+    passed &= check(cameraControlTransform.frameWorldPoints(framePoints,
+                                                             viewportSize),
+                    "fit-view must accept world geometry bounds");
+    qreal frameMinX = std::numeric_limits<qreal>::infinity();
+    qreal frameMinY = std::numeric_limits<qreal>::infinity();
+    qreal frameMaxX = -frameMinX;
+    qreal frameMaxY = -frameMinY;
+    for (const Point3D &point : framePoints) {
+        QPointF projected;
+        if (cameraControlTransform.worldPointToScreen(point, viewportSize, &projected)) {
+            frameMinX = std::min(frameMinX, projected.x());
+            frameMinY = std::min(frameMinY, projected.y());
+            frameMaxX = std::max(frameMaxX, projected.x());
+            frameMaxY = std::max(frameMaxY, projected.y());
+        }
+    }
+    passed &= check(frameMinX >= 20.0 && frameMinY >= 20.0 &&
+                        frameMaxX <= viewportSize.width() - 20.0 &&
+                        frameMaxY <= viewportSize.height() - 20.0,
+                    "fit-view must keep the framed geometry inside the viewport");
+    CurveHitTester gizmoHitTester;
+    ViewportRenderer gizmoRenderer(viewportTransform, gizmoHitTester);
+    ViewportOverlay gizmoOverlay(gizmoRenderer, viewportTransform);
+    const QPointF cubeCenter(viewportSize.width() - 76.0, 70.0);
+    const NavigationGizmoHit topFaceHit = gizmoOverlay.navigationGizmoHitAt(
+        cubeCenter, viewportSize);
+    passed &= check(gizmoOverlay.navigationCubeContains(cubeCenter, viewportSize) &&
+                        topFaceHit.action == NavigationGizmoAction::SetViewDirection &&
+                        topFaceHit.direction.z > 0.99,
+                    "navigation cube center must identify its visible top face");
+    const NavigationGizmoHit edgeHit = gizmoOverlay.navigationGizmoHitAt(
+        cubeCenter + QPointF(-15.0, 0.0), viewportSize);
+    passed &= check(edgeHit.action == NavigationGizmoAction::SetViewDirection &&
+                        edgeHit.direction.x < -0.5 && edgeHit.direction.z > 0.5,
+                    "navigation cube edge tiles must align to diagonal edge views");
+    const NavigationGizmoHit cornerHit = gizmoOverlay.navigationGizmoHitAt(
+        cubeCenter + QPointF(-15.0, -15.0), viewportSize);
+    passed &= check(cornerHit.action == NavigationGizmoAction::SetViewDirection &&
+                        cornerHit.direction.x < -0.5 && cornerHit.direction.y > 0.5 &&
+                        cornerHit.direction.z > 0.5,
+                    "navigation cube corner tiles must align to three-axis views");
+    const NavigationGizmoHit orbitHit = gizmoOverlay.navigationGizmoHitAt(
+        cubeCenter + QPointF(-51.0, 0.0), viewportSize);
+    passed &= check(orbitHit.action == NavigationGizmoAction::Orbit &&
+                        orbitHit.amount == 45.0 &&
+                        orbitHit.arrowDirection == QPointF(-1.0, 0.0),
+                    "navigation cube side arrows must provide a 45-degree orbit step");
+    const NavigationGizmoHit rollHit = gizmoOverlay.navigationGizmoHitAt(
+        cubeCenter + QPointF(-30.0, -53.0), viewportSize);
+    passed &= check(rollHit.action == NavigationGizmoAction::Roll &&
+                        rollHit.amount == -45.0,
+                    "navigation cube roll buttons must rotate the view by 45 degrees");
+    passed &= check(gizmoOverlay.navigationGizmoHitAt(
+                        cubeCenter + QPointF(-55.0, -53.0), viewportSize).action ==
+                        NavigationGizmoAction::Home &&
+                        gizmoOverlay.navigationGizmoHitAt(
+                            cubeCenter + QPointF(55.0, -53.0), viewportSize).action ==
+                        NavigationGizmoAction::Reverse &&
+                        gizmoOverlay.navigationGizmoHitAt(
+                            cubeCenter + QPointF(55.0, 53.0), viewportSize).action ==
+                        NavigationGizmoAction::Menu,
+                    "navigation cube must expose home, reverse, and menu controls");
     const QPointF serviceWorldPoint(12.5, -7.25);
     const QPointF serviceScreenPoint =
         viewportTransform.worldToScreen(serviceWorldPoint, viewportSize);
@@ -906,6 +1042,8 @@ int main(int argc, char **argv)
     ViewportTransform xzTransform;
     xzTransform.setWorkPlane(WorkPlane::XZ, 7.0);
     xzTransform.setViewPreset(ViewportViewPreset::Front);
+    passed &= check(!xzTransform.isThreeDimensionalView(),
+                    "front orthographic view must keep 2D navigation mapping");
     const QPointF xzPoint(14.0, -9.0);
     const QPointF xzScreen = xzTransform.worldToScreen(xzPoint, viewportSize);
     const QPointF xzRoundTrip = xzTransform.screenToWorld(xzScreen, viewportSize);
@@ -913,11 +1051,79 @@ int main(int argc, char **argv)
                                xzRoundTrip.y() - xzPoint.y()) <= 1.0e-9,
                     "front view must project and pick points on the offset XZ workplane");
     xzTransform.setViewPreset(ViewportViewPreset::Isometric);
+    passed &= check(xzTransform.isThreeDimensionalView(),
+                    "isometric view must activate 3D navigation mapping");
     const QPointF isoScreen = xzTransform.worldToScreen(xzPoint, viewportSize);
     const QPointF isoRoundTrip = xzTransform.screenToWorld(isoScreen, viewportSize);
     passed &= check(std::hypot(isoRoundTrip.x() - xzPoint.x(),
                                isoRoundTrip.y() - xzPoint.y()) <= 1.0e-8,
                     "isometric view must ray-pick back onto the active workplane");
+    ViewportTransform perspectiveTransform;
+    perspectiveTransform.setViewPreset(ViewportViewPreset::Perspective);
+    const QPointF perspectiveNearPoint(100.0, -100.0);
+    const QPointF perspectiveFarPoint(-100.0, 100.0);
+    perspectiveTransform.zoom() = 0.5;
+    const QPointF nearAtLowZoom =
+        perspectiveTransform.worldToScreen(perspectiveNearPoint, viewportSize);
+    const QPointF farAtLowZoom =
+        perspectiveTransform.worldToScreen(perspectiveFarPoint, viewportSize);
+    perspectiveTransform.zoom() = 2.0;
+    const QPointF nearAtHighZoom =
+        perspectiveTransform.worldToScreen(perspectiveNearPoint, viewportSize);
+    const QPointF farAtHighZoom =
+        perspectiveTransform.worldToScreen(perspectiveFarPoint, viewportSize);
+    const QPointF viewportCenter(viewportSize.width() / 2.0,
+                                 viewportSize.height() / 2.0);
+    const qreal lowZoomPerspectiveRatio =
+        QLineF(viewportCenter, nearAtLowZoom).length() /
+        QLineF(viewportCenter, farAtLowZoom).length();
+    const qreal highZoomPerspectiveRatio =
+        QLineF(viewportCenter, nearAtHighZoom).length() /
+        QLineF(viewportCenter, farAtHighZoom).length();
+    passed &= check(highZoomPerspectiveRatio > lowZoomPerspectiveRatio,
+                    "perspective zoom must dolly toward the view pivot naturally");
+    QPointF perspectiveRoundTrip;
+    const QPointF perspectiveScreen =
+        perspectiveTransform.worldToScreen(xzPoint, viewportSize);
+    passed &= check(perspectiveTransform.screenToWorkPlane(perspectiveScreen,
+                                                            viewportSize,
+                                                            WorkPlane::XY,
+                                                            0.0,
+                                                            &perspectiveRoundTrip) &&
+                        std::hypot(perspectiveRoundTrip.x() - xzPoint.x(),
+                                   perspectiveRoundTrip.y() - xzPoint.y()) <= 1.0e-8,
+                    "perspective projection must ray-pick back onto the active workplane");
+    ViewportTransform pivotTransform;
+    pivotTransform.pan() = QPointF(120.0, -70.0);
+    QPointF pivotBeforeViewChange;
+    QPointF pivotAfterViewChange;
+    passed &= check(pivotTransform.screenToWorkPlane(viewportCenter,
+                                                      viewportSize,
+                                                      WorkPlane::XY,
+                                                      0.0,
+                                                      &pivotBeforeViewChange),
+                    "orthographic viewport center must define a valid orbit pivot");
+    pivotTransform.setViewPreset(ViewportViewPreset::Perspective);
+    passed &= check(pivotTransform.screenToWorkPlane(viewportCenter,
+                                                      viewportSize,
+                                                      WorkPlane::XY,
+                                                      0.0,
+                                                      &pivotAfterViewChange) &&
+                        QLineF(pivotBeforeViewChange, pivotAfterViewChange).length() <=
+                            1.0e-8,
+                    "changing projection must preserve the world-space view pivot");
+    pivotTransform.orbitByPixels(QPointF(30.0, -20.0));
+    passed &= check(pivotTransform.isThreeDimensionalView(),
+                    "a custom orbited view must activate 3D navigation mapping");
+    QPointF pivotAfterOrbit;
+    passed &= check(pivotTransform.screenToWorkPlane(viewportCenter,
+                                                      viewportSize,
+                                                      WorkPlane::XY,
+                                                      0.0,
+                                                      &pivotAfterOrbit) &&
+                        QLineF(pivotBeforeViewChange, pivotAfterOrbit).length() <=
+                            1.0e-8,
+                    "orbiting must rotate around the preserved world-space view pivot");
     xzTransform.setViewPreset(ViewportViewPreset::Front);
     QPointF edgeOnPick;
     passed &= check(!xzTransform.screenToWorkPlane(QPointF(320.0, 240.0),

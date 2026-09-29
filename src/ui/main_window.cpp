@@ -1280,13 +1280,19 @@ private:
         viewPresetCombo_ = new QComboBox;
         viewPresetCombo_->setObjectName(QStringLiteral("viewPresetCombo"));
         viewPresetCombo_->setToolTip(QStringLiteral(
-            "Top, front, side, isometric, or perspective view; Shift+pan-button drag orbits"));
+            "Choose a standard view; in 3D, MMB-drag orbits and Shift+MMB-drag pans"));
         viewPresetCombo_->addItem(QStringLiteral("Top"),
                                   static_cast<int>(ViewportViewPreset::Top));
         viewPresetCombo_->addItem(QStringLiteral("Front"),
                                   static_cast<int>(ViewportViewPreset::Front));
         viewPresetCombo_->addItem(QStringLiteral("Right"),
                                   static_cast<int>(ViewportViewPreset::Right));
+        viewPresetCombo_->addItem(QStringLiteral("Bottom"),
+                                  static_cast<int>(ViewportViewPreset::Bottom));
+        viewPresetCombo_->addItem(QStringLiteral("Back"),
+                                  static_cast<int>(ViewportViewPreset::Back));
+        viewPresetCombo_->addItem(QStringLiteral("Left"),
+                                  static_cast<int>(ViewportViewPreset::Left));
         viewPresetCombo_->addItem(QStringLiteral("Iso"),
                                   static_cast<int>(ViewportViewPreset::Isometric));
         viewPresetCombo_->addItem(QStringLiteral("Perspective"),

@@ -9,6 +9,23 @@
 
 namespace classiCAD {
 
+enum class NavigationGizmoAction {
+    None,
+    SetViewDirection,
+    Orbit,
+    Roll,
+    Home,
+    Reverse,
+    Menu,
+};
+
+struct NavigationGizmoHit {
+    NavigationGizmoAction action = NavigationGizmoAction::None;
+    Point3D direction;
+    qreal amount = 0.0;
+    QPointF arrowDirection;
+};
+
 class ViewportOverlay {
 public:
     ViewportOverlay(const ViewportRenderer &renderer,
@@ -119,6 +136,20 @@ public:
                         bool duplicateActive,
                         bool duplicatePickingBasePoint,
                         bool duplicateHasBasePoint) const;
+    void drawNavigationGizmo(QPainter &painter,
+                             const QSize &viewportSize,
+                             const QPointF &hoverPosition,
+                             const QPointF &placementOffset = {}) const;
+    NavigationGizmoHit navigationGizmoHitAt(
+        const QPointF &screenPosition,
+        const QSize &viewportSize,
+        const QPointF &placementOffset = {}) const;
+    bool navigationCubeContains(const QPointF &screenPosition,
+                                const QSize &viewportSize,
+                                const QPointF &placementOffset = {}) const;
+    bool navigationCubeSurfaceContains(const QPointF &screenPosition,
+                                       const QSize &viewportSize,
+                                       const QPointF &placementOffset = {}) const;
 
 private:
     void drawSampledEraseIntervals(QPainter &painter,

@@ -26,6 +26,7 @@
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
+#include <QEasingCurve>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QHash>
@@ -35,12 +36,14 @@
 #include <QJsonObject>
 #include <QImageReader>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPixmap>
 #include <QSettings>
 #include <QTextStream>
 #include <QTimer>
+#include <QVariantAnimation>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -152,6 +155,57 @@ public:
         setFocusPolicy(Qt::StrongFocus);
         qApp->installEventFilter(this);
         setCursor(Qt::CrossCursor);
+        navigationAnimation_ = new QVariantAnimation(this);
+        navigationAnimation_->setDuration(300);
+        navigationAnimation_->setStartValue(0.0);
+        navigationAnimation_->setEndValue(1.0);
+        navigationAnimation_->setEasingCurve(QEasingCurve::InOutCubic);
+        connect(navigationAnimation_, &QVariantAnimation::valueChanged,
+                this, [this](const QVariant &value) {
+                    const qreal progress = value.toReal();
+                    ViewportCameraState state;
+                    state.zoom = std::exp(std::log(navigationAnimationStart_.zoom) +
+                                          (std::log(navigationAnimationEnd_.zoom) -
+                                           std::log(navigationAnimationStart_.zoom)) *
+                                              progress);
+                    state.pan = navigationAnimationStart_.pan * (1.0 - progress) +
+                                navigationAnimationEnd_.pan * progress;
+                    state.orbitPivot = {
+                        navigationAnimationStart_.orbitPivot.x * (1.0 - progress) +
+                            navigationAnimationEnd_.orbitPivot.x * progress,
+                        navigationAnimationStart_.orbitPivot.y * (1.0 - progress) +
+                            navigationAnimationEnd_.orbitPivot.y * progress,
+                        navigationAnimationStart_.orbitPivot.z * (1.0 - progress) +
+                            navigationAnimationEnd_.orbitPivot.z * progress};
+                    const auto interpolateAngle = [progress](qreal start, qreal end) {
+                        constexpr qreal turn = 6.28318530717958647692;
+                        return start + std::remainder(end - start, turn) * progress;
+                    };
+                    state.yawRadians = interpolateAngle(
+                        navigationAnimationStart_.yawRadians,
+                        navigationAnimationEnd_.yawRadians);
+                    state.pitchRadians = navigationAnimationStart_.pitchRadians +
+                                         (navigationAnimationEnd_.pitchRadians -
+                                          navigationAnimationStart_.pitchRadians) *
+                                             progress;
+                    state.rollRadians = interpolateAngle(
+                        navigationAnimationStart_.rollRadians,
+                        navigationAnimationEnd_.rollRadians);
+                    state.perspective = navigationAnimationStart_.perspective;
+                    state.preset = progress >= 1.0
+                                       ? navigationAnimationEnd_.preset
+                                       : ViewportViewPreset::Custom;
+                    viewportTransform_.setCameraState(state);
+                    update();
+                    emitCoordinateUpdate();
+                });
+        connect(navigationAnimation_, &QVariantAnimation::finished,
+                this, [this]() {
+                    viewportTransform_.setCameraState(navigationAnimationEnd_);
+                    notifyViewStateChanged();
+                    update();
+                    emitCoordinateUpdate();
+                });
         DebugLog::instance().write(QStringLiteral("viewport constructed"));
     }
 
@@ -805,15 +859,174 @@ public:
 
     void setViewPreset(ViewportViewPreset preset) override
     {
-        viewportTransform_.setViewPreset(preset);
-        notifyViewStateChanged();
-        update();
-        emitCoordinateUpdate();
+        animateNavigationCamera([this, preset]() {
+            viewportTransform_.setViewPreset(preset);
+        });
     }
 
     ViewportViewPreset viewPreset() const override
     {
         return viewportTransform_.viewPreset();
+    }
+
+    void activateNavigationHit(const NavigationGizmoHit &hit)
+    {
+        if (hit.action == NavigationGizmoAction::Menu) {
+            showNavigationMenu();
+            return;
+        }
+        if (hit.action == NavigationGizmoAction::None) {
+            return;
+        }
+
+        animateNavigationCamera([this, hit]() {
+            switch (hit.action) {
+            case NavigationGizmoAction::SetViewDirection:
+                viewportTransform_.setViewDirection(hit.direction);
+                break;
+            case NavigationGizmoAction::Orbit: {
+                const QPointF screenAxis(-hit.arrowDirection.y(),
+                                         hit.arrowDirection.x());
+                viewportTransform_.rotateViewAroundScreenAxis(screenAxis,
+                                                               hit.amount);
+                break;
+            }
+            case NavigationGizmoAction::Roll:
+                viewportTransform_.rollByDegrees(hit.amount);
+                break;
+            case NavigationGizmoAction::Home:
+                viewportTransform_.setViewPreset(ViewportViewPreset::Isometric);
+                if (!frameScene(false, false)) {
+                    viewportTransform_.setOrbitPivot({});
+                    viewportTransform_.zoom() = 1.0;
+                    viewportTransform_.pan() = {};
+                }
+                break;
+            case NavigationGizmoAction::Reverse:
+                viewportTransform_.reverseView();
+                break;
+            case NavigationGizmoAction::Menu:
+            case NavigationGizmoAction::None:
+                break;
+            }
+        });
+    }
+
+    void showNavigationMenu()
+    {
+        QMenu menu(this);
+        QMenu *projectionMenu = menu.addMenu(QStringLiteral("Projection"));
+        QAction *orthographicAction = projectionMenu->addAction(
+            QStringLiteral("Orthographic"));
+        orthographicAction->setCheckable(true);
+        orthographicAction->setChecked(!viewportTransform_.isPerspectiveEnabled());
+        QAction *perspectiveAction = projectionMenu->addAction(
+            QStringLiteral("Perspective"));
+        perspectiveAction->setCheckable(true);
+        perspectiveAction->setChecked(viewportTransform_.isPerspectiveEnabled());
+        connect(orthographicAction, &QAction::triggered, this, [this]() {
+            viewportTransform_.setPerspectiveEnabled(false);
+            notifyViewStateChanged();
+            update();
+            emitCoordinateUpdate();
+        });
+        connect(perspectiveAction, &QAction::triggered, this, [this]() {
+            viewportTransform_.setPerspectiveEnabled(true);
+            notifyViewStateChanged();
+            update();
+            emitCoordinateUpdate();
+        });
+
+        QAction *isometricAction = menu.addAction(QStringLiteral("Isometric"));
+        connect(isometricAction, &QAction::triggered, this, [this]() {
+            setViewPreset(ViewportViewPreset::Isometric);
+        });
+        menu.addSeparator();
+        QAction *fitAllAction = menu.addAction(QStringLiteral("Fit All"));
+        QAction *fitSelectionAction = menu.addAction(QStringLiteral("Fit Selection"));
+        fitSelectionAction->setEnabled(!selection_.objectIds().isEmpty());
+        connect(fitAllAction, &QAction::triggered, this, [this]() {
+            animateNavigationCamera([this]() {
+                frameScene(false, false);
+            });
+        });
+        connect(fitSelectionAction, &QAction::triggered, this, [this]() {
+            animateNavigationCamera([this]() {
+                frameScene(true, false);
+            });
+        });
+
+        QAction *alignSelectionAction = menu.addAction(
+            QStringLiteral("Align to Selected Work Plane"));
+        const ObjectId alignObjectId = selection_.primaryObjectId().isValid()
+                                           ? selection_.primaryObjectId()
+                                           : selection_.objectIds().value(0,
+                                                                          ObjectId::invalid());
+        const Shape *alignShape = document_.shape(alignObjectId);
+        alignSelectionAction->setEnabled(alignShape != nullptr);
+        connect(alignSelectionAction, &QAction::triggered, this,
+                [this, alignObjectId]() {
+                    const Shape *shape = document_.shape(alignObjectId);
+                    if (shape == nullptr) {
+                        return;
+                    }
+                    const WorkPlane selectedPlane = shape->workPlane;
+                    animateNavigationCamera([this, selectedPlane]() {
+                        viewportTransform_.setViewDirection(
+                            workPlaneNormal(selectedPlane));
+                    });
+                });
+        menu.addSeparator();
+        QAction *moveCubeAction = menu.addAction(
+            QStringLiteral("Move Navigation Cube"));
+        moveCubeAction->setCheckable(true);
+        moveCubeAction->setChecked(navigationCubeMovable_);
+        connect(moveCubeAction, &QAction::toggled, this, [this](bool movable) {
+            navigationCubeMovable_ = movable;
+        });
+
+        menu.exec(mapToGlobal(navigationMenuPosition_.toPoint()));
+    }
+
+    bool frameScene(bool selectedOnly, bool updateViewport = true)
+    {
+        QVector<Point3D> worldPoints;
+        const auto appendCurvePoints = [&worldPoints](const NurbsCurve2D &curve,
+                                                       const Shape &shape) {
+            for (const QPointF &point : curve.controlPoints) {
+                worldPoints.append(workPlanePointToWorld(point,
+                                                          shape.workPlane,
+                                                          shape.workPlaneOffset));
+            }
+        };
+        for (int index = 0; index < shapes_.size(); ++index) {
+            const ObjectId objectId = shapes_.objectIdAt(index);
+            if (selectedOnly && !selection_.contains(objectId)) {
+                continue;
+            }
+            if (!document_.isObjectVisible(objectId)) {
+                continue;
+            }
+            const Shape &shape = shapes_[index];
+            for (const QPointF &point : shape.points) {
+                worldPoints.append(workPlanePointToWorld(point,
+                                                          shape.workPlane,
+                                                          shape.workPlaneOffset));
+            }
+            appendCurvePoints(shape.nurbs, shape);
+            for (const NurbsCurve2D &component : shape.components) {
+                appendCurvePoints(component, shape);
+            }
+        }
+        if (!viewportTransform_.frameWorldPoints(worldPoints, size())) {
+            return false;
+        }
+        if (updateViewport) {
+            notifyViewStateChanged();
+            update();
+            emitCoordinateUpdate();
+        }
+        return true;
     }
 
     void setControlPointsVisible(bool visible)
@@ -2194,11 +2407,32 @@ protected:
                                          duplicateActive_,
                                          duplicatePickingBasePoint_,
                                          duplicateHasBasePoint_);
+        viewportOverlay_.drawNavigationGizmo(painter,
+                                              size(),
+                                              navigationHoverPosition_,
+                                              navigationCubeOffset_);
     }
 
     void mousePressEvent(QMouseEvent *event) override
     {
+        stopNavigationAnimation();
         const QPointF screenPosition = eventPosition(event);
+        if (event->button() == Qt::LeftButton &&
+            viewportOverlay_.navigationCubeContains(screenPosition,
+                                                    size(),
+                                                    navigationCubeOffset_)) {
+            navigationCubePressed_ = true;
+            navigationCubeMoved_ = false;
+            navigationCubePressPosition_ = screenPosition.toPoint();
+            navigationCubeLastPosition_ = navigationCubePressPosition_;
+            navigationCubePressHit_ = viewportOverlay_.navigationGizmoHitAt(
+                screenPosition, size(), navigationCubeOffset_);
+            navigationMenuPosition_ = screenPosition;
+            navigationHoverPosition_ = screenPosition;
+            update();
+            event->accept();
+            return;
+        }
         QPointF rawWorldPosition;
         const bool worldPositionValid = viewportTransform_.screenToWorkPlane(
             screenPosition,
@@ -2347,11 +2581,21 @@ protected:
             return;
         }
 
-        if (event->button() == panButton_ ||
-            (event->button() == Qt::LeftButton && event->modifiers().testFlag(Qt::AltModifier))) {
+        const bool threeDimensionalView =
+            viewportTransform_.isThreeDimensionalView();
+        const bool threeDimensionalMiddleDrag =
+            threeDimensionalView && event->button() == Qt::MiddleButton;
+        const bool orthographicPanDrag =
+            !threeDimensionalView && event->button() == panButton_;
+        const bool alternatePanDrag = event->button() == Qt::LeftButton &&
+                                      event->modifiers().testFlag(Qt::AltModifier);
+        if (threeDimensionalMiddleDrag || orthographicPanDrag || alternatePanDrag) {
             panning_ = true;
-            orbiting_ = event->button() == panButton_ &&
-                        event->modifiers().testFlag(Qt::ShiftModifier);
+            orbiting_ = threeDimensionalMiddleDrag
+                            ? !event->modifiers().testFlag(Qt::ShiftModifier)
+                            : orthographicPanDrag &&
+                                  event->modifiers().testFlag(Qt::ShiftModifier);
+            panDragButton_ = event->button();
             panMoved_ = false;
             panStartPosition_ = screenPosition.toPoint();
             lastMousePosition_ = screenPosition.toPoint();
@@ -2719,9 +2963,77 @@ protected:
         update();
     }
 
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        const QPointF screenPosition = eventPosition(event);
+        if (event->button() == Qt::LeftButton &&
+            viewportOverlay_.navigationCubeSurfaceContains(screenPosition,
+                                                           size(),
+                                                           navigationCubeOffset_)) {
+            const NavigationGizmoHit hit = viewportOverlay_.navigationGizmoHitAt(
+                screenPosition, size(), navigationCubeOffset_);
+            navigationCubePressed_ = true;
+            navigationCubeMoved_ = true;
+            if (hit.action == NavigationGizmoAction::SetViewDirection) {
+                animateNavigationCamera([this, hit]() {
+                    viewportTransform_.setViewDirection(hit.direction);
+                    frameScene(!selection_.objectIds().isEmpty(), false);
+                });
+            }
+            event->accept();
+            return;
+        }
+        QWidget::mouseDoubleClickEvent(event);
+    }
+
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
+        const QPointF previousHoverPosition = navigationHoverPosition_;
+        navigationHoverPosition_ = screenPosition;
+        if (navigationCubePressed_ &&
+            (event->buttons() & Qt::LeftButton) != 0) {
+            const QPoint current = screenPosition.toPoint();
+            const QPoint delta = current - navigationCubeLastPosition_;
+            const QPoint totalDelta = current - navigationCubePressPosition_;
+            if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
+                navigationCubeMoved_ = true;
+            }
+            if (navigationCubeMoved_) {
+                if (navigationCubeMovable_) {
+                    navigationCubeOffset_ += QPointF(delta);
+                    const qreal minimumX = 151.0 - width();
+                    const qreal maximumX = 8.0;
+                    const qreal minimumY = -7.0;
+                    const qreal maximumY = height() - 134.0;
+                    navigationCubeOffset_.setX(std::clamp(navigationCubeOffset_.x(),
+                                                          minimumX,
+                                                          maximumX));
+                    navigationCubeOffset_.setY(std::clamp(navigationCubeOffset_.y(),
+                                                          minimumY,
+                                                          maximumY));
+                } else if (navigationCubePressHit_.action ==
+                           NavigationGizmoAction::SetViewDirection) {
+                    const ViewportViewPreset previous = viewportTransform_.viewPreset();
+                    viewportTransform_.orbitByPixels(QPointF(delta));
+                    if (previous != viewportTransform_.viewPreset()) {
+                        notifyViewStateChanged();
+                    }
+                }
+            }
+            navigationCubeLastPosition_ = current;
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+        if (viewportOverlay_.navigationCubeContains(screenPosition,
+                                                   size(),
+                                                   navigationCubeOffset_) ||
+            viewportOverlay_.navigationCubeContains(previousHoverPosition,
+                                                   size(),
+                                                   navigationCubeOffset_)) {
+            update();
+        }
         if (panning_) {
             const QPoint current = screenPosition.toPoint();
             const QPoint delta = current - lastMousePosition_;
@@ -3191,8 +3503,22 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent *event) override
     {
+        if (navigationCubePressed_ && event->button() == Qt::LeftButton) {
+            const bool dragged = navigationCubeMoved_;
+            const NavigationGizmoHit hit = navigationCubePressHit_;
+            navigationCubePressed_ = false;
+            navigationCubeMoved_ = false;
+            navigationCubePressHit_ = {};
+            if (!dragged) {
+                activateNavigationHit(hit);
+            }
+            event->accept();
+            return;
+        }
         const bool repeatToolOnRelease =
-            panning_ && event->button() == panButton_ && !panMoved_ &&
+            panning_ && event->button() == panDragButton_ &&
+            !viewportTransform_.isThreeDimensionalView() &&
+            panDragButton_ == panButton_ && !panMoved_ &&
             activeTool_ == Tool::Select && repeatTool_ != Tool::Select;
 
         DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 panMoved=%4 draggingBefore=%5 repeat=%6")
@@ -3211,9 +3537,10 @@ protected:
         if (releaseEraseCursor) {
             eraseCursorPressed_ = false;
         }
-        if (panning_ && (event->button() == panButton_ || event->button() == Qt::LeftButton)) {
+        if (panning_ && event->button() == panDragButton_) {
             panning_ = false;
             orbiting_ = false;
+            panDragButton_ = Qt::NoButton;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-pan-orbit"));
         }
@@ -3332,6 +3659,7 @@ protected:
             return;
         }
 
+        stopNavigationAnimation();
         const QPointF screenPosition = eventPosition(event);
         const QPointF beforeZoom = screenToWorld(screenPosition);
         const qreal oldZoom = zoom_;
@@ -3355,6 +3683,7 @@ protected:
 
     void keyPressEvent(QKeyEvent *event) override
     {
+        stopNavigationAnimation();
         DebugLog::instance().write(QStringLiteral("keyPress key=%1 text=%2 tool=%3 lineActive=%4 points=%5")
                                        .arg(event->key())
                                        .arg(event->text())
@@ -3609,6 +3938,57 @@ protected:
     }
 
 private:
+    static qreal shortestAngleDelta(qreal from, qreal to)
+    {
+        constexpr qreal fullTurn = 6.28318530717958647692;
+        return std::remainder(to - from, fullTurn);
+    }
+
+    void stopNavigationAnimation()
+    {
+        if (navigationAnimation_ != nullptr) {
+            navigationAnimation_->stop();
+        }
+    }
+
+    void animateNavigationCamera(const std::function<void()> &setTarget)
+    {
+        stopNavigationAnimation();
+        const ViewportCameraState original = viewportTransform_.cameraState();
+        setTarget();
+        const ViewportCameraState target = viewportTransform_.cameraState();
+        constexpr qreal angleTolerance = 1.0e-8;
+        const bool poseChanged =
+            std::abs(original.zoom - target.zoom) > 1.0e-8 ||
+            std::hypot(original.pan.x() - target.pan.x(),
+                       original.pan.y() - target.pan.y()) > 1.0e-8 ||
+            std::abs(original.orbitPivot.x - target.orbitPivot.x) > 1.0e-8 ||
+            std::abs(original.orbitPivot.y - target.orbitPivot.y) > 1.0e-8 ||
+            std::abs(original.orbitPivot.z - target.orbitPivot.z) > 1.0e-8 ||
+            std::abs(shortestAngleDelta(original.yawRadians,
+                                        target.yawRadians)) > angleTolerance ||
+            std::abs(original.pitchRadians - target.pitchRadians) > angleTolerance ||
+            std::abs(shortestAngleDelta(original.rollRadians,
+                                        target.rollRadians)) > angleTolerance;
+
+        // Projection changes are discrete; apply them at the start instead of
+        // leaving an unexpected snap at the end of the camera movement.
+        ViewportCameraState start = original;
+        start.perspective = target.perspective;
+        if (!poseChanged || navigationAnimation_ == nullptr) {
+            viewportTransform_.setCameraState(target);
+            notifyViewStateChanged();
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
+        navigationAnimationStart_ = start;
+        navigationAnimationEnd_ = target;
+        viewportTransform_.setCameraState(start);
+        navigationAnimation_->start();
+    }
+
     void resetForDocumentReplacement()
     {
         history_.clear();
@@ -9349,6 +9729,18 @@ private:
     SelectionModel selection_;
     History history_;
     ViewportTransform viewportTransform_;
+    QVariantAnimation *navigationAnimation_ = nullptr;
+    ViewportCameraState navigationAnimationStart_;
+    ViewportCameraState navigationAnimationEnd_;
+    QPointF navigationHoverPosition_{-1000.0, -1000.0};
+    QPointF navigationCubeOffset_;
+    QPointF navigationMenuPosition_;
+    NavigationGizmoHit navigationCubePressHit_;
+    QPoint navigationCubePressPosition_;
+    QPoint navigationCubeLastPosition_;
+    bool navigationCubePressed_ = false;
+    bool navigationCubeMoved_ = false;
+    bool navigationCubeMovable_ = false;
     CurveSampler curveSampler_;
     CurveHitTester curveHitTester_;
     SnapEngine snapEngine_;
@@ -9437,6 +9829,7 @@ private:
     bool panning_ = false;
     bool orbiting_ = false;
     bool panMoved_ = false;
+    Qt::MouseButton panDragButton_ = Qt::NoButton;
     QPoint panStartPosition_;
     Qt::MouseButton panButton_ = Qt::MiddleButton;
     bool lineCommandActive_ = false;

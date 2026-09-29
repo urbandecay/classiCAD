@@ -989,6 +989,58 @@ int main(int argc, char **argv)
         blenderGizmoOverlay.drawBlenderNavigationGizmo(
             gizmoPainter, viewportSize, QPointF(-1000.0, -1000.0));
     }
+    const QColor gizmoIconCanvas(40, 40, 40);
+    auto renderGizmoIcons = [&](bool perspectiveEnabled) {
+        blenderViewTransform.setPerspectiveEnabled(perspectiveEnabled);
+        QImage image(viewportSize, QImage::Format_ARGB32_Premultiplied);
+        image.fill(gizmoIconCanvas);
+        QPainter painter(&image);
+        blenderGizmoOverlay.drawBlenderNavigationGizmo(
+            painter, viewportSize, QPointF(-1000.0, -1000.0));
+        return image;
+    };
+    const QImage isoGizmoIconImage = renderGizmoIcons(false);
+    const QImage perspectiveGizmoIconImage = renderGizmoIcons(true);
+    const QRect panIconRect(viewportSize.width() - 36, 130, 28, 28);
+    const QRect cameraIconRect(viewportSize.width() - 36, 158, 28, 28);
+    const QRect projectionIconRect(viewportSize.width() - 36,
+                                   186,
+                                   28,
+                                   28);
+    auto hasIconPixels = [&](const QImage &image, const QRect &rect) {
+        for (int y = rect.top(); y <= rect.bottom(); ++y) {
+            for (int x = rect.left(); x <= rect.right(); ++x) {
+                if (image.pixelColor(x, y) != gizmoIconCanvas) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    int brightestPanIconPixel = 0;
+    for (int y = panIconRect.top(); y <= panIconRect.bottom(); ++y) {
+        for (int x = panIconRect.left(); x <= panIconRect.right(); ++x) {
+            brightestPanIconPixel = std::max(
+                brightestPanIconPixel,
+                isoGizmoIconImage.pixelColor(x, y).red());
+        }
+    }
+    passed &= check(hasIconPixels(isoGizmoIconImage,
+                                 QRect(viewportSize.width() - 36, 102, 28, 28)) &&
+                        hasIconPixels(isoGizmoIconImage,
+                                      QRect(viewportSize.width() - 36, 130, 28, 28)) &&
+                        hasIconPixels(isoGizmoIconImage,
+                                      QRect(viewportSize.width() - 36, 158, 28, 28)) &&
+                        isoGizmoIconImage.copy(panIconRect) !=
+                            isoGizmoIconImage.copy(cameraIconRect) &&
+                        brightestPanIconPixel >= 170 &&
+                        brightestPanIconPixel <= 200 &&
+                        hasIconPixels(isoGizmoIconImage, projectionIconRect) &&
+                        isoGizmoIconImage.copy(projectionIconRect) !=
+                            perspectiveGizmoIconImage.copy(projectionIconRect),
+                    "Blender navigation buttons must use their exact glyph artwork and switch between distinct perspective and iso grids");
+    blenderViewTransform.setPerspectiveEnabled(false);
+
     const Point3D negativeXAxisDirection{-1.0, 0.0, 0.0};
     const ViewportDirectionProjection negativeXAxisProjection =
         blenderViewTransform.worldDirectionToView(negativeXAxisDirection);

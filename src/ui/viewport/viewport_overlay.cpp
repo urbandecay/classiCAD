@@ -3,6 +3,7 @@
 #include "core/geometry/circle_construction.h"
 
 #include <QFont>
+#include <QImage>
 #include <QLineF>
 #include <QPolygonF>
 #include <QPainterPath>
@@ -89,6 +90,43 @@ QRectF blenderMiniButtonRect(BlenderNavigationAction action,
                   blenderMiniButtonSize);
 }
 
+QImage loadBlenderNavigationIcon(const char *resourcePath)
+{
+    QImage image(QString::fromLatin1(resourcePath));
+    image.setDevicePixelRatio(2.0);
+    return image;
+}
+
+const QImage &blenderNavigationIcon(BlenderNavigationAction action,
+                                   bool perspectiveEnabled)
+{
+    static const QImage zoom = loadBlenderNavigationIcon(
+        ":/blender-navigation/zoom.png");
+    static const QImage pan = loadBlenderNavigationIcon(
+        ":/blender-navigation/pan.png");
+    static const QImage camera = loadBlenderNavigationIcon(
+        ":/blender-navigation/camera.png");
+    static const QImage perspective = loadBlenderNavigationIcon(
+        ":/blender-navigation/perspective.png");
+    static const QImage iso = loadBlenderNavigationIcon(
+        ":/blender-navigation/iso.png");
+
+    switch (action) {
+    case BlenderNavigationAction::Zoom:
+        return zoom;
+    case BlenderNavigationAction::Pan:
+        return pan;
+    case BlenderNavigationAction::Camera:
+        return camera;
+    case BlenderNavigationAction::Projection:
+        return perspectiveEnabled ? perspective : iso;
+    default: {
+        static const QImage noIcon;
+        return noIcon;
+    }
+    }
+}
+
 QVector<BlenderAxisMarker> blenderAxisMarkers(const ViewportTransform &transform,
                                              const QSize &viewportSize)
 {
@@ -137,77 +175,27 @@ void drawBlenderNavigationButton(QPainter &painter,
     }
 
     const QPointF center = button.center();
-    const QColor iconColor(hovered ? 245 : 185,
-                            hovered ? 245 : 185,
-                            hovered ? 245 : 185,
-                            hovered ? 255 : 220);
-    painter.setPen(QPen(iconColor, 1.35, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(Qt::NoBrush);
-
-    if (action == BlenderNavigationAction::Zoom) {
-        painter.drawEllipse(QRectF(center.x() - 6.0,
-                                   center.y() - 7.0,
-                                   11.0,
-                                   11.0));
-        painter.drawLine(QPointF(center.x() + 3.5, center.y() + 3.5),
-                         QPointF(center.x() + 7.0, center.y() + 7.0));
-        painter.drawLine(QPointF(center.x() - 3.5, center.y() - 1.5),
-                         QPointF(center.x() + 2.5, center.y() - 1.5));
-        painter.drawLine(QPointF(center.x() - 0.5, center.y() - 4.5),
-                         QPointF(center.x() - 0.5, center.y() + 1.5));
-    } else if (action == BlenderNavigationAction::Pan) {
-        QPainterPath hand;
-        hand.moveTo(center + QPointF(-4.5, 6.0));
-        hand.lineTo(center + QPointF(-6.5, 2.0));
-        hand.quadTo(center + QPointF(-7.0, 0.0), center + QPointF(-5.0, -0.5));
-        hand.lineTo(center + QPointF(-3.7, 1.0));
-        hand.lineTo(center + QPointF(-3.7, -5.0));
-        hand.quadTo(center + QPointF(-3.7, -7.0), center + QPointF(-2.1, -7.0));
-        hand.quadTo(center + QPointF(-0.5, -7.0), center + QPointF(-0.5, -5.0));
-        hand.lineTo(center + QPointF(-0.5, -2.0));
-        hand.lineTo(center + QPointF(0.0, -6.0));
-        hand.quadTo(center + QPointF(0.3, -7.7), center + QPointF(1.8, -7.3));
-        hand.quadTo(center + QPointF(3.2, -6.9), center + QPointF(2.9, -5.2));
-        hand.lineTo(center + QPointF(2.4, -1.5));
-        hand.lineTo(center + QPointF(3.1, -4.7));
-        hand.quadTo(center + QPointF(3.5, -6.3), center + QPointF(4.9, -5.8));
-        hand.quadTo(center + QPointF(6.2, -5.3), center + QPointF(5.8, -3.7));
-        hand.lineTo(center + QPointF(4.6, 2.0));
-        hand.quadTo(center + QPointF(3.6, 6.0), center + QPointF(0.0, 7.0));
-        hand.quadTo(center + QPointF(-2.5, 7.0), center + QPointF(-4.5, 6.0));
-        hand.closeSubpath();
-        painter.setBrush(iconColor);
-        painter.drawPath(hand);
-        painter.setBrush(Qt::NoBrush);
-    } else if (action == BlenderNavigationAction::Camera) {
-        const QRectF body(center.x() - 7.0, center.y() - 5.0, 10.0, 10.0);
-        painter.drawRoundedRect(body, 1.0, 1.0);
-        painter.drawPolygon(QPolygonF{QPointF(center.x() + 3.0, center.y() - 3.0),
-                                      QPointF(center.x() + 7.0, center.y() - 5.0),
-                                      QPointF(center.x() + 7.0, center.y() + 5.0),
-                                      QPointF(center.x() + 3.0, center.y() + 3.0)});
-        painter.drawEllipse(QPointF(center.x() - 2.0, center.y()), 1.5, 1.5);
-    } else if (action == BlenderNavigationAction::Projection) {
-        painter.drawRect(QRectF(center.x() - 7.0,
-                                center.y() - 7.0,
-                                14.0,
-                                14.0));
-        if (perspectiveEnabled) {
-            painter.drawLine(center + QPointF(-7.0, -2.0), center);
-            painter.drawLine(center + QPointF(7.0, -2.0), center);
-            painter.drawLine(center + QPointF(-7.0, 3.0), center);
-            painter.drawLine(center + QPointF(7.0, 3.0), center);
-        } else {
-            painter.drawLine(center + QPointF(-2.3, -7.0),
-                             center + QPointF(-2.3, 7.0));
-            painter.drawLine(center + QPointF(2.3, -7.0),
-                             center + QPointF(2.3, 7.0));
-            painter.drawLine(center + QPointF(-7.0, -2.3),
-                             center + QPointF(7.0, -2.3));
-            painter.drawLine(center + QPointF(-7.0, 2.3),
-                             center + QPointF(7.0, 2.3));
-        }
+    const QImage &icon = blenderNavigationIcon(action, perspectiveEnabled);
+    if (icon.isNull()) {
+        return;
     }
+
+    const qreal iconDpr = icon.devicePixelRatio();
+    const QSizeF sourceLogicalSize(icon.width() / iconDpr,
+                                  icon.height() / iconDpr);
+    constexpr qreal maximumIconExtent = 17.0;
+    const qreal scale = maximumIconExtent /
+        std::max(sourceLogicalSize.width(), sourceLogicalSize.height());
+    const QSizeF iconSize(sourceLogicalSize.width() * scale,
+                          sourceLogicalSize.height() * scale);
+    const QRectF iconRect(center.x() - iconSize.width() / 2.0,
+                          center.y() - iconSize.height() / 2.0,
+                          iconSize.width(),
+                          iconSize.height());
+    painter.save();
+    painter.setOpacity(hovered ? 1.0 : 0.65);
+    painter.drawImage(iconRect, icon);
+    painter.restore();
 }
 
 } // namespace

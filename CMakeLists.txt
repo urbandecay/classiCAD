@@ -82,6 +82,7 @@ set(CLASSICAD_VIEWPORT_SUPPORT_SOURCES
     src/ui/input_helpers.cpp
     src/ui/viewport/viewport_renderer.cpp
     src/ui/viewport/viewport_overlay.cpp
+    src/ui/viewport/blender_navigation_icons.qrc
 )
 
 set(CLASSICAD_UI_SOURCES
@@ -145,6 +146,7 @@ if (CLASSICAD_BUILD_TESTS)
         ${CLASSICAD_TOOL_SOURCES}
         src/ui/viewport/viewport_renderer.cpp
         src/ui/viewport/viewport_overlay.cpp
+        src/ui/viewport/blender_navigation_icons.qrc
     )
 
     source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tests"

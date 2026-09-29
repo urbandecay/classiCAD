@@ -1,0 +1,9 @@
+<RCC>
+  <qresource prefix="/blender-navigation">
+    <file alias="zoom.png">../../../resources/icons/blender/navigation_zoom.png</file>
+    <file alias="pan.png">../../../resources/icons/blender/navigation_pan.png</file>
+    <file alias="camera.png">../../../resources/icons/blender/navigation_camera.png</file>
+    <file alias="perspective.png">../../../resources/icons/blender/navigation_perspective.png</file>
+    <file alias="iso.png">../../../resources/icons/blender/navigation_iso.png</file>
+  </qresource>
+</RCC>

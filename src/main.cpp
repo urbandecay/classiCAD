@@ -2,9 +2,16 @@
 #include "ui/main_window.h"
 
 #include <QApplication>
+#include <QSurfaceFormat>
 
 int main(int argc, char *argv[])
 {
+    QSurfaceFormat viewportFormat;
+    viewportFormat.setVersion(3, 3);
+    viewportFormat.setProfile(QSurfaceFormat::CoreProfile);
+    viewportFormat.setDepthBufferSize(24);
+    QSurfaceFormat::setDefaultFormat(viewportFormat);
+
     QApplication application(argc, argv);
     application.setApplicationName(QStringLiteral("classiCAD"));
     application.setOrganizationName(QStringLiteral("classiCAD"));

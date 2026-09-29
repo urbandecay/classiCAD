@@ -1,5 +1,6 @@
 #pragma once
 
+#include "document_settings.h"
 #include "layer.h"
 #include "scene_object.h"
 
@@ -18,6 +19,7 @@ public:
         LayerId activeLayerId = LayerId::invalid();
         quint64 nextObjectValue = 1;
         quint64 nextLayerValue = 1;
+        DocumentSettings settings;
     };
 
     Document();
@@ -27,6 +29,8 @@ public:
     const QVector<SceneObject> &objects() const;
     QVector<SceneObject> &objects();
     const QVector<Layer> &layers() const;
+    const DocumentSettings &settings() const;
+    bool setSettings(const DocumentSettings &settings);
 
     const SceneObject *object(ObjectId id) const;
     SceneObject *object(ObjectId id);
@@ -123,6 +127,7 @@ private:
     LayerId activeLayerId_ = LayerId::invalid();
     quint64 nextObjectValue_ = 1;
     quint64 nextLayerValue_ = 1;
+    DocumentSettings settings_;
 };
 
 } // namespace classiCAD

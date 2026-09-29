@@ -2,8 +2,10 @@
 
 #include "core/document/layer_id.h"
 #include "core/document/object_id.h"
+#include "core/document/document_settings.h"
 #include "core/model.h"
 #include "services/viewport/viewport_transform.h"
+#include "viewport/blender_grid_appearance.h"
 
 #include <QString>
 #include <QColor>
@@ -120,6 +122,17 @@ public:
     virtual void setControlPointsVisible(bool visible) = 0;
     virtual void setSnapLabelsVisible(bool visible) = 0;
     virtual void setSmoothCurveDisplay(bool enabled) = 0;
+    virtual DocumentSettings documentSettings() const = 0;
+    virtual bool setDocumentSettings(const DocumentSettings &settings) = 0;
+    virtual BlenderGridAppearance gridAppearance() const = 0;
+    virtual void setGridAppearance(const BlenderGridAppearance &appearance) = 0;
+    virtual ViewportCameraPreferences cameraPreferences() const = 0;
+    virtual bool setCameraPreferences(const ViewportCameraPreferences &preferences) = 0;
+    virtual ViewportNavigationPreferences navigationPreferences() const = 0;
+    virtual void setNavigationPreferences(
+        const ViewportNavigationPreferences &preferences) = 0;
+    virtual int viewportAntiAliasingSamples() const = 0;
+    virtual void setViewportAntiAliasingSamples(int samples) = 0;
     virtual void setArchitecturalDimensionFont(bool enabled) = 0;
     virtual void setPanButton(Qt::MouseButton button) = 0;
     virtual Qt::MouseButton panButton() const = 0;

@@ -40,6 +40,7 @@ src/core/document/layer_id.h       stable layer identity value type
 src/core/document/layer.h          layer record, visibility, locking, and object membership
 src/core/document/scene_object.h   persistent object identity, layer, and geometry payload
 src/core/document/document.*       document-owned scene objects, layers, IDs, and snapshots
+src/core/document/document_settings.* persistent document display units and grid spacing
 src/core/document/selection_model.* selected object and control-point references
 src/core/history/history.*          document-level snapshot undo/redo ownership
 src/core/serialization/document_serializer.* versioned document/layer/object save/restore
@@ -68,21 +69,31 @@ src/tools/trim_tool.*               trim lifecycle bridge
 src/tools/erase_tool.*              erase lifecycle bridge
 src/ui/input_helpers.*             Qt event-position and icon helpers
 src/ui/viewport_widget_api.h       typed viewport settings, command, status, and callback boundary
-src/ui/viewport_widget.cpp         current viewport state, tools, editing, snapping, and paint orchestration
-src/ui/viewport/viewport_renderer.* committed-geometry projection, active-workplane grid/axes, control-point, and subdivision drawing
+src/ui/viewport_widget.cpp         current viewport state, tools, editing, snapping, and Qt paint orchestration
+src/ui/viewport/blender_grid_renderer.* 3D grid shader setup, offscreen context, camera uniforms, and procedural GPU drawing
+src/ui/viewport/blender_grid_scale.*     Blender-compatible viewport grid step ladder and view-dependent LOD selection
+src/ui/viewport/blender_grid_frame.*     Blender-compatible visual grid plane, camera-relative origin, orthographic distance, and global-axis mapping
+src/ui/viewport/blender_grid_appearance.* shared theme colors, opacity, stipple, and camera-fade settings for GPU/Qt grid paths
+src/ui/viewport/viewport_depth_geometry.* sampled scene curves, points, and picture planes for the GPU depth prepass
+src/ui/viewport/shaders/blender_grid.* adapted Blender grid vertex/fragment shaders
+src/ui/viewport/shaders/scene_depth.*     depth-only scene geometry shader pair
+src/ui/viewport/viewport_renderer.* committed-geometry projection, CPU grid fallback, axes, control-point, and subdivision drawing
 src/ui/viewport/viewport_overlay.*  snap markers, tool previews, selection boxes, labels, and erase/trim overlays
 src/ui/main_window.*               menus, tool shelf, preferences, and window wiring
 tests/trim_seam.cpp                current geometry/editing regression coverage
 tests/core_contracts.cpp            vocabulary, ID, NURBS, and session compatibility coverage
+tests/viewport_interaction.cpp      viewport mouse/wheel and GPU/fallback interaction coverage
 ```
 
-The current split is useful, and phases 1 through 9 now give the remaining
+The current split is useful, and phases 1 through 10 now give the remaining
 modules explicit vocabulary, validation, document-ownership, history,
 selection, reusable-service, tool-lifecycle, and viewport-rendering contracts.
 `src/ui/viewport_widget.cpp` is still a large implementation module. It
 currently owns event routing, tool state, trim, erase, rotate, join, explode,
-subdivision, geometry creation, persistence, and paint orchestration. Geometry
-drawing now delegates to `ViewportRenderer`, while snap markers, transient tool
+subdivision, geometry creation, persistence, and Qt paint orchestration.
+3D grid rendering now delegates to `BlenderGridRenderer`; the CPU grid remains
+a context/shader fallback. Geometry drawing delegates to `ViewportRenderer`,
+while snap markers, transient tool
 previews, selection boxes, control points, labels, and erase/trim overlays
 delegate to `ViewportOverlay`. World/screen
 conversion, NURBS evaluation and sampling, scene erase-cache generation,
@@ -498,6 +509,13 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 | 8. Layers UI | Complete | Added `core/serialization/document_serializer.*` and regression coverage for stable layer IDs, object membership, active layer, visibility, locking, rename, reorder, and NURBS-bearing document records. Added the right-panel Layers UI with add/remove, rename, reorder, active-layer selection, visibility/locking controls, and move-selected-objects commands routed through `ViewportWidgetApi`; rendering, sampling, snapping, and editable selection now respect layer state. Version-3 update sessions persist the document/layer model while versions 1 and 2 remain readable. Build, both registered tests, diff check, and offscreen startup smoke passed. Next: phase 9, cleanup and enforce the architecture. |
 | 9. Cleanup and enforcement | Complete | Removed unreachable duplicate viewport rendering, hit-testing, NURBS-evaluation, and preview fallback implementations after confirming their extracted renderer/service/overlay paths are live. Retained only compatibility bridges still referenced by editing, session migration, or regression tests. Added CMake source groups mirroring `src/core`, `src/services`, `src/tools`, and `src/ui`; audited core/services/tools for forbidden UI dependencies and confirmed `NurbsCurve2D` is the sole committed curve representation. Updated the architecture map and README. `git diff --check`, `cmake --build build`, both registered tests, and the offscreen startup smoke passed. Refactoring phases 0–9 are complete; future extraction of the remaining explicit bridges is optional follow-up work. |
 | 10. 3D camera and planar workplanes | Complete | Added per-shape XY/XZ/YZ plane and offset metadata, 3D camera projection with orthographic/perspective presets and orbit, workplane ray-picking, plane-aware rendering/grid/axes, active-plane selection/snapping/erase/dimension anchors, an active-plane offset control, and plane-aware `.vignola`/`.3dm` geometry mapping. Existing curves remain local 2D NURBS; no mesh or arbitrary spatial NURBS was added. `cmake --build build`, all three offscreen CTest suites, `git diff --check`, and offscreen application startup passed. |
+| 11. Blender-derived 3D grid | Complete | Added GPL-2.0-or-later adaptations of Blender's procedural grid shaders and draw setup. The normal QWidget/QPainter viewport is preserved; perspective and orthographic grids render through an offscreen GL framebuffer and composite beneath scene geometry, with the existing painter renderer as a context/shader fallback. Added `COPYING`, source notices, and README licensing/architecture notes. `cmake --build build -j2`, all three offscreen CTest suites, `git diff --check`, an offscreen app startup/fallback smoke, and a software-OpenGL shader render test for both perspective and orthographic views passed. |
+| 12. Blender grid scale and LOD | Complete | Added `BlenderGridScale` for Blender's 8-step decimal ladder, three extra fixed-axis orthographic subdivisions, camera-dependent selection, and linear fractional level blending. The GPU shader clamps its three adjacent draw levels to the same ladder. Perspective focus distance follows `overlay_grid.hh`; fixed-axis orthographic distance follows Blender's `10 * 12px / (region width * projection[0][0])` rule. Added CPU regression coverage for transition values and axis-view classification. `cmake --build build -j2`, all three CTest suites, `git diff --check`, offscreen startup/fallback, and a brief desktop software-OpenGL startup passed. |
+| 13. Blender camera-relative grid frame and view mapping | Complete | Added `BlenderGridFrame` to resolve the Blender display plane, camera-relative grid origin, focus distance, and default global-axis visibility without mutating the CAD construction plane. Fixed views map Top/Bottom→XY, Front/Back→XZ, Right/Left→YZ; free-angle and perspective views use XY. The GPU shader now draws true global X/Y/Z axes, and the CPU fallback consumes the same resolved plane/origin/axis mapping. Added `gridViewDistance` to camera state for free-angle orthographic grid LOD and update it during orthographic zoom/navigation animation. Added contracts for all six axis planes, axis visibility, unchanged CAD plane, pan tracking, and custom-orthographic distance/zoom. `cmake --build build -j2`, all three CTest suites, `git diff --check`, and software-OpenGL shader startup validation passed. |
+| 14. Blender grid scene depth and occlusion | Complete | Added sampled 3D depth geometry for visible NURBS/vector curves, point markers, and picture planes; viewport depth-only pass; transparent grid composition over the scene image; GL_LEQUAL depth testing; first-iteration-only depth writes; and Blender-style progressive perspective clip-space z-bias. Kept Qt-painted scene geometry, screen annotations, previews, and the CPU grid fallback. Opaque picture planes occlude correctly; alpha cutouts in RGBA images are a documented follow-up limitation. `cmake --build build -j2`, all three CTest suites, `git diff --check`, and five-second XCB/Mesa software-OpenGL initialization passed without shader/context setup errors. Fixed-view image comparison and the broader depth-occlusion matrix are deferred to Stage 5. |
+| 15. Blender grid units and theme appearance | Complete | Added persistent document length-unit/base-spacing settings with version-4 serialization and legacy defaults, shared `BlenderGridAppearance` inputs for GPU and Qt fallback, and document-grid/preferences controls for units, spacing, theme colors, opacity, and low-alpha stipple. Kept geometry coordinates in millimeters. Added unit-scaled LOD, settings serialization, and theme validation coverage; build, all three CTest suites, `git diff --check`, and offscreen startup/fallback passed. |
+| 16. Blender viewport parity regression matrix | In progress | Added CPU-fallback image regressions for six axis views, isometric ortho, perspective, axis colors, horizon fade, close/far zoom, pan, and orbit; added document grid-settings undo/redo coverage. A dedicated widget interaction test sends wheel, configured pan, Shift+MMB pan, and Shift+configured-button orbit events. The offscreen CTest checks the Qt fallback; an XCB/Mesa run directly requires covered GPU-rendered orthographic and perspective grids. All four CTest suites and `git diff --check` pass. Direct Blender-vs-classiCAD screenshot comparison remains to validate pixel-level parity. |
+| 17. Blender navigation and projection comparison | In progress | Traced Blender's view zoom, smooth view, camera projection, grid setup, and theme source; read the user's Blender 5.2 preferences. Matched the 2x viewport projection factor, 1.2 wheel distance ratio, 200 ms smoothstep preset animation, target-depth cursor zoom, Blender distance bounds, 151/301 perspective/orthographic grid line counts, unbounded floor focus distance, and Blender-derived theme colors. The exact old saved palette migrates in memory without overwriting edited colors. Added projection and far-zoom recovery tests. The QWidget renderer still synchronously reads GPU frames into a QImage; native GPU composition and Blender screenshot/orbit comparison remain to establish full parity. |
 
 ## Required iteration report
 

@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/classiCAD/shaders">
+        <file alias="blender_grid.vert">shaders/blender_grid.vert</file>
+        <file alias="blender_grid.frag">shaders/blender_grid.frag</file>
+        <file alias="scene_depth.vert">shaders/scene_depth.vert</file>
+        <file alias="scene_depth.frag">shaders/scene_depth.frag</file>
+    </qresource>
+</RCC>

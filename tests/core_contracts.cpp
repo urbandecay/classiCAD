@@ -20,6 +20,10 @@
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
 #include "ui/viewport/line_type_style.h"
+#include "ui/viewport/blender_grid_frame.h"
+#include "ui/viewport/blender_grid_appearance.h"
+#include "ui/viewport/blender_grid_scale.h"
+#include "ui/viewport/viewport_depth_geometry.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "ui/viewport/viewport_overlay.h"
 #include "tools/circle_tool.h"
@@ -775,6 +779,13 @@ int main(int argc, char **argv)
                     "selection model must prune deleted object IDs");
 
     Document layerDocument;
+    DocumentSettings persistedGridSettings;
+    persistedGridSettings.lengthUnit = DocumentLengthUnit::Inch;
+    persistedGridSettings.gridSpacing = 0.25;
+    passed &= check(layerDocument.setSettings(persistedGridSettings) &&
+                        std::abs(documentGridSpacingInMillimeters(layerDocument.settings()) -
+                                 6.35) < 1.0e-12,
+                    "document grid spacing must convert the chosen length unit to canonical millimeters");
     const LayerId layeredSketch = layerDocument.createLayer(QStringLiteral("Sketch"));
     const LayerId layeredConstruction =
         layerDocument.createLayer(QStringLiteral("Construction"));
@@ -831,8 +842,18 @@ int main(int argc, char **argv)
                             QStringLiteral("Sketch geometry") &&
                         restoredLayerDocument.layer(layeredSketch)->frozen &&
                         !restoredLayerDocument.layer(layeredSketch)->plotted &&
-                        restoredLayerDocument.layer(layeredSketch)->locked,
-                    "document serialization must preserve layer identity, style, flags, and object membership");
+                        restoredLayerDocument.layer(layeredSketch)->locked &&
+                        restoredLayerDocument.settings() == persistedGridSettings,
+                    "document serialization must preserve layers, object membership, and explicit unit/grid settings");
+
+    QJsonObject versionThreeDocument = serializedDocument;
+    versionThreeDocument.insert(QStringLiteral("version"), 3);
+    Document restoredVersionThreeDocument;
+    passed &= check(documentFromJson(versionThreeDocument,
+                                     &restoredVersionThreeDocument,
+                                     &documentError) &&
+                        restoredVersionThreeDocument.settings() == DocumentSettings{},
+                    "version-3 documents must load with the previous millimeter grid defaults");
 
     QJsonObject versionOneDocument = serializedDocument;
     versionOneDocument.insert(QStringLiteral("version"), 1);
@@ -893,9 +914,57 @@ int main(int argc, char **argv)
                         historyDocument.shape(historyObject) != nullptr &&
                         historyDocument.shape(historyObject)->geometryType == GeometryType::Line,
                     "history must restore geometry edits through the same path");
+    history.record();
+    DocumentSettings historyGridSettings;
+    historyGridSettings.lengthUnit = DocumentLengthUnit::Inch;
+    historyGridSettings.gridSpacing = 0.5;
+    historyDocument.setSettings(historyGridSettings);
+    passed &= check(history.undo() &&
+                        historyDocument.settings() == DocumentSettings{} &&
+                        history.redo() &&
+                        historyDocument.settings() == historyGridSettings,
+                    "document grid units and spacing must participate in undo and redo snapshots");
 
     const QSize viewportSize(640, 480);
     ViewportTransform viewportTransform;
+    Shape depthLine = lineShape;
+    depthLine.workPlane = WorkPlane::XZ;
+    depthLine.workPlaneOffset = 7.0;
+    Shape depthPoint;
+    depthPoint.geometryType = GeometryType::Point;
+    depthPoint.points = {QPointF(2.0, 3.0)};
+    depthPoint.workPlane = WorkPlane::YZ;
+    depthPoint.workPlaneOffset = 6.0;
+    Shape depthPicture = picture;
+    depthPicture.workPlane = WorkPlane::XZ;
+    depthPicture.workPlaneOffset = 7.0;
+    Shape depthDimension;
+    depthDimension.geometryType = GeometryType::LinearDimension;
+    depthDimension.points = {QPointF(0.0, 0.0),
+                              QPointF(5.0, 0.0),
+                              QPointF(2.5, 1.0)};
+    const QVector<Shape> depthShapes{
+        depthLine, depthPoint, depthPicture, depthDimension};
+    const ViewportDepthGeometry depthGeometry =
+        buildViewportDepthGeometry(depthShapes);
+    const QByteArray depthGeometryKey =
+        viewportDepthGeometryCacheKey(depthShapes);
+    QVector<Shape> editedDepthShapes = depthShapes;
+    editedDepthShapes[0].points[0].rx() += 1.0;
+    bool lineDepthUsesShapePlane = depthGeometry.lineVertices.size() >= 2;
+    for (const QVector3D &vertex : depthGeometry.lineVertices) {
+        lineDepthUsesShapePlane &= std::abs(vertex.y() - 7.0f) < 1.0e-5f;
+    }
+    passed &= check(lineDepthUsesShapePlane &&
+                        depthGeometry.pointVertices.size() == 1 &&
+                        std::abs(depthGeometry.pointVertices.first().x() - 6.0f) < 1.0e-5f &&
+                        std::abs(depthGeometry.pointVertices.first().y() - 2.0f) < 1.0e-5f &&
+                        std::abs(depthGeometry.pointVertices.first().z() - 3.0f) < 1.0e-5f &&
+                        depthGeometry.surfaceVertices.size() == 6 &&
+                        std::abs(depthGeometry.surfaceVertices.first().y() - 7.0f) < 1.0e-5f &&
+                        depthGeometryKey !=
+                            viewportDepthGeometryCacheKey(editedDepthShapes),
+                    "viewport depth geometry must follow each object's workplane and represent curves, point markers, and picture surfaces while excluding dimension annotations");
     const QPointF serviceWorldPoint(12.5, -7.25);
     const QPointF serviceScreenPoint =
         viewportTransform.worldToScreen(serviceWorldPoint, viewportSize);
@@ -906,6 +975,117 @@ int main(int argc, char **argv)
                     "viewport transform must preserve world/screen round trips");
 
     ViewportTransform blenderViewTransform;
+    const BlenderGridLevelSelection fixedAxisGridLevel =
+        selectBlenderGridLevel(60.0, true);
+    const BlenderGridLevelSelection closeAxisGridLevel =
+        selectBlenderGridLevel(0.001, true);
+    const BlenderGridLevelSelection perspectiveGridLevel =
+        selectBlenderGridLevel(5.5, false);
+    const BlenderGridLevelSelection belowPerspectiveBaseGridLevel =
+        selectBlenderGridLevel(0.5, false);
+    passed &= check(fixedAxisGridLevel.baseStep == 10.0 &&
+                        fixedAxisGridLevel.baseStepIndex == 4 &&
+                        std::abs(fixedAxisGridLevel.levelFraction - 50.0 / 90.0) < 1.0e-12 &&
+                        closeAxisGridLevel.baseStep == 0.001 &&
+                        closeAxisGridLevel.baseStepIndex == 0 &&
+                        perspectiveGridLevel.baseStep == 1.0 &&
+                        std::abs(perspectiveGridLevel.levelFraction - 0.5) < 1.0e-12 &&
+                        belowPerspectiveBaseGridLevel.baseStep == 1.0 &&
+                        belowPerspectiveBaseGridLevel.levelFraction < 0.0,
+                    "Blender grid LOD must use its view-specific decimal steps and linear level blending");
+    const BlenderGridLevelSelection inchGridLevel =
+        selectBlenderGridLevel(300.0, false, 25.4);
+    BlenderGridAppearance defaultGridAppearance;
+    BlenderGridAppearance invalidGridAppearance = defaultGridAppearance;
+    invalidGridAppearance.opacity = 2.5;
+    passed &= check(std::abs(inchGridLevel.baseStep - 254.0) < 1.0e-10 &&
+                        std::abs(blenderGridStepAtLevel(inchGridLevel, 0) - 25.4) <
+                            1.0e-10 &&
+                        isValidBlenderGridAppearance(defaultGridAppearance) &&
+                        !isValidBlenderGridAppearance(invalidGridAppearance),
+                    "grid LOD must scale from document units and reject invalid theme opacity values");
+    passed &= check(isBlenderAxisAlignedView(ViewportViewPreset::Top) &&
+                        isBlenderAxisAlignedView(ViewportViewPreset::Back) &&
+                        !isBlenderAxisAlignedView(ViewportViewPreset::Isometric) &&
+                        !isBlenderAxisAlignedView(ViewportViewPreset::Custom),
+                    "only Blender's six cardinal presets may use fixed-axis orthographic grid subdivisions");
+
+    const QVector<QPair<ViewportViewPreset, WorkPlane>> gridViewPlanes{
+        {ViewportViewPreset::Top, WorkPlane::XY},
+        {ViewportViewPreset::Bottom, WorkPlane::XY},
+        {ViewportViewPreset::Front, WorkPlane::XZ},
+        {ViewportViewPreset::Back, WorkPlane::XZ},
+        {ViewportViewPreset::Right, WorkPlane::YZ},
+        {ViewportViewPreset::Left, WorkPlane::YZ},
+    };
+    ViewportTransform gridFrameTransform;
+    gridFrameTransform.setWorkPlane(WorkPlane::XZ, 9.0);
+    for (const auto &viewPlane : gridViewPlanes) {
+        gridFrameTransform.setViewPreset(viewPlane.first);
+        const BlenderGridFrame frame = resolveBlenderGridFrame(
+            gridFrameTransform, viewportSize);
+        const bool xVisible = viewPlane.second != WorkPlane::YZ;
+        const bool yVisible = viewPlane.second == WorkPlane::XY ||
+                              viewPlane.second == WorkPlane::YZ;
+        passed &= check(frame.plane == viewPlane.second &&
+                            frame.planeOffset == 0.0 &&
+                            frame.fixedAxisOrthographic &&
+                            frame.visibleAxes[0] == xVisible &&
+                            frame.visibleAxes[1] == yVisible &&
+                            !frame.visibleAxes[2] &&
+                            gridFrameTransform.workPlane() == WorkPlane::XZ &&
+                            gridFrameTransform.workPlaneOffset() == 9.0,
+                        "Blender cardinal views must select their matching visual plane and global in-plane axes without changing the CAD construction plane");
+    }
+    gridFrameTransform.setViewPreset(ViewportViewPreset::Top);
+    gridFrameTransform.pan() = QPointF(14.0, -6.0);
+    const BlenderGridFrame pannedGridFrame = resolveBlenderGridFrame(
+        gridFrameTransform, viewportSize);
+    passed &= check(std::abs(pannedGridFrame.cameraRelativeOffset.x() + 14.0) < 1.0e-9 &&
+                        std::abs(pannedGridFrame.cameraRelativeOffset.y() - 6.0) < 1.0e-9,
+                    "orthographic grid origin must track viewport pan in the displayed plane");
+
+    ViewportTransform customOrthoGridTransform;
+    customOrthoGridTransform.setWorkPlane(WorkPlane::XZ, 9.0);
+    customOrthoGridTransform.setViewDirection({1.0, 0.0, 0.25});
+    ViewportCameraState customOrthoCamera = customOrthoGridTransform.cameraState();
+    customOrthoCamera.gridViewDistance = 37.0;
+    customOrthoGridTransform.setCameraState(customOrthoCamera);
+    const BlenderGridFrame customOrthoFrame = resolveBlenderGridFrame(
+        customOrthoGridTransform, viewportSize);
+    passed &= check(customOrthoGridTransform.viewPreset() == ViewportViewPreset::Custom &&
+                        customOrthoFrame.plane == WorkPlane::XY &&
+                        !customOrthoFrame.fixedAxisOrthographic &&
+                        std::abs(customOrthoFrame.focusDistance - 37.0) < 1.0e-9 &&
+                        customOrthoFrame.visibleAxes[0] &&
+                        customOrthoFrame.visibleAxes[1] &&
+                        !customOrthoFrame.visibleAxes[2] &&
+                        customOrthoGridTransform.workPlane() == WorkPlane::XZ,
+                    "free-angle orthographic views must use Blender's XY grid and independent grid distance while retaining the CAD workplane");
+    customOrthoGridTransform.zoomAt(QPointF(viewportSize.width() * 0.5,
+                                            viewportSize.height() * 0.5),
+                                   2.0,
+                                   viewportSize,
+                                   0.01,
+                                   12.0);
+    const BlenderGridFrame zoomedCustomOrthoFrame = resolveBlenderGridFrame(
+        customOrthoGridTransform, viewportSize);
+    passed &= check(std::abs(zoomedCustomOrthoFrame.focusDistance - 18.5) < 1.0e-8,
+                    "free-angle orthographic zoom must update Blender-style grid distance for LOD selection");
+
+    ViewportTransform perspectiveGridFrameTransform;
+    perspectiveGridFrameTransform.setViewPreset(ViewportViewPreset::Perspective);
+    const BlenderGridFrame perspectiveGridFrame = resolveBlenderGridFrame(
+        perspectiveGridFrameTransform, viewportSize);
+    passed &= check(perspectiveGridFrame.plane == WorkPlane::XY &&
+                        !perspectiveGridFrame.fixedAxisOrthographic &&
+                        perspectiveGridFrame.focusDistance > 0.0 &&
+                        perspectiveGridFrame.focusDistance <= 60.0 &&
+                        perspectiveGridFrame.visibleAxes[0] &&
+                        perspectiveGridFrame.visibleAxes[1] &&
+                        !perspectiveGridFrame.visibleAxes[2],
+                    "Blender perspective views must display the floor plane and global X/Y axes");
+
     const QVector<QPair<ViewportViewPreset, Point3D>> axisViews{
         {ViewportViewPreset::Top, {0.0, 0.0, 1.0}},
         {ViewportViewPreset::Bottom, {0.0, 0.0, -1.0}},
@@ -1095,6 +1275,376 @@ int main(int argc, char **argv)
     passed &= check(std::hypot(isoRoundTrip.x() - xzPoint.x(),
                                isoRoundTrip.y() - xzPoint.y()) <= 1.0e-8,
                     "isometric view must ray-pick back onto the active workplane");
+
+    ViewportTransform perspectiveZoomTransform;
+    const ViewportCameraPreferences blenderCameraDefaults =
+        perspectiveZoomTransform.cameraPreferences();
+    passed &= check(std::abs(blenderCameraDefaults.focalLengthMillimeters - 50.0) < 1.0e-9 &&
+                        std::abs(blenderCameraDefaults.clipStart - 0.01) < 1.0e-9 &&
+                        std::abs(blenderCameraDefaults.clipEnd - 1000.0) < 1.0e-9,
+                    "viewport camera defaults must match the user's Blender lens and clipping values");
+    ViewportTransform perspectiveDistanceTransform;
+    perspectiveDistanceTransform.setViewPreset(ViewportViewPreset::Perspective);
+    const Point3D perspectiveTarget = perspectiveDistanceTransform.viewTarget();
+    const Point3D perspectiveEye =
+        perspectiveDistanceTransform.cameraPosition(viewportSize);
+    const Point3D largerViewportEye =
+        perspectiveDistanceTransform.cameraPosition(QSize(1920, 1080));
+    const qreal perspectiveDistance = std::hypot(
+        std::hypot(perspectiveEye.x - perspectiveTarget.x,
+                   perspectiveEye.y - perspectiveTarget.y),
+        perspectiveEye.z - perspectiveTarget.z);
+    const qreal largerViewportDistance = std::hypot(
+        std::hypot(largerViewportEye.x - perspectiveTarget.x,
+                   largerViewportEye.y - perspectiveTarget.y),
+        largerViewportEye.z - perspectiveTarget.z);
+    perspectiveDistanceTransform.zoom() = 0.15;
+    QPointF zoomedOutTargetScreen;
+    passed &= check(std::abs(perspectiveDistance - 60.0) < 1.0e-8 &&
+                        std::abs(largerViewportDistance - perspectiveDistance) < 1.0e-8 &&
+                        perspectiveDistanceTransform.worldPointToScreen(
+                            perspectiveDistanceTransform.viewTarget(),
+                            viewportSize,
+                            &zoomedOutTargetScreen),
+                    "perspective distance must use scene units independent of widget pixels and keep the view target inside the far clip while zooming out");
+    ViewportTransform blenderProjectionTransform;
+    blenderProjectionTransform.setViewPreset(ViewportViewPreset::Front);
+    blenderProjectionTransform.setPerspectiveEnabled(true);
+    QPointF oneUnitFromTargetScreen;
+    passed &= check(blenderProjectionTransform.worldPointToScreen(
+                        {1.0, 0.0, 0.0}, viewportSize,
+                        &oneUnitFromTargetScreen) &&
+                        std::abs(oneUnitFromTargetScreen.x() -
+                                 viewportSize.width() * 0.5 -
+                                 viewportSize.width() * 50.0 / (72.0 * 60.0)) <
+                            1.0e-8,
+                    "perspective projection must include Blender's 2x viewport zoom factor");
+    const QPointF edgeOnCursor(500.0, 180.0);
+    const qreal targetPlanePixelSize = 60.0 /
+        (viewportSize.width() * 50.0 / 72.0);
+    const Point3D edgeOnAnchor{
+        (edgeOnCursor.x() - viewportSize.width() * 0.5) *
+            targetPlanePixelSize,
+        0.0,
+        (viewportSize.height() * 0.5 - edgeOnCursor.y()) *
+            targetPlanePixelSize};
+    blenderProjectionTransform.setWorkPlane(WorkPlane::XY);
+    QPointF edgeOnPlanePick;
+    passed &= check(!blenderProjectionTransform.screenToWorkPlane(
+                        edgeOnCursor, viewportSize, WorkPlane::XY, 0.0,
+                        &edgeOnPlanePick),
+                    "edge-on construction plane must not provide a cursor anchor");
+    blenderProjectionTransform.zoomAt(edgeOnCursor, 1.2, viewportSize,
+                                      0.15, 12.0);
+    QPointF zoomedEdgeOnAnchor;
+    passed &= check(blenderProjectionTransform.worldPointToScreen(
+                        edgeOnAnchor, viewportSize, &zoomedEdgeOnAnchor) &&
+                        std::hypot(zoomedEdgeOnAnchor.x() - edgeOnCursor.x(),
+                                   zoomedEdgeOnAnchor.y() - edgeOnCursor.y()) <
+                            1.0e-8,
+                    "zoom to mouse must keep the target-depth point under the cursor when the CAD plane is edge-on");
+    ViewportTransform farZoomTransform;
+    farZoomTransform.setViewPreset(ViewportViewPreset::Perspective);
+    farZoomTransform.zoomAt(QPointF(viewportSize.width() * 0.5,
+                                   viewportSize.height() * 0.5),
+                            0.03, viewportSize, 0.15, 12.0);
+    const Point3D farZoomTarget = farZoomTransform.viewTarget();
+    const Point3D farZoomEye = farZoomTransform.cameraPosition(viewportSize);
+    const qreal farZoomDistance = std::hypot(
+        std::hypot(farZoomEye.x - farZoomTarget.x,
+                   farZoomEye.y - farZoomTarget.y),
+        farZoomEye.z - farZoomTarget.z);
+    farZoomTransform.zoomAt(QPointF(viewportSize.width() * 0.5,
+                                   viewportSize.height() * 0.5),
+                            1.0 / 0.03, viewportSize, 0.15, 12.0);
+    QPointF returnedTargetScreen;
+    passed &= check(std::abs(farZoomDistance - 2000.0) < 1.0e-7 &&
+                        farZoomTransform.worldPointToScreen(
+                            farZoomTransform.viewTarget(), viewportSize,
+                            &returnedTargetScreen),
+                    "Blender's distance range must allow far zoom and recover on zooming back");
+    ViewportCameraPreferences extendedFarClip = blenderCameraDefaults;
+    extendedFarClip.clipEnd = 3000.0;
+    perspectiveZoomTransform.setCameraPreferences(extendedFarClip);
+    perspectiveZoomTransform.setViewPreset(ViewportViewPreset::Front);
+    perspectiveZoomTransform.setPerspectiveEnabled(true);
+    perspectiveZoomTransform.zoom() = 1.0;
+    QPointF nearPerspectiveScreen;
+    QPointF farPerspectiveScreen;
+    const bool projectedPerspectiveDepthPair =
+        perspectiveZoomTransform.worldPointToScreen({100.0, 0.0, 0.0},
+                                                    viewportSize,
+                                                    &nearPerspectiveScreen) &&
+        perspectiveZoomTransform.worldPointToScreen({100.0, 100.0, 0.0},
+                                                    viewportSize,
+                                                    &farPerspectiveScreen);
+    const qreal viewportCenterX = viewportSize.width() / 2.0;
+    const qreal unitZoomPerspectiveRatio =
+        std::abs((nearPerspectiveScreen.x() - viewportCenterX) /
+                 (farPerspectiveScreen.x() - viewportCenterX));
+    perspectiveZoomTransform.zoom() = 0.5;
+    const bool projectedZoomedOutDepthPair =
+        perspectiveZoomTransform.worldPointToScreen({100.0, 0.0, 0.0},
+                                                    viewportSize,
+                                                    &nearPerspectiveScreen) &&
+        perspectiveZoomTransform.worldPointToScreen({100.0, 100.0, 0.0},
+                                                    viewportSize,
+                                                    &farPerspectiveScreen);
+    const qreal zoomedOutPerspectiveRatio =
+        std::abs((nearPerspectiveScreen.x() - viewportCenterX) /
+                 (farPerspectiveScreen.x() - viewportCenterX));
+    passed &= check(projectedPerspectiveDepthPair &&
+                        projectedZoomedOutDepthPair &&
+                        zoomedOutPerspectiveRatio < unitZoomPerspectiveRatio,
+                    "perspective zoom-out must move the camera back at a fixed Blender-like lens instead of widening the field of view");
+
+    const Point3D cameraEye = perspectiveZoomTransform.cameraPosition(viewportSize);
+    const Point3D cameraOut = perspectiveZoomTransform.viewDirection();
+    const Point3D cameraForward{-cameraOut.x, -cameraOut.y, -cameraOut.z};
+    const auto pointAlongView = [&cameraEye, &cameraForward](qreal depth) {
+        return Point3D{cameraEye.x + cameraForward.x * depth,
+                       cameraEye.y + cameraForward.y * depth,
+                       cameraEye.z + cameraForward.z * depth};
+    };
+    QPointF clippedPoint;
+    passed &= check(!perspectiveZoomTransform.worldPointToScreen(
+                        pointAlongView(0.005), viewportSize, &clippedPoint) &&
+                        !perspectiveZoomTransform.worldPointToScreen(
+                            pointAlongView(3001.0), viewportSize, &clippedPoint),
+                    "perspective camera clip start and clip end must reject points outside the clipping range");
+
+    ViewportTransform focalLengthTransform;
+    focalLengthTransform.setViewPreset(ViewportViewPreset::Front);
+    focalLengthTransform.setPerspectiveEnabled(true);
+    const Point3D eyeBeforeFocalChange = focalLengthTransform.cameraPosition(viewportSize);
+    QPointF shortLensScreen;
+    focalLengthTransform.worldPointToScreen({100.0, 0.0, 0.0},
+                                            viewportSize,
+                                            &shortLensScreen);
+    ViewportCameraPreferences longLens = focalLengthTransform.cameraPreferences();
+    longLens.focalLengthMillimeters = 100.0;
+    focalLengthTransform.setCameraPreferences(longLens);
+    QPointF longLensScreen;
+    focalLengthTransform.worldPointToScreen({100.0, 0.0, 0.0},
+                                            viewportSize,
+                                            &longLensScreen);
+    const Point3D eyeAfterFocalChange = focalLengthTransform.cameraPosition(viewportSize);
+    passed &= check(std::abs(eyeBeforeFocalChange.x - eyeAfterFocalChange.x) < 1.0e-8 &&
+                        std::abs(eyeBeforeFocalChange.y - eyeAfterFocalChange.y) < 1.0e-8 &&
+                        std::abs(eyeBeforeFocalChange.z - eyeAfterFocalChange.z) < 1.0e-8 &&
+                        longLensScreen.x() > shortLensScreen.x(),
+                    "changing focal length must alter perspective framing without dollying the camera");
+
+    ViewportTransform autoPerspectiveTransform;
+    autoPerspectiveTransform.setViewPreset(ViewportViewPreset::Front);
+    autoPerspectiveTransform.orbitByPixels(QPointF(1.0, 0.0));
+    passed &= check(autoPerspectiveTransform.isPerspectiveEnabled(),
+                    "Blender's auto-perspective preference must switch orthographic orbit to perspective");
+
+    ViewportTransform fixedOrthoOrbitTransform;
+    fixedOrthoOrbitTransform.setViewPreset(ViewportViewPreset::Front);
+    ViewportNavigationPreferences fixedOrthoNavigation;
+    fixedOrthoNavigation.autoPerspective = false;
+    fixedOrthoOrbitTransform.setNavigationPreferences(fixedOrthoNavigation);
+    fixedOrthoOrbitTransform.orbitByPixels(QPointF(1.0, 0.0));
+    passed &= check(!fixedOrthoOrbitTransform.isPerspectiveEnabled(),
+                    "disabling auto-perspective must preserve orthographic projection while orbiting");
+
+    ViewportTransform scaleZoomTransform;
+    scaleZoomTransform.setViewPreset(ViewportViewPreset::Front);
+    scaleZoomTransform.setPerspectiveEnabled(true);
+    ViewportNavigationPreferences scaleZoomPreferences;
+    scaleZoomPreferences.zoomMethod = ViewportZoomMethod::Scale;
+    scaleZoomTransform.setNavigationPreferences(scaleZoomPreferences);
+    const Point3D eyeBeforeScaleZoom = scaleZoomTransform.cameraPosition(viewportSize);
+    QPointF pointBeforeScaleZoom;
+    scaleZoomTransform.worldPointToScreen({100.0, 0.0, 0.0},
+                                          viewportSize,
+                                          &pointBeforeScaleZoom);
+    scaleZoomTransform.zoomAt(QPointF(viewportSize.width() * 0.5,
+                                      viewportSize.height() * 0.5),
+                              2.0,
+                              viewportSize,
+                              0.15,
+                              12.0);
+    const Point3D eyeAfterScaleZoom = scaleZoomTransform.cameraPosition(viewportSize);
+    QPointF pointAfterScaleZoom;
+    scaleZoomTransform.worldPointToScreen({100.0, 0.0, 0.0},
+                                          viewportSize,
+                                          &pointAfterScaleZoom);
+    passed &= check(std::abs(scaleZoomTransform.cameraPreferences().focalLengthMillimeters -
+                             100.0) < 1.0e-8 &&
+                        std::hypot(eyeBeforeScaleZoom.x - eyeAfterScaleZoom.x,
+                                   eyeBeforeScaleZoom.y - eyeAfterScaleZoom.y) < 1.0e-8 &&
+                        std::abs(eyeBeforeScaleZoom.z - eyeAfterScaleZoom.z) < 1.0e-8 &&
+                        pointAfterScaleZoom.x() > pointBeforeScaleZoom.x(),
+                    "Scale zoom must change focal length while preserving camera distance");
+
+    ViewportTransform perspectiveRoundTripTransform;
+    ViewportCameraPreferences roundTripCamera =
+        perspectiveRoundTripTransform.cameraPreferences();
+    roundTripCamera.clipEnd = 3000.0;
+    perspectiveRoundTripTransform.setCameraPreferences(roundTripCamera);
+    perspectiveRoundTripTransform.setViewPreset(ViewportViewPreset::Isometric);
+    perspectiveRoundTripTransform.setPerspectiveEnabled(true);
+    perspectiveRoundTripTransform.zoom() = 0.65;
+    const QPointF perspectiveWorldPoint(12.0, -8.0);
+    const QPointF perspectiveScreenPoint =
+        perspectiveRoundTripTransform.worldToScreen(perspectiveWorldPoint,
+                                                    viewportSize);
+    QPointF perspectiveRoundTripWorld;
+    const bool perspectiveRoundTripSucceeded =
+        perspectiveRoundTripTransform.screenToWorkPlane(
+            perspectiveScreenPoint,
+            viewportSize,
+            WorkPlane::XY,
+            0.0,
+            &perspectiveRoundTripWorld);
+    passed &= check(perspectiveRoundTripSucceeded &&
+                        std::hypot(perspectiveRoundTripWorld.x() -
+                                       perspectiveWorldPoint.x(),
+                                   perspectiveRoundTripWorld.y() -
+                                       perspectiveWorldPoint.y()) <= 1.0e-8,
+                    "fixed-lens perspective projection and workplane picking must round-trip consistently");
+
+    ViewportTransform perspectiveGridTransform;
+    ViewportCameraState lowHorizonCamera;
+    lowHorizonCamera.zoom = 1.0;
+    lowHorizonCamera.yawRadians = 0.35;
+    lowHorizonCamera.pitchRadians = 0.025;
+    lowHorizonCamera.perspective = true;
+    lowHorizonCamera.preset = ViewportViewPreset::Custom;
+    perspectiveGridTransform.setCameraState(lowHorizonCamera);
+    CurveHitTester perspectiveGridHitTester;
+    ViewportRenderer perspectiveGridRenderer(perspectiveGridTransform,
+                                             perspectiveGridHitTester);
+    QImage perspectiveGridImage(viewportSize,
+                                QImage::Format_ARGB32_Premultiplied);
+    perspectiveGridImage.fill(QColor(QStringLiteral("#292929")));
+    {
+        QPainter painter(&perspectiveGridImage);
+        perspectiveGridRenderer.drawGrid(painter, viewportSize);
+    }
+    auto averageLuminance = [&](const QRect &rect) {
+        qint64 total = 0;
+        for (int y = rect.top(); y <= rect.bottom(); ++y) {
+            for (int x = rect.left(); x <= rect.right(); ++x) {
+                total += qGray(perspectiveGridImage.pixel(x, y));
+            }
+        }
+        return static_cast<qreal>(total) / rect.width() / rect.height();
+    };
+    const qreal horizonBandLuminance = averageLuminance(QRect(0, 0, 640, 80));
+    const qreal foregroundBandLuminance =
+        averageLuminance(QRect(0, 400, 640, 80));
+    auto countGridPixels = [&](const QRect &rect) {
+        int count = 0;
+        for (int y = rect.top(); y <= rect.bottom(); ++y) {
+            for (int x = rect.left(); x <= rect.right(); ++x) {
+                if (qGray(perspectiveGridImage.pixel(x, y)) > 42) {
+                    ++count;
+                }
+            }
+        }
+        return count;
+    };
+    const int horizonGridPixels = countGridPixels(QRect(0, 0, 640, 80));
+    const int foregroundGridPixels = countGridPixels(QRect(0, 400, 640, 80));
+    passed &= check(foregroundBandLuminance > horizonBandLuminance + 0.2,
+                    "perspective floor grid must fade smoothly toward its horizon instead of staying uniformly bright");
+    passed &= check(foregroundGridPixels > 100 &&
+                        foregroundGridPixels > horizonGridPixels * 4,
+                    "Blender-like perspective grid must remain visible in the foreground and fade out above the horizon at grazing camera angles");
+
+    const QColor gridRegressionBackground(QStringLiteral("#292929"));
+    const auto renderCpuGrid = [&](const ViewportTransform &transform,
+                                   const BlenderGridAppearance &appearance =
+                                       BlenderGridAppearance{},
+                                   qreal baseGridStep = 1.0) {
+        CurveHitTester hitTester;
+        ViewportRenderer renderer(transform, hitTester);
+        renderer.setGridAppearance(appearance);
+        renderer.setGridBaseStep(baseGridStep);
+        QImage image(viewportSize, QImage::Format_ARGB32_Premultiplied);
+        image.fill(gridRegressionBackground);
+        QPainter painter(&image);
+        renderer.drawGrid(painter, viewportSize);
+        renderer.drawOrigin(painter, viewportSize);
+        return image;
+    };
+    const auto changedGridPixelCount = [&](const QImage &image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                if (image.pixelColor(x, y) != gridRegressionBackground) {
+                    ++count;
+                }
+            }
+        }
+        return count;
+    };
+    const QVector<ViewportViewPreset> blenderGridViewMatrix{
+        ViewportViewPreset::Top,
+        ViewportViewPreset::Bottom,
+        ViewportViewPreset::Front,
+        ViewportViewPreset::Back,
+        ViewportViewPreset::Right,
+        ViewportViewPreset::Left,
+        ViewportViewPreset::Isometric,
+    };
+    bool allOrthographicViewsRenderGrid = true;
+    for (const ViewportViewPreset preset : blenderGridViewMatrix) {
+        ViewportTransform matrixTransform;
+        matrixTransform.setViewPreset(preset);
+        const QImage image = renderCpuGrid(matrixTransform);
+        allOrthographicViewsRenderGrid &= changedGridPixelCount(image) > 100;
+    }
+    ViewportTransform perspectiveMatrixTransform;
+    perspectiveMatrixTransform.setViewPreset(ViewportViewPreset::Isometric);
+    perspectiveMatrixTransform.setPerspectiveEnabled(true);
+    const QImage perspectiveMatrixImage = renderCpuGrid(perspectiveMatrixTransform);
+    passed &= check(allOrthographicViewsRenderGrid &&
+                        changedGridPixelCount(perspectiveMatrixImage) > 100,
+                    "CPU fallback must render Blender grid and axis overlays in all six cardinal views, isometric ortho, and perspective");
+
+    ViewportTransform topGridMatrixTransform;
+    const QImage topGridMatrixImage = renderCpuGrid(topGridMatrixTransform);
+    int redAxisPixels = 0;
+    int greenAxisPixels = 0;
+    for (int offset = -2; offset <= 2; ++offset) {
+        const int y = viewportSize.height() / 2 + offset;
+        const int x = viewportSize.width() / 2 + offset;
+        for (int axisOffset = -80; axisOffset <= 80; ++axisOffset) {
+            const QColor horizontal = topGridMatrixImage.pixelColor(
+                viewportSize.width() / 2 + axisOffset, y);
+            const QColor vertical = topGridMatrixImage.pixelColor(
+                x, viewportSize.height() / 2 + axisOffset);
+            redAxisPixels += horizontal.red() > horizontal.green() + 35 &&
+                             horizontal.red() > horizontal.blue() + 35;
+            greenAxisPixels += vertical.green() > vertical.red() + 35 &&
+                               vertical.green() > vertical.blue() + 20;
+        }
+    }
+    passed &= check(redAxisPixels > 40 && greenAxisPixels > 40,
+                    "CPU grid fallback must preserve Blender red X and green Y axis colors in top view");
+
+    ViewportTransform closeGridTransform;
+    closeGridTransform.zoom() = 2.0;
+    ViewportTransform farGridTransform;
+    farGridTransform.zoom() = 0.5;
+    const QImage closeGridImage = renderCpuGrid(closeGridTransform);
+    const QImage farGridImage = renderCpuGrid(farGridTransform);
+    ViewportTransform pannedGridTransform;
+    pannedGridTransform.panByPixels(QPointF(47.0, -23.0), viewportSize);
+    const QImage pannedGridImage = renderCpuGrid(pannedGridTransform);
+    ViewportTransform orbitedGridTransform;
+    orbitedGridTransform.orbitByPixels(QPointF(36.0, -20.0));
+    const QImage orbitedGridImage = renderCpuGrid(orbitedGridTransform);
+    passed &= check(closeGridImage != farGridImage &&
+                        topGridMatrixImage != pannedGridImage &&
+                        topGridMatrixImage != orbitedGridImage,
+                    "CPU grid output must respond to close/far zoom, pan, and orbit camera navigation");
+
     xzTransform.setViewPreset(ViewportViewPreset::Front);
     QPointF edgeOnPick;
     passed &= check(!xzTransform.screenToWorkPlane(QPointF(320.0, 240.0),

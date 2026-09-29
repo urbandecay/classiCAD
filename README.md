@@ -59,7 +59,7 @@ src/core/debug_log.*         application logging
 src/ui/input_helpers.*       Qt event and icon helpers
 src/ui/viewport_widget_api.h typed viewport settings, command, status, and callback boundary
 src/ui/viewport_widget.cpp   viewport event routing, selection, editing, and lifecycle state
-src/ui/viewport/*             geometry renderer and transient overlay responsibilities
+src/ui/viewport/*             OpenGL 3D grid, geometry renderer, and transient overlays
 src/ui/main_window.*         menus, tool shelf, preferences, and window wiring
 tests/trim_seam.cpp          focused geometry/editing regression coverage
 tests/core_contracts.cpp     core, service, tool, and session-contract coverage
@@ -96,3 +96,22 @@ copies become selected. After the first axis point, a temporary mirrored
 preview follows the constrained cursor until the second point commits it.
 NURBS control points and component curves are reflected through the shared
 geometry transform while their curve structure is retained.
+
+## Blender-derived viewport grid
+
+The 3D viewport grid uses a standalone OpenGL adaptation of Blender's 3D View
+overlay grid shaders. It retains Blender's procedural line generation,
+camera-relative snapping, three-level grid transitions, perspective/ortho
+fades, low-alpha stipple, and additive passes; classiCAD's scene geometry and
+editing overlays continue to use Qt painting. A GPU depth prepass lets scene
+curves, points, and picture planes occlude the grid, with Blender-style
+perspective depth bias. The adapted shader sources and upstream references are
+documented in `THIRD_PARTY_NOTICES.md`. The combined
+application is licensed under GPL-2.0-or-later; see `COPYING`.
+Grid units and base spacing are document settings in View > Grid Units and
+Spacing; choosing a unit changes the displayed grid interval, not stored
+geometry coordinates. Grid colors, opacity, and low-alpha stipple are
+configurable in Edit > Preferences > Viewport, and the same appearance settings
+are used by the OpenGL renderer and its Qt fallback.
+Grid parity is being implemented in explicit stages; see
+`BLENDER_VIEWPORT_PARITY_PLAN.md` for completed work and remaining differences.

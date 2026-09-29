@@ -11,6 +11,9 @@ set(CMAKE_AUTORCC ON)
 
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS OpenGL)
+
+set(CLASSICAD_QT_OPENGL_LIBRARIES Qt${QT_VERSION_MAJOR}::OpenGL)
 
 include(FetchContent)
 FetchContent_Declare(
@@ -35,6 +38,8 @@ set(CLASSICAD_CORE_SOURCES
     src/core/geometry/circle_construction.cpp
     src/core/geometry/geometry_transform.cpp
     src/core/document/document.cpp
+    src/core/document/document_settings.cpp
+    src/core/document/document_settings.cpp
     src/core/document/selection_model.cpp
     src/core/history/history.cpp
     src/core/serialization/document_serializer.cpp
@@ -80,6 +85,12 @@ set(CLASSICAD_TOOL_SOURCES
 
 set(CLASSICAD_VIEWPORT_SUPPORT_SOURCES
     src/ui/input_helpers.cpp
+    src/ui/viewport/blender_grid_frame.cpp
+    src/ui/viewport/blender_grid_appearance.cpp
+    src/ui/viewport/blender_grid_renderer.cpp
+    src/ui/viewport/blender_grid_scale.cpp
+    src/ui/viewport/blender_grid_shaders.qrc
+    src/ui/viewport/viewport_depth_geometry.cpp
     src/ui/viewport/viewport_renderer.cpp
     src/ui/viewport/viewport_overlay.cpp
     src/ui/viewport/blender_navigation_icons.qrc
@@ -115,6 +126,7 @@ target_include_directories(classiCAD PRIVATE
 
 target_link_libraries(classiCAD PRIVATE
     Qt${QT_VERSION_MAJOR}::Widgets
+    ${CLASSICAD_QT_OPENGL_LIBRARIES}
     opennurbsStatic
     zlib
     opennurbsStatic
@@ -144,14 +156,22 @@ if (CLASSICAD_BUILD_TESTS)
         ${CLASSICAD_CORE_CONTRACT_SOURCES}
         ${CLASSICAD_SERVICE_SOURCES}
         ${CLASSICAD_TOOL_SOURCES}
+        src/ui/viewport/blender_grid_frame.cpp
+        src/ui/viewport/blender_grid_appearance.cpp
+        src/ui/viewport/blender_grid_renderer.cpp
+        src/ui/viewport/blender_grid_scale.cpp
+        src/ui/viewport/viewport_depth_geometry.cpp
         src/ui/viewport/viewport_renderer.cpp
         src/ui/viewport/viewport_overlay.cpp
         src/ui/viewport/blender_navigation_icons.qrc
+        src/ui/viewport/blender_grid_shaders.qrc
     )
 
     source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/tests"
                  PREFIX "tests"
-                 FILES tests/trim_seam.cpp tests/core_contracts.cpp)
+                 FILES tests/trim_seam.cpp
+                       tests/core_contracts.cpp
+                       tests/viewport_interaction.cpp)
     source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src"
                  FILES ${CLASSICAD_TEST_RUNTIME_SOURCES}
                        ${CLASSICAD_CORE_CONTRACT_TEST_SOURCES})
@@ -165,6 +185,7 @@ if (CLASSICAD_BUILD_TESTS)
     )
     target_link_libraries(classicad_trim_seam_test PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
+        ${CLASSICAD_QT_OPENGL_LIBRARIES}
         opennurbsStatic
         zlib
         opennurbsStatic
@@ -181,6 +202,7 @@ if (CLASSICAD_BUILD_TESTS)
     )
     target_link_libraries(classicad_core_contracts_test PRIVATE
         Qt${QT_VERSION_MAJOR}::Widgets
+        ${CLASSICAD_QT_OPENGL_LIBRARIES}
         opennurbsStatic
         zlib
         opennurbsStatic
@@ -188,12 +210,33 @@ if (CLASSICAD_BUILD_TESTS)
     add_test(NAME core_contracts COMMAND classicad_core_contracts_test)
     set_tests_properties(core_contracts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+    add_executable(classicad_viewport_interaction_test
+        tests/viewport_interaction.cpp
+        ${CLASSICAD_TEST_RUNTIME_SOURCES}
+        src/ui/viewport_widget.cpp
+    )
+    target_include_directories(classicad_viewport_interaction_test PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(classicad_viewport_interaction_test PRIVATE
+        Qt${QT_VERSION_MAJOR}::Widgets
+        ${CLASSICAD_QT_OPENGL_LIBRARIES}
+        opennurbsStatic
+        zlib
+        opennurbsStatic
+    )
+    add_test(NAME viewport_interaction COMMAND classicad_viewport_interaction_test)
+    set_tests_properties(viewport_interaction PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+
     add_executable(classicad_vignola_file_test
         tests/vignola_file.cpp
         src/core/geometry/geometry_type.cpp
         src/core/geometry/nurbs_curve.cpp
         src/core/geometry/work_plane.cpp
         src/core/document/document.cpp
+        src/core/document/document_settings.cpp
         src/core/serialization/document_serializer.cpp
         src/core/serialization/vignola_document_file.cpp
         src/core/model.cpp

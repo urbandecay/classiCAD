@@ -17,6 +17,7 @@
 #include "../tools/tool_input.h"
 #include "../tools/tool_registry.h"
 #include "input_helpers.h"
+#include "viewport/blender_grid_renderer.h"
 #include "viewport/viewport_overlay.h"
 #include "viewport/viewport_renderer.h"
 
@@ -157,22 +158,27 @@ public:
         qApp->installEventFilter(this);
         setCursor(Qt::CrossCursor);
         navigationAnimation_ = new QVariantAnimation(this);
-        navigationAnimation_->setDuration(300);
+        navigationAnimation_->setDuration(200);
         navigationAnimation_->setStartValue(0.0);
         navigationAnimation_->setEndValue(1.0);
-        navigationAnimation_->setEasingCurve(QEasingCurve::InOutCubic);
+        navigationAnimation_->setEasingCurve(QEasingCurve::Linear);
         connect(navigationAnimation_, &QVariantAnimation::valueChanged,
                 this, [this](const QVariant &value) {
-                    const qreal progress = value.toReal();
+                    const qreal time = value.toReal();
+                    // Blender's smooth view uses 3*t*t - 2*t*t*t.
+                    const qreal progress = time * time * (3.0 - 2.0 * time);
                     const auto interpolateAngle = [progress](qreal start, qreal end) {
                         constexpr qreal turn = 6.28318530717958647692;
                         return start + std::remainder(end - start, turn) * progress;
                     };
                     ViewportCameraState state;
-                    state.zoom = std::exp(std::log(navigationAnimationStart_.zoom) +
-                                          (std::log(navigationAnimationEnd_.zoom) -
-                                           std::log(navigationAnimationStart_.zoom)) *
-                                              progress);
+                    const qreal startDistance = 1.0 / navigationAnimationStart_.zoom;
+                    const qreal endDistance = 1.0 / navigationAnimationEnd_.zoom;
+                    state.zoom = 1.0 / (startDistance * (1.0 - progress) +
+                                        endDistance * progress);
+                    state.gridViewDistance =
+                        navigationAnimationStart_.gridViewDistance * (1.0 - progress) +
+                        navigationAnimationEnd_.gridViewDistance * progress;
                     state.pan = navigationAnimationStart_.pan * (1.0 - progress) +
                                 navigationAnimationEnd_.pan * progress;
                     state.orbitPivot = {
@@ -900,6 +906,83 @@ public:
     {
         viewportRenderer_.setSmoothCurveDisplay(enabled);
         DebugLog::instance().write(QStringLiteral("setSmoothCurveDisplay=%1").arg(enabled));
+        update();
+    }
+
+    DocumentSettings documentSettings() const override
+    {
+        return document_.settings();
+    }
+
+    bool setDocumentSettings(const DocumentSettings &settings) override
+    {
+        if (!isValidDocumentSettings(settings)) {
+            return false;
+        }
+        if (document_.settings() == settings) {
+            return true;
+        }
+        const Document::Snapshot previous = document_.snapshot();
+        if (!document_.setSettings(settings)) {
+            return false;
+        }
+        viewportRenderer_.setGridBaseStep(documentGridSpacingInMillimeters(settings));
+        recordGeometrySnapshot(previous);
+        update();
+        return true;
+    }
+
+    BlenderGridAppearance gridAppearance() const override
+    {
+        return gridAppearance_;
+    }
+
+    void setGridAppearance(const BlenderGridAppearance &appearance) override
+    {
+        if (!isValidBlenderGridAppearance(appearance)) {
+            return;
+        }
+        gridAppearance_ = appearance;
+        viewportRenderer_.setGridAppearance(appearance);
+        update();
+    }
+
+    ViewportCameraPreferences cameraPreferences() const override
+    {
+        return viewportTransform_.cameraPreferences();
+    }
+
+    bool setCameraPreferences(
+        const ViewportCameraPreferences &preferences) override
+    {
+        if (!viewportTransform_.setCameraPreferences(preferences)) {
+            return false;
+        }
+        update();
+        emitCoordinateUpdate();
+        return true;
+    }
+
+    ViewportNavigationPreferences navigationPreferences() const override
+    {
+        return viewportTransform_.navigationPreferences();
+    }
+
+    void setNavigationPreferences(
+        const ViewportNavigationPreferences &preferences) override
+    {
+        viewportTransform_.setNavigationPreferences(preferences);
+        update();
+    }
+
+    int viewportAntiAliasingSamples() const override
+    {
+        return blenderGridRenderer_.antiAliasingSamples();
+    }
+
+    void setViewportAntiAliasingSamples(int samples) override
+    {
+        blenderGridRenderer_.setAntiAliasingSamples(samples);
         update();
     }
 
@@ -2008,16 +2091,51 @@ protected:
     void paintEvent(QPaintEvent *) override
     {
         updateAssociativeDimensions(document_, curveSampler_);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
-
-        drawGrid(painter);
-        drawOrigin(painter);
+        const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
+        viewportRenderer_.setGridBaseStep(baseGridStep);
+        viewportRenderer_.setGridAppearance(gridAppearance_);
+        QVector<Shape> visibleDepthShapes;
+        visibleDepthShapes.reserve(shapes_.size());
+        for (int index = 0; index < shapes_.size(); ++index) {
+            const ObjectId objectId = shapes_.objectIdAt(index);
+            if (!document_.isObjectVisible(objectId)) {
+                continue;
+            }
+            Shape depthShape = shapes_[index];
+            if (activeTool_ == Tool::Scale && scalePreviewValid_ &&
+                scaleShapeIds_.contains(objectId)) {
+                scaleShapeGeometry(&depthShape,
+                                   scaleBaseWorld_,
+                                   scalePreviewAxis_,
+                                   scalePreviewFactor_,
+                                   scaleMode_);
+            } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
+                       rotateShapeIndices_.contains(objectId)) {
+                rotateShapeGeometry(&depthShape,
+                                    rotateBaseWorld_,
+                                    rotatePreviewAngle_);
+            }
+            visibleDepthShapes.append(std::move(depthShape));
+        }
+        const QImage gpuViewportBackground = blenderGridRenderer_.render(
+            viewportTransform_, size(), devicePixelRatioF(), visibleDepthShapes,
+            baseGridStep, gridAppearance_);
+        const qreal devicePixelRatio = std::max<qreal>(devicePixelRatioF(), 1.0);
+        const QSize scenePixelSize(qRound(size().width() * devicePixelRatio),
+                                   qRound(size().height() * devicePixelRatio));
+        QImage committedSceneLayer(scenePixelSize,
+                                   QImage::Format_ARGB32_Premultiplied);
+        committedSceneLayer.setDevicePixelRatio(devicePixelRatio);
+        committedSceneLayer.fill(Qt::transparent);
+        QPainter scenePainter(&committedSceneLayer);
+        scenePainter.setRenderHint(QPainter::Antialiasing, true);
 
         for (int index = 0; index < shapes_.size(); ++index) {
             const ObjectId objectId = shapes_.objectIdAt(index);
             if (!document_.isObjectVisible(objectId)) {
+                continue;
+            }
+            if (isDimensionGeometryType(shapes_[index].geometryType)) {
                 continue;
             }
             QColor layerColor;
@@ -2048,7 +2166,7 @@ protected:
                                    scalePreviewAxis_,
                                    scalePreviewFactor_,
                                    scaleMode_);
-                drawShape(painter,
+                drawShape(scenePainter,
                           previewShape,
                           false,
                           true,
@@ -2056,18 +2174,12 @@ protected:
                           layerColor,
                           layerLineType,
                           layerLineWeightMm);
-                if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
-                    drawSubdivisionPoints(painter,
-                                          previewShape,
-                                          previewShape.subdivisionParameters,
-                                          false);
-                }
             } else if (rotatePreview) {
                 Shape previewShape = shapes_[index];
                 rotateShapeGeometry(&previewShape,
                                     rotateBaseWorld_,
                                     rotatePreviewAngle_);
-                drawShape(painter,
+                drawShape(scenePainter,
                           previewShape,
                           false,
                           true,
@@ -2075,14 +2187,8 @@ protected:
                           layerColor,
                           layerLineType,
                           layerLineWeightMm);
-                if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
-                    drawSubdivisionPoints(painter,
-                                          previewShape,
-                                          previewShape.subdivisionParameters,
-                                          false);
-                }
             } else {
-                drawShape(painter,
+                drawShape(scenePainter,
                           shapes_[index],
                           false,
                           selected,
@@ -2090,12 +2196,63 @@ protected:
                           layerColor,
                           layerLineType,
                           layerLineWeightMm);
-                if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
-                    drawSubdivisionPoints(painter,
-                                          shapes_[index],
-                                          shapes_[index].subdivisionParameters,
-                                          false);
+            }
+        }
+        scenePainter.end();
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        if (gpuViewportBackground.isNull()) {
+            painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
+            drawGrid(painter);
+            drawOrigin(painter);
+        } else {
+            painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
+        }
+        painter.drawImage(QPoint(0, 0), committedSceneLayer);
+        if (!gpuViewportBackground.isNull()) {
+            // The GPU layer is transparent and contains only fragments that
+            // pass against scene depth, so it composites over scene pixels
+            // only when the grid is in front.
+            painter.drawImage(QPoint(0, 0), gpuViewportBackground);
+        }
+
+        for (int index = 0; index < shapes_.size(); ++index) {
+            const ObjectId objectId = shapes_.objectIdAt(index);
+            if (!document_.isObjectVisible(objectId)) {
+                continue;
+            }
+            const Shape &shape = shapes_[index];
+            if (isDimensionGeometryType(shape.geometryType)) {
+                QColor layerColor;
+                QString layerLineType;
+                qreal layerLineWeightMm = 0.0;
+                const SceneObject *sceneObject = document_.object(objectId);
+                const Layer *objectLayer = sceneObject == nullptr
+                                               ? nullptr
+                                               : document_.layer(sceneObject->layerId);
+                if (objectLayer != nullptr) {
+                    layerColor = objectLayer->color;
+                    layerLineType = objectLayer->lineType;
+                    layerLineWeightMm = objectLayer->lineWeightMm;
                 }
+                const bool selected = selectedShapeIndices_.contains(objectId) ||
+                                      objectId == selectedShapeIndex_ ||
+                                      joinShapeIndices_.contains(objectId);
+                drawShape(painter,
+                          shape,
+                          false,
+                          selected,
+                          true,
+                          layerColor,
+                          layerLineType,
+                          layerLineWeightMm);
+            }
+            if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
+                drawSubdivisionPoints(painter,
+                                      shape,
+                                      shape.subdivisionParameters,
+                                      false);
             }
         }
 
@@ -2263,6 +2420,10 @@ protected:
                 navigationPressPosition_ = screenPosition;
                 navigationLastPosition_ = screenPosition;
                 navigationMoved_ = false;
+                if (hit.action == BlenderNavigationAction::Orbit ||
+                    hit.action == BlenderNavigationAction::Axis) {
+                    beginOrbitAt(screenPosition);
+                }
                 setCursor(hit.action == BlenderNavigationAction::Camera ||
                                   hit.action == BlenderNavigationAction::Projection
                               ? Qt::PointingHandCursor
@@ -2433,6 +2594,9 @@ protected:
             } else {
                 orbiting_ = configuredPanButton &&
                             event->modifiers().testFlag(Qt::ShiftModifier);
+            }
+            if (orbiting_) {
+                beginOrbitAt(screenPosition);
             }
             panMoved_ = false;
             panStartPosition_ = screenPosition.toPoint();
@@ -2820,7 +2984,15 @@ protected:
                     viewportTransform_.orbitByPixels(delta);
                     break;
                 case BlenderNavigationAction::Zoom: {
-                    const qreal factor = std::exp(-delta.y() * 0.012);
+                    const ViewportNavigationPreferences preferences =
+                        viewportTransform_.navigationPreferences();
+                    qreal zoomDelta = preferences.zoomAxis == ViewportZoomAxis::Vertical
+                                          ? delta.y()
+                                          : delta.x();
+                    if (preferences.invertMouseZoom) {
+                        zoomDelta = -zoomDelta;
+                    }
+                    const qreal factor = std::exp(-zoomDelta * 0.012);
                     viewportTransform_.zoomAt(QPointF(width() * 0.5,
                                                       height() * 0.5),
                                               factor,
@@ -3545,14 +3717,29 @@ protected:
         const QPointF screenPosition = eventPosition(event);
         const QPointF beforeZoom = screenToWorld(screenPosition);
         const qreal oldZoom = zoom_;
-        const qreal factor = event->angleDelta().y() > 0 ? 1.12 : 1.0 / 1.12;
+        const int pixelDelta = event->pixelDelta().y();
+        const int angleDelta = event->angleDelta().y();
+        qreal wheelSteps = pixelDelta != 0
+                               ? static_cast<qreal>(pixelDelta) / 40.0
+                               : static_cast<qreal>(angleDelta) / 120.0;
+        if (wheelSteps == 0.0) {
+            event->accept();
+            return;
+        }
+        if (viewportTransform_.navigationPreferences().invertZoomWheel) {
+            wheelSteps = -wheelSteps;
+        }
+        wheelSteps = std::clamp(wheelSteps, -24.0, 24.0);
+        // Blender's view_zoom_apply_step uses a 1.2 distance ratio per notch.
+        const qreal factor = std::exp(std::log(1.2) * wheelSteps);
         viewportTransform_.zoomAt(screenPosition, factor, size(), 0.15, 12.0);
 
         const QPointF afterZoom = screenToWorld(screenPosition);
 
-        DebugLog::instance().write(QStringLiteral("wheel screen=%1 deltaY=%2 zoom=%3->%4 worldBefore=%5 worldAfter=%6 pan=%7")
+        DebugLog::instance().write(QStringLiteral("wheel screen=%1 angleDeltaY=%2 pixelDeltaY=%3 zoom=%4->%5 worldBefore=%6 worldAfter=%7 pan=%8")
                                        .arg(pointText(screenPosition))
-                                       .arg(event->angleDelta().y())
+                                       .arg(angleDelta)
+                                       .arg(pixelDelta)
                                        .arg(oldZoom, 0, 'f', 4)
                                        .arg(zoom_, 0, 'f', 4)
                                        .arg(pointText(beforeZoom))
@@ -3820,6 +4007,70 @@ protected:
     }
 
 private:
+    void beginOrbitAt(const QPointF &screenPosition)
+    {
+        const ViewportNavigationPreferences preferences =
+            viewportTransform_.navigationPreferences();
+        QPointF workPlanePosition;
+        if (preferences.useMouseDepthNavigate &&
+            hitTestShape(screenPosition) >= 0 &&
+            viewportTransform_.screenToWorkPlane(
+                screenPosition,
+                size(),
+                viewportTransform_.workPlane(),
+                viewportTransform_.workPlaneOffset(),
+                &workPlanePosition)) {
+            viewportTransform_.setOrbitPivotPreservingView(
+                workPlanePointToWorld(workPlanePosition,
+                                      viewportTransform_.workPlane(),
+                                      viewportTransform_.workPlaneOffset()));
+            return;
+        }
+
+        if (!preferences.orbitAroundActive || !selectedShapeIndex_.isValid()) {
+            return;
+        }
+        const int shapeIndex = objectIndex(selectedShapeIndex_);
+        if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+            return;
+        }
+        const Shape &shape = shapes_[shapeIndex];
+        bool hasBounds = false;
+        qreal minimumX = 0.0;
+        qreal minimumY = 0.0;
+        qreal maximumX = 0.0;
+        qreal maximumY = 0.0;
+        const auto includePoints = [&](const QVector<QPointF> &points) {
+            for (const QPointF &point : points) {
+                if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
+                    continue;
+                }
+                if (!hasBounds) {
+                    minimumX = maximumX = point.x();
+                    minimumY = maximumY = point.y();
+                    hasBounds = true;
+                } else {
+                    minimumX = std::min(minimumX, point.x());
+                    minimumY = std::min(minimumY, point.y());
+                    maximumX = std::max(maximumX, point.x());
+                    maximumY = std::max(maximumY, point.y());
+                }
+            }
+        };
+        includePoints(shape.points);
+        includePoints(shape.nurbs.controlPoints);
+        for (const Shape::NurbsCurve2D &component : shape.components) {
+            includePoints(component.controlPoints);
+        }
+        if (!hasBounds) {
+            return;
+        }
+        const QPointF center((minimumX + maximumX) * 0.5,
+                             (minimumY + maximumY) * 0.5);
+        viewportTransform_.setOrbitPivotPreservingView(
+            workPlanePointToWorld(center, shape.workPlane, shape.workPlaneOffset));
+    }
+
     static qreal directionDot(const Point3D &first, const Point3D &second)
     {
         return first.x * second.x + first.y * second.y + first.z * second.z;
@@ -3841,6 +4092,7 @@ private:
         constexpr qreal angleTolerance = 1.0e-8;
         const bool poseChanged =
             std::abs(original.zoom - target.zoom) > 1.0e-8 ||
+            std::abs(original.gridViewDistance - target.gridViewDistance) > 1.0e-8 ||
             std::hypot(original.pan.x() - target.pan.x(),
                        original.pan.y() - target.pan.y()) > 1.0e-8 ||
             std::abs(original.orbitPivot.x - target.orbitPivot.x) > 1.0e-8 ||
@@ -9654,7 +9906,9 @@ private:
     CurveHitTester curveHitTester_;
     SnapEngine snapEngine_;
     ViewportRenderer viewportRenderer_;
+    BlenderGridRenderer blenderGridRenderer_;
     ViewportOverlay viewportOverlay_;
+    BlenderGridAppearance gridAppearance_;
     ToolContext toolContext_;
     ToolRegistry toolRegistry_;
     InteractionTool *activeToolController_ = nullptr;

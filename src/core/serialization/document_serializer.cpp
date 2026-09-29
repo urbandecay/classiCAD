@@ -58,7 +58,12 @@ bool idFromJson(const QJsonValue &value, quint64 *id)
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 3);
+    serialized.insert(QStringLiteral("version"), 4);
+    QJsonObject settings;
+    settings.insert(QStringLiteral("lengthUnit"),
+                    documentLengthUnitKey(document.settings().lengthUnit));
+    settings.insert(QStringLiteral("gridSpacing"), document.settings().gridSpacing);
+    serialized.insert(QStringLiteral("settings"), settings);
     serialized.insert(QStringLiteral("activeLayerId"),
                       idToJson(document.activeLayerId().value()));
 
@@ -108,7 +113,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 3) {
+    if (version < 1 || version > 4) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -121,6 +126,32 @@ bool documentFromJson(const QJsonValue &value,
     }
 
     Document::Snapshot snapshot;
+    if (version >= 4) {
+        const QJsonValue settingsValue = serialized.value(QStringLiteral("settings"));
+        if (!settingsValue.isObject()) {
+            setError(errorMessage, QStringLiteral("document settings must be an object"));
+            return false;
+        }
+        const QJsonObject settingsObject = settingsValue.toObject();
+        DocumentSettings settings;
+        const QJsonValue lengthUnitValue =
+            settingsObject.value(QStringLiteral("lengthUnit"));
+        const QJsonValue gridSpacingValue =
+            settingsObject.value(QStringLiteral("gridSpacing"));
+        if (!lengthUnitValue.isString() ||
+            !documentLengthUnitFromKey(lengthUnitValue.toString(),
+                                       &settings.lengthUnit) ||
+            !gridSpacingValue.isDouble()) {
+            setError(errorMessage, QStringLiteral("invalid document grid settings"));
+            return false;
+        }
+        settings.gridSpacing = gridSpacingValue.toDouble();
+        if (!isValidDocumentSettings(settings)) {
+            setError(errorMessage, QStringLiteral("invalid document grid settings"));
+            return false;
+        }
+        snapshot.settings = settings;
+    }
     QSet<quint64> layerIds;
     quint64 nextLayerValue = 1;
     for (const QJsonValue &layerValue : layersValue.toArray()) {

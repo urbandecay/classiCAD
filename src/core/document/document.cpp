@@ -35,6 +35,20 @@ const QVector<Layer> &Document::layers() const
     return layers_;
 }
 
+const DocumentSettings &Document::settings() const
+{
+    return settings_;
+}
+
+bool Document::setSettings(const DocumentSettings &settings)
+{
+    if (!isValidDocumentSettings(settings)) {
+        return false;
+    }
+    settings_ = settings;
+    return true;
+}
+
 const SceneObject *Document::object(ObjectId id) const
 {
     const int index = indexOf(id);
@@ -151,6 +165,7 @@ QVector<ObjectId> Document::replaceShapes(const QVector<Shape> &shapes)
     activeLayerId_ = LayerId::invalid();
     nextObjectValue_ = 1;
     nextLayerValue_ = 1;
+    settings_ = DocumentSettings{};
     ensureDefaultLayer();
     QVector<ObjectId> ids;
     ids.reserve(shapes.size());
@@ -459,7 +474,7 @@ bool Document::isObjectEditable(ObjectId objectId) const
 
 Document::Snapshot Document::snapshot() const
 {
-    return Snapshot{layers_, objects_, activeLayerId_, nextObjectValue_, nextLayerValue_};
+    return Snapshot{layers_, objects_, activeLayerId_, nextObjectValue_, nextLayerValue_, settings_};
 }
 
 void Document::restoreSnapshot(const Snapshot &snapshot)
@@ -469,6 +484,9 @@ void Document::restoreSnapshot(const Snapshot &snapshot)
     activeLayerId_ = snapshot.activeLayerId;
     nextObjectValue_ = snapshot.nextObjectValue;
     nextLayerValue_ = snapshot.nextLayerValue;
+    settings_ = isValidDocumentSettings(snapshot.settings)
+                    ? snapshot.settings
+                    : DocumentSettings{};
     ensureDefaultLayer();
     rebuildLayerObjectIds();
 }

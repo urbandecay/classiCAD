@@ -4,6 +4,7 @@
 #include "core/model.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/viewport/viewport_transform.h"
+#include "blender_grid_appearance.h"
 
 #include <QPainter>
 #include <QColor>
@@ -18,6 +19,8 @@ public:
 
     void drawGrid(QPainter &painter, const QSize &viewportSize) const;
     void drawOrigin(QPainter &painter, const QSize &viewportSize) const;
+    void setGridAppearance(const BlenderGridAppearance &appearance);
+    void setGridBaseStep(qreal baseGridStep);
     void drawShape(QPainter &painter,
                    const Shape &shape,
                    const QSize &viewportSize,
@@ -86,6 +89,8 @@ private:
     const CurveHitTester &curveHitTester_;
     bool smoothCurveDisplay_ = true;
     bool architecturalDimensionFont_ = false;
+    BlenderGridAppearance gridAppearance_;
+    qreal gridBaseStep_ = 1.0;
 };
 
 } // namespace classiCAD

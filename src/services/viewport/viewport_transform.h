@@ -19,6 +19,34 @@ enum class ViewportViewPreset {
     Left = 8,
 };
 
+enum class ViewportZoomMethod {
+    Dolly,
+    Scale,
+};
+
+enum class ViewportZoomAxis {
+    Vertical,
+    Horizontal,
+};
+
+struct ViewportCameraPreferences {
+    qreal focalLengthMillimeters = 50.0;
+    qreal clipStart = 0.01;
+    qreal clipEnd = 1000.0;
+};
+
+struct ViewportNavigationPreferences {
+    bool autoPerspective = true;
+    bool zoomToMouse = true;
+    bool orbitAroundActive = true;
+    bool useMouseDepthNavigate = true;
+    qreal turntableSensitivityRadiansPerPixel = 0.006981316953897476;
+    bool invertMouseZoom = false;
+    bool invertZoomWheel = false;
+    ViewportZoomMethod zoomMethod = ViewportZoomMethod::Dolly;
+    ViewportZoomAxis zoomAxis = ViewportZoomAxis::Vertical;
+};
+
 struct ViewportDirectionProjection {
     qreal horizontal = 0.0;
     qreal vertical = 0.0;
@@ -33,6 +61,9 @@ struct ViewportCameraState {
     qreal pitchRadians = 0.0;
     bool perspective = false;
     ViewportViewPreset preset = ViewportViewPreset::Top;
+    // Blender's rv3d->dist drives free-angle orthographic grid LOD. The
+    // orthographic projection itself remains controlled by zoom.
+    qreal gridViewDistance = 60.0;
 };
 
 class ViewportTransform final {
@@ -68,6 +99,13 @@ public:
     ViewportViewPreset viewPreset() const;
     ViewportDirectionProjection worldDirectionToView(const Point3D &direction) const;
     Point3D viewDirection() const;
+    Point3D viewTarget() const;
+    // Returns the finite eye position used by the perspective projection.
+    Point3D cameraPosition(const QSize &viewportSize) const;
+    ViewportCameraPreferences cameraPreferences() const;
+    bool setCameraPreferences(const ViewportCameraPreferences &preferences);
+    ViewportNavigationPreferences navigationPreferences() const;
+    void setNavigationPreferences(const ViewportNavigationPreferences &preferences);
     ViewportCameraState cameraState() const;
     void setCameraState(const ViewportCameraState &state);
     bool isPerspectiveEnabled() const;
@@ -75,6 +113,7 @@ public:
     void setViewPreset(ViewportViewPreset preset);
     void setViewDirection(const Point3D &cameraDirection);
     void orbitByPixels(const QPointF &delta);
+    void setOrbitPivotPreservingView(const Point3D &pivot);
     void panByPixels(const QPointF &delta, const QSize &viewportSize);
     void resetView();
 
@@ -94,7 +133,10 @@ private:
     qreal yawRadians_ = 0.0;
     qreal pitchRadians_ = 1.5707963267948966;
     bool perspective_ = false;
-    qreal cameraDistance_ = 1000.0;
+    qreal gridViewDistance_ = 60.0;
+    ViewportCameraPreferences cameraPreferences_;
+    ViewportNavigationPreferences navigationPreferences_;
+    bool orbitPivotLocked_ = false;
 };
 
 } // namespace classiCAD

@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QActionGroup>
 #include <QAbstractItemView>
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -64,6 +65,9 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QWheelEvent>
+#include <QtMath>
+
+#include <algorithm>
 
 namespace classiCAD {
 
@@ -254,11 +258,15 @@ public:
                                bool snapLabelsVisible,
                                bool smoothCurveDisplay,
                                bool architecturalDimensionFont,
+                               const BlenderGridAppearance &gridAppearance,
+                               const ViewportCameraPreferences &cameraPreferences,
+                               const ViewportNavigationPreferences &navigationPreferences,
+                               int viewportAaSamples,
                                QWidget *parent = nullptr)
         : QDialog(parent)
     {
         setWindowTitle(QStringLiteral("Preferences"));
-        resize(760, 520);
+        resize(800, 660);
         setModal(true);
 
         auto *rootLayout = new QVBoxLayout(this);
@@ -297,11 +305,17 @@ public:
         for (const QString &category : categoryNames) {
             if (category == QStringLiteral("Viewport")) {
                 pages_->addWidget(createViewportPage(snapLabelsVisible,
-                                                     smoothCurveDisplay));
+                                                     smoothCurveDisplay,
+                                                     gridAppearance,
+                                                     cameraPreferences));
             } else if (category == QStringLiteral("Dimensions")) {
                 pages_->addWidget(createDimensionPage(architecturalDimensionFont));
+            } else if (category == QStringLiteral("Navigation")) {
+                pages_->addWidget(createNavigationPage(navigationPreferences));
             } else if (category == QStringLiteral("Keymap")) {
                 pages_->addWidget(createKeymapPage(panButton));
+            } else if (category == QStringLiteral("System")) {
+                pages_->addWidget(createSystemPage(viewportAaSamples));
             } else {
                 pages_->addWidget(createPlaceholderPage(category));
             }
@@ -333,9 +347,49 @@ public:
         return smoothCurveDisplayCheckBox_->isChecked();
     }
 
+    BlenderGridAppearance gridAppearance() const
+    {
+        BlenderGridAppearance appearance = gridAppearance_;
+        appearance.opacity = gridOpacitySpinBox_->value();
+        appearance.lowAlphaStipple = gridStippleCheckBox_->isChecked();
+        return appearance;
+    }
+
     bool architecturalDimensionFont() const
     {
         return dimensionFontCombo_->currentData().toBool();
+    }
+
+    ViewportCameraPreferences cameraPreferences() const
+    {
+        return {focalLengthSpinBox_->value(),
+                clipStartSpinBox_->value(),
+                clipEndSpinBox_->value()};
+    }
+
+    ViewportNavigationPreferences navigationPreferences() const
+    {
+        ViewportNavigationPreferences preferences;
+        preferences.autoPerspective = autoPerspectiveCheckBox_->isChecked();
+        preferences.zoomToMouse = zoomToMouseCheckBox_->isChecked();
+        preferences.orbitAroundActive = orbitAroundActiveCheckBox_->isChecked();
+        preferences.useMouseDepthNavigate = mouseDepthNavigateCheckBox_->isChecked();
+        preferences.turntableSensitivityRadiansPerPixel =
+            qDegreesToRadians(turntableSensitivitySpinBox_->value());
+        preferences.invertMouseZoom = invertMouseZoomCheckBox_->isChecked();
+        preferences.invertZoomWheel = invertZoomWheelCheckBox_->isChecked();
+        preferences.zoomMethod = zoomMethodCombo_->currentData().toInt() == 1
+                                     ? ViewportZoomMethod::Scale
+                                     : ViewportZoomMethod::Dolly;
+        preferences.zoomAxis = zoomAxisCombo_->currentData().toInt() == 1
+                                   ? ViewportZoomAxis::Horizontal
+                                   : ViewportZoomAxis::Vertical;
+        return preferences;
+    }
+
+    int viewportAaSamples() const
+    {
+        return viewportAaCombo_->currentData().toInt();
     }
 
 private:
@@ -398,10 +452,49 @@ private:
         return page;
     }
 
-    QWidget *createViewportPage(bool snapLabelsVisible, bool smoothCurveDisplay)
+    QPushButton *addGridColorButton(QFormLayout *layout,
+                                    const QString &label,
+                                    QColor BlenderGridAppearance::*colorMember,
+                                    const QString &objectName)
     {
-        auto *page = new QWidget;
-        auto *layout = new QVBoxLayout(page);
+        auto *button = new QPushButton;
+        button->setObjectName(objectName);
+        const auto updateButton = [button](const QColor &color) {
+            button->setText(color.name(QColor::HexArgb).toUpper());
+            button->setStyleSheet(
+                QStringLiteral("background-color: rgba(%1,%2,%3,%4);")
+                    .arg(color.red())
+                    .arg(color.green())
+                    .arg(color.blue())
+                    .arg(color.alpha()));
+        };
+        updateButton(gridAppearance_.*colorMember);
+        connect(button, &QPushButton::clicked, this,
+                [this, button, colorMember, label, updateButton]() {
+                    const QColor selected = QColorDialog::getColor(
+                        gridAppearance_.*colorMember,
+                        this,
+                        label,
+                        QColorDialog::ShowAlphaChannel);
+                    if (selected.isValid()) {
+                        gridAppearance_.*colorMember = selected;
+                        updateButton(selected);
+                    }
+                });
+        layout->addRow(label, button);
+        return button;
+    }
+
+    QWidget *createViewportPage(bool snapLabelsVisible,
+                                bool smoothCurveDisplay,
+                                const BlenderGridAppearance &gridAppearance,
+                                const ViewportCameraPreferences &cameraPreferences)
+    {
+        gridAppearance_ = gridAppearance;
+        auto *scrollArea = new QScrollArea;
+        scrollArea->setWidgetResizable(true);
+        auto *content = new QWidget;
+        auto *layout = new QVBoxLayout(content);
         layout->setContentsMargins(18, 12, 18, 12);
         layout->setSpacing(12);
 
@@ -438,8 +531,91 @@ private:
         curveHint->setWordWrap(true);
         curveLayout->addWidget(curveHint);
         layout->addWidget(curveBox);
+
+        auto *gridBox = new QGroupBox(QStringLiteral("Grid and Axes"));
+        auto *gridLayout = new QFormLayout(gridBox);
+        addGridColorButton(gridLayout,
+                           QStringLiteral("Grid lines"),
+                           &BlenderGridAppearance::gridColor,
+                           QStringLiteral("gridColorPreference"));
+        addGridColorButton(gridLayout,
+                           QStringLiteral("Emphasis lines"),
+                           &BlenderGridAppearance::emphasisColor,
+                           QStringLiteral("gridEmphasisColorPreference"));
+        addGridColorButton(gridLayout,
+                           QStringLiteral("X axis"),
+                           &BlenderGridAppearance::axisXColor,
+                           QStringLiteral("gridAxisXColorPreference"));
+        addGridColorButton(gridLayout,
+                           QStringLiteral("Y axis"),
+                           &BlenderGridAppearance::axisYColor,
+                           QStringLiteral("gridAxisYColorPreference"));
+        addGridColorButton(gridLayout,
+                           QStringLiteral("Z axis"),
+                           &BlenderGridAppearance::axisZColor,
+                           QStringLiteral("gridAxisZColorPreference"));
+        gridOpacitySpinBox_ = new QDoubleSpinBox;
+        gridOpacitySpinBox_->setRange(0.0, 2.0);
+        gridOpacitySpinBox_->setSingleStep(0.05);
+        gridOpacitySpinBox_->setDecimals(2);
+        gridOpacitySpinBox_->setValue(gridAppearance.opacity);
+        gridOpacitySpinBox_->setObjectName(QStringLiteral("gridOpacityPreference"));
+        gridLayout->addRow(QStringLiteral("Opacity"), gridOpacitySpinBox_);
+        gridStippleCheckBox_ = new QCheckBox(QStringLiteral("Stipple low-opacity lines"));
+        gridStippleCheckBox_->setChecked(gridAppearance.lowAlphaStipple);
+        gridStippleCheckBox_->setObjectName(QStringLiteral("gridStipplePreference"));
+        gridLayout->addRow(QString(), gridStippleCheckBox_);
+        layout->addWidget(gridBox);
+
+        auto *cameraBox = new QGroupBox(QStringLiteral("View Camera"));
+        auto *cameraLayout = new QFormLayout(cameraBox);
+        focalLengthSpinBox_ = new QDoubleSpinBox;
+        focalLengthSpinBox_->setRange(1.0, 2000.0);
+        focalLengthSpinBox_->setDecimals(1);
+        focalLengthSpinBox_->setSingleStep(1.0);
+        focalLengthSpinBox_->setValue(cameraPreferences.focalLengthMillimeters);
+        focalLengthSpinBox_->setSuffix(QStringLiteral(" mm"));
+        focalLengthSpinBox_->setObjectName(QStringLiteral("viewportFocalLengthPreference"));
+        cameraLayout->addRow(QStringLiteral("Focal length"), focalLengthSpinBox_);
+
+        clipStartSpinBox_ = new QDoubleSpinBox;
+        clipStartSpinBox_->setRange(0.000001, 1.0e8);
+        clipStartSpinBox_->setDecimals(6);
+        clipStartSpinBox_->setSingleStep(0.01);
+        clipStartSpinBox_->setValue(cameraPreferences.clipStart);
+        clipStartSpinBox_->setObjectName(QStringLiteral("viewportClipStartPreference"));
+        cameraLayout->addRow(QStringLiteral("Clip start"), clipStartSpinBox_);
+
+        clipEndSpinBox_ = new QDoubleSpinBox;
+        clipEndSpinBox_->setRange(0.000002, 1.0e9);
+        clipEndSpinBox_->setDecimals(6);
+        clipEndSpinBox_->setSingleStep(1.0);
+        clipEndSpinBox_->setValue(cameraPreferences.clipEnd);
+        clipEndSpinBox_->setObjectName(QStringLiteral("viewportClipEndPreference"));
+        cameraLayout->addRow(QStringLiteral("Clip end"), clipEndSpinBox_);
+        connect(clipStartSpinBox_, qOverload<double>(&QDoubleSpinBox::valueChanged),
+                this, [this](double start) {
+                    const double minimumEnd = start + std::max(0.000001, start * 1.0e-6);
+                    clipEndSpinBox_->setMinimum(minimumEnd);
+                });
+        layout->addWidget(cameraBox);
+
+        auto *cameraHint = new QLabel(QStringLiteral(
+            "These camera and clipping values drive perspective, picking, scene depth, and the grid. "
+            "Distances use the document's model units."));
+        cameraHint->setObjectName(QStringLiteral("preferencesHint"));
+        cameraHint->setWordWrap(true);
+        layout->addWidget(cameraHint);
+
+        auto *gridHint = new QLabel(QStringLiteral(
+            "Grid and axis colors are theme values. Low-opacity stipple and camera fades "
+            "use Blender's viewport behavior."));
+        gridHint->setObjectName(QStringLiteral("preferencesHint"));
+        gridHint->setWordWrap(true);
+        layout->addWidget(gridHint);
         layout->addStretch(1);
-        return page;
+        scrollArea->setWidget(content);
+        return scrollArea;
     }
 
     QWidget *createDimensionPage(bool architecturalDimensionFont)
@@ -486,12 +662,226 @@ private:
         return page;
     }
 
+    QWidget *createNavigationPage(
+        const ViewportNavigationPreferences &preferences)
+    {
+        auto *page = new QWidget;
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 12, 18, 12);
+        layout->setSpacing(12);
+
+        auto *title = new QLabel(QStringLiteral("Navigation"));
+        title->setObjectName(QStringLiteral("preferencesTitle"));
+        layout->addWidget(title);
+
+        auto *orbitBox = new QGroupBox(QStringLiteral("Orbit"));
+        auto *orbitLayout = new QVBoxLayout(orbitBox);
+        autoPerspectiveCheckBox_ = new QCheckBox(
+            QStringLiteral("Auto perspective when orbiting"));
+        autoPerspectiveCheckBox_->setChecked(preferences.autoPerspective);
+        autoPerspectiveCheckBox_->setObjectName(
+            QStringLiteral("viewportAutoPerspectivePreference"));
+        orbitLayout->addWidget(autoPerspectiveCheckBox_);
+
+        orbitAroundActiveCheckBox_ = new QCheckBox(
+            QStringLiteral("Orbit around the active object"));
+        orbitAroundActiveCheckBox_->setChecked(preferences.orbitAroundActive);
+        orbitAroundActiveCheckBox_->setObjectName(
+            QStringLiteral("viewportOrbitAroundActivePreference"));
+        orbitLayout->addWidget(orbitAroundActiveCheckBox_);
+
+        mouseDepthNavigateCheckBox_ = new QCheckBox(
+            QStringLiteral("Use mouse depth when orbiting over geometry"));
+        mouseDepthNavigateCheckBox_->setChecked(preferences.useMouseDepthNavigate);
+        mouseDepthNavigateCheckBox_->setObjectName(
+            QStringLiteral("viewportMouseDepthNavigatePreference"));
+        orbitLayout->addWidget(mouseDepthNavigateCheckBox_);
+
+        auto *sensitivityLayout = new QFormLayout;
+        turntableSensitivitySpinBox_ = new QDoubleSpinBox;
+        turntableSensitivitySpinBox_->setRange(0.01, 5.0);
+        turntableSensitivitySpinBox_->setDecimals(2);
+        turntableSensitivitySpinBox_->setSingleStep(0.05);
+        turntableSensitivitySpinBox_->setValue(
+            qRadiansToDegrees(preferences.turntableSensitivityRadiansPerPixel));
+        turntableSensitivitySpinBox_->setSuffix(QStringLiteral("° per pixel"));
+        turntableSensitivitySpinBox_->setObjectName(
+            QStringLiteral("viewportTurntableSensitivityPreference"));
+        sensitivityLayout->addRow(QStringLiteral("Turntable sensitivity"),
+                                  turntableSensitivitySpinBox_);
+        orbitLayout->addLayout(sensitivityLayout);
+        layout->addWidget(orbitBox);
+
+        auto *zoomBox = new QGroupBox(QStringLiteral("Zoom"));
+        auto *zoomLayout = new QFormLayout(zoomBox);
+        zoomToMouseCheckBox_ = new QCheckBox(
+            QStringLiteral("Zoom toward mouse position"));
+        zoomToMouseCheckBox_->setChecked(preferences.zoomToMouse);
+        zoomToMouseCheckBox_->setObjectName(
+            QStringLiteral("viewportZoomToMousePreference"));
+        zoomLayout->addRow(QString(), zoomToMouseCheckBox_);
+
+        zoomMethodCombo_ = new QComboBox;
+        zoomMethodCombo_->addItem(QStringLiteral("Dolly"), 0);
+        zoomMethodCombo_->addItem(QStringLiteral("Scale"), 1);
+        zoomMethodCombo_->setCurrentIndex(
+            zoomMethodCombo_->findData(preferences.zoomMethod == ViewportZoomMethod::Scale
+                                           ? 1
+                                           : 0));
+        zoomMethodCombo_->setObjectName(QStringLiteral("viewportZoomMethodPreference"));
+        zoomLayout->addRow(QStringLiteral("Zoom method"), zoomMethodCombo_);
+
+        zoomAxisCombo_ = new QComboBox;
+        zoomAxisCombo_->addItem(QStringLiteral("Vertical"), 0);
+        zoomAxisCombo_->addItem(QStringLiteral("Horizontal"), 1);
+        zoomAxisCombo_->setCurrentIndex(
+            zoomAxisCombo_->findData(preferences.zoomAxis == ViewportZoomAxis::Horizontal
+                                         ? 1
+                                         : 0));
+        zoomAxisCombo_->setObjectName(QStringLiteral("viewportZoomAxisPreference"));
+        zoomLayout->addRow(QStringLiteral("Drag zoom axis"), zoomAxisCombo_);
+
+        invertMouseZoomCheckBox_ = new QCheckBox(
+            QStringLiteral("Invert drag zoom direction"));
+        invertMouseZoomCheckBox_->setChecked(preferences.invertMouseZoom);
+        invertMouseZoomCheckBox_->setObjectName(
+            QStringLiteral("viewportInvertMouseZoomPreference"));
+        zoomLayout->addRow(QString(), invertMouseZoomCheckBox_);
+
+        invertZoomWheelCheckBox_ = new QCheckBox(
+            QStringLiteral("Invert mouse wheel zoom"));
+        invertZoomWheelCheckBox_->setChecked(preferences.invertZoomWheel);
+        invertZoomWheelCheckBox_->setObjectName(
+            QStringLiteral("viewportInvertZoomWheelPreference"));
+        zoomLayout->addRow(QString(), invertZoomWheelCheckBox_);
+        layout->addWidget(zoomBox);
+
+        auto *hint = new QLabel(QStringLiteral(
+            "Turntable and zoom defaults are read from your Blender preferences. "
+            "Mouse-depth orbit uses the app's active construction plane."));
+        hint->setObjectName(QStringLiteral("preferencesHint"));
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+        layout->addStretch(1);
+        return page;
+    }
+
+    QWidget *createSystemPage(int viewportAaSamples)
+    {
+        auto *page = new QWidget;
+        auto *layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 12, 18, 12);
+        layout->setSpacing(12);
+
+        auto *title = new QLabel(QStringLiteral("System"));
+        title->setObjectName(QStringLiteral("preferencesTitle"));
+        layout->addWidget(title);
+
+        auto *viewportBox = new QGroupBox(QStringLiteral("Viewport"));
+        auto *viewportLayout = new QFormLayout(viewportBox);
+        viewportAaCombo_ = new QComboBox;
+        viewportAaCombo_->addItem(QStringLiteral("Off"), 0);
+        viewportAaCombo_->addItem(QStringLiteral("2×"), 2);
+        viewportAaCombo_->addItem(QStringLiteral("4×"), 4);
+        viewportAaCombo_->addItem(QStringLiteral("8×"), 8);
+        viewportAaCombo_->setCurrentIndex(viewportAaCombo_->findData(viewportAaSamples));
+        viewportAaCombo_->setObjectName(QStringLiteral("viewportAntiAliasingPreference"));
+        viewportLayout->addRow(QStringLiteral("Anti-aliasing"), viewportAaCombo_);
+
+        auto *backend = new QLabel(QStringLiteral(
+            "OpenGL shader viewport; Qt rendering is used automatically if OpenGL is unavailable."));
+        backend->setWordWrap(true);
+        viewportLayout->addRow(QStringLiteral("Graphics backend"), backend);
+        layout->addWidget(viewportBox);
+
+        auto *hint = new QLabel(QStringLiteral(
+            "8× is the saved viewport anti-aliasing setting from your Blender preferences. "
+            "If the GPU cannot provide that sample count, the viewport falls back to single-sample rendering."));
+        hint->setObjectName(QStringLiteral("preferencesHint"));
+        hint->setWordWrap(true);
+        layout->addWidget(hint);
+        layout->addStretch(1);
+        return page;
+    }
+
     QListWidget *categoryList_ = nullptr;
     QStackedWidget *pages_ = nullptr;
     QComboBox *panButtonCombo_ = nullptr;
     QComboBox *dimensionFontCombo_ = nullptr;
     QCheckBox *snapLabelsCheckBox_ = nullptr;
     QCheckBox *smoothCurveDisplayCheckBox_ = nullptr;
+    BlenderGridAppearance gridAppearance_;
+    QDoubleSpinBox *gridOpacitySpinBox_ = nullptr;
+    QCheckBox *gridStippleCheckBox_ = nullptr;
+    QDoubleSpinBox *focalLengthSpinBox_ = nullptr;
+    QDoubleSpinBox *clipStartSpinBox_ = nullptr;
+    QDoubleSpinBox *clipEndSpinBox_ = nullptr;
+    QCheckBox *autoPerspectiveCheckBox_ = nullptr;
+    QCheckBox *zoomToMouseCheckBox_ = nullptr;
+    QCheckBox *orbitAroundActiveCheckBox_ = nullptr;
+    QCheckBox *mouseDepthNavigateCheckBox_ = nullptr;
+    QDoubleSpinBox *turntableSensitivitySpinBox_ = nullptr;
+    QCheckBox *invertMouseZoomCheckBox_ = nullptr;
+    QCheckBox *invertZoomWheelCheckBox_ = nullptr;
+    QComboBox *zoomMethodCombo_ = nullptr;
+    QComboBox *zoomAxisCombo_ = nullptr;
+    QComboBox *viewportAaCombo_ = nullptr;
+};
+
+class DocumentGridDialog final : public QDialog {
+public:
+    explicit DocumentGridDialog(const DocumentSettings &settings,
+                                QWidget *parent = nullptr)
+        : QDialog(parent)
+    {
+        setWindowTitle(QStringLiteral("Document Grid Settings"));
+        setModal(true);
+        auto *root = new QVBoxLayout(this);
+        auto *form = new QFormLayout;
+        unitCombo_ = new QComboBox;
+        for (const DocumentLengthUnit unit : {
+                 DocumentLengthUnit::Millimeter,
+                 DocumentLengthUnit::Centimeter,
+                 DocumentLengthUnit::Meter,
+                 DocumentLengthUnit::Inch,
+                 DocumentLengthUnit::Foot}) {
+            unitCombo_->addItem(documentLengthUnitName(unit), static_cast<int>(unit));
+        }
+        const int unitIndex = unitCombo_->findData(static_cast<int>(settings.lengthUnit));
+        unitCombo_->setCurrentIndex(std::max(unitIndex, 0));
+        form->addRow(QStringLiteral("Document length unit"), unitCombo_);
+
+        spacingSpinBox_ = new QDoubleSpinBox;
+        spacingSpinBox_->setDecimals(6);
+        spacingSpinBox_->setRange(0.000001, 1.0e9);
+        spacingSpinBox_->setValue(settings.gridSpacing);
+        spacingSpinBox_->setObjectName(QStringLiteral("documentGridSpacing"));
+        form->addRow(QStringLiteral("Base grid spacing"), spacingSpinBox_);
+        root->addLayout(form);
+
+        auto *hint = new QLabel(QStringLiteral(
+            "Geometry remains stored in millimeters; these settings control the "
+            "document grid and its displayed unit scale."));
+        hint->setWordWrap(true);
+        root->addWidget(hint);
+
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        root->addWidget(buttons);
+    }
+
+    DocumentSettings settings() const
+    {
+        DocumentSettings result;
+        result.lengthUnit = static_cast<DocumentLengthUnit>(unitCombo_->currentData().toInt());
+        result.gridSpacing = spacingSpinBox_->value();
+        return result;
+    }
+
+private:
+    QComboBox *unitCombo_ = nullptr;
+    QDoubleSpinBox *spacingSpinBox_ = nullptr;
 };
 
 class MainWindow final : public QMainWindow {
@@ -1195,6 +1585,29 @@ private:
         QMenu *viewMenu = menuBar()->addMenu(QStringLiteral("View"));
         viewMenu->addAction(QStringLiteral("Frame All"));
         viewMenu->addAction(QStringLiteral("Toggle Grid"));
+        QAction *documentGridSettingsAction =
+            viewMenu->addAction(QStringLiteral("Grid Units and Spacing…"));
+        connect(documentGridSettingsAction, &QAction::triggered,
+                this, [this]() { openDocumentGridSettings(); });
+        QMenu *drawingPlaneMenu = viewMenu->addMenu(QStringLiteral("Drawing Plane"));
+        workPlaneActionGroup_ = new QActionGroup(this);
+        workPlaneActionGroup_->setExclusive(true);
+        const auto addWorkPlaneAction = [this, drawingPlaneMenu](
+                                            const QString &label,
+                                            WorkPlane plane) {
+            QAction *action = drawingPlaneMenu->addAction(label);
+            action->setCheckable(true);
+            action->setData(static_cast<int>(plane));
+            workPlaneActionGroup_->addAction(action);
+            connect(action, &QAction::triggered, this, [this, plane]() {
+                if (viewport_ != nullptr) {
+                    viewport_->setWorkPlane(plane, viewport_->workPlaneOffset());
+                }
+            });
+        };
+        addWorkPlaneAction(QStringLiteral("XY"), WorkPlane::XY);
+        addWorkPlaneAction(QStringLiteral("XZ"), WorkPlane::XZ);
+        addWorkPlaneAction(QStringLiteral("YZ"), WorkPlane::YZ);
 
         menuBar()->addMenu(QStringLiteral("Help"));
     }
@@ -1235,78 +1648,6 @@ private:
                 workspaceButton->setChecked(true);
             }
         }
-
-        bar->addSeparator();
-        QLabel *mode = new QLabel(QStringLiteral("3D • planar curves"));
-        mode->setObjectName(QStringLiteral("modeLabel"));
-        bar->addWidget(mode);
-
-        bar->addSeparator();
-        bar->addWidget(new QLabel(QStringLiteral("Plane")));
-        workPlaneCombo_ = new QComboBox;
-        workPlaneCombo_->setObjectName(QStringLiteral("workPlaneCombo"));
-        workPlaneCombo_->setToolTip(QStringLiteral("Active 2D drawing plane in world XYZ"));
-        workPlaneCombo_->addItem(QStringLiteral("XY"), static_cast<int>(WorkPlane::XY));
-        workPlaneCombo_->addItem(QStringLiteral("XZ"), static_cast<int>(WorkPlane::XZ));
-        workPlaneCombo_->addItem(QStringLiteral("YZ"), static_cast<int>(WorkPlane::YZ));
-        connect(workPlaneCombo_, qOverload<int>(&QComboBox::activated),
-                this, [this](int index) {
-                    if (viewport_ != nullptr && index >= 0) {
-                        viewport_->setWorkPlane(static_cast<WorkPlane>(
-                                                    workPlaneCombo_->itemData(index).toInt()),
-                                                workPlaneOffsetSpin_->value());
-                    }
-                });
-        bar->addWidget(workPlaneCombo_);
-
-        bar->addWidget(new QLabel(QStringLiteral("Offset")));
-        workPlaneOffsetSpin_ = new QDoubleSpinBox;
-        workPlaneOffsetSpin_->setObjectName(QStringLiteral("workPlaneOffsetSpin"));
-        workPlaneOffsetSpin_->setToolTip(QStringLiteral(
-            "Distance of the active XY/XZ/YZ drawing plane from the world origin"));
-        workPlaneOffsetSpin_->setRange(-1.0e9, 1.0e9);
-        workPlaneOffsetSpin_->setDecimals(3);
-        workPlaneOffsetSpin_->setSingleStep(1.0);
-        workPlaneOffsetSpin_->setValue(0.0);
-        connect(workPlaneOffsetSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
-                this, [this](double offset) {
-                    if (viewport_ != nullptr) {
-                        viewport_->setWorkPlane(viewport_->workPlane(), offset);
-                    }
-                });
-        bar->addWidget(workPlaneOffsetSpin_);
-
-        bar->addWidget(new QLabel(QStringLiteral("View")));
-        viewPresetCombo_ = new QComboBox;
-        viewPresetCombo_->setObjectName(QStringLiteral("viewPresetCombo"));
-        viewPresetCombo_->setToolTip(QStringLiteral(
-            "Choose a view preset. In the viewport, middle-drag orbits and Shift+middle-drag pans."));
-        viewPresetCombo_->addItem(QStringLiteral("Top"),
-                                  static_cast<int>(ViewportViewPreset::Top));
-        viewPresetCombo_->addItem(QStringLiteral("Front"),
-                                  static_cast<int>(ViewportViewPreset::Front));
-        viewPresetCombo_->addItem(QStringLiteral("Right"),
-                                  static_cast<int>(ViewportViewPreset::Right));
-        viewPresetCombo_->addItem(QStringLiteral("Bottom"),
-                                  static_cast<int>(ViewportViewPreset::Bottom));
-        viewPresetCombo_->addItem(QStringLiteral("Back"),
-                                  static_cast<int>(ViewportViewPreset::Back));
-        viewPresetCombo_->addItem(QStringLiteral("Left"),
-                                  static_cast<int>(ViewportViewPreset::Left));
-        viewPresetCombo_->addItem(QStringLiteral("Iso"),
-                                  static_cast<int>(ViewportViewPreset::Isometric));
-        viewPresetCombo_->addItem(QStringLiteral("Perspective"),
-                                  static_cast<int>(ViewportViewPreset::Perspective));
-        viewPresetCombo_->addItem(QStringLiteral("Custom"),
-                                  static_cast<int>(ViewportViewPreset::Custom));
-        connect(viewPresetCombo_, qOverload<int>(&QComboBox::activated),
-                this, [this](int index) {
-                    if (viewport_ != nullptr && index >= 0) {
-                        viewport_->setViewPreset(static_cast<ViewportViewPreset>(
-                            viewPresetCombo_->itemData(index).toInt()));
-                    }
-                });
-        bar->addWidget(viewPresetCombo_);
 
         bar->addSeparator();
         updateAction_ = new QAction(QStringLiteral("Update"), this);
@@ -1585,19 +1926,13 @@ private:
             }
         };
         viewportCallbacks.viewStateUpdate = [this](WorkPlane plane,
-                                                   qreal offset,
-                                                   ViewportViewPreset preset) {
-            const QSignalBlocker planeBlocker(workPlaneCombo_);
-            const QSignalBlocker offsetBlocker(workPlaneOffsetSpin_);
-            const QSignalBlocker viewBlocker(viewPresetCombo_);
-            const int planeIndex = workPlaneCombo_->findData(static_cast<int>(plane));
-            const int viewIndex = viewPresetCombo_->findData(static_cast<int>(preset));
-            if (planeIndex >= 0) {
-                workPlaneCombo_->setCurrentIndex(planeIndex);
-            }
-            workPlaneOffsetSpin_->setValue(offset);
-            if (viewIndex >= 0) {
-                viewPresetCombo_->setCurrentIndex(viewIndex);
+                                                   qreal,
+                                                   ViewportViewPreset) {
+            if (workPlaneActionGroup_ != nullptr) {
+                for (QAction *action : workPlaneActionGroup_->actions()) {
+                    action->setChecked(action->data().toInt() ==
+                                       static_cast<int>(plane));
+                }
             }
         };
         viewport_->setUiCallbacks(viewportCallbacks);
@@ -2196,6 +2531,95 @@ private:
             settings.value(QStringLiteral("viewport/snapLabelsVisible"), true).toBool());
         viewport_->setSmoothCurveDisplay(
             settings.value(QStringLiteral("viewport/smoothCurveDisplay"), true).toBool());
+        BlenderGridAppearance gridAppearance;
+        const auto readGridColor = [&settings](const QString &key,
+                                               const QColor &defaultColor) {
+            const QColor stored(settings.value(key,
+                                               defaultColor.name(QColor::HexArgb))
+                                    .toString());
+            return stored.isValid() ? stored : defaultColor;
+        };
+        gridAppearance.gridColor = readGridColor(QStringLiteral("viewport/gridColor"),
+                                                 gridAppearance.gridColor);
+        gridAppearance.emphasisColor = readGridColor(
+            QStringLiteral("viewport/gridEmphasisColor"), gridAppearance.emphasisColor);
+        gridAppearance.axisXColor = readGridColor(QStringLiteral("viewport/gridAxisXColor"),
+                                                  gridAppearance.axisXColor);
+        gridAppearance.axisYColor = readGridColor(QStringLiteral("viewport/gridAxisYColor"),
+                                                  gridAppearance.axisYColor);
+        gridAppearance.axisZColor = readGridColor(QStringLiteral("viewport/gridAxisZColor"),
+                                                  gridAppearance.axisZColor);
+        gridAppearance.opacity = settings.value(QStringLiteral("viewport/gridOpacity"),
+                                                 gridAppearance.opacity).toDouble();
+        gridAppearance.lowAlphaStipple = settings.value(
+            QStringLiteral("viewport/gridStipple"), gridAppearance.lowAlphaStipple).toBool();
+        if (!isValidBlenderGridAppearance(gridAppearance)) {
+            gridAppearance = BlenderGridAppearance{};
+        } else if (gridAppearance.gridColor == QColor(QStringLiteral("#38858585")) &&
+                   gridAppearance.emphasisColor == QColor(QStringLiteral("#4da1a1a1")) &&
+                   gridAppearance.axisXColor == QColor(QStringLiteral("#b8c7332e")) &&
+                   gridAppearance.axisYColor == QColor(QStringLiteral("#b842ad38")) &&
+                   gridAppearance.axisZColor == QColor(QStringLiteral("#b83378d1"))) {
+            // Replace the prior hard-coded palette only when every stored
+            // channel still equals that palette; custom user colors survive.
+            gridAppearance.gridColor = BlenderGridAppearance{}.gridColor;
+            gridAppearance.emphasisColor = BlenderGridAppearance{}.emphasisColor;
+            gridAppearance.axisXColor = BlenderGridAppearance{}.axisXColor;
+            gridAppearance.axisYColor = BlenderGridAppearance{}.axisYColor;
+            gridAppearance.axisZColor = BlenderGridAppearance{}.axisZColor;
+        }
+        viewport_->setGridAppearance(gridAppearance);
+        ViewportCameraPreferences cameraPreferences;
+        cameraPreferences.focalLengthMillimeters = settings.value(
+            QStringLiteral("viewport/focalLengthMillimeters"),
+            cameraPreferences.focalLengthMillimeters).toDouble();
+        cameraPreferences.clipStart = settings.value(
+            QStringLiteral("viewport/clipStart"), cameraPreferences.clipStart).toDouble();
+        cameraPreferences.clipEnd = settings.value(
+            QStringLiteral("viewport/clipEnd"), cameraPreferences.clipEnd).toDouble();
+        if (!viewport_->setCameraPreferences(cameraPreferences)) {
+            viewport_->setCameraPreferences(ViewportCameraPreferences{});
+        }
+
+        ViewportNavigationPreferences navigationPreferences;
+        navigationPreferences.autoPerspective = settings.value(
+            QStringLiteral("navigation/autoPerspective"),
+            navigationPreferences.autoPerspective).toBool();
+        navigationPreferences.zoomToMouse = settings.value(
+            QStringLiteral("navigation/zoomToMouse"),
+            navigationPreferences.zoomToMouse).toBool();
+        navigationPreferences.orbitAroundActive = settings.value(
+            QStringLiteral("navigation/orbitAroundActive"),
+            navigationPreferences.orbitAroundActive).toBool();
+        navigationPreferences.useMouseDepthNavigate = settings.value(
+            QStringLiteral("navigation/useMouseDepthNavigate"),
+            navigationPreferences.useMouseDepthNavigate).toBool();
+        navigationPreferences.turntableSensitivityRadiansPerPixel = settings.value(
+            QStringLiteral("navigation/turntableSensitivityRadiansPerPixel"),
+            navigationPreferences.turntableSensitivityRadiansPerPixel).toDouble();
+        navigationPreferences.invertMouseZoom = settings.value(
+            QStringLiteral("navigation/invertMouseZoom"),
+            navigationPreferences.invertMouseZoom).toBool();
+        navigationPreferences.invertZoomWheel = settings.value(
+            QStringLiteral("navigation/invertZoomWheel"),
+            navigationPreferences.invertZoomWheel).toBool();
+        navigationPreferences.zoomMethod = settings.value(
+            QStringLiteral("navigation/zoomMethod"), 0).toInt() == 1
+                                                  ? ViewportZoomMethod::Scale
+                                                  : ViewportZoomMethod::Dolly;
+        navigationPreferences.zoomAxis = settings.value(
+            QStringLiteral("navigation/zoomAxis"), 0).toInt() == 1
+                                                ? ViewportZoomAxis::Horizontal
+                                                : ViewportZoomAxis::Vertical;
+        viewport_->setNavigationPreferences(navigationPreferences);
+
+        const int requestedAaSamples = settings.value(
+            QStringLiteral("system/viewportAaSamples"), 8).toInt();
+        const int viewportAaSamples = requestedAaSamples == 2 || requestedAaSamples == 4 ||
+                                              requestedAaSamples == 8
+                                          ? requestedAaSamples
+                                          : 0;
+        viewport_->setViewportAntiAliasingSamples(viewportAaSamples);
         viewport_->setArchitecturalDimensionFont(
             settings.value(QStringLiteral("dimensions/architecturalFont"), false).toBool());
 
@@ -2242,13 +2666,39 @@ private:
             settings.value(QStringLiteral("viewport/snapLabelsVisible"), true).toBool(),
             settings.value(QStringLiteral("viewport/smoothCurveDisplay"), true).toBool(),
             settings.value(QStringLiteral("dimensions/architecturalFont"), false).toBool(),
+            viewport_->gridAppearance(),
+            viewport_->cameraPreferences(),
+            viewport_->navigationPreferences(),
+            viewport_->viewportAntiAliasingSamples(),
             this);
         if (dialog.exec() == QDialog::Accepted) {
             applyPanButton(dialog.panButton(), true);
             applySnapLabelsVisible(dialog.snapLabelsVisible(), true);
             applySmoothCurveDisplay(dialog.smoothCurveDisplay(), true);
             applyArchitecturalDimensionFont(dialog.architecturalDimensionFont(), true);
+            applyGridAppearance(dialog.gridAppearance(), true);
+            applyCameraPreferences(dialog.cameraPreferences(), true);
+            applyNavigationPreferences(dialog.navigationPreferences(), true);
+            applyViewportAntiAliasingSamples(dialog.viewportAaSamples(), true);
         }
+    }
+
+    void openDocumentGridSettings()
+    {
+        if (viewport_ == nullptr) {
+            return;
+        }
+        DocumentGridDialog dialog(viewport_->documentSettings(), this);
+        if (dialog.exec() != QDialog::Accepted) {
+            return;
+        }
+        if (!viewport_->setDocumentSettings(dialog.settings())) {
+            QMessageBox::warning(this,
+                                 QStringLiteral("Invalid Grid Settings"),
+                                 QStringLiteral("Choose a positive, finite grid spacing and a supported unit."));
+            return;
+        }
+        statusBar()->showMessage(QStringLiteral("Document grid settings updated"), 3000);
     }
 
     void applyArchitecturalDimensionFont(bool enabled, bool save)
@@ -2274,6 +2724,92 @@ private:
             settings.sync();
             statusBar()->showMessage(enabled ? QStringLiteral("Smooth curve display: On")
                                              : QStringLiteral("Smooth curve display: Off"));
+        }
+    }
+
+    void applyGridAppearance(const BlenderGridAppearance &appearance, bool save)
+    {
+        if (viewport_ == nullptr || !isValidBlenderGridAppearance(appearance)) {
+            return;
+        }
+        viewport_->setGridAppearance(appearance);
+        if (save) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("viewport/gridColor"),
+                              appearance.gridColor.name(QColor::HexArgb));
+            settings.setValue(QStringLiteral("viewport/gridEmphasisColor"),
+                              appearance.emphasisColor.name(QColor::HexArgb));
+            settings.setValue(QStringLiteral("viewport/gridAxisXColor"),
+                              appearance.axisXColor.name(QColor::HexArgb));
+            settings.setValue(QStringLiteral("viewport/gridAxisYColor"),
+                              appearance.axisYColor.name(QColor::HexArgb));
+            settings.setValue(QStringLiteral("viewport/gridAxisZColor"),
+                              appearance.axisZColor.name(QColor::HexArgb));
+            settings.setValue(QStringLiteral("viewport/gridOpacity"), appearance.opacity);
+            settings.setValue(QStringLiteral("viewport/gridStipple"),
+                              appearance.lowAlphaStipple);
+            settings.sync();
+        }
+    }
+
+    void applyCameraPreferences(const ViewportCameraPreferences &preferences, bool save)
+    {
+        if (viewport_ == nullptr || !viewport_->setCameraPreferences(preferences)) {
+            return;
+        }
+        if (save) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("viewport/focalLengthMillimeters"),
+                              preferences.focalLengthMillimeters);
+            settings.setValue(QStringLiteral("viewport/clipStart"), preferences.clipStart);
+            settings.setValue(QStringLiteral("viewport/clipEnd"), preferences.clipEnd);
+            settings.sync();
+        }
+    }
+
+    void applyNavigationPreferences(
+        const ViewportNavigationPreferences &preferences,
+        bool save)
+    {
+        if (viewport_ == nullptr) {
+            return;
+        }
+        viewport_->setNavigationPreferences(preferences);
+        if (save) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("navigation/autoPerspective"),
+                              preferences.autoPerspective);
+            settings.setValue(QStringLiteral("navigation/zoomToMouse"),
+                              preferences.zoomToMouse);
+            settings.setValue(QStringLiteral("navigation/orbitAroundActive"),
+                              preferences.orbitAroundActive);
+            settings.setValue(QStringLiteral("navigation/useMouseDepthNavigate"),
+                              preferences.useMouseDepthNavigate);
+            settings.setValue(
+                QStringLiteral("navigation/turntableSensitivityRadiansPerPixel"),
+                preferences.turntableSensitivityRadiansPerPixel);
+            settings.setValue(QStringLiteral("navigation/invertMouseZoom"),
+                              preferences.invertMouseZoom);
+            settings.setValue(QStringLiteral("navigation/invertZoomWheel"),
+                              preferences.invertZoomWheel);
+            settings.setValue(QStringLiteral("navigation/zoomMethod"),
+                              preferences.zoomMethod == ViewportZoomMethod::Scale ? 1 : 0);
+            settings.setValue(QStringLiteral("navigation/zoomAxis"),
+                              preferences.zoomAxis == ViewportZoomAxis::Horizontal ? 1 : 0);
+            settings.sync();
+        }
+    }
+
+    void applyViewportAntiAliasingSamples(int samples, bool save)
+    {
+        if (viewport_ == nullptr) {
+            return;
+        }
+        viewport_->setViewportAntiAliasingSamples(samples);
+        if (save) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("system/viewportAaSamples"), samples);
+            settings.sync();
         }
     }
 
@@ -3155,10 +3691,6 @@ private:
                 font-weight: bold;
                 padding-right: 8px;
             }
-            QLabel#modeLabel {
-                color: #999999;
-                padding-left: 12px;
-            }
             QToolButton#workspaceButton {
                 border: 1px solid transparent;
                 border-radius: 3px;
@@ -3369,9 +3901,7 @@ private:
     QToolButton *scaleToolButton_ = nullptr;
     ScaleMode scaleMode_ = ScaleMode::TwoD;
     QComboBox *currentLayerCombo_ = nullptr;
-    QComboBox *workPlaneCombo_ = nullptr;
-    QDoubleSpinBox *workPlaneOffsetSpin_ = nullptr;
-    QComboBox *viewPresetCombo_ = nullptr;
+    QActionGroup *workPlaneActionGroup_ = nullptr;
     QComboBox *layerColorCombo_ = nullptr;
     QComboBox *layerLineTypeCombo_ = nullptr;
     QComboBox *layerLineWeightCombo_ = nullptr;

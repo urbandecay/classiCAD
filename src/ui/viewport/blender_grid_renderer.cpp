@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace classiCAD {
 namespace {
@@ -130,6 +131,7 @@ BlenderGridRenderer::~BlenderGridRenderer()
     if (current) {
         framebuffer_.reset();
         resolvedFramebuffer_.reset();
+        pickFramebuffer_.reset();
         if (textureBlitter_.isCreated()) {
             textureBlitter_.destroy();
         }
@@ -274,14 +276,7 @@ bool BlenderGridRenderer::renderGridLayer(
         glDisable(GL_MULTISAMPLE);
     }
 
-    const QByteArray depthGeometryKey =
-        viewportDepthGeometryCacheKey(visibleSceneShapes);
-    if (!depthGeometryCacheValid_ || depthGeometryCacheKey_ != depthGeometryKey) {
-        cachedDepthGeometry_ = buildViewportDepthGeometry(visibleSceneShapes);
-        depthGeometryCacheKey_ = depthGeometryKey;
-        depthGeometryCacheValid_ = true;
-        uploadSceneDepthGeometry(cachedDepthGeometry_);
-    }
+    updateSceneDepthGeometry(visibleSceneShapes);
     drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
     return drawGrid(transform, viewportSize, dpr, baseGridStep, appearance);
 }
@@ -383,6 +378,170 @@ bool BlenderGridRenderer::renderToCurrentFramebuffer(
     textureBlitter_.release();
     glDisable(GL_BLEND);
     return true;
+}
+
+bool BlenderGridRenderer::pickScenePoint(
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector<Shape> &visibleSceneShapes,
+    Point3D *worldPoint)
+{
+    if (worldPoint == nullptr || viewportSize.isEmpty() ||
+        QOpenGLContext::currentContext() == nullptr || !usingWidgetContext_ ||
+        !initialized_ || visibleSceneShapes.isEmpty()) {
+        return false;
+    }
+
+    updateSceneDepthGeometry(visibleSceneShapes);
+    if (sceneDepthLineVertexCount_ == 0 &&
+        sceneDepthSurfaceVertexCount_ == 0 &&
+        sceneDepthPointVertexCount_ == 0) {
+        return false;
+    }
+
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    const QSize pixelSize(qRound(viewportSize.width() * dpr),
+                          qRound(viewportSize.height() * dpr));
+    if (pickFramebuffer_ == nullptr || pickFramebuffer_->size() != pixelSize) {
+        QOpenGLFramebufferObjectFormat format;
+        format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+        format.setSamples(0);
+        pickFramebuffer_ = std::make_unique<QOpenGLFramebufferObject>(pixelSize,
+                                                                      format);
+    }
+    if (pickFramebuffer_ == nullptr || !pickFramebuffer_->isValid()) {
+        pickFramebuffer_.reset();
+        return false;
+    }
+
+    GLint previousFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousDepthFunction = GL_LESS;
+    GLfloat previousLineWidth = 1.0f;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    GLboolean previousDepthMask = GL_TRUE;
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetFloatv(GL_LINE_WIDTH, &previousLineWidth);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    if (!pickFramebuffer_->bind()) {
+        glBindFramebuffer(GL_FRAMEBUFFER,
+                          static_cast<GLuint>(previousFramebuffer));
+        return false;
+    }
+    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+    glDepthMask(GL_TRUE);
+    glClearDepth(1.0);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
+
+    // Match the CPU hit tolerance while reading only a tiny block on demand,
+    // once when orbit begins. This keeps navigation frames free of readback.
+    const int radius = std::max(1, static_cast<int>(std::ceil(9.0 * dpr)));
+    const qreal maximumPixelDistanceSquared = 81.0 * dpr * dpr;
+    const int centerX = qRound(screenPosition.x() * dpr);
+    const int centerY = qRound(screenPosition.y() * dpr);
+    const int left = std::clamp(centerX - radius, 0, pixelSize.width() - 1);
+    const int top = std::clamp(centerY - radius, 0, pixelSize.height() - 1);
+    const int right = std::clamp(centerX + radius, 0, pixelSize.width() - 1);
+    const int bottom = std::clamp(centerY + radius, 0, pixelSize.height() - 1);
+    const int readWidth = right - left + 1;
+    const int readHeight = bottom - top + 1;
+    const int glBottom = pixelSize.height() - 1 - bottom;
+    QVector<float> depths(readWidth * readHeight, 1.0f);
+    glReadPixels(left, glBottom, readWidth, readHeight,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, depths.data());
+
+    qreal closestPixelDistanceSquared = std::numeric_limits<qreal>::infinity();
+    float closestDepth = 1.0f;
+    int closestPixelX = -1;
+    int closestPixelY = -1;
+    for (int row = 0; row < readHeight; ++row) {
+        for (int column = 0; column < readWidth; ++column) {
+            const float depth = depths[row * readWidth + column];
+            if (!std::isfinite(depth) || depth >= 1.0f || depth < 0.0f) {
+                continue;
+            }
+            const int pixelX = left + column;
+            const int pixelY = bottom - row;
+            const qreal dx = pixelX + 0.5 - screenPosition.x() * dpr;
+            const qreal dy = pixelY + 0.5 - screenPosition.y() * dpr;
+            const qreal distanceSquared = dx * dx + dy * dy;
+            if (distanceSquared > maximumPixelDistanceSquared) {
+                continue;
+            }
+            if (distanceSquared < closestPixelDistanceSquared - 1.0e-6 ||
+                (std::abs(distanceSquared - closestPixelDistanceSquared) <=
+                     1.0e-6 && depth < closestDepth)) {
+                closestPixelDistanceSquared = distanceSquared;
+                closestDepth = depth;
+                closestPixelX = pixelX;
+                closestPixelY = pixelY;
+            }
+        }
+    }
+
+    bool picked = false;
+    if (closestPixelX >= 0) {
+        bool invertible = false;
+        const QMatrix4x4 inverse = viewportViewProjection(
+            transform, viewportSize).inverted(&invertible);
+        if (invertible) {
+            const qreal ndcX = 2.0 * (closestPixelX + 0.5) /
+                                   pixelSize.width() - 1.0;
+            const qreal ndcY = 1.0 - 2.0 * (closestPixelY + 0.5) /
+                                   pixelSize.height();
+            QVector4D world = inverse * QVector4D(
+                static_cast<float>(ndcX), static_cast<float>(ndcY),
+                closestDepth * 2.0f - 1.0f, 1.0f);
+            if (std::abs(world.w()) > 1.0e-12f) {
+                world /= world.w();
+                *worldPoint = {world.x(), world.y(), world.z()};
+                picked = true;
+            }
+        }
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER,
+                      static_cast<GLuint>(previousFramebuffer));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glColorMask(previousColorMask[0], previousColorMask[1],
+                previousColorMask[2], previousColorMask[3]);
+    glDepthMask(previousDepthMask);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    glLineWidth(previousLineWidth);
+    if (previousDepthTest) {
+        glEnable(GL_DEPTH_TEST);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
+    if (previousBlend) {
+        glEnable(GL_BLEND);
+    } else {
+        glDisable(GL_BLEND);
+    }
+    return picked;
+}
+
+void BlenderGridRenderer::updateSceneDepthGeometry(
+    const QVector<Shape> &visibleSceneShapes)
+{
+    const QByteArray depthGeometryKey =
+        viewportDepthGeometryCacheKey(visibleSceneShapes);
+    if (depthGeometryCacheValid_ && depthGeometryCacheKey_ == depthGeometryKey) {
+        return;
+    }
+    cachedDepthGeometry_ = buildViewportDepthGeometry(visibleSceneShapes);
+    depthGeometryCacheKey_ = depthGeometryKey;
+    depthGeometryCacheValid_ = true;
+    uploadSceneDepthGeometry(cachedDepthGeometry_);
 }
 
 void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,

@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -289,6 +290,41 @@ int main(int argc, char **argv)
                             coveredPixels(perspectiveGrid) > 100 &&
                             orthographicGrid != perspectiveGrid,
                         "required OpenGL run must render distinct covered grid pixels in orthographic and perspective views");
+
+        ViewportGpuSurface depthProbe;
+        depthProbe.resize(200, 150);
+        ViewportTransform depthTransform;
+        depthTransform.zoom() = 100.0;
+        Shape backPoint;
+        backPoint.geometryType = GeometryType::Point;
+        backPoint.points = {QPointF(0.0, 0.0)};
+        Shape frontPoint = backPoint;
+        frontPoint.workPlaneOffset = 10.0;
+        const QVector<Shape> depthShapes{backPoint, frontPoint};
+        depthProbe.setDrawCallback(
+            [&depthTransform](QPainter &painter,
+                              BlenderGridRenderer &gridRenderer,
+                              ViewportSceneRenderer &) {
+                painter.fillRect(QRect(QPoint(0, 0), painter.viewport().size()),
+                                 QColor(QStringLiteral("#282828")));
+                painter.beginNativePainting();
+                gridRenderer.renderToCurrentFramebuffer(
+                    depthTransform, QSize(200, 150), 1.0, {}, 1.0,
+                    BlenderGridAppearance{});
+                painter.endNativePainting();
+            });
+        depthProbe.show();
+        application.processEvents();
+        Point3D pickedPoint;
+        const bool depthPickSucceeded = depthProbe.pickScenePoint(
+            QPointF(100.0, 75.0), depthTransform, QSize(200, 150),
+            depthShapes, &pickedPoint);
+        passed &= check(depthProbe.isValid() && depthPickSucceeded &&
+                            std::abs(pickedPoint.x) < 0.1 &&
+                            std::abs(pickedPoint.y) < 0.1 &&
+                            std::abs(pickedPoint.z - 10.0) < 0.1,
+                        "GPU depth picking must unproject the frontmost overlapping scene point");
+        depthProbe.hide();
     }
 
     return passed ? 0 : 1;

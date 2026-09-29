@@ -6,6 +6,14 @@
 
 namespace classiCAD {
 
+qreal viewportWheelStepsFromDeltas(int angleDeltaY, int pixelDeltaY)
+{
+    if (angleDeltaY != 0) {
+        return static_cast<qreal>(angleDeltaY) / 120.0;
+    }
+    return static_cast<qreal>(pixelDeltaY) / 40.0;
+}
+
 ViewportOrientation ViewportOrientation::fromAxisAngle(qreal axisX,
                                                        qreal axisY,
                                                        qreal axisZ,
@@ -73,6 +81,8 @@ constexpr qreal kViewportSensorWidthMillimeters = 36.0;
 constexpr qreal kViewportReferenceDistance = 60.0;
 // BKE_camera_params_from_view3d uses CAMERA_PARAM_ZOOM_INIT_PERSP = 2.
 constexpr qreal kBlenderViewportProjectionZoom = 2.0;
+// Blender 5.2's V3D_OP_TRACKBALLSIZE from view3d_navigate.hh.
+constexpr qreal kBlenderTrackballSize = 1.1;
 
 qreal viewportFocalLengthPixels(const QSize &viewportSize, qreal lensMillimeters)
 {
@@ -193,6 +203,38 @@ Vec3 cameraTarget(const CameraBasis &basis,
     return add(asVec(orbitPivot),
                add(multiply(basis.right, -pan.x()),
                    multiply(basis.up, -pan.y())));
+}
+
+Vec3 trackballVector(const QPointF &screenPosition, const QSize &viewportSize)
+{
+    if (viewportSize.width() <= 0 || viewportSize.height() <= 0) {
+        return {0.0, 0.0, kBlenderTrackballSize};
+    }
+
+    // Match Blender's calctrackballvec: normalize both axes against half the
+    // shorter viewport dimension so a nonsquare region does not distort the
+    // virtual sphere. Qt's Y axis points down, unlike Blender's window space.
+    const qreal halfMinimumDimension =
+        std::min(viewportSize.width(), viewportSize.height()) * 0.5;
+    const qreal x = (screenPosition.x() - viewportSize.width() * 0.5) /
+                    halfMinimumDimension;
+    const qreal y = (viewportSize.height() * 0.5 - screenPosition.y()) /
+                    halfMinimumDimension;
+    const qreal distance = std::sqrt(x * x + y * y);
+    const qreal transition = kBlenderTrackballSize / std::sqrt(2.0);
+    const qreal z = distance < transition
+                        ? std::sqrt(std::max<qreal>(
+                              0.0, kBlenderTrackballSize * kBlenderTrackballSize -
+                                       distance * distance))
+                        : transition * transition / distance;
+    return {x, y, z};
+}
+
+Vec3 cross(const Vec3 &first, const Vec3 &second)
+{
+    return {first.y * second.z - first.z * second.y,
+            first.z * second.x - first.x * second.z,
+            first.x * second.y - first.y * second.x};
 }
 
 } // namespace
@@ -463,7 +505,12 @@ void ViewportTransform::setNavigationPreferences(
 {
     if (!std::isfinite(preferences.turntableSensitivityRadiansPerPixel) ||
         preferences.turntableSensitivityRadiansPerPixel < 0.00017453292519943296 ||
-        preferences.turntableSensitivityRadiansPerPixel > 0.08726646259971647) {
+        preferences.turntableSensitivityRadiansPerPixel > 0.08726646259971647 ||
+        !std::isfinite(preferences.trackballSensitivity) ||
+        preferences.trackballSensitivity < 0.01 ||
+        preferences.trackballSensitivity > 10.0 ||
+        (preferences.orbitMethod != ViewportOrbitMethod::Turntable &&
+         preferences.orbitMethod != ViewportOrbitMethod::Trackball)) {
         return;
     }
     navigationPreferences_ = preferences;
@@ -490,6 +537,7 @@ void ViewportTransform::setCameraState(const ViewportCameraState &state)
         !std::isfinite(state.gridViewDistance) || state.gridViewDistance <= 0.0) {
         return;
     }
+    orbitGestureActive_ = false;
     perspective_ = state.perspective;
     zoom_ = perspective_
                 ? std::clamp(state.zoom,
@@ -540,6 +588,7 @@ void ViewportTransform::setViewPreset(ViewportViewPreset preset)
         viewPreset_ = preset;
         return;
     }
+    orbitGestureActive_ = false;
     orbitPivotLocked_ = false;
     const CameraBasis previousBasis = cameraBasis(orientation_);
     const Vec3 previousTarget = cameraTarget(previousBasis, pan_, orbitPivot_);
@@ -591,6 +640,7 @@ void ViewportTransform::setViewDirection(const Point3D &cameraDirection)
         return;
     }
 
+    orbitGestureActive_ = false;
     const CameraBasis previousBasis = cameraBasis(orientation_);
     const Vec3 previousTarget = cameraTarget(previousBasis, pan_, orbitPivot_);
     orbitPivot_ = {previousTarget.x, previousTarget.y, previousTarget.z};
@@ -618,6 +668,21 @@ void ViewportTransform::setViewDirection(const Point3D &cameraDirection)
     }
 }
 
+void ViewportTransform::beginOrbitGesture(const QPointF &screenPosition,
+                                         const QSize &viewportSize)
+{
+    if (!orbitPivotLocked_) {
+        const CameraBasis basis = cameraBasis(orientation_);
+        const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
+        orbitPivot_ = {target.x, target.y, target.z};
+        pan_ = {};
+    }
+    const Vec3 vector = trackballVector(screenPosition, viewportSize);
+    trackballStartVector_ = {vector.x, vector.y, vector.z};
+    trackballStartOrientation_ = orientation_;
+    orbitGestureActive_ = true;
+}
+
 void ViewportTransform::orbitByPixels(const QPointF &delta)
 {
     if (!orbitPivotLocked_) {
@@ -642,6 +707,56 @@ void ViewportTransform::orbitByPixels(const QPointF &delta)
         right.x, right.y, right.z, -delta.y() * radiansPerPixel);
     orientation_ = (pitch * yaw * orientation_).normalized();
     viewPreset_ = ViewportViewPreset::Custom;
+}
+
+void ViewportTransform::orbitToPosition(const QPointF &screenPosition,
+                                        const QSize &viewportSize)
+{
+    if (!orbitGestureActive_) {
+        beginOrbitGesture(screenPosition, viewportSize);
+    }
+
+    const Vec3 start{trackballStartVector_.x,
+                     trackballStartVector_.y,
+                     trackballStartVector_.z};
+    const Vec3 current = trackballVector(screenPosition, viewportSize);
+    const Vec3 drag = subtract(current, start);
+    const qreal dragLength = std::sqrt(dot(drag, drag));
+    if (dragLength <= 1.0e-15) {
+        return;
+    }
+
+    if (navigationPreferences_.autoPerspective) {
+        perspective_ = true;
+        zoom_ = std::clamp(zoom_,
+                           minimumPerspectiveZoom(cameraPreferences_),
+                           maximumPerspectiveZoom(cameraPreferences_));
+    }
+
+    // Blender scales the virtual-sphere drag distance linearly, then uses the
+    // cross product of the start/current vectors for the rotation axis.
+    qreal angle = dragLength *
+                  (3.14159265358979323846 /
+                   (2.0 * kBlenderTrackballSize)) *
+                  navigationPreferences_.trackballSensitivity;
+    angle = std::remainder(angle, 2.0 * 3.14159265358979323846);
+
+    const Vec3 axis = normalized(cross(start, current));
+    if (dot(axis, axis) > 1.0e-15 && std::abs(angle) > 1.0e-15) {
+        const ViewportOrientation inverseViewRotation =
+            ViewportOrientation::fromAxisAngle(axis.x, axis.y, axis.z, -angle);
+        // Blender applies this delta to its world-to-view quaternion. This
+        // transform stores the inverse (camera-to-world), so invert the delta
+        // and post-multiply it onto the drag-start orientation.
+        orientation_ =
+            (trackballStartOrientation_ * inverseViewRotation).normalized();
+    }
+    viewPreset_ = ViewportViewPreset::Custom;
+}
+
+void ViewportTransform::endOrbitGesture()
+{
+    orbitGestureActive_ = false;
 }
 
 void ViewportTransform::setOrbitPivotPreservingView(const Point3D &pivot)

@@ -151,11 +151,18 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   clamp. Orbit-start depth selection tests visible shapes on their own offset
   workplanes, with sampled committed NURBS points supplying curve depth,
   rather than projecting onto the active construction plane, and
-  pivot changes preserve the perspective eye position. This is sampled CPU
-  depth picking, not a GPU depth-buffer equivalent; Blender's trackball mode
-  and pointer-gesture scaling have not been proven equivalent. The screenshot
-  comparison in Stage 5 and
-  native GPU composition in Stage 7 remain required before claiming parity.
+  pivot changes preserve the perspective eye position. Orbit start now tries an
+  on-demand GPU depth-buffer pick of visible scene geometry and falls back to
+  the sampled CPU hit test; the small depth readback happens only once at orbit
+  start, not on every frame. A selectable Blender-style trackball method uses
+  Blender 5.2's 1.1-radius, aspect-correct sphere/hyperbola mapping for drag
+  start/current positions, deriving the axis from their cross product and
+  scaling the angle by a separately saved sensitivity. Trackball is wired to
+  gizmo and mouse orbit drags;
+  turntable remains the default. Core math and overlapping-depth regressions
+  pass, but live Blender gesture calibration is not validated yet. The
+  screenshot comparison in Stage 5 and native GPU composition in Stage 7
+  remain required before claiming parity.
 - Validation passed: `cmake --build build -j2`, all four CTest suites,
   `git diff --check`, the XCB/Mesa software-OpenGL interaction test, and a
   five-second offscreen application startup. The offscreen platform cannot
@@ -195,4 +202,5 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 - [Blender scene/view unit and grid-step selection](https://github.com/blender/blender/blob/main/source/blender/editors/space_view3d/view3d_draw.cc)
 - [Blender view zoom](https://github.com/blender/blender/blob/main/source/blender/editors/space_view3d/view3d_navigate_view_zoom.cc)
 - [Blender smooth view](https://github.com/blender/blender/blob/main/source/blender/editors/space_view3d/view3d_navigate_smoothview.cc)
+- [Blender 5.2 viewport turntable and trackball rotation](https://github.com/blender/blender/blob/v5.2.0/source/blender/editors/space_view3d/view3d_navigate_view_rotate.cc)
 - [Blender viewport camera parameters](https://github.com/blender/blender/blob/main/source/blender/blenkernel/intern/camera.cc)

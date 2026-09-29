@@ -46,6 +46,12 @@ public:
                                     const QVector<Shape> &visibleSceneShapes,
                                     qreal baseGridStep,
                                     const BlenderGridAppearance &appearance);
+    bool pickScenePoint(const QPointF &screenPosition,
+                        const ViewportTransform &transform,
+                        const QSize &viewportSize,
+                        qreal devicePixelRatio,
+                        const QVector<Shape> &visibleSceneShapes,
+                        Point3D *worldPoint);
     void setAntiAliasingSamples(int samples);
     int antiAliasingSamples() const;
 
@@ -64,6 +70,7 @@ private:
                         const QSize &viewportSize,
                         qreal devicePixelRatio);
     void uploadSceneDepthGeometry(const ViewportDepthGeometry &geometry);
+    void updateSceneDepthGeometry(const QVector<Shape> &visibleSceneShapes);
     bool drawGrid(const ViewportTransform &transform,
                   const QSize &viewportSize,
                   qreal devicePixelRatio,
@@ -74,6 +81,7 @@ private:
     QOffscreenSurface surface_;
     std::unique_ptr<QOpenGLFramebufferObject> framebuffer_;
     std::unique_ptr<QOpenGLFramebufferObject> resolvedFramebuffer_;
+    std::unique_ptr<QOpenGLFramebufferObject> pickFramebuffer_;
     QOpenGLTextureBlitter textureBlitter_;
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram sceneDepthProgram_;

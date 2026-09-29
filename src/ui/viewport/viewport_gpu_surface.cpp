@@ -79,6 +79,24 @@ void ViewportGpuSurface::setAntiAliasingSamples(int samples)
     update();
 }
 
+bool ViewportGpuSurface::pickScenePoint(
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    const QVector<Shape> &visibleSceneShapes,
+    Point3D *worldPoint)
+{
+    if (!isValid() || worldPoint == nullptr) {
+        return false;
+    }
+    makeCurrent();
+    const bool picked = gridRenderer_->pickScenePoint(
+        screenPosition, transform, viewportSize, devicePixelRatioF(),
+        visibleSceneShapes, worldPoint);
+    doneCurrent();
+    return picked;
+}
+
 void ViewportGpuSurface::paintGL()
 {
     if (drawCallback_) {

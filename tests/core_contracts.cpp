@@ -42,6 +42,7 @@
 #include <QJsonObject>
 #include <QPainter>
 
+#include <algorithm>
 #include <cmath>
 #include <type_traits>
 
@@ -1320,6 +1321,42 @@ int main(int argc, char **argv)
                             1.0e-8,
                     "perspective projection must include Blender's 2x viewport zoom factor");
     const QPointF edgeOnCursor(500.0, 180.0);
+    passed &= check(std::abs(viewportWheelStepsFromDeltas(120, 120) - 1.0) <
+                            1.0e-12 &&
+                        std::abs(viewportWheelStepsFromDeltas(-60, -60) + 0.5) <
+                            1.0e-12 &&
+                        std::abs(viewportWheelStepsFromDeltas(0, 40) - 1.0) <
+                            1.0e-12,
+                    "viewport wheel zoom must prefer notch deltas when Qt also reports pixel deltas, with pixel-only smooth scrolling as fallback");
+    ViewportTransform combinedDeltaZoomTransform;
+    const ViewportCameraState initialCombinedDeltaCamera =
+        combinedDeltaZoomTransform.cameraState();
+    const auto applyCombinedDeltaWheel = [&](int angleDeltaY, int pixelDeltaY) {
+        const qreal wheelSteps =
+            viewportWheelStepsFromDeltas(angleDeltaY, pixelDeltaY);
+        const qreal factor = std::exp(std::log(1.2) * wheelSteps);
+        combinedDeltaZoomTransform.zoomAt(QPointF(420.0, 160.0),
+                                           factor,
+                                           viewportSize,
+                                           0.15,
+                                           12.0);
+    };
+    for (int step = 0; step < 8; ++step) {
+        applyCombinedDeltaWheel(-60, -60);
+    }
+    for (int step = 0; step < 8; ++step) {
+        applyCombinedDeltaWheel(60, 60);
+    }
+    const ViewportCameraState returnedCombinedDeltaCamera =
+        combinedDeltaZoomTransform.cameraState();
+    passed &= check(std::abs(returnedCombinedDeltaCamera.zoom -
+                             initialCombinedDeltaCamera.zoom) < 1.0e-12 &&
+                        std::hypot(returnedCombinedDeltaCamera.pan.x() -
+                                       initialCombinedDeltaCamera.pan.x(),
+                                   returnedCombinedDeltaCamera.pan.y() -
+                                       initialCombinedDeltaCamera.pan.y()) <
+                            1.0e-10,
+                    "eight combined-delta wheel steps out and back at an off-center cursor must return to the original camera without clamp-induced zoom or pan drift");
     const qreal targetPlanePixelSize = 60.0 /
         (viewportSize.width() * 50.0 / 72.0);
     const Point3D edgeOnAnchor{
@@ -1748,6 +1785,115 @@ int main(int argc, char **argv)
                         poleOrbit.viewDirection().y > 0.0 &&
                         std::abs(poleOrbit.viewUp().z) > 0.1,
                     "quaternion turntable orbit must rotate through the pole without a pitch clamp");
+
+    ViewportNavigationPreferences trackballPreferences;
+    trackballPreferences.autoPerspective = false;
+    trackballPreferences.orbitMethod = ViewportOrbitMethod::Trackball;
+    trackballPreferences.trackballSensitivity = 1.0;
+    const QSize trackballViewportSize(800, 600);
+    const QPointF trackballStart(400.0, 300.0);
+    const QPointF trackballEnd(520.0, 375.0);
+    const auto orientationDistance = [](const ViewportOrientation &first,
+                                        const ViewportOrientation &second) {
+        const qreal cosine = std::clamp(std::abs(first.dot(second)), 0.0, 1.0);
+        return 2.0 * std::acos(cosine);
+    };
+    ViewportTransform fullTrackballOrbit;
+    fullTrackballOrbit.setViewPreset(ViewportViewPreset::Front);
+    fullTrackballOrbit.setNavigationPreferences(trackballPreferences);
+    const ViewportOrientation trackballInitialOrientation =
+        fullTrackballOrbit.cameraState().orientation;
+    fullTrackballOrbit.beginOrbitGesture(trackballStart, trackballViewportSize);
+    fullTrackballOrbit.orbitToPosition(trackballEnd, trackballViewportSize);
+    const qreal fullTrackballAngle = orientationDistance(
+        trackballInitialOrientation,
+        fullTrackballOrbit.cameraState().orientation);
+    const qreal trackballRadius = 1.1;
+    const qreal sphereX = 120.0 / 300.0;
+    const qreal sphereY = -75.0 / 300.0;
+    const qreal sphereZ = std::sqrt(trackballRadius * trackballRadius -
+                                    sphereX * sphereX - sphereY * sphereY);
+    const qreal sphereDragLength = std::sqrt(
+        sphereX * sphereX + sphereY * sphereY +
+        (sphereZ - trackballRadius) * (sphereZ - trackballRadius));
+    const qreal expectedSphereAngle = sphereDragLength *
+        (3.14159265358979323846 / (2.0 * trackballRadius));
+    passed &= check(std::abs(fullTrackballAngle - expectedSphereAngle) < 1.0e-8,
+                    "Blender trackball sphere mapping must use drag distance divided by twice the trackball radius");
+
+    ViewportTransform halfTrackballOrbit;
+    halfTrackballOrbit.setViewPreset(ViewportViewPreset::Front);
+    trackballPreferences.trackballSensitivity = 0.5;
+    halfTrackballOrbit.setNavigationPreferences(trackballPreferences);
+    halfTrackballOrbit.beginOrbitGesture(trackballStart, trackballViewportSize);
+    halfTrackballOrbit.orbitToPosition(trackballEnd, trackballViewportSize);
+    // Compare both results from the same initial pose; the half-sensitivity
+    // path must rotate by half the full-sensitivity trackball angle.
+    const qreal measuredHalfTrackballAngle = orientationDistance(
+        trackballInitialOrientation,
+        halfTrackballOrbit.cameraState().orientation);
+    passed &= check(fullTrackballAngle > 0.0 &&
+                        std::abs(measuredHalfTrackballAngle / fullTrackballAngle - 0.5) <
+                            1.0e-8 &&
+                        halfTrackballOrbit.viewPreset() == ViewportViewPreset::Custom,
+                    "Blender trackball sensitivity must scale the drag angle from its initial view pose");
+
+    trackballPreferences.trackballSensitivity = 1.0;
+    const auto trackballDragAngle = [&](const QPointF &endPosition) {
+        ViewportTransform transform;
+        transform.setViewPreset(ViewportViewPreset::Front);
+        transform.setNavigationPreferences(trackballPreferences);
+        const ViewportOrientation startOrientation = transform.cameraState().orientation;
+        transform.beginOrbitGesture(trackballStart, trackballViewportSize);
+        transform.orbitToPosition(endPosition, trackballViewportSize);
+        return orientationDistance(startOrientation,
+                                  transform.cameraState().orientation);
+    };
+    const qreal horizontalTrackballAngle =
+        trackballDragAngle(trackballStart + QPointF(120.0, 0.0));
+    const qreal verticalTrackballAngle =
+        trackballDragAngle(trackballStart + QPointF(0.0, 120.0));
+    passed &= check(std::abs(horizontalTrackballAngle - verticalTrackballAngle) <
+                        1.0e-8,
+                    "Blender trackball mapping must aspect-correct horizontal and vertical cursor travel");
+    const qreal hyperbolaZ = (trackballRadius * trackballRadius / 2.0) / 2.0;
+    const qreal hyperbolaDragLength =
+        std::sqrt(2.0 * 2.0 +
+                  (hyperbolaZ - trackballRadius) *
+                      (hyperbolaZ - trackballRadius));
+    const qreal wrappedHyperbolaAngle = std::abs(std::remainder(
+        hyperbolaDragLength *
+            (3.14159265358979323846 / (2.0 * trackballRadius)),
+        2.0 * 3.14159265358979323846));
+    passed &= check(std::abs(trackballDragAngle(QPointF(1000.0, 300.0)) -
+                             wrappedHyperbolaAngle) < 1.0e-8,
+                    "Blender trackball must continue over the hyperbola outside the virtual sphere");
+
+    ViewportTransform absoluteTrackballOrbit;
+    absoluteTrackballOrbit.setViewPreset(ViewportViewPreset::Front);
+    absoluteTrackballOrbit.setNavigationPreferences(trackballPreferences);
+    absoluteTrackballOrbit.beginOrbitGesture(trackballStart, trackballViewportSize);
+    absoluteTrackballOrbit.orbitToPosition(QPointF(455.0, 335.0),
+                                          trackballViewportSize);
+    absoluteTrackballOrbit.orbitToPosition(trackballEnd, trackballViewportSize);
+    ViewportTransform directTrackballOrbit;
+    directTrackballOrbit.setViewPreset(ViewportViewPreset::Front);
+    directTrackballOrbit.setNavigationPreferences(trackballPreferences);
+    directTrackballOrbit.beginOrbitGesture(trackballStart, trackballViewportSize);
+    directTrackballOrbit.orbitToPosition(trackballEnd, trackballViewportSize);
+    passed &= check(std::abs(absoluteTrackballOrbit.cameraState().orientation.dot(
+                                 directTrackballOrbit.cameraState().orientation)) >
+                        1.0 - 1.0e-12,
+                    "Blender trackball motion must be computed from the drag-start cursor and orientation, not accumulated deltas");
+
+    ViewportNavigationPreferences savedTrackballPreferences =
+        fullTrackballOrbit.navigationPreferences();
+    passed &= check(savedTrackballPreferences.orbitMethod ==
+                            ViewportOrbitMethod::Trackball &&
+                        std::abs(savedTrackballPreferences.trackballSensitivity - 1.0) <
+                            1.0e-12,
+                    "viewport navigation preferences must retain the selected trackball mode and sensitivity");
+
     passed &= check(sampler.sampleDocument(xzDocument,
                                            viewportTransform,
                                            viewportSize).isEmpty() &&

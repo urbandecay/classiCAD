@@ -27,6 +27,11 @@ public:
     static bool isSupported();
     void setDrawCallback(DrawCallback callback);
     void setAntiAliasingSamples(int samples);
+    bool pickScenePoint(const QPointF &screenPosition,
+                        const ViewportTransform &transform,
+                        const QSize &viewportSize,
+                        const QVector<Shape> &visibleSceneShapes,
+                        Point3D *worldPoint);
 
 protected:
     void paintGL() override;

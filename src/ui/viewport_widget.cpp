@@ -2130,16 +2130,10 @@ protected:
         QWidget::resizeEvent(event);
     }
 
-    void paintViewport(QPainter &painter,
-                       BlenderGridRenderer *nativeRenderer,
-                       ViewportSceneRenderer *sceneRenderer)
+    QVector<Shape> visibleDepthShapes() const
     {
-        updateAssociativeDimensions(document_, curveSampler_);
-        const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
-        viewportRenderer_.setGridBaseStep(baseGridStep);
-        viewportRenderer_.setGridAppearance(gridAppearance_);
-        QVector<Shape> visibleDepthShapes;
-        visibleDepthShapes.reserve(shapes_.size());
+        QVector<Shape> visibleShapes;
+        visibleShapes.reserve(shapes_.size());
         for (int index = 0; index < shapes_.size(); ++index) {
             const ObjectId objectId = shapes_.objectIdAt(index);
             if (!document_.isObjectVisible(objectId)) {
@@ -2159,14 +2153,26 @@ protected:
                                     rotateBaseWorld_,
                                     rotatePreviewAngle_);
             }
-            visibleDepthShapes.append(std::move(depthShape));
+            visibleShapes.append(std::move(depthShape));
         }
+        return visibleShapes;
+    }
+
+    void paintViewport(QPainter &painter,
+                       BlenderGridRenderer *nativeRenderer,
+                       ViewportSceneRenderer *sceneRenderer)
+    {
+        updateAssociativeDimensions(document_, curveSampler_);
+        const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
+        viewportRenderer_.setGridBaseStep(baseGridStep);
+        viewportRenderer_.setGridAppearance(gridAppearance_);
+        const QVector<Shape> visibleShapes = visibleDepthShapes();
         QImage gpuViewportBackground;
         QImage committedSceneLayer;
         QPainter rasterScenePainter;
         if (nativeRenderer == nullptr) {
             gpuViewportBackground = blenderGridRenderer_.render(
-                viewportTransform_, size(), devicePixelRatioF(), visibleDepthShapes,
+                viewportTransform_, size(), devicePixelRatioF(), visibleShapes,
                 baseGridStep, gridAppearance_);
             const qreal devicePixelRatio =
                 std::max<qreal>(devicePixelRatioF(), 1.0);
@@ -2192,7 +2198,7 @@ protected:
             if (!document_.isObjectVisible(objectId)) {
                 continue;
             }
-            const Shape &visibleShape = visibleDepthShapes[visibleShapeIndex++];
+            const Shape &visibleShape = visibleShapes[visibleShapeIndex++];
             if (isDimensionGeometryType(shapes_[index].geometryType)) {
                 continue;
             }
@@ -2317,7 +2323,7 @@ protected:
                                                         devicePixelRatioF());
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 viewportTransform_, size(), devicePixelRatioF(),
-                visibleDepthShapes, baseGridStep, gridAppearance_);
+                visibleShapes, baseGridStep, gridAppearance_);
             painter.endNativePainting();
             if (!sceneDrawn) {
                 for (const ViewportSceneStroke &stroke : gpuStrokes) {
@@ -2551,6 +2557,10 @@ protected:
                 if (hit.action == BlenderNavigationAction::Orbit ||
                     hit.action == BlenderNavigationAction::Axis) {
                     beginOrbitAt(screenPosition);
+                    if (viewportTransform_.navigationPreferences().orbitMethod ==
+                        ViewportOrbitMethod::Trackball) {
+                        viewportTransform_.beginOrbitGesture(screenPosition, size());
+                    }
                 }
                 setCursor(hit.action == BlenderNavigationAction::Camera ||
                                   hit.action == BlenderNavigationAction::Projection
@@ -2725,6 +2735,10 @@ protected:
             }
             if (orbiting_) {
                 beginOrbitAt(screenPosition);
+                if (viewportTransform_.navigationPreferences().orbitMethod ==
+                    ViewportOrbitMethod::Trackball) {
+                    viewportTransform_.beginOrbitGesture(screenPosition, size());
+                }
             }
             panMoved_ = false;
             panStartPosition_ = screenPosition.toPoint();
@@ -3109,7 +3123,12 @@ protected:
                 switch (navigationPressedAction_) {
                 case BlenderNavigationAction::Orbit:
                 case BlenderNavigationAction::Axis:
-                    viewportTransform_.orbitByPixels(delta);
+                    if (viewportTransform_.navigationPreferences().orbitMethod ==
+                        ViewportOrbitMethod::Trackball) {
+                        viewportTransform_.orbitToPosition(screenPosition, size());
+                    } else {
+                        viewportTransform_.orbitByPixels(delta);
+                    }
                     break;
                 case BlenderNavigationAction::Zoom: {
                     const ViewportNavigationPreferences preferences =
@@ -3157,7 +3176,12 @@ protected:
             }
             if (orbiting_) {
                 const ViewportViewPreset previousPreset = viewportTransform_.viewPreset();
-                viewportTransform_.orbitByPixels(QPointF(delta));
+                if (viewportTransform_.navigationPreferences().orbitMethod ==
+                    ViewportOrbitMethod::Trackball) {
+                    viewportTransform_.orbitToPosition(screenPosition, size());
+                } else {
+                    viewportTransform_.orbitByPixels(QPointF(delta));
+                }
                 if (previousPreset != viewportTransform_.viewPreset()) {
                     notifyViewStateChanged();
                 }
@@ -3647,6 +3671,7 @@ protected:
             const BlenderNavigationAction action = navigationPressedAction_;
             const BlenderNavigationHit hit = navigationPressHit_;
             const QPointF releasePosition = eventPosition(event);
+            viewportTransform_.endOrbitGesture();
             if (!navigationMoved_) {
                 switch (action) {
                 case BlenderNavigationAction::Axis: {
@@ -3721,6 +3746,9 @@ protected:
         if (panning_ && (event->button() == panButton_ ||
                          event->button() == Qt::MiddleButton ||
                          event->button() == Qt::LeftButton)) {
+            if (orbiting_) {
+                viewportTransform_.endOrbitGesture();
+            }
             panning_ = false;
             orbiting_ = false;
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
@@ -3847,9 +3875,8 @@ protected:
         const qreal oldZoom = zoom_;
         const int pixelDelta = event->pixelDelta().y();
         const int angleDelta = event->angleDelta().y();
-        qreal wheelSteps = pixelDelta != 0
-                               ? static_cast<qreal>(pixelDelta) / 40.0
-                               : static_cast<qreal>(angleDelta) / 120.0;
+        qreal wheelSteps = viewportWheelStepsFromDeltas(angleDelta,
+                                                        pixelDelta);
         if (wheelSteps == 0.0) {
             event->accept();
             return;
@@ -4140,14 +4167,25 @@ private:
         const ViewportNavigationPreferences preferences =
             viewportTransform_.navigationPreferences();
         Point3D depthPoint;
-        if (preferences.useMouseDepthNavigate &&
-            curveHitTester_.hitTestVisibleDepth(document_,
-                                                 screenPosition,
-                                                 viewportTransform_,
-                                                 size(),
-                                                 &depthPoint)) {
-            viewportTransform_.setOrbitPivotPreservingView(depthPoint);
-            return;
+        if (preferences.useMouseDepthNavigate) {
+            const QVector<Shape> depthShapes = visibleDepthShapes();
+            const bool gpuDepthHit =
+                gpuSurface_ != nullptr &&
+                gpuSurface_->pickScenePoint(screenPosition,
+                                            viewportTransform_,
+                                            size(),
+                                            depthShapes,
+                                            &depthPoint);
+            const bool cpuDepthHit = !gpuDepthHit &&
+                curveHitTester_.hitTestVisibleDepth(document_,
+                                                     screenPosition,
+                                                     viewportTransform_,
+                                                     size(),
+                                                     &depthPoint);
+            if (gpuDepthHit || cpuDepthHit) {
+                viewportTransform_.setOrbitPivotPreservingView(depthPoint);
+                return;
+            }
         }
 
         if (!preferences.orbitAroundActive || !selectedShapeIndex_.isValid()) {

@@ -29,6 +29,11 @@ enum class ViewportZoomAxis {
     Horizontal,
 };
 
+enum class ViewportOrbitMethod {
+    Turntable,
+    Trackball,
+};
+
 struct ViewportCameraPreferences {
     qreal focalLengthMillimeters = 50.0;
     qreal clipStart = 0.01;
@@ -41,11 +46,18 @@ struct ViewportNavigationPreferences {
     bool orbitAroundActive = true;
     bool useMouseDepthNavigate = true;
     qreal turntableSensitivityRadiansPerPixel = 0.006981316953897476;
+    ViewportOrbitMethod orbitMethod = ViewportOrbitMethod::Turntable;
+    qreal trackballSensitivity = 1.0;
     bool invertMouseZoom = false;
     bool invertZoomWheel = false;
     ViewportZoomMethod zoomMethod = ViewportZoomMethod::Dolly;
     ViewportZoomAxis zoomAxis = ViewportZoomAxis::Vertical;
 };
+
+// Convert Qt wheel deltas into Blender-style wheel notches. Angle deltas are
+// authoritative when present; pixel deltas are the fallback for smooth-scroll
+// devices that do not report angle deltas.
+qreal viewportWheelStepsFromDeltas(int angleDeltaY, int pixelDeltaY);
 
 struct ViewportDirectionProjection {
     qreal horizontal = 0.0;
@@ -132,7 +144,12 @@ public:
     void setPerspectiveEnabled(bool enabled);
     void setViewPreset(ViewportViewPreset preset);
     void setViewDirection(const Point3D &cameraDirection);
+    void beginOrbitGesture(const QPointF &screenPosition,
+                          const QSize &viewportSize);
     void orbitByPixels(const QPointF &delta);
+    void orbitToPosition(const QPointF &screenPosition,
+                         const QSize &viewportSize);
+    void endOrbitGesture();
     void setOrbitPivotPreservingView(const Point3D &pivot);
     void panByPixels(const QPointF &delta, const QSize &viewportSize);
     void resetView();
@@ -156,6 +173,9 @@ private:
     ViewportCameraPreferences cameraPreferences_;
     ViewportNavigationPreferences navigationPreferences_;
     bool orbitPivotLocked_ = false;
+    Point3D trackballStartVector_{};
+    ViewportOrientation trackballStartOrientation_;
+    bool orbitGestureActive_ = false;
 };
 
 } // namespace classiCAD

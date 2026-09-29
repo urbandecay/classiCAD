@@ -376,6 +376,10 @@ public:
         preferences.useMouseDepthNavigate = mouseDepthNavigateCheckBox_->isChecked();
         preferences.turntableSensitivityRadiansPerPixel =
             qDegreesToRadians(turntableSensitivitySpinBox_->value());
+        preferences.orbitMethod = orbitMethodCombo_->currentData().toInt() == 1
+                                      ? ViewportOrbitMethod::Trackball
+                                      : ViewportOrbitMethod::Turntable;
+        preferences.trackballSensitivity = trackballSensitivitySpinBox_->value();
         preferences.invertMouseZoom = invertMouseZoomCheckBox_->isChecked();
         preferences.invertZoomWheel = invertZoomWheelCheckBox_->isChecked();
         preferences.zoomMethod = zoomMethodCombo_->currentData().toInt() == 1
@@ -698,6 +702,15 @@ private:
         orbitLayout->addWidget(mouseDepthNavigateCheckBox_);
 
         auto *sensitivityLayout = new QFormLayout;
+        orbitMethodCombo_ = new QComboBox;
+        orbitMethodCombo_->addItem(QStringLiteral("Turntable"), 0);
+        orbitMethodCombo_->addItem(QStringLiteral("Trackball"), 1);
+        orbitMethodCombo_->setCurrentIndex(
+            orbitMethodCombo_->findData(
+                preferences.orbitMethod == ViewportOrbitMethod::Trackball ? 1 : 0));
+        orbitMethodCombo_->setObjectName(QStringLiteral("viewportOrbitMethodPreference"));
+        sensitivityLayout->addRow(QStringLiteral("Rotation method"), orbitMethodCombo_);
+
         turntableSensitivitySpinBox_ = new QDoubleSpinBox;
         turntableSensitivitySpinBox_->setRange(0.01, 5.0);
         turntableSensitivitySpinBox_->setDecimals(2);
@@ -709,6 +722,38 @@ private:
             QStringLiteral("viewportTurntableSensitivityPreference"));
         sensitivityLayout->addRow(QStringLiteral("Turntable sensitivity"),
                                   turntableSensitivitySpinBox_);
+
+        trackballSensitivitySpinBox_ = new QDoubleSpinBox;
+        trackballSensitivitySpinBox_->setRange(0.01, 10.0);
+        trackballSensitivitySpinBox_->setDecimals(2);
+        trackballSensitivitySpinBox_->setSingleStep(0.1);
+        trackballSensitivitySpinBox_->setValue(preferences.trackballSensitivity);
+        trackballSensitivitySpinBox_->setSuffix(QStringLiteral("×"));
+        trackballSensitivitySpinBox_->setObjectName(
+            QStringLiteral("viewportTrackballSensitivityPreference"));
+        sensitivityLayout->addRow(QStringLiteral("Trackball sensitivity"),
+                                  trackballSensitivitySpinBox_);
+
+        QWidget *turntableSensitivityLabel =
+            sensitivityLayout->labelForField(turntableSensitivitySpinBox_);
+        QWidget *trackballSensitivityLabel =
+            sensitivityLayout->labelForField(trackballSensitivitySpinBox_);
+        const auto updateSensitivityFields = [this,
+                                              turntableSensitivityLabel,
+                                              trackballSensitivityLabel]() {
+            const bool trackball = orbitMethodCombo_->currentData().toInt() == 1;
+            turntableSensitivitySpinBox_->setVisible(!trackball);
+            if (turntableSensitivityLabel != nullptr) {
+                turntableSensitivityLabel->setVisible(!trackball);
+            }
+            trackballSensitivitySpinBox_->setVisible(trackball);
+            if (trackballSensitivityLabel != nullptr) {
+                trackballSensitivityLabel->setVisible(trackball);
+            }
+        };
+        connect(orbitMethodCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, [updateSensitivityFields](int) { updateSensitivityFields(); });
+        updateSensitivityFields();
         orbitLayout->addLayout(sensitivityLayout);
         layout->addWidget(orbitBox);
 
@@ -757,8 +802,8 @@ private:
         layout->addWidget(zoomBox);
 
         auto *hint = new QLabel(QStringLiteral(
-            "Turntable and zoom defaults are read from your Blender preferences. "
-            "Mouse-depth orbit uses the app's active construction plane."));
+            "Choose Blender-style turntable or trackball rotation and adjust its sensitivity. "
+            "Mouse-depth orbit uses the geometry under the cursor."));
         hint->setObjectName(QStringLiteral("preferencesHint"));
         hint->setWordWrap(true);
         layout->addWidget(hint);
@@ -820,7 +865,9 @@ private:
     QCheckBox *zoomToMouseCheckBox_ = nullptr;
     QCheckBox *orbitAroundActiveCheckBox_ = nullptr;
     QCheckBox *mouseDepthNavigateCheckBox_ = nullptr;
+    QComboBox *orbitMethodCombo_ = nullptr;
     QDoubleSpinBox *turntableSensitivitySpinBox_ = nullptr;
+    QDoubleSpinBox *trackballSensitivitySpinBox_ = nullptr;
     QCheckBox *invertMouseZoomCheckBox_ = nullptr;
     QCheckBox *invertZoomWheelCheckBox_ = nullptr;
     QComboBox *zoomMethodCombo_ = nullptr;
@@ -2597,6 +2644,13 @@ private:
         navigationPreferences.turntableSensitivityRadiansPerPixel = settings.value(
             QStringLiteral("navigation/turntableSensitivityRadiansPerPixel"),
             navigationPreferences.turntableSensitivityRadiansPerPixel).toDouble();
+        navigationPreferences.orbitMethod = settings.value(
+            QStringLiteral("navigation/orbitMethod"), 0).toInt() == 1
+                                                  ? ViewportOrbitMethod::Trackball
+                                                  : ViewportOrbitMethod::Turntable;
+        navigationPreferences.trackballSensitivity = settings.value(
+            QStringLiteral("navigation/trackballSensitivity"),
+            navigationPreferences.trackballSensitivity).toDouble();
         navigationPreferences.invertMouseZoom = settings.value(
             QStringLiteral("navigation/invertMouseZoom"),
             navigationPreferences.invertMouseZoom).toBool();
@@ -2788,6 +2842,12 @@ private:
             settings.setValue(
                 QStringLiteral("navigation/turntableSensitivityRadiansPerPixel"),
                 preferences.turntableSensitivityRadiansPerPixel);
+            settings.setValue(QStringLiteral("navigation/orbitMethod"),
+                              preferences.orbitMethod == ViewportOrbitMethod::Trackball
+                                  ? 1
+                                  : 0);
+            settings.setValue(QStringLiteral("navigation/trackballSensitivity"),
+                              preferences.trackballSensitivity);
             settings.setValue(QStringLiteral("navigation/invertMouseZoom"),
                               preferences.invertMouseZoom);
             settings.setValue(QStringLiteral("navigation/invertZoomWheel"),

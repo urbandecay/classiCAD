@@ -46,7 +46,7 @@ src/core/history/history.*          document-level snapshot undo/redo ownership
 src/core/serialization/document_serializer.* versioned document/layer/object save/restore
 src/core/model.*                   compatibility model, factories, serialization, helpers
 src/core/debug_log.*               application logging
-src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/workplane picking, presets, zoom, pan, and orbit
+src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/workplane picking, presets, zoom, pan, and Blender-style turntable/trackball orbit math
 src/services/sampling/curve_sampler.* NURBS display/erase sampling and scene cache generation
 src/services/hit_testing/curve_hit_tester.* curve/control-point hit-testing and cross-workplane orbit-depth picking
 src/services/snapping/snap_engine.* endpoint, midpoint, center, intersection, perpendicular, and tangent snapping
@@ -85,7 +85,7 @@ src/ui/viewport/viewport_renderer.* committed-geometry projection, CPU grid fall
 src/ui/viewport/viewport_overlay.*  snap markers, tool previews, selection boxes, labels, and erase/trim overlays
 src/ui/main_window.*               menus, tool shelf, preferences, and window wiring
 tests/trim_seam.cpp                current geometry/editing regression coverage
-tests/core_contracts.cpp            vocabulary, ID, NURBS, and session compatibility coverage
+tests/core_contracts.cpp            vocabulary, ID, NURBS, session, camera, and orbit-math compatibility coverage
 tests/viewport_interaction.cpp      viewport mouse/wheel and GPU/fallback interaction coverage
 ```
 
@@ -257,7 +257,7 @@ src/
     sampling/
       curve_sampler.*                   cached display/erase samples from NURBS source data
     viewport/
-      viewport_transform.*              world/screen conversion, zoom, and pan
+      viewport_transform.*              world/screen conversion, zoom, pan, quaternion turntable, and trackball orbit math
 
   tools/
     tool.*                              common tool lifecycle/input/preview contract
@@ -520,7 +520,8 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 | 15. Blender grid units and theme appearance | Complete | Added persistent document length-unit/base-spacing settings with version-4 serialization and legacy defaults, shared `BlenderGridAppearance` inputs for GPU and Qt fallback, and document-grid/preferences controls for units, spacing, theme colors, opacity, and low-alpha stipple. Kept geometry coordinates in millimeters. Added unit-scaled LOD, settings serialization, and theme validation coverage; build, all three CTest suites, `git diff --check`, and offscreen startup/fallback passed. |
 | 16. Blender viewport parity regression matrix | In progress | Added CPU-fallback image regressions for six axis views, isometric ortho, perspective, axis colors, horizon fade, close/far zoom, pan, and orbit; added document grid-settings undo/redo coverage. A dedicated widget interaction test sends wheel, configured pan, Shift+MMB pan, and Shift+configured-button orbit events. The offscreen CTest checks the Qt fallback; an XCB/Mesa run directly requires covered GPU-rendered orthographic and perspective grids. All four CTest suites and `git diff --check` pass. Direct Blender-vs-classiCAD screenshot comparison remains to validate pixel-level parity. |
 | 17. Blender navigation and projection comparison | In progress | Traced Blender's view zoom, smooth view, camera projection, grid setup, and theme source; read the user's Blender 5.2 preferences. Matched the 2x viewport projection factor, 1.2 wheel distance ratio, 200 ms smoothstep preset animation, target-depth cursor zoom, Blender distance bounds, 151/301 perspective/orthographic grid line counts, unbounded floor focus distance, and Blender-derived theme colors. The exact old saved palette migrates in memory without overwriting edited colors. Added projection and far-zoom recovery tests. At this phase, the QWidget renderer synchronously read GPU frames into a QImage; phase 18 addresses that. Blender screenshot/orbit comparison remains to establish full parity. |
-| 17a. Quaternion orbit and depth navigation | In progress | Replaced yaw/pitch camera storage and preset interpolation with double-precision quaternion rotation/slerp so orbit can pass through poles without losing CAD projection precision; updated GPU camera up vector to use the same orientation. Orbit-start hit testing now inspects visible objects on their own workplanes and uses sampled NURBS stroke depth (or picture plane depth) as the pivot, preserving the perspective eye when the target depth changes. Added offset-plane, overlapping-depth, and pole regressions. Build, all four offscreen CTest suites, XCB/Mesa interaction, offscreen startup smoke, and `git diff --check` passed. This is a CPU depth approximation, not a GPU depth-buffer pick; Blender's trackball mode, navigation gesture calibration, and direct visual/interaction comparison remain open. |
+| 17a. Quaternion orbit and depth navigation | In progress | Replaced yaw/pitch camera storage and preset interpolation with double-precision quaternion rotation/slerp so orbit can pass through poles without losing CAD projection precision; updated GPU camera up vector to use the same orientation. Orbit-start picking now uses the GPU depth buffer over shared visible-scene geometry, with a small on-demand readback and sampled CPU fallback when the GPU path is unavailable or finds no hit. Both paths preserve the perspective eye when the target depth changes. Offset-plane, overlapping-depth, pole, and GPU frontmost-overlap regressions pass. Direct visual/interaction comparison remains open. |
+| 17b. Blender 5.2 trackball rotation | In progress | Added selectable Turntable/Trackball settings, a separately saved trackball sensitivity, and Blender's 1.1-radius aspect-correct virtual sphere/hyperbola mapping with drag-start quaternion and cross-product axis math in `ViewportTransform`. Wired begin/move/end gesture handling to the viewport gizmo and mouse orbit drags; Turntable remains the default. Added transform-level sensitivity and absolute-drag regressions in `tests/core_contracts.cpp`. Build, all four CTest suites, the XCB/Mesa GPU interaction regression, and offscreen fallback startup pass. Live pointer-gesture calibration against Blender remains open. |
 | 18. Native viewport GPU presentation and curve strokes | In progress | Added a QOpenGLWidget surface, direct grid framebuffer composition without per-frame GPU image readback, OpenGL scene strokes for common CAD curves and points, cached world tessellation, and dashed GPU Bézier/NURBS control guides. Qt remains for pictures, dimensions, tool previews, overlays, noncontinuous layer line styles, and offscreen fallback. Full build, all four CTest suites, XCB/Mesa interaction checks for rectangle/Bézier guides/point pixels, `git diff --check`, and offscreen startup/fallback passed. Remaining scene migration and close-zoom curve inspection are tracked in Stage 7 of `BLENDER_VIEWPORT_PARITY_PLAN.md`. |
 
 ## Required iteration report

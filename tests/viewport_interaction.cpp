@@ -369,6 +369,43 @@ int main(int argc, char **argv)
                             zoomRoundTripImageError < 2.0,
                         "native grid must remain visible after twenty zoom-out steps and return to the same centered view after twenty steps in");
 
+        viewport->setViewPreset(ViewportViewPreset::Perspective);
+        waitForViewportTransition();
+        const QImage perspectiveZoomRoundTripStart =
+            captureViewport(viewport.get());
+        for (int step = 0; step < 20; ++step) {
+            sendWheel(viewport.get(), comparisonCenter, -120);
+        }
+        application.processEvents();
+        waitForViewportTransition();
+        const QImage perspectiveTwentyStepsOut =
+            captureViewport(viewport.get());
+        for (int step = 0; step < 20; ++step) {
+            sendWheel(viewport.get(), comparisonCenter, 120);
+        }
+        application.processEvents();
+        waitForViewportTransition();
+        const QImage perspectiveZoomRoundTripEnd =
+            captureViewport(viewport.get());
+        saveGridCapture(QStringLiteral("viewport-native-perspective-zoom-20-out"),
+                        perspectiveTwentyStepsOut);
+        saveGridCapture(QStringLiteral("viewport-native-perspective-zoom-20-return"),
+                        perspectiveZoomRoundTripEnd);
+        const int perspectiveGridPixelsAfterZoomOut =
+            neutralGridLikePixels(perspectiveTwentyStepsOut);
+        const qreal perspectiveZoomRoundTripImageError =
+            imageMeanAbsoluteError(perspectiveZoomRoundTripStart,
+                                  perspectiveZoomRoundTripEnd);
+        qInfo().noquote()
+            << QStringLiteral("Native 20-step perspective zoom check: gridPixels=%1 returnImageMAE=%2")
+                   .arg(perspectiveGridPixelsAfterZoomOut)
+                   .arg(perspectiveZoomRoundTripImageError, 0, 'f', 4);
+        passed &= check(
+            perspectiveZoomRoundTripStart.size() == blenderReferenceViewportSize &&
+                perspectiveGridPixelsAfterZoomOut > 200 &&
+                perspectiveZoomRoundTripImageError < 2.0,
+            "native perspective grid must remain visible after twenty zoom-out steps and return to the same centered view after twenty steps in");
+
         const std::array<std::pair<const char *, ViewportViewPreset>, 8> viewMatrix{{
             {"top", ViewportViewPreset::Top},
             {"bottom", ViewportViewPreset::Bottom},

@@ -21,6 +21,7 @@ public:
                                             qreal,
                                             Shape *)>;
     using ShapeCommitter = std::function<bool(ToolId, const Shape &)>;
+    using ShapesCommitter = std::function<bool(ToolId, const QVector<Shape> &)>;
     using ToolFinisher = std::function<void(ToolId)>;
     using PreviewPublisher = std::function<void(const ToolPreview &)>;
     using StatusPublisher = std::function<void(const ToolStatus &)>;
@@ -48,6 +49,7 @@ public:
 
     void setShapeFactory(ShapeFactory factory);
     void setShapeCommitter(ShapeCommitter committer);
+    void setShapesCommitter(ShapesCommitter committer);
     void setToolFinisher(ToolFinisher finisher);
     void setPreviewPublisher(PreviewPublisher publisher);
     void setStatusPublisher(StatusPublisher publisher);
@@ -61,6 +63,7 @@ public:
                      qreal arcSweep,
                      Shape *shape) const;
     bool commitShape(ToolId tool, const Shape &shape) const;
+    bool commitShapes(ToolId tool, const QVector<Shape> &shapes) const;
     void finishTool(ToolId tool) const;
     void publishPreview(const ToolPreview &preview) const;
     void publishStatus(const ToolStatus &status) const;
@@ -80,6 +83,7 @@ private:
     SnapEngine &snapEngine_;
     ShapeFactory shapeFactory_;
     ShapeCommitter shapeCommitter_;
+    ShapesCommitter shapesCommitter_;
     ToolFinisher toolFinisher_;
     PreviewPublisher previewPublisher_;
     StatusPublisher statusPublisher_;

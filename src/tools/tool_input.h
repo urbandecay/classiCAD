@@ -15,6 +15,8 @@ struct ToolInput {
     QPointF screenPosition;
     QPointF rawWorldPosition;
     QPointF worldPosition;
+    WorkPlaneFrame workPlaneFrame;
+    bool orthoEnabled = false;
     Qt::MouseButton button = Qt::NoButton;
     Qt::MouseButtons buttons = Qt::NoButton;
     Qt::KeyboardModifiers modifiers = Qt::NoModifier;

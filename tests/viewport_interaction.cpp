@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QPainter>
@@ -175,6 +176,18 @@ void waitForViewportTransition()
     eventLoop.exec();
 }
 
+bool waitForViewPreset(ViewportWidgetApi *viewport, ViewportViewPreset preset)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (viewport->viewPreset() != preset && timer.elapsed() < 2000) {
+        QEventLoop loop;
+        QTimer::singleShot(25, &loop, &QEventLoop::quit);
+        loop.exec();
+    }
+    return viewport->viewPreset() == preset;
+}
+
 bool benchmarkNativeViewportFrames(ViewportWidgetApi *viewport,
                                    int frameCount,
                                    const QString &sceneName)
@@ -329,6 +342,187 @@ int main(int argc, char **argv)
     viewport->setGridAppearance(blenderGridAppearance);
 
     const QPointF center(320.0, 240.0);
+    // A side-view click over an edge-on XY curve must use the visible YZ
+    // plane, rather than discarding input on an unpickable inherited plane.
+    {
+        QTemporaryDir directory;
+        Document source;
+        Shape edge;
+        edge.geometryType = GeometryType::Line;
+        edge.points = {QPointF(0.0, -100.0), QPointF(0.0, 100.0)};
+        edge.nurbs = makeDegreeOneNurbs(edge.points);
+        source.append(edge);
+        const QString path = directory.filePath(QStringLiteral("side-line.vignola"));
+        QString error;
+        std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+        probe->resize(interactionViewportSize);
+        probe->show();
+        passed &= check(saveVignolaDocument(path, source, &error) &&
+                            probe->loadVignolaDocument(path, &error),
+                        "side-view line fixture must load");
+        probe->setViewPreset(ViewportViewPreset::Right);
+        application.processEvents();
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Right),
+                        "side-view camera transition must finish before drawing");
+        probe->setTool(ToolId::Line);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, center,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseMove, center + QPointF(0.0, -80.0),
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, center + QPointF(0.0, -80.0),
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, center + QPointF(0.0, -80.0),
+                  Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        Document result;
+        passed &= check(probe->saveVignolaDocument(path, &error) &&
+                            loadVignolaDocument(path, &result, &error) &&
+                            result.objects().size() == 2,
+                        "side-view line must commit above an edge-on existing curve");
+        if (result.objects().size() == 2) {
+            const Shape &line = result.objects().back().geometry;
+            const WorkPlaneFrame frame = shapeWorkPlaneFrame(line);
+            const Point3D a = workPlaneFramePointToWorld(line.nurbs.controlPoints.first(), frame);
+            const Point3D b = workPlaneFramePointToWorld(line.nurbs.controlPoints.last(), frame);
+            passed &= check(validateNurbsCurve(line.nurbs) &&
+                                std::abs(a.x - b.x) < 1.0e-8 &&
+                                std::abs(a.y - b.y) < 1.0e-8 &&
+                                std::abs(a.z - b.z) > 1.0,
+                            "vertical side-view line must store a world Z segment");
+        }
+        // Exercise real Qt input and save/reload world CVs. Z starts from the
+        // perspective XY floor here, so projecting input onto XY would fail.
+        ViewportTransform projection;
+        projection.setViewPreset(ViewportViewPreset::Perspective);
+        const Point3D ends[] = {{10.0, 0.0, 0.0}, {0.0, 10.0, 0.0}, {0.0, 0.0, 10.0}};
+        const int keys[] = {Qt::Key_X, Qt::Key_Y, Qt::Key_Z};
+        for (int index = 0; index < 3; ++index) {
+            probe->createNewDocument();
+            probe->setOsnapEnabled(false);
+            probe->setViewPreset(ViewportViewPreset::Perspective);
+            passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Perspective),
+                            "perspective camera transition must finish before axis placement");
+            probe->setTool(ToolId::Line);
+            sendMouse(probe.get(), QEvent::MouseButtonPress, center,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QKeyEvent key(QEvent::KeyPress, keys[index], Qt::NoModifier);
+            QApplication::sendEvent(probe.get(), &key);
+            QPointF endScreen;
+            projection.worldPointToScreen(ends[index], interactionViewportSize, &endScreen);
+            sendMouse(probe.get(), QEvent::MouseMove, endScreen,
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            application.processEvents();
+            saveGridCapture(QStringLiteral("line-world-axis-%1-preview").arg(index),
+                            captureViewport(probe.get()));
+            sendMouse(probe.get(), QEvent::MouseButtonPress, endScreen,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            sendMouse(probe.get(), QEvent::MouseButtonPress, endScreen,
+                      Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+            Document axisResult;
+            const bool saved = probe->saveVignolaDocument(path, &error) &&
+                loadVignolaDocument(path, &axisResult, &error);
+            bool axisMatches = saved && axisResult.objects().size() == 1;
+            if (axisMatches) {
+                const Shape &line = axisResult.objects().first().geometry;
+                const Point3D end = workPlaneFramePointToWorld(
+                    line.nurbs.controlPoints.last(), shapeWorkPlaneFrame(line));
+                axisMatches = validateNurbsCurve(line.nurbs) &&
+                    std::abs(end.x - ends[index].x) < 1.0e-6 &&
+                    std::abs(end.y - ends[index].y) < 1.0e-6 &&
+                    std::abs(end.z - ends[index].z) < 1.0e-6;
+            }
+            passed &= check(axisMatches,
+                "X/Y/Z keys must create the requested world axis in perspective, including outside XY");
+        }
+        probe->createNewDocument();
+        probe->setOsnapEnabled(false);
+        probe->setViewPreset(ViewportViewPreset::Perspective);
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Perspective),
+                        "chain camera transition must finish before drawing");
+        probe->setTool(ToolId::Line);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, center,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        const Point3D chain[] = {{10.0, 0.0, 0.0}, {10.0, 10.0, 0.0}, {10.0, 10.0, 10.0}};
+        QPointF endScreen;
+        for (int index = 0; index < 3; ++index) {
+            QKeyEvent key(QEvent::KeyPress, keys[index], Qt::NoModifier);
+            QApplication::sendEvent(probe.get(), &key);
+            projection.worldPointToScreen(chain[index], interactionViewportSize, &endScreen);
+            sendMouse(probe.get(), QEvent::MouseMove, endScreen,
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            sendMouse(probe.get(), QEvent::MouseButtonPress, endScreen,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        }
+        sendMouse(probe.get(), QEvent::MouseButtonPress, endScreen,
+                  Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        Document chainResult;
+        passed &= check(probe->saveVignolaDocument(path, &error) &&
+                            loadVignolaDocument(path, &chainResult, &error) &&
+                            chainResult.objects().size() == 2,
+                        "an XYZ path must preserve its planar NURBS runs");
+        probe->executeCommand(ViewportCommand::Undo);
+        passed &= check(probe->saveVignolaDocument(path, &error) &&
+                            loadVignolaDocument(path, &chainResult, &error) &&
+                            chainResult.objects().isEmpty(),
+                        "one Undo must remove the whole XYZ drawing command");
+        Document snapSource;
+        Shape elevatedPoint;
+        elevatedPoint.geometryType = GeometryType::Point;
+        elevatedPoint.workPlaneOffset = 10.0;
+        elevatedPoint.points = {QPointF(5.0, 6.0)};
+        snapSource.append(elevatedPoint);
+        passed &= check(saveVignolaDocument(path, snapSource, &error) &&
+                            probe->loadVignolaDocument(path, &error),
+                        "spatial OSnap fixture must load");
+        probe->setOsnapEnabled(true);
+        probe->setViewPreset(ViewportViewPreset::Perspective);
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Perspective),
+                        "snap camera transition must finish before drawing");
+        probe->setTool(ToolId::Line);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, center,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        projection.worldPointToScreen({5.0, 6.0, 10.0}, interactionViewportSize, &endScreen);
+        sendMouse(probe.get(), QEvent::MouseMove, endScreen,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, endScreen,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, endScreen,
+                  Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        Document snapResult;
+        bool snapped = probe->saveVignolaDocument(path, &error) &&
+            loadVignolaDocument(path, &snapResult, &error) && snapResult.size() == 2;
+        if (snapped) {
+            const Shape &line = snapResult.objects().last().geometry;
+            const Point3D end = workPlaneFramePointToWorld(line.nurbs.controlPoints.last(),
+                                                          shapeWorkPlaneFrame(line));
+            snapped = std::abs(end.x - 5.0) < 1.0e-6 &&
+                std::abs(end.y - 6.0) < 1.0e-6 && std::abs(end.z - 10.0) < 1.0e-6;
+        }
+        passed &= check(snapped,
+                        "Line OSnap must keep the actual XYZ depth of an endpoint on another plane");
+        probe->createNewDocument();
+        probe->setOsnapEnabled(false);
+        probe->setViewPreset(ViewportViewPreset::Isometric);
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Isometric),
+                        "oblique camera transition must finish before drawing");
+        probe->setTool(ToolId::Line);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, center,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        const QPointF obliqueEnd = center + QPointF(80.0, 10.0);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, obliqueEnd,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, obliqueEnd,
+                  Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        Document obliqueResult;
+        bool oblique = probe->saveVignolaDocument(path, &error) &&
+            loadVignolaDocument(path, &obliqueResult, &error) && obliqueResult.size() == 1;
+        if (oblique) {
+            const WorkPlaneFrame frame = shapeWorkPlaneFrame(obliqueResult[0]);
+            oblique = std::abs(frame.normal.x) > 0.1 && std::abs(frame.normal.y) > 0.1 &&
+                std::abs(frame.normal.z) > 0.1 && validateNurbsCurve(obliqueResult[0].nurbs);
+        }
+        passed &= check(oblique,
+                        "oblique orthographic Line input must use the actual camera plane, as the addon does");
+    }
     if (QApplication::platformName() == QStringLiteral("xcb") &&
         !qEnvironmentVariable("CLASSICAD_VIEWPORT_CAPTURE_DIR").isEmpty()) {
         viewport->resize(blenderReferenceViewportSize);

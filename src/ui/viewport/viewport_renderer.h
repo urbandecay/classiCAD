@@ -72,14 +72,6 @@ private:
     bool subdivisionCurve(const Shape &shape,
                           Shape::NurbsCurve2D *curve) const;
     QVector<QPointF> rectangleVertices(const Shape &shape) const;
-    bool makeCircularArcGeometry(const QPointF &startWorld,
-                                 const QPointF &endWorld,
-                                 const QPointF &throughWorld,
-                                 const QSize &viewportSize,
-                                 QPointF *center,
-                                 qreal *radius,
-                                 qreal *startAngle,
-                                 qreal *sweepAngle) const;
     void drawCenterArc(QPainter &painter,
                        const QPointF &centerWorld,
                        const QPointF &startWorld,

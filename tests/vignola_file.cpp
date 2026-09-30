@@ -214,6 +214,16 @@ int main(int argc, char **argv)
         rhinoModel.AddManagedModelGeometryComponent(
             new ON_LineCurve(ON_3dPoint(0.0, 0.0, 0.0), ON_3dPoint(1.0, 1.0, 2.0)),
             new ON_3dmObjectAttributes(spatialCurveAttributes));
+        // A tilted straight line is still planar. Four noncoplanar CVs are
+        // needed to exercise rejection of a genuinely spatial NURBS curve.
+        auto *nonplanar = new ON_NurbsCurve(3, false, 4, 4);
+        nonplanar->SetCV(0, ON_3dPoint(0.0, 0.0, 0.0));
+        nonplanar->SetCV(1, ON_3dPoint(1.0, 0.0, 0.0));
+        nonplanar->SetCV(2, ON_3dPoint(0.0, 1.0, 0.0));
+        nonplanar->SetCV(3, ON_3dPoint(0.0, 0.0, 1.0));
+        nonplanar->MakeClampedUniformKnotVector();
+        rhinoModel.AddManagedModelGeometryComponent(
+            nonplanar, new ON_3dmObjectAttributes(spatialCurveAttributes));
     }
 
     const QString rhinoPath = QDir(temporaryDirectory.path()).filePath(
@@ -235,8 +245,8 @@ int main(int argc, char **argv)
     }
     passed &= check(imported,
                     "ordinary Rhino 3DM files must import without Vignola metadata");
-    passed &= check(importTarget.size() == 4 && importReport.importedObjectCount == 3,
-                    "Rhino import must merge XY, offset-XY, and point geometry into the existing document");
+    passed &= check(importTarget.size() == 5 && importReport.importedObjectCount == 4,
+                    "Rhino import must merge principal and tilted planar curves and points into the document");
     passed &= check(importReport.skippedObjectCount == 1 &&
                         !importReport.warningMessage.isEmpty(),
                     "Rhino import must explicitly report skipped non-planar geometry");
@@ -254,6 +264,7 @@ int main(int argc, char **argv)
     bool foundRationalCurve = false;
     bool foundScaledPoint = false;
     bool foundOffsetPlaneCurve = false;
+    bool foundTiltedCurve = false;
     for (const SceneObject &object : importTarget.objects()) {
         if ((object.geometry.geometryType == GeometryType::Nurbs ||
              object.geometry.geometryType == GeometryType::Circle) &&
@@ -270,7 +281,14 @@ int main(int argc, char **argv)
         }
         if (object.geometry.geometryType == GeometryType::Line &&
             object.geometry.workPlane == WorkPlane::XY) {
-            foundOffsetPlaneCurve = std::abs(object.geometry.workPlaneOffset - 50.8) < 1.0e-8;
+            foundOffsetPlaneCurve |= std::abs(object.geometry.workPlaneOffset - 50.8) < 1.0e-8;
+        }
+        if (object.geometry.geometryType == GeometryType::Line &&
+            validateNurbsCurve(object.geometry.nurbs)) {
+            const Point3D end = workPlaneFramePointToWorld(
+                object.geometry.nurbs.controlPoints.last(), shapeWorkPlaneFrame(object.geometry));
+            foundTiltedCurve |= std::abs(end.x - 25.4) < 1.0e-8 &&
+                std::abs(end.y - 25.4) < 1.0e-8 && std::abs(end.z - 50.8) < 1.0e-8;
         }
     }
     passed &= check(foundRationalCurve,
@@ -279,6 +297,8 @@ int main(int argc, char **argv)
                     "Rhino points must be converted from source units to millimeters");
     passed &= check(foundOffsetPlaneCurve,
                     "Rhino import must preserve principal-plane offsets and convert them to millimeters");
+    passed &= check(foundTiltedCurve,
+                    "Rhino import must preserve the world endpoints of a tilted planar line");
 
     return passed ? 0 : 1;
 }

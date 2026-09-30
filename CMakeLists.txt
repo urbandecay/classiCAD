@@ -37,6 +37,7 @@ set(CLASSICAD_CORE_SOURCES
     src/core/tool_id.cpp
     src/core/geometry/geometry_type.cpp
     src/core/geometry/nurbs_curve.cpp
+    src/core/geometry/arc_curve_factory.cpp
     src/core/geometry/work_plane.cpp
     src/core/geometry/curve_evaluator.cpp
     src/core/geometry/circle_construction.cpp

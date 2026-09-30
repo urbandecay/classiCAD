@@ -19,6 +19,7 @@ namespace {
 constexpr qreal blenderAxisRadius = 32.0;
 constexpr qreal blenderAxisMarkerRadius = 8.0;
 constexpr qreal blenderMiniButtonSize = 28.0;
+constexpr qreal blenderGizmoSupersampling = 2.0;
 
 struct BlenderAxisMarker {
     Point3D direction;
@@ -314,39 +315,84 @@ void ViewportOverlay::drawLinePreview(QPainter &painter,
                                       bool cursorValid,
                                       const SnapResult &currentSnap,
                                       const QSize &viewportSize,
-                                      bool drawCurve) const
+                                      bool drawCurve,
+                                      const WorkPlaneFrame &workPlaneFrame) const
 {
     const QColor lineColor(QStringLiteral("#e6b85c"));
     const QColor pointColor(QStringLiteral("#f0a45a"));
+    const auto toScreen = [this, &workPlaneFrame, &viewportSize](const QPointF &point) {
+        return isValidWorkPlaneFrame(workPlaneFrame)
+                   ? transform_.workPlaneToScreen(point,
+                                                  viewportSize,
+                                                  workPlaneFrame)
+                   : transform_.worldToScreen(point, viewportSize);
+    };
 
     if (drawCurve) {
         painter.setPen(QPen(lineColor, 2.0));
         for (int index = 0; index + 1 < pendingPoints.size(); ++index) {
-            painter.drawLine(transform_.worldToScreen(pendingPoints[index], viewportSize),
-                             transform_.worldToScreen(pendingPoints[index + 1], viewportSize));
+            painter.drawLine(toScreen(pendingPoints[index]),
+                             toScreen(pendingPoints[index + 1]));
         }
 
         if (!pendingPoints.isEmpty() && cursorValid) {
-            painter.drawLine(transform_.worldToScreen(pendingPoints.back(), viewportSize),
-                             transform_.worldToScreen(cursorWorld, viewportSize));
+            painter.drawLine(toScreen(pendingPoints.back()),
+                             toScreen(cursorWorld));
         }
     }
 
     painter.setPen(QPen(pointColor, 1.5));
     painter.setBrush(QColor(QStringLiteral("#282828")));
     for (const QPointF &point : pendingPoints) {
-        painter.drawEllipse(transform_.worldToScreen(point, viewportSize), 5.0, 5.0);
+        painter.drawEllipse(toScreen(point), 5.0, 5.0);
     }
 
     if (cursorValid) {
         painter.setPen(QPen(pointColor, 2.0));
         painter.setBrush(pointColor);
-        painter.drawEllipse(transform_.worldToScreen(cursorWorld, viewportSize), 4.0, 4.0);
+        painter.drawEllipse(toScreen(cursorWorld), 4.0, 4.0);
     }
 
     if (currentSnap.isValid()) {
         drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
     }
+}
+
+void ViewportOverlay::drawWorldLinePreview(QPainter &painter,
+                                          const QVector<Point3D> &points,
+                                          const Point3D &cursor,
+                                          bool cursorValid,
+                                          const QSize &viewportSize,
+                                          bool drawCurve) const
+{
+    painter.save();
+    QPointF previous;
+    bool previousValid = false;
+    painter.setPen(QPen(QColor(QStringLiteral("#e6b85c")), 2.0));
+    for (const Point3D &point : points) {
+        QPointF screen;
+        const bool valid = transform_.worldPointToScreen(point, viewportSize, &screen);
+        if (drawCurve && previousValid && valid) painter.drawLine(previous, screen);
+        previous = screen;
+        previousValid = valid;
+    }
+    QPointF cursorScreen;
+    const bool validCursor = cursorValid &&
+        transform_.worldPointToScreen(cursor, viewportSize, &cursorScreen);
+    if (drawCurve && previousValid && validCursor) painter.drawLine(previous, cursorScreen);
+    painter.setPen(QPen(QColor(QStringLiteral("#f0a45a")), 1.5));
+    painter.setBrush(QColor(QStringLiteral("#282828")));
+    for (const Point3D &point : points) {
+        QPointF screen;
+        if (transform_.worldPointToScreen(point, viewportSize, &screen)) {
+            painter.drawEllipse(screen, 5.0, 5.0);
+        }
+    }
+    if (validCursor) {
+        painter.setBrush(QColor(QStringLiteral("#f0a45a")));
+        painter.drawEllipse(cursorScreen, 4.0, 4.0);
+    }
+    painter.restore();
 }
 
 void ViewportOverlay::drawArcPreview(QPainter &painter,
@@ -1091,6 +1137,40 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
 }
 
 void ViewportOverlay::drawBlenderNavigationGizmo(
+    QPainter &painter,
+    const QSize &viewportSize,
+    const QPointF &hoverPosition) const
+{
+    if (viewportSize.width() < 180 || viewportSize.height() < 150) {
+        return;
+    }
+
+    // The navigation controls occupy a small corner of the viewport. Render
+    // that region at 2x resolution so thin colored strokes and circles retain
+    // smooth edges even when the OpenGL surface has no multisample buffer.
+    const QRect bounds(viewportSize.width() - 90,
+                       0,
+                       90,
+                       std::min(viewportSize.height(), 230));
+    QImage image(bounds.size() * int(blenderGizmoSupersampling),
+                 QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    image.setDevicePixelRatio(blenderGizmoSupersampling);
+
+    QPainter gizmoPainter(&image);
+    gizmoPainter.setRenderHint(QPainter::Antialiasing, true);
+    gizmoPainter.setRenderHint(QPainter::TextAntialiasing, true);
+    gizmoPainter.translate(-bounds.topLeft());
+    drawBlenderNavigationGizmoContents(gizmoPainter, viewportSize, hoverPosition);
+    gizmoPainter.end();
+
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.drawImage(bounds.topLeft(), image);
+    painter.restore();
+}
+
+void ViewportOverlay::drawBlenderNavigationGizmoContents(
     QPainter &painter,
     const QSize &viewportSize,
     const QPointF &hoverPosition) const

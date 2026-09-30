@@ -3,6 +3,7 @@
 #include "core/document/object_id.h"
 #include "core/document/selection_model.h"
 #include "core/geometry/circle_construction.h"
+#include "core/geometry/arc_curve_factory.h"
 #include "core/geometry/geometry_type.h"
 #include "core/geometry/geometry_transform.h"
 #include "core/geometry/curve_evaluator.h"
@@ -344,6 +345,55 @@ int main(int argc, char **argv)
                                                          QPointF(2.0, 0.0),
                                                          &threePointCircleDefinition),
                     "three-point circle construction must reject collinear points");
+    CircularArc2D majorArc;
+    constexpr qreal arcPi = 3.14159265358979323846;
+    const bool majorArcCreated = makeCircularArcThroughPoint(
+        QPointF(1.0, 0.0),
+        QPointF(0.0, 1.0),
+        QPointF(0.0, -1.0),
+        &majorArc);
+    qreal majorArcDomainStart = 0.0;
+    qreal majorArcDomainEnd = 0.0;
+    QPointF majorArcThrough;
+    const bool majorArcPassesThroughThirdPoint =
+        majorArcCreated &&
+        nurbsParameterDomain(majorArc.curve,
+                             &majorArcDomainStart,
+                             &majorArcDomainEnd) &&
+        evaluateNurbsPoint(majorArc.curve,
+                           majorArcDomainStart +
+                               (1.0 / 3.0) *
+                                   (majorArcDomainEnd - majorArcDomainStart),
+                           &majorArcThrough);
+    passed &= check(majorArcPassesThroughThirdPoint &&
+                        validateNurbsCurve(majorArc.curve) &&
+                        majorArc.curve.degree == 2 && majorArc.curve.order == 3 &&
+                        majorArc.curve.rational &&
+                        majorArc.curve.knots.size() ==
+                            majorArc.curve.controlPoints.size() +
+                                majorArc.curve.order - 2 &&
+                        std::abs(majorArc.sweepAngle + 1.5 * arcPi) <= 1.0e-9 &&
+                        std::hypot(majorArcThrough.x(), majorArcThrough.y() + 1.0) <= 1.0e-8,
+                    "three-point arcs must choose the signed major sweep that passes through the third point and store it as valid rational NURBS");
+    CircularArc2D upperSemicircle;
+    CircularArc2D lowerSemicircle;
+    passed &= check(makeCircularArcThroughPoint(QPointF(-1.0, 0.0),
+                                                QPointF(1.0, 0.0),
+                                                QPointF(0.0, 1.0),
+                                                &upperSemicircle) &&
+                        makeCircularArcThroughPoint(QPointF(-1.0, 0.0),
+                                                    QPointF(1.0, 0.0),
+                                                    QPointF(0.0, -1.0),
+                                                    &lowerSemicircle) &&
+                        upperSemicircle.sweepAngle < 0.0 &&
+                        lowerSemicircle.sweepAngle > 0.0,
+                    "three-point arc winding must follow the chosen side of the chord");
+    CircularArc2D degenerateArc;
+    passed &= check(!makeCircularArcThroughPoint(QPointF(0.0, 0.0),
+                                                 QPointF(1.0, 0.0),
+                                                 QPointF(2.0, 0.0),
+                                                 &degenerateArc),
+                    "three collinear points must not produce an invalid circular arc");
     constexpr qreal quarterTurn = 0.78539816339744830962;
     QPointF circleDerivative;
     passed &= check(evaluateNurbsDerivative(circle.nurbs,
@@ -3555,5 +3605,57 @@ int main(int argc, char **argv)
     passed &= check(arcsUseVisibleTangencies,
                     "three circular arcs must use only tangent contacts on their visible spans");
 
+    {
+        Document lineDocument;
+        SelectionModel lineSelection;
+        History lineHistory(lineDocument);
+        ViewportTransform lineTransform;
+        lineTransform.setViewPreset(ViewportViewPreset::Perspective);
+        CurveSampler lineSampler;
+        CurveHitTester lineHitTester;
+        SnapEngine lineSnaps;
+        ToolContext lineContext(lineDocument, lineSelection, lineHistory,
+                                lineTransform, lineSampler, lineHitTester, lineSnaps);
+        LineTool spatialLine;
+        const QSize viewportSize(640, 480);
+        const auto inputAt = [&](const Point3D &point, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            ToolInput input;
+            input.viewportSize = viewportSize;
+            input.workPlaneFrame = lineTransform.workPlaneFrame();
+            input.button = Qt::LeftButton;
+            input.modifiers = modifiers;
+            lineTransform.worldPointToScreen(point, viewportSize, &input.screenPosition);
+            lineTransform.screenToWorkPlane(input.screenPosition, viewportSize,
+                                            input.workPlaneFrame, &input.worldPosition);
+            input.rawWorldPosition = input.worldPosition;
+            return input;
+        };
+        spatialLine.begin(lineContext);
+        spatialLine.handleMousePress(inputAt({0.0, 0.0, 0.0}), lineContext);
+        ToolInput key;
+        key.key = Qt::Key_N;
+        spatialLine.handleKey(key, lineContext);
+        spatialLine.handleMouseMove(inputAt({0.0, 0.0, 10.0}), lineContext);
+        passed &= check(std::abs(spatialLine.preview().worldCursorPoint.z - 10.0) < 1.0e-8,
+                        "Line normal lock must use mouse-ray placement outside the initial XY plane");
+        spatialLine.handleMousePress(inputAt({0.0, 0.0, 10.0}), lineContext);
+        key.key = Qt::Key_X;
+        spatialLine.handleKey(key, lineContext);
+        spatialLine.handleMousePress(inputAt({10.0, 0.0, 10.0}), lineContext);
+        key.key = Qt::Key_Backspace;
+        spatialLine.handleKey(key, lineContext);
+        spatialLine.handleKey(key, lineContext);
+        passed &= check(spatialLine.preview().worldPoints.size() == 1 &&
+                            std::abs(lineTransform.workPlaneFrame().origin.z) < 1.0e-8,
+                        "Line Backspace must restore the pivot plane after removing an elevated segment");
+        spatialLine.begin(lineContext);
+        spatialLine.handleMousePress(inputAt({0.0, 0.0, 0.0}), lineContext);
+        spatialLine.handleMouseMove(inputAt({8.0, 3.0, 0.0}, Qt::ShiftModifier), lineContext);
+        spatialLine.handleMouseMove(inputAt({16.0, 6.0, 0.0}, Qt::ShiftModifier), lineContext);
+        const Point3D lockedPoint = spatialLine.preview().worldCursorPoint;
+        passed &= check(std::abs(lockedPoint.x - 16.0) < 1.0e-8 &&
+                            std::abs(lockedPoint.y - 6.0) < 1.0e-8,
+                        "Line Shift must retain a free world direction while the cursor changes distance");
+    }
     return passed ? 0 : 1;
 }

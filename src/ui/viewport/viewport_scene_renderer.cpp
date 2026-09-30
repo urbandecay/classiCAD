@@ -33,8 +33,7 @@ QVector<QVector3D> controlGuideVertices(const Shape &shape)
     vertices.reserve((points.size() - 1) * 2);
     for (int index = 0; index + 1 < points.size(); ++index) {
         for (const QPointF &point : {points[index], points[index + 1]}) {
-            const Point3D world = workPlanePointToWorld(
-                point, shape.workPlane, shape.workPlaneOffset);
+            const Point3D world = shapePointToWorld(shape, point);
             vertices.append(QVector3D(world.x, world.y, world.z));
         }
     }
@@ -406,8 +405,7 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
     const std::array<int, 6> cornerIndices{0, 1, 2, 0, 2, 3};
     for (std::size_t index = 0; index < vertices.size(); ++index) {
         const int cornerIndex = cornerIndices[index];
-        const Point3D world = workPlanePointToWorld(
-            corners[cornerIndex], picture.workPlane, picture.workPlaneOffset);
+        const Point3D world = shapePointToWorld(picture, corners[cornerIndex]);
         vertices[index] = {
             QVector3D(static_cast<float>(world.x),
                       static_cast<float>(world.y),

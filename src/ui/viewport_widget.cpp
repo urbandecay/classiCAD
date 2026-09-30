@@ -3,6 +3,7 @@
 #include "../core/document/selection_model.h"
 #include "../core/debug_log.h"
 #include "../core/geometry/circle_construction.h"
+#include "../core/geometry/arc_curve_factory.h"
 #include "../core/geometry/curve_evaluator.h"
 #include "../core/geometry/geometry_transform.h"
 #include "../core/geometry/work_plane.h"
@@ -203,6 +204,9 @@ public:
             Shape committedShape = shape;
             committedShape.workPlane = viewportTransform_.workPlane();
             committedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
+            if (!isValidWorkPlaneFrame(committedShape.workPlaneFrame)) {
+                committedShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
+            }
             shapes_.append(committedShape);
             DebugLog::instance().write(QStringLiteral("tool commit tool=%1 shapes=%2")
                                            .arg(toolName(tool))
@@ -215,11 +219,41 @@ public:
                 commandFinished_(tool);
             }
         });
+        toolContext_.setShapesCommitter([this](ToolId, const QVector<Shape> &shapes) {
+            if (shapes.isEmpty()) return false;
+            for (const Shape &shape : shapes) {
+                if (!validateNurbsCurve(shape.nurbs) ||
+                    !isValidWorkPlaneFrame(shape.workPlaneFrame)) return false;
+            }
+            recordGeometryChange();
+            for (const Shape &shape : shapes) shapes_.append(shape);
+            return true;
+        });
         toolContext_.setPreviewPublisher([this](const ToolPreview &preview) {
             // Rendering remains in the viewport for now, but the pending
             // points themselves are owned by the active tool.
             pendingPoints_ = preview.points;
+            if (activeTool_ == Tool::Line) {
+                linePreviewFrame_ = preview.workPlaneFrame;
+                linePreviewWorldPoints_ = preview.worldPoints;
+                linePreviewWorldCursor_ = preview.worldCursorPoint;
+                linePreviewShapes_ = preview.shapes;
+                linePreviewPlaneLocked_ = preview.planeLocked;
+                if (preview.overridesSnap) currentSnap_ = preview.snap;
+                if (preview.hasCursorPoint) {
+                    cursorWorld_ = preview.cursorPoint;
+                    cursorValid_ = true;
+                }
+            }
             controllerPreviewShape_ = preview.shape;
+            if (preview.hasShape &&
+                !isValidWorkPlaneFrame(controllerPreviewShape_.workPlaneFrame)) {
+                controllerPreviewShape_.workPlane = viewportTransform_.workPlane();
+                controllerPreviewShape_.workPlaneOffset =
+                    viewportTransform_.workPlaneOffset();
+                controllerPreviewShape_.workPlaneFrame =
+                    viewportTransform_.workPlaneFrame();
+            }
             controllerPreviewShapeVisible_ = preview.hasShape;
             update();
         });
@@ -373,6 +407,10 @@ public:
         activeTool_ = tool;
         activeToolController_ = toolRegistry_.find(tool);
         pendingPoints_.clear();
+        linePreviewFrame_ = {};
+        linePreviewWorldPoints_.clear();
+        linePreviewShapes_.clear();
+        linePreviewPlaneLocked_ = false;
         controllerPreviewShape_ = Shape{};
         controllerPreviewShapeVisible_ = false;
         resetArcPreviewTracking();
@@ -932,7 +970,9 @@ public:
                                                      viewportTransform_.workPlaneOffset(),
                                                      plane,
                                                      offset);
-        if (!planeChanged && !offsetChanged) {
+        const bool frameChanged = !workPlaneMatches(
+            viewportTransform_.workPlaneFrame(), makeWorkPlaneFrame(plane, offset));
+        if (!planeChanged && !offsetChanged && !frameChanged) {
             return;
         }
 
@@ -1841,6 +1881,7 @@ public:
                      components};
         joined.workPlane = viewportTransform_.workPlane();
         joined.workPlaneOffset = viewportTransform_.workPlaneOffset();
+        joined.workPlaneFrame = viewportTransform_.workPlaneFrame();
         const ObjectId joinedObjectId = shapes_.insert(insertIndex, joined);
 
         joinActive_ = false;
@@ -1956,6 +1997,7 @@ public:
                     {component}};
                 componentObject.geometry.workPlane = source.workPlane;
                 componentObject.geometry.workPlaneOffset = source.workPlaneOffset;
+                componentObject.geometry.workPlaneFrame = source.workPlaneFrame;
                 explodedObjects.append(componentObject);
                 explodedSelectionIndices.append(newIndex);
             }
@@ -2295,9 +2337,8 @@ protected:
                     controlPointsForShape(handleShape);
                 for (int pointIndex = 0; pointIndex < controlPoints.size();
                      ++pointIndex) {
-                    const Point3D world = workPlanePointToWorld(
-                        controlPoints[pointIndex], handleShape.workPlane,
-                        handleShape.workPlaneOffset);
+                    const Point3D world = shapePointToWorld(
+                        handleShape, controlPoints[pointIndex]);
                     const bool active = draggingControlPoint_ &&
                                         objectId == selectedShapeIndex_ &&
                                         pointIndex == controlPointIndex_;
@@ -2613,6 +2654,7 @@ protected:
                     line.points = {first, second};
                     line.workPlane = viewportTransform_.workPlane();
                     line.workPlaneOffset = viewportTransform_.workPlaneOffset();
+                    line.workPlaneFrame = viewportTransform_.workPlaneFrame();
                     return addPreviewShape(line, color, width, false, 0.0f,
                                            true, false);
                 };
@@ -2627,6 +2669,7 @@ protected:
                     marker.points = {point};
                     marker.workPlane = viewportTransform_.workPlane();
                     marker.workPlaneOffset = viewportTransform_.workPlaneOffset();
+                    marker.workPlaneFrame = viewportTransform_.workPlaneFrame();
                     return addPreviewShape(marker, color, 1.5f, false, diameter,
                                            false, outline);
                 };
@@ -2688,6 +2731,11 @@ protected:
                     gpuActiveToolPreview |= addPreviewShape(
                         pointPreview, previewColor, 1.5f, false, 9.0f,
                         false, false);
+                }
+            } else if (activeTool_ == Tool::Line) {
+                for (const Shape &preview : linePreviewShapes_) {
+                    gpuActiveToolPreview |= addPreviewShape(
+                        preview, previewColor, 2.0f, false, 0.0f, false, false);
                 }
             } else if (activeTool_ != Tool::Picture &&
                        activeTool_ != Tool::Mirror &&
@@ -3040,6 +3088,7 @@ protected:
                                {}};
             previewShape.workPlane = viewportTransform_.workPlane();
             previewShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
+            previewShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
             if (!gpuActiveToolPreview || !gpuPreviewRendered) {
                 drawShape(painter, previewShape, true);
             }
@@ -3111,17 +3160,19 @@ protected:
                 return;
             }
         }
+        updateDrawingWorkPlaneFromHover(screenPosition);
         QPointF rawWorldPosition;
         const bool worldPositionValid = viewportTransform_.screenToWorkPlane(
             screenPosition,
             size(),
-            viewportTransform_.workPlane(),
-            viewportTransform_.workPlaneOffset(),
+            viewportTransform_.workPlaneFrame(),
             &rawWorldPosition);
         if (!worldPositionValid) {
             rawWorldPosition = {};
         }
-        const QPointF worldPosition = constrainLinePoint(rawWorldPosition);
+        const QPointF worldPosition = worldPositionValid
+            ? constrainLinePoint(rawWorldPosition) : rawWorldPosition;
+        if (!worldPositionValid) currentSnap_ = SnapResult{};
         DebugLog::instance().write(
             QStringLiteral("mousePress button=%1 screen=%2 worldRaw=%3 worldUsed=%4 tool=%5 lineActive=%6 ortho=%7 panButton=%8 modifiers=0x%9 snap=%10")
                 .arg(inputButtonName(event->button()))
@@ -3136,7 +3187,8 @@ protected:
                 .arg(snapTypeName(currentSnap_.type)));
 
         if (!worldPositionValid && event->button() == Qt::LeftButton &&
-            event->button() != panButton_) {
+            event->button() != panButton_ &&
+            !(activeTool_ == Tool::Line && !pendingPoints_.isEmpty())) {
             event->ignore();
             return;
         }
@@ -3574,7 +3626,6 @@ protected:
         }
 
         if (pendingPoints_.size() == requiredPoints(activeTool_)) {
-            recordGeometryChange();
             const ArcMode completedArcMode = activeTool_ == Tool::Arc
                                                  ? arcMode_
                                                  : ArcMode::TwoPoint;
@@ -3587,6 +3638,7 @@ protected:
                                  {}};
             completedShape.workPlane = viewportTransform_.workPlane();
             completedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
+            completedShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
             if (isRectangleTool(activeTool_)) {
                 completedShape.points = makeRectanglePoints(
                     rectangleModeForTool(activeTool_), pendingPoints_);
@@ -3599,11 +3651,20 @@ protected:
             }
             if (activeTool_ == Tool::Arc) {
                 completedShape.nurbs = makeArcNurbsCurve(completedShape);
+                if (!isValidNurbsCurve(completedShape.nurbs)) {
+                    pendingPoints_.clear();
+                    resetArcPreviewTracking();
+                    DebugLog::instance().write(
+                        QStringLiteral("arc creation rejected: points do not define a valid circular arc"));
+                    update();
+                    return;
+                }
             } else if (activeTool_ == Tool::Bezier || activeTool_ == Tool::Nurbs) {
                 completedShape.nurbs = makeBezierNurbs(completedShape.points);
             } else if (activeTool_ == Tool::Circle) {
                 completedShape.nurbs = makeCircleNurbs(completedShape.points);
             }
+            recordGeometryChange();
             shapes_.append(completedShape);
             QString commitMessage = QStringLiteral("placeholder shape committed tool=%1 points=%2")
                                         .arg(toolName(activeTool_))
@@ -3747,13 +3808,19 @@ protected:
             setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
         }
         eraseCursorScreen_ = screenPosition;
+        updateDrawingWorkPlaneFromHover(screenPosition);
         if (!viewportTransform_.screenToWorkPlane(screenPosition,
                                                   size(),
-                                                  viewportTransform_.workPlane(),
-                                                  viewportTransform_.workPlaneOffset(),
+                                                  viewportTransform_.workPlaneFrame(),
                                                   &rawCursorWorld_)) {
             cursorValid_ = false;
             currentSnap_ = SnapResult{};
+            if (activeTool_ == Tool::Line && activeToolController_ != nullptr &&
+                !pendingPoints_.isEmpty()) {
+                const ToolInput input = makeToolInput(event, screenPosition,
+                                                      lastWorldPosition_, lastWorldPosition_);
+                activeToolController_->handleMouseMove(input, toolContext_);
+            }
             update();
             emitCoordinateUpdate();
             return;
@@ -4767,7 +4834,7 @@ private:
         const QPointF center((minimumX + maximumX) * 0.5,
                              (minimumY + maximumY) * 0.5);
         viewportTransform_.setOrbitPivotPreservingView(
-            workPlanePointToWorld(center, shape.workPlane, shape.workPlaneOffset));
+            shapePointToWorld(shape, center));
     }
 
     static qreal directionDot(const Point3D &first, const Point3D &second)
@@ -5580,10 +5647,8 @@ private:
                 if (!document_.isObjectEditable(objectId)) {
                     continue;
                 }
-                if (!workPlaneMatches(shapes_[index].workPlane,
-                                      shapes_[index].workPlaneOffset,
-                                      viewportTransform_.workPlane(),
-                                      viewportTransform_.workPlaneOffset())) {
+                if (!workPlaneMatches(shapeWorkPlaneFrame(shapes_[index]),
+                                      viewportTransform_.workPlaneFrame())) {
                     continue;
                 }
                 if (shapeMatchesSelectionBox(shapes_[index],
@@ -6006,6 +6071,7 @@ private:
                        {}};
             line.workPlane = viewportTransform_.workPlane();
             line.workPlaneOffset = viewportTransform_.workPlaneOffset();
+            line.workPlaneFrame = viewportTransform_.workPlaneFrame();
             shapes_.append(line);
             DebugLog::instance().write(
                 QStringLiteral("finishLineCommand committed dimension=%1 degree=%2 order=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7 shapes=%8")
@@ -6043,13 +6109,38 @@ private:
         }
 
         if (shape.arcMode == ArcMode::TwoPoint) {
-            return makeCircularArcGeometry(shape.points[0],
-                                           shape.points[1],
-                                           shape.points[2],
-                                           centerScreen,
-                                           radius,
-                                           startAngle,
-                                           sweepAngle);
+            CircularArc2D arc;
+            if (!makeCircularArcThroughPoint(shape.points[0],
+                                             shape.points[1],
+                                             shape.points[2],
+                                             &arc)) {
+                return false;
+            }
+
+            const QPointF center = worldToScreen(arc.center);
+            const QPointF start = worldToScreen(shape.points[0]);
+            const QPointF screenX = worldToScreen(arc.center + QPointF(1.0, 0.0)) - center;
+            const QPointF screenY = worldToScreen(arc.center + QPointF(0.0, 1.0)) - center;
+            const qreal orientation = screenX.x() * screenY.y() -
+                                      screenX.y() * screenY.x();
+            if (std::abs(orientation) <= 1.0e-12) {
+                return false;
+            }
+            if (centerScreen != nullptr) {
+                *centerScreen = center;
+            }
+            if (radius != nullptr) {
+                *radius = std::hypot(start.x() - center.x(),
+                                     start.y() - center.y());
+            }
+            if (startAngle != nullptr) {
+                *startAngle = std::atan2(start.y() - center.y(),
+                                         start.x() - center.x());
+            }
+            if (sweepAngle != nullptr) {
+                *sweepAngle = orientation < 0.0 ? -arc.sweepAngle : arc.sweepAngle;
+            }
+            return true;
         }
 
         const QPointF center = worldToScreen(shape.points[0]);
@@ -6119,6 +6210,18 @@ private:
                                 qreal fraction,
                                 QPointF *point) const
     {
+        qreal parameterStart = 0.0;
+        qreal parameterEnd = 0.0;
+        if (isValidNurbsCurve(shape.nurbs) &&
+            nurbsParameterDomain(shape.nurbs, &parameterStart, &parameterEnd)) {
+            return point != nullptr &&
+                   evaluateNurbsPoint(shape.nurbs,
+                                      parameterStart +
+                                          std::clamp(fraction, 0.0, 1.0) *
+                                              (parameterEnd - parameterStart),
+                                      point);
+        }
+
         QPointF center;
         qreal radius = 0.0;
         qreal startAngle = 0.0;
@@ -6141,6 +6244,19 @@ private:
 
     Shape::NurbsCurve2D makeArcNurbsCurve(const Shape &shape) const
     {
+        if (shape.arcMode == ArcMode::TwoPoint) {
+            if (shape.points.size() < 3) {
+                return {};
+            }
+            CircularArc2D arc;
+            return makeCircularArcThroughPoint(shape.points[0],
+                                               shape.points[1],
+                                               shape.points[2],
+                                               &arc)
+                       ? arc.curve
+                       : Shape::NurbsCurve2D{};
+        }
+
         Shape::NurbsCurve2D curve;
         curve.dimension = 2;
         curve.degree = 2;
@@ -10025,6 +10141,139 @@ private:
         return viewportTransform_.screenToWorld(screen, size());
     }
 
+    void updateDrawingWorkPlaneFromHover(const QPointF &screenPosition)
+    {
+        if ((activeTool_ == Tool::Line && linePreviewPlaneLocked_) ||
+            (activeTool_ != Tool::Line && !pendingPoints_.isEmpty())) {
+            return;
+        }
+        const bool drawingShape =
+            geometryTypeForTool(activeTool_) != GeometryType::Invalid;
+        const bool selectingCustomPlane = activeTool_ == Tool::Select;
+        if (!drawingShape && !selectingCustomPlane) {
+            return;
+        }
+        const int shapeIndex = curveHitTester_.hitTestShapeOnAnyWorkPlane(
+            document_, screenPosition, viewportTransform_, size());
+        if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
+            const Shape &shape = shapes_[shapeIndex];
+            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+            const bool customShapeFrame =
+                isValidWorkPlaneFrame(shape.workPlaneFrame) &&
+                !workPlaneMatches(frame,
+                                  makeWorkPlaneFrame(shape.workPlane,
+                                                     shape.workPlaneOffset));
+            if (drawingShape || customShapeFrame) {
+                QPointF planePoint;
+                if (!drawingShape || viewportTransform_.screenToWorkPlane(
+                        screenPosition, size(), frame, &planePoint)) {
+                    viewportTransform_.setWorkPlaneFrame(frame);
+                    return;
+                }
+            }
+            if (!drawingShape) {
+                return;
+            }
+        }
+        if (drawingShape) {
+            // SurfaceDrawTool resolves a fresh plane from hovered scene
+            // geometry first. Empty-space input follows Blender's view-based
+            // fallback, mapped onto the supported principal workplanes.
+            useAddonCompatibleDrawingPlane();
+        }
+    }
+
+    void useAddonCompatibleDrawingPlane()
+    {
+        WorkPlane plane = WorkPlane::XY;
+        if (viewportTransform_.isPerspectiveEnabled()) {
+            // DrawManager.get_snap_data uses world Z as its perspective
+            // fallback, regardless of the camera's viewing direction.
+            plane = WorkPlane::XY;
+        } else {
+            switch (viewportTransform_.viewPreset()) {
+            // Fixed views use the plane visible to the cursor. These map to
+            // the app's principal workplanes and offsets.
+            case ViewportViewPreset::Top:
+            case ViewportViewPreset::Bottom:
+                plane = WorkPlane::XY;
+                break;
+            case ViewportViewPreset::Front:
+            case ViewportViewPreset::Back:
+                plane = WorkPlane::XZ;
+                break;
+            case ViewportViewPreset::Right:
+            case ViewportViewPreset::Left:
+                plane = WorkPlane::YZ;
+                break;
+            case ViewportViewPreset::Isometric:
+            case ViewportViewPreset::Perspective:
+            case ViewportViewPreset::Custom:
+                {
+                    const Point3D normal = viewportTransform_.viewDirection();
+                    const qreal xAlignment = std::abs(normal.x);
+                    const qreal yAlignment = std::abs(normal.y);
+                    const qreal zAlignment = std::abs(normal.z);
+                    if (activeTool_ == Tool::Line &&
+                        std::max({xAlignment, yAlignment, zAlignment}) <= 0.99) {
+                        // The addon uses the actual camera-facing plane for
+                        // oblique ortho. Storage remains local planar NURBS.
+                        viewportTransform_.setWorkPlaneFrame(
+                            makeWorkPlaneFrameFromNormal({0.0, 0.0, 0.0},
+                                {-normal.x, -normal.y, -normal.z}));
+                        return;
+                    }
+                    plane = xAlignment >= yAlignment && xAlignment >= zAlignment
+                                ? WorkPlane::YZ
+                                : (yAlignment >= zAlignment ? WorkPlane::XZ
+                                                            : WorkPlane::XY);
+                }
+                break;
+            }
+        }
+
+        const WorkPlaneFrame frame = makeWorkPlaneFrame(plane, 0.0);
+        const bool frameChanged = !workPlaneFramesMatch(
+            viewportTransform_.workPlaneFrame(), frame);
+        const bool planeChanged = !workPlaneMatches(
+            viewportTransform_.workPlane(),
+            viewportTransform_.workPlaneOffset(),
+            plane,
+            0.0);
+        if (!frameChanged && !planeChanged) {
+            return;
+        }
+        viewportTransform_.setWorkPlane(plane, 0.0);
+        notifyViewStateChanged();
+    }
+
+    WorkPlaneFrame viewAlignedDrawingFrame() const
+    {
+        const Point3D target = viewportTransform_.viewTarget();
+        switch (viewportTransform_.viewPreset()) {
+        case ViewportViewPreset::Top:
+        case ViewportViewPreset::Bottom:
+            return makeWorkPlaneFrame(WorkPlane::XY, target.z);
+        case ViewportViewPreset::Front:
+        case ViewportViewPreset::Back:
+            return makeWorkPlaneFrame(WorkPlane::XZ, target.y);
+        case ViewportViewPreset::Right:
+        case ViewportViewPreset::Left:
+            return makeWorkPlaneFrame(WorkPlane::YZ, target.x);
+        case ViewportViewPreset::Isometric:
+        case ViewportViewPreset::Perspective:
+        case ViewportViewPreset::Custom:
+            break;
+        }
+
+        const Point3D normal = viewportTransform_.viewDirection();
+        const Point3D up = viewportTransform_.viewUp();
+        const Point3D screenRight{up.y * normal.z - up.z * normal.y,
+                                  up.z * normal.x - up.x * normal.z,
+                                  up.x * normal.y - up.y * normal.x};
+        return makeWorkPlaneFrameFromNormal(target, normal, screenRight);
+    }
+
     QPointF worldToScreen(const QPointF &world) const
     {
         return viewportTransform_.worldToScreen(world, size());
@@ -10039,13 +10288,24 @@ private:
 
     void drawLineToolPreview(QPainter &painter, bool drawCurve = true)
     {
+        if (activeTool_ == Tool::Line && !linePreviewWorldPoints_.isEmpty()) {
+            viewportOverlay_.drawWorldLinePreview(painter, linePreviewWorldPoints_,
+                linePreviewWorldCursor_, cursorValid_, size(), drawCurve);
+            if (currentSnap_.isValid()) {
+                drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+            }
+            return;
+        }
         viewportOverlay_.drawLinePreview(painter,
                                          pendingPoints_,
                                          cursorWorld_,
                                          cursorValid_,
                                          currentSnap_,
                                          size(),
-                                         drawCurve);
+                                         drawCurve,
+                                         activeTool_ == Tool::Line
+                                             ? linePreviewFrame_
+                                             : WorkPlaneFrame{});
     }
 
     void drawMirrorToolPreview(
@@ -10081,85 +10341,6 @@ private:
                 }
             }
         }
-    }
-
-    bool makeCircularArcGeometry(const QPointF &startWorld,
-                                 const QPointF &endWorld,
-                                 const QPointF &throughWorld,
-                                 QPointF *center,
-                                 qreal *radius,
-                                 qreal *startAngle,
-                                 qreal *sweepAngle) const
-    {
-        const QPointF start = worldToScreen(startWorld);
-        const QPointF end = worldToScreen(endWorld);
-        const QPointF through = worldToScreen(throughWorld);
-
-        const qreal startSquared = start.x() * start.x() + start.y() * start.y();
-        const qreal endSquared = end.x() * end.x() + end.y() * end.y();
-        const qreal throughSquared =
-            through.x() * through.x() + through.y() * through.y();
-        const qreal denominator = 2.0 *
-            (start.x() * (end.y() - through.y()) +
-             end.x() * (through.y() - start.y()) +
-             through.x() * (start.y() - end.y()));
-
-        if (std::abs(denominator) < 1e-9) {
-            return false;
-        }
-
-        const QPointF circleCenter(
-            (startSquared * (end.y() - through.y()) +
-             endSquared * (through.y() - start.y()) +
-             throughSquared * (start.y() - end.y())) / denominator,
-            (startSquared * (through.x() - end.x()) +
-             endSquared * (start.x() - through.x()) +
-             throughSquared * (end.x() - start.x())) / denominator);
-        const qreal circleRadius = std::hypot(start.x() - circleCenter.x(),
-                                              start.y() - circleCenter.y());
-        if (circleRadius <= 1e-9) {
-            return false;
-        }
-
-        constexpr qreal twoPi = 6.28318530717958647692;
-        const auto normalizeAngle = [twoPi](qreal angle) {
-            angle = std::fmod(angle, twoPi);
-            if (angle < 0.0) {
-                angle += twoPi;
-            }
-            return angle;
-        };
-
-        const qreal firstAngle = std::atan2(start.y() - circleCenter.y(),
-                                            start.x() - circleCenter.x());
-        const qreal secondAngle = std::atan2(end.y() - circleCenter.y(),
-                                             end.x() - circleCenter.x());
-        const qreal throughAngle = std::atan2(through.y() - circleCenter.y(),
-                                              through.x() - circleCenter.x());
-        const qreal counterClockwiseSweep = normalizeAngle(secondAngle - firstAngle);
-        const qreal throughSweep = normalizeAngle(throughAngle - firstAngle);
-
-        if (counterClockwiseSweep <= 1e-9) {
-            return false;
-        }
-
-        const qreal selectedSweep = throughSweep <= counterClockwiseSweep + 1e-7
-                                        ? counterClockwiseSweep
-                                        : -(twoPi - counterClockwiseSweep);
-
-        if (center != nullptr) {
-            *center = circleCenter;
-        }
-        if (radius != nullptr) {
-            *radius = circleRadius;
-        }
-        if (startAngle != nullptr) {
-            *startAngle = firstAngle;
-        }
-        if (sweepAngle != nullptr) {
-            *sweepAngle = selectedSweep;
-        }
-        return true;
     }
 
     void resetArcPreviewTracking()
@@ -10299,9 +10480,8 @@ private:
                            int shapeIndex,
                            bool drawMarkers = true)
     {
-        const WorkPlane previousPlane = viewportTransform_.workPlane();
-        const qreal previousOffset = viewportTransform_.workPlaneOffset();
-        viewportTransform_.setWorkPlane(shape.workPlane, shape.workPlaneOffset);
+        const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
+        viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
         viewportOverlay_.drawControlPoints(painter,
                                            shape,
                                            size(),
@@ -10310,7 +10490,7 @@ private:
                                            draggingControlPoint_,
                                            controlPointIndex_,
                                            drawMarkers);
-        viewportTransform_.setWorkPlane(previousPlane, previousOffset);
+        viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 
     void drawGrid(QPainter &painter)
@@ -10345,15 +10525,14 @@ private:
                                const QVector<double> &parameters,
                                bool preview)
     {
-        const WorkPlane previousPlane = viewportTransform_.workPlane();
-        const qreal previousOffset = viewportTransform_.workPlaneOffset();
-        viewportTransform_.setWorkPlane(shape.workPlane, shape.workPlaneOffset);
+        const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
+        viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
         viewportOverlay_.drawSubdivisionPoints(painter,
                                                shape,
                                                parameters,
                                                size(),
                                                preview);
-        viewportTransform_.setWorkPlane(previousPlane, previousOffset);
+        viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 
     void drawPointToolPreview(QPainter &painter, bool drawPoint = true)
@@ -10430,9 +10609,8 @@ private:
                    const QString &layerLineType = QString(),
                    qreal layerLineWeightMm = 0.0)
     {
-        const WorkPlane previousPlane = viewportTransform_.workPlane();
-        const qreal previousOffset = viewportTransform_.workPlaneOffset();
-        viewportTransform_.setWorkPlane(shape.workPlane, shape.workPlaneOffset);
+        const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
+        viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
         viewportRenderer_.drawShape(painter,
                                     shape,
                                     size(),
@@ -10442,7 +10620,7 @@ private:
                                     layerColor,
                                     layerLineType,
                                     layerLineWeightMm);
-        viewportTransform_.setWorkPlane(previousPlane, previousOffset);
+        viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 
     void emitCoordinateUpdate()
@@ -10468,6 +10646,7 @@ private:
         picture.geometryType = GeometryType::Picture;
         picture.workPlane = viewportTransform_.workPlane();
         picture.workPlaneOffset = viewportTransform_.workPlaneOffset();
+        picture.workPlaneFrame = viewportTransform_.workPlaneFrame();
         if (pendingPictureImage_.isNull() || pendingPoints_.isEmpty()) {
             return picture;
         }
@@ -10503,6 +10682,8 @@ private:
         input.screenPosition = screenPosition;
         input.rawWorldPosition = rawWorldPosition;
         input.worldPosition = worldPosition;
+        input.workPlaneFrame = viewportTransform_.workPlaneFrame();
+        input.orthoEnabled = orthoEnabled_;
         input.viewportSize = size();
         input.snapType = currentSnap_.type;
         if (event != nullptr) {
@@ -10516,6 +10697,7 @@ private:
     ToolInput makeKeyToolInput(const QKeyEvent *event) const
     {
         ToolInput input;
+        input.workPlaneFrame = viewportTransform_.workPlaneFrame();
         input.viewportSize = size();
         if (event != nullptr) {
             input.key = event->key();
@@ -10544,6 +10726,7 @@ private:
                      {}};
         result.workPlane = viewportTransform_.workPlane();
         result.workPlaneOffset = viewportTransform_.workPlaneOffset();
+        result.workPlaneFrame = viewportTransform_.workPlaneFrame();
         if (isRectangleTool(tool)) {
             result.points = makeRectanglePoints(rectangleModeForTool(tool), points);
             if (result.points.size() != 4) {
@@ -10576,6 +10759,9 @@ private:
             result.nurbs = makeDegreeOneNurbs(result.points);
         } else if (tool == Tool::Arc) {
             result.nurbs = makeArcNurbsCurve(result);
+            if (!isValidNurbsCurve(result.nurbs)) {
+                return false;
+            }
         } else if (tool == Tool::Bezier || tool == Tool::Nurbs) {
             result.nurbs = makeBezierNurbs(result.points);
         } else if (isCircleConstructionTool(tool)) {
@@ -10641,6 +10827,11 @@ private:
     QByteArray pendingPictureImageData_;
     QString pendingPicturePath_;
     Shape controllerPreviewShape_;
+    WorkPlaneFrame linePreviewFrame_;
+    QVector<Point3D> linePreviewWorldPoints_;
+    Point3D linePreviewWorldCursor_;
+    QVector<Shape> linePreviewShapes_;
+    bool linePreviewPlaneLocked_ = false;
     bool controllerPreviewShapeVisible_ = false;
     int polygonSideCount_ = 6;
     int polygonWheelRemainder_ = 0;

@@ -76,27 +76,28 @@ QString openNurbsError(const ON_wString &log, const QString &fallback)
 
 Point3D worldPoint(const QPointF &point, const Shape &shape)
 {
-    return workPlanePointToWorld(point, shape.workPlane, shape.workPlaneOffset);
+    return shapePointToWorld(shape, point);
 }
 
-ON_3dVector workPlaneXAxis(WorkPlane plane)
+ON_3dVector workPlaneXAxis(const Shape &shape)
 {
-    return plane == WorkPlane::YZ ? ON_3dVector::YAxis : ON_3dVector::XAxis;
+    const Point3D axis = shapeWorkPlaneFrame(shape).xAxis;
+    return ON_3dVector(axis.x, axis.y, axis.z);
 }
 
-ON_3dVector workPlaneYAxis(WorkPlane plane)
+ON_3dVector workPlaneYAxis(const Shape &shape)
 {
-    return plane == WorkPlane::XY ? ON_3dVector::YAxis : ON_3dVector::ZAxis;
+    const Point3D axis = shapeWorkPlaneFrame(shape).yAxis;
+    return ON_3dVector(axis.x, axis.y, axis.z);
 }
 
 ON_Plane openNurbsPlane(const Shape &shape)
 {
-    const Point3D origin = workPlanePointToWorld({},
-                                                 shape.workPlane,
-                                                 shape.workPlaneOffset);
+    const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+    const Point3D origin = frame.origin;
     return ON_Plane(ON_3dPoint(origin.x, origin.y, origin.z),
-                    workPlaneXAxis(shape.workPlane),
-                    workPlaneYAxis(shape.workPlane));
+                    workPlaneXAxis(shape),
+                    workPlaneYAxis(shape));
 }
 
 bool makeNurbsCurve(const Shape::NurbsCurve2D &source,
@@ -186,7 +187,7 @@ bool makeObjectGeometry(const Shape &shape,
             ON::AnnotationType::Aligned,
             dimensionStyleId,
             openNurbsPlane(shape),
-            workPlaneXAxis(shape.workPlane),
+            workPlaneXAxis(shape),
             ON_3dPoint(first.x, first.y, first.z),
             ON_3dPoint(second.x, second.y, second.z),
             ON_3dPoint(offset.x, offset.y, offset.z));
@@ -228,7 +229,7 @@ bool makeObjectGeometry(const Shape &shape,
         auto dimension = std::make_unique<ON_DimAngular>();
         if (!dimension->Create(dimensionStyleId,
                                openNurbsPlane(shape),
-                               workPlaneXAxis(shape.workPlane),
+                               workPlaneXAxis(shape),
                                ON_3dPoint(worldVertex.x, worldVertex.y, worldVertex.z),
                                ON_3dPoint(worldFirstRay.x,
                                           worldFirstRay.y,
@@ -419,12 +420,83 @@ LayerId matchingLayer(const Document &document, const QString &name)
     return LayerId::invalid();
 }
 
+bool workPlaneFrameFromOpenNurbsPlane(const ON_Plane &plane,
+                                     double unitScale,
+                                     WorkPlane *workPlane,
+                                     qreal *workPlaneOffset,
+                                     WorkPlaneFrame *frame)
+{
+    if (workPlane == nullptr || workPlaneOffset == nullptr || frame == nullptr ||
+        !plane.IsValid() || !std::isfinite(unitScale) || unitScale <= 0.0) {
+        return false;
+    }
+    const ON_3dPoint &origin = plane.Origin();
+    const ON_3dVector &xAxis = plane.Xaxis();
+    const ON_3dVector &yAxis = plane.Yaxis();
+    const ON_3dVector &normal = plane.Normal();
+    if (!std::isfinite(origin.x) || !std::isfinite(origin.y) ||
+        !std::isfinite(origin.z) || !std::isfinite(xAxis.x) ||
+        !std::isfinite(xAxis.y) || !std::isfinite(xAxis.z) ||
+        !std::isfinite(yAxis.x) || !std::isfinite(yAxis.y) ||
+        !std::isfinite(yAxis.z) || !std::isfinite(normal.x) ||
+        !std::isfinite(normal.y) || !std::isfinite(normal.z)) {
+        return false;
+    }
+
+    constexpr qreal principalAlignmentTolerance = 1.0e-8;
+    if (std::abs(normal.z) >= 1.0 - principalAlignmentTolerance) {
+        *workPlane = WorkPlane::XY;
+        *workPlaneOffset = origin.z * unitScale;
+        *frame = makeWorkPlaneFrame(*workPlane, *workPlaneOffset);
+    } else if (std::abs(normal.y) >= 1.0 - principalAlignmentTolerance) {
+        *workPlane = WorkPlane::XZ;
+        *workPlaneOffset = origin.y * unitScale;
+        *frame = makeWorkPlaneFrame(*workPlane, *workPlaneOffset);
+    } else if (std::abs(normal.x) >= 1.0 - principalAlignmentTolerance) {
+        *workPlane = WorkPlane::YZ;
+        *workPlaneOffset = origin.x * unitScale;
+        *frame = makeWorkPlaneFrame(*workPlane, *workPlaneOffset);
+    } else {
+        *workPlane = WorkPlane::XY;
+        *workPlaneOffset = 0.0;
+        Point3D canonicalNormal{normal.x, normal.y, normal.z};
+        constexpr qreal signTolerance = 1.0e-12;
+        const bool reverseNormal = canonicalNormal.x < -signTolerance ||
+            (std::abs(canonicalNormal.x) <= signTolerance &&
+             (canonicalNormal.y < -signTolerance ||
+              (std::abs(canonicalNormal.y) <= signTolerance &&
+               canonicalNormal.z < 0.0)));
+        if (reverseNormal) {
+            canonicalNormal.x = -canonicalNormal.x;
+            canonicalNormal.y = -canonicalNormal.y;
+            canonicalNormal.z = -canonicalNormal.z;
+        }
+        const Point3D scaledOrigin{origin.x * unitScale,
+                                   origin.y * unitScale,
+                                   origin.z * unitScale};
+        const qreal planeDistance = scaledOrigin.x * canonicalNormal.x +
+                                    scaledOrigin.y * canonicalNormal.y +
+                                    scaledOrigin.z * canonicalNormal.z;
+        const Point3D canonicalOrigin{canonicalNormal.x * planeDistance,
+                                      canonicalNormal.y * planeDistance,
+                                      canonicalNormal.z * planeDistance};
+        // Canonicalizing the normal sign, in-plane axes, and origin gives
+        // separate .3dm curves on the same plane one identical local frame,
+        // so their existing OSnap candidates remain interoperable.
+        *frame = makeWorkPlaneFrameFromNormal(canonicalOrigin,
+                                              canonicalNormal);
+    }
+    return isValidWorkPlaneFrame(*frame);
+}
+
 bool importNurbsCurve(const ON_Curve &source,
                       double unitScale,
                       double planarTolerance,
                       Shape::NurbsCurve2D *destination,
                       WorkPlane *destinationPlane,
                       qreal *destinationOffset,
+                      WorkPlaneFrame *destinationFrame,
+                      const WorkPlaneFrame *forcedFrame,
                       QString *reason)
 {
     ON_NurbsCurve converted;
@@ -491,26 +563,48 @@ bool importNurbsCurve(const ON_Curve &source,
         maxZ = std::max(maxZ, point.z);
     }
     WorkPlane plane = WorkPlane::XY;
-    qreal offset = worldControlPoints.first().z;
-    if (maxZ - minZ <= planarTolerance) {
+    qreal offset = 0.0;
+    WorkPlaneFrame frame;
+    if (forcedFrame != nullptr && isValidWorkPlaneFrame(*forcedFrame)) {
+        frame = *forcedFrame;
+    } else if (maxZ - minZ <= planarTolerance) {
         plane = WorkPlane::XY;
-        offset = worldControlPoints.first().z;
+        offset = worldControlPoints.first().z * unitScale;
+        frame = makeWorkPlaneFrame(plane, offset);
     } else if (maxY - minY <= planarTolerance) {
         plane = WorkPlane::XZ;
-        offset = worldControlPoints.first().y;
+        offset = worldControlPoints.first().y * unitScale;
+        frame = makeWorkPlaneFrame(plane, offset);
     } else if (maxX - minX <= planarTolerance) {
         plane = WorkPlane::YZ;
-        offset = worldControlPoints.first().x;
+        offset = worldControlPoints.first().x * unitScale;
+        frame = makeWorkPlaneFrame(plane, offset);
     } else {
+        ON_Plane curvePlane;
+        if (!converted.IsPlanar(&curvePlane, planarTolerance) ||
+            !workPlaneFrameFromOpenNurbsPlane(curvePlane,
+                                             unitScale,
+                                             &plane,
+                                             &offset,
+                                             &frame)) {
+            if (reason != nullptr) {
+                *reason = QStringLiteral("curve is not planar or its plane is invalid");
+            }
+            return false;
+        }
+    }
+    if (!isValidWorkPlaneFrame(frame)) {
         if (reason != nullptr) {
-            *reason = QStringLiteral("curve is not in an XY, XZ, or YZ workplane");
+            *reason = QStringLiteral("curve workplane frame is invalid");
         }
         return false;
     }
     result.controlPoints.reserve(worldControlPoints.size());
     for (const Point3D &point : worldControlPoints) {
-        const QPointF local = worldPointToWorkPlane(point, plane);
-        result.controlPoints.append(local * unitScale);
+        const Point3D scaledPoint{point.x * unitScale,
+                                  point.y * unitScale,
+                                  point.z * unitScale};
+        result.controlPoints.append(worldPointToWorkPlaneFrame(scaledPoint, frame));
     }
 
     result.knots.reserve(converted.KnotCount());
@@ -531,7 +625,10 @@ bool importNurbsCurve(const ON_Curve &source,
         *destinationPlane = plane;
     }
     if (destinationOffset != nullptr) {
-        *destinationOffset = offset * unitScale;
+        *destinationOffset = offset;
+    }
+    if (destinationFrame != nullptr) {
+        *destinationFrame = frame;
     }
     return true;
 }
@@ -550,12 +647,27 @@ bool importCurve(const ON_Curve &curve,
         Shape result;
         result.geometryType = GeometryType::PolyCurve;
         result.components.reserve(polyCurve->Count());
+        ON_Plane polyCurvePlane;
+        WorkPlaneFrame commonFrame;
+        if (!polyCurve->IsPlanar(&polyCurvePlane, planarTolerance) ||
+            !workPlaneFrameFromOpenNurbsPlane(polyCurvePlane,
+                                             unitScale,
+                                             &result.workPlane,
+                                             &result.workPlaneOffset,
+                                             &commonFrame)) {
+            if (reason != nullptr) {
+                *reason = QStringLiteral("polycurve is not planar or its plane is invalid");
+            }
+            return false;
+        }
+        result.workPlaneFrame = commonFrame;
         bool hasPlane = false;
         for (int index = 0; index < polyCurve->Count(); ++index) {
             const ON_Curve *segment = polyCurve->SegmentCurve(index);
             Shape::NurbsCurve2D converted;
             WorkPlane segmentPlane = WorkPlane::XY;
             qreal segmentOffset = 0.0;
+            WorkPlaneFrame segmentFrame;
             if (segment == nullptr ||
                 !importNurbsCurve(*segment,
                                   unitScale,
@@ -563,20 +675,18 @@ bool importCurve(const ON_Curve &curve,
                                   &converted,
                                   &segmentPlane,
                                   &segmentOffset,
+                                  &segmentFrame,
+                                  &commonFrame,
                                   reason)) {
                 return false;
             }
-            if (hasPlane && !workPlaneMatches(result.workPlane,
-                                               result.workPlaneOffset,
-                                               segmentPlane,
-                                               segmentOffset)) {
+            if (hasPlane && !workPlaneFramesMatch(result.workPlaneFrame,
+                                                   segmentFrame)) {
                 if (reason != nullptr) {
                     *reason = QStringLiteral("polycurve segments use different workplanes");
                 }
                 return false;
             }
-            result.workPlane = segmentPlane;
-            result.workPlaneOffset = segmentOffset;
             hasPlane = true;
             if (result.points.isEmpty()) {
                 result.points.append(converted.controlPoints.first());
@@ -601,6 +711,8 @@ bool importCurve(const ON_Curve &curve,
                           &result.nurbs,
                           &result.workPlane,
                           &result.workPlaneOffset,
+                          &result.workPlaneFrame,
+                          nullptr,
                           reason)) {
         return false;
     }
@@ -610,10 +722,15 @@ bool importCurve(const ON_Curve &curve,
         const ON_3dPoint center = arcCurve->m_arc.Center();
         const ON_3dPoint edge = arcCurve->m_arc.PointAt(0.0);
         result.geometryType = GeometryType::Circle;
-        result.points = {worldPointToWorkPlane({center.x, center.y, center.z},
-                                               result.workPlane) * unitScale,
-                         worldPointToWorkPlane({edge.x, edge.y, edge.z},
-                                               result.workPlane) * unitScale};
+        result.points = {
+            shapeWorldPointToLocal(result,
+                                   {center.x * unitScale,
+                                    center.y * unitScale,
+                                    center.z * unitScale}),
+            shapeWorldPointToLocal(result,
+                                   {edge.x * unitScale,
+                                    edge.y * unitScale,
+                                    edge.z * unitScale})};
         *shape = std::move(result);
         return true;
     }

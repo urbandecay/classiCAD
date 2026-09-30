@@ -21,6 +21,12 @@ struct SnapSettings {
 
 class SnapEngine final {
 public:
+    SnapResult findSpatialSnapPoint(const Document &document,
+                                    const QPointF &screenPosition,
+                                    const Point3D *anchor,
+                                    const ViewportTransform &transform,
+                                    const QSize &viewportSize,
+                                    const QVector<Point3D> &previewPoints = {}) const;
     void setSettings(const SnapSettings &settings);
     const SnapSettings &settings() const;
 

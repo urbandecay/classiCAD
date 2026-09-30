@@ -1,6 +1,9 @@
 #include "snap_engine.h"
 
 #include "core/geometry/curve_evaluator.h"
+#include <QDataStream>
+#include <QHash>
+#include <QIODevice>
 
 #include <algorithm>
 #include <cmath>
@@ -938,10 +941,8 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             continue;
         }
         const Shape &shape = document[shapeIndex];
-        if (!workPlaneMatches(shape.workPlane,
-                              shape.workPlaneOffset,
-                              transform.workPlane(),
-                              transform.workPlaneOffset())) {
+        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+                              transform.workPlaneFrame())) {
             continue;
         }
         if (isDimensionGeometryType(shape.geometryType)) {
@@ -1272,10 +1273,8 @@ QVector<SnapCandidate> SnapEngine::perpendicularCandidates(
             continue;
         }
         const Shape &shape = document[shapeIndex];
-        if (!workPlaneMatches(shape.workPlane,
-                              shape.workPlaneOffset,
-                              transform.workPlane(),
-                              transform.workPlaneOffset())) {
+        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+                              transform.workPlaneFrame())) {
             continue;
         }
         if (shape.geometryType == GeometryType::Ellipse) {
@@ -1395,10 +1394,8 @@ QVector<SnapCandidate> SnapEngine::tangentCandidates(
             continue;
         }
         const Shape &shape = document[shapeIndex];
-        if (!workPlaneMatches(shape.workPlane,
-                              shape.workPlaneOffset,
-                              transform.workPlane(),
-                              transform.workPlaneOffset())) {
+        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+                              transform.workPlaneFrame())) {
             continue;
         }
         candidates += tangentCandidatesForShape(shape,
@@ -1420,10 +1417,8 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
     if (isDimensionGeometryType(shape.geometryType)) {
         return candidates;
     }
-    if (!workPlaneMatches(shape.workPlane,
-                          shape.workPlaneOffset,
-                          transform.workPlane(),
-                          transform.workPlaneOffset())) {
+    if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+                          transform.workPlaneFrame())) {
         return candidates;
     }
     const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
@@ -1559,10 +1554,8 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         }
 
         const Shape &shape = document[shapeIndex];
-        if (!workPlaneMatches(shape.workPlane,
-                              shape.workPlaneOffset,
-                              transform.workPlane(),
-                              transform.workPlaneOffset())) {
+        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+                              transform.workPlaneFrame())) {
             continue;
         }
         if (isDimensionGeometryType(shape.geometryType)) {
@@ -1696,6 +1689,93 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         }
     }
     return candidates;
+}
+
+SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
+                                           const QPointF &screenPosition,
+                                           const Point3D *anchor,
+                                           const ViewportTransform &transform,
+                                           const QSize &viewportSize,
+                                           const QVector<Point3D> &previewPoints) const
+{
+    SnapResult best;
+    if (!settings_.enabled || viewportSize.isEmpty()) return best;
+    qreal bestDistance = 12.0;
+    int bestPriority = -1;
+    const auto considerWorld = [&](SnapType type, const Point3D &world) {
+        QPointF screen;
+        if (!transform.worldPointToScreen(world, viewportSize, &screen)) return;
+        const qreal distance = std::hypot(screen.x() - screenPosition.x(),
+                                          screen.y() - screenPosition.y());
+        const int priority = type == SnapType::Near ? 0 : 1;
+        if (distance <= 12.0 && (priority > bestPriority ||
+            (priority == bestPriority && distance <= bestDistance))) {
+            bestDistance = distance;
+            bestPriority = priority;
+            best.type = type;
+            best.worldPoint = world;
+            best.hasWorldPoint = true;
+            // Existing markers retain their screen position; geometry uses
+            // the actual world point even when its depth differs from the plane.
+            best.point = transform.screenToWorld(screen, viewportSize);
+        }
+    };
+    struct PlaneScene { WorkPlaneFrame frame; Document document; };
+    QVector<PlaneScene> scenes;
+    QHash<QByteArray, int> sceneByFrame;
+    for (int index = 0; index < document.size(); ++index) {
+        if (!document.isObjectVisible(document.objectIdAt(index))) continue;
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(document[index]);
+        QByteArray key;
+        QDataStream stream(&key, QIODevice::WriteOnly);
+        for (const Point3D &value : {frame.origin, frame.xAxis, frame.yAxis, frame.normal}) {
+            stream << double(value.x) << double(value.y) << double(value.z);
+        }
+        int sceneIndex = sceneByFrame.value(key, -1);
+        if (sceneIndex < 0) {
+            sceneIndex = scenes.size();
+            sceneByFrame.insert(key, sceneIndex);
+            scenes.append({frame, Document{}});
+        }
+        scenes[sceneIndex].document.append(document[index]);
+    }
+    for (const PlaneScene &scene : scenes) {
+        const WorkPlaneFrame &frame = scene.frame;
+        ViewportTransform shapeTransform = transform;
+        shapeTransform.setWorkPlaneFrame(frame);
+        const auto consider = [&](const SnapCandidate &candidate) {
+            const Point3D world = workPlaneFramePointToWorld(candidate.point, frame);
+            considerWorld(candidate.type, world);
+        };
+        for (const SnapCandidate &candidate :
+             snapCandidatesForScene(scene.document, {}, shapeTransform, viewportSize)) {
+            consider(candidate);
+        }
+        QPointF localCursor;
+        if (transform.screenToWorkPlane(screenPosition, viewportSize, frame, &localCursor)) {
+            for (const SnapCandidate &candidate : nearCandidatesForScene(
+                    scene.document, localCursor, shapeTransform, viewportSize)) {
+                consider(candidate);
+            }
+            if (anchor != nullptr) {
+                const QPointF localAnchor = worldPointToWorkPlaneFrame(*anchor, frame);
+                for (const SnapCandidate &candidate : perpendicularCandidates(
+                        scene.document, localAnchor, localCursor, shapeTransform, viewportSize)) {
+                    consider(candidate);
+                }
+                if (std::abs(signedDistanceFromWorkPlaneFrame(*anchor, frame)) <= 1.0e-8) {
+                    for (const SnapCandidate &candidate : tangentCandidates(
+                            scene.document, localAnchor, shapeTransform, viewportSize)) {
+                        consider(candidate);
+                    }
+                }
+            }
+        }
+    }
+    if (settings_.endpoint) {
+        for (const Point3D &point : previewPoints) considerWorld(SnapType::Endpoint, point);
+    }
+    return best;
 }
 
 SnapResult SnapEngine::findSnapPoint(const Document &document,

@@ -38,6 +38,8 @@ enum class SnapType {
 struct SnapResult {
     SnapType type = SnapType::None;
     QPointF point;
+    Point3D worldPoint;
+    bool hasWorldPoint = false;
 
     bool isValid() const
     {
@@ -141,7 +143,14 @@ struct Shape {
     QByteArray pictureImageData;
     WorkPlane workPlane = WorkPlane::XY;
     qreal workPlaneOffset = 0.0;
+    // When valid, this frame is authoritative for local 2D geometry. An
+    // invalid frame keeps older records on their principal workPlane mapping.
+    WorkPlaneFrame workPlaneFrame;
 };
+
+WorkPlaneFrame shapeWorkPlaneFrame(const Shape &shape);
+Point3D shapePointToWorld(const Shape &shape, const QPointF &point);
+QPointF shapeWorldPointToLocal(const Shape &shape, const Point3D &point);
 
 struct EraseCurveSampleCache {
     int shapeIndex = -1;

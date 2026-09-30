@@ -118,17 +118,31 @@ public:
                            WorkPlane plane,
                            qreal planeOffset,
                            QPointF *workPlanePosition) const;
+    bool screenToWorkPlane(const QPointF &screenPosition,
+                           const QSize &viewportSize,
+                           const WorkPlaneFrame &frame,
+                           QPointF *workPlanePosition) const;
     QPointF workPlaneToScreen(const QPointF &workPlanePosition,
                               const QSize &viewportSize,
                               WorkPlane plane,
                               qreal planeOffset = 0.0) const;
+    QPointF workPlaneToScreen(const QPointF &workPlanePosition,
+                              const QSize &viewportSize,
+                              const WorkPlaneFrame &frame) const;
     bool worldPointToScreen(const Point3D &worldPosition,
                             const QSize &viewportSize,
                             QPointF *screenPosition) const;
+    bool screenToWorldAxis(const QPointF &screenPosition,
+                           const QSize &viewportSize,
+                           const Point3D &origin,
+                           const Point3D &direction,
+                           Point3D *worldPosition) const;
 
     WorkPlane workPlane() const;
     qreal workPlaneOffset() const;
+    const WorkPlaneFrame &workPlaneFrame() const;
     void setWorkPlane(WorkPlane plane, qreal offset = 0.0);
+    void setWorkPlaneFrame(const WorkPlaneFrame &frame);
 
     ViewportViewPreset viewPreset() const;
     ViewportDirectionProjection worldDirectionToView(const Point3D &direction) const;
@@ -167,6 +181,7 @@ private:
     QPointF pan_{0.0, 0.0};
     WorkPlane workPlane_ = WorkPlane::XY;
     qreal workPlaneOffset_ = 0.0;
+    WorkPlaneFrame workPlaneFrame_ = makeWorkPlaneFrame(WorkPlane::XY);
     Point3D orbitPivot_{};
     ViewportViewPreset viewPreset_ = ViewportViewPreset::Top;
     ViewportOrientation orientation_;

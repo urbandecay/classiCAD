@@ -521,10 +521,8 @@ int CurveHitTester::hitTestShape(const Document &document,
             continue;
         }
         const Shape &shape = document[index];
-        if (!workPlaneMatches(shape.workPlane,
-                              shape.workPlaneOffset,
-                              transform.workPlane(),
-                              transform.workPlaneOffset())) {
+        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+                              transform.workPlaneFrame())) {
             continue;
         }
         const qreal distance = distanceToShape(screenPosition,
@@ -533,6 +531,54 @@ int CurveHitTester::hitTestShape(const Document &document,
                                                viewportSize);
         if (distance <= closestDistance) {
             closestDistance = distance;
+            closestShape = index;
+        }
+    }
+    return closestShape;
+}
+
+int CurveHitTester::hitTestShapeOnAnyWorkPlane(
+    const Document &document,
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize) const
+{
+    // Match OSnap's capture radius so a candidate on an inherited plane can
+    // still be acquired anywhere inside the existing snap tolerance.
+    constexpr qreal hitRadiusPixels = 12.0;
+    int closestShape = -1;
+    qreal closestDistance = hitRadiusPixels;
+    qreal closestDepth = -std::numeric_limits<qreal>::infinity();
+    for (int index = 0; index < document.size(); ++index) {
+        if (!document.isObjectVisible(document.objectIdAt(index))) {
+            continue;
+        }
+        const Shape &shape = document[index];
+        ViewportTransform shapeTransform = transform;
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        shapeTransform.setWorkPlaneFrame(frame);
+        const qreal distance = distanceToShape(screenPosition,
+                                               shape,
+                                               shapeTransform,
+                                               viewportSize);
+        if (!std::isfinite(distance) || distance > hitRadiusPixels) {
+            continue;
+        }
+        QPointF planePoint;
+        if (!transform.screenToWorkPlane(screenPosition,
+                                         viewportSize,
+                                         frame,
+                                         &planePoint)) {
+            continue;
+        }
+        const Point3D worldPoint = workPlaneFramePointToWorld(planePoint, frame);
+        const qreal depth = transform.worldDirectionToView(worldPoint).towardCamera;
+        if (std::isfinite(depth) &&
+            (depth > closestDepth + 1.0e-6 ||
+             (std::abs(depth - closestDepth) <= 1.0e-6 &&
+              distance < closestDistance))) {
+            closestDistance = distance;
+            closestDepth = depth;
             closestShape = index;
         }
     }
@@ -558,7 +604,8 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
         }
         const Shape &shape = document[index];
         ViewportTransform shapeTransform = transform;
-        shapeTransform.setWorkPlane(shape.workPlane, shape.workPlaneOffset);
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        shapeTransform.setWorkPlaneFrame(frame);
         const qreal screenDistance = distanceToShape(screenPosition,
                                                       shape,
                                                       shapeTransform,
@@ -569,13 +616,11 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
         QPointF planePoint;
         if (!transform.screenToWorkPlane(screenPosition,
                                          viewportSize,
-                                         shape.workPlane,
-                                         shape.workPlaneOffset,
+                                         frame,
                                          &planePoint)) {
             continue;
         }
-        Point3D candidate = workPlanePointToWorld(
-            planePoint, shape.workPlane, shape.workPlaneOffset);
+        Point3D candidate = workPlaneFramePointToWorld(planePoint, frame);
         // Curves are unfilled geometry: the closest sampled stroke point is
         // their actual scene depth, while a picture face uses the ray/plane hit.
         qreal closestStrokeDistance = hitRadiusPixels;
@@ -615,9 +660,9 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
                     closestScreen.y() - screenPosition.y());
                 if (std::isfinite(distance) && distance <= closestStrokeDistance) {
                     closestStrokeDistance = distance;
-                    candidate = workPlanePointToWorld(
+                    candidate = workPlaneFramePointToWorld(
                         previousLocal + (currentLocal - previousLocal) * fraction,
-                        shape.workPlane, shape.workPlaneOffset);
+                        frame);
                 }
                 previousLocal = currentLocal;
                 previousScreen = currentScreen;
@@ -632,8 +677,7 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
         }
         if (shape.geometryType == GeometryType::Point &&
             !shape.points.isEmpty()) {
-            candidate = workPlanePointToWorld(
-                shape.points.first(), shape.workPlane, shape.workPlaneOffset);
+            candidate = shapePointToWorld(shape, shape.points.first());
         }
         const qreal depth = transform.worldDirectionToView(candidate).towardCamera;
         if (!found || depth > nearestDepth + 1.0e-6 ||

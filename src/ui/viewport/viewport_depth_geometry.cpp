@@ -152,8 +152,8 @@ void appendPictureDepthSurface(const Shape &shape,
         };
         std::array<QVector3D, 4> worldCorners;
         for (std::size_t index = 0; index < localCorners.size(); ++index) {
-            worldCorners[index] = asVector(workPlanePointToWorld(
-                localCorners[index], shape.workPlane, shape.workPlaneOffset));
+            worldCorners[index] = asVector(shapePointToWorld(shape,
+                                                             localCorners[index]));
         }
         geometry->surfaceVertices.append(worldCorners[0]);
         geometry->surfaceVertices.append(worldCorners[1]);
@@ -209,8 +209,8 @@ void appendCurveDepthVertices(const Shape &shape,
             if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
                 return;
             }
-            const QVector3D worldPoint = asVector(workPlanePointToWorld(
-                localPoint, shape.workPlane, shape.workPlaneOffset));
+            const QVector3D worldPoint = asVector(shapePointToWorld(shape,
+                                                                   localPoint));
             if (hasPreviousPoint) {
                 vertices->append(previousPoint);
                 vertices->append(worldPoint);
@@ -254,8 +254,8 @@ void appendShapeDepthGeometry(const Shape &shape,
         }
         if (shape.geometryType == GeometryType::Point) {
             if (!shape.points.isEmpty()) {
-                geometry.pointVertices.append(asVector(workPlanePointToWorld(
-                    shape.points.first(), shape.workPlane, shape.workPlaneOffset)));
+                geometry.pointVertices.append(asVector(shapePointToWorld(
+                    shape, shape.points.first())));
             }
             return;
         }
@@ -309,6 +309,15 @@ QByteArray viewportDepthGeometryCacheKey(
                << qint32(static_cast<int>(shape.workPlane))
                << double(shape.workPlaneOffset)
                << qint32(shape.points.size());
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        stream << double(frame.origin.x) << double(frame.origin.y)
+               << double(frame.origin.z)
+               << double(frame.xAxis.x) << double(frame.xAxis.y)
+               << double(frame.xAxis.z)
+               << double(frame.yAxis.x) << double(frame.yAxis.y)
+               << double(frame.yAxis.z)
+               << double(frame.normal.x) << double(frame.normal.y)
+               << double(frame.normal.z);
         for (const QPointF &point : shape.points) {
             stream << double(point.x()) << double(point.y());
         }

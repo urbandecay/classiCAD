@@ -153,10 +153,8 @@ QVector<EraseCurveSampleCache> CurveSampler::sampleDocument(
             continue;
         }
         const Shape &shape = document[shapeIndex];
-        if (!workPlaneMatches(shape.workPlane,
-                              shape.workPlaneOffset,
-                              transform.workPlane(),
-                              transform.workPlaneOffset())) {
+        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+                              transform.workPlaneFrame())) {
             continue;
         }
         const QVector<Shape::NurbsCurve2D> curves = curvesForShape(shape);

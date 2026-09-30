@@ -11,6 +11,84 @@
 
 namespace classiCAD {
 
+namespace {
+
+QJsonArray point3DToJson(const Point3D &point)
+{
+    QJsonArray value;
+    value.append(point.x);
+    value.append(point.y);
+    value.append(point.z);
+    return value;
+}
+
+bool point3DFromJson(const QJsonValue &value, Point3D *point)
+{
+    if (point == nullptr || !value.isArray() || value.toArray().size() != 3) {
+        return false;
+    }
+    const QJsonArray coordinates = value.toArray();
+    for (const QJsonValue &coordinate : coordinates) {
+        if (!coordinate.isDouble() || !std::isfinite(coordinate.toDouble())) {
+            return false;
+        }
+    }
+    *point = {coordinates[0].toDouble(),
+              coordinates[1].toDouble(),
+              coordinates[2].toDouble()};
+    return true;
+}
+
+QJsonObject workPlaneFrameToJson(const WorkPlaneFrame &frame)
+{
+    QJsonObject value;
+    value.insert(QStringLiteral("origin"), point3DToJson(frame.origin));
+    value.insert(QStringLiteral("xAxis"), point3DToJson(frame.xAxis));
+    value.insert(QStringLiteral("yAxis"), point3DToJson(frame.yAxis));
+    value.insert(QStringLiteral("normal"), point3DToJson(frame.normal));
+    return value;
+}
+
+bool workPlaneFrameFromJson(const QJsonValue &value, WorkPlaneFrame *frame)
+{
+    if (frame == nullptr || !value.isObject()) {
+        return false;
+    }
+    const QJsonObject object = value.toObject();
+    WorkPlaneFrame parsed;
+    if (!point3DFromJson(object.value(QStringLiteral("origin")), &parsed.origin) ||
+        !point3DFromJson(object.value(QStringLiteral("xAxis")), &parsed.xAxis) ||
+        !point3DFromJson(object.value(QStringLiteral("yAxis")), &parsed.yAxis) ||
+        !point3DFromJson(object.value(QStringLiteral("normal")), &parsed.normal)) {
+        return false;
+    }
+    parsed.valid = true;
+    if (!isValidWorkPlaneFrame(parsed)) {
+        return false;
+    }
+    *frame = parsed;
+    return true;
+}
+
+} // namespace
+
+WorkPlaneFrame shapeWorkPlaneFrame(const Shape &shape)
+{
+    return isValidWorkPlaneFrame(shape.workPlaneFrame)
+               ? shape.workPlaneFrame
+               : makeWorkPlaneFrame(shape.workPlane, shape.workPlaneOffset);
+}
+
+Point3D shapePointToWorld(const Shape &shape, const QPointF &point)
+{
+    return workPlaneFramePointToWorld(point, shapeWorkPlaneFrame(shape));
+}
+
+QPointF shapeWorldPointToLocal(const Shape &shape, const Point3D &point)
+{
+    return worldPointToWorkPlaneFrame(point, shapeWorkPlaneFrame(shape));
+}
+
 HomogeneousControlPoint2D blendHomogeneousControlPoints(
     const HomogeneousControlPoint2D &first,
     const HomogeneousControlPoint2D &second,
@@ -650,6 +728,10 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
     object.insert(QStringLiteral("workPlane"), static_cast<int>(shape.workPlane));
     object.insert(QStringLiteral("workPlaneOffset"), shape.workPlaneOffset);
+    if (isValidWorkPlaneFrame(shape.workPlaneFrame)) {
+        object.insert(QStringLiteral("workPlaneFrame"),
+                      workPlaneFrameToJson(shape.workPlaneFrame));
+    }
     object.insert(QStringLiteral("arcMode"), static_cast<int>(shape.arcMode));
     object.insert(QStringLiteral("arcSweep"), shape.arcSweep);
 
@@ -725,6 +807,13 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
                                       : workPlaneOffsetValue.toDouble(
                                             std::numeric_limits<qreal>::quiet_NaN());
     if (!std::isfinite(workPlaneOffset)) {
+        return false;
+    }
+    WorkPlaneFrame workPlaneFrame;
+    const QJsonValue workPlaneFrameValue =
+        object.value(QStringLiteral("workPlaneFrame"));
+    if (!workPlaneFrameValue.isUndefined() &&
+        !workPlaneFrameFromJson(workPlaneFrameValue, &workPlaneFrame)) {
         return false;
     }
     GeometryType geometryType = GeometryType::Invalid;
@@ -920,6 +1009,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
                                   : QByteArray{};
     shape->workPlane = workPlane;
     shape->workPlaneOffset = workPlaneOffset;
+    shape->workPlaneFrame = workPlaneFrame;
     return true;
 }
 

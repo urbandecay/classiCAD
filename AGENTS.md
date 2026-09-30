@@ -12,14 +12,30 @@ representation and conform to Rhino/openNURBS conventions.
   `control_vertex_count + order - 2`; do not store the two redundant outer
   entries from the mathematical full knot vector.
 - Store rational curves as Euclidean 2D control-vertex positions plus weights
-  internally. `Shape::workPlane` and `Shape::workPlaneOffset` lift those local
-  coordinates onto the world XY, XZ, or YZ plane; legacy records default to
-  XY at offset zero. When exporting to Rhino/openNURBS, lift each CV to world
-  `(x, y, z)` first, then write rational homogeneous form
-  `(weight * x, weight * y, weight * z, weight)`.
-- The current 3D scope supports curves on the three principal workplanes only.
-  Keep local curves as `NurbsCurve2D`; do not add arbitrary spatial NURBS or
-  mesh geometry until their modeling and interchange contracts are designed.
+  internally. `Shape::workPlaneFrame` maps those local coordinates to world
+  XYZ through an origin, orthonormal X/Y axes, and their right-handed normal.
+  Legacy records without a frame use `Shape::workPlane` and
+  `Shape::workPlaneOffset`, defaulting to XY at offset zero. When exporting to
+  Rhino/openNURBS, lift each CV to world `(x, y, z)` first, then write rational
+  homogeneous form `(weight * x, weight * y, weight * z, weight)`.
+- Curves may lie on any oriented plane but remain local `NurbsCurve2D` data.
+  Do not add nonplanar spatial NURBS or mesh geometry until their modeling and
+  interchange contracts are designed. The viewport resolves the drawing frame
+  before sending input to a tool. Hovering a planar scene object inherits its
+  frame. In empty space, drawing matches the add-on fallback within the
+  supported planes: perspective uses world XY through the origin; fixed
+  orthographic views use XY, XZ, or YZ through the origin; oblique orthographic
+  views use the principal plane whose normal is most aligned with the view.
+  Each drawing tool must capture its frame at its first point and keep later
+  points, previews, and committed geometry in that frame. Existing OSnap
+  supplies snap points; do not add a second snap overlay or snap model for
+  plane handling.
+  Line follows the requested add-on behavior beyond the principal-plane
+  fallback: oblique orthographic input uses the actual camera-facing plane;
+  world-axis and normal constraints can leave the initial plane. Keep its
+  transient input in world XYZ and commit the longest planar runs as separate
+  local degree-1 NURBS curves with their own frames, in one history operation.
+  Reuse the existing SnapEngine for spatial snap targets and markers.
 - Use positive rational weights and nondecreasing knots. Preserve the curve's
   parameter domain when editing, evaluating, or exporting it.
 - Circles and circular arcs must be exact rational degree-2 NURBS curves. Split

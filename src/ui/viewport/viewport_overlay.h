@@ -57,7 +57,14 @@ public:
                          bool cursorValid,
                          const SnapResult &currentSnap,
                          const QSize &viewportSize,
-                         bool drawCurve = true) const;
+                         bool drawCurve = true,
+                         const WorkPlaneFrame &workPlaneFrame = {}) const;
+    void drawWorldLinePreview(QPainter &painter,
+                              const QVector<Point3D> &points,
+                              const Point3D &cursor,
+                              bool cursorValid,
+                              const QSize &viewportSize,
+                              bool drawCurve) const;
     void drawArcPreview(QPainter &painter,
                         const QVector<QPointF> &pendingPoints,
                         ArcMode arcMode,
@@ -146,6 +153,9 @@ public:
     void drawBlenderNavigationGizmo(QPainter &painter,
                                     const QSize &viewportSize,
                                     const QPointF &hoverPosition) const;
+    void drawBlenderNavigationGizmoContents(QPainter &painter,
+                                            const QSize &viewportSize,
+                                            const QPointF &hoverPosition) const;
     BlenderNavigationHit blenderNavigationGizmoHitAt(
         const QPointF &screenPosition,
         const QSize &viewportSize) const;

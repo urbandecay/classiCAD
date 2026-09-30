@@ -189,10 +189,8 @@ DimensionAnchorReference captureDimensionAnchor(
             const Shape &shape = document[index];
             if (isDimensionGeometryType(shape.geometryType) ||
                 !document.isObjectVisible(objectId) ||
-                !workPlaneMatches(shape.workPlane,
-                                  shape.workPlaneOffset,
-                                  transform.workPlane(),
-                                  transform.workPlaneOffset())) {
+                !workPlaneMatches(shapeWorkPlaneFrame(shape),
+                                  transform.workPlaneFrame())) {
                 continue;
             }
             QPointF center;
@@ -219,10 +217,8 @@ DimensionAnchorReference captureDimensionAnchor(
             const Shape &shape = document[index];
             if (isDimensionGeometryType(shape.geometryType) ||
                 !document.isObjectVisible(objectId) ||
-                !workPlaneMatches(shape.workPlane,
-                                  shape.workPlaneOffset,
-                                  transform.workPlane(),
-                                  transform.workPlaneOffset())) {
+                !workPlaneMatches(shapeWorkPlaneFrame(shape),
+                                  transform.workPlaneFrame())) {
                 continue;
             }
             const auto considerCurve = [&](const Shape::NurbsCurve2D &curve,
@@ -265,10 +261,8 @@ DimensionAnchorReference captureDimensionAnchor(
             const Shape &shape = document[index];
             if (shape.geometryType != GeometryType::Point || shape.points.isEmpty() ||
                 !document.isObjectVisible(objectId) ||
-                !workPlaneMatches(shape.workPlane,
-                                  shape.workPlaneOffset,
-                                  transform.workPlane(),
-                                  transform.workPlaneOffset())) {
+                !workPlaneMatches(shapeWorkPlaneFrame(shape),
+                                  transform.workPlaneFrame())) {
                 continue;
             }
             const qreal distanceSquared = squaredDistance(
@@ -290,10 +284,8 @@ DimensionAnchorReference captureDimensionAnchor(
         const Shape &shape = document[shapeIndex];
         if (isDimensionGeometryType(shape.geometryType) ||
             !document.isObjectVisible(objectId) ||
-            !workPlaneMatches(shape.workPlane,
-                              shape.workPlaneOffset,
-                              transform.workPlane(),
-                              transform.workPlaneOffset())) {
+            !workPlaneMatches(shapeWorkPlaneFrame(shape),
+                              transform.workPlaneFrame())) {
             continue;
         }
         const QVector<Shape::NurbsCurve2D> curves = curveSampler.curvesForShape(shape);

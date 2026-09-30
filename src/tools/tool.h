@@ -25,9 +25,18 @@ struct ToolStatus {
 
 struct ToolPreview {
     QVector<QPointF> points;
+    WorkPlaneFrame workPlaneFrame;
+    QPointF cursorPoint;
+    QVector<Point3D> worldPoints;
+    Point3D worldCursorPoint;
+    QVector<Shape> shapes;
+    bool planeLocked = false;
+    SnapResult snap;
+    bool overridesSnap = false;
     Shape shape;
     bool hasShape = false;
     bool cursorVisible = false;
+    bool hasCursorPoint = false;
     QString statusText;
 };
 

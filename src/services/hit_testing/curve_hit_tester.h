@@ -31,6 +31,13 @@ public:
                      const QSize &viewportSize,
                      bool editableOnly = false) const;
 
+    // Drawing-plane inference can inspect every visible planar object while
+    // ordinary selection remains scoped to the active plane.
+    int hitTestShapeOnAnyWorkPlane(const Document &document,
+                                   const QPointF &screenPosition,
+                                   const ViewportTransform &transform,
+                                   const QSize &viewportSize) const;
+
     bool hitTestVisibleDepth(const Document &document,
                              const QPointF &screenPosition,
                              const ViewportTransform &transform,

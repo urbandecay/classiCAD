@@ -32,7 +32,8 @@ src/main.cpp                       application entry point
 src/core/tool_id.*                 active interaction vocabulary and tool metadata
 src/core/geometry/geometry_type.*  persistent geometry vocabulary and legacy mapping
 src/core/geometry/nurbs_curve.*    shared NURBS storage, knot expansion, validation
-src/core/geometry/work_plane.*     principal XY/XZ/YZ local-2D to world-3D mapping
+src/core/geometry/arc_curve_factory.* signed direction and exact rational NURBS construction for three-point arcs
+src/core/geometry/work_plane.*     principal and oriented local-2D to world-3D frame mapping
 src/core/geometry/curve_evaluator.* NURBS evaluation and parameter-domain operations
 src/core/geometry/geometry_transform.* reflected geometry transforms
 src/core/document/object_id.h      stable scene-object identity value type
@@ -44,20 +45,21 @@ src/core/document/document_settings.* persistent document display units and grid
 src/core/document/selection_model.* selected object and control-point references
 src/core/history/history.*          document-level snapshot undo/redo ownership
 src/core/serialization/document_serializer.* versioned document/layer/object save/restore
-src/core/model.*                   compatibility model, factories, serialization, helpers
+src/core/serialization/vignola_document_file.* `.vignola` and Rhino/openNURBS interchange with oriented-plane lifting
+src/core/model.*                   compatibility model, shape-plane frames, factories, serialization, helpers
 src/core/debug_log.*               application logging
-src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/workplane picking, presets, zoom, pan, and Blender-style turntable/trackball orbit math
+src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/frame picking, presets, zoom, pan, and Blender-style turntable/trackball orbit math
 src/services/sampling/curve_sampler.* NURBS display/erase sampling and scene cache generation
-src/services/hit_testing/curve_hit_tester.* curve/control-point hit-testing and cross-workplane orbit-depth picking
+src/services/hit_testing/curve_hit_tester.* curve/control-point hit-testing, drawing-plane inheritance, and cross-workplane orbit-depth picking
 src/services/snapping/snap_engine.* endpoint, midpoint, center, intersection, perpendicular, and tangent snapping
 src/tools/tool.*                  non-Qt interaction lifecycle contract and preview/status values
-src/tools/tool_input.h            translated mouse, wheel, and keyboard input payload
+src/tools/tool_input.h            translated mouse, wheel, and keyboard input payload with the active workplane frame
 src/tools/tool_context.*          document, history, services, factory, commit, and preview ports
 src/tools/tool_registry.*         active tool module lookup and ownership
 src/tools/shape_creation_tool.*   shared pending-point creation lifecycle
 src/tools/select_tool.*            selection lifecycle bridge
 src/tools/point_tool.*             point creation
-src/tools/line_tool.*              connected line creation
+src/tools/line_tool.*              world-space connected line input and planar NURBS run creation
 src/tools/rectangle_tool.*         rectangle creation
 src/tools/circle_tool.*            rational circle creation
 src/tools/arc_tool.*               arc creation lifecycle bridge
@@ -69,7 +71,7 @@ src/tools/trim_tool.*               trim lifecycle bridge
 src/tools/erase_tool.*              erase lifecycle bridge
 src/ui/input_helpers.*             Qt event-position and icon helpers
 src/ui/viewport_widget_api.h       typed viewport settings, command, status, and callback boundary
-src/ui/viewport_widget.cpp         current viewport state, tools, editing, snapping, and Qt paint orchestration
+src/ui/viewport_widget.cpp         current viewport state, shared drawing-frame inference, tools, editing, snapping, and Qt paint orchestration
 src/ui/viewport/blender_grid_renderer.* 3D grid shader setup, offscreen/on-screen contexts, camera uniforms, and procedural GPU drawing
 src/ui/viewport/viewport_gpu_surface.* native QOpenGLWidget presentation surface and renderer lifetime
 src/ui/viewport/viewport_scene_renderer.* GPU committed-curve strokes and dashed control guides
@@ -136,6 +138,27 @@ the same transform while the second axis point moves, so the user sees the
 copy before committing it. Its axis therefore receives the same Ortho and
 OSnap behavior as Line without introducing a second snapping model.
 
+Every shape retains local 2D geometry plus an orthonormal `WorkPlaneFrame`
+with a world origin, X/Y axes, and normal. Legacy records still map through
+their principal XY/XZ/YZ workplane and offset. Drawing input resolves its
+plane once in the shared viewport path before a tool receives plane-local
+points. At the first point, hovering an existing planar shape makes the active
+drawing frame follow that shape. In empty space, drawing follows the add-on's
+fallback within the supported principal planes: perspective uses world XY
+through the origin, fixed orthographic views use XY/XZ/YZ through the origin,
+and other tools in oblique orthographic views use the most view-aligned
+principal plane. Line uses the actual camera-facing plane there. It captures
+the normal at the first point and advances the plane through each new pivot;
+XYZ, Shift, and normal constraints use mouse-ray/world-line placement. Its
+temporary world vertices become local degree-1 NURBS planar runs committed
+in one history operation. Remaining tools still need explicit frame capture.
+Line's existing SnapEngine resolves candidates across scene frames and keeps
+their actual world depth; the existing markers are reused.
+Rendering, hit-testing, sampling, depth geometry, session serialization, and
+Rhino/openNURBS CV lifting consume the same frame mapping. `.3dm` import keeps
+oblique planar curve frames; mesh and nonplanar spatial NURBS geometry remain
+out of scope.
+
 Select-mode movement also supports an explicit Blender-style grab lifecycle:
 `G` starts a move for the selected editable objects, `X`/`Y` constrains the
 move independently of Ortho, left-click commits it, and Esc/right-click
@@ -144,14 +167,17 @@ the user picks an enabled OSnap point on the selection and moves that anchor
 to another enabled OSnap point, even when global OSnap is off. Ordinary
 selection dragging remains available as a separate path.
 
-The current 3D viewport milestone keeps curves as local `NurbsCurve2D` data
-with each `Shape` carrying a principal workplane and offset. It provides
-Top/Front/Right/Isometric/Perspective views and ray-picking onto active XY/XZ/YZ
-planes. Existing 2D editing, object snaps, trimming, and erase are restricted
-to the active plane so local 2D operations cannot unintentionally distort
-geometry on another plane. `.vignola` persistence and `.3dm` curve interchange
-preserve this mapping; arbitrary spatial NURBS and mesh modeling remain future
-work.
+The current 3D viewport keeps curves as local `NurbsCurve2D` data and stores
+their oriented planes in `WorkPlaneFrame`; legacy shapes retain principal
+XY/XZ/YZ workplanes and offsets. It provides Top/Front/Right/Isometric/
+Perspective views and camera-ray picking onto the active drawing frame. At the
+start of a shape command, shared input can inherit a frame from a planar scene
+object under the cursor, then locks that frame through the remaining points.
+Existing 2D editing, object snaps, trimming, and erase stay scoped to matching
+active frames so local operations do not unintentionally distort geometry on
+another plane. `.vignola` persistence and `.3dm` curve interchange preserve
+arbitrary planar frames; nonplanar spatial NURBS and mesh modeling remain
+future work.
 
 Do not begin by moving lines into arbitrary folders. First identify the owner of each piece of state and the direction of its dependencies.
 
@@ -226,7 +252,8 @@ src/
   core/
     geometry/
       nurbs_curve.*                     NurbsCurve2D data and invariants
-      curve_factories.*                 line, Bezier, circle, arc, and polycurve factories
+      curve_factories.*                 line, Bezier, circle, and polycurve factories
+      arc_curve_factory.*               signed winding and exact rational three-point arc construction
       curve_evaluator.*                 NURBS evaluation and parameter-domain operations
       curve_intersections.*             curve/line intersection calculations
       curve_validation.*                NURBS and geometry validation
@@ -523,6 +550,9 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 | 17a. Quaternion orbit and depth navigation | In progress | Replaced yaw/pitch camera storage and preset interpolation with double-precision quaternion rotation/slerp so orbit can pass through poles without losing CAD projection precision; updated GPU camera up vector to use the same orientation. Orbit-start picking now uses the GPU depth buffer over shared visible-scene geometry, with a small on-demand readback and sampled CPU fallback when the GPU path is unavailable or finds no hit. Both paths preserve the perspective eye when the target depth changes. Offset-plane, overlapping-depth, pole, and GPU frontmost-overlap regressions pass. Direct visual/interaction comparison remains open. |
 | 17b. Blender 5.2 trackball rotation | In progress | Added selectable Turntable/Trackball settings, a separately saved trackball sensitivity, and Blender's 1.1-radius aspect-correct virtual sphere/hyperbola mapping with drag-start quaternion and cross-product axis math in `ViewportTransform`. Wired begin/move/end gesture handling to the viewport gizmo and mouse orbit drags; Turntable remains the default. Added transform-level sensitivity and absolute-drag regressions in `tests/core_contracts.cpp`. Build, all four CTest suites, the XCB/Mesa GPU interaction regression, and offscreen fallback startup pass. Live pointer-gesture calibration against Blender remains open. |
 | 18. Native viewport GPU presentation and curve strokes | In progress | Added a QOpenGLWidget surface, direct grid framebuffer composition without per-frame GPU image readback, OpenGL scene strokes for common CAD curves and points, cached world tessellation, and dashed GPU Bézier/NURBS control guides. Qt remains for pictures, dimensions, tool previews, overlays, noncontinuous layer line styles, and offscreen fallback. Full build, all four CTest suites, XCB/Mesa interaction checks for rectangle/Bézier guides/point pixels, `git diff --check`, and offscreen startup/fallback passed. Remaining scene migration and close-zoom curve inspection are tracked in Stage 7 of `BLENDER_VIEWPORT_PARITY_PLAN.md`. |
+| 19. Workplane arc direction geometry | Complete | Added `core/geometry/arc_curve_factory.*` to choose the signed sweep containing the third point in local workplane coordinates and build exact rational quadratic NURBS spans. Two-point arc preview, committed geometry, and arc snap geometry now share that signed direction; screen-space circle fitting no longer controls the arc. Invalid/collinear arc definitions are rejected before commit. Added minor-side, major-sweep, and degenerate-input regression coverage. `cmake --build build`, all four CTest suites, `git diff --check`, and offscreen application startup passed. |
+| 20. Shared oriented drawing-plane input | In progress | Added `WorkPlaneFrame` geometry and backwards-compatible shape serialization while keeping committed curves as local `NurbsCurve2D`. Hovering a planar scene object makes the drawing frame follow that object's stored plane. In empty space, shared drawing input follows the add-on fallback within the supported principal planes: world XY through the origin in perspective, XY/XZ/YZ through the origin in fixed orthographic views, and the most view-aligned principal plane in oblique orthographic views. `LineTool` captures this frame on its first point, converts any later input from a changed frame back into its captured frame, renders the live cursor in that frame, and preserves the frame through shape commit. It also has passive in-plane world-axis inference, Shift direction lock, X/Y/Z axis keys where the axis lies in-plane, and Backspace point removal. Off-plane axis locking, camera-facing oblique planes, and the add-on's 3D normal lock remain unsupported while committed curves are planar `NurbsCurve2D`. Existing OSnap is reused with no new snap overlay. Renderer/depth geometry, hit-testing, sampling, dimensions, and Rhino/openNURBS lifting use the same mapping. Remaining tool modules still need explicit frame capture. `cmake --build build` and `git diff --check` passed. Tests were not run in this iteration. |
+| 21. Add-on Line world-axis input | Complete | Replaced plane-projected Line constraints with closest-point mouse-ray/world-line placement for XYZ, passive global-axis inference, Shift, and N normal locking. L controls plane locking; each new pivot moves the locked-normal plane. Line uses the actual camera-facing plane in oblique ortho, and the existing SnapEngine resolves enabled OSnaps across scene planes with actual world depth and preview endpoint snapping. Preview world vertices and planar NURBS runs feed GPU and painter rendering. Committed data remains local degree-1 NURBS; a chain changing planes creates planar component objects together through the ToolContext batch commit port, with one Undo. Added actual Qt-event/save-reload regressions for side-view Z drawing, all perspective world axes, a mixed-plane chain, atomic Undo, and cross-plane OSnap. Corrected the Rhino import test to distinguish tilted planar lines from genuinely nonplanar cubic curves. Build, all four CTest suites, the XCB native GPU interaction run with inspected Z preview, diff checks, and offscreen startup passed. Core regressions also cover normal locking, Shift direction preservation, and Backspace depth restoration. Remaining tool migrations belong to phase 20. Open app processes were confirmed to still run deleted older executables; the Update action is required to load the rebuilt app while preserving their scenes. |
 
 ## Required iteration report
 

@@ -108,6 +108,24 @@ bool ToolContext::commitShape(ToolId tool, const Shape &shape) const
     return shapeCommitter_ && shapeCommitter_(tool, shape);
 }
 
+void ToolContext::setShapesCommitter(ShapesCommitter committer)
+{
+    shapesCommitter_ = std::move(committer);
+}
+
+bool ToolContext::commitShapes(ToolId tool, const QVector<Shape> &shapes) const
+{
+    if (shapesCommitter_) {
+        return shapesCommitter_(tool, shapes);
+    }
+    for (const Shape &shape : shapes) {
+        if (!commitShape(tool, shape)) {
+            return false;
+        }
+    }
+    return !shapes.isEmpty();
+}
+
 void ToolContext::finishTool(ToolId tool) const
 {
     if (toolFinisher_) {

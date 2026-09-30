@@ -292,10 +292,7 @@ QPointF ViewportTransform::screenToWorld(const QPointF &screenPosition,
                                          const QSize &viewportSize) const
 {
     QPointF workPlanePosition;
-    if (!screenToWorkPlane(screenPosition,
-                           viewportSize,
-                           workPlane_,
-                           workPlaneOffset_,
+    if (!screenToWorkPlane(screenPosition, viewportSize, workPlaneFrame_,
                            &workPlanePosition)) {
         return {};
     }
@@ -305,10 +302,7 @@ QPointF ViewportTransform::screenToWorld(const QPointF &screenPosition,
 QPointF ViewportTransform::worldToScreen(const QPointF &worldPosition,
                                          const QSize &viewportSize) const
 {
-    return workPlaneToScreen(worldPosition,
-                             viewportSize,
-                             workPlane_,
-                             workPlaneOffset_);
+    return workPlaneToScreen(worldPosition, viewportSize, workPlaneFrame_);
 }
 
 bool ViewportTransform::screenToWorkPlane(const QPointF &screenPosition,
@@ -317,8 +311,21 @@ bool ViewportTransform::screenToWorkPlane(const QPointF &screenPosition,
                                           qreal planeOffset,
                                           QPointF *workPlanePosition) const
 {
+    return screenToWorkPlane(screenPosition,
+                             viewportSize,
+                             makeWorkPlaneFrame(plane, planeOffset),
+                             workPlanePosition);
+}
+
+bool ViewportTransform::screenToWorkPlane(
+    const QPointF &screenPosition,
+    const QSize &viewportSize,
+    const WorkPlaneFrame &frame,
+    QPointF *workPlanePosition) const
+{
     if (workPlanePosition == nullptr || viewportSize.width() <= 0 ||
-        viewportSize.height() <= 0 || zoom_ <= 1.0e-15) {
+        viewportSize.height() <= 0 || zoom_ <= 1.0e-15 ||
+        !isValidWorkPlaneFrame(frame)) {
         return false;
     }
 
@@ -347,8 +354,8 @@ bool ViewportTransform::screenToWorkPlane(const QPointF &screenPosition,
         rayDirection = basis.forward;
     }
 
-    const Vec3 planePoint = asVec(workPlanePointToWorld({}, plane, planeOffset));
-    const Vec3 planeNormal = asVec(workPlaneNormal(plane));
+    const Vec3 planePoint = asVec(frame.origin);
+    const Vec3 planeNormal = asVec(frame.normal);
     const qreal denominator = dot(planeNormal, rayDirection);
     if (std::abs(denominator) <= 1.0e-12) {
         return false;
@@ -370,9 +377,55 @@ bool ViewportTransform::screenToWorkPlane(const QPointF &screenPosition,
     distance = std::max<qreal>(0.0, distance);
 
     const Vec3 world = add(rayOrigin, multiply(rayDirection, distance));
-    *workPlanePosition = worldPointToWorkPlane({world.x, world.y, world.z}, plane);
+    *workPlanePosition = worldPointToWorkPlaneFrame(
+        {world.x, world.y, world.z}, frame);
     return std::isfinite(workPlanePosition->x()) &&
            std::isfinite(workPlanePosition->y());
+}
+
+bool ViewportTransform::screenToWorldAxis(const QPointF &screenPosition,
+                                         const QSize &viewportSize,
+                                         const Point3D &origin,
+                                         const Point3D &direction,
+                                         Point3D *worldPosition) const
+{
+    if (worldPosition == nullptr || viewportSize.isEmpty() || zoom_ <= 1.0e-15) {
+        return false;
+    }
+    const CameraBasis basis = cameraBasis(orientation_);
+    const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
+    const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0;
+    const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y();
+    Vec3 rayOrigin;
+    Vec3 rayDirection;
+    if (perspective_) {
+        const qreal focal = viewportFocalLengthPixels(
+            viewportSize, cameraPreferences_.focalLengthMillimeters);
+        rayOrigin = subtract(target, multiply(basis.forward,
+            perspectiveCameraDistance(zoom_, cameraPreferences_)));
+        rayDirection = normalized(add(basis.forward,
+            add(multiply(basis.right, pixelX / focal),
+                multiply(basis.up, pixelY / focal))));
+    } else {
+        const qreal scale = viewScalePixelsPerWorldUnit(viewportSize);
+        rayOrigin = add(target, add(multiply(basis.right, pixelX / scale),
+                                    multiply(basis.up, pixelY / scale)));
+        rayDirection = basis.forward;
+    }
+    const Vec3 axis = normalized(asVec(direction));
+    const qreal alignment = dot(axis, rayDirection);
+    const qreal denominator = dot(axis, axis) - alignment * alignment;
+    if (denominator <= 1.0e-12) {
+        return false;
+    }
+    // Closest point between the mouse ray and the constrained world line,
+    // matching Blender's intersect_line_line rather than a floor projection.
+    const Vec3 delta = subtract(rayOrigin, asVec(origin));
+    const qreal parameter = (dot(axis, delta) - alignment * dot(rayDirection, delta)) /
+                            denominator;
+    const Vec3 point = add(asVec(origin), multiply(axis, parameter));
+    *worldPosition = {point.x, point.y, point.z};
+    return std::isfinite(point.x) && std::isfinite(point.y) && std::isfinite(point.z);
 }
 
 QPointF ViewportTransform::workPlaneToScreen(const QPointF &workPlanePosition,
@@ -380,10 +433,18 @@ QPointF ViewportTransform::workPlaneToScreen(const QPointF &workPlanePosition,
                                              WorkPlane plane,
                                              qreal planeOffset) const
 {
+    return workPlaneToScreen(workPlanePosition,
+                             viewportSize,
+                             makeWorkPlaneFrame(plane, planeOffset));
+}
+
+QPointF ViewportTransform::workPlaneToScreen(
+    const QPointF &workPlanePosition,
+    const QSize &viewportSize,
+    const WorkPlaneFrame &frame) const
+{
     QPointF screenPosition;
-    if (!worldPointToScreen(workPlanePointToWorld(workPlanePosition,
-                                                   plane,
-                                                   planeOffset),
+    if (!worldPointToScreen(workPlaneFramePointToWorld(workPlanePosition, frame),
                             viewportSize,
                             &screenPosition)) {
         const qreal invalid = std::numeric_limits<qreal>::quiet_NaN();
@@ -442,6 +503,11 @@ qreal ViewportTransform::workPlaneOffset() const
     return workPlaneOffset_;
 }
 
+const WorkPlaneFrame &ViewportTransform::workPlaneFrame() const
+{
+    return workPlaneFrame_;
+}
+
 void ViewportTransform::setWorkPlane(WorkPlane plane, qreal offset)
 {
     if (!std::isfinite(offset)) {
@@ -449,6 +515,14 @@ void ViewportTransform::setWorkPlane(WorkPlane plane, qreal offset)
     }
     workPlane_ = plane;
     workPlaneOffset_ = offset;
+    workPlaneFrame_ = makeWorkPlaneFrame(plane, offset);
+}
+
+void ViewportTransform::setWorkPlaneFrame(const WorkPlaneFrame &frame)
+{
+    if (isValidWorkPlaneFrame(frame)) {
+        workPlaneFrame_ = frame;
+    }
 }
 
 ViewportViewPreset ViewportTransform::viewPreset() const
@@ -864,6 +938,7 @@ void ViewportTransform::resetView()
     orbitPivotLocked_ = false;
     workPlane_ = WorkPlane::XY;
     workPlaneOffset_ = 0.0;
+    workPlaneFrame_ = makeWorkPlaneFrame(workPlane_, workPlaneOffset_);
     setViewPreset(ViewportViewPreset::Top);
 }
 

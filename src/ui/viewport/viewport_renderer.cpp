@@ -1,5 +1,6 @@
 #include "viewport_renderer.h"
 
+#include "core/geometry/arc_curve_factory.h"
 #include "core/geometry/curve_evaluator.h"
 #include "blender_grid_scale.h"
 #include "blender_grid_frame.h"
@@ -1248,123 +1249,19 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
     }
 }
 
-bool ViewportRenderer::makeCircularArcGeometry(const QPointF &startWorld,
-                                               const QPointF &endWorld,
-                                               const QPointF &throughWorld,
-                                               const QSize &viewportSize,
-                                               QPointF *center,
-                                               qreal *radius,
-                                               qreal *startAngle,
-                                               qreal *sweepAngle) const
-{
-    const QPointF start = worldToScreen(startWorld, viewportSize);
-    const QPointF end = worldToScreen(endWorld, viewportSize);
-    const QPointF through = worldToScreen(throughWorld, viewportSize);
-
-    const qreal startSquared = start.x() * start.x() + start.y() * start.y();
-    const qreal endSquared = end.x() * end.x() + end.y() * end.y();
-    const qreal throughSquared = through.x() * through.x() + through.y() * through.y();
-    const qreal denominator = 2.0 *
-        (start.x() * (end.y() - through.y()) +
-         end.x() * (through.y() - start.y()) +
-         through.x() * (start.y() - end.y()));
-
-    if (std::abs(denominator) < 1e-9) {
-        return false;
-    }
-
-    const QPointF circleCenter(
-        (startSquared * (end.y() - through.y()) +
-         endSquared * (through.y() - start.y()) +
-         throughSquared * (start.y() - end.y())) / denominator,
-        (startSquared * (through.x() - end.x()) +
-         endSquared * (start.x() - through.x()) +
-         throughSquared * (end.x() - start.x())) / denominator);
-    const qreal circleRadius =
-        std::hypot(start.x() - circleCenter.x(), start.y() - circleCenter.y());
-    if (circleRadius <= 1e-9) {
-        return false;
-    }
-
-    constexpr qreal twoPi = 6.28318530717958647692;
-    const auto normalizeAngle = [twoPi](qreal angle) {
-        angle = std::fmod(angle, twoPi);
-        if (angle < 0.0) {
-            angle += twoPi;
-        }
-        return angle;
-    };
-
-    const qreal firstAngle = std::atan2(start.y() - circleCenter.y(),
-                                        start.x() - circleCenter.x());
-    const qreal secondAngle = std::atan2(end.y() - circleCenter.y(),
-                                         end.x() - circleCenter.x());
-    const qreal throughAngle = std::atan2(through.y() - circleCenter.y(),
-                                          through.x() - circleCenter.x());
-    const qreal counterClockwiseSweep = normalizeAngle(secondAngle - firstAngle);
-    const qreal throughSweep = normalizeAngle(throughAngle - firstAngle);
-    if (counterClockwiseSweep <= 1e-9) {
-        return false;
-    }
-
-    const qreal selectedSweep = throughSweep <= counterClockwiseSweep + 1e-7
-                                    ? counterClockwiseSweep
-                                    : -(twoPi - counterClockwiseSweep);
-    if (center != nullptr) {
-        *center = circleCenter;
-    }
-    if (radius != nullptr) {
-        *radius = circleRadius;
-    }
-    if (startAngle != nullptr) {
-        *startAngle = firstAngle;
-    }
-    if (sweepAngle != nullptr) {
-        *sweepAngle = selectedSweep;
-    }
-    return true;
-}
-
 void ViewportRenderer::drawCircularArc(QPainter &painter,
                                        const QPointF &start,
                                        const QPointF &end,
                                        const QPointF &through,
                                        const QSize &viewportSize) const
 {
-    QPointF center;
-    qreal radius = 0.0;
-    qreal startAngle = 0.0;
-    qreal sweepAngle = 0.0;
-    if (!makeCircularArcGeometry(start,
-                                 end,
-                                 through,
-                                 viewportSize,
-                                 &center,
-                                 &radius,
-                                 &startAngle,
-                                 &sweepAngle)) {
+    CircularArc2D arc;
+    if (!makeCircularArcThroughPoint(start, end, through, &arc)) {
         painter.drawLine(worldToScreen(start, viewportSize),
                          worldToScreen(end, viewportSize));
         return;
     }
-
-    const int steps = std::clamp(
-        static_cast<int>(std::ceil(std::abs(sweepAngle) * radius / 8.0)),
-        12,
-        256);
-    QPainterPath path;
-    for (int step = 0; step <= steps; ++step) {
-        const qreal fraction = static_cast<qreal>(step) / steps;
-        const qreal angle = startAngle + sweepAngle * fraction;
-        const QPointF point(center.x() + radius * std::cos(angle),
-                            center.y() + radius * std::sin(angle));
-        if (step == 0) {
-            path.moveTo(point);
-        } else {
-            path.lineTo(point);
-        }
-    }
-    painter.drawPath(path);
+    drawNurbsCurve(painter, arc.curve, viewportSize);
 }
 
 void ViewportRenderer::drawCenterArcWithSweep(QPainter &painter,

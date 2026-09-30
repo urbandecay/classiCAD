@@ -6,6 +6,8 @@
 
 namespace classiCAD {
 
+inline constexpr int kBlenderViewportBackgroundGray = 63;
+
 // Theme-provided grid colors and the tunable appearance controls. Fade and
 // stipple defaults follow Blender's overlay_grid_frag.glsl behavior.
 struct BlenderGridAppearance {
@@ -14,9 +16,9 @@ struct BlenderGridAppearance {
     QColor gridColor = QColor::fromRgb(84, 84, 84, 128);
     QColor emphasisColor = QColor::fromRgb(84, 84, 84, 255);
     QColor axisXColor = QColor::fromRgb(209, 35, 62, 235);
-    // Calibrated against Blender 5.2's composited grid-axis screenshot. The
-    // blue component is intentional; Blender's Y axis is not pure green.
-    QColor axisYColor = QColor::fromRgb(109, 176, 23, 235);
+    // Calibrated against Blender 5.2's final composited screenshot, accounting
+    // for the semitransparent line over the viewport background.
+    QColor axisYColor = QColor::fromRgb(115, 190, 14, 235);
     QColor axisZColor = QColor::fromRgb(26, 115, 209, 235);
     qreal opacity = 1.0;
     bool lowAlphaStipple = true;

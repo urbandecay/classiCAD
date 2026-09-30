@@ -487,8 +487,10 @@ void ViewportRenderer::drawGrid(QPainter &painter,
                 gridAppearance_.emphasisColor.blueF() * emphasis,
             gridAppearance_.gridColor.alphaF() * (1.0 - emphasis) +
                 gridAppearance_.emphasisColor.alphaF() * emphasis);
+        const qreal pixelFade = blenderOrthographicGridPixelFade(
+            step * transform_.viewScalePixelsPerWorldUnit(viewportSize));
         const qreal lineOpacity = levelAlpha * levelColor.alphaF() *
-                                  gridAppearance_.opacity;
+                                  gridAppearance_.opacity * pixelFade;
         const auto radialFade = [offset, radius, this](const QPointF &point) {
             const qreal normalizedU = (point.x() - offset.x()) / radius;
             const qreal normalizedV = (point.y() - offset.y()) / radius;

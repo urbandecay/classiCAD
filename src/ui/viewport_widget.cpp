@@ -47,7 +47,6 @@
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QPixmap>
-#include <QRadialGradient>
 #include <QSettings>
 #include <QTextStream>
 #include <QTimer>
@@ -68,26 +67,8 @@ void fillViewportBackground(QPainter &painter, const QRect &bounds)
     if (bounds.isEmpty()) {
         return;
     }
-    const QPointF center(bounds.x() + bounds.width() * 0.5,
-                         bounds.y() + bounds.height() * 0.5);
-    const qreal radius = 0.5 * std::hypot(bounds.width(), bounds.height());
-    QRadialGradient gradient(center, std::max<qreal>(radius, 1.0), center);
-    constexpr qreal gamma = 2.2;
-    constexpr qreal high = 61.0 / 255.0;
-    constexpr qreal low = 48.0 / 255.0;
-    constexpr int stopCount = 32;
-    for (int stopIndex = 0; stopIndex <= stopCount; ++stopIndex) {
-        const qreal factor = static_cast<qreal>(stopIndex) / stopCount;
-        const qreal gammaColor = std::pow(
-            std::pow(high, 1.0 / gamma) * (1.0 - factor) +
-                std::pow(low, 1.0 / gamma) * factor,
-            gamma);
-        const QColor color = QColor::fromRgbF(gammaColor,
-                                              gammaColor,
-                                              gammaColor);
-        gradient.setColorAt(factor, color);
-    }
-    painter.fillRect(bounds, gradient);
+    const int gray = kBlenderViewportBackgroundGray;
+    painter.fillRect(bounds, QColor(gray, gray, gray));
 }
 
 ViewportSceneLineStyle viewportSceneLineStyleForLayerPattern(

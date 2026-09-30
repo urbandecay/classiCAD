@@ -21,6 +21,9 @@ BlenderGridLevelSelection selectBlenderGridLevel(
 qreal blenderGridStepAtLevel(const BlenderGridLevelSelection &selection,
                              int lineLevel);
 
+// Blender fades orthographic grid lines between 4 and 64 screen pixels apart.
+qreal blenderOrthographicGridPixelFade(qreal projectedStepPixels);
+
 bool isBlenderAxisAlignedView(ViewportViewPreset preset);
 
 } // namespace classiCAD

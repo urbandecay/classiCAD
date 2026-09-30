@@ -297,10 +297,10 @@ int main(int argc, char **argv)
     const BlenderGridAppearance blenderGridAppearance{};
     passed &= check(
         blenderGridAppearance.gridColor == QColor::fromRgb(84, 84, 84, 128) &&
-            blenderGridAppearance.emphasisColor ==
+        blenderGridAppearance.emphasisColor ==
                 QColor::fromRgb(84, 84, 84, 255) &&
-            blenderGridAppearance.axisYColor == QColor::fromRgb(109, 176, 23, 235),
-        "grid and Y-axis defaults must match Blender's saved theme appearance");
+            blenderGridAppearance.axisYColor == QColor::fromRgb(115, 190, 14, 235),
+        "grid and Y-axis defaults must match Blender's captured viewport appearance");
 
     std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget());
     viewport->resize(interactionViewportSize);
@@ -652,10 +652,10 @@ int main(int argc, char **argv)
         beforeWheel,
         QPoint(beforeWheel.width() / 2, beforeWheel.height() / 2),
         3);
-    passed &= check(edgeBackground >= 45 &&
-                        edgeBackground <= 53 &&
-                        centerBackground >= edgeBackground + 8,
-                    "viewport background must use Blender's soft radial theme gradient");
+    passed &= check(
+        std::abs(edgeBackground - kBlenderViewportBackgroundGray) <= 1 &&
+            std::abs(centerBackground - kBlenderViewportBackgroundGray) <= 1,
+        "viewport background must match Blender's captured solid theme color");
     const QPoint globalCenter = viewport->mapToGlobal(center.toPoint());
     QWheelEvent wheel(center,
                       globalCenter,

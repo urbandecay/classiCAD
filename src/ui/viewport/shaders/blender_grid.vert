@@ -152,8 +152,9 @@ void main()
     vEmphasis = clamp(float(line.level) - uLevelFraction, 0.0, 1.0);
     vAlpha = clamp(float(line.level) + 1.0 - uLevelFraction, 0.0, 1.0);
     if (uMode == 0 && uPerspective == 0) {
-        // Blender fades ortho levels that would otherwise shimmer below pixel size.
-        vAlpha *= smoothstep(0.25, 4.0, stepSize * uZoom);
+        // Blender's inverse-pixel thresholds fade levels from 4 to 64 screen
+        // pixels apart. This is the same interval expressed in pixel spacing.
+        vAlpha *= smoothstep(4.0, 64.0, stepSize * uZoom);
     }
     vFixedCoordinate = uMode == 0 ? position[1 - line.axis] : 0.0;
     vLineAxis = line.axis;

@@ -74,6 +74,17 @@ qreal blenderGridStepAtLevel(const BlenderGridLevelSelection &selection,
            std::pow(10.0, static_cast<qreal>(levelIndex - selectedIndex));
 }
 
+qreal blenderOrthographicGridPixelFade(qreal projectedStepPixels)
+{
+    if (!std::isfinite(projectedStepPixels)) {
+        return projectedStepPixels > 0.0 ? 1.0 : 0.0;
+    }
+    const qreal fraction = std::clamp((projectedStepPixels - 4.0) / 60.0,
+                                      0.0,
+                                      1.0);
+    return fraction * fraction * (3.0 - 2.0 * fraction);
+}
+
 bool isBlenderAxisAlignedView(ViewportViewPreset preset)
 {
     switch (preset) {

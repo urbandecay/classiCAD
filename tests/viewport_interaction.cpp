@@ -850,6 +850,105 @@ int main(int argc, char **argv)
             transform.setViewPreset(preset);
             captureView(name, transform);
         }
+
+        const auto redAxisPixels = [](const QImage &image) {
+            int count = 0;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    const QColor pixel = image.pixelColor(x, y);
+                    count += pixel.red() > pixel.green() + 25 &&
+                             pixel.red() > pixel.blue() + 20 &&
+                             pixel.red() > 40;
+                }
+            }
+            return count;
+        };
+        const auto greenAxisPixels = [](const QImage &image) {
+            int count = 0;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    const QColor pixel = image.pixelColor(x, y);
+                    count += pixel.green() > pixel.red() + 25 &&
+                             pixel.green() > pixel.blue() + 20 &&
+                             pixel.green() > 40;
+                }
+            }
+            return count;
+        };
+        const auto renderCameraRelativeAxis = [&](qreal yawRadians,
+                                                  const Point3D &orbitPivot) {
+            ViewportTransform transform;
+            transform.setCameraPreferences(blenderCameraPreferences);
+            ViewportCameraState camera = transform.cameraState();
+            camera.yawRadians = yawRadians;
+            camera.pitchRadians = 0.12;
+            camera.orbitPivot = orbitPivot;
+            camera.perspective = true;
+            camera.preset = ViewportViewPreset::Custom;
+            camera.hasOrientation = false;
+            transform.setCameraState(camera);
+            return gridRenderer.render(transform,
+                                       blenderReferenceViewportSize,
+                                       1.0,
+                                       {},
+                                       1.0,
+                                       blenderGridAppearance);
+        };
+        constexpr qreal halfPi = 1.57079632679489661923;
+        const QImage nearEdgeOnRedAxisBefore =
+            renderCameraRelativeAxis(halfPi - 0.003,
+                                    {8000.0, 0.0, 0.0});
+        const QImage nearEdgeOnRedAxisAfter =
+            renderCameraRelativeAxis(halfPi + 0.003,
+                                    {8000.0, 0.0, 0.0});
+        saveGridCapture(QStringLiteral("axis-camera-relative-before"),
+                        nearEdgeOnRedAxisBefore);
+        saveGridCapture(QStringLiteral("axis-camera-relative-after"),
+                        nearEdgeOnRedAxisAfter);
+        passed &= check(redAxisPixels(nearEdgeOnRedAxisBefore) > 2 &&
+                            redAxisPixels(nearEdgeOnRedAxisAfter) > 2,
+                        "native GPU X axis must stay visible through small perspective camera movements far from world origin");
+
+        const QImage redAxisEdgeOn =
+            renderCameraRelativeAxis(halfPi, {});
+        const QImage greenAxisEdgeOn =
+            renderCameraRelativeAxis(0.0, {});
+        saveGridCapture(QStringLiteral("axis-red-edge-on"), redAxisEdgeOn);
+        saveGridCapture(QStringLiteral("axis-green-edge-on"), greenAxisEdgeOn);
+        qInfo() << "Native edge-on axis pixels:"
+                << redAxisPixels(redAxisEdgeOn)
+                << greenAxisPixels(redAxisEdgeOn)
+                << redAxisPixels(greenAxisEdgeOn)
+                << greenAxisPixels(greenAxisEdgeOn);
+        passed &= check(redAxisPixels(redAxisEdgeOn) > 2 &&
+                            greenAxisPixels(redAxisEdgeOn) > 2 &&
+                            redAxisPixels(greenAxisEdgeOn) > 2 &&
+                            greenAxisPixels(greenAxisEdgeOn) > 2,
+                        "native GPU red and green axes must remain visible when either axis points nearly into the perspective camera");
+
+        for (int yawStep = 0; yawStep < 8; ++yawStep) {
+            ViewportTransform transform;
+            transform.setCameraPreferences(blenderCameraPreferences);
+            ViewportCameraState camera = transform.cameraState();
+            camera.yawRadians = yawStep * halfPi / 2.0;
+            camera.pitchRadians = 0.55;
+            camera.orbitPivot = {4.0, 4.0, 0.0};
+            camera.zoom = 0.05;
+            camera.perspective = true;
+            camera.preset = ViewportViewPreset::Custom;
+            camera.hasOrientation = false;
+            transform.setCameraState(camera);
+            const QImage image = gridRenderer.render(transform,
+                                                     blenderReferenceViewportSize,
+                                                     1.0,
+                                                     {},
+                                                     1.0,
+                                                     blenderGridAppearance);
+            passed &= check(redAxisPixels(image) > 50 &&
+                                greenAxisPixels(image) > 50,
+                            "native GPU axes must survive orbit at 5% perspective zoom");
+        }
+
         ViewportTransform zoomInTransform;
         ViewportCameraState zoomInState = zoomInTransform.cameraState();
         zoomInState.zoom = 2.0;

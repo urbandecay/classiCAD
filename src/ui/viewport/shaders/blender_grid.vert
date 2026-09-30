@@ -12,6 +12,8 @@
 
 uniform mat4 uViewProjection;
 uniform vec3 uGridOrigin;
+uniform vec3 uCameraPosition;
+uniform float uFarClipDistance;
 uniform vec3 uAxisU;
 uniform vec3 uAxisV;
 uniform int uAxisVisibleX;
@@ -156,10 +158,20 @@ void main()
     vFixedCoordinate = uMode == 0 ? position[1 - line.axis] : 0.0;
     vLineAxis = line.axis;
     vRenderMode = uMode;
+    vec3 axisDirection = globalAxisDirection(line.axis);
+    // Blender centers each finite axis segment on the camera's coordinate
+    // along it, so panning/turning cannot leave the rendered segment behind.
+    float axisCenter = dot(uCameraPosition - uGridOrigin, axisDirection);
+    // Blender clamps each camera-relative axis endpoint to the view's clip
+    // rectangle before projection. At distant zoom levels the procedural
+    // segment can otherwise extend far beyond the far plane.
+    float axisDistance = clamp(stepSize * line.P.x,
+                               -uFarClipDistance,
+                               uFarClipDistance);
     vWorldPosition = uMode == 0
                          ? worldPosition(position)
-                         : uGridOrigin + globalAxisDirection(line.axis) *
-                                               (stepSize * line.P.x);
+                         : uGridOrigin + axisDirection *
+                                               (axisCenter + axisDistance);
     if (uMode != 0) {
         vAlpha = globalAxisVisible(line.axis) ? 1.0 : 0.0;
         vEmphasis = 1.0;
@@ -179,10 +191,17 @@ void main()
                                              pairedStep)
                             : vec2(0.0);
     vec2 pairedPosition = pairedOffset + pairedStep * pairedLine.P;
+    vec3 pairedAxisDirection = globalAxisDirection(pairedLine.axis);
+    float pairedAxisCenter = dot(uCameraPosition - uGridOrigin,
+                                 pairedAxisDirection);
+    float pairedAxisDistance = clamp(pairedStep * pairedLine.P.x,
+                                     -uFarClipDistance,
+                                     uFarClipDistance);
     vec3 pairedWorldPosition = uMode == 0
                                    ? worldPosition(pairedPosition)
-                                   : uGridOrigin + globalAxisDirection(pairedLine.axis) *
-                                                         (pairedStep * pairedLine.P.x);
+                                   : uGridOrigin + pairedAxisDirection *
+                                                         (pairedAxisCenter +
+                                                          pairedAxisDistance);
     vec4 thisClip = uViewProjection * vec4(vWorldPosition, 1.0);
     if (uPerspective != 0) {
         // Blender progressively biases its four perspective grid iterations

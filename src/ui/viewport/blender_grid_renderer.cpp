@@ -843,10 +843,14 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
     for (int iteration = 0; iteration < iterationCount; ++iteration) {
         glDepthMask(iteration == 0 ? GL_TRUE : GL_FALSE);
         program_.setUniformValue("uIteration", iteration);
-        program_.setUniformValue("uMode", 0);
-        glDrawArrays(GL_LINES, 0, gridVertexCount);
+        // Blender draws the axes before the floor-grid lines. This lets the
+        // axis pass establish depth first; coincident grid fragments are then
+        // rejected instead of intermittently z-fighting the axes as the view
+        // moves.
         program_.setUniformValue("uMode", 1);
         glDrawArrays(GL_LINES, 0, 6);
+        program_.setUniformValue("uMode", 0);
+        glDrawArrays(GL_LINES, 0, gridVertexCount);
     }
     glDepthMask(GL_TRUE);
     glDisable(GL_DEPTH_TEST);

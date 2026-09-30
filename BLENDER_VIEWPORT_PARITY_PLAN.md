@@ -263,11 +263,12 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   across camera moves and applies per-shape color and width. Bézier/NURBS
   control polygon guides use the same pass with a dashed pattern.
 - Main curve/shape previews for drawing tools, tangent results, mirror previews,
-  and duplicate previews now use a separate cached OpenGL stroke renderer over
-  the grid. Qt still paints cursor/snap markers, construction guides, labels,
-  pictures, dimensions, erase overlays, and noncontinuous layer line styles.
-  Unsupported GL systems
-  use the established Qt rendering path. The native scene stroke path uses
+  duplicate previews, and the geometric rotate/scale guides now use a separate
+  cached OpenGL stroke renderer over the grid. Picture placement and duplicated
+  picture previews use cached OpenGL textures with an OpenGL frame outline.
+  Qt still paints cursor/snap markers, angle/status labels, control handles,
+  dimensions, erase overlays, and committed picture images. Unsupported GL
+  systems use the established Qt rendering path. The native scene stroke path uses
   cached fixed NURBS tessellation rather than the painter's adaptive display
   setting. Degree-one spans now emit only their exact endpoints; higher-degree
   spans use 128 samples (with an 8192-sample budget). A regression checks
@@ -276,11 +277,12 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   tessellation quality in the model, but is not a substitute for a direct
   hardware-GPU visual/performance check.
 - Desktop interaction checks cover wheel zoom, pan/orbit, an in-progress GPU
-  rectangle preview and its committed stroke,
-  a Bézier with visible control guides, and a point marker. Full build, all
+  rectangle preview and its committed stroke, a correctly oriented four-color
+  GPU picture preview, a Bézier with visible control guides, and a point
+  marker. Full build, all
   four CTest suites, XCB/Mesa interaction check, offscreen startup/fallback,
   and `git diff --check` passed. Stage 7 remains in progress until
-  remaining scene items (including textured picture rendering and more layer
+  remaining scene items (including committed picture rendering and more layer
   line styles in the GPU stroke pass) are addressed. Close-zoom NURBS chord
   error is now covered by a geometry regression; live hardware-GPU visual
   quality and performance remain unverified.

@@ -88,6 +88,15 @@ void fillViewportBackground(QPainter &painter, const QRect &bounds)
     painter.fillRect(bounds, gradient);
 }
 
+Shape pictureFrameOutline(const Shape &picture)
+{
+    Shape frame = picture;
+    frame.geometryType = GeometryType::Polygon;
+    frame.pictureImage = QImage();
+    frame.pictureImageData.clear();
+    return frame;
+}
+
 } // namespace
 
 struct TransientPreviewStroke {
@@ -96,6 +105,19 @@ struct TransientPreviewStroke {
     float width = 1.5f;
     bool controlGuide = false;
     float pointDiameter = 0.0f;
+    bool dashed = false;
+    bool pointOutline = false;
+};
+
+struct TransientPreviewPicture {
+    Shape image;
+    Shape frame;
+    int duplicateIndex = -1;
+    int sceneShapeIndex = -1;
+    ObjectId mirrorObjectId = ObjectId::invalid();
+    bool activeToolPreview = false;
+    float opacity = 0.78f;
+    QColor frameColor = QColor(QStringLiteral("#e6b85c"));
 };
 
 enum class DragAxisLock {
@@ -2242,11 +2264,16 @@ protected:
                                      : painter;
         QVector<ViewportSceneStroke> gpuStrokes;
         QVector<TransientPreviewStroke> gpuPreviewGeometry;
+        QVector<TransientPreviewPicture> gpuPreviewPictures;
         gpuPreviewGeometry.reserve(duplicatePreviewShapes_.size() +
-                                   mirrorShapeIndices_.size() + 8);
+                                   mirrorShapeIndices_.size() + 16);
+        gpuPreviewPictures.reserve(shapes_.size() +
+                                   duplicatePreviewShapes_.size() +
+                                   mirrorShapeIndices_.size() + 1);
         QVector<bool> gpuDuplicatePreviewHandled(duplicatePreviewShapes_.size(), false);
         QVector<ObjectId> gpuMirrorPreviewHandled;
         bool gpuActiveToolPreview = false;
+        bool gpuActivePicturePreviewRendered = false;
         int visibleShapeIndex = 0;
 
         for (int index = 0; index < shapes_.size(); ++index) {
@@ -2307,6 +2334,26 @@ protected:
                                       validateNurbsCurve(visibleShape.nurbs)) &&
                                      (geometryType != GeometryType::PolyCurve ||
                                       !visibleShape.components.isEmpty());
+            if (sceneRenderer != nullptr && previewRenderer != nullptr &&
+                geometryType == GeometryType::Picture &&
+                (scalePreview || rotatePreview) &&
+                !visibleShape.pictureImage.isNull() &&
+                pictureFrameCorners(visibleShape).size() == 4) {
+                gpuPreviewPictures.append(
+                    {visibleShape,
+                     pictureFrameOutline(visibleShape),
+                     -1,
+                     index,
+                     ObjectId::invalid(),
+                     false,
+                     1.0f,
+                     QColor(QStringLiteral("#5da9e9"))});
+                gpuStrokes.append({&gpuPreviewPictures.back().frame,
+                                   QColor(QStringLiteral("#5da9e9")),
+                                   1.5f,
+                                   false});
+                continue;
+            }
             if (nativeCurve) {
                 const bool highlighted = selected || scalePreview || rotatePreview;
                 const qreal storedWidth = layerLineWeightMm > 0.0
@@ -2378,7 +2425,9 @@ protected:
                                      const QColor &color,
                                      float width,
                                      bool controlGuide,
-                                     float pointDiameter) {
+                                     float pointDiameter,
+                                     bool dashed,
+                                     bool pointOutline) {
                     const GeometryType type = shape.geometryType;
                     const bool supportedType =
                         type == GeometryType::Point || type == GeometryType::Line ||
@@ -2399,14 +2448,71 @@ protected:
                         return false;
                     }
                     gpuPreviewGeometry.append(
-                        {shape, color, width, controlGuide, pointDiameter});
+                        {shape, color, width, controlGuide, pointDiameter,
+                         dashed, pointOutline});
                     return true;
+                };
+
+            const auto addPicturePreview =
+                [&gpuPreviewPictures](const Shape &picture,
+                                      int duplicateIndex,
+                                      bool activeToolPreview,
+                                      ObjectId mirrorObjectId) {
+                    if (picture.geometryType != GeometryType::Picture ||
+                        picture.pictureImage.isNull() ||
+                        pictureFrameCorners(picture).size() != 4) {
+                        return false;
+                    }
+                    gpuPreviewPictures.append(
+                        {picture,
+                         pictureFrameOutline(picture),
+                         duplicateIndex,
+                         -1,
+                         mirrorObjectId,
+                         activeToolPreview,
+                         0.78f,
+                         QColor(QStringLiteral("#e6b85c"))});
+                    return true;
+                };
+
+            const auto addPreviewLine =
+                [&](const QPointF &first,
+                    const QPointF &second,
+                    const QColor &color,
+                    float width) {
+                    Shape line;
+                    line.geometryType = GeometryType::Line;
+                    line.points = {first, second};
+                    line.workPlane = viewportTransform_.workPlane();
+                    line.workPlaneOffset = viewportTransform_.workPlaneOffset();
+                    return addPreviewShape(line, color, width, false, 0.0f,
+                                           true, false);
+                };
+
+            const auto addPreviewPoint =
+                [&](const QPointF &point,
+                    const QColor &color,
+                    float diameter,
+                    bool outline) {
+                    Shape marker;
+                    marker.geometryType = GeometryType::Point;
+                    marker.points = {point};
+                    marker.workPlane = viewportTransform_.workPlane();
+                    marker.workPlaneOffset = viewportTransform_.workPlaneOffset();
+                    return addPreviewShape(marker, color, 1.5f, false, diameter,
+                                           false, outline);
                 };
 
             const QColor previewColor(QStringLiteral("#e6b85c"));
             for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
-                gpuDuplicatePreviewHandled[index] = addPreviewShape(
-                    duplicatePreviewShapes_[index], previewColor, 1.5f, false, 0.0f);
+                const Shape &preview = duplicatePreviewShapes_[index];
+                if (preview.geometryType == GeometryType::Picture) {
+                    addPicturePreview(preview, index, false,
+                                      ObjectId::invalid());
+                } else {
+                    gpuDuplicatePreviewHandled[index] = addPreviewShape(
+                        preview, previewColor, 1.5f, false, 0.0f, false, false);
+                }
             }
 
             if (activeTool_ == Tool::Mirror && !pendingPoints_.isEmpty() &&
@@ -2422,11 +2528,15 @@ protected:
                                               pendingPoints_.first(),
                                               cursorWorld_,
                                               &mirroredShape)) {
-                        if (addPreviewShape(mirroredShape,
-                                            previewColor,
-                                            1.5f,
-                                            false,
-                                            0.0f)) {
+                        if (mirroredShape.geometryType == GeometryType::Picture) {
+                            addPicturePreview(mirroredShape, -1, false, objectId);
+                        } else if (addPreviewShape(mirroredShape,
+                                                   previewColor,
+                                                   1.5f,
+                                                   false,
+                                                   0.0f,
+                                                   false,
+                                                   false)) {
                             gpuMirrorPreviewHandled.append(objectId);
                         }
                     }
@@ -2436,7 +2546,8 @@ protected:
             if (controllerPreviewShapeVisible_ &&
                 !isDimensionGeometryType(controllerPreviewShape_.geometryType)) {
                 gpuActiveToolPreview |= addPreviewShape(
-                    controllerPreviewShape_, previewColor, 1.5f, false, 0.0f);
+                    controllerPreviewShape_, previewColor, 1.5f, false, 0.0f,
+                    false, false);
             }
 
             if (activeTool_ == Tool::Point && cursorValid_) {
@@ -2447,7 +2558,8 @@ protected:
                                   arcPreviewSweepAngle_,
                                   &pointPreview)) {
                     gpuActiveToolPreview |= addPreviewShape(
-                        pointPreview, previewColor, 1.5f, false, 9.0f);
+                        pointPreview, previewColor, 1.5f, false, 9.0f,
+                        false, false);
                 }
             } else if (activeTool_ != Tool::Picture &&
                        activeTool_ != Tool::Mirror &&
@@ -2467,8 +2579,56 @@ protected:
                         previewColor,
                         2.0f,
                         false,
-                        toolPreview.geometryType == GeometryType::Point ? 9.0f : 0.0f);
+                        toolPreview.geometryType == GeometryType::Point ? 9.0f : 0.0f,
+                        false,
+                        false);
                 }
+            }
+
+            if (activeTool_ == Tool::Picture && pendingPoints_.size() == 1 &&
+                cursorValid_ && !pendingPictureImage_.isNull()) {
+                const Shape picture = pictureShapeForCorner(cursorWorld_);
+                addPicturePreview(picture, -1, true, ObjectId::invalid());
+            }
+
+            if (activeTool_ == Tool::Rotate && cursorValid_) {
+                const QColor rotateColor(QStringLiteral("#e6b85c"));
+                const QColor guideColor(QStringLiteral("#8aa7c7"));
+                const QColor pointColor(QStringLiteral("#f0a45a"));
+                if (rotateStep_ == 0) {
+                    gpuActiveToolPreview |= addPreviewPoint(
+                        cursorWorld_, pointColor, 12.0f, true);
+                } else {
+                    gpuActiveToolPreview |= addPreviewPoint(
+                        rotateBaseWorld_, pointColor, 12.0f, true);
+                    if (rotateStep_ >= 1) {
+                        gpuActiveToolPreview |= addPreviewLine(
+                            rotateBaseWorld_, cursorWorld_, guideColor, 1.0f);
+                    }
+                    if (rotateStep_ >= 2) {
+                        gpuActiveToolPreview |= addPreviewLine(
+                            rotateBaseWorld_, rotateReferenceWorld_, rotateColor,
+                            1.0f);
+                    }
+                }
+                gpuActiveToolPreview |= addPreviewPoint(
+                    cursorWorld_, pointColor, 8.0f, false);
+            }
+
+            if (activeTool_ == Tool::Scale && scaleStep_ == 2 && cursorValid_) {
+                QPointF guideEnd = cursorWorld_;
+                if (scaleMode_ == ScaleMode::OneD && !scaleUsingTypedFactor_) {
+                    const QPointF offset = cursorWorld_ - scaleBaseWorld_;
+                    guideEnd = scaleBaseWorld_ +
+                               scaleAxisDirection_ *
+                                   QPointF::dotProduct(offset,
+                                                       scaleAxisDirection_);
+                }
+                const QColor guideColor(QStringLiteral("#8aa7c7"));
+                gpuActiveToolPreview |= addPreviewLine(
+                    scaleBaseWorld_, guideEnd, guideColor, 1.0f);
+                gpuActiveToolPreview |= addPreviewPoint(
+                    scaleBaseWorld_, previewColor, 8.0f, true);
             }
         }
 
@@ -2479,12 +2639,28 @@ protected:
                                       preview.color,
                                       preview.width,
                                       preview.controlGuide,
-                                      preview.pointDiameter});
+                                      preview.pointDiameter,
+                                      preview.dashed,
+                                      preview.pointOutline});
         }
+        gpuPreviewStrokes.reserve(gpuPreviewStrokes.size() +
+                                  gpuPreviewPictures.size());
 
         bool gpuPreviewRendered = false;
+        QVector<const Shape *> failedScenePicturePreviews;
         if (nativeRenderer != nullptr) {
             painter.beginNativePainting();
+            if (sceneRenderer != nullptr) {
+                for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
+                    if (preview.sceneShapeIndex >= 0 &&
+                        !sceneRenderer->drawPicture(preview.image,
+                                                    viewportTransform_, size(),
+                                                    devicePixelRatioF(),
+                                                    preview.opacity)) {
+                        failedScenePicturePreviews.append(&preview.image);
+                    }
+                }
+            }
             const bool sceneDrawn = sceneRenderer == nullptr ||
                                     sceneRenderer->draw(gpuStrokes,
                                                         viewportTransform_, size(),
@@ -2492,6 +2668,35 @@ protected:
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 viewportTransform_, size(), devicePixelRatioF(),
                 visibleShapes, baseGridStep, gridAppearance_);
+            if (previewRenderer != nullptr) {
+                for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
+                    if (preview.sceneShapeIndex >= 0) {
+                        continue;
+                    }
+                    if (!previewRenderer->drawPicture(preview.image,
+                                                      viewportTransform_, size(),
+                                                      devicePixelRatioF(),
+                                                      preview.opacity)) {
+                        continue;
+                    }
+                    if (preview.duplicateIndex >= 0 &&
+                        preview.duplicateIndex < gpuDuplicatePreviewHandled.size()) {
+                        gpuDuplicatePreviewHandled[preview.duplicateIndex] = true;
+                    }
+                    if (preview.mirrorObjectId.isValid()) {
+                        gpuMirrorPreviewHandled.append(preview.mirrorObjectId);
+                    }
+                    gpuActivePicturePreviewRendered |= preview.activeToolPreview;
+                    gpuPreviewStrokes.append({&preview.frame,
+                                              preview.frameColor,
+                                              preview.sceneShapeIndex >= 0 ? 1.5f
+                                                                           : 1.25f,
+                                              false,
+                                              0.0f,
+                                              preview.sceneShapeIndex < 0,
+                                              false});
+                }
+            }
             gpuPreviewRendered = previewRenderer != nullptr &&
                                  previewRenderer->draw(gpuPreviewStrokes,
                                                        viewportTransform_, size(),
@@ -2509,6 +2714,11 @@ protected:
             if (!gridDrawn) {
                 drawGrid(painter);
                 drawOrigin(painter);
+            }
+            for (const Shape *failedPicture : failedScenePicturePreviews) {
+                if (failedPicture != nullptr) {
+                    drawShape(painter, *failedPicture, false, true);
+                }
             }
         } else {
             rasterScenePainter.end();
@@ -2619,7 +2829,8 @@ protected:
         if (activeTool_ == Tool::Picture && pendingPoints_.size() == 1 &&
             cursorValid_ && !pendingPictureImage_.isNull()) {
             const Shape picturePreview = pictureShapeForCorner(cursorWorld_);
-            if (picturePreview.points.size() == 4) {
+            if (picturePreview.points.size() == 4 &&
+                (!gpuActivePicturePreviewRendered || !gpuPreviewRendered)) {
                 drawShape(painter, picturePreview, true, false, false);
             }
         } else if (activeTool_ == Tool::TangentFromCurve) {
@@ -2669,9 +2880,11 @@ protected:
             drawPointToolPreview(painter,
                                  !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::Rotate) {
-            drawRotateToolPreview(painter);
+            drawRotateToolPreview(painter,
+                                  !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::Scale && scaleStep_ == 2) {
-            drawScaleToolGuide(painter);
+            drawScaleToolGuide(painter,
+                               !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (isDimensionTool(activeTool_)) {
             if (controllerPreviewShapeVisible_) {
                 drawShape(painter, controllerPreviewShape_, true);
@@ -10012,7 +10225,7 @@ private:
                                           drawPoint);
     }
 
-    void drawRotateToolPreview(QPainter &painter)
+    void drawRotateToolPreview(QPainter &painter, bool drawGeometry = true)
     {
         viewportOverlay_.drawRotatePreview(painter,
                                            cursorWorld_,
@@ -10022,12 +10235,13 @@ private:
                                            rotateReferenceWorld_,
                                            rotatePreviewAngle_,
                                            currentSnap_,
-                                           size());
+                                           size(),
+                                           drawGeometry);
     }
 
-    void drawScaleToolGuide(QPainter &painter)
+    void drawScaleToolGuide(QPainter &painter, bool drawGuide = true)
     {
-        if (!cursorValid_ || scaleStep_ != 2) {
+        if (!drawGuide || !cursorValid_ || scaleStep_ != 2) {
             return;
         }
 

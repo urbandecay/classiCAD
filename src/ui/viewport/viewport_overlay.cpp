@@ -783,7 +783,8 @@ void ViewportOverlay::drawRotatePreview(QPainter &painter,
                                         const QPointF &rotateReferenceWorld,
                                         qreal rotatePreviewAngle,
                                         const SnapResult &currentSnap,
-                                        const QSize &viewportSize) const
+                                        const QSize &viewportSize,
+                                        bool drawGeometry) const
 {
     if (!cursorValid) {
         return;
@@ -794,39 +795,42 @@ void ViewportOverlay::drawRotatePreview(QPainter &painter,
     const QColor pointColor(QStringLiteral("#f0a45a"));
     const QPointF cursorScreen = transform_.worldToScreen(cursorWorld, viewportSize);
 
-    painter.setBrush(Qt::NoBrush);
-    if (rotateStep == 0) {
-        painter.setPen(QPen(pointColor, 1.5));
-        painter.drawEllipse(cursorScreen, 6.0, 6.0);
-    } else {
-        const QPointF baseScreen = transform_.worldToScreen(rotateBaseWorld, viewportSize);
-        painter.setPen(QPen(pointColor, 1.5));
-        painter.drawEllipse(baseScreen, 6.0, 6.0);
-        if (rotateStep >= 1) {
-            painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
-            painter.drawLine(baseScreen, cursorScreen);
+    if (drawGeometry) {
+        painter.setBrush(Qt::NoBrush);
+        if (rotateStep == 0) {
+            painter.setPen(QPen(pointColor, 1.5));
+            painter.drawEllipse(cursorScreen, 6.0, 6.0);
+        } else {
+            const QPointF baseScreen = transform_.worldToScreen(rotateBaseWorld, viewportSize);
+            painter.setPen(QPen(pointColor, 1.5));
+            painter.drawEllipse(baseScreen, 6.0, 6.0);
+            if (rotateStep >= 1) {
+                painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
+                painter.drawLine(baseScreen, cursorScreen);
+            }
+            if (rotateStep >= 2) {
+                const QPointF referenceScreen =
+                    transform_.worldToScreen(rotateReferenceWorld, viewportSize);
+                painter.setPen(QPen(rotateColor, 1.0, Qt::DashLine));
+                painter.drawLine(baseScreen, referenceScreen);
+            }
         }
-        if (rotateStep >= 2) {
-            const QPointF referenceScreen =
-                transform_.worldToScreen(rotateReferenceWorld, viewportSize);
-            painter.setPen(QPen(rotateColor, 1.0, Qt::DashLine));
-            painter.drawLine(baseScreen, referenceScreen);
-            painter.setPen(QColor(QStringLiteral("#d0d0d0")));
-            painter.setFont(QFont(QStringLiteral("Sans"), 9));
-            const QString angleText = QStringLiteral("%1°")
-                                           .arg(rotatePreviewAngle *
-                                                    180.0 /
-                                                    3.14159265358979323846,
-                                                0,
-                                                'f',
-                                                1);
-            painter.drawText(cursorScreen + QPointF(12.0, -10.0), angleText);
-        }
+        painter.setPen(QPen(pointColor, 1.5));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(cursorScreen, 4.0, 4.0);
     }
-
-    painter.setPen(QPen(pointColor, 1.5));
-    painter.setBrush(pointColor);
-    painter.drawEllipse(cursorScreen, 4.0, 4.0);
+    if (rotateStep >= 2) {
+        painter.setPen(QColor(QStringLiteral("#d0d0d0")));
+        painter.setFont(QFont(QStringLiteral("Sans"), 9));
+        const QString angleText = QStringLiteral("%1°")
+                                       .arg(rotatePreviewAngle *
+                                                180.0 /
+                                                3.14159265358979323846,
+                                            0,
+                                            'f',
+                                            1);
+        painter.drawText(cursorScreen + QPointF(12.0, -10.0), angleText);
+    }
     if (currentSnap.isValid()) {
         drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
     }

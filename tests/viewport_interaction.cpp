@@ -7,6 +7,7 @@
 #include <QEventLoop>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
 
@@ -376,6 +377,91 @@ int main(int argc, char **argv)
     passed &= check(afterRectangle != beforeRectangle &&
                         orangePixels(afterRectangle) > orangePixels(beforeRectangle) + 25,
                     "committed rectangle stroke must appear after viewport rendering");
+
+    QTemporaryDir pictureDirectory;
+    QImage pictureImage(64, 64, QImage::Format_ARGB32);
+    pictureImage.fill(Qt::black);
+    {
+        QPainter picturePainter(&pictureImage);
+        picturePainter.fillRect(QRect(0, 0, 32, 32), Qt::red);
+        picturePainter.fillRect(QRect(32, 0, 32, 32), Qt::green);
+        picturePainter.fillRect(QRect(0, 32, 32, 32), Qt::blue);
+        picturePainter.fillRect(QRect(32, 32, 32, 32), Qt::yellow);
+    }
+    const QString picturePath = pictureDirectory.filePath(
+        QStringLiteral("viewport-preview-quadrants.png"));
+    passed &= check(pictureDirectory.isValid() && pictureImage.save(picturePath),
+                    "test picture preview image must be created");
+    viewport->setViewPreset(ViewportViewPreset::Top);
+    viewport->setWorkPlane(WorkPlane::XY);
+    viewport->setOsnapEnabled(false);
+    waitForViewportTransition();
+    QString pictureError;
+    passed &= check(viewport->beginPicturePlacement(picturePath, &pictureError),
+                    "picture placement must start for the OpenGL preview test");
+    const QPointF pictureFirstCorner(150.0, 140.0);
+    const QPointF pictureCursorCorner(390.0, 380.0);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, pictureFirstCorner,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, pictureFirstCorner,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseMove, pictureCursorCorner,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+    const QImage picturePreview = captureViewport(viewport.get());
+    struct ColorRegionStats {
+        int count = 0;
+        qint64 xSum = 0;
+        qint64 ySum = 0;
+        QPointF center() const
+        {
+            return count == 0 ? QPointF()
+                              : QPointF(static_cast<qreal>(xSum) / count,
+                                        static_cast<qreal>(ySum) / count);
+        }
+    };
+    ColorRegionStats redRegion;
+    ColorRegionStats greenRegion;
+    ColorRegionStats blueRegion;
+    ColorRegionStats yellowRegion;
+    for (int y = 0; y < picturePreview.height(); ++y) {
+        for (int x = 0; x < picturePreview.width(); ++x) {
+            const QColor color = picturePreview.pixelColor(x, y);
+            ColorRegionStats *region = nullptr;
+            if (color.red() > color.green() + 65 &&
+                color.red() > color.blue() + 45) {
+                region = &redRegion;
+            } else if (color.green() > color.red() + 45 &&
+                       color.green() > color.blue() + 25) {
+                region = &greenRegion;
+            } else if (color.blue() > color.red() + 55 &&
+                       color.blue() > color.green() + 30) {
+                region = &blueRegion;
+            } else if (color.red() > color.blue() + 55 &&
+                       color.green() > color.blue() + 55 &&
+                       color.red() > 100 && color.green() > 100) {
+                region = &yellowRegion;
+            }
+            if (region != nullptr) {
+                ++region->count;
+                region->xSum += x;
+                region->ySum += y;
+            }
+        }
+    }
+    const QPointF redCenter = redRegion.center();
+    const QPointF greenCenter = greenRegion.center();
+    const QPointF blueCenter = blueRegion.center();
+    const QPointF yellowCenter = yellowRegion.center();
+    passed &= check(redRegion.count > 100 && greenRegion.count > 100 &&
+                        blueRegion.count > 100 && yellowRegion.count > 100 &&
+                        redCenter.x() < greenCenter.x() &&
+                        blueCenter.x() < yellowCenter.x() &&
+                        redCenter.y() < blueCenter.y() &&
+                        greenCenter.y() < yellowCenter.y(),
+                    "picture placement preview must render its image with the correct texture orientation");
+    viewport->setTool(ToolId::Select);
+    application.processEvents();
 
     const QImage beforeBezier = captureViewport(viewport.get());
     viewport->setTool(ToolId::Bezier);

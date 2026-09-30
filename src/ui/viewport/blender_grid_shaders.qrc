@@ -11,5 +11,7 @@
         <file alias="scene_stroke.frag">shaders/scene_stroke.frag</file>
         <file alias="scene_point.vert">shaders/scene_point.vert</file>
         <file alias="scene_point.frag">shaders/scene_point.frag</file>
+        <file alias="scene_picture.vert">shaders/scene_picture.vert</file>
+        <file alias="scene_picture.frag">shaders/scene_picture.frag</file>
     </qresource>
 </RCC>

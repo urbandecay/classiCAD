@@ -113,7 +113,8 @@ public:
                            const QPointF &rotateReferenceWorld,
                            qreal rotatePreviewAngle,
                            const SnapResult &currentSnap,
-                           const QSize &viewportSize) const;
+                           const QSize &viewportSize,
+                           bool drawGeometry = true) const;
     void drawEraseCandidatePreview(
         QPainter &painter,
         const QVector<EraseCurveSampleCache> &targetCurves,

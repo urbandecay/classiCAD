@@ -79,7 +79,7 @@ qreal blenderOrthographicGridPixelFade(qreal projectedStepPixels)
     if (!std::isfinite(projectedStepPixels)) {
         return projectedStepPixels > 0.0 ? 1.0 : 0.0;
     }
-    const qreal fraction = std::clamp((projectedStepPixels - 4.0) / 60.0,
+    const qreal fraction = std::clamp((projectedStepPixels - 0.25) / 3.75,
                                       0.0,
                                       1.0);
     return fraction * fraction * (3.0 - 2.0 * fraction);

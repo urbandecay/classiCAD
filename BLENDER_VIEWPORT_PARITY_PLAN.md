@@ -268,15 +268,15 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   `git diff --check`. The hardware run used an NVIDIA GeForce GTX 1050 Ti; its
   1,500-stroke scene averaged 16.57 ms/frame with display pacing enabled. New
   native captures are under `/tmp/classicad-projection-toggle-hardware-final`.
-- Appearance follow-up (2026-09-30): changed the viewport background to the
-  solid RGB 63 sampled from Blender's matched Top view, for both the GPU and
-  CPU fallback paths. Orthographic grid lines now fade by projected spacing
-  over 4–64 screen pixels, following Blender 5.2's `overlay_grid_vert.glsl`
-  thresholds. Tuned the default green Y-axis palette against the prior matched
-  pixel sample and added migration for the exact previously shipped palette;
-  custom saved colors are still preserved. The application target builds
-  successfully. A post-change screenshot comparison is still needed to confirm
-  the rendered pixels, so appearance parity remains under review.
+- Appearance follow-up (2026-09-30): read the user's saved Blender 5.2.2
+  preferences. Their Default theme has a radial background (`48`–`61` gray),
+  grid RGB 84 with alpha 0.502 for minor lines and 1.0 for major lines, axis
+  colors X `#ff3352`, Y `#8bdc00`, Z `#2890ff`, and grid-axis brightness 0.46.
+  Restored the matching radial GPU/CPU backgrounds and close fine-grid
+  visibility; reverted the temporary Y-axis adjustment made against a
+  different screenshot. The exact transient palette now migrates back to the
+  prior default, while custom saved colors remain preserved. A post-change
+  viewport capture is still needed to confirm rendered pixels.
 
 ## Stage 6 progress
 

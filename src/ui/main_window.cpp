@@ -2620,7 +2620,7 @@ private:
                    (gridAppearance.gridColor == QColor(QStringLiteral("#80545454")) &&
                     gridAppearance.emphasisColor == QColor(QStringLiteral("#ff545454")) &&
                     gridAppearance.axisXColor == QColor(QStringLiteral("#ebd1233e")) &&
-                    gridAppearance.axisYColor == QColor(QStringLiteral("#eb6db017")) &&
+                    gridAppearance.axisYColor == QColor(QStringLiteral("#eb73be0e")) &&
                     gridAppearance.axisZColor == QColor(QStringLiteral("#eb1a73d1")))) {
             // Replace known shipped palettes only when every stored color
             // still matches; custom user colors survive this migration.

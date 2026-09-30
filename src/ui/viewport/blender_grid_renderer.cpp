@@ -435,10 +435,17 @@ bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
     {
         QOpenGLVertexArrayObject::Binder vaoBinder(&vertexArray_);
         backgroundProgram_.setUniformValue(
-            "uBackgroundColor",
-            QVector3D(kBlenderViewportBackgroundGray / 255.0f,
-                      kBlenderViewportBackgroundGray / 255.0f,
-                      kBlenderViewportBackgroundGray / 255.0f));
+            "uViewportSize",
+            QVector2D(static_cast<float>(viewportSize.width() * dpr),
+                      static_cast<float>(viewportSize.height() * dpr)));
+        backgroundProgram_.setUniformValue(
+            "uHighGradient", QVector3D(61.0f / 255.0f,
+                                       61.0f / 255.0f,
+                                       61.0f / 255.0f));
+        backgroundProgram_.setUniformValue(
+            "uGradient", QVector3D(48.0f / 255.0f,
+                                   48.0f / 255.0f,
+                                   48.0f / 255.0f));
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     backgroundProgram_.release();

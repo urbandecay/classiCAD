@@ -126,9 +126,90 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 - Validation passed: `cmake --build build -j4`, all four CTest suites,
   `git diff --check`, and `QT_QPA_PLATFORM=xcb LIBGL_ALWAYS_SOFTWARE=1
   ./build/classicad_viewport_interaction_test` with both GPU-render checks.
-- A side-by-side pixel/image comparison against Blender's fixed screenshot
-  matrix remains unverified. The GL test proves shader-backed rendering works,
-  not that its pixels are identical to Blender's in every camera state.
+- Added opt-in screenshot capture to the XCB test with
+  `CLASSICAD_VIEWPORT_CAPTURE_DIR`; it records the native widget's initial and
+  perspective frames plus GPU grid renders for six axis views, orthographic
+  isometric, perspective, close/far zoom, and pan.
+- The first screenshot comparison was not apples-to-apples: the classiCAD
+  renderer capture was 640x480 while Blender's captured viewport was 591x511.
+  The saved classiCAD preferences also had clip start/end 0.1/100000, while the
+  current Blender 5.2.2 View3D values are 0.01/1000. Do not treat the earlier
+  pixel-pitch estimate as a controlled parity result.
+- Re-ran the capture with both viewport images at 591x511 and explicit,
+  in-memory comparison preferences in the classiCAD test: 50 mm lens,
+  clip start/end 0.01/1000, 8x viewport AA, and 1-unit grid spacing. The test
+  view used classiCAD's default camera state. The Blender capture script
+  explicitly sets `region.view_distance=60`, zero view location, and the same
+  top/isometric orientations for its captures; the earlier caveat comparing
+  Blender's saved startup distance (~18) with classiCAD's 60 was incorrect for
+  these screenshots because the script overwrites that startup state. Blender
+  preferences were not changed. The saved classiCAD clip preferences were
+  aligned to 0.01/1000.
+- The matched captures are in `/tmp/classicad-blender-matched-captures` and
+  `/tmp/classicad-blender-user-reference-captures`. The viewport dimensions and
+  listed camera/grid preferences match. Inspection of Blender's saved 5.2
+  theme found its radial 3D View background colors (`gradient` 48/255,
+  `high_gradient` 61/255) and grid colors (RGB 84/255, alpha 0.502 for minor
+  and 1.0 for major lines).
+- Replaced classiCAD's flat viewport background with a full-screen OpenGL
+  radial-gradient pass using those theme colors; the non-GL fallback uses the
+  same gradient. Grid lines now use Blender's saved theme grays, and the
+  renderer composites overlapping LOD/iteration lines with alpha-over instead
+  of additively brightening coincident lines. Previously shipped gray defaults
+  are migrated only when the full stored palette is unchanged; custom colors
+  are preserved.
+- Rechecked the 591x511 Blender and native classiCAD captures at the scripted
+  pose. The perspective view uses the same nominal 50 mm lens, 60-unit camera
+  distance, zero target/pan, and 45-degree yaw / 35.264-degree pitch. The
+  orthographic views share the same orientation and nominal distance, but the
+  projection scales are not equivalent: Blender derives ortho scale from its
+  view matrix, while classiCAD uses its independent screen-space `zoom` (1.0).
+  In the top-view screenshots, the prominent grid interval measures about
+  68 px in Blender versus 100 px in classiCAD; the fine interval is about 7 px
+  versus 10 px. Added an opt-in native-widget recapture that applies a centered
+  smooth-wheel delta of -253 (zoom 1.0 to 0.6809) for top orthographic only,
+  then applies the inverse before taking the perspective screenshot. This is
+  a screenshot-test adjustment; the app's initial zoom/default is unchanged.
+  The new screenshots are in `/tmp/classicad-blender-controlled-captures`.
+- The framing-matched top capture now measures about 7 px for the fine grid
+  and 68 px for the prominent grid, matching Blender's intervals. Neutral
+  grayscale MAE in the central viewport crop fell from 5.23 to 3.80 intensity
+  levels. The perspective capture remains at zoom 1.0 / distance 60; its same
+  crop MAE is 2.82, with band MAEs of 2.80 near the top, 3.45 through the
+  center, and 2.34 near the bottom. This confirms the earlier top-view
+  discrepancy was mainly orthographic framing, while small rendering/color
+  differences remain.
+- Center-axis samples are close for red (Blender 200/42/63, classiCAD
+  198/37/62); green differs in its blue component (Blender 108/172/21,
+  classiCAD 106/170/5). The grid remains visible through the perspective
+  horizon fade in both captures, but the classiCAD neutral grid/background is
+  about 2-3 intensity levels darker across the sampled horizontal bands.
+  These are diagnostics, not a parity pass: green-axis hue, subtle grid/fade
+  contrast, and interaction feel still need follow-up.
+- Added regression checks for the Blender theme grid colors and the radial
+  background. The native XCB test uses Mesa software OpenGL; this confirms the
+  GL path but not hardware-GPU performance.
+- Latest appearance follow-up (2026-09-29): aligned the background shader with
+  Blender 5.2's [overlay background shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_background_frag.glsl)
+  (normalized radial distance, gamma-space interpolation, and 4x4 Bayer
+  dither); the Qt fallback now uses the same radial/gamma ramp. The Y-axis
+  palette was calibrated against the blended native screenshot, rather than
+  treating its source RGB as the final pixel color.
+- Fixed the native screenshot test's resize race: it now waits for the GL
+  surface to settle and asserts the top-view capture is exactly 591x511 before
+  comparing it with Blender. The background regression samples a neutral edge
+  patch instead of a single rounded viewport-corner pixel.
+- Re-measured the current matched captures over neutral grayscale pixels in
+  ROI x=35..554, y=100..454: mean absolute error is 4.53 levels in top
+  orthographic and 4.91 in isometric perspective. These supersede the earlier
+  3.80/2.82 measurements, which were from the prior appearance/capture run.
+  The mean Y-axis sample is now Blender (104.5, 166.3, 25.4) versus classiCAD
+  (104.6, 166.6, 25.6). Neutral radial-bin medians remain about 1-3 levels
+  darker in classiCAD, so exact background color-management parity remains
+  open; this is not a claim of pixel-identical viewport output.
+- Revalidation passed: full C++ build, all four CTest suites, and the XCB/Mesa
+  native OpenGL interaction/capture test. Hardware-GPU performance is still
+  untested.
 
 ## Stage 6 progress
 
@@ -160,9 +241,10 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   scaling the angle by a separately saved sensitivity. Trackball is wired to
   gizmo and mouse orbit drags;
   turntable remains the default. Core math and overlapping-depth regressions
-  pass, but live Blender gesture calibration is not validated yet. The
-  screenshot comparison in Stage 5 and native GPU composition in Stage 7
-  remain required before claiming parity.
+  pass, but live Blender gesture calibration is not validated yet. Stage 5 now
+  has controlled native-GPU screenshots; their remaining grid/axis differences
+  are recorded there. Stage 7 still needs remaining scene items and close-zoom
+  curve-quality validation before claiming full parity.
 - Validation passed: `cmake --build build -j2`, all four CTest suites,
   `git diff --check`, the XCB/Mesa software-OpenGL interaction test, and a
   five-second offscreen application startup. The offscreen platform cannot

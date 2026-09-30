@@ -2,6 +2,8 @@
     <qresource prefix="/classiCAD/shaders">
         <file alias="blender_grid.vert">shaders/blender_grid.vert</file>
         <file alias="blender_grid.frag">shaders/blender_grid.frag</file>
+        <file alias="viewport_background.vert">shaders/viewport_background.vert</file>
+        <file alias="viewport_background.frag">shaders/viewport_background.frag</file>
         <file alias="scene_depth.vert">shaders/scene_depth.vert</file>
         <file alias="scene_depth.frag">shaders/scene_depth.frag</file>
         <file alias="scene_stroke.vert">shaders/scene_stroke.vert</file>

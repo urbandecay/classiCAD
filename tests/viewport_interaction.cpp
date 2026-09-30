@@ -3,10 +3,14 @@
 #include "ui/viewport/viewport_gpu_surface.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QEventLoop>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QTimer>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 
@@ -37,12 +41,77 @@ void sendMouse(ViewportWidgetApi *viewport,
     QApplication::sendEvent(viewport, &event);
 }
 
+void sendWheel(ViewportWidgetApi *viewport,
+               const QPointF &position,
+               int angleDeltaY)
+{
+    QWheelEvent event(position,
+                      viewport->mapToGlobal(position.toPoint()),
+                      QPoint(),
+                      QPoint(0, angleDeltaY),
+                      Qt::NoButton,
+                      Qt::NoModifier,
+                      Qt::ScrollUpdate,
+                      false);
+    QApplication::sendEvent(viewport, &event);
+}
+
 QImage captureViewport(ViewportWidgetApi *viewport)
 {
     if (auto *surface = viewport->findChild<ViewportGpuSurface *>()) {
         return surface->grabFramebuffer();
     }
     return viewport->grab().toImage();
+}
+
+int medianNeutralGray(const QImage &image, const QPoint &center, int radius)
+{
+    QVector<int> samples;
+    for (int y = std::max(0, center.y() - radius);
+         y <= std::min(image.height() - 1, center.y() + radius);
+         ++y) {
+        for (int x = std::max(0, center.x() - radius);
+             x <= std::min(image.width() - 1, center.x() + radius);
+             ++x) {
+            const QColor color = image.pixelColor(x, y);
+            const int minimum = std::min({color.red(), color.green(), color.blue()});
+            const int maximum = std::max({color.red(), color.green(), color.blue()});
+            if (maximum - minimum <= 8) {
+                samples.append((color.red() + color.green() + color.blue()) / 3);
+            }
+        }
+    }
+    if (samples.isEmpty()) {
+        return -1;
+    }
+    std::sort(samples.begin(), samples.end());
+    return samples[samples.size() / 2];
+}
+
+void saveGridCapture(const QString &name, const QImage &image)
+{
+    const QString captureRoot = qEnvironmentVariable(
+        "CLASSICAD_VIEWPORT_CAPTURE_DIR");
+    if (captureRoot.isEmpty()) {
+        return;
+    }
+
+    QDir captureDirectory(captureRoot);
+    if (!captureDirectory.exists() && !captureDirectory.mkpath(QStringLiteral("."))) {
+        qWarning() << "Could not create viewport capture directory:" << captureRoot;
+        return;
+    }
+    if (image.isNull() ||
+        !image.save(captureDirectory.filePath(name + QStringLiteral(".png")))) {
+        qWarning() << "Could not save viewport grid capture:" << name;
+    }
+}
+
+void waitForViewportTransition()
+{
+    QEventLoop eventLoop;
+    QTimer::singleShot(250, &eventLoop, &QEventLoop::quit);
+    eventLoop.exec();
 }
 
 } // namespace
@@ -52,8 +121,20 @@ int main(int argc, char **argv)
     QApplication application(argc, argv);
     bool passed = true;
 
+    const QSize interactionViewportSize(640, 480);
+    const QSize blenderReferenceViewportSize(591, 511);
+    const ViewportCameraPreferences blenderCameraPreferences{
+        50.0, 0.01, 1000.0};
+    const BlenderGridAppearance blenderGridAppearance{};
+    passed &= check(
+        blenderGridAppearance.gridColor == QColor::fromRgb(84, 84, 84, 128) &&
+            blenderGridAppearance.emphasisColor ==
+                QColor::fromRgb(84, 84, 84, 255) &&
+            blenderGridAppearance.axisYColor == QColor::fromRgb(109, 176, 23, 235),
+        "grid and Y-axis defaults must match Blender's saved theme appearance");
+
     std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget());
-    viewport->resize(640, 480);
+    viewport->resize(interactionViewportSize);
     viewport->show();
     application.processEvents();
 
@@ -63,9 +144,73 @@ int main(int argc, char **argv)
     passed &= check(viewport->viewportAntiAliasingSamples() == 4,
                     "viewport anti-aliasing preference must update the OpenGL renderer");
     viewport->setViewportAntiAliasingSamples(8);
+    passed &= check(viewport->setCameraPreferences(blenderCameraPreferences),
+                    "Blender comparison camera preferences must be accepted by the viewport");
+    const ViewportCameraPreferences appliedCameraPreferences =
+        viewport->cameraPreferences();
+    passed &= check(
+        std::abs(appliedCameraPreferences.focalLengthMillimeters - 50.0) < 1.0e-9 &&
+            std::abs(appliedCameraPreferences.clipStart - 0.01) < 1.0e-9 &&
+            std::abs(appliedCameraPreferences.clipEnd - 1000.0) < 1.0e-9 &&
+            viewport->viewportAntiAliasingSamples() == 8,
+        "Blender comparison must use a 50 mm lens, 0.01/1000 clipping, and 8x AA");
+    passed &= check(
+        std::abs(viewport->documentSettings().gridSpacing - 1.0) < 1.0e-9,
+        "Blender comparison must use the same 1-unit base grid spacing");
+    viewport->setGridAppearance(blenderGridAppearance);
 
     const QPointF center(320.0, 240.0);
+    if (QApplication::platformName() == QStringLiteral("xcb") &&
+        !qEnvironmentVariable("CLASSICAD_VIEWPORT_CAPTURE_DIR").isEmpty()) {
+        viewport->resize(blenderReferenceViewportSize);
+        application.processEvents();
+        waitForViewportTransition();
+
+        // Blender's top-view RegionView3D distance is not the same quantity as
+        // classiCAD's direct orthographic pixels-per-unit zoom. The current
+        // reference captures show about 68 px between Blender's major lines
+        // versus 100 px in classiCAD at zoom 1.0. This fractional smooth-wheel
+        // event produces a test-only ~0.681 zoom, matching that framing; the
+        // inverse event restores the original state before perspective capture.
+        const QPointF comparisonCenter(blenderReferenceViewportSize.width() * 0.5,
+                                       blenderReferenceViewportSize.height() * 0.5);
+        sendWheel(viewport.get(), comparisonCenter, -253);
+        application.processEvents();
+        const QImage topOrthographicCapture = captureViewport(viewport.get());
+        saveGridCapture(QStringLiteral("viewport-native-top-ortho-scale-matched"),
+                        topOrthographicCapture);
+        passed &= check(topOrthographicCapture.size() == blenderReferenceViewportSize,
+                        "native top-view capture must use Blender's reference dimensions");
+        sendWheel(viewport.get(), comparisonCenter, 253);
+        application.processEvents();
+        viewport->setViewPreset(ViewportViewPreset::Perspective);
+        waitForViewportTransition();
+        saveGridCapture(QStringLiteral("viewport-native-iso-perspective-scale-matched"),
+                        captureViewport(viewport.get()));
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        waitForViewportTransition();
+        viewport->resize(interactionViewportSize);
+        application.processEvents();
+        waitForViewportTransition();
+    } else {
+        saveGridCapture(QStringLiteral("viewport-native-start"),
+                        captureViewport(viewport.get()));
+    }
     const QImage beforeWheel = captureViewport(viewport.get());
+    saveGridCapture(QStringLiteral("viewport-native-final-top-background"),
+                    beforeWheel);
+    const int edgeBackground = medianNeutralGray(
+        beforeWheel,
+        QPoint(12, 12),
+        8);
+    const int centerBackground = medianNeutralGray(
+        beforeWheel,
+        QPoint(beforeWheel.width() / 2, beforeWheel.height() / 2),
+        3);
+    passed &= check(edgeBackground >= 45 &&
+                        edgeBackground <= 53 &&
+                        centerBackground >= edgeBackground + 8,
+                    "viewport background must use Blender's soft radial theme gradient");
     const QPoint globalCenter = viewport->mapToGlobal(center.toPoint());
     QWheelEvent wheel(center,
                       globalCenter,
@@ -259,23 +404,71 @@ int main(int argc, char **argv)
                         "desktop viewport must use a valid native OpenGL surface");
         BlenderGridRenderer gridRenderer;
         ViewportTransform orthographicTransform;
+        orthographicTransform.setCameraPreferences(blenderCameraPreferences);
         const QImage orthographicGrid = gridRenderer.render(
             orthographicTransform,
-            QSize(640, 480),
+            blenderReferenceViewportSize,
             1.0,
             {},
             1.0,
-            BlenderGridAppearance{});
+            blenderGridAppearance);
         ViewportTransform perspectiveTransform;
         perspectiveTransform.setViewPreset(ViewportViewPreset::Isometric);
         perspectiveTransform.setPerspectiveEnabled(true);
+        perspectiveTransform.setCameraPreferences(blenderCameraPreferences);
         const QImage perspectiveGrid = gridRenderer.render(
             perspectiveTransform,
-            QSize(640, 480),
+            blenderReferenceViewportSize,
             1.0,
             {},
             1.0,
-            BlenderGridAppearance{});
+            blenderGridAppearance);
+        saveGridCapture(QStringLiteral("top-ortho"), orthographicGrid);
+        saveGridCapture(QStringLiteral("iso-perspective"), perspectiveGrid);
+
+        const auto captureView = [&gridRenderer,
+                                  &blenderCameraPreferences,
+                                  &blenderReferenceViewportSize,
+                                  &blenderGridAppearance](
+                                     const QString &name,
+                                     ViewportTransform transform) {
+            transform.setCameraPreferences(blenderCameraPreferences);
+            saveGridCapture(
+                name,
+                gridRenderer.render(transform,
+                                    blenderReferenceViewportSize,
+                                    1.0,
+                                    {},
+                                    1.0,
+                                    blenderGridAppearance));
+        };
+        for (const auto &[name, preset] : {
+                 std::pair{QStringLiteral("front-ortho"), ViewportViewPreset::Front},
+                 std::pair{QStringLiteral("right-ortho"), ViewportViewPreset::Right},
+                 std::pair{QStringLiteral("bottom-ortho"), ViewportViewPreset::Bottom},
+                 std::pair{QStringLiteral("back-ortho"), ViewportViewPreset::Back},
+                 std::pair{QStringLiteral("left-ortho"), ViewportViewPreset::Left},
+                 std::pair{QStringLiteral("iso-ortho"), ViewportViewPreset::Isometric}}) {
+            ViewportTransform transform;
+            transform.setViewPreset(preset);
+            captureView(name, transform);
+        }
+        ViewportTransform zoomInTransform;
+        ViewportCameraState zoomInState = zoomInTransform.cameraState();
+        zoomInState.zoom = 2.0;
+        zoomInState.gridViewDistance = 30.0;
+        zoomInTransform.setCameraState(zoomInState);
+        captureView(QStringLiteral("top-zoom-in"), zoomInTransform);
+        ViewportTransform zoomOutTransform;
+        ViewportCameraState zoomOutState = zoomOutTransform.cameraState();
+        zoomOutState.zoom = 0.5;
+        zoomOutState.gridViewDistance = 120.0;
+        zoomOutTransform.setCameraState(zoomOutState);
+        captureView(QStringLiteral("top-zoom-out"), zoomOutTransform);
+        ViewportTransform panTransform;
+        panTransform.pan() = QPointF(30.0, -18.0);
+        captureView(QStringLiteral("top-pan"), panTransform);
+
         const auto coveredPixels = [](const QImage &image) {
             int count = 0;
             for (int y = 0; y < image.height(); ++y) {

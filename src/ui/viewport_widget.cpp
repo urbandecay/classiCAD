@@ -45,6 +45,7 @@
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QPixmap>
+#include <QRadialGradient>
 #include <QSettings>
 #include <QTextStream>
 #include <QTimer>
@@ -57,6 +58,37 @@
 #include <functional>
 
 namespace classiCAD {
+
+namespace {
+
+void fillViewportBackground(QPainter &painter, const QRect &bounds)
+{
+    if (bounds.isEmpty()) {
+        return;
+    }
+    const QPointF center(bounds.x() + bounds.width() * 0.5,
+                         bounds.y() + bounds.height() * 0.5);
+    const qreal radius = 0.5 * std::hypot(bounds.width(), bounds.height());
+    QRadialGradient gradient(center, std::max<qreal>(radius, 1.0), center);
+    constexpr qreal gamma = 2.2;
+    constexpr qreal high = 61.0 / 255.0;
+    constexpr qreal low = 48.0 / 255.0;
+    constexpr int stopCount = 32;
+    for (int stopIndex = 0; stopIndex <= stopCount; ++stopIndex) {
+        const qreal factor = static_cast<qreal>(stopIndex) / stopCount;
+        const qreal gammaColor = std::pow(
+            std::pow(high, 1.0 / gamma) * (1.0 - factor) +
+                std::pow(low, 1.0 / gamma) * factor,
+            gamma);
+        const QColor color = QColor::fromRgbF(gammaColor,
+                                              gammaColor,
+                                              gammaColor);
+        gradient.setColorAt(factor, color);
+    }
+    painter.fillRect(bounds, gradient);
+}
+
+} // namespace
 
 enum class DragAxisLock {
     None,
@@ -2185,7 +2217,14 @@ protected:
             rasterScenePainter.begin(&committedSceneLayer);
             rasterScenePainter.setRenderHint(QPainter::Antialiasing, true);
         } else {
-            painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
+            painter.beginNativePainting();
+            const bool backgroundDrawn =
+                nativeRenderer->renderBackgroundToCurrentFramebuffer(
+                    size(), devicePixelRatioF());
+            painter.endNativePainting();
+            if (!backgroundDrawn) {
+                fillViewportBackground(painter, rect());
+            }
         }
         QPainter &scenePainter = nativeRenderer == nullptr
                                      ? rasterScenePainter
@@ -2340,7 +2379,7 @@ protected:
             }
         } else {
             rasterScenePainter.end();
-            painter.fillRect(rect(), QColor(QStringLiteral("#282828")));
+            fillViewportBackground(painter, rect());
             if (gpuViewportBackground.isNull()) {
                 drawGrid(painter);
                 drawOrigin(painter);

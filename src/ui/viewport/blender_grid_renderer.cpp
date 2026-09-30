@@ -145,6 +145,7 @@ BlenderGridRenderer::~BlenderGridRenderer()
             vertexArray_.destroy();
         }
         program_.removeAllShaders();
+        backgroundProgram_.removeAllShaders();
         sceneDepthProgram_.removeAllShaders();
         if (!usingWidgetContext_) {
             context_.doneCurrent();
@@ -203,6 +204,17 @@ bool BlenderGridRenderer::initializeResources()
                                           QStringLiteral(":/classiCAD/shaders/blender_grid.frag")) ||
         !program_.link()) {
         qWarning().noquote() << "Blender grid shader setup failed:" << program_.log();
+        return false;
+    }
+    if (!backgroundProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Vertex,
+            QStringLiteral(":/classiCAD/shaders/viewport_background.vert")) ||
+        !backgroundProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Fragment,
+            QStringLiteral(":/classiCAD/shaders/viewport_background.frag")) ||
+        !backgroundProgram_.link()) {
+        qWarning().noquote() << "Viewport background shader setup failed:"
+                             << backgroundProgram_.log();
         return false;
     }
     if (!sceneDepthProgram_.addShaderFromSourceFile(
@@ -377,6 +389,85 @@ bool BlenderGridRenderer::renderToCurrentFramebuffer(
                          QOpenGLTextureBlitter::OriginBottomLeft);
     textureBlitter_.release();
     glDisable(GL_BLEND);
+    return true;
+}
+
+bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
+    const QSize &viewportSize,
+    qreal devicePixelRatio)
+{
+    if (viewportSize.isEmpty() || QOpenGLContext::currentContext() == nullptr) {
+        return false;
+    }
+    if (!initializationAttempted_) {
+        initializationAttempted_ = true;
+        usingWidgetContext_ = true;
+        if (!initializeResources()) {
+            return false;
+        }
+    }
+    if (!initialized_) {
+        return false;
+    }
+
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    GLint previousViewport[4] = {};
+    GLint previousProgram = 0;
+    GLboolean previousDepthMask = GL_TRUE;
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousScissorTest = glIsEnabled(GL_SCISSOR_TEST);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    if (!backgroundProgram_.bind()) {
+        return false;
+    }
+
+    glViewport(0, 0, qRound(viewportSize.width() * dpr),
+               qRound(viewportSize.height() * dpr));
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDepthMask(GL_FALSE);
+    {
+        QOpenGLVertexArrayObject::Binder vaoBinder(&vertexArray_);
+        backgroundProgram_.setUniformValue(
+            "uViewportSize",
+            QVector2D(static_cast<float>(viewportSize.width() * dpr),
+                      static_cast<float>(viewportSize.height() * dpr)));
+        backgroundProgram_.setUniformValue(
+            "uHighGradient", QVector3D(61.0f / 255.0f,
+                                       61.0f / 255.0f,
+                                       61.0f / 255.0f));
+        backgroundProgram_.setUniformValue(
+            "uGradient", QVector3D(48.0f / 255.0f,
+                                   48.0f / 255.0f,
+                                   48.0f / 255.0f));
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    backgroundProgram_.release();
+
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glDepthMask(previousDepthMask);
+    if (previousBlend) {
+        glEnable(GL_BLEND);
+    } else {
+        glDisable(GL_BLEND);
+    }
+    if (previousDepthTest) {
+        glEnable(GL_DEPTH_TEST);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
+    if (previousScissorTest) {
+        glEnable(GL_SCISSOR_TEST);
+    } else {
+        glDisable(GL_SCISSOR_TEST);
+    }
+    glUseProgram(static_cast<GLuint>(previousProgram));
     return true;
 }
 
@@ -740,9 +831,10 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
 
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
-    // Keep the transparent overlay premultiplied for QPainter composition:
-    // accumulate RGB with source alpha, and accumulate coverage in alpha.
-    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ONE);
+    // Blender composites the nested grid levels and perspective iterations
+    // with alpha-over. Keep the result premultiplied for the texture blitter.
+    glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
     glLineWidth(static_cast<float>(dpr));

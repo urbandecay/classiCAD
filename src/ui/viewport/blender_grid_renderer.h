@@ -46,6 +46,8 @@ public:
                                     const QVector<Shape> &visibleSceneShapes,
                                     qreal baseGridStep,
                                     const BlenderGridAppearance &appearance);
+    bool renderBackgroundToCurrentFramebuffer(const QSize &viewportSize,
+                                              qreal devicePixelRatio);
     bool pickScenePoint(const QPointF &screenPosition,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,
@@ -84,6 +86,7 @@ private:
     std::unique_ptr<QOpenGLFramebufferObject> pickFramebuffer_;
     QOpenGLTextureBlitter textureBlitter_;
     QOpenGLShaderProgram program_;
+    QOpenGLShaderProgram backgroundProgram_;
     QOpenGLShaderProgram sceneDepthProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject sceneDepthVertexArray_;

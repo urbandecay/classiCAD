@@ -2602,13 +2602,23 @@ private:
             QStringLiteral("viewport/gridStipple"), gridAppearance.lowAlphaStipple).toBool();
         if (!isValidBlenderGridAppearance(gridAppearance)) {
             gridAppearance = BlenderGridAppearance{};
-        } else if (gridAppearance.gridColor == QColor(QStringLiteral("#38858585")) &&
-                   gridAppearance.emphasisColor == QColor(QStringLiteral("#4da1a1a1")) &&
-                   gridAppearance.axisXColor == QColor(QStringLiteral("#b8c7332e")) &&
-                   gridAppearance.axisYColor == QColor(QStringLiteral("#b842ad38")) &&
-                   gridAppearance.axisZColor == QColor(QStringLiteral("#b83378d1"))) {
-            // Replace the prior hard-coded palette only when every stored
-            // channel still equals that palette; custom user colors survive.
+        } else if ((gridAppearance.gridColor == QColor(QStringLiteral("#38858585")) &&
+                    gridAppearance.emphasisColor == QColor(QStringLiteral("#4da1a1a1")) &&
+                    gridAppearance.axisXColor == QColor(QStringLiteral("#b8c7332e")) &&
+                    gridAppearance.axisYColor == QColor(QStringLiteral("#b842ad38")) &&
+                    gridAppearance.axisZColor == QColor(QStringLiteral("#b83378d1"))) ||
+                   (gridAppearance.gridColor == QColor(QStringLiteral("#805e5e5e")) &&
+                    gridAppearance.emphasisColor == QColor(QStringLiteral("#ff686868")) &&
+                    gridAppearance.axisXColor == QColor(QStringLiteral("#ebd1233e")) &&
+                    gridAppearance.axisYColor == QColor(QStringLiteral("#eb6eb300")) &&
+                    gridAppearance.axisZColor == QColor(QStringLiteral("#eb1a73d1"))) ||
+                   (gridAppearance.gridColor == QColor(QStringLiteral("#80545454")) &&
+                    gridAppearance.emphasisColor == QColor(QStringLiteral("#ff545454")) &&
+                    gridAppearance.axisXColor == QColor(QStringLiteral("#ebd1233e")) &&
+                    gridAppearance.axisYColor == QColor(QStringLiteral("#eb70b612")) &&
+                    gridAppearance.axisZColor == QColor(QStringLiteral("#eb1a73d1")))) {
+            // Replace known shipped palettes only when every stored color
+            // still matches; custom user colors survive this migration.
             gridAppearance.gridColor = BlenderGridAppearance{}.gridColor;
             gridAppearance.emphasisColor = BlenderGridAppearance{}.emphasisColor;
             gridAppearance.axisXColor = BlenderGridAppearance{}.axisXColor;

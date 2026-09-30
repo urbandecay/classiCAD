@@ -84,7 +84,10 @@ void addLinearDimension(const Shape &shape,
     const QPointF midpoint = (first + second) * 0.5;
     qreal offset = QPointF::dotProduct(shape.points[2] - midpoint, normal);
     if (std::abs(offset) <= kEpsilon) {
-        offset = std::max(length * 0.25, 2.0 / std::max(transform.zoom(), 1.0e-6));
+        offset = std::max(
+            length * 0.25,
+            2.0 / std::max(transform.viewScalePixelsPerWorldUnit(viewportSize),
+                            1.0e-6));
     }
 
     const QPointF dimensionFirst = first + normal * offset;

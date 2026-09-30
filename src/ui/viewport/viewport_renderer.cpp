@@ -1215,9 +1215,13 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
         screenPoints.clear();
         const int sampleCount = std::max(
             32,
-            std::min(maximumAdaptivePointCount,
-                     static_cast<int>(std::ceil(nonZeroSpans * 24.0 *
-                                                std::sqrt(std::max(1.0, transform_.zoom()))))));
+            std::min(
+                maximumAdaptivePointCount,
+                static_cast<int>(std::ceil(
+                    nonZeroSpans * 24.0 *
+                    std::sqrt(std::max(
+                        1.0,
+                        transform_.viewScalePixelsPerWorldUnit(viewportSize)))))));
         for (int sample = 0; sample <= sampleCount; ++sample) {
             const qreal fraction = static_cast<qreal>(sample) / sampleCount;
             const qreal parameter = firstParameter +

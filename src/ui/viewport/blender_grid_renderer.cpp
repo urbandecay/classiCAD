@@ -103,7 +103,8 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
                            nearPlane,
                            cameraPreferences.clipEnd);
     } else {
-        const qreal zoom = std::max<qreal>(transform.zoom(), 1.0e-8);
+        const qreal zoom = std::max<qreal>(
+            transform.viewScalePixelsPerWorldUnit(viewportSize), 1.0e-8);
         projection.ortho(-viewportSize.width() / (2.0 * zoom),
                          viewportSize.width() / (2.0 * zoom),
                          -viewportSize.height() / (2.0 * zoom),
@@ -790,7 +791,9 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
     program_.setUniformValue("uCameraPosition", eye);
     program_.setUniformValue("uViewDirection", asVector(cameraOut));
     program_.setUniformValue("uPerspective", perspective ? 1 : 0);
-    program_.setUniformValue("uZoom", static_cast<float>(transform.zoom()));
+    program_.setUniformValue(
+        "uZoom",
+        static_cast<float>(transform.viewScalePixelsPerWorldUnit(viewportSize)));
     program_.setUniformValue("uGridOffset",
                              QVector2D(static_cast<float>(focusPlanePosition.x()),
                                        static_cast<float>(focusPlanePosition.y())));

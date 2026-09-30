@@ -248,6 +248,26 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   renders retain their separate 0.01/10000 preferences so their existing
   far-plane coverage remains intact. A matched native perspective pan/orbit
   comparison is recorded in Stage 6.
+- Projection-scale follow-up (2026-09-30; supersedes the earlier manual
+  orthographic zoom correction above): Blender 5.2.2's projection toggle keeps
+  the view distance and lens unchanged ([toggle source](https://raw.githubusercontent.com/blender/blender/v5.2.2/source/blender/editors/space_view3d/view3d_edit.cc),
+  [camera projection source](https://raw.githubusercontent.com/blender/blender/v5.2.2/source/blender/blenkernel/intern/camera.cc)). classiCAD had used
+  `zoom` directly as orthographic pixels per world unit while its perspective
+  camera used `60 / zoom` as distance, so zoom 1.0 produced different screen
+  scales when changing projection. Added a shared target-plane scale of
+  `max(viewport width, height) * lens / (72 * 60) * zoom` and used it for
+  orthographic drawing, picking, grid rendering, panning, zoom anchoring, and
+  screen-space tolerances. At the 591x511 Blender comparison size with a
+  50 mm lens, classiCAD's default Top view now matches Blender's distance-60
+  baseline without a test-only zoom. The measured prominent top-grid pitch is
+  68.5 px in both captures. The native screenshot now waits for the frame to
+  draw and asserts that the grid is present. Close/far captures use 2.0/0.5
+  zoom, corresponding to Blender distances 30/120. Validation passed: full
+  `cmake --build build -j2`, `classicad_core_contracts_test`, the hardware
+  XCB interaction test with picture/style and large-scene GPU checks, and
+  `git diff --check`. The hardware run used an NVIDIA GeForce GTX 1050 Ti; its
+  1,500-stroke scene averaged 16.57 ms/frame with display pacing enabled. New
+  native captures are under `/tmp/classicad-projection-toggle-hardware-final`.
 
 ## Stage 6 progress
 

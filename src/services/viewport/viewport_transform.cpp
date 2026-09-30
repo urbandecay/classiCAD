@@ -267,6 +267,17 @@ qreal &ViewportTransform::zoom()
     return zoom_;
 }
 
+qreal ViewportTransform::viewScalePixelsPerWorldUnit(
+    const QSize &viewportSize) const
+{
+    if (viewportSize.width() <= 0 || viewportSize.height() <= 0) {
+        return zoom_;
+    }
+    return viewportFocalLengthPixels(
+               viewportSize, cameraPreferences_.focalLengthMillimeters) *
+           zoom_ / kViewportReferenceDistance;
+}
+
 QPointF ViewportTransform::pan() const
 {
     return pan_;
@@ -318,6 +329,7 @@ bool ViewportTransform::screenToWorkPlane(const QPointF &screenPosition,
 
     const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0;
     const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y();
+    const qreal viewScale = viewScalePixelsPerWorldUnit(viewportSize);
     Vec3 rayOrigin;
     Vec3 rayDirection;
     if (perspective_) {
@@ -330,8 +342,8 @@ bool ViewportTransform::screenToWorkPlane(const QPointF &screenPosition,
     } else {
         rayOrigin = add(
             add(target, multiply(basis.forward, -cameraPreferences_.clipEnd)),
-            add(multiply(basis.right, pixelX / zoom_),
-                multiply(basis.up, pixelY / zoom_)));
+            add(multiply(basis.right, pixelX / viewScale),
+                multiply(basis.up, pixelY / viewScale)));
         rayDirection = basis.forward;
     }
 
@@ -394,7 +406,7 @@ bool ViewportTransform::worldPointToScreen(const Point3D &worldPosition,
     const Vec3 relative = subtract(asVec(worldPosition), target);
     const qreal viewX = dot(relative, basis.right);
     const qreal viewY = dot(relative, basis.up);
-    qreal scale = zoom_;
+    qreal scale = viewScalePixelsPerWorldUnit(viewportSize);
     if (perspective_) {
         const qreal focalLength = viewportFocalLengthPixels(
             viewportSize, cameraPreferences_.focalLengthMillimeters);
@@ -834,7 +846,8 @@ void ViewportTransform::panByPixels(const QPointF &delta,
                         -delta.y() * worldUnitsPerPixel);
         return;
     }
-    pan_ += QPointF(delta.x() / zoom_, -delta.y() / zoom_);
+    const qreal viewScale = viewScalePixelsPerWorldUnit(viewportSize);
+    pan_ += QPointF(delta.x() / viewScale, -delta.y() / viewScale);
 }
 
 void ViewportTransform::resetView()
@@ -865,13 +878,9 @@ void ViewportTransform::zoomAt(const QPointF &screenPosition,
                                     ? screenPosition
                                     : QPointF(viewportSize.width() * 0.5,
                                               viewportSize.height() * 0.5);
-    const qreal beforeWorldUnitsPerPixel = perspective_
-        ? perspectiveCameraDistance(zoom_, cameraPreferences_) /
-              std::max<qreal>(viewportFocalLengthPixels(
-                                  viewportSize,
-                                  cameraPreferences_.focalLengthMillimeters),
-                              1.0e-15)
-        : 1.0 / zoom_;
+    const qreal beforeWorldUnitsPerPixel =
+        1.0 / std::max<qreal>(viewScalePixelsPerWorldUnit(viewportSize),
+                              1.0e-15);
     const auto applyZoom = [this, factor] {
         if (perspective_ && navigationPreferences_.zoomMethod ==
                                 ViewportZoomMethod::Scale) {
@@ -896,13 +905,9 @@ void ViewportTransform::zoomAt(const QPointF &screenPosition,
     if (navigationPreferences_.zoomToMouse) {
         // Blender projects the cursor at the view target's depth, independent
         // of the current construction plane. Keep that point under the cursor.
-        const qreal afterWorldUnitsPerPixel = perspective_
-            ? perspectiveCameraDistance(zoom_, cameraPreferences_) /
-                  std::max<qreal>(viewportFocalLengthPixels(
-                                      viewportSize,
-                                      cameraPreferences_.focalLengthMillimeters),
-                                  1.0e-15)
-            : 1.0 / zoom_;
+        const qreal afterWorldUnitsPerPixel =
+            1.0 / std::max<qreal>(viewScalePixelsPerWorldUnit(viewportSize),
+                                  1.0e-15);
         const qreal scaleChange = beforeWorldUnitsPerPixel -
                                   afterWorldUnitsPerPixel;
         const qreal offsetX = zoomPosition.x() - viewportSize.width() * 0.5;

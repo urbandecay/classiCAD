@@ -4993,7 +4993,10 @@ private:
         constexpr qreal minimumTolerance = 1.0e-5;
         constexpr qreal screenTolerancePixels = 3.0;
         return std::max(minimumTolerance,
-                        screenTolerancePixels / std::max(zoom_, 1.0e-9));
+                        screenTolerancePixels /
+                            std::max(viewportTransform_.viewScalePixelsPerWorldUnit(
+                                         size()),
+                                     1.0e-9));
     }
 
     Shape::NurbsCurve2D reversedNurbsCurve(const Shape::NurbsCurve2D &curve) const

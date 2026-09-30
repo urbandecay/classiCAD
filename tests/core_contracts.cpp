@@ -1442,6 +1442,31 @@ int main(int argc, char **argv)
                                  viewportSize.width() * 50.0 / (72.0 * 60.0)) <
                             1.0e-8,
                     "perspective projection must include Blender's 2x viewport zoom factor");
+    ViewportTransform projectionToggleTransform;
+    projectionToggleTransform.setViewPreset(ViewportViewPreset::Top);
+    const Point3D projectionTogglePoint{1.0, 2.0, 0.0};
+    QPointF orthographicTogglePoint;
+    QPointF perspectiveTogglePoint;
+    const bool orthographicTogglePointVisible =
+        projectionToggleTransform.worldPointToScreen(
+            projectionTogglePoint, viewportSize, &orthographicTogglePoint);
+    const qreal expectedTargetScale =
+        std::max(viewportSize.width(), viewportSize.height()) *
+        blenderCameraDefaults.focalLengthMillimeters / (72.0 * 60.0);
+    projectionToggleTransform.setPerspectiveEnabled(true);
+    const bool perspectiveTogglePointVisible =
+        projectionToggleTransform.worldPointToScreen(
+            projectionTogglePoint, viewportSize, &perspectiveTogglePoint);
+    passed &= check(orthographicTogglePointVisible &&
+                        perspectiveTogglePointVisible &&
+                        std::abs(orthographicTogglePoint.x() -
+                                 perspectiveTogglePoint.x()) < 1.0e-8 &&
+                        std::abs(orthographicTogglePoint.y() -
+                                 perspectiveTogglePoint.y()) < 1.0e-8 &&
+                        std::abs(projectionToggleTransform
+                                     .viewScalePixelsPerWorldUnit(viewportSize) -
+                                 expectedTargetScale) < 1.0e-8,
+                    "switching Blender's top view between orthographic and perspective must preserve scale at the target plane");
     const QPointF edgeOnCursor(500.0, 180.0);
     passed &= check(std::abs(viewportWheelStepsFromDeltas(120, 120) - 1.0) <
                             1.0e-12 &&
@@ -2399,11 +2424,15 @@ int main(int argc, char **argv)
     passed &= check(freeformTangenciesAreValid,
                     "freeform Bezier tangent lines must match the curve's analytic derivative");
 
+    viewportTransform.zoom() =
+        1.0 / viewportTransform.viewScalePixelsPerWorldUnit(viewportSize);
     SnapSettings nearOnlySettings{true, false, false, false, false, false, false, true};
     SnapEngine nearSnapEngine;
     nearSnapEngine.setSettings(nearOnlySettings);
+    const QPointF nearLineScreenPoint =
+        viewportTransform.worldToScreen(QPointF(5.0, 0.0), viewportSize);
     const QPointF nearLineCursor = viewportTransform.screenToWorld(
-        lineScreenPoint + QPointF(0.0, 5.0), viewportSize);
+        nearLineScreenPoint + QPointF(0.0, 5.0), viewportSize);
     const SnapResult nearLineSnap = nearSnapEngine.findSnapPoint(serviceDocument,
                                                                  nearLineCursor,
                                                                  true,

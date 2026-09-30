@@ -49,7 +49,8 @@ void DimensionTool::begin(ToolContext &context)
     fixedPoints_.clear();
     fixedAssociations_.clear();
     cursor_ = QPointF{};
-    minimumOffsetWorld_ = 2.0 / std::max(context.viewportTransform().zoom(), 1.0e-6);
+    minimumOffsetWorld_ = 2.0 / std::max(
+        context.viewportTransform().zoom(), 1.0e-6);
     cursorValid_ = false;
     status_.state = ToolLifecycleState::Active;
     status_.text = nextPointPrompt(tool_, 0);
@@ -64,7 +65,9 @@ bool DimensionTool::handleMousePress(const ToolInput &input, ToolContext &contex
     }
 
     cursor_ = input.worldPosition;
-    minimumOffsetWorld_ = 2.0 / std::max(context.viewportTransform().zoom(), 1.0e-6);
+    minimumOffsetWorld_ = 2.0 / std::max(
+        context.viewportTransform().viewScalePixelsPerWorldUnit(input.viewportSize),
+        1.0e-6);
     cursorValid_ = true;
     if (fixedPoints_.size() < 2) {
         if (!fixedPoints_.isEmpty() &&
@@ -131,7 +134,9 @@ bool DimensionTool::handleMousePress(const ToolInput &input, ToolContext &contex
 bool DimensionTool::handleMouseMove(const ToolInput &input, ToolContext &context)
 {
     cursor_ = input.worldPosition;
-    minimumOffsetWorld_ = 2.0 / std::max(context.viewportTransform().zoom(), 1.0e-6);
+    minimumOffsetWorld_ = 2.0 / std::max(
+        context.viewportTransform().viewScalePixelsPerWorldUnit(input.viewportSize),
+        1.0e-6);
     cursorValid_ = true;
     status_.text = nextPointPrompt(tool_, fixedPoints_.size());
     publish(context);

@@ -335,23 +335,17 @@ int main(int argc, char **argv)
         application.processEvents();
         waitForViewportTransition();
 
-        // Blender's top-view RegionView3D distance is not the same quantity as
-        // classiCAD's direct orthographic pixels-per-unit zoom. The current
-        // reference captures show about 68 px between Blender's major lines
-        // versus 100 px in classiCAD at zoom 1.0. This fractional smooth-wheel
-        // event produces a test-only ~0.681 zoom, matching that framing; the
-        // inverse event restores the original state before perspective capture.
-        const QPointF comparisonCenter(blenderReferenceViewportSize.width() * 0.5,
-                                       blenderReferenceViewportSize.height() * 0.5);
-        sendWheel(viewport.get(), comparisonCenter, -253);
-        application.processEvents();
+        // Blender's orthographic and perspective projections share the same
+        // scale at the view target. The native view transform uses that shared
+        // scale, so capture the default top view without a calibration zoom.
+        waitForViewportTransition();
         const QImage topOrthographicCapture = captureViewport(viewport.get());
         saveGridCapture(QStringLiteral("viewport-native-top-ortho-scale-matched"),
                         topOrthographicCapture);
-        passed &= check(topOrthographicCapture.size() == blenderReferenceViewportSize,
-                        "native top-view capture must use Blender's reference dimensions");
-        sendWheel(viewport.get(), comparisonCenter, 253);
-        application.processEvents();
+        passed &= check(
+            topOrthographicCapture.size() == blenderReferenceViewportSize &&
+                neutralGridLikePixels(topOrthographicCapture) > 200,
+            "native top-view capture must use Blender's reference dimensions and show the grid");
         viewport->setViewPreset(ViewportViewPreset::Perspective);
         waitForViewportTransition();
         saveGridCapture(QStringLiteral("viewport-native-iso-perspective-scale-matched"),
@@ -442,14 +436,9 @@ int main(int argc, char **argv)
                 perspectiveZoomRoundTripImageError < 2.0,
             "native perspective grid must remain visible after twenty zoom-out steps and return to the same centered view after twenty steps in");
 
-        // Blender's orthographic view_distance of 60 currently matches a
-        // classiCAD zoom of about 0.681 at this viewport size. Match Blender's
-        // close/far distances (30/120) with reciprocal scale changes around
-        // that same baseline; 456 wheel units approximate a 2x scale change.
+        // Blender's baseline view distance of 60 maps to classiCAD zoom 1.0.
+        // Use reciprocal 2x changes to compare Blender distances 30 and 120.
         viewport->setViewPreset(ViewportViewPreset::Top);
-        waitForViewportTransition();
-        sendWheel(viewport.get(), comparisonCenter, -253);
-        application.processEvents();
         waitForViewportTransition();
         sendWheel(viewport.get(), comparisonCenter, 456);
         application.processEvents();
@@ -489,12 +478,7 @@ int main(int argc, char **argv)
         passed &= check(allNativeViewsCaptured,
                         "native matched-scale matrix must cover all six axis views and isometric orthographic at Blender's reference dimensions");
 
-        // Restore classiCAD's 1.0 zoom before the perspective reference: that
-        // is the separately calibrated projection scale used by Blender's
-        // 60-unit isometric-perspective capture.
-        sendWheel(viewport.get(), comparisonCenter, 253);
-        application.processEvents();
-        waitForViewportTransition();
+        // The close/far round trip restores the shared baseline zoom of 1.0.
         viewport->setViewPreset(ViewportViewPreset::Perspective);
         waitForViewportTransition();
         const QImage matchedPerspectiveCapture = captureViewport(viewport.get());
@@ -504,7 +488,7 @@ int main(int argc, char **argv)
         saveGridCapture(QStringLiteral("viewport-native-matched-isometric-perspective"),
                         matchedPerspectiveCapture);
         passed &= check(allNativeViewsCaptured,
-                        "native matched-scale matrix must include the separately calibrated perspective view at Blender's reference dimensions");
+                        "native matched-scale matrix must include the perspective view at Blender's reference dimensions");
 
         viewport->setViewPreset(ViewportViewPreset::Top);
         waitForViewportTransition();

@@ -103,6 +103,9 @@ public:
 
     qreal zoom() const;
     qreal &zoom();
+    // Pixel scale at the camera target. This is shared by Blender's
+    // orthographic viewplane and perspective frustum at the focus depth.
+    qreal viewScalePixelsPerWorldUnit(const QSize &viewportSize) const;
     QPointF pan() const;
     QPointF &pan();
 

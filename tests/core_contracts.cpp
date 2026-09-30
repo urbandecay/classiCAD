@@ -109,6 +109,34 @@ int main(int argc, char **argv)
         layerGpuLinePattern(QStringLiteral("DOTX2"));
     const LayerGpuLinePattern complexLayerPattern =
         layerGpuLinePattern(QStringLiteral("CENTER"));
+    const LayerGpuLinePattern dashDotLayerPattern =
+        layerGpuLinePattern(QStringLiteral("DASHDOT"));
+    const LayerGpuLinePattern divideLayerPattern =
+        layerGpuLinePattern(QStringLiteral("DIVIDE"));
+    const LayerGpuLinePattern borderLayerPattern =
+        layerGpuLinePattern(QStringLiteral("BORDER"));
+    const LayerGpuLinePattern phantomLayerPattern =
+        layerGpuLinePattern(QStringLiteral("PHANTOM"));
+    const LayerGpuLinePattern doubledCenterLayerPattern =
+        layerGpuLinePattern(QStringLiteral("CENTERX2"));
+    const bool allStandardLineTypesSupported = std::all_of(
+        layerLineTypes.cbegin(), layerLineTypes.cend(),
+        [](const QString &lineType) {
+            return layerGpuLinePattern(lineType).kind !=
+                   LayerGpuLinePatternKind::Unsupported;
+        });
+    gpuStroke.lineStyle = ViewportSceneLineStyle::Pattern;
+    gpuStroke.linePatternScale = 1.0f;
+    gpuStroke.linePatternSegmentCount = complexLayerPattern.segments.size();
+    for (int segmentIndex = 0;
+         segmentIndex < gpuStroke.linePatternSegmentCount;
+         ++segmentIndex) {
+        gpuStroke.linePatternSegmentsWidthUnits[
+            static_cast<std::size_t>(segmentIndex)] =
+            static_cast<float>(complexLayerPattern.segments[segmentIndex]);
+    }
+    const ViewportSceneStrokePattern complexGpuPattern =
+        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
     passed &= check(solidGpuPattern.style == ViewportSceneLineStyle::Solid &&
                         solidGpuPattern.periodPixels == 0.0f &&
                         dashedGpuPattern.style == ViewportSceneLineStyle::Dashed &&
@@ -128,8 +156,21 @@ int main(int argc, char **argv)
                             LayerGpuLinePatternKind::Dotted &&
                         dottedLayerPattern.scale == 2.0 &&
                         complexLayerPattern.kind ==
-                            LayerGpuLinePatternKind::Unsupported,
-                    "GPU scene strokes must expose solid, 7:3 dashed, and round-dot 1:2 patterns scaled by framebuffer width");
+                            LayerGpuLinePatternKind::Pattern &&
+                        dashDotLayerPattern.segments.size() == 4 &&
+                        divideLayerPattern.segments.size() == 6 &&
+                        borderLayerPattern.segments.size() == 6 &&
+                        phantomLayerPattern.segments.size() == 8 &&
+                        doubledCenterLayerPattern.segments.size() == 6 &&
+                        doubledCenterLayerPattern.segments.first() == 20.0 &&
+                        complexGpuPattern.style ==
+                            ViewportSceneLineStyle::Pattern &&
+                        complexGpuPattern.segmentCount == 6 &&
+                        complexGpuPattern.periodPixels == 36.0f &&
+                        complexGpuPattern.segmentsPixels[0] == 20.0f &&
+                        complexGpuPattern.segmentsPixels[2] == 2.0f &&
+                        allStandardLineTypesSupported,
+                    "GPU scene strokes must support every built-in layer pattern, including scaled multi-dash and dash-dot styles");
     gpuStroke.lineStyle = ViewportSceneLineStyle::Dotted;
     gpuStroke.dashed = true;
     passed &= check(effectiveViewportSceneLineStyle(gpuStroke) ==

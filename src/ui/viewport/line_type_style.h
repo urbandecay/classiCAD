@@ -6,18 +6,22 @@
 #include <QStringList>
 #include <QVector>
 
+#include <cmath>
+
 namespace classiCAD {
 
 enum class LayerGpuLinePatternKind {
     Solid,
     Dashed,
     Dotted,
+    Pattern,
     Unsupported,
 };
 
 struct LayerGpuLinePattern {
     LayerGpuLinePatternKind kind = LayerGpuLinePatternKind::Solid;
     qreal scale = 1.0;
+    QVector<qreal> segments;
 };
 
 inline QStringList standardLayerLineTypes()
@@ -95,27 +99,36 @@ inline QVector<qreal> layerLineTypePattern(const QString &lineType)
     return pattern;
 }
 
-// The native stroke shader currently supports solid, regular dash, and dot
-// patterns. Keep other CAD linetypes on the Qt fallback until their full
-// alternating pattern sequences are represented by the GPU renderer.
+// The stroke shader has compact paths for regular dashes and dots. Other
+// standard CAD linetypes carry their full alternating on/off sequence.
 inline LayerGpuLinePattern layerGpuLinePattern(const QString &lineType)
 {
     const QVector<qreal> pattern = layerLineTypePattern(lineType);
     if (pattern.isEmpty()) {
         return {};
     }
-    if (pattern.size() != 2 || pattern[0] <= 0.0 || pattern[1] <= 0.0) {
-        return {LayerGpuLinePatternKind::Unsupported, 1.0};
+    if (pattern.size() < 2 || pattern.size() > 8 ||
+        pattern.size() % 2 != 0) {
+        return {LayerGpuLinePatternKind::Unsupported, 1.0, {}};
+    }
+    for (const qreal segment : pattern) {
+        if (!std::isfinite(segment) || segment <= 0.0) {
+            return {LayerGpuLinePatternKind::Unsupported, 1.0, {}};
+        }
+    }
+
+    if (pattern.size() != 2) {
+        return {LayerGpuLinePatternKind::Pattern, 1.0, pattern};
     }
 
     const qreal dashRatio = pattern[0] / pattern[1];
     if (qAbs(dashRatio - (7.0 / 3.0)) <= 1.0e-9) {
-        return {LayerGpuLinePatternKind::Dashed, pattern[0] / 7.0};
+        return {LayerGpuLinePatternKind::Dashed, pattern[0] / 7.0, {}};
     }
     if (qAbs(dashRatio - 0.5) <= 1.0e-9) {
-        return {LayerGpuLinePatternKind::Dotted, pattern[0]};
+        return {LayerGpuLinePatternKind::Dotted, pattern[0], {}};
     }
-    return {LayerGpuLinePatternKind::Unsupported, 1.0};
+    return {LayerGpuLinePatternKind::Pattern, 1.0, pattern};
 }
 
 inline QPen layerLineTypePen(const QColor &color,

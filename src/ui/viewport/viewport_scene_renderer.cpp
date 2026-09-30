@@ -41,6 +41,38 @@ QVector<QVector3D> controlGuideVertices(const Shape &shape)
     return vertices;
 }
 
+float projectedStrokeSegmentLength(const QVector3D &first,
+                                   const QVector3D &second,
+                                   const QMatrix4x4 &viewProjection,
+                                   const QSize &pixelSize)
+{
+    QVector4D clipFirst = viewProjection * QVector4D(first, 1.0f);
+    QVector4D clipSecond = viewProjection * QVector4D(second, 1.0f);
+    const float nearFirst = clipFirst.z() + clipFirst.w();
+    const float nearSecond = clipSecond.z() + clipSecond.w();
+    if (nearFirst < 0.0f && nearSecond < 0.0f) {
+        return 0.0f;
+    }
+    if (nearFirst < 0.0f) {
+        const float fraction = nearFirst / (nearFirst - nearSecond);
+        clipFirst = clipFirst * (1.0f - fraction) + clipSecond * fraction;
+    } else if (nearSecond < 0.0f) {
+        const float fraction = nearSecond / (nearSecond - nearFirst);
+        clipSecond = clipSecond * (1.0f - fraction) + clipFirst * fraction;
+    }
+    if (clipFirst.w() <= 0.0f || clipSecond.w() <= 0.0f) {
+        return 0.0f;
+    }
+
+    const float deltaX = (clipSecond.x() / clipSecond.w() -
+                          clipFirst.x() / clipFirst.w()) *
+                         static_cast<float>(pixelSize.width()) * 0.5f;
+    const float deltaY = (clipSecond.y() / clipSecond.w() -
+                          clipFirst.y() / clipFirst.w()) *
+                         static_cast<float>(pixelSize.height()) * 0.5f;
+    return std::hypot(deltaX, deltaY);
+}
+
 } // namespace
 
 ViewportSceneRenderer::~ViewportSceneRenderer()
@@ -48,6 +80,9 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
     if (QOpenGLContext::currentContext() != nullptr) {
         if (vertexBuffer_.isCreated()) {
             vertexBuffer_.destroy();
+        }
+        if (patternOffsetBuffer_.isCreated()) {
+            patternOffsetBuffer_.destroy();
         }
         if (vertexArray_.isCreated()) {
             vertexArray_.destroy();
@@ -94,7 +129,8 @@ bool ViewportSceneRenderer::initialize()
         !pointProgram_.addShaderFromSourceFile(
             QOpenGLShader::Fragment,
             QStringLiteral(":/classiCAD/shaders/scene_point.frag")) ||
-        !pointProgram_.link() || !vertexArray_.create() || !vertexBuffer_.create()) {
+        !pointProgram_.link() || !vertexArray_.create() ||
+        !vertexBuffer_.create() || !patternOffsetBuffer_.create()) {
         qWarning().noquote() << "Viewport scene stroke shader setup failed:"
                              << program_.log() << pointProgram_.log();
         return false;
@@ -155,6 +191,7 @@ bool ViewportSceneRenderer::draw(
         strokeGeometryKeys_ = std::move(geometryKeys);
         strokeRanges_.clear();
         cachedVertices_.clear();
+        cachedPatternOffsets_.clear();
         strokeRanges_.reserve(strokes.size());
         for (const ViewportSceneStroke &stroke : strokes) {
             const int first = cachedVertices_.size();
@@ -171,6 +208,7 @@ bool ViewportSceneRenderer::draw(
             }
             strokeRanges_.append({first, cachedVertices_.size() - first});
         }
+        cachedPatternOffsets_.fill(0.0f, cachedVertices_.size());
     }
     if (cachedVertices_.isEmpty()) {
         return true;
@@ -179,6 +217,44 @@ bool ViewportSceneRenderer::draw(
     const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
     const QSize pixelSize(qRound(viewportSize.width() * dpr),
                           qRound(viewportSize.height() * dpr));
+    const QMatrix4x4 viewProjection =
+        viewportViewProjection(transform, viewportSize);
+    QVector<float> patternOffsets(cachedVertices_.size(), 0.0f);
+    for (int index = 0; index < strokes.size(); ++index) {
+        if (strokes[index].pointDiameter > 0.0f) {
+            continue;
+        }
+        const auto range = strokeRanges_[index];
+        float accumulatedPixels = 0.0f;
+        QVector3D previousEnd;
+        bool hasPreviousEnd = false;
+        for (int offset = 0; offset + 1 < range.second; offset += 2) {
+            const int firstIndex = range.first + offset;
+            const int secondIndex = firstIndex + 1;
+            const QVector3D &first = cachedVertices_[firstIndex];
+            const QVector3D &second = cachedVertices_[secondIndex];
+            if (hasPreviousEnd) {
+                const float coordinateScale = std::max(
+                    {1.0f, first.length(), previousEnd.length()});
+                const float connectionTolerance =
+                    std::max(1.0e-5f, coordinateScale * 1.0e-6f);
+                if ((first - previousEnd).lengthSquared() >
+                    connectionTolerance * connectionTolerance) {
+                    accumulatedPixels = 0.0f;
+                }
+            }
+            patternOffsets[firstIndex] = accumulatedPixels;
+            patternOffsets[secondIndex] = accumulatedPixels;
+            accumulatedPixels += projectedStrokeSegmentLength(
+                first, second, viewProjection, pixelSize);
+            previousEnd = second;
+            hasPreviousEnd = true;
+        }
+    }
+    const bool patternOffsetsChanged = patternOffsets != cachedPatternOffsets_;
+    if (patternOffsetsChanged) {
+        cachedPatternOffsets_ = std::move(patternOffsets);
+    }
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -196,9 +272,19 @@ bool ViewportSceneRenderer::draw(
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
                           sizeof(QVector3D), nullptr);
+    vertexBuffer_.release();
+    if (geometryChanged || patternOffsetsChanged) {
+        patternOffsetBuffer_.bind();
+        patternOffsetBuffer_.allocate(
+            cachedPatternOffsets_.constData(),
+            static_cast<int>(cachedPatternOffsets_.size() * sizeof(float)));
+        patternOffsetBuffer_.release();
+    }
+    patternOffsetBuffer_.bind();
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
+    patternOffsetBuffer_.release();
     QOpenGLShaderProgram *boundProgram = nullptr;
-    const QMatrix4x4 viewProjection =
-        viewportViewProjection(transform, viewportSize);
     for (int index = 0; index < strokes.size(); ++index) {
         const ViewportSceneStroke &stroke = strokes[index];
         const auto range = strokeRanges_[index];
@@ -239,10 +325,16 @@ bool ViewportSceneRenderer::draw(
             boundProgram->setUniformValue("uPatternPeriod", pattern.periodPixels);
             boundProgram->setUniformValue("uPatternOnLength",
                                           pattern.onLengthPixels);
+            boundProgram->setUniformValue("uPatternSegmentCount",
+                                          pattern.segmentCount);
+            if (pattern.segmentCount > 0) {
+                boundProgram->setUniformValueArray(
+                    "uPatternSegments", pattern.segmentsPixels.data(),
+                    pattern.segmentCount, 1);
+            }
             glDrawArrays(GL_LINES, range.first, range.second);
         }
     }
-    vertexBuffer_.release();
     vertexArray_.release();
     if (boundProgram != nullptr) {
         boundProgram->release();

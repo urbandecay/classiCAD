@@ -16,9 +16,9 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 | 2. Camera-relative grid placement and axis/view mapping | Match Blender's grid origin tracking while panning/orbiting; distinguish fixed-axis views from user-defined orthographic views; render the appropriate work plane and global X/Y/Z axes in each view. | Complete |
 | 3. Depth, occlusion, and z-bias | Integrate the grid with scene depth so curves/objects occlude it correctly; reproduce Blender's grid-line occlusion and perspective additive-pass depth-bias behavior. This may require moving grid composition into a shared viewport GL pass instead of rendering it to a standalone image. | Complete |
 | 4. Theme, units, and appearance | Feed grid spacing from explicit document units/grid settings; match axis/grid theme colors, opacity, stipple, and perspective/orthographic fades without hard-coded renderer-only colors. | Complete |
-| 5. Parity regression and interaction validation | Compare a fixed matrix of Blender and classiCAD views (six axis views, isometric ortho, perspective, close/far zoom, pan, and orbit), add durable render/scale regressions, and verify the existing mouse navigation and CPU fallback remain intact. | In progress |
-| 6. Blender camera and navigation parity | Port Blender's viewport projection multiplier, wheel distance step, zoom-to-cursor depth rule, smooth-view timing/easing, and zoom distance range. Compare orbit/pan and saved navigation settings with Blender. | In progress |
-| 7. Native GPU viewport composition | Draw the grid and scene in the widget's GPU presentation path so camera motion does not synchronously read the framebuffer back into a Qt image on every repaint. Retain a tested CPU fallback. | In progress |
+| 5. Parity regression and interaction validation | Compare a fixed matrix of Blender and classiCAD views (six axis views, isometric ortho, perspective, close/far zoom, pan, and orbit), add durable render/scale regressions, and verify the existing mouse navigation and CPU fallback remain intact. | Complete |
+| 6. Blender camera and navigation parity | Port Blender's viewport projection multiplier, wheel distance step, zoom-to-cursor depth rule, smooth-view timing/easing, and zoom distance range. Compare orbit/pan and saved navigation settings with Blender. | Complete |
+| 7. Native GPU viewport composition | Draw the grid and scene in the widget's GPU presentation path so camera motion does not synchronously read the framebuffer back into a Qt image on every repaint. Retain a tested CPU fallback. | Complete |
 
 ## Stage 1 implementation notes
 
@@ -143,8 +143,8 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   top/isometric orientations for its captures; the earlier caveat comparing
   Blender's saved startup distance (~18) with classiCAD's 60 was incorrect for
   these screenshots because the script overwrites that startup state. Blender
-  preferences were not changed. The saved classiCAD clip preferences were
-  aligned to 0.01/1000.
+  preferences were not changed. The classiCAD comparison harness applies the
+  clip range in memory; saved classiCAD preferences remain unchanged.
 - The matched captures are in `/tmp/classicad-blender-matched-captures` and
   `/tmp/classicad-blender-user-reference-captures`. The viewport dimensions and
   listed camera/grid preferences match. Inspection of Blender's saved 5.2
@@ -171,14 +171,13 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   then applies the inverse before taking the perspective screenshot. This is
   a screenshot-test adjustment; the app's initial zoom/default is unchanged.
   The new screenshots are in `/tmp/classicad-blender-controlled-captures`.
-- The framing-matched top capture now measures about 7 px for the fine grid
-  and 68 px for the prominent grid, matching Blender's intervals. Neutral
-  grayscale MAE in the central viewport crop fell from 5.23 to 3.80 intensity
-  levels. The perspective capture remains at zoom 1.0 / distance 60; its same
-  crop MAE is 2.82, with band MAEs of 2.80 near the top, 3.45 through the
-  center, and 2.34 near the bottom. This confirms the earlier top-view
-  discrepancy was mainly orthographic framing, while small rendering/color
-  differences remain.
+- The framing-matched top capture measures about 7 px for the fine grid and
+  68 px for the prominent grid. A later visible-window comparison confirms
+  that the coarse pitch matches Blender at baseline, while fine-level LOD
+  visibility still differs: classiCAD shows the 7 px subdivision where
+  Blender's baseline view suppresses it. Earlier crop MAEs came from the
+  screenshot-area capture path and are superseded by the controlled visible-
+  window measurements below.
 - Center-axis samples are close for red (Blender 200/42/63, classiCAD
   198/37/62); green differs in its blue component (Blender 108/172/21,
   classiCAD 106/170/5). The grid remains visible through the perspective
@@ -208,8 +207,47 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   darker in classiCAD, so exact background color-management parity remains
   open; this is not a claim of pixel-identical viewport output.
 - Revalidation passed: full C++ build, all four CTest suites, and the XCB/Mesa
-  native OpenGL interaction/capture test. Hardware-GPU performance is still
-  untested.
+  native OpenGL interaction/capture test. The later hardware spot check is
+  recorded under Stage 7.
+- Controlled visible-window parity matrix (2026-09-30; supersedes the earlier
+  `screenshot_area` comparisons, which returned transparent/black output in
+  the nested Mesa display): Blender and classiCAD captures are both 591x511,
+  rendered by Mesa llvmpipe (LLVM 20.1.2, Mesa 25.2.8), with a 50 mm lens,
+  clip range 0.01/1000, and centered target. The Blender script explicitly
+  sets that clip range; the classiCAD harness applies the same values in
+  memory, leaving saved user preferences untouched. Both runs use the same
+  1-unit grid and matching orthographic/perspective poses. The isolated
+  Blender capture's background gradient (48/61) and grid gray (84, alpha 128)
+  also match the saved Blender theme. The six cardinal views, isometric
+  orthographic and isometric perspective captures are under
+  `/tmp/classicad-stage5-llvmpipe-r3` and
+  `/tmp/classicad-stage5-blender-llvmpipe`.
+- The fixed-view matrix aligns the colored-axis origins and isometric axis
+  directions; the red and green isometric line slopes are +0.5773 and -0.5773
+  in both applications. Direct top-view scale checks use classiCAD zoom
+  0.6809 versus Blender distance 60 at baseline, zoom 1.3613 versus distance
+  30 for close, and zoom 0.3405 versus distance 120 for far. The dominant
+  top-grid pitches agree at approximately 68, 136, and 34 px, respectively.
+  The orthographic matrix uses the same baseline match, and perspective remains
+  at classiCAD zoom 1.0 versus Blender distance 60.
+- Appearance differences persist with viewport size, clip range, and renderer
+  held constant. In neutral background pixels, radial-bin medians (center,
+  middle, outer) are classiCAD (60, 58, 56) versus Blender (63, 63, 63) in top
+  view and (62, 59, 56) versus (67, 66, 63) in isometric perspective. The
+  median green-axis pixel in top view is classiCAD (102, 160, 28) versus
+  Blender (107, 170, 22); the palette inputs are close, so the remaining
+  difference is in final line coverage/compositing rather than a renderer
+  mismatch. Fine grid LOD lines are more visible in classiCAD at baseline and
+  far zoom. Neutral-pixel ROI MAE is 6.42 for top and 9.14 for perspective;
+  those values include the LOD visibility difference and viewport-specific UI,
+  and are not pure background-color measurements. Exact background, fine-grid,
+  and axis-pixel parity remain open, but the Stage 5 view/scale comparisons and
+  clip-controlled investigation are complete.
+- The native XCB interaction/capture harness passed after switching its
+  comparison camera to 0.01/1000. The extreme-distance grid-clipping regression
+  renders retain their separate 0.01/10000 preferences so their existing
+  far-plane coverage remains intact. A matched native perspective pan/orbit
+  comparison is recorded in Stage 6.
 
 ## Stage 6 progress
 
@@ -241,14 +279,85 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   scaling the angle by a separately saved sensitivity. Trackball is wired to
   gizmo and mouse orbit drags;
   turntable remains the default. Core math and overlapping-depth regressions
-  pass, but live Blender gesture calibration is not validated yet. Stage 5 now
-  has controlled native-GPU screenshots; their remaining grid/axis differences
-  are recorded there. Stage 7 still needs remaining scene items and close-zoom
-  curve-quality validation before claiming full parity.
+  pass. A matched live perspective pan and combined orbit drag has now been
+  visually compared with Blender (details below); it confirms the yaw sign,
+  turntable response for this drag, and 1:1 pan displacement. The expanded
+  gesture calibration across additional drag extents and saved navigation
+  settings is recorded below. Stage 5 now
+  has controlled native XCB screenshots; their remaining grid/axis differences
+  are recorded there. Stage 7's committed-picture, layer-style, and hardware
+  checks are recorded below. Close-zoom curve chord error has a geometry
+  regression.
 - Validation passed: `cmake --build build -j2`, all four CTest suites,
   `git diff --check`, the XCB/Mesa software-OpenGL interaction test, and a
   five-second offscreen application startup. The offscreen platform cannot
   create an OpenGL context, so it exercised the CPU fallback as expected.
+- Gesture review (2026-09-30): the older captures in
+  `/tmp/classicad-nav-test-eV57wr` remain invalid for parity because classiCAD
+  used Trackball, Blender's after-drag image shows no clear rotation, viewport
+  widths differ, and drag coordinates were not recorded. A controlled live
+  yaw check then ran only on isolated Xephyr display `:99`, using fresh apps
+  and temporary settings; the original unsaved Blender session was untouched.
+  Both started Top/Orthographic. classiCAD used the copied saved settings
+  `panButton=RMB`, Turntable, and sensitivity 0.006981317 rad/px; it received a
+  Shift+RMB horizontal drag of +100 px. Blender 5.2.2 used its default
+  Turntable MMB orbit with the same +100 px horizontal delta. In both after
+  captures, positive X tilts up-right and positive Y up-left, confirming the
+  horizontal yaw direction in `275873c`. Captures are under
+  `/tmp/classicad-turntable-nested-*.png`. This validates direction only:
+  classiCAD stayed orthographic while Blender changed to User Perspective, and
+  their viewport areas differed (about 536x572 versus 1050x670), so it did not
+  validate perspective orbit or pan parity. At that point Trackball had only
+  been checked mathematically; the live comparison is recorded below.
+- Matched perspective gesture comparison (2026-09-30): used fresh temporary
+  classiCAD and Blender 5.2.2 instances on isolated Xephyr display `:100`; the
+  original unsaved Blender session was left untouched. Both were set to Top
+  Perspective, centered target, 60-unit view distance, and 50 mm lens. The
+  captured viewport crops were both 802x710 px (classiCAD crop at 98,119;
+  Blender crop at 0,54). classiCAD used the copied saved `panButton=RMB`,
+  Turntable, and 0.006981317 rad/px sensitivity; Blender used default
+  Turntable navigation.
+  A center drag of (+100,+50) px used RMB in classiCAD and Shift+MMB in
+  Blender. The grid origin moved by (+100,+50) px in both captures, and the
+  inverse drags returned both views to their starting origins. Then a second
+  (+100,+50) px center drag used Shift+RMB for classiCAD orbit and MMB for
+  Blender orbit. The fitted screen-space red X-axis slopes were -0.7885 and
+  -0.7883; green Y-axis slopes were +1.1200 and +1.1199, respectively. The
+  resulting axis directions and tilt match within about 0.02 degrees, directly
+  validating the reversed horizontal yaw in `275873c` for this perspective
+  Turntable gesture. The baseline grid origins differ by about 4 px
+  horizontally and 15 px vertically between the viewport crops; these captures
+  validate gesture response, not pixel-identical background or grid rendering.
+  Captures are in `/tmp/classicad-perspective100-xdg` and
+  `/tmp/blender-perspective100-xdg`. At that point other drag extents,
+  independent yaw/pitch gestures, wheel zoom, and Trackball feel remained
+  unvalidated; the expanded review below covers them.
+
+- Expanded live gesture review (2026-09-30): fresh classiCAD and Blender 5.2.2
+  instances ran side by side in isolated Xephyr display `:103`; Blender used a
+  copy of the saved user preferences, and classiCAD used the matching
+  navigation settings. Both viewport crops were 1311x846 px. With Turntable
+  at 0.4 degrees/pixel, separate Top-view horizontal drags of +50 and +150 px
+  rotated the colored axes by -20 and -60 degrees in both applications. A
+  separate +50 px vertical drag and an off-center Isometric drag of (-80,+40)
+  px also matched visually; fitted Isometric red/green axis changes differ by
+  less than 0.01 degrees. The Front-view +75 px horizontal drag was exercised,
+  but its floor grid is edge-on in Blender and disappears when classiCAD leaves
+  the fixed Front view, so it is not used as visual parity evidence.
+  Trackball was compared from Isometric using the same off-center start
+  (-90,-40) px and drag (+180,+80) px. Its rendered axis motion looks alike;
+  screen-line fits differ by 0.06 degrees for red and 1.44 degrees for green,
+  so this records a close visual match rather than exact numeric parity.
+  For off-center wheel zoom at (981,328), Top-view grid spacing changed from
+  15 to 18 px in Blender and approximately 15/16 to 18/19 px in classiCAD.
+  The colored-axis intersection moved from (655,423) to about (590,442) in
+  both, matching zoom-to-cursor anchoring. Perspective wheel zoom also used
+  the same 1.2 distance ratio, and classiCAD's sampled world point under the
+  cursor was unchanged before and after. The interaction harness now saves
+  repeatable captures for these gestures; they are under
+  `/tmp/classicad-stage6-blender-captures-r2` and
+  `/tmp/classicad-stage6-classicad-captures-r3`. The live classiCAD run used
+  XCB/Mesa software OpenGL; hardware-GPU checks remain in Stage 7.
 
 ## Stage 7 progress
 
@@ -267,8 +376,9 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   cached OpenGL stroke renderer over the grid. Picture placement and duplicated
   picture previews use cached OpenGL textures with an OpenGL frame outline.
   Qt still paints cursor/snap markers, angle/status labels, control handles,
-  dimensions, erase overlays, and committed picture images. Unsupported GL
-  systems use the established Qt rendering path. The native scene stroke path uses
+  dimensions, and erase overlays. Committed picture images use cached GPU
+  textures, with Qt fallback when native rendering is unavailable. Unsupported
+  GL systems use the established Qt rendering path. The native scene stroke path uses
   cached fixed NURBS tessellation rather than the painter's adaptive display
   setting. Degree-one spans now emit only their exact endpoints; higher-degree
   spans use 128 samples (with an 8192-sample budget). A regression checks
@@ -277,15 +387,32 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   tessellation quality in the model, but is not a substitute for a direct
   hardware-GPU visual/performance check.
 - Desktop interaction checks cover wheel zoom, pan/orbit, an in-progress GPU
-  rectangle preview and its committed stroke, a correctly oriented four-color
-  GPU picture preview, a Bézier with visible control guides, and a point
-  marker. Full build, all
+  rectangle preview and its committed stroke, a GPU picture placement preview
+  and the resulting committed picture, a Bézier with visible control guides,
+  and a point marker. Full build, all
   four CTest suites, XCB/Mesa interaction check, offscreen startup/fallback,
-  and `git diff --check` passed. Stage 7 remains in progress until
-  remaining scene items (including committed picture rendering and more layer
-  line styles in the GPU stroke pass) are addressed. Close-zoom NURBS chord
-  error is now covered by a geometry regression; live hardware-GPU visual
-  quality and performance remain unverified.
+  and `git diff --check` passed. Close-zoom NURBS chord error is covered by a
+  geometry regression.
+- GPU completion checks (2026-09-30): extended the native stroke shader to draw
+  the full 25-style built-in layer linetype set, including the multi-part
+  CENTER, DASHDOT, DIVIDE, BORDER, and PHANTOM patterns. Pattern phase now
+  carries across connected segments. A first hardware image check exposed
+  DOT2 dots that were too faint because their diameter shrank along with their
+  spacing; dot diameter now follows stroke width while spacing keeps its
+  selected scale. A GPU-only hardware capture shows the committed picture's
+  red, blue, and yellow quadrants while its transparent quadrant reveals the
+  background. The same capture shows every built-in style; see
+  `/tmp/classicad-stage7-hardware-final/stage7-gpu-picture-and-layer-styles.png`.
+- The expanded XCB run reported `GL_RENDERER` directly as NVIDIA GeForce GTX
+  1050 Ti/PCIe/SSE2. Its synthetic dense 1,500-stroke scene at 1280x720
+  averaged 16.57 ms/frame (median 16.65 ms, p95 18.19 ms; about 60 frames/s);
+  the measurement includes display pacing, so it confirms paced rendering on
+  this GPU but does not measure uncapped maximum throughput or other GPU
+  vendors. The stress capture is `/tmp/classicad-stage7-hardware-final/stage7-large-scene-1500-strokes.png`.
+  `cmake --build build -j2`, `classicad_core_contracts_test`, the hardware
+  `classicad_viewport_interaction_test` with picture/style and large-scene GPU
+  checks enabled, and `git diff --check` passed. Stage 7 is complete for the
+  available hardware; other GPU models have not been checked.
 
 ## Upstream behavioral references
 

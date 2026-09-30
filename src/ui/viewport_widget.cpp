@@ -98,6 +98,8 @@ ViewportSceneLineStyle viewportSceneLineStyleForLayerPattern(
         return ViewportSceneLineStyle::Dashed;
     case LayerGpuLinePatternKind::Dotted:
         return ViewportSceneLineStyle::Dotted;
+    case LayerGpuLinePatternKind::Pattern:
+        return ViewportSceneLineStyle::Pattern;
     case LayerGpuLinePatternKind::Solid:
     case LayerGpuLinePatternKind::Unsupported:
     default:
@@ -2491,6 +2493,16 @@ protected:
                         gpuLayerPattern.kind);
                     sceneStroke.linePatternScale =
                         static_cast<float>(gpuLayerPattern.scale);
+                    sceneStroke.linePatternSegmentCount = std::min(
+                        static_cast<int>(gpuLayerPattern.segments.size()),
+                        static_cast<int>(sceneStroke.linePatternSegmentsWidthUnits.size()));
+                    for (int segmentIndex = 0;
+                         segmentIndex < sceneStroke.linePatternSegmentCount;
+                         ++segmentIndex) {
+                        sceneStroke.linePatternSegmentsWidthUnits[
+                            static_cast<std::size_t>(segmentIndex)] =
+                            static_cast<float>(gpuLayerPattern.segments[segmentIndex]);
+                    }
                 }
                 gpuStrokes.append(sceneStroke);
                 continue;

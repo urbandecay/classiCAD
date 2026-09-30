@@ -16,6 +16,8 @@
 #include <QVector>
 #include <QVector3D>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace classiCAD {
@@ -24,6 +26,7 @@ enum class ViewportSceneLineStyle : int {
     Solid = 0,
     Dashed = 1,
     Dotted = 2,
+    Pattern = 3,
 };
 
 struct ViewportSceneStroke {
@@ -36,12 +39,16 @@ struct ViewportSceneStroke {
     bool pointOutline = false;
     ViewportSceneLineStyle lineStyle = ViewportSceneLineStyle::Solid;
     float linePatternScale = 1.0f;
+    std::array<float, 8> linePatternSegmentsWidthUnits{};
+    int linePatternSegmentCount = 0;
 };
 
 struct ViewportSceneStrokePattern {
     ViewportSceneLineStyle style = ViewportSceneLineStyle::Solid;
     float periodPixels = 0.0f;
     float onLengthPixels = 0.0f;
+    std::array<float, 8> segmentsPixels{};
+    int segmentCount = 0;
 };
 
 // Keep the legacy dashed flag and control-guide strokes dashed while allowing
@@ -72,17 +79,37 @@ inline ViewportSceneStrokePattern viewportSceneStrokePattern(
                 safeWidth * 7.0f * safeScale};
     case ViewportSceneLineStyle::Dotted:
         return {style, safeWidth * 3.0f * safeScale,
-                safeWidth * safeScale};
+                safeWidth};
     case ViewportSceneLineStyle::Solid:
     default:
         return {ViewportSceneLineStyle::Solid, 0.0f, 0.0f};
+    case ViewportSceneLineStyle::Pattern: {
+        const int count = std::clamp(stroke.linePatternSegmentCount,
+                                     0,
+                                     static_cast<int>(stroke.linePatternSegmentsWidthUnits.size()));
+        if (count < 2 || count % 2 != 0) {
+            return {ViewportSceneLineStyle::Solid, 0.0f, 0.0f};
+        }
+        ViewportSceneStrokePattern pattern;
+        pattern.style = ViewportSceneLineStyle::Pattern;
+        pattern.segmentCount = count;
+        for (int index = 0; index < count; ++index) {
+            const float segmentPixels =
+                stroke.linePatternSegmentsWidthUnits[index] * safeWidth * safeScale;
+            if (!std::isfinite(segmentPixels) || segmentPixels <= 0.0f) {
+                return {ViewportSceneLineStyle::Solid, 0.0f, 0.0f};
+            }
+            pattern.segmentsPixels[static_cast<std::size_t>(index)] = segmentPixels;
+            pattern.periodPixels += segmentPixels;
+        }
+        return pattern;
+    }
     }
 }
 
-// Renders cached curve strokes and points into the current widget framebuffer.
-// A second instance can render transient tool previews without invalidating
-// committed-scene geometry. It also renders picture previews as GL textures;
-// committed pictures and viewport annotations remain in Qt.
+// Renders cached curve strokes, points, and picture textures into the current
+// widget framebuffer. A second instance can render transient tool previews
+// without invalidating committed-scene geometry.
 class ViewportSceneRenderer final : protected QOpenGLFunctions_3_3_Core {
 public:
     ~ViewportSceneRenderer();
@@ -111,12 +138,14 @@ private:
     QOpenGLShaderProgram pictureProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer patternOffsetBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLVertexArrayObject pictureVertexArray_;
     QOpenGLBuffer pictureVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QHash<qint64, PictureTexture> pictureTextures_;
     QVector<QByteArray> strokeGeometryKeys_;
     QVector<QPair<int, int>> strokeRanges_;
     QVector<QVector3D> cachedVertices_;
+    QVector<float> cachedPatternOffsets_;
     bool initializationAttempted_ = false;
     bool initialized_ = false;
     bool pictureInitializationAttempted_ = false;

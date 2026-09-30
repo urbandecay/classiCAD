@@ -2,6 +2,10 @@
 #include "ui/viewport/blender_grid_renderer.h"
 #include "ui/viewport/viewport_gpu_surface.h"
 #include "ui/viewport/viewport_depth_geometry.h"
+#include "ui/viewport/line_type_style.h"
+
+#include "core/document/document.h"
+#include "core/serialization/vignola_document_file.h"
 
 #include <QApplication>
 #include <QDebug>
@@ -9,6 +13,8 @@
 #include <QDir>
 #include <QEventLoop>
 #include <QMouseEvent>
+#include <QOpenGLContext>
+#include <QOpenGLFunctions>
 #include <QPainter>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -169,7 +175,9 @@ void waitForViewportTransition()
     eventLoop.exec();
 }
 
-bool benchmarkNativeViewportFrames(ViewportWidgetApi *viewport, int frameCount)
+bool benchmarkNativeViewportFrames(ViewportWidgetApi *viewport,
+                                   int frameCount,
+                                   const QString &sceneName)
 {
     auto *surface = viewport == nullptr
                         ? nullptr
@@ -237,7 +245,8 @@ bool benchmarkNativeViewportFrames(ViewportWidgetApi *viewport, int frameCount)
     const qreal percentile95Milliseconds =
         static_cast<qreal>(frameLatenciesNanoseconds[percentile95Index]) / 1.0e6;
     qInfo().noquote()
-        << QStringLiteral("Native viewport frame benchmark: frames=%1 mean=%2 ms median=%3 ms p95=%4 ms rate=%5 frames/s (wheel-input to frame-swap, includes display pacing)")
+        << QStringLiteral("Native viewport frame benchmark: scene=%1 frames=%2 mean=%3 ms median=%4 ms p95=%5 ms rate=%6 frames/s (wheel-input to frame-swap, includes display pacing)")
+               .arg(sceneName)
                .arg(frameCount)
                .arg(meanMilliseconds, 0, 'f', 2)
                .arg(medianMilliseconds, 0, 'f', 2)
@@ -245,6 +254,29 @@ bool benchmarkNativeViewportFrames(ViewportWidgetApi *viewport, int frameCount)
                .arg(meanMilliseconds > 0.0 ? 1000.0 / meanMilliseconds : 0.0,
                     0, 'f', 1);
     return true;
+}
+
+QString openGlRendererName(ViewportGpuSurface *surface)
+{
+    if (surface == nullptr || !surface->isValid()) {
+        return {};
+    }
+    surface->makeCurrent();
+    QString rendererName;
+    QOpenGLContext *context = surface->context();
+    if (context != nullptr) {
+        QOpenGLFunctions *functions = context->functions();
+        if (functions != nullptr) {
+            functions->initializeOpenGLFunctions();
+            const GLubyte *renderer = functions->glGetString(GL_RENDERER);
+            if (renderer != nullptr) {
+                rendererName = QString::fromLatin1(
+                    reinterpret_cast<const char *>(renderer));
+            }
+        }
+    }
+    surface->doneCurrent();
+    return rendererName;
 }
 
 } // namespace
@@ -257,6 +289,10 @@ int main(int argc, char **argv)
     const QSize interactionViewportSize(640, 480);
     const QSize blenderReferenceViewportSize(591, 511);
     const ViewportCameraPreferences blenderCameraPreferences{
+        50.0, 0.01, 1000.0};
+    // Keep the extreme-distance grid clip regressions independent of the
+    // matched Blender capture settings above.
+    const ViewportCameraPreferences wideClipGridPreferences{
         50.0, 0.01, 10000.0};
     const BlenderGridAppearance blenderGridAppearance{};
     passed &= check(
@@ -284,9 +320,9 @@ int main(int argc, char **argv)
     passed &= check(
         std::abs(appliedCameraPreferences.focalLengthMillimeters - 50.0) < 1.0e-9 &&
             std::abs(appliedCameraPreferences.clipStart - 0.01) < 1.0e-9 &&
-            std::abs(appliedCameraPreferences.clipEnd - 10000.0) < 1.0e-9 &&
+            std::abs(appliedCameraPreferences.clipEnd - 1000.0) < 1.0e-9 &&
             viewport->viewportAntiAliasingSamples() == 8,
-        "Blender comparison must use a 50 mm lens, 0.01/10000 clipping, and 8x AA");
+        "Blender comparison must use a 50 mm lens, 0.01/1000 clipping, and 8x AA");
     passed &= check(
         std::abs(viewport->documentSettings().gridSpacing - 1.0) < 1.0e-9,
         "Blender comparison must use the same 1-unit base grid spacing");
@@ -406,7 +442,30 @@ int main(int argc, char **argv)
                 perspectiveZoomRoundTripImageError < 2.0,
             "native perspective grid must remain visible after twenty zoom-out steps and return to the same centered view after twenty steps in");
 
-        const std::array<std::pair<const char *, ViewportViewPreset>, 8> viewMatrix{{
+        // Blender's orthographic view_distance of 60 currently matches a
+        // classiCAD zoom of about 0.681 at this viewport size. Match Blender's
+        // close/far distances (30/120) with reciprocal scale changes around
+        // that same baseline; 456 wheel units approximate a 2x scale change.
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        waitForViewportTransition();
+        sendWheel(viewport.get(), comparisonCenter, -253);
+        application.processEvents();
+        waitForViewportTransition();
+        sendWheel(viewport.get(), comparisonCenter, 456);
+        application.processEvents();
+        waitForViewportTransition();
+        saveGridCapture(QStringLiteral("viewport-native-top-close-zoom"),
+                        captureViewport(viewport.get()));
+        sendWheel(viewport.get(), comparisonCenter, -912);
+        application.processEvents();
+        waitForViewportTransition();
+        saveGridCapture(QStringLiteral("viewport-native-top-far-zoom"),
+                        captureViewport(viewport.get()));
+        sendWheel(viewport.get(), comparisonCenter, 456);
+        application.processEvents();
+        waitForViewportTransition();
+
+        const std::array<std::pair<const char *, ViewportViewPreset>, 7> orthoViewMatrix{{
             {"top", ViewportViewPreset::Top},
             {"bottom", ViewportViewPreset::Bottom},
             {"front", ViewportViewPreset::Front},
@@ -414,22 +473,38 @@ int main(int argc, char **argv)
             {"right", ViewportViewPreset::Right},
             {"left", ViewportViewPreset::Left},
             {"isometric-ortho", ViewportViewPreset::Isometric},
-            {"isometric-perspective", ViewportViewPreset::Perspective},
         }};
         bool allNativeViewsCaptured = true;
-        for (const auto &[name, preset] : viewMatrix) {
+        for (const auto &[name, preset] : orthoViewMatrix) {
             viewport->setViewPreset(preset);
             waitForViewportTransition();
             const QImage viewCapture = captureViewport(viewport.get());
             allNativeViewsCaptured &=
                 !viewCapture.isNull() &&
                 viewCapture.size() == blenderReferenceViewportSize;
-            saveGridCapture(QStringLiteral("viewport-native-") +
+            saveGridCapture(QStringLiteral("viewport-native-matched-") +
                                 QString::fromLatin1(name),
                             viewCapture);
         }
         passed &= check(allNativeViewsCaptured,
-                        "native viewport capture matrix must cover all six axis views, isometric orthographic, and perspective at Blender's reference dimensions");
+                        "native matched-scale matrix must cover all six axis views and isometric orthographic at Blender's reference dimensions");
+
+        // Restore classiCAD's 1.0 zoom before the perspective reference: that
+        // is the separately calibrated projection scale used by Blender's
+        // 60-unit isometric-perspective capture.
+        sendWheel(viewport.get(), comparisonCenter, 253);
+        application.processEvents();
+        waitForViewportTransition();
+        viewport->setViewPreset(ViewportViewPreset::Perspective);
+        waitForViewportTransition();
+        const QImage matchedPerspectiveCapture = captureViewport(viewport.get());
+        allNativeViewsCaptured &=
+            !matchedPerspectiveCapture.isNull() &&
+            matchedPerspectiveCapture.size() == blenderReferenceViewportSize;
+        saveGridCapture(QStringLiteral("viewport-native-matched-isometric-perspective"),
+                        matchedPerspectiveCapture);
+        passed &= check(allNativeViewsCaptured,
+                        "native matched-scale matrix must include the separately calibrated perspective view at Blender's reference dimensions");
 
         viewport->setViewPreset(ViewportViewPreset::Top);
         waitForViewportTransition();
@@ -437,6 +512,151 @@ int main(int argc, char **argv)
         application.processEvents();
         waitForViewportTransition();
     }
+
+    if (QApplication::platformName() == QStringLiteral("xcb") &&
+        !qEnvironmentVariable("CLASSICAD_VIEWPORT_CAPTURE_DIR").isEmpty()) {
+        const QSize stage6ViewportSize(1311, 846);
+        viewport->resize(stage6ViewportSize);
+        viewport->setPanButton(Qt::RightButton);
+        ViewportNavigationPreferences stage6Navigation =
+            viewport->navigationPreferences();
+        stage6Navigation.autoPerspective = true;
+        stage6Navigation.zoomToMouse = true;
+        stage6Navigation.orbitAroundActive = true;
+        stage6Navigation.useMouseDepthNavigate = true;
+        stage6Navigation.turntableSensitivityRadiansPerPixel =
+            0.006981316953897476;
+        stage6Navigation.orbitMethod = ViewportOrbitMethod::Turntable;
+        stage6Navigation.trackballSensitivity = 1.0;
+        stage6Navigation.zoomMethod = ViewportZoomMethod::Dolly;
+        stage6Navigation.zoomAxis = ViewportZoomAxis::Vertical;
+        stage6Navigation.invertMouseZoom = false;
+        stage6Navigation.invertZoomWheel = false;
+        viewport->setNavigationPreferences(stage6Navigation);
+        application.processEvents();
+
+        const QPointF stage6Center(stage6ViewportSize.width() * 0.5,
+                                   stage6ViewportSize.height() * 0.5);
+        const auto saveStage6Frame = [&](const QString &name) {
+            const QImage image = captureViewport(viewport.get());
+            saveGridCapture(QStringLiteral("stage6-") + name, image);
+            return image;
+        };
+        const auto prepareStage6View = [&](ViewportViewPreset preset,
+                                           const QString &name) {
+            viewport->setViewPreset(preset);
+            application.processEvents();
+            waitForViewportTransition();
+            const QImage image = saveStage6Frame(name + QStringLiteral("-before"));
+            passed &= check(!image.isNull() && image.size() == stage6ViewportSize,
+                            "Stage 6 navigation captures must use the Blender comparison viewport dimensions");
+            return image;
+        };
+        const auto sendStage6Orbit = [&](const QPointF &start,
+                                         const QPointF &delta) {
+            const QPointF end = start + delta;
+            sendMouse(viewport.get(), QEvent::MouseButtonPress, start,
+                      Qt::RightButton, Qt::RightButton, Qt::ShiftModifier);
+            sendMouse(viewport.get(), QEvent::MouseMove, end,
+                      Qt::NoButton, Qt::RightButton, Qt::ShiftModifier);
+            sendMouse(viewport.get(), QEvent::MouseButtonRelease, end,
+                      Qt::RightButton, Qt::NoButton, Qt::ShiftModifier);
+            application.processEvents();
+            waitForViewportTransition();
+        };
+        const auto compareStage6Orbit = [&](ViewportViewPreset preset,
+                                            const QString &name,
+                                            const QPointF &start,
+                                            const QPointF &delta) {
+            const QImage before = prepareStage6View(preset, name);
+            sendStage6Orbit(start, delta);
+            const QImage after = saveStage6Frame(name + QStringLiteral("-after"));
+            passed &= check(!before.isNull() && !after.isNull() && before != after &&
+                                viewport->viewPreset() == ViewportViewPreset::Custom,
+                            "Stage 6 turntable and trackball drags must change the actual viewport camera");
+        };
+
+        stage6Navigation.orbitMethod = ViewportOrbitMethod::Turntable;
+        viewport->setNavigationPreferences(stage6Navigation);
+        compareStage6Orbit(ViewportViewPreset::Top,
+                           QStringLiteral("top-horizontal-50"),
+                           stage6Center,
+                           QPointF(50.0, 0.0));
+        compareStage6Orbit(ViewportViewPreset::Top,
+                           QStringLiteral("top-vertical-50"),
+                           stage6Center,
+                           QPointF(0.0, 50.0));
+        compareStage6Orbit(ViewportViewPreset::Top,
+                           QStringLiteral("top-horizontal-150"),
+                           stage6Center,
+                           QPointF(150.0, 0.0));
+        compareStage6Orbit(ViewportViewPreset::Front,
+                           QStringLiteral("front-horizontal-75"),
+                           stage6Center,
+                           QPointF(75.0, 0.0));
+        compareStage6Orbit(ViewportViewPreset::Isometric,
+                           QStringLiteral("iso-diagonal-minus-80-plus-40"),
+                           stage6Center,
+                           QPointF(-80.0, 40.0));
+
+        stage6Navigation.orbitMethod = ViewportOrbitMethod::Trackball;
+        viewport->setNavigationPreferences(stage6Navigation);
+        const QPointF trackballStart = stage6Center + QPointF(-90.0, -40.0);
+        compareStage6Orbit(ViewportViewPreset::Isometric,
+                           QStringLiteral("trackball-offcenter-180-80"),
+                           trackballStart,
+                           QPointF(180.0, 80.0));
+
+        stage6Navigation.orbitMethod = ViewportOrbitMethod::Turntable;
+        viewport->setNavigationPreferences(stage6Navigation);
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        application.processEvents();
+        waitForViewportTransition();
+        const QPointF stage6WheelPosition(981.0, 328.0);
+        // Match the line spacing at this larger reference viewport before
+        // comparing how one wheel notch changes scale and cursor anchoring.
+        sendWheel(viewport.get(), stage6Center, 285);
+        application.processEvents();
+        waitForViewportTransition();
+        const QImage topWheelBefore =
+            saveStage6Frame(QStringLiteral("top-wheel-cursor-before"));
+        sendWheel(viewport.get(), stage6WheelPosition, 120);
+        application.processEvents();
+        waitForViewportTransition();
+        const QImage topWheelAfter =
+            saveStage6Frame(QStringLiteral("top-wheel-cursor-after"));
+        passed &= check(!topWheelBefore.isNull() && !topWheelAfter.isNull() &&
+                            topWheelBefore != topWheelAfter,
+                        "Stage 6 off-center wheel zoom must visibly change the top view");
+
+        // Undo the cursor zoom at the same location, then return the classiCAD
+        // zoom to 1.0 so the perspective comparison starts at Blender's
+        // 60-unit distance with an unshifted target.
+        sendWheel(viewport.get(), stage6WheelPosition, -120);
+        sendWheel(viewport.get(), stage6Center, -285);
+        application.processEvents();
+        waitForViewportTransition();
+        viewport->setViewPreset(ViewportViewPreset::Perspective);
+        application.processEvents();
+        waitForViewportTransition();
+        const QImage perspectiveWheelBefore =
+            saveStage6Frame(QStringLiteral("perspective-wheel-cursor-before"));
+        sendWheel(viewport.get(), stage6WheelPosition, 120);
+        application.processEvents();
+        waitForViewportTransition();
+        const QImage perspectiveWheelAfter =
+            saveStage6Frame(QStringLiteral("perspective-wheel-cursor-after"));
+        passed &= check(!perspectiveWheelBefore.isNull() &&
+                            !perspectiveWheelAfter.isNull() &&
+                            perspectiveWheelBefore != perspectiveWheelAfter,
+                        "Stage 6 off-center wheel zoom must visibly change the perspective view");
+
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        viewport->resize(interactionViewportSize);
+        application.processEvents();
+        waitForViewportTransition();
+    }
+
     const QImage beforeWheel = captureViewport(viewport.get());
     saveGridCapture(QStringLiteral("viewport-native-final-top-background"),
                     beforeWheel);
@@ -799,6 +1019,175 @@ int main(int argc, char **argv)
         auto *nativeSurface = viewport->findChild<ViewportGpuSurface *>();
         passed &= check(nativeSurface != nullptr && nativeSurface->isValid(),
                         "desktop viewport must use a valid native OpenGL surface");
+        const QString glRendererName = openGlRendererName(nativeSurface);
+        qInfo().noquote() << "Native viewport GL_RENDERER:" << glRendererName;
+        passed &= check(!glRendererName.trimmed().isEmpty(),
+                        "native viewport hardware check must report the active OpenGL renderer");
+        if (qEnvironmentVariableIsSet("CLASSICAD_REQUIRE_HARDWARE_GL")) {
+            const QString normalizedRenderer = glRendererName.toLower();
+            const bool softwareRenderer =
+                normalizedRenderer.contains(QStringLiteral("llvmpipe")) ||
+                normalizedRenderer.contains(QStringLiteral("softpipe")) ||
+                normalizedRenderer.contains(QStringLiteral("swrast")) ||
+                normalizedRenderer.contains(QStringLiteral("swiftshader")) ||
+                normalizedRenderer.contains(QStringLiteral("software rasterizer"));
+            passed &= check(!softwareRenderer,
+                            "hardware-only viewport run must not use a software OpenGL renderer");
+        }
+
+        const QSize gpuPatternSize(640, 480);
+        const QStringList gpuLayerLineTypes = standardLayerLineTypes();
+        QVector<Shape> gpuPatternShapes;
+        QVector<ViewportSceneStroke> gpuPatternStrokes;
+        QVector<qreal> gpuPatternWorldY;
+        gpuPatternShapes.reserve(gpuLayerLineTypes.size());
+        gpuPatternStrokes.reserve(gpuLayerLineTypes.size());
+        gpuPatternWorldY.reserve(gpuLayerLineTypes.size());
+        ViewportTransform gpuPatternTransform;
+        gpuPatternTransform.setCameraPreferences(blenderCameraPreferences);
+        for (int index = 0; index < gpuLayerLineTypes.size(); ++index) {
+            const qreal rowY = 78.0 + index * 13.0;
+            Shape line;
+            line.geometryType = GeometryType::Line;
+            line.workPlane = WorkPlane::XY;
+            line.points = {
+                gpuPatternTransform.screenToWorld(QPointF(60.0, rowY),
+                                                  gpuPatternSize),
+                gpuPatternTransform.screenToWorld(QPointF(580.0, rowY),
+                                                  gpuPatternSize),
+            };
+            gpuPatternWorldY.append(line.points[0].y());
+            gpuPatternShapes.append(std::move(line));
+
+            const LayerGpuLinePattern layerPattern =
+                layerGpuLinePattern(gpuLayerLineTypes[index]);
+            ViewportSceneStroke stroke;
+            stroke.shape = &gpuPatternShapes.back();
+            stroke.color = QColor(245, 222, 112);
+            stroke.width = 2.0f;
+            stroke.linePatternScale = static_cast<float>(layerPattern.scale);
+            switch (layerPattern.kind) {
+            case LayerGpuLinePatternKind::Dashed:
+                stroke.lineStyle = ViewportSceneLineStyle::Dashed;
+                break;
+            case LayerGpuLinePatternKind::Dotted:
+                stroke.lineStyle = ViewportSceneLineStyle::Dotted;
+                break;
+            case LayerGpuLinePatternKind::Pattern:
+                stroke.lineStyle = ViewportSceneLineStyle::Pattern;
+                stroke.linePatternSegmentCount = static_cast<int>(
+                    layerPattern.segments.size());
+                for (int segmentIndex = 0;
+                     segmentIndex < stroke.linePatternSegmentCount;
+                     ++segmentIndex) {
+                    stroke.linePatternSegmentsWidthUnits[
+                        static_cast<std::size_t>(segmentIndex)] =
+                        static_cast<float>(layerPattern.segments[segmentIndex]);
+                }
+                break;
+            case LayerGpuLinePatternKind::Solid:
+            case LayerGpuLinePatternKind::Unsupported:
+                stroke.lineStyle = ViewportSceneLineStyle::Solid;
+                break;
+            }
+            gpuPatternStrokes.append(stroke);
+        }
+
+        Shape gpuPicture;
+        gpuPicture.geometryType = GeometryType::Picture;
+        gpuPicture.workPlane = WorkPlane::XY;
+        gpuPicture.points = {
+            gpuPatternTransform.screenToWorld(QPointF(18.0, 18.0),
+                                              gpuPatternSize),
+            gpuPatternTransform.screenToWorld(QPointF(54.0, 18.0),
+                                              gpuPatternSize),
+            gpuPatternTransform.screenToWorld(QPointF(54.0, 54.0),
+                                              gpuPatternSize),
+            gpuPatternTransform.screenToWorld(QPointF(18.0, 54.0),
+                                              gpuPatternSize),
+        };
+        gpuPicture.pictureImage = pictureImage;
+        ViewportGpuSurface gpuSceneProbe;
+        gpuSceneProbe.resize(gpuPatternSize);
+        bool gpuPictureDrawSucceeded = false;
+        bool gpuPatternDrawSucceeded = false;
+        gpuSceneProbe.setDrawCallback(
+            [&gpuPicture,
+             &gpuPictureDrawSucceeded,
+             &gpuPatternDrawSucceeded,
+             &gpuPatternStrokes,
+             &gpuPatternTransform,
+             &gpuPatternSize](QPainter &painter,
+                             BlenderGridRenderer &,
+                             ViewportSceneRenderer &sceneRenderer,
+                             ViewportSceneRenderer &,
+                             ViewportControlPointRenderer &) {
+                painter.fillRect(QRect(QPoint(0, 0), gpuPatternSize),
+                                 QColor(34, 34, 34));
+                painter.beginNativePainting();
+                gpuPictureDrawSucceeded = sceneRenderer.drawPicture(
+                    gpuPicture, gpuPatternTransform, gpuPatternSize, 1.0, 1.0f);
+                gpuPatternDrawSucceeded = sceneRenderer.draw(
+                    gpuPatternStrokes, gpuPatternTransform, gpuPatternSize, 1.0);
+                painter.endNativePainting();
+            });
+        gpuSceneProbe.show();
+        application.processEvents();
+        const QImage gpuSceneProbeImage = gpuSceneProbe.grabFramebuffer();
+        saveGridCapture(QStringLiteral("stage7-gpu-picture-and-layer-styles"),
+                        gpuSceneProbeImage);
+        const QColor gpuPictureRed = gpuSceneProbeImage.pixelColor(28, 28);
+        const QColor gpuPictureBlue = gpuSceneProbeImage.pixelColor(28, 44);
+        const QColor gpuPictureYellow = gpuSceneProbeImage.pixelColor(44, 44);
+        const QColor gpuPictureTransparent = gpuSceneProbeImage.pixelColor(44, 28);
+        const int solidStylePixelCount = [&]() {
+            const QPointF screenPoint = gpuPatternTransform.workPlaneToScreen(
+                QPointF(0.0, gpuPatternWorldY.first()),
+                gpuPatternSize,
+                WorkPlane::XY);
+            int count = 0;
+            const int row = qRound(screenPoint.y());
+            for (int x = 60; x < 580; ++x) {
+                const QColor pixel = gpuSceneProbeImage.pixelColor(x, row);
+                count += pixel.red() > 180 && pixel.green() > 150 &&
+                         pixel.blue() < 170;
+            }
+            return count;
+        }();
+        bool allGpuPatternsVisible = solidStylePixelCount > 400;
+        bool patternedStylesHaveGaps = true;
+        for (int index = 1; index < gpuPatternWorldY.size(); ++index) {
+            const QPointF screenPoint = gpuPatternTransform.workPlaneToScreen(
+                QPointF(0.0, gpuPatternWorldY[index]),
+                gpuPatternSize,
+                WorkPlane::XY);
+            const int row = qRound(screenPoint.y());
+            int count = 0;
+            for (int x = 60; x < 580; ++x) {
+                const QColor pixel = gpuSceneProbeImage.pixelColor(x, row);
+                count += pixel.red() > 180 && pixel.green() > 150 &&
+                         pixel.blue() < 170;
+            }
+            allGpuPatternsVisible &= count > 10;
+            patternedStylesHaveGaps &= count < solidStylePixelCount - 10;
+        }
+        const QColor gpuPictureBackground(34, 34, 34);
+        const bool transparentPictureKeepsBackground =
+            std::abs(gpuPictureTransparent.red() - gpuPictureBackground.red()) <= 8 &&
+            std::abs(gpuPictureTransparent.green() - gpuPictureBackground.green()) <= 8 &&
+            std::abs(gpuPictureTransparent.blue() - gpuPictureBackground.blue()) <= 8;
+        passed &= check(gpuSceneProbe.isValid() && gpuPictureDrawSucceeded &&
+                            gpuPatternDrawSucceeded &&
+                            gpuPictureRed.red() > gpuPictureRed.green() + 60 &&
+                            gpuPictureBlue.blue() > gpuPictureBlue.red() + 60 &&
+                            gpuPictureYellow.red() > 150 &&
+                            gpuPictureYellow.green() > 150 &&
+                            transparentPictureKeepsBackground,
+                        "native picture shader must draw committed RGBA pixels and preserve transparent areas");
+        passed &= check(allGpuPatternsVisible && patternedStylesHaveGaps,
+                        "native stroke shader must visibly draw every built-in CAD layer line style with the expected gaps");
+        gpuSceneProbe.hide();
+
         BlenderGridRenderer gridRenderer;
         ViewportTransform orthographicTransform;
         orthographicTransform.setCameraPreferences(blenderCameraPreferences);
@@ -878,7 +1267,7 @@ int main(int argc, char **argv)
         const auto renderCameraRelativeAxis = [&](qreal yawRadians,
                                                   const Point3D &orbitPivot) {
             ViewportTransform transform;
-            transform.setCameraPreferences(blenderCameraPreferences);
+            transform.setCameraPreferences(wideClipGridPreferences);
             ViewportCameraState camera = transform.cameraState();
             camera.yawRadians = yawRadians;
             camera.pitchRadians = 0.12;
@@ -928,7 +1317,7 @@ int main(int argc, char **argv)
 
         for (int yawStep = 0; yawStep < 8; ++yawStep) {
             ViewportTransform transform;
-            transform.setCameraPreferences(blenderCameraPreferences);
+            transform.setCameraPreferences(wideClipGridPreferences);
             ViewportCameraState camera = transform.cameraState();
             camera.yawRadians = yawStep * halfPi / 2.0;
             camera.pitchRadians = 0.55;
@@ -1016,8 +1405,61 @@ int main(int argc, char **argv)
                             std::abs(pickedPoint.z - 10.0) < 0.1,
                         "GPU depth picking must unproject the frontmost overlapping scene point");
         depthProbe.hide();
-        passed &= check(benchmarkNativeViewportFrames(viewport.get(), 90),
-                        "native viewport frame benchmark must receive each requested frame swap");
+        passed &= check(benchmarkNativeViewportFrames(
+                            viewport.get(), 90, QStringLiteral("small scene")),
+                        "native viewport small-scene benchmark must receive each requested frame swap");
+
+        if (qEnvironmentVariableIsSet("CLASSICAD_RUN_LARGE_GPU_CHECKS")) {
+            constexpr int largeSceneStrokeCount = 1500;
+            Document largeGpuDocument;
+            const LayerId largeSceneLayer = largeGpuDocument.activeLayerId();
+            largeGpuDocument.setLayerLineType(largeSceneLayer,
+                                              QStringLiteral("Continuous"));
+            largeGpuDocument.setLayerColor(largeSceneLayer,
+                                           QColor(245, 222, 112));
+            for (int index = 0; index < largeSceneStrokeCount; ++index) {
+                const qreal y = -240.0 +
+                                480.0 * index /
+                                    static_cast<qreal>(largeSceneStrokeCount - 1);
+                Shape line;
+                line.geometryType = GeometryType::Line;
+                line.workPlane = WorkPlane::XY;
+                line.points = {QPointF(-600.0, y), QPointF(600.0, y)};
+                largeGpuDocument.append(line);
+            }
+
+            QTemporaryDir largeSceneDirectory;
+            const QString largeScenePath = largeSceneDirectory.filePath(
+                QStringLiteral("stage7-large-scene.vignola"));
+            QString largeSceneError;
+            const bool largeSceneSaved = largeSceneDirectory.isValid() &&
+                saveVignolaDocument(largeScenePath,
+                                    largeGpuDocument,
+                                    &largeSceneError);
+            passed &= check(largeSceneSaved,
+                            "large GPU performance scene must save to a temporary native document");
+            if (largeSceneSaved) {
+                passed &= check(viewport->loadVignolaDocument(
+                                    largeScenePath, &largeSceneError),
+                                "large GPU performance scene must load into the native viewport");
+                viewport->resize(QSize(1280, 720));
+                viewport->setViewPreset(ViewportViewPreset::Top);
+                application.processEvents();
+                waitForViewportTransition();
+                saveGridCapture(QStringLiteral("stage7-large-scene-1500-strokes"),
+                                captureViewport(viewport.get()));
+                qInfo().noquote()
+                    << QStringLiteral("Large-scene hardware check: renderer=%1 strokes=%2 viewport=%3x%4")
+                           .arg(glRendererName)
+                           .arg(largeSceneStrokeCount)
+                           .arg(viewport->width())
+                           .arg(viewport->height());
+                passed &= check(benchmarkNativeViewportFrames(
+                                    viewport.get(), 60,
+                                    QStringLiteral("1500 strokes at 1280x720")),
+                                "large-scene viewport benchmark must receive each requested frame swap");
+            }
+        }
     }
 
     return passed ? 0 : 1;

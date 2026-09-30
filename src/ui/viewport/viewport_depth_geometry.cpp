@@ -36,15 +36,17 @@ void appendCurveDepthVertices(const Shape &shape,
             ++nonZeroSpans;
         }
     }
-    const int samplesPerSpan = curve.degree <= 1 ? 64 : 32;
-    constexpr int maximumSampleCount = 2048;
+    // A degree-one NURBS is exactly linear within each knot span, so its
+    // endpoints are sufficient. Higher-degree curves need enough vertices to
+    // stay smooth at maximum orthographic zoom. Bound their normal sampling
+    // budget; the resulting vertices are cached by the GPU scene renderer.
+    const int samplesPerSpan = curve.degree <= 1 ? 1 : 128;
+    constexpr int maximumSampleBudget = 8192;
     const int samplesForEachSpan =
         std::max(1,
                  std::min(samplesPerSpan,
-                          maximumSampleCount / std::max(1, nonZeroSpans)));
+                          maximumSampleBudget / std::max(1, nonZeroSpans)));
 
-    QVector3D previousPoint;
-    bool hasPreviousPoint = false;
     for (int spanIndex = curve.degree;
          spanIndex < curve.controlPoints.size();
          ++spanIndex) {
@@ -53,10 +55,9 @@ void appendCurveDepthVertices(const Shape &shape,
         if (spanEnd <= spanStart) {
             continue;
         }
+        QVector3D previousPoint;
+        bool hasPreviousPoint = false;
         for (int sample = 0; sample <= samplesForEachSpan; ++sample) {
-            if (spanIndex > curve.degree && sample == 0) {
-                continue;
-            }
             const qreal fraction = static_cast<qreal>(sample) /
                                    samplesForEachSpan;
             const qreal parameter = spanStart +

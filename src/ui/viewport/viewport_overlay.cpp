@@ -311,21 +311,23 @@ void ViewportOverlay::drawLinePreview(QPainter &painter,
                                       const QPointF &cursorWorld,
                                       bool cursorValid,
                                       const SnapResult &currentSnap,
-                                      const QSize &viewportSize) const
+                                      const QSize &viewportSize,
+                                      bool drawCurve) const
 {
     const QColor lineColor(QStringLiteral("#e6b85c"));
     const QColor pointColor(QStringLiteral("#f0a45a"));
 
-    painter.setPen(QPen(lineColor, 2.0));
-    for (int index = 0; index + 1 < pendingPoints.size(); ++index) {
-        painter.drawLine(transform_.worldToScreen(pendingPoints[index], viewportSize),
-                         transform_.worldToScreen(pendingPoints[index + 1], viewportSize));
-    }
-
-    if (!pendingPoints.isEmpty() && cursorValid) {
+    if (drawCurve) {
         painter.setPen(QPen(lineColor, 2.0));
-        painter.drawLine(transform_.worldToScreen(pendingPoints.back(), viewportSize),
-                         transform_.worldToScreen(cursorWorld, viewportSize));
+        for (int index = 0; index + 1 < pendingPoints.size(); ++index) {
+            painter.drawLine(transform_.worldToScreen(pendingPoints[index], viewportSize),
+                             transform_.worldToScreen(pendingPoints[index + 1], viewportSize));
+        }
+
+        if (!pendingPoints.isEmpty() && cursorValid) {
+            painter.drawLine(transform_.worldToScreen(pendingPoints.back(), viewportSize),
+                             transform_.worldToScreen(cursorWorld, viewportSize));
+        }
     }
 
     painter.setPen(QPen(pointColor, 1.5));
@@ -352,7 +354,8 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
                                      bool cursorValid,
                                      qreal arcSweep,
                                      const SnapResult &currentSnap,
-                                     const QSize &viewportSize) const
+                                     const QSize &viewportSize,
+                                     bool drawCurve) const
 {
     if (pendingPoints.isEmpty()) {
         if (currentSnap.isValid()) {
@@ -378,7 +381,7 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
                              transform_.worldToScreen(pendingPoints[1], viewportSize));
 
             painter.setPen(QPen(arcColor, 2.0));
-            if (std::abs(arcSweep) > 1e-12) {
+            if (drawCurve && std::abs(arcSweep) > 1e-12) {
                 renderer_.drawCenterArcWithSweep(painter,
                                                  pendingPoints[0],
                                                  pendingPoints[1],
@@ -397,11 +400,13 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
             painter.drawLine(transform_.worldToScreen(pendingPoints[0], viewportSize),
                              transform_.worldToScreen(pendingPoints[1], viewportSize));
             painter.setPen(QPen(arcColor, 2.0));
-            renderer_.drawCircularArc(painter,
-                                      pendingPoints[0],
-                                      pendingPoints[1],
-                                      cursorWorld,
-                                      viewportSize);
+            if (drawCurve) {
+                renderer_.drawCircularArc(painter,
+                                          pendingPoints[0],
+                                          pendingPoints[1],
+                                          cursorWorld,
+                                          viewportSize);
+            }
         }
     }
 
@@ -428,7 +433,8 @@ void ViewportOverlay::drawCirclePreview(QPainter &painter,
                                         const QPointF &cursorWorld,
                                         bool cursorValid,
                                         const SnapResult &currentSnap,
-                                        const QSize &viewportSize) const
+                                        const QSize &viewportSize,
+                                        bool drawCurve) const
 {
     if (pendingPoints.isEmpty()) {
         return;
@@ -460,7 +466,7 @@ void ViewportOverlay::drawCirclePreview(QPainter &painter,
         }
     }
 
-    if (definitionValid) {
+    if (drawCurve && definitionValid) {
         const Shape::NurbsCurve2D curve = makeCircleNurbs(definition);
         if (validateNurbsCurve(curve)) {
             painter.save();
@@ -515,7 +521,8 @@ void ViewportOverlay::drawEllipsePreview(QPainter &painter,
                                          const QPointF &cursorWorld,
                                          bool cursorValid,
                                          const SnapResult &currentSnap,
-                                         const QSize &viewportSize) const
+                                         const QSize &viewportSize,
+                                         bool drawCurve) const
 {
     if (pendingPoints.isEmpty()) {
         if (currentSnap.isValid()) {
@@ -534,7 +541,7 @@ void ViewportOverlay::drawEllipsePreview(QPainter &painter,
 
     const EllipseMode mode = ellipseModeForTool(tool);
     const int requiredPointCount = requiredPoints(tool);
-    if (candidatePoints.size() >= requiredPointCount) {
+    if (drawCurve && candidatePoints.size() >= requiredPointCount) {
         const Shape::NurbsCurve2D curve = makeEllipseNurbs(mode, candidatePoints);
         if (validateNurbsCurve(curve)) {
             painter.save();
@@ -589,7 +596,8 @@ void ViewportOverlay::drawRectanglePreview(QPainter &painter,
                                            const QPointF &cursorWorld,
                                            bool cursorValid,
                                            const SnapResult &currentSnap,
-                                           const QSize &viewportSize) const
+                                           const QSize &viewportSize,
+                                           bool drawCurve) const
 {
     if (pendingPoints.isEmpty()) {
         if (currentSnap.isValid()) {
@@ -638,11 +646,13 @@ void ViewportOverlay::drawRectanglePreview(QPainter &painter,
             screenPoints.append(transform_.worldToScreen(point, viewportSize));
         }
 
-        painter.setPen(QPen(rectangleColor, 2.0));
-        painter.setBrush(Qt::NoBrush);
-        for (int index = 0; index < screenPoints.size(); ++index) {
-            painter.drawLine(screenPoints[index],
-                             screenPoints[(index + 1) % screenPoints.size()]);
+        if (drawCurve) {
+            painter.setPen(QPen(rectangleColor, 2.0));
+            painter.setBrush(Qt::NoBrush);
+            for (int index = 0; index < screenPoints.size(); ++index) {
+                painter.drawLine(screenPoints[index],
+                                 screenPoints[(index + 1) % screenPoints.size()]);
+            }
         }
 
         const qreal width = std::hypot(rectanglePoints[1].x() - rectanglePoints[0].x(),
@@ -679,7 +689,8 @@ void ViewportOverlay::drawPolygonPreview(QPainter &painter,
                                          const QPointF &cursorWorld,
                                          bool cursorValid,
                                          const SnapResult &currentSnap,
-                                         const QSize &viewportSize) const
+                                         const QSize &viewportSize,
+                                         bool drawCurve) const
 {
     if (pendingPoints.isEmpty()) {
         if (currentSnap.isValid()) {
@@ -709,7 +720,7 @@ void ViewportOverlay::drawPolygonPreview(QPainter &painter,
         painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
         painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
                          transform_.worldToScreen(cursorWorld, viewportSize));
-    } else if (vertices.size() >= 3) {
+    } else if (drawCurve && vertices.size() >= 3) {
         painter.setPen(QPen(polygonColor, 2.0));
         for (int index = 0; index < vertices.size(); ++index) {
             painter.drawLine(transform_.worldToScreen(vertices[index], viewportSize),
@@ -745,7 +756,8 @@ void ViewportOverlay::drawPointPreview(QPainter &painter,
                                        const QPointF &cursorWorld,
                                        bool cursorValid,
                                        const SnapResult &currentSnap,
-                                       const QSize &viewportSize) const
+                                       const QSize &viewportSize,
+                                       bool drawPoint) const
 {
     if (!cursorValid) {
         return;
@@ -753,9 +765,11 @@ void ViewportOverlay::drawPointPreview(QPainter &painter,
 
     const QPointF screenPoint = transform_.worldToScreen(cursorWorld, viewportSize);
     const QColor pointColor(QStringLiteral("#e6b85c"));
-    painter.setPen(QPen(pointColor, 1.5));
-    painter.setBrush(pointColor);
-    painter.drawEllipse(screenPoint, 4.5, 4.5);
+    if (drawPoint) {
+        painter.setPen(QPen(pointColor, 1.5));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(screenPoint, 4.5, 4.5);
+    }
     if (currentSnap.isValid()) {
         drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
     }

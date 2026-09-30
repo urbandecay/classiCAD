@@ -19,6 +19,7 @@ namespace classiCAD {
 class ViewportGpuSurface final : public QOpenGLWidget {
 public:
     using DrawCallback = std::function<void(QPainter &, BlenderGridRenderer &,
+                                            ViewportSceneRenderer &,
                                             ViewportSceneRenderer &)>;
 
     explicit ViewportGpuSurface(QWidget *parent = nullptr);
@@ -40,6 +41,7 @@ private:
     DrawCallback drawCallback_;
     std::unique_ptr<BlenderGridRenderer> gridRenderer_;
     std::unique_ptr<ViewportSceneRenderer> sceneRenderer_;
+    std::unique_ptr<ViewportSceneRenderer> previewRenderer_;
 };
 
 } // namespace classiCAD

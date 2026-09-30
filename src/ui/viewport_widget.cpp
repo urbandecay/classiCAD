@@ -90,6 +90,14 @@ void fillViewportBackground(QPainter &painter, const QRect &bounds)
 
 } // namespace
 
+struct TransientPreviewStroke {
+    Shape shape;
+    QColor color;
+    float width = 1.5f;
+    bool controlGuide = false;
+    float pointDiameter = 0.0f;
+};
+
 enum class DragAxisLock {
     None,
     X,
@@ -247,8 +255,10 @@ public:
                 blenderGridRenderer_.antiAliasingSamples());
             gpuSurface_->setDrawCallback(
                 [this](QPainter &painter, BlenderGridRenderer &gridRenderer,
-                       ViewportSceneRenderer &sceneRenderer) {
-                    paintViewport(painter, &gridRenderer, &sceneRenderer);
+                       ViewportSceneRenderer &sceneRenderer,
+                       ViewportSceneRenderer &previewRenderer) {
+                    paintViewport(painter, &gridRenderer, &sceneRenderer,
+                                  &previewRenderer);
                 });
             gpuSurface_->show();
         }
@@ -2151,7 +2161,7 @@ protected:
         }
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        paintViewport(painter, nullptr, nullptr);
+        paintViewport(painter, nullptr, nullptr, nullptr);
     }
 
     void resizeEvent(QResizeEvent *event) override
@@ -2192,7 +2202,8 @@ protected:
 
     void paintViewport(QPainter &painter,
                        BlenderGridRenderer *nativeRenderer,
-                       ViewportSceneRenderer *sceneRenderer)
+                       ViewportSceneRenderer *sceneRenderer,
+                       ViewportSceneRenderer *previewRenderer)
     {
         updateAssociativeDimensions(document_, curveSampler_);
         const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
@@ -2230,6 +2241,12 @@ protected:
                                      ? rasterScenePainter
                                      : painter;
         QVector<ViewportSceneStroke> gpuStrokes;
+        QVector<TransientPreviewStroke> gpuPreviewGeometry;
+        gpuPreviewGeometry.reserve(duplicatePreviewShapes_.size() +
+                                   mirrorShapeIndices_.size() + 8);
+        QVector<bool> gpuDuplicatePreviewHandled(duplicatePreviewShapes_.size(), false);
+        QVector<ObjectId> gpuMirrorPreviewHandled;
+        bool gpuActiveToolPreview = false;
         int visibleShapeIndex = 0;
 
         for (int index = 0; index < shapes_.size(); ++index) {
@@ -2354,6 +2371,118 @@ protected:
                           layerLineWeightMm);
             }
         }
+
+        if (sceneRenderer != nullptr && previewRenderer != nullptr) {
+            const auto addPreviewShape =
+                [&gpuPreviewGeometry](const Shape &shape,
+                                     const QColor &color,
+                                     float width,
+                                     bool controlGuide,
+                                     float pointDiameter) {
+                    const GeometryType type = shape.geometryType;
+                    const bool supportedType =
+                        type == GeometryType::Point || type == GeometryType::Line ||
+                        type == GeometryType::Rectangle || type == GeometryType::Polygon ||
+                        type == GeometryType::Circle || type == GeometryType::Ellipse ||
+                        type == GeometryType::Arc || type == GeometryType::PolyCurve ||
+                        type == GeometryType::Bezier || type == GeometryType::Nurbs;
+                    if (!supportedType || isDimensionGeometryType(type) ||
+                        type == GeometryType::Picture) {
+                        return false;
+                    }
+                    if ((type == GeometryType::Point && shape.points.isEmpty()) ||
+                        ((type == GeometryType::Circle || type == GeometryType::Ellipse ||
+                          type == GeometryType::Arc || type == GeometryType::Bezier ||
+                          type == GeometryType::Nurbs) &&
+                         !validateNurbsCurve(shape.nurbs)) ||
+                        (type == GeometryType::PolyCurve && shape.components.isEmpty())) {
+                        return false;
+                    }
+                    gpuPreviewGeometry.append(
+                        {shape, color, width, controlGuide, pointDiameter});
+                    return true;
+                };
+
+            const QColor previewColor(QStringLiteral("#e6b85c"));
+            for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
+                gpuDuplicatePreviewHandled[index] = addPreviewShape(
+                    duplicatePreviewShapes_[index], previewColor, 1.5f, false, 0.0f);
+            }
+
+            if (activeTool_ == Tool::Mirror && !pendingPoints_.isEmpty() &&
+                cursorValid_) {
+                for (const ObjectId objectId : mirrorShapeIndices_) {
+                    const int shapeIndex = objectIndex(objectId);
+                    if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
+                        !document_.isObjectVisible(objectId)) {
+                        continue;
+                    }
+                    Shape mirroredShape;
+                    if (mirrorShapeAcrossLine(shapes_[shapeIndex],
+                                              pendingPoints_.first(),
+                                              cursorWorld_,
+                                              &mirroredShape)) {
+                        if (addPreviewShape(mirroredShape,
+                                            previewColor,
+                                            1.5f,
+                                            false,
+                                            0.0f)) {
+                            gpuMirrorPreviewHandled.append(objectId);
+                        }
+                    }
+                }
+            }
+
+            if (controllerPreviewShapeVisible_ &&
+                !isDimensionGeometryType(controllerPreviewShape_.geometryType)) {
+                gpuActiveToolPreview |= addPreviewShape(
+                    controllerPreviewShape_, previewColor, 1.5f, false, 0.0f);
+            }
+
+            if (activeTool_ == Tool::Point && cursorValid_) {
+                Shape pointPreview;
+                if (makeToolShape(Tool::Point,
+                                  {cursorWorld_},
+                                  arcMode_,
+                                  arcPreviewSweepAngle_,
+                                  &pointPreview)) {
+                    gpuActiveToolPreview |= addPreviewShape(
+                        pointPreview, previewColor, 1.5f, false, 9.0f);
+                }
+            } else if (activeTool_ != Tool::Picture &&
+                       activeTool_ != Tool::Mirror &&
+                       activeTool_ != Tool::Rotate &&
+                       activeTool_ != Tool::Scale &&
+                       !pendingPoints_.isEmpty() && cursorValid_) {
+                QVector<QPointF> candidatePoints = pendingPoints_;
+                candidatePoints.append(cursorWorld_);
+                Shape toolPreview;
+                if (makeToolShape(activeTool_,
+                                  candidatePoints,
+                                  arcMode_,
+                                  arcPreviewSweepAngle_,
+                                  &toolPreview)) {
+                    gpuActiveToolPreview |= addPreviewShape(
+                        toolPreview,
+                        previewColor,
+                        2.0f,
+                        false,
+                        toolPreview.geometryType == GeometryType::Point ? 9.0f : 0.0f);
+                }
+            }
+        }
+
+        QVector<ViewportSceneStroke> gpuPreviewStrokes;
+        gpuPreviewStrokes.reserve(gpuPreviewGeometry.size());
+        for (const TransientPreviewStroke &preview : gpuPreviewGeometry) {
+            gpuPreviewStrokes.append({&preview.shape,
+                                      preview.color,
+                                      preview.width,
+                                      preview.controlGuide,
+                                      preview.pointDiameter});
+        }
+
+        bool gpuPreviewRendered = false;
         if (nativeRenderer != nullptr) {
             painter.beginNativePainting();
             const bool sceneDrawn = sceneRenderer == nullptr ||
@@ -2363,6 +2492,10 @@ protected:
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 viewportTransform_, size(), devicePixelRatioF(),
                 visibleShapes, baseGridStep, gridAppearance_);
+            gpuPreviewRendered = previewRenderer != nullptr &&
+                                 previewRenderer->draw(gpuPreviewStrokes,
+                                                       viewportTransform_, size(),
+                                                       devicePixelRatioF());
             painter.endNativePainting();
             if (!sceneDrawn) {
                 for (const ViewportSceneStroke &stroke : gpuStrokes) {
@@ -2430,8 +2563,10 @@ protected:
         }
 
         if (duplicateActive_) {
-            for (const Shape &previewShape : duplicatePreviewShapes_) {
-                drawShape(painter, previewShape, true);
+            for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
+                if (!gpuPreviewRendered || !gpuDuplicatePreviewHandled.value(index)) {
+                    drawShape(painter, duplicatePreviewShapes_[index], true);
+                }
             }
         }
 
@@ -2488,36 +2623,51 @@ protected:
                 drawShape(painter, picturePreview, true, false, false);
             }
         } else if (activeTool_ == Tool::TangentFromCurve) {
-            drawLineToolPreview(painter);
+            drawLineToolPreview(painter,
+                                !gpuActiveToolPreview || !gpuPreviewRendered);
             if (!pendingPoints_.isEmpty()) {
                 drawSnapMarker(painter, SnapType::Tangent, pendingPoints_.first());
             }
         } else if (activeTool_ == Tool::PerpendicularFromCurve) {
-            drawLineToolPreview(painter);
+            drawLineToolPreview(painter,
+                                !gpuActiveToolPreview || !gpuPreviewRendered);
             if (!pendingPoints_.isEmpty()) {
                 drawSnapMarker(painter,
                                SnapType::Perpendicular,
                                pendingPoints_.first());
             }
         } else if (activeTool_ == Tool::Line && lineCommandActive_) {
-            drawLineToolPreview(painter);
+            drawLineToolPreview(painter,
+                                !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::Mirror) {
-            drawMirrorToolPreview(painter);
-            drawLineToolPreview(painter);
+            drawMirrorToolPreview(
+                painter,
+                gpuPreviewRendered ? gpuMirrorPreviewHandled : QVector<ObjectId>{});
+            drawLineToolPreview(painter,
+                                !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::Arc) {
-            drawArcToolPreview(painter);
+            drawArcToolPreview(painter,
+                               !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (isCircleConstructionTool(activeTool_) && !pendingPoints_.isEmpty()) {
-            drawCircleToolPreview(painter);
+            drawCircleToolPreview(painter,
+                                  !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (isCircleTangentTool(activeTool_)) {
-            drawCircleTangentToolPreview(painter);
+            drawCircleTangentToolPreview(painter,
+                                         !gpuActiveToolPreview ||
+                                             !gpuPreviewRendered);
         } else if (isEllipseTool(activeTool_)) {
-            drawEllipseToolPreview(painter);
+            drawEllipseToolPreview(painter,
+                                   !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (isRectangleTool(activeTool_)) {
-            drawRectangleToolPreview(painter);
+            drawRectangleToolPreview(painter,
+                                     !gpuActiveToolPreview ||
+                                         !gpuPreviewRendered);
         } else if (isPolygonTool(activeTool_)) {
-            drawPolygonToolPreview(painter);
+            drawPolygonToolPreview(painter,
+                                   !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::Point) {
-            drawPointToolPreview(painter);
+            drawPointToolPreview(painter,
+                                 !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::Rotate) {
             drawRotateToolPreview(painter);
         } else if (activeTool_ == Tool::Scale && scaleStep_ == 2) {
@@ -2541,7 +2691,9 @@ protected:
                                {}};
             previewShape.workPlane = viewportTransform_.workPlane();
             previewShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
-            drawShape(painter, previewShape, true);
+            if (!gpuActiveToolPreview || !gpuPreviewRendered) {
+                drawShape(painter, previewShape, true);
+            }
         }
 
         if ((grabActive_ || duplicateActive_ || activeTool_ == Tool::Scale ||
@@ -9535,17 +9687,20 @@ private:
         viewportOverlay_.drawSnapMarker(painter, type, worldPoint, size());
     }
 
-    void drawLineToolPreview(QPainter &painter)
+    void drawLineToolPreview(QPainter &painter, bool drawCurve = true)
     {
         viewportOverlay_.drawLinePreview(painter,
                                          pendingPoints_,
                                          cursorWorld_,
                                          cursorValid_,
                                          currentSnap_,
-                                         size());
+                                         size(),
+                                         drawCurve);
     }
 
-    void drawMirrorToolPreview(QPainter &painter)
+    void drawMirrorToolPreview(
+        QPainter &painter,
+        const QVector<ObjectId> &gpuHandledObjects = {})
     {
         if (pendingPoints_.isEmpty() || !cursorValid_) {
             return;
@@ -9565,7 +9720,9 @@ private:
                                       axisStart,
                                       axisEnd,
                                       &mirroredShape)) {
-                drawShape(painter, mirroredShape, true, false, false);
+                if (!gpuHandledObjects.contains(objectId)) {
+                    drawShape(painter, mirroredShape, true, false, false);
+                }
                 if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
                     drawSubdivisionPoints(painter,
                                           mirroredShape,
@@ -9717,7 +9874,7 @@ private:
         arcPreviewPreviousAngle_ = angle;
     }
 
-    void drawArcToolPreview(QPainter &painter)
+    void drawArcToolPreview(QPainter &painter, bool drawCurve = true)
     {
         viewportOverlay_.drawArcPreview(painter,
                                         pendingPoints_,
@@ -9726,10 +9883,11 @@ private:
                                         cursorValid_,
                                         arcPreviewSweepAngle_,
                                         currentSnap_,
-                                        size());
+                                        size(),
+                                        drawCurve);
     }
 
-    void drawCircleToolPreview(QPainter &painter)
+    void drawCircleToolPreview(QPainter &painter, bool drawCurve = true)
     {
         viewportOverlay_.drawCirclePreview(painter,
                                            activeTool_,
@@ -9737,17 +9895,19 @@ private:
                                            cursorWorld_,
                                            cursorValid_,
                                            currentSnap_,
-                                           size());
+                                           size(),
+                                           drawCurve);
     }
 
-    void drawCircleTangentToolPreview(QPainter &painter)
+    void drawCircleTangentToolPreview(QPainter &painter,
+                                      bool drawPreviewGeometry = true)
     {
-        if (controllerPreviewShapeVisible_) {
+        if (controllerPreviewShapeVisible_ && drawPreviewGeometry) {
             drawShape(painter, controllerPreviewShape_, true);
         }
     }
 
-    void drawEllipseToolPreview(QPainter &painter)
+    void drawEllipseToolPreview(QPainter &painter, bool drawCurve = true)
     {
         viewportOverlay_.drawEllipsePreview(painter,
                                              activeTool_,
@@ -9755,10 +9915,11 @@ private:
                                              cursorWorld_,
                                              cursorValid_,
                                              currentSnap_,
-                                             size());
+                                             size(),
+                                             drawCurve);
     }
 
-    void drawRectangleToolPreview(QPainter &painter)
+    void drawRectangleToolPreview(QPainter &painter, bool drawCurve = true)
     {
         viewportOverlay_.drawRectanglePreview(painter,
                                               activeTool_,
@@ -9766,10 +9927,11 @@ private:
                                               cursorWorld_,
                                               cursorValid_,
                                               currentSnap_,
-                                              size());
+                                              size(),
+                                              drawCurve);
     }
 
-    void drawPolygonToolPreview(QPainter &painter)
+    void drawPolygonToolPreview(QPainter &painter, bool drawCurve = true)
     {
         viewportOverlay_.drawPolygonPreview(painter,
                                             activeTool_,
@@ -9778,7 +9940,8 @@ private:
                                             cursorWorld_,
                                             cursorValid_,
                                             currentSnap_,
-                                            size());
+                                            size(),
+                                            drawCurve);
     }
 
     void drawControlPoints(QPainter &painter, const Shape &shape, int shapeIndex)
@@ -9839,13 +10002,14 @@ private:
         viewportTransform_.setWorkPlane(previousPlane, previousOffset);
     }
 
-    void drawPointToolPreview(QPainter &painter)
+    void drawPointToolPreview(QPainter &painter, bool drawPoint = true)
     {
         viewportOverlay_.drawPointPreview(painter,
                                           cursorWorld_,
                                           cursorValid_,
                                           currentSnap_,
-                                          size());
+                                          size(),
+                                          drawPoint);
     }
 
     void drawRotateToolPreview(QPainter &painter)

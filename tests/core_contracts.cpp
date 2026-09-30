@@ -948,6 +948,8 @@ int main(int argc, char **argv)
         depthLine, depthPoint, depthPicture, depthDimension};
     const ViewportDepthGeometry depthGeometry =
         buildViewportDepthGeometry(depthShapes);
+    const ViewportDepthGeometry linearDepthGeometry =
+        buildViewportDepthGeometry(depthLine);
     const QByteArray depthGeometryKey =
         viewportDepthGeometryCacheKey(depthShapes);
     QVector<Shape> editedDepthShapes = depthShapes;
@@ -966,6 +968,32 @@ int main(int argc, char **argv)
                         depthGeometryKey !=
                             viewportDepthGeometryCacheKey(editedDepthShapes),
                     "viewport depth geometry must follow each object's workplane and represent curves, point markers, and picture surfaces while excluding dimension annotations");
+    passed &= check(linearDepthGeometry.lineVertices.size() == 2,
+                    "degree-one NURBS scene strokes must emit only exact knot-span endpoints");
+
+    Shape closeZoomCircle;
+    closeZoomCircle.geometryType = GeometryType::Circle;
+    closeZoomCircle.points = {QPointF(0.0, 0.0), QPointF(100.0, 0.0)};
+    closeZoomCircle.nurbs = makeCircleNurbs(closeZoomCircle.points);
+    const ViewportDepthGeometry closeZoomCircleGeometry =
+        buildViewportDepthGeometry(closeZoomCircle);
+    qreal maximumCloseZoomErrorPixels = 0.0;
+    for (int index = 0;
+         index + 1 < closeZoomCircleGeometry.lineVertices.size();
+         index += 2) {
+        const QVector3D &first = closeZoomCircleGeometry.lineVertices[index];
+        const QVector3D &second = closeZoomCircleGeometry.lineVertices[index + 1];
+        const qreal midpointX = (first.x() + second.x()) * 0.5;
+        const qreal midpointY = (first.y() + second.y()) * 0.5;
+        const qreal radialError = std::abs(
+            100.0 - std::hypot(midpointX, midpointY));
+        maximumCloseZoomErrorPixels =
+            std::max(maximumCloseZoomErrorPixels, radialError * 12.0);
+    }
+    passed &= check(closeZoomCircleGeometry.lineVertices.size() >= 1024 &&
+                        maximumCloseZoomErrorPixels < 0.1,
+                    "GPU curve tessellation must keep an exact radius-100 NURBS circle below 0.1 viewport pixels of chord error at maximum orthographic zoom");
+
     const QPointF serviceWorldPoint(12.5, -7.25);
     const QPointF serviceScreenPoint =
         viewportTransform.worldToScreen(serviceWorldPoint, viewportSize);

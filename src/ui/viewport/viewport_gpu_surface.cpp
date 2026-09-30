@@ -14,6 +14,7 @@ ViewportGpuSurface::ViewportGpuSurface(QWidget *parent)
     : QOpenGLWidget(parent)
     , gridRenderer_(std::make_unique<BlenderGridRenderer>())
     , sceneRenderer_(std::make_unique<ViewportSceneRenderer>())
+    , previewRenderer_(std::make_unique<ViewportSceneRenderer>())
 {
     QSurfaceFormat format = QSurfaceFormat::defaultFormat();
     format.setVersion(3, 3);
@@ -29,6 +30,7 @@ ViewportGpuSurface::~ViewportGpuSurface()
     if (isValid()) {
         makeCurrent();
     }
+    previewRenderer_.reset();
     sceneRenderer_.reset();
     gridRenderer_.reset();
     if (isValid()) {
@@ -102,7 +104,7 @@ void ViewportGpuSurface::paintGL()
     if (drawCallback_) {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        drawCallback_(painter, *gridRenderer_, *sceneRenderer_);
+        drawCallback_(painter, *gridRenderer_, *sceneRenderer_, *previewRenderer_);
     }
 }
 

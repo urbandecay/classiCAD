@@ -329,13 +329,35 @@ int main(int argc, char **argv)
 
     const QImage beforeRectangle = captureViewport(viewport.get());
     viewport->setTool(ToolId::Rectangle);
-    for (const QPointF point : {QPointF(170.0, 290.0),
-                                QPointF(330.0, 360.0)}) {
-        sendMouse(viewport.get(), QEvent::MouseButtonPress, point,
-                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-        sendMouse(viewport.get(), QEvent::MouseButtonRelease, point,
-                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    const QPointF rectangleStart(170.0, 290.0);
+    const QPointF rectangleEnd(330.0, 360.0);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, rectangleStart,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, rectangleStart,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseMove, rectangleEnd,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+    const QImage rectanglePreview = captureViewport(viewport.get());
+    const auto previewGoldPixels = [](const QImage &image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor color = image.pixelColor(x, y);
+                count += color.red() > 175 && color.green() > 115 &&
+                         color.green() < 215 && color.blue() < 140;
+            }
+        }
+        return count;
+    };
+    if (QApplication::platformName() == QStringLiteral("xcb")) {
+        passed &= check(previewGoldPixels(rectanglePreview) > 20,
+                        "in-progress rectangle preview must be rendered into the native OpenGL viewport");
     }
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, rectangleEnd,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, rectangleEnd,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     viewport->setTool(ToolId::Select);
     application.processEvents();
     const QImage afterRectangle = captureViewport(viewport.get());
@@ -497,6 +519,7 @@ int main(int argc, char **argv)
         depthProbe.setDrawCallback(
             [&depthTransform](QPainter &painter,
                               BlenderGridRenderer &gridRenderer,
+                              ViewportSceneRenderer &,
                               ViewportSceneRenderer &) {
                 painter.fillRect(QRect(QPoint(0, 0), painter.viewport().size()),
                                  QColor(QStringLiteral("#282828")));

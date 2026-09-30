@@ -25,8 +25,9 @@ struct ViewportSceneStroke {
     float pointDiameter = 0.0f;
 };
 
-// Renders committed curve strokes and points into the current widget framebuffer.
-// Text, pictures, and tool overlays remain in the Qt overlay pass.
+// Renders cached curve strokes and points into the current widget framebuffer.
+// A second instance can render transient tool previews without invalidating
+// committed-scene geometry. Text, markers, and image overlays remain in Qt.
 class ViewportSceneRenderer final : protected QOpenGLFunctions_3_3_Core {
 public:
     ~ViewportSceneRenderer();

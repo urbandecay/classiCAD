@@ -26,6 +26,7 @@
 #include "ui/viewport/viewport_depth_geometry.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "ui/viewport/viewport_overlay.h"
+#include "ui/viewport/viewport_scene_renderer.h"
 #include "tools/circle_tool.h"
 #include "tools/circle_tangent_tool.h"
 #include "tools/dimension_tool.h"
@@ -85,6 +86,60 @@ int main(int argc, char **argv)
                                       dashedPattern.first() * 2.0 + 1.0) &&
                         dashedPen.style() == Qt::CustomDashLine,
                     "linetype size variants must use scaled, visibly distinct custom dash patterns");
+
+    ViewportSceneStroke gpuStroke;
+    gpuStroke.width = 2.0f;
+    const ViewportSceneStrokePattern solidGpuPattern =
+        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
+    gpuStroke.lineStyle = ViewportSceneLineStyle::Dashed;
+    const ViewportSceneStrokePattern dashedGpuPattern =
+        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
+    gpuStroke.lineStyle = ViewportSceneLineStyle::Dotted;
+    const ViewportSceneStrokePattern dottedGpuPattern =
+        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
+    gpuStroke.lineStyle = ViewportSceneLineStyle::Dashed;
+    const ViewportSceneStrokePattern highDpiDashPattern =
+        viewportSceneStrokePattern(gpuStroke, gpuStroke.width * 2.0f);
+    gpuStroke.linePatternScale = 0.5f;
+    const ViewportSceneStrokePattern halfScaleDashPattern =
+        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
+    const LayerGpuLinePattern dashedLayerPattern =
+        layerGpuLinePattern(QStringLiteral("DASHED2"));
+    const LayerGpuLinePattern dottedLayerPattern =
+        layerGpuLinePattern(QStringLiteral("DOTX2"));
+    const LayerGpuLinePattern complexLayerPattern =
+        layerGpuLinePattern(QStringLiteral("CENTER"));
+    passed &= check(solidGpuPattern.style == ViewportSceneLineStyle::Solid &&
+                        solidGpuPattern.periodPixels == 0.0f &&
+                        dashedGpuPattern.style == ViewportSceneLineStyle::Dashed &&
+                        dashedGpuPattern.periodPixels == 20.0f &&
+                        dashedGpuPattern.onLengthPixels == 14.0f &&
+                        dottedGpuPattern.style == ViewportSceneLineStyle::Dotted &&
+                        dottedGpuPattern.periodPixels == 6.0f &&
+                        dottedGpuPattern.onLengthPixels == 2.0f &&
+                        highDpiDashPattern.periodPixels == 40.0f &&
+                        highDpiDashPattern.onLengthPixels == 28.0f &&
+                        halfScaleDashPattern.periodPixels == 10.0f &&
+                        halfScaleDashPattern.onLengthPixels == 7.0f &&
+                        dashedLayerPattern.kind ==
+                            LayerGpuLinePatternKind::Dashed &&
+                        dashedLayerPattern.scale == 0.5 &&
+                        dottedLayerPattern.kind ==
+                            LayerGpuLinePatternKind::Dotted &&
+                        dottedLayerPattern.scale == 2.0 &&
+                        complexLayerPattern.kind ==
+                            LayerGpuLinePatternKind::Unsupported,
+                    "GPU scene strokes must expose solid, 7:3 dashed, and round-dot 1:2 patterns scaled by framebuffer width");
+    gpuStroke.lineStyle = ViewportSceneLineStyle::Dotted;
+    gpuStroke.dashed = true;
+    passed &= check(effectiveViewportSceneLineStyle(gpuStroke) ==
+                            ViewportSceneLineStyle::Dashed,
+                    "legacy dashed scene strokes must retain dashed rendering when explicit styles are available");
+    gpuStroke.dashed = false;
+    gpuStroke.controlGuide = true;
+    passed &= check(effectiveViewportSceneLineStyle(gpuStroke) ==
+                            ViewportSceneLineStyle::Dashed,
+                    "control-guide strokes must remain dashed regardless of the selected layer line style");
 
     passed &= check(!std::is_same_v<ToolId, GeometryType>,
                     "tool and geometry vocabularies must be distinct types");
@@ -1094,9 +1149,7 @@ int main(int argc, char **argv)
     customOrthoGridTransform.zoomAt(QPointF(viewportSize.width() * 0.5,
                                             viewportSize.height() * 0.5),
                                    2.0,
-                                   viewportSize,
-                                   0.01,
-                                   12.0);
+                                   viewportSize);
     const BlenderGridFrame zoomedCustomOrthoFrame = resolveBlenderGridFrame(
         customOrthoGridTransform, viewportSize);
     passed &= check(std::abs(zoomedCustomOrthoFrame.focusDistance - 18.5) < 1.0e-8,
@@ -1365,9 +1418,7 @@ int main(int argc, char **argv)
         const qreal factor = std::exp(std::log(1.2) * wheelSteps);
         combinedDeltaZoomTransform.zoomAt(QPointF(420.0, 160.0),
                                            factor,
-                                           viewportSize,
-                                           0.15,
-                                           12.0);
+                                           viewportSize);
     };
     for (int step = 0; step < 8; ++step) {
         applyCombinedDeltaWheel(-60, -60);
@@ -1385,6 +1436,54 @@ int main(int argc, char **argv)
                                        initialCombinedDeltaCamera.pan.y()) <
                             1.0e-10,
                     "eight combined-delta wheel steps out and back at an off-center cursor must return to the original camera without clamp-induced zoom or pan drift");
+    ViewportTransform twentyStepZoomTransform;
+    const QPointF twentyStepZoomCenter(viewportSize.width() * 0.5,
+                                       viewportSize.height() * 0.5);
+    for (int step = 0; step < 20; ++step) {
+        twentyStepZoomTransform.zoomAt(twentyStepZoomCenter,
+                                       1.0 / 1.2,
+                                       viewportSize);
+    }
+    const ViewportCameraState twentyStepZoomOutState =
+        twentyStepZoomTransform.cameraState();
+    const qreal expectedZoomAfterTwentySteps = std::pow(1.2, -20.0);
+    const qreal expectedDistanceAfterTwentySteps = 60.0 * std::pow(1.2, 20.0);
+    const qreal blenderMinimumZoom = 60.0 / (1000.0 * 10.0);
+    passed &= check(std::abs(twentyStepZoomOutState.zoom -
+                             expectedZoomAfterTwentySteps) < 1.0e-12 &&
+                        std::abs(twentyStepZoomOutState.gridViewDistance -
+                                 expectedDistanceAfterTwentySteps) < 1.0e-8 &&
+                        twentyStepZoomOutState.zoom > blenderMinimumZoom,
+                    "twenty Blender wheel steps out must not hit the soft zoom limit with default clipping and grid spacing");
+    for (int step = 0; step < 20; ++step) {
+        twentyStepZoomTransform.zoomAt(twentyStepZoomCenter,
+                                       1.2,
+                                       viewportSize);
+    }
+    const ViewportCameraState returnedTwentyStepZoomState =
+        twentyStepZoomTransform.cameraState();
+    passed &= check(std::abs(returnedTwentyStepZoomState.zoom - 1.0) < 1.0e-12 &&
+                        std::abs(returnedTwentyStepZoomState.gridViewDistance - 60.0) <
+                            1.0e-8 &&
+                        std::hypot(returnedTwentyStepZoomState.pan.x(),
+                                   returnedTwentyStepZoomState.pan.y()) < 1.0e-10,
+                    "twenty Blender wheel steps out and back must restore zoom, view distance, and centering");
+    ViewportTransform blenderZoomLimitsTransform;
+    blenderZoomLimitsTransform.zoomAt(twentyStepZoomCenter,
+                                      1.0e-12,
+                                      viewportSize);
+    const ViewportCameraState zoomAtFarLimit =
+        blenderZoomLimitsTransform.cameraState();
+    blenderZoomLimitsTransform.zoomAt(twentyStepZoomCenter,
+                                      1.0e12,
+                                      viewportSize);
+    const ViewportCameraState zoomAtNearLimit =
+        blenderZoomLimitsTransform.cameraState();
+    passed &= check(std::abs(zoomAtFarLimit.zoom - blenderMinimumZoom) < 1.0e-12 &&
+                        std::abs(zoomAtFarLimit.gridViewDistance - 10000.0) < 1.0e-8 &&
+                        std::abs(zoomAtNearLimit.zoom - 60000.0) < 1.0e-7 &&
+                        std::abs(zoomAtNearLimit.gridViewDistance - 0.001) < 1.0e-12,
+                    "viewport zoom limits must map Blender's grid-based near distance and clip-based far distance");
     const qreal targetPlanePixelSize = 60.0 /
         (viewportSize.width() * 50.0 / 72.0);
     const Point3D edgeOnAnchor{
@@ -1399,8 +1498,7 @@ int main(int argc, char **argv)
                         edgeOnCursor, viewportSize, WorkPlane::XY, 0.0,
                         &edgeOnPlanePick),
                     "edge-on construction plane must not provide a cursor anchor");
-    blenderProjectionTransform.zoomAt(edgeOnCursor, 1.2, viewportSize,
-                                      0.15, 12.0);
+    blenderProjectionTransform.zoomAt(edgeOnCursor, 1.2, viewportSize);
     QPointF zoomedEdgeOnAnchor;
     passed &= check(blenderProjectionTransform.worldPointToScreen(
                         edgeOnAnchor, viewportSize, &zoomedEdgeOnAnchor) &&
@@ -1412,7 +1510,7 @@ int main(int argc, char **argv)
     farZoomTransform.setViewPreset(ViewportViewPreset::Perspective);
     farZoomTransform.zoomAt(QPointF(viewportSize.width() * 0.5,
                                    viewportSize.height() * 0.5),
-                            0.03, viewportSize, 0.15, 12.0);
+                            0.03, viewportSize);
     const Point3D farZoomTarget = farZoomTransform.viewTarget();
     const Point3D farZoomEye = farZoomTransform.cameraPosition(viewportSize);
     const qreal farZoomDistance = std::hypot(
@@ -1421,7 +1519,7 @@ int main(int argc, char **argv)
         farZoomEye.z - farZoomTarget.z);
     farZoomTransform.zoomAt(QPointF(viewportSize.width() * 0.5,
                                    viewportSize.height() * 0.5),
-                            1.0 / 0.03, viewportSize, 0.15, 12.0);
+                            1.0 / 0.03, viewportSize);
     QPointF returnedTargetScreen;
     passed &= check(std::abs(farZoomDistance - 2000.0) < 1.0e-7 &&
                         farZoomTransform.worldPointToScreen(
@@ -1529,9 +1627,7 @@ int main(int argc, char **argv)
     scaleZoomTransform.zoomAt(QPointF(viewportSize.width() * 0.5,
                                       viewportSize.height() * 0.5),
                               2.0,
-                              viewportSize,
-                              0.15,
-                              12.0);
+                              viewportSize);
     const Point3D eyeAfterScaleZoom = scaleZoomTransform.cameraPosition(viewportSize);
     QPointF pointAfterScaleZoom;
     scaleZoomTransform.worldPointToScreen({100.0, 0.0, 0.0},

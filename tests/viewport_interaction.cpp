@@ -1,8 +1,11 @@
 #include "ui/viewport_widget_api.h"
 #include "ui/viewport/blender_grid_renderer.h"
 #include "ui/viewport/viewport_gpu_surface.h"
+#include "ui/viewport/viewport_depth_geometry.h"
 
 #include <QApplication>
+#include <QDebug>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QEventLoop>
 #include <QMouseEvent>
@@ -12,7 +15,9 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <memory>
 
 using namespace classiCAD;
@@ -108,11 +113,138 @@ void saveGridCapture(const QString &name, const QImage &image)
     }
 }
 
+int pixelsNearColor(const QImage &image, const QColor &target, int tolerance = 4)
+{
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            count += std::abs(pixel.red() - target.red()) <= tolerance &&
+                     std::abs(pixel.green() - target.green()) <= tolerance &&
+                     std::abs(pixel.blue() - target.blue()) <= tolerance;
+        }
+    }
+    return count;
+}
+
+qreal imageMeanAbsoluteError(const QImage &first, const QImage &second)
+{
+    if (first.isNull() || second.isNull() || first.size() != second.size()) {
+        return std::numeric_limits<qreal>::infinity();
+    }
+    qint64 totalDifference = 0;
+    for (int y = 0; y < first.height(); ++y) {
+        for (int x = 0; x < first.width(); ++x) {
+            const QColor firstPixel = first.pixelColor(x, y);
+            const QColor secondPixel = second.pixelColor(x, y);
+            totalDifference += std::abs(firstPixel.red() - secondPixel.red());
+            totalDifference += std::abs(firstPixel.green() - secondPixel.green());
+            totalDifference += std::abs(firstPixel.blue() - secondPixel.blue());
+        }
+    }
+    const qreal channelCount =
+        static_cast<qreal>(first.width()) * first.height() * 3.0;
+    return static_cast<qreal>(totalDifference) / channelCount;
+}
+
+int neutralGridLikePixels(const QImage &image)
+{
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            const int minimum = std::min({pixel.red(), pixel.green(), pixel.blue()});
+            const int maximum = std::max({pixel.red(), pixel.green(), pixel.blue()});
+            const int gray = (pixel.red() + pixel.green() + pixel.blue()) / 3;
+            count += maximum - minimum <= 8 && gray >= 64 && gray <= 110;
+        }
+    }
+    return count;
+}
+
 void waitForViewportTransition()
 {
     QEventLoop eventLoop;
     QTimer::singleShot(250, &eventLoop, &QEventLoop::quit);
     eventLoop.exec();
+}
+
+bool benchmarkNativeViewportFrames(ViewportWidgetApi *viewport, int frameCount)
+{
+    auto *surface = viewport == nullptr
+                        ? nullptr
+                        : viewport->findChild<ViewportGpuSurface *>();
+    if (surface == nullptr || !surface->isValid() || frameCount < 2) {
+        return false;
+    }
+
+    QVector<qint64> frameLatenciesNanoseconds;
+    frameLatenciesNanoseconds.reserve(frameCount);
+    QElapsedTimer latencyTimer;
+    QEventLoop frameLoop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &frameLoop,
+                     &QEventLoop::quit);
+
+    bool waitingForFrame = false;
+    bool frameReceived = false;
+    QObject::connect(surface, &QOpenGLWidget::frameSwapped, &frameLoop,
+                     [&]() {
+                         if (!waitingForFrame) {
+                             return;
+                         }
+                         waitingForFrame = false;
+                         frameReceived = true;
+                         frameLatenciesNanoseconds.append(
+                             latencyTimer.nsecsElapsed());
+                         frameLoop.quit();
+                     });
+
+    const QPointF center(viewport->width() * 0.5,
+                         viewport->height() * 0.5);
+    for (int frame = 0; frame < frameCount; ++frame) {
+        frameReceived = false;
+        waitingForFrame = true;
+        latencyTimer.start();
+        sendWheel(viewport, center, frame % 2 == 0 ? 120 : -120);
+        surface->update();
+        timeout.start(1000);
+        frameLoop.exec();
+        timeout.stop();
+        waitingForFrame = false;
+        if (!frameReceived) {
+            qWarning() << "Viewport benchmark timed out waiting for frame"
+                       << frame;
+            return false;
+        }
+    }
+
+    std::sort(frameLatenciesNanoseconds.begin(),
+              frameLatenciesNanoseconds.end());
+    qint64 totalNanoseconds = 0;
+    for (const qint64 latency : frameLatenciesNanoseconds) {
+        totalNanoseconds += latency;
+    }
+    const qreal meanMilliseconds =
+        static_cast<qreal>(totalNanoseconds) / frameCount / 1.0e6;
+    const qreal medianMilliseconds =
+        static_cast<qreal>(frameLatenciesNanoseconds[frameCount / 2]) / 1.0e6;
+    const int percentile95Index =
+        std::clamp(static_cast<int>(std::ceil(frameCount * 0.95)) - 1,
+                   0,
+                   frameCount - 1);
+    const qreal percentile95Milliseconds =
+        static_cast<qreal>(frameLatenciesNanoseconds[percentile95Index]) / 1.0e6;
+    qInfo().noquote()
+        << QStringLiteral("Native viewport frame benchmark: frames=%1 mean=%2 ms median=%3 ms p95=%4 ms rate=%5 frames/s (wheel-input to frame-swap, includes display pacing)")
+               .arg(frameCount)
+               .arg(meanMilliseconds, 0, 'f', 2)
+               .arg(medianMilliseconds, 0, 'f', 2)
+               .arg(percentile95Milliseconds, 0, 'f', 2)
+               .arg(meanMilliseconds > 0.0 ? 1000.0 / meanMilliseconds : 0.0,
+                    0, 'f', 1);
+    return true;
 }
 
 } // namespace
@@ -125,7 +257,7 @@ int main(int argc, char **argv)
     const QSize interactionViewportSize(640, 480);
     const QSize blenderReferenceViewportSize(591, 511);
     const ViewportCameraPreferences blenderCameraPreferences{
-        50.0, 0.01, 1000.0};
+        50.0, 0.01, 10000.0};
     const BlenderGridAppearance blenderGridAppearance{};
     passed &= check(
         blenderGridAppearance.gridColor == QColor::fromRgb(84, 84, 84, 128) &&
@@ -152,9 +284,9 @@ int main(int argc, char **argv)
     passed &= check(
         std::abs(appliedCameraPreferences.focalLengthMillimeters - 50.0) < 1.0e-9 &&
             std::abs(appliedCameraPreferences.clipStart - 0.01) < 1.0e-9 &&
-            std::abs(appliedCameraPreferences.clipEnd - 1000.0) < 1.0e-9 &&
+            std::abs(appliedCameraPreferences.clipEnd - 10000.0) < 1.0e-9 &&
             viewport->viewportAntiAliasingSamples() == 8,
-        "Blender comparison must use a 50 mm lens, 0.01/1000 clipping, and 8x AA");
+        "Blender comparison must use a 50 mm lens, 0.01/10000 clipping, and 8x AA");
     passed &= check(
         std::abs(viewport->documentSettings().gridSpacing - 1.0) < 1.0e-9,
         "Blender comparison must use the same 1-unit base grid spacing");
@@ -196,6 +328,77 @@ int main(int argc, char **argv)
     } else {
         saveGridCapture(QStringLiteral("viewport-native-start"),
                         captureViewport(viewport.get()));
+    }
+    if (QApplication::platformName() == QStringLiteral("xcb")) {
+        viewport->resize(blenderReferenceViewportSize);
+        application.processEvents();
+        waitForViewportTransition();
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        waitForViewportTransition();
+
+        const QPointF comparisonCenter(
+            blenderReferenceViewportSize.width() * 0.5,
+            blenderReferenceViewportSize.height() * 0.5);
+        const QImage zoomRoundTripStart = captureViewport(viewport.get());
+        for (int step = 0; step < 20; ++step) {
+            sendWheel(viewport.get(), comparisonCenter, -120);
+        }
+        application.processEvents();
+        waitForViewportTransition();
+        const QImage twentyStepsOut = captureViewport(viewport.get());
+        for (int step = 0; step < 20; ++step) {
+            sendWheel(viewport.get(), comparisonCenter, 120);
+        }
+        application.processEvents();
+        waitForViewportTransition();
+        const QImage zoomRoundTripEnd = captureViewport(viewport.get());
+        saveGridCapture(QStringLiteral("viewport-native-zoom-20-out"),
+                        twentyStepsOut);
+        saveGridCapture(QStringLiteral("viewport-native-zoom-20-return"),
+                        zoomRoundTripEnd);
+        const int gridPixelsAfterZoomOut =
+            neutralGridLikePixels(twentyStepsOut);
+        const qreal zoomRoundTripImageError = imageMeanAbsoluteError(
+            zoomRoundTripStart, zoomRoundTripEnd);
+        qInfo().noquote()
+            << QStringLiteral("Native 20-step zoom check: gridPixels=%1 returnImageMAE=%2")
+                   .arg(gridPixelsAfterZoomOut)
+                   .arg(zoomRoundTripImageError, 0, 'f', 4);
+        passed &= check(zoomRoundTripStart.size() == blenderReferenceViewportSize &&
+                            gridPixelsAfterZoomOut > 200 &&
+                            zoomRoundTripImageError < 2.0,
+                        "native grid must remain visible after twenty zoom-out steps and return to the same centered view after twenty steps in");
+
+        const std::array<std::pair<const char *, ViewportViewPreset>, 8> viewMatrix{{
+            {"top", ViewportViewPreset::Top},
+            {"bottom", ViewportViewPreset::Bottom},
+            {"front", ViewportViewPreset::Front},
+            {"back", ViewportViewPreset::Back},
+            {"right", ViewportViewPreset::Right},
+            {"left", ViewportViewPreset::Left},
+            {"isometric-ortho", ViewportViewPreset::Isometric},
+            {"isometric-perspective", ViewportViewPreset::Perspective},
+        }};
+        bool allNativeViewsCaptured = true;
+        for (const auto &[name, preset] : viewMatrix) {
+            viewport->setViewPreset(preset);
+            waitForViewportTransition();
+            const QImage viewCapture = captureViewport(viewport.get());
+            allNativeViewsCaptured &=
+                !viewCapture.isNull() &&
+                viewCapture.size() == blenderReferenceViewportSize;
+            saveGridCapture(QStringLiteral("viewport-native-") +
+                                QString::fromLatin1(name),
+                            viewCapture);
+        }
+        passed &= check(allNativeViewsCaptured,
+                        "native viewport capture matrix must cover all six axis views, isometric orthographic, and perspective at Blender's reference dimensions");
+
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        waitForViewportTransition();
+        viewport->resize(interactionViewportSize);
+        application.processEvents();
+        waitForViewportTransition();
     }
     const QImage beforeWheel = captureViewport(viewport.get());
     saveGridCapture(QStringLiteral("viewport-native-final-top-background"),
@@ -380,14 +583,28 @@ int main(int argc, char **argv)
 
     QTemporaryDir pictureDirectory;
     QImage pictureImage(64, 64, QImage::Format_ARGB32);
-    pictureImage.fill(Qt::black);
+    pictureImage.fill(Qt::transparent);
     {
         QPainter picturePainter(&pictureImage);
         picturePainter.fillRect(QRect(0, 0, 32, 32), Qt::red);
-        picturePainter.fillRect(QRect(32, 0, 32, 32), Qt::green);
         picturePainter.fillRect(QRect(0, 32, 32, 32), Qt::blue);
         picturePainter.fillRect(QRect(32, 32, 32, 32), Qt::yellow);
     }
+    Shape depthPicture;
+    depthPicture.geometryType = GeometryType::Picture;
+    depthPicture.points = {QPointF(0.0, 1.0), QPointF(1.0, 1.0),
+                           QPointF(1.0, 0.0), QPointF(0.0, 0.0)};
+    depthPicture.pictureImage = pictureImage;
+    const ViewportDepthGeometry pictureDepth =
+        buildViewportDepthGeometry(depthPicture);
+    bool pictureDepthSkipsTransparentTopRight = true;
+    for (const QVector3D &vertex : pictureDepth.surfaceVertices) {
+        pictureDepthSkipsTransparentTopRight &=
+            !(vertex.x() > 0.5f && vertex.y() > 0.5f);
+    }
+    passed &= check(!pictureDepth.surfaceVertices.isEmpty() &&
+                        pictureDepthSkipsTransparentTopRight,
+                    "picture depth mesh must omit transparent pixels instead of treating the full frame as opaque");
     const QString picturePath = pictureDirectory.filePath(
         QStringLiteral("viewport-preview-quadrants.png"));
     passed &= check(pictureDirectory.isValid() && pictureImage.save(picturePath),
@@ -396,6 +613,7 @@ int main(int argc, char **argv)
     viewport->setWorkPlane(WorkPlane::XY);
     viewport->setOsnapEnabled(false);
     waitForViewportTransition();
+    const QImage beforePicture = captureViewport(viewport.get());
     QString pictureError;
     passed &= check(viewport->beginPicturePlacement(picturePath, &pictureError),
                     "picture placement must start for the OpenGL preview test");
@@ -450,18 +668,39 @@ int main(int argc, char **argv)
         }
     }
     const QPointF redCenter = redRegion.center();
-    const QPointF greenCenter = greenRegion.center();
     const QPointF blueCenter = blueRegion.center();
     const QPointF yellowCenter = yellowRegion.center();
-    passed &= check(redRegion.count > 100 && greenRegion.count > 100 &&
-                        blueRegion.count > 100 && yellowRegion.count > 100 &&
-                        redCenter.x() < greenCenter.x() &&
+    passed &= check(redRegion.count > 100 && blueRegion.count > 100 &&
+                        yellowRegion.count > 100 &&
                         blueCenter.x() < yellowCenter.x() &&
                         redCenter.y() < blueCenter.y() &&
-                        greenCenter.y() < yellowCenter.y(),
+                        redCenter.x() < yellowCenter.x(),
                     "picture placement preview must render its image with the correct texture orientation");
-    viewport->setTool(ToolId::Select);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, pictureCursorCorner,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, pictureCursorCorner,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     application.processEvents();
+    const QImage committedPicture = captureViewport(viewport.get());
+    const QPoint redSample = redCenter.toPoint();
+    const QPoint blueSample = blueCenter.toPoint();
+    const QPoint yellowSample = yellowCenter.toPoint();
+    const QPoint transparentSample =
+        (redCenter + yellowCenter - blueCenter).toPoint();
+    const QColor transparentBefore = beforePicture.pixelColor(transparentSample);
+    const QColor transparentAfter = committedPicture.pixelColor(transparentSample);
+    const QColor committedRed = committedPicture.pixelColor(redSample);
+    const QColor committedBlue = committedPicture.pixelColor(blueSample);
+    const QColor committedYellow = committedPicture.pixelColor(yellowSample);
+    const bool transparentAreaPreserved =
+        std::abs(transparentBefore.red() - transparentAfter.red()) <= 12 &&
+        std::abs(transparentBefore.green() - transparentAfter.green()) <= 12 &&
+        std::abs(transparentBefore.blue() - transparentAfter.blue()) <= 12;
+    passed &= check(committedRed.red() > committedRed.green() + 50 &&
+                        committedBlue.blue() > committedBlue.red() + 50 &&
+                        committedYellow.red() > 150 && committedYellow.green() > 150 &&
+                        transparentAreaPreserved,
+                    "committed picture rendering must preserve image colors and leave transparent pixels unobscuring the grid");
 
     const QImage beforeBezier = captureViewport(viewport.get());
     viewport->setTool(ToolId::Bezier);
@@ -492,6 +731,19 @@ int main(int argc, char **argv)
     passed &= check(afterBezier != beforeBezier &&
                         guidePixels(afterBezier) > guidePixels(beforeBezier) + 5,
                     "Bezier control guides must be visible in the viewport frame");
+
+    viewport->setControlPointsVisible(true);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, QPointF(350.0, 280.0),
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, QPointF(350.0, 280.0),
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+    waitForViewportTransition();
+    const QImage controlPointFrame = captureViewport(viewport.get());
+    passed &= check(pixelsNearColor(controlPointFrame,
+                                    QColor(QStringLiteral("#263b4b"))) >= 24,
+                    "selected curve control-point handles must render in the native viewport and CPU fallback");
+    viewport->setControlPointsVisible(false);
 
     const QImage beforePoint = captureViewport(viewport.get());
     viewport->setTool(ToolId::Point);
@@ -606,7 +858,8 @@ int main(int argc, char **argv)
             [&depthTransform](QPainter &painter,
                               BlenderGridRenderer &gridRenderer,
                               ViewportSceneRenderer &,
-                              ViewportSceneRenderer &) {
+                              ViewportSceneRenderer &,
+                              ViewportControlPointRenderer &) {
                 painter.fillRect(QRect(QPoint(0, 0), painter.viewport().size()),
                                  QColor(QStringLiteral("#282828")));
                 painter.beginNativePainting();
@@ -627,6 +880,8 @@ int main(int argc, char **argv)
                             std::abs(pickedPoint.z - 10.0) < 0.1,
                         "GPU depth picking must unproject the frontmost overlapping scene point");
         depthProbe.hide();
+        passed &= check(benchmarkNativeViewportFrames(viewport.get(), 90),
+                        "native viewport frame benchmark must receive each requested frame swap");
     }
 
     return passed ? 0 : 1;

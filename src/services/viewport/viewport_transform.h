@@ -136,6 +136,7 @@ public:
     Point3D cameraPosition(const QSize &viewportSize) const;
     ViewportCameraPreferences cameraPreferences() const;
     bool setCameraPreferences(const ViewportCameraPreferences &preferences);
+    void setGridSpacing(qreal gridSpacing);
     ViewportNavigationPreferences navigationPreferences() const;
     void setNavigationPreferences(const ViewportNavigationPreferences &preferences);
     ViewportCameraState cameraState() const;
@@ -156,9 +157,7 @@ public:
 
     void zoomAt(const QPointF &screenPosition,
                 qreal factor,
-                const QSize &viewportSize,
-                qreal minimumZoom,
-                qreal maximumZoom);
+                const QSize &viewportSize);
 
 private:
     qreal zoom_ = 1.0;
@@ -170,6 +169,7 @@ private:
     ViewportOrientation orientation_;
     bool perspective_ = false;
     qreal gridViewDistance_ = 60.0;
+    qreal gridSpacing_ = 1.0;
     ViewportCameraPreferences cameraPreferences_;
     ViewportNavigationPreferences navigationPreferences_;
     bool orbitPivotLocked_ = false;

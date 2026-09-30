@@ -8,6 +8,18 @@
 
 namespace classiCAD {
 
+enum class LayerGpuLinePatternKind {
+    Solid,
+    Dashed,
+    Dotted,
+    Unsupported,
+};
+
+struct LayerGpuLinePattern {
+    LayerGpuLinePatternKind kind = LayerGpuLinePatternKind::Solid;
+    qreal scale = 1.0;
+};
+
 inline QStringList standardLayerLineTypes()
 {
     return {
@@ -81,6 +93,29 @@ inline QVector<qreal> layerLineTypePattern(const QString &lineType)
         segment *= scale;
     }
     return pattern;
+}
+
+// The native stroke shader currently supports solid, regular dash, and dot
+// patterns. Keep other CAD linetypes on the Qt fallback until their full
+// alternating pattern sequences are represented by the GPU renderer.
+inline LayerGpuLinePattern layerGpuLinePattern(const QString &lineType)
+{
+    const QVector<qreal> pattern = layerLineTypePattern(lineType);
+    if (pattern.isEmpty()) {
+        return {};
+    }
+    if (pattern.size() != 2 || pattern[0] <= 0.0 || pattern[1] <= 0.0) {
+        return {LayerGpuLinePatternKind::Unsupported, 1.0};
+    }
+
+    const qreal dashRatio = pattern[0] / pattern[1];
+    if (qAbs(dashRatio - (7.0 / 3.0)) <= 1.0e-9) {
+        return {LayerGpuLinePatternKind::Dashed, pattern[0] / 7.0};
+    }
+    if (qAbs(dashRatio - 0.5) <= 1.0e-9) {
+        return {LayerGpuLinePatternKind::Dotted, pattern[0]};
+    }
+    return {LayerGpuLinePatternKind::Unsupported, 1.0};
 }
 
 inline QPen layerLineTypePen(const QColor &color,

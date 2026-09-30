@@ -7,9 +7,11 @@
 
 #include <QCryptographicHash>
 #include <QDataStream>
+#include <QHash>
 #include <QIODevice>
 
 #include <algorithm>
+#include <array>
 
 namespace classiCAD {
 namespace {
@@ -19,6 +21,147 @@ QVector3D asVector(const Point3D &point)
     return {static_cast<float>(point.x),
             static_cast<float>(point.y),
             static_cast<float>(point.z)};
+}
+
+struct OpaqueImageRun {
+    int firstColumn = 0;
+    int pastLastColumn = 0;
+    int firstRow = 0;
+    int pastLastRow = 0;
+};
+
+quint64 imageRunKey(int firstColumn, int pastLastColumn)
+{
+    return (quint64(static_cast<quint32>(firstColumn)) << 32) |
+           static_cast<quint32>(pastLastColumn);
+}
+
+QPointF picturePointAt(const QVector<QPointF> &corners, qreal u, qreal v)
+{
+    const QPointF top = corners[0] * (1.0 - u) + corners[1] * u;
+    const QPointF bottom = corners[3] * (1.0 - u) + corners[2] * u;
+    return top * (1.0 - v) + bottom * v;
+}
+
+void appendPictureDepthSurface(const Shape &shape,
+                               const QVector<QPointF> &corners,
+                               ViewportDepthGeometry *geometry)
+{
+    const QImage image = shape.pictureImage.convertToFormat(
+        QImage::Format_RGBA8888);
+    if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
+        return;
+    }
+
+    constexpr int maximumMaskDimension = 256;
+    const int maskWidth = std::min(image.width(), maximumMaskDimension);
+    const int maskHeight = std::min(image.height(), maximumMaskDimension);
+    QVector<uchar> fullyOpaqueCells(maskWidth * maskHeight, 1);
+    for (int rowIndex = 0; rowIndex < image.height(); ++rowIndex) {
+        const uchar *pixels = image.constScanLine(rowIndex);
+        const int maskRow = rowIndex * maskHeight / image.height();
+        for (int column = 0; column < image.width(); ++column) {
+            if (pixels[column * 4 + 3] != 255) {
+                const int maskColumn = column * maskWidth / image.width();
+                fullyOpaqueCells[maskRow * maskWidth + maskColumn] = 0;
+            }
+        }
+    }
+
+    // Build a compact mask mesh: contiguous opaque pixels in each row are
+    // merged vertically when their horizontal span matches. The bounded mask
+    // marks a cell opaque only if every source pixel in it is opaque.
+    // Partially transparent pixels therefore never write depth.
+    QVector<OpaqueImageRun> activeRuns;
+    QVector<OpaqueImageRun> opaqueRectangles;
+    for (int rowIndex = 0; rowIndex < maskHeight; ++rowIndex) {
+        QHash<quint64, int> activeRunLookup;
+        activeRunLookup.reserve(activeRuns.size());
+        for (int runIndex = 0; runIndex < activeRuns.size(); ++runIndex) {
+            const OpaqueImageRun &run = activeRuns[runIndex];
+            activeRunLookup.insert(
+                imageRunKey(run.firstColumn, run.pastLastColumn), runIndex);
+        }
+
+        QVector<OpaqueImageRun> nextActiveRuns;
+        int column = 0;
+        while (column < maskWidth) {
+            while (column < maskWidth &&
+                   fullyOpaqueCells[rowIndex * maskWidth + column] == 0) {
+                ++column;
+            }
+            const int firstOpaqueColumn = column;
+            while (column < maskWidth &&
+                   fullyOpaqueCells[rowIndex * maskWidth + column] != 0) {
+                ++column;
+            }
+            if (firstOpaqueColumn == column) {
+                continue;
+            }
+
+            const quint64 key = imageRunKey(firstOpaqueColumn, column);
+            const auto activeRun = activeRunLookup.find(key);
+            if (activeRun == activeRunLookup.end()) {
+                nextActiveRuns.append({firstOpaqueColumn, column,
+                                       rowIndex, rowIndex + 1});
+                continue;
+            }
+
+            OpaqueImageRun continued = activeRuns[activeRun.value()];
+            continued.pastLastRow = rowIndex + 1;
+            nextActiveRuns.append(continued);
+            activeRunLookup.erase(activeRun);
+        }
+
+        for (auto run = activeRunLookup.cbegin();
+             run != activeRunLookup.cend();
+             ++run) {
+            opaqueRectangles.append(activeRuns[run.value()]);
+        }
+        activeRuns = std::move(nextActiveRuns);
+    }
+    opaqueRectangles += activeRuns;
+
+    const auto sourceBoundary = [](int maskIndex,
+                                   int sourceExtent,
+                                   int maskExtent) {
+        return static_cast<int>((qint64(maskIndex) * sourceExtent +
+                                 maskExtent - 1) /
+                                maskExtent);
+    };
+    const qreal imageWidth = image.width();
+    const qreal imageHeight = image.height();
+    for (const OpaqueImageRun &rectangle : opaqueRectangles) {
+        const qreal left = sourceBoundary(rectangle.firstColumn,
+                                          image.width(), maskWidth) /
+                           imageWidth;
+        const qreal right = sourceBoundary(rectangle.pastLastColumn,
+                                           image.width(), maskWidth) /
+                            imageWidth;
+        const qreal top = sourceBoundary(rectangle.firstRow,
+                                         image.height(), maskHeight) /
+                          imageHeight;
+        const qreal bottom = sourceBoundary(rectangle.pastLastRow,
+                                            image.height(), maskHeight) /
+                            imageHeight;
+        const std::array<QPointF, 4> localCorners{
+            picturePointAt(corners, left, top),
+            picturePointAt(corners, right, top),
+            picturePointAt(corners, right, bottom),
+            picturePointAt(corners, left, bottom),
+        };
+        std::array<QVector3D, 4> worldCorners;
+        for (std::size_t index = 0; index < localCorners.size(); ++index) {
+            worldCorners[index] = asVector(workPlanePointToWorld(
+                localCorners[index], shape.workPlane, shape.workPlaneOffset));
+        }
+        geometry->surfaceVertices.append(worldCorners[0]);
+        geometry->surfaceVertices.append(worldCorners[1]);
+        geometry->surfaceVertices.append(worldCorners[2]);
+        geometry->surfaceVertices.append(worldCorners[0]);
+        geometry->surfaceVertices.append(worldCorners[2]);
+        geometry->surfaceVertices.append(worldCorners[3]);
+    }
 }
 
 void appendCurveDepthVertices(const Shape &shape,
@@ -118,25 +261,9 @@ void appendShapeDepthGeometry(const Shape &shape,
         }
         if (shape.geometryType == GeometryType::Picture) {
             const QVector<QPointF> corners = pictureFrameCorners(shape);
-            if (shape.pictureImage.isNull() || corners.size() != 4) {
-                return;
+            if (!shape.pictureImage.isNull() && corners.size() == 4) {
+                appendPictureDepthSurface(shape, corners, &geometry);
             }
-            const QVector<QVector3D> worldCorners{
-                asVector(workPlanePointToWorld(corners[0], shape.workPlane,
-                                               shape.workPlaneOffset)),
-                asVector(workPlanePointToWorld(corners[1], shape.workPlane,
-                                               shape.workPlaneOffset)),
-                asVector(workPlanePointToWorld(corners[2], shape.workPlane,
-                                               shape.workPlaneOffset)),
-                asVector(workPlanePointToWorld(corners[3], shape.workPlane,
-                                               shape.workPlaneOffset)),
-            };
-            geometry.surfaceVertices.append(worldCorners[0]);
-            geometry.surfaceVertices.append(worldCorners[1]);
-            geometry.surfaceVertices.append(worldCorners[2]);
-            geometry.surfaceVertices.append(worldCorners[0]);
-            geometry.surfaceVertices.append(worldCorners[2]);
-            geometry.surfaceVertices.append(worldCorners[3]);
             return;
         }
 
@@ -190,10 +317,12 @@ QByteArray viewportDepthGeometryCacheKey(
         for (const Shape::NurbsCurve2D &curve : shape.components) {
             writeCurve(stream, curve);
         }
-        // Picture geometry depends on the frame and aspect ratio, not pixels.
+        // Picture depth geometry also depends on pixel alpha, so include the
+        // image cache key as well as its dimensions in this cache key.
         stream << quint8(shape.pictureImage.isNull() ? 1 : 0)
                << qint32(shape.pictureImage.width())
-               << qint32(shape.pictureImage.height());
+               << qint32(shape.pictureImage.height())
+               << qint64(shape.pictureImage.cacheKey());
     }
     return QCryptographicHash::hash(payload, QCryptographicHash::Sha256);
 }

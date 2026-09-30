@@ -3,6 +3,7 @@
 #pragma once
 
 #include "blender_grid_renderer.h"
+#include "viewport_control_point_renderer.h"
 #include "viewport_scene_renderer.h"
 
 #include <QOpenGLWidget>
@@ -20,7 +21,8 @@ class ViewportGpuSurface final : public QOpenGLWidget {
 public:
     using DrawCallback = std::function<void(QPainter &, BlenderGridRenderer &,
                                             ViewportSceneRenderer &,
-                                            ViewportSceneRenderer &)>;
+                                            ViewportSceneRenderer &,
+                                            ViewportControlPointRenderer &)>;
 
     explicit ViewportGpuSurface(QWidget *parent = nullptr);
     ~ViewportGpuSurface() override;
@@ -42,6 +44,7 @@ private:
     std::unique_ptr<BlenderGridRenderer> gridRenderer_;
     std::unique_ptr<ViewportSceneRenderer> sceneRenderer_;
     std::unique_ptr<ViewportSceneRenderer> previewRenderer_;
+    std::unique_ptr<ViewportControlPointRenderer> controlPointRenderer_;
 };
 
 } // namespace classiCAD

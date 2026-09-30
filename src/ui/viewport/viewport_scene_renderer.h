@@ -16,7 +16,15 @@
 #include <QVector>
 #include <QVector3D>
 
+#include <cmath>
+
 namespace classiCAD {
+
+enum class ViewportSceneLineStyle : int {
+    Solid = 0,
+    Dashed = 1,
+    Dotted = 2,
+};
 
 struct ViewportSceneStroke {
     const Shape *shape = nullptr;
@@ -26,7 +34,50 @@ struct ViewportSceneStroke {
     float pointDiameter = 0.0f;
     bool dashed = false;
     bool pointOutline = false;
+    ViewportSceneLineStyle lineStyle = ViewportSceneLineStyle::Solid;
+    float linePatternScale = 1.0f;
 };
+
+struct ViewportSceneStrokePattern {
+    ViewportSceneLineStyle style = ViewportSceneLineStyle::Solid;
+    float periodPixels = 0.0f;
+    float onLengthPixels = 0.0f;
+};
+
+// Keep the legacy dashed flag and control-guide strokes dashed while allowing
+// scene callers to select the explicit solid/dashed/dotted line style.
+inline ViewportSceneLineStyle effectiveViewportSceneLineStyle(
+    const ViewportSceneStroke &stroke) noexcept
+{
+    return stroke.controlGuide || stroke.dashed
+               ? ViewportSceneLineStyle::Dashed
+               : stroke.lineStyle;
+}
+
+// Pattern lengths use the final framebuffer-pixel stroke width, so high-DPI
+// rendering and line weight scale together. The ratios match the standard
+// DASHED (7:3) and DOT (1:2) layer patterns.
+inline ViewportSceneStrokePattern viewportSceneStrokePattern(
+    const ViewportSceneStroke &stroke, float widthPixels) noexcept
+{
+    const float safeWidth = widthPixels > 0.0f ? widthPixels : 1.0f;
+    const float safeScale = std::isfinite(stroke.linePatternScale) &&
+                                    stroke.linePatternScale > 0.0f
+                                ? stroke.linePatternScale
+                                : 1.0f;
+    const ViewportSceneLineStyle style = effectiveViewportSceneLineStyle(stroke);
+    switch (style) {
+    case ViewportSceneLineStyle::Dashed:
+        return {style, safeWidth * 10.0f * safeScale,
+                safeWidth * 7.0f * safeScale};
+    case ViewportSceneLineStyle::Dotted:
+        return {style, safeWidth * 3.0f * safeScale,
+                safeWidth * safeScale};
+    case ViewportSceneLineStyle::Solid:
+    default:
+        return {ViewportSceneLineStyle::Solid, 0.0f, 0.0f};
+    }
+}
 
 // Renders cached curve strokes and points into the current widget framebuffer.
 // A second instance can render transient tool previews without invalidating

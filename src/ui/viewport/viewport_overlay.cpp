@@ -282,7 +282,8 @@ void ViewportOverlay::drawControlPoints(QPainter &painter,
                                         ObjectId shapeObjectId,
                                         ObjectId selectedObjectId,
                                         bool draggingControlPoint,
-                                        int activeControlPointIndex) const
+                                        int activeControlPointIndex,
+                                        bool drawMarkers) const
 {
     renderer_.drawControlPoints(painter,
                                 shape,
@@ -290,7 +291,8 @@ void ViewportOverlay::drawControlPoints(QPainter &painter,
                                 shapeObjectId,
                                 selectedObjectId,
                                 draggingControlPoint,
-                                activeControlPointIndex);
+                                activeControlPointIndex,
+                                drawMarkers);
 }
 
 void ViewportOverlay::drawSubdivisionPoints(QPainter &painter,

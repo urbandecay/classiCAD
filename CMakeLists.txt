@@ -96,6 +96,7 @@ set(CLASSICAD_VIEWPORT_SUPPORT_SOURCES
     src/ui/viewport/blender_grid_shaders.qrc
     src/ui/viewport/viewport_depth_geometry.cpp
     src/ui/viewport/viewport_gpu_surface.cpp
+    src/ui/viewport/viewport_control_point_renderer.cpp
     src/ui/viewport/viewport_scene_renderer.cpp
     src/ui/viewport/viewport_renderer.cpp
     src/ui/viewport/viewport_overlay.cpp

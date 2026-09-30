@@ -230,9 +230,15 @@ bool ViewportSceneRenderer::draw(
                                           stroke.pointOutline);
             glDrawArrays(GL_POINTS, range.first, range.second);
         } else {
-            boundProgram->setUniformValue("uWidth", stroke.width * float(dpr));
+            const float widthPixels = stroke.width * float(dpr);
+            const ViewportSceneStrokePattern pattern =
+                viewportSceneStrokePattern(stroke, widthPixels);
+            boundProgram->setUniformValue("uWidth", widthPixels);
             boundProgram->setUniformValue(
-                "uDashed", stroke.controlGuide || stroke.dashed ? 1 : 0);
+                "uLineStyle", static_cast<int>(pattern.style));
+            boundProgram->setUniformValue("uPatternPeriod", pattern.periodPixels);
+            boundProgram->setUniformValue("uPatternOnLength",
+                                          pattern.onLengthPixels);
             glDrawArrays(GL_LINES, range.first, range.second);
         }
     }

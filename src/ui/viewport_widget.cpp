@@ -5,6 +5,7 @@
 #include "../core/geometry/circle_construction.h"
 #include "../core/geometry/curve_evaluator.h"
 #include "../core/geometry/geometry_transform.h"
+#include "../core/geometry/work_plane.h"
 #include "../core/history/history.h"
 #include "../core/serialization/document_serializer.h"
 #include "../core/serialization/vignola_document_file.h"
@@ -18,6 +19,7 @@
 #include "../tools/tool_registry.h"
 #include "input_helpers.h"
 #include "viewport/blender_grid_renderer.h"
+#include "viewport/viewport_control_point_renderer.h"
 #include "viewport/viewport_gpu_surface.h"
 #include "viewport/line_type_style.h"
 #include "viewport/viewport_scene_renderer.h"
@@ -86,6 +88,21 @@ void fillViewportBackground(QPainter &painter, const QRect &bounds)
         gradient.setColorAt(factor, color);
     }
     painter.fillRect(bounds, gradient);
+}
+
+ViewportSceneLineStyle viewportSceneLineStyleForLayerPattern(
+    LayerGpuLinePatternKind kind)
+{
+    switch (kind) {
+    case LayerGpuLinePatternKind::Dashed:
+        return ViewportSceneLineStyle::Dashed;
+    case LayerGpuLinePatternKind::Dotted:
+        return ViewportSceneLineStyle::Dotted;
+    case LayerGpuLinePatternKind::Solid:
+    case LayerGpuLinePatternKind::Unsupported:
+    default:
+        return ViewportSceneLineStyle::Solid;
+    }
 }
 
 Shape pictureFrameOutline(const Shape &picture)
@@ -169,6 +186,8 @@ public:
         , controlPointIndex_(selection_.activeControlPointIndex())
         , zoom_(viewportTransform_.zoom())
     {
+        viewportTransform_.setGridSpacing(
+            documentGridSpacingInMillimeters(document_.settings()));
         toolContext_.setShapeFactory(
             [this](ToolId tool,
                    const QVector<QPointF> &points,
@@ -278,9 +297,10 @@ public:
             gpuSurface_->setDrawCallback(
                 [this](QPainter &painter, BlenderGridRenderer &gridRenderer,
                        ViewportSceneRenderer &sceneRenderer,
-                       ViewportSceneRenderer &previewRenderer) {
+                       ViewportSceneRenderer &previewRenderer,
+                       ViewportControlPointRenderer &controlPointRenderer) {
                     paintViewport(painter, &gridRenderer, &sceneRenderer,
-                                  &previewRenderer);
+                                  &previewRenderer, &controlPointRenderer);
                 });
             gpuSurface_->show();
         }
@@ -810,6 +830,10 @@ public:
         }
 
         history_.undo();
+        viewportTransform_.setGridSpacing(
+            documentGridSpacingInMillimeters(document_.settings()));
+        viewportRenderer_.setGridBaseStep(
+            documentGridSpacingInMillimeters(document_.settings()));
         resetInteractionAfterHistory();
         notifyHistoryChanged();
         notifyLayersChanged();
@@ -827,6 +851,10 @@ public:
         }
 
         history_.redo();
+        viewportTransform_.setGridSpacing(
+            documentGridSpacingInMillimeters(document_.settings()));
+        viewportRenderer_.setGridBaseStep(
+            documentGridSpacingInMillimeters(document_.settings()));
         resetInteractionAfterHistory();
         notifyHistoryChanged();
         notifyLayersChanged();
@@ -1011,7 +1039,9 @@ public:
         if (!document_.setSettings(settings)) {
             return false;
         }
-        viewportRenderer_.setGridBaseStep(documentGridSpacingInMillimeters(settings));
+        const qreal gridSpacing = documentGridSpacingInMillimeters(settings);
+        viewportTransform_.setGridSpacing(gridSpacing);
+        viewportRenderer_.setGridBaseStep(gridSpacing);
         recordGeometrySnapshot(previous);
         update();
         return true;
@@ -2183,7 +2213,7 @@ protected:
         }
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        paintViewport(painter, nullptr, nullptr, nullptr);
+        paintViewport(painter, nullptr, nullptr, nullptr, nullptr);
     }
 
     void resizeEvent(QResizeEvent *event) override
@@ -2225,13 +2255,67 @@ protected:
     void paintViewport(QPainter &painter,
                        BlenderGridRenderer *nativeRenderer,
                        ViewportSceneRenderer *sceneRenderer,
-                       ViewportSceneRenderer *previewRenderer)
+                       ViewportSceneRenderer *previewRenderer,
+                       ViewportControlPointRenderer *controlPointRenderer)
     {
         updateAssociativeDimensions(document_, curveSampler_);
         const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
         viewportRenderer_.setGridBaseStep(baseGridStep);
         viewportRenderer_.setGridAppearance(gridAppearance_);
         const QVector<Shape> visibleShapes = visibleDepthShapes();
+        QVector<ViewportControlPointHandle> gpuControlPointHandles;
+        if (controlPointsVisible_ && controlPointRenderer != nullptr) {
+            const QColor handleOutline(QStringLiteral("#77b7e6"));
+            const QColor handleFill(QStringLiteral("#263b4b"));
+            const QColor activeHandle(QStringLiteral("#f0a45a"));
+            for (const int shapeIndex : controlPointShapeIndices()) {
+                if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                    continue;
+                }
+
+                Shape handleShape = shapes_[shapeIndex];
+                const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+                if (activeTool_ == Tool::Scale && scalePreviewValid_ &&
+                    scaleShapeIds_.contains(objectId)) {
+                    scaleShapeGeometry(&handleShape,
+                                       scaleBaseWorld_,
+                                       scalePreviewAxis_,
+                                       scalePreviewFactor_,
+                                       scaleMode_);
+                } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
+                           rotateShapeIndices_.contains(objectId)) {
+                    rotateShapeGeometry(&handleShape,
+                                        rotateBaseWorld_,
+                                        rotatePreviewAngle_);
+                }
+
+                const QVector<QPointF> controlPoints =
+                    controlPointsForShape(handleShape);
+                for (int pointIndex = 0; pointIndex < controlPoints.size();
+                     ++pointIndex) {
+                    const Point3D world = workPlanePointToWorld(
+                        controlPoints[pointIndex], handleShape.workPlane,
+                        handleShape.workPlaneOffset);
+                    const bool active = draggingControlPoint_ &&
+                                        objectId == selectedShapeIndex_ &&
+                                        pointIndex == controlPointIndex_;
+                    ViewportControlPointHandle handle;
+                    handle.worldPosition = QVector3D(
+                        static_cast<float>(world.x),
+                        static_cast<float>(world.y),
+                        static_cast<float>(world.z));
+                    handle.fillColor = active ? activeHandle : handleFill;
+                    handle.outlineColor = active ? activeHandle : handleOutline;
+                    // The old QPainter square is 8 logical pixels with a
+                    // 1.5-pixel outline straddling its edges.
+                    handle.diameterPixels = 9.5f;
+                    handle.outlineWidthPixels = 1.5f;
+                    handle.shape = ViewportControlPointShape::Square;
+                    gpuControlPointHandles.append(handle);
+                }
+            }
+        }
+        bool gpuControlPointsDrawn = false;
         QImage gpuViewportBackground;
         QImage committedSceneLayer;
         QPainter rasterScenePainter;
@@ -2297,6 +2381,8 @@ protected:
                 layerLineType = objectLayer->lineType;
                 layerLineWeightMm = objectLayer->lineWeightMm;
             }
+            const LayerGpuLinePattern gpuLayerPattern =
+                layerGpuLinePattern(layerLineType);
             const bool selected = selectedShapeIndices_.contains(objectId) ||
                                   objectId == selectedShapeIndex_ ||
                                   joinShapeIndices_.contains(objectId);
@@ -2322,7 +2408,8 @@ protected:
                                      gpuStrokeType &&
                                      (geometryType == GeometryType::Point ||
                                       selected || scalePreview || rotatePreview ||
-                                      layerLineTypePattern(layerLineType).isEmpty()) &&
+                                      gpuLayerPattern.kind !=
+                                          LayerGpuLinePatternKind::Unsupported) &&
                                      (geometryType != GeometryType::Arc ||
                                       validateNurbsCurve(visibleShape.nurbs)) &&
                                      (geometryType != GeometryType::Circle ||
@@ -2334,6 +2421,28 @@ protected:
                                       validateNurbsCurve(visibleShape.nurbs)) &&
                                      (geometryType != GeometryType::PolyCurve ||
                                       !visibleShape.components.isEmpty());
+            if (sceneRenderer != nullptr && previewRenderer != nullptr &&
+                geometryType == GeometryType::Picture &&
+                !scalePreview && !rotatePreview &&
+                !visibleShape.pictureImage.isNull() &&
+                pictureFrameCorners(visibleShape).size() == 4) {
+                gpuPreviewPictures.append(
+                    {visibleShape,
+                     pictureFrameOutline(visibleShape),
+                     -1,
+                     index,
+                     ObjectId::invalid(),
+                     false,
+                     1.0f,
+                     QColor(QStringLiteral("#5da9e9"))});
+                if (selected) {
+                    gpuStrokes.append({&gpuPreviewPictures.back().frame,
+                                       QColor(QStringLiteral("#5da9e9")),
+                                       1.5f,
+                                       false});
+                }
+                continue;
+            }
             if (sceneRenderer != nullptr && previewRenderer != nullptr &&
                 geometryType == GeometryType::Picture &&
                 (scalePreview || rotatePreview) &&
@@ -2366,17 +2475,24 @@ protected:
                                        QColor(QStringLiteral("#8aa7c7")),
                                        1.0f, true});
                 }
-                gpuStrokes.append({&visibleShape,
-                                   highlighted ? QColor(QStringLiteral("#5da9e9"))
-                                               : layerColor.isValid()
-                                                     ? layerColor
-                                                     : QColor(QStringLiteral("#d28b45")),
-                                   static_cast<float>(highlighted ? 3.5
-                                                                  : storedWidth),
-                                   false,
-                                   geometryType == GeometryType::Point
-                                       ? (highlighted ? 10.0f : 9.0f)
-                                       : 0.0f});
+                ViewportSceneStroke sceneStroke{
+                    &visibleShape,
+                    highlighted ? QColor(QStringLiteral("#5da9e9"))
+                                : layerColor.isValid()
+                                      ? layerColor
+                                      : QColor(QStringLiteral("#d28b45")),
+                    static_cast<float>(highlighted ? 3.5 : storedWidth),
+                    false,
+                    geometryType == GeometryType::Point
+                        ? (highlighted ? 10.0f : 9.0f)
+                        : 0.0f};
+                if (!highlighted) {
+                    sceneStroke.lineStyle = viewportSceneLineStyleForLayerPattern(
+                        gpuLayerPattern.kind);
+                    sceneStroke.linePatternScale =
+                        static_cast<float>(gpuLayerPattern.scale);
+                }
+                gpuStrokes.append(sceneStroke);
                 continue;
             }
             if (scalePreview) {
@@ -2701,6 +2817,11 @@ protected:
                                  previewRenderer->draw(gpuPreviewStrokes,
                                                        viewportTransform_, size(),
                                                        devicePixelRatioF());
+            if (controlPointsVisible_ && controlPointRenderer != nullptr) {
+                gpuControlPointsDrawn = controlPointRenderer->draw(
+                    gpuControlPointHandles, viewportTransform_, size(),
+                    devicePixelRatioF());
+            }
             painter.endNativePainting();
             if (!sceneDrawn) {
                 for (const ViewportSceneStroke &stroke : gpuStrokes) {
@@ -2811,16 +2932,19 @@ protected:
                                            scalePreviewAxis_,
                                            scalePreviewFactor_,
                                            scaleMode_);
-                        drawControlPoints(painter, previewShape, shapeIndex);
+                        drawControlPoints(painter, previewShape, shapeIndex,
+                                          !gpuControlPointsDrawn);
                     } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
                         rotateShapeIndices_.contains(shapes_.objectIdAt(shapeIndex))) {
                         Shape previewShape = shapes_[shapeIndex];
                         rotateShapeGeometry(&previewShape,
                                             rotateBaseWorld_,
                                             rotatePreviewAngle_);
-                        drawControlPoints(painter, previewShape, shapeIndex);
+                        drawControlPoints(painter, previewShape, shapeIndex,
+                                          !gpuControlPointsDrawn);
                     } else {
-                        drawControlPoints(painter, shapes_[shapeIndex], shapeIndex);
+                        drawControlPoints(painter, shapes_[shapeIndex], shapeIndex,
+                                          !gpuControlPointsDrawn);
                     }
                 }
             }
@@ -3547,9 +3671,7 @@ protected:
                     viewportTransform_.zoomAt(QPointF(width() * 0.5,
                                                       height() * 0.5),
                                               factor,
-                                              size(),
-                                              0.15,
-                                              12.0);
+                                              size());
                     break;
                 }
                 case BlenderNavigationAction::Pan:
@@ -4291,7 +4413,7 @@ protected:
         wheelSteps = std::clamp(wheelSteps, -24.0, 24.0);
         // Blender's view_zoom_apply_step uses a 1.2 distance ratio per notch.
         const qreal factor = std::exp(std::log(1.2) * wheelSteps);
-        viewportTransform_.zoomAt(screenPosition, factor, size(), 0.15, 12.0);
+        viewportTransform_.zoomAt(screenPosition, factor, size());
 
         const QPointF afterZoom = screenToWorld(screenPosition);
 
@@ -10157,7 +10279,10 @@ private:
                                             drawCurve);
     }
 
-    void drawControlPoints(QPainter &painter, const Shape &shape, int shapeIndex)
+    void drawControlPoints(QPainter &painter,
+                           const Shape &shape,
+                           int shapeIndex,
+                           bool drawMarkers = true)
     {
         const WorkPlane previousPlane = viewportTransform_.workPlane();
         const qreal previousOffset = viewportTransform_.workPlaneOffset();
@@ -10168,7 +10293,8 @@ private:
                                            shapes_.objectIdAt(shapeIndex),
                                            selectedShapeIndex_,
                                            draggingControlPoint_,
-                                           controlPointIndex_);
+                                           controlPointIndex_,
+                                           drawMarkers);
         viewportTransform_.setWorkPlane(previousPlane, previousOffset);
     }
 

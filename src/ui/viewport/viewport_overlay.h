@@ -43,7 +43,8 @@ public:
                            ObjectId shapeObjectId,
                            ObjectId selectedObjectId,
                            bool draggingControlPoint,
-                           int activeControlPointIndex) const;
+                           int activeControlPointIndex,
+                           bool drawMarkers = true) const;
     void drawSubdivisionPoints(QPainter &painter,
                                const Shape &shape,
                                const QVector<double> &parameters,

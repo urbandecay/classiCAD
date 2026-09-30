@@ -955,7 +955,8 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                                          ObjectId shapeObjectId,
                                          ObjectId selectedObjectId,
                                          bool draggingControlPoint,
-                                         int activeControlPointIndex) const
+                                         int activeControlPointIndex,
+                                         bool drawMarkers) const
 {
     const QColor handleColor(QStringLiteral("#77b7e6"));
     const QColor handleFill(QStringLiteral("#263b4b"));
@@ -974,6 +975,9 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
         }
 
         for (int index = 0; index < controlPoints.size(); ++index) {
+            if (!drawMarkers) {
+                continue;
+            }
             const bool active = draggingControlPoint &&
                                 shapeObjectId == selectedObjectId &&
                                 activeControlPointIndex == globalControlPointIndex + index;

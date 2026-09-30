@@ -275,8 +275,12 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   Restored the matching radial GPU/CPU backgrounds and close fine-grid
   visibility; reverted the temporary Y-axis adjustment made against a
   different screenshot. The exact transient palette now migrates back to the
-  prior default, while custom saved colors remain preserved. A post-change
-  viewport capture is still needed to confirm rendered pixels.
+  prior default, while custom saved colors remain preserved. The updated
+  native capture and viewport interaction check passed with Mesa software
+  OpenGL; captures are under
+  `/tmp/classicad-blender-user-theme-confirmation`. This confirms the saved
+  theme styling is present in classiCAD, while a pixel-aligned Blender/classiCAD
+  comparison against the cropped reference remains open.
 
 ## Stage 6 progress
 

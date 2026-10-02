@@ -36,6 +36,33 @@ bool projectFramePoint(const ViewportTransform &transform,
         workPlaneFramePointToWorld(localPoint, frame), viewportSize, screenPoint);
 }
 
+QColor arcTwoPointGuideColor(const QPointF &localVector,
+                             const WorkPlaneFrame &frame)
+{
+    const Point3D worldVector{
+        localVector.x() * frame.xAxis.x + localVector.y() * frame.yAxis.x,
+        localVector.x() * frame.xAxis.y + localVector.y() * frame.yAxis.y,
+        localVector.x() * frame.xAxis.z + localVector.y() * frame.yAxis.z};
+    const qreal length = std::sqrt(worldVector.x * worldVector.x +
+                                   worldVector.y * worldVector.y +
+                                   worldVector.z * worldVector.z);
+    if (length <= 1.0e-9) {
+        return QColor(72, 72, 72);
+    }
+
+    constexpr qreal axisTolerance = 0.9999;
+    if (std::abs(worldVector.x) / length > axisTolerance) {
+        return QColor(255, 26, 26);
+    }
+    if (std::abs(worldVector.y) / length > axisTolerance) {
+        return QColor(26, 179, 26);
+    }
+    if (std::abs(worldVector.z) / length > axisTolerance) {
+        return QColor(51, 128, 255);
+    }
+    return QColor(92, 92, 92);
+}
+
 QColor arcCompassColor(const Point3D &normal)
 {
     constexpr qreal axisTolerance = 0.999999;
@@ -732,6 +759,88 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
 
         if (currentSnap.isValid()) {
             drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        }
+        return;
+    }
+
+    if (arcMode == ArcMode::TwoPoint) {
+        const WorkPlaneFrame frame = isValidWorkPlaneFrame(workPlaneFrame)
+                                         ? workPlaneFrame
+                                         : transform_.workPlaneFrame();
+        if (!isValidWorkPlaneFrame(frame)) {
+            return;
+        }
+
+        const QColor pointColor(QStringLiteral("#f0a45a"));
+        const auto drawPoint = [&](const QPointF &localPoint) {
+            QPointF screenPoint;
+            if (!projectFramePoint(transform_, frame, localPoint,
+                                   viewportSize, &screenPoint)) {
+                return;
+            }
+            painter.setPen(QPen(pointColor, 1.25));
+            painter.setBrush(QColor(QStringLiteral("#282828")));
+            painter.drawEllipse(screenPoint, 4.0, 4.0);
+            painter.drawLine(screenPoint + QPointF(-5.0, 0.0),
+                             screenPoint + QPointF(5.0, 0.0));
+            painter.drawLine(screenPoint + QPointF(0.0, -5.0),
+                             screenPoint + QPointF(0.0, 5.0));
+        };
+        const auto drawGuide = [&](const QPointF &start,
+                                   const QPointF &end,
+                                   const QColor &color) {
+            QPointF startScreen;
+            QPointF endScreen;
+            if (projectFramePoint(transform_, frame, start, viewportSize,
+                                  &startScreen) &&
+                projectFramePoint(transform_, frame, end, viewportSize,
+                                  &endScreen)) {
+                painter.setPen(QPen(color, 1.0));
+                painter.drawLine(startScreen, endScreen);
+            }
+        };
+
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        if (pendingPoints.isEmpty()) {
+            if (cursorValid) {
+                drawPoint(cursorWorld);
+            }
+        } else if (pendingPoints.size() == 1) {
+            drawPoint(pendingPoints.first());
+            if (cursorValid) {
+                const QPointF chord = cursorWorld - pendingPoints.first();
+                drawGuide(pendingPoints.first(), cursorWorld,
+                          arcTwoPointGuideColor(chord, frame));
+                drawPoint(cursorWorld);
+            }
+        } else {
+            const QPointF first = pendingPoints[0];
+            const QPointF second = pendingPoints[1];
+            const QPointF chord = second - first;
+            const qreal chordLength = std::hypot(chord.x(), chord.y());
+            drawPoint(first);
+            drawPoint(second);
+            drawGuide(first, second, arcTwoPointGuideColor(chord, frame));
+
+            if (cursorValid && chordLength > 1.0e-9) {
+                const QPointF midpoint = (first + second) * 0.5;
+                const QPointF heightVector = cursorWorld - midpoint;
+                drawGuide(midpoint, cursorWorld,
+                          arcTwoPointGuideColor(heightVector, frame));
+                if (drawCurve) {
+                    painter.setPen(QPen(resolvedCurveColor, 1.5));
+                    renderer_.drawCircularArc(painter, first, second,
+                                              cursorWorld, viewportSize);
+                }
+                drawPoint(cursorWorld);
+            }
+        }
+        painter.restore();
+
+        if (currentSnap.isValid()) {
+            drawSnapMarker(painter, currentSnap.type, currentSnap.point,
+                           viewportSize);
         }
         return;
     }

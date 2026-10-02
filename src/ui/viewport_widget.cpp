@@ -3144,13 +3144,20 @@ protected:
         gpuPreviewStrokes.reserve(gpuPreviewStrokes.size() +
                                   gpuPreviewPictures.size());
 
-        const bool onePointArcPreview = activeTool_ == Tool::Arc &&
-                                        arcMode_ == ArcMode::OnePoint;
+        const bool gpuArcToolPreview =
+            activeTool_ == Tool::Arc &&
+            (arcMode_ == ArcMode::OnePoint || arcMode_ == ArcMode::TwoPoint);
+        const qreal arcHudPanelWidth = arcMode_ == ArcMode::TwoPoint
+                                           ? 750.0
+                                           : 570.0;
+        const ArcHudDisplay arcHudDisplay = arcMode_ == ArcMode::TwoPoint
+                                                ? twoPointArcHudDisplay()
+                                                : onePointArcHudDisplay();
         const QImage arcHudText = nativeRenderer != nullptr &&
-                                          onePointArcPreview
-                                      ? onePointArcHudTextImage(
-                                            onePointArcHudDisplay(),
-                                            devicePixelRatioF())
+                                          gpuArcToolPreview
+                                      ? arcHudTextImage(arcHudDisplay,
+                                                        devicePixelRatioF(),
+                                                        arcHudPanelWidth)
                                       : QImage{};
         bool gpuPreviewRendered = false;
         bool gpuArcOverlayRendered = false;
@@ -3213,9 +3220,9 @@ protected:
                     gpuControlPointHandles, viewportTransform_, size(),
                     devicePixelRatioF());
             }
-            if (onePointArcPreview && previewRenderer != nullptr) {
+            if (gpuArcToolPreview && previewRenderer != nullptr) {
                 gpuArcOverlayRendered =
-                    previewRenderer->drawArcOnePointOverlay(
+                    previewRenderer->drawArcToolOverlay(
                         viewportTransform_,
                         size(),
                         devicePixelRatioF(),
@@ -3223,11 +3230,13 @@ protected:
                         pendingPoints_,
                         cursorWorld_,
                         cursorValid_,
+                        arcMode_,
                         arcPreviewSweepAngle_,
                         arcPreviewColor,
                         currentSnap_,
                         arcCompassRotation(),
                         arcHudText,
+                        arcHudPanelWidth,
                         !gpuActiveToolPreview || !gpuPreviewRendered,
                         viewportOverlay_.snapLabelsVisible());
             }
@@ -3541,8 +3550,7 @@ protected:
             ? constrainLinePoint(
                   rawWorldPosition,
                   event->modifiers().testFlag(Qt::AltModifier),
-                  &screenPosition,
-                  true)
+                  &screenPosition)
             : rawWorldPosition;
         if (!worldPositionValid) currentSnap_ = SnapResult{};
         DebugLog::instance().write(
@@ -3693,6 +3701,26 @@ protected:
 
         if (event->button() == Qt::RightButton && activeTool_ == Tool::Picture) {
             cancelPicturePlacement();
+            return;
+        }
+
+        if (event->button() == Qt::RightButton && activeTool_ == Tool::Arc &&
+            arcMode_ == ArcMode::TwoPoint) {
+            if (worldPositionValid && pendingPoints_.size() >= 2) {
+                cursorWorld_ = worldPosition;
+                lastWorldPosition_ = worldPosition;
+                cursorValid_ = true;
+                finishTwoPointArcAt(worldPosition);
+            }
+            if (activeTool_ == Tool::Arc) {
+                pendingPoints_.clear();
+                setTool(Tool::Select);
+                if (commandFinished_) {
+                    commandFinished_(Tool::Select);
+                }
+            }
+            update();
+            emitCoordinateUpdate();
             return;
         }
 
@@ -4020,6 +4048,14 @@ protected:
                                            .arg(pointText(lastWorldPosition_))
                                            .arg(pendingPoints_.size()));
             update();
+            return;
+        }
+
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint &&
+            pendingPoints_.size() >= 2) {
+            finishTwoPointArcAt(worldPosition);
+            update();
+            emitCoordinateUpdate();
             return;
         }
 
@@ -5170,6 +5206,11 @@ protected:
             return;
         }
 
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint &&
+            handleTwoPointArcKey(event)) {
+            return;
+        }
+
         if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
             handleOnePointArcKey(event)) {
             return;
@@ -5293,6 +5334,8 @@ private:
         None,
         Radius,
         Angle,
+        ChordLength,
+        Sagitta,
     };
 
     void beginOrbitAt(const QPointF &screenPosition)
@@ -7734,8 +7777,7 @@ private:
 
     QPointF constrainLinePoint(const QPointF &rawPoint,
                                bool altModifier = false,
-                               const QPointF *screenPosition = nullptr,
-                               bool mousePress = false)
+                               const QPointF *screenPosition = nullptr)
     {
         currentSnap_ = findSnapPoint(rawPoint);
         const QPointF snappedOrRawPoint = currentSnap_.isValid()
@@ -7747,8 +7789,7 @@ private:
             return constrainArcChordEndpoint(
                 rawPoint,
                 altModifier,
-                currentArcScreenPosition(screenPosition),
-                mousePress);
+                currentArcScreenPosition(screenPosition));
         }
 
         if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint &&
@@ -10867,6 +10908,25 @@ private:
         arcTextInputMode_ = ArcTextInputMode::None;
         arcTextInput_.clear();
 
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint) {
+            qreal distance = 0.0;
+            if (parseArcLengthInput(input,
+                                    document_.settings().lengthUnit,
+                                    &distance)) {
+                distance = std::abs(distance);
+                if (inputMode == ArcTextInputMode::ChordLength &&
+                    pendingPoints_.size() == 1) {
+                    setTwoPointArcChordLength(distance);
+                } else if (inputMode == ArcTextInputMode::Sagitta &&
+                           pendingPoints_.size() >= 2) {
+                    setTwoPointArcSagitta(distance);
+                }
+            }
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
         if (inputMode == ArcTextInputMode::Radius) {
             qreal radius = 0.0;
             if (parseArcLengthInput(input,
@@ -11069,6 +11129,112 @@ private:
         return false;
     }
 
+    bool handleTwoPointArcKey(QKeyEvent *event)
+    {
+        if (event == nullptr || activeTool_ != Tool::Arc ||
+            arcMode_ != ArcMode::TwoPoint) {
+            return false;
+        }
+
+        if (arcTextInputMode_ != ArcTextInputMode::None) {
+            if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+                applyArcTextInput();
+                event->accept();
+                return true;
+            }
+            if (event->key() == Qt::Key_Backspace) {
+                arcTextInput_.chop(1);
+                update();
+                event->accept();
+                return true;
+            }
+
+            const QString typedText = event->text();
+            bool accepted = !typedText.isEmpty();
+            for (const QChar character : typedText) {
+                const bool numeric = character.isDigit() ||
+                                     character == QLatin1Char('.') ||
+                                     character == QLatin1Char(',') ||
+                                     character == QLatin1Char('-') ||
+                                     character == QLatin1Char('+') ||
+                                     character == QLatin1Char('/') ||
+                                     character == QLatin1Char(' ') ||
+                                     character == QLatin1Char('\'') ||
+                                     character == QLatin1Char('"') ||
+                                     character.isLetter();
+                if (!numeric) {
+                    accepted = false;
+                    break;
+                }
+            }
+            if (accepted) {
+                arcTextInput_.append(typedText == QStringLiteral(",")
+                                         ? QStringLiteral(".")
+                                         : typedText);
+                update();
+                event->accept();
+                return true;
+            }
+            return false;
+        }
+
+        if (event->isAutoRepeat() || event->modifiers() != Qt::NoModifier) {
+            return false;
+        }
+        switch (event->key()) {
+        case Qt::Key_D:
+            if (pendingPoints_.size() == 1) {
+                beginArcTextInput(ArcTextInputMode::ChordLength);
+                event->accept();
+                return true;
+            }
+            return false;
+        case Qt::Key_H:
+            if (pendingPoints_.size() >= 2) {
+                beginArcTextInput(ArcTextInputMode::Sagitta);
+                event->accept();
+                return true;
+            }
+            return false;
+        case Qt::Key_P:
+            toggleTwoPointArcPerpendicularPlane();
+            event->accept();
+            return true;
+        case Qt::Key_L:
+            toggleArcPlaneLock();
+            event->accept();
+            return true;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+        case Qt::Key_Space:
+            if (pendingPoints_.size() >= 2) {
+                finishTwoPointArcAt(cursorWorld_);
+                event->accept();
+                return true;
+            }
+            return false;
+        default:
+            break;
+        }
+
+        if (!pendingPoints_.isEmpty()) {
+            const QString typedText = event->text();
+            if (typedText.size() == 1 &&
+                (typedText.front().isDigit() ||
+                 typedText.front() == QLatin1Char('.') ||
+                 typedText.front() == QLatin1Char('-') ||
+                 typedText.front() == QLatin1Char('+'))) {
+                beginArcTextInput(pendingPoints_.size() >= 2
+                                      ? ArcTextInputMode::Sagitta
+                                      : ArcTextInputMode::ChordLength,
+                                  typedText);
+                event->accept();
+                return true;
+            }
+        }
+        return false;
+    }
+
     void toggleOnePointArcPerpendicularPlane()
     {
         if (pendingPoints_.isEmpty() || !arcReferenceFrameValid_ ||
@@ -11223,6 +11389,43 @@ private:
         emitCoordinateUpdate();
     }
 
+    void finishTwoPointArcAt(const QPointF &cursorPoint)
+    {
+        if (activeTool_ != Tool::Arc || arcMode_ != ArcMode::TwoPoint ||
+            pendingPoints_.size() < 2 ||
+            !isValidWorkPlaneFrame(viewportTransform_.workPlaneFrame())) {
+            return;
+        }
+
+        QVector<QPointF> points{pendingPoints_[0], pendingPoints_[1]};
+        points.append(constrainTwoPointArcThroughPoint(
+            cursorPoint, currentSnap_.isValid(), false));
+        Shape completedShape;
+        if (!makeToolShape(Tool::Arc, points, ArcMode::TwoPoint, 0.0,
+                           &completedShape)) {
+            return;
+        }
+
+        recordGeometryChange();
+        shapes_.append(completedShape);
+        DebugLog::instance().write(
+            QStringLiteral("two-point arc committed chord=%1 sagitta=%2")
+                .arg(std::hypot(points[1].x() - points[0].x(),
+                               points[1].y() - points[0].y()),
+                     0, 'f', 4)
+                .arg(std::hypot(points[2].x() -
+                                    (points[0].x() + points[1].x()) * 0.5,
+                                points[2].y() -
+                                    (points[0].y() + points[1].y()) * 0.5),
+                     0, 'f', 4));
+        setTool(Tool::Select);
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        update();
+        emitCoordinateUpdate();
+    }
+
     QPointF currentArcScreenPosition(const QPointF *screenPosition = nullptr) const
     {
         if (screenPosition != nullptr) {
@@ -11306,6 +11509,16 @@ private:
                 arcVectorAdd(arcFirstPointWorld_, endpoint), 0.5);
             frame = makeWorkPlaneFrameFromNormal(midpoint,
                                                  arcVerticalPlaneNormal());
+        } else if (arcPerpendicularPlaneActive_) {
+            const Point3D midpoint = arcVectorScale(
+                arcVectorAdd(arcFirstPointWorld_, endpoint), 0.5);
+            Point3D normal = arcVectorCross(chordDirection,
+                                            arcReferenceNormal_);
+            const qreal normalLength = arcVectorLength(normal);
+            if (normalLength > 1.0e-9) {
+                normal = arcVectorScale(normal, 1.0 / normalLength);
+                frame = makeWorkPlaneFrameFromNormal(midpoint, normal);
+            }
         }
         if (!isValidWorkPlaneFrame(frame)) {
             return;
@@ -11322,6 +11535,135 @@ private:
             pendingPoints_[1] = worldPointToWorkPlaneFrame(arcSecondPointWorld_,
                                                             frame);
         }
+    }
+
+    void setTwoPointArcChordLength(qreal chordLength)
+    {
+        if (pendingPoints_.size() != 1 || !arcReferenceFrameValid_ ||
+            !std::isfinite(chordLength) || chordLength <= 1.0e-9) {
+            return;
+        }
+
+        const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
+        const Point3D cursorWorld = workPlaneFramePointToWorld(cursorWorld_, frame);
+        Point3D direction = arcVectorSubtract(cursorWorld, arcFirstPointWorld_);
+        if (arcAxisConstraintKey_ != 0) {
+            const Point3D axis = arcAxisDirection(arcAxisConstraintKey_);
+            const qreal directionLength = arcVectorLength(direction);
+            const qreal sign = directionLength > 1.0e-9 &&
+                                       arcVectorDot(direction, axis) < 0.0
+                                   ? -1.0
+                                   : 1.0;
+            direction = arcVectorScale(axis, sign);
+        } else {
+            const qreal directionLength = arcVectorLength(direction);
+            if (directionLength <= 1.0e-9) {
+                direction = arcReferenceFrame_.xAxis;
+            } else {
+                direction = arcVectorScale(direction, 1.0 / directionLength);
+            }
+        }
+
+        arcSecondPointWorld_ = arcVectorAdd(
+            arcFirstPointWorld_, arcVectorScale(direction, chordLength));
+        arcChordWorldPointsValid_ = true;
+        updateArcTwoPointWorkPlaneForView(&arcSecondPointWorld_);
+        pendingPoints_[0] = worldPointToWorkPlaneFrame(
+            arcFirstPointWorld_, viewportTransform_.workPlaneFrame());
+        pendingPoints_.append(worldPointToWorkPlaneFrame(
+            arcSecondPointWorld_, viewportTransform_.workPlaneFrame()));
+        arcAxisConstraintKey_ = 0;
+        arcResolvedChordPointValid_ = false;
+        cursorWorld_ = pendingPoints_[1];
+        rawCursorWorld_ = cursorWorld_;
+        lastWorldPosition_ = cursorWorld_;
+        cursorValid_ = true;
+        currentSnap_ = SnapResult{};
+    }
+
+    void setTwoPointArcSagitta(qreal sagitta)
+    {
+        if (pendingPoints_.size() < 2 || !std::isfinite(sagitta)) {
+            return;
+        }
+
+        const QPointF chord = pendingPoints_[1] - pendingPoints_[0];
+        const qreal chordLength = std::hypot(chord.x(), chord.y());
+        if (chordLength <= 1.0e-9) {
+            return;
+        }
+        const QPointF midpoint = (pendingPoints_[0] + pendingPoints_[1]) * 0.5;
+        const QPointF perpendicular(-chord.y() / chordLength,
+                                    chord.x() / chordLength);
+        const qreal currentHeight = QPointF::dotProduct(cursorWorld_ - midpoint,
+                                                        perpendicular);
+        const qreal sign = currentHeight < 0.0 ? -1.0 : 1.0;
+        cursorWorld_ = midpoint + perpendicular * (sign * std::abs(sagitta));
+        rawCursorWorld_ = cursorWorld_;
+        lastWorldPosition_ = cursorWorld_;
+        cursorValid_ = true;
+        currentSnap_ = SnapResult{};
+    }
+
+    void toggleArcPlaneLock()
+    {
+        arcPlaneLocked_ = !arcPlaneLocked_;
+        if (arcPlaneLocked_ && pendingPoints_.isEmpty()) {
+            arcLockedFrame_ = viewportTransform_.workPlaneFrame();
+            arcLockedFrameValid_ = isValidWorkPlaneFrame(arcLockedFrame_);
+        } else if (!arcPlaneLocked_) {
+            arcLockedFrame_ = {};
+            arcLockedFrameValid_ = false;
+            if (pendingPoints_.isEmpty()) {
+                updateDrawingWorkPlaneFromHover(currentArcScreenPosition());
+            }
+        }
+        update();
+    }
+
+    void toggleTwoPointArcPerpendicularPlane()
+    {
+        if (pendingPoints_.size() == 1 && arcReferenceFrameValid_) {
+            // Match the add-on: P can choose the arc plane while the chord
+            // endpoint is still moving. The next cursor update resolves the
+            // provisional chord and applies this plane to its preview.
+            arcPerpendicularPlaneActive_ = !arcPerpendicularPlaneActive_;
+            arcVerticalOverrideAxis_ = 0;
+            restoreArcChordReferencePlaneForEndpointPick();
+            refreshArcCursorOnCurrentFrame();
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+        if (pendingPoints_.size() < 2 || !arcChordWorldPointsValid_) {
+            return;
+        }
+
+        const Point3D chord = arcVectorSubtract(arcSecondPointWorld_,
+                                                arcFirstPointWorld_);
+        const qreal chordLength = arcVectorLength(chord);
+        if (chordLength <= 1.0e-9) {
+            return;
+        }
+        const Point3D chordDirection = arcVectorScale(chord, 1.0 / chordLength);
+        const qreal verticalThreshold = arcWasVertical_ ? 0.98 : 0.995;
+        const bool isVertical = std::abs(arcVectorDot(chordDirection,
+                                                      arcReferenceNormal_)) >
+                                verticalThreshold;
+        arcWasVertical_ = isVertical;
+        if (isVertical) {
+            arcVerticalOverrideAxis_ = arcVerticalOverrideAxis_ == Qt::Key_X
+                                           ? Qt::Key_Y
+                                           : Qt::Key_X;
+        } else {
+            arcPerpendicularPlaneActive_ = !arcPerpendicularPlaneActive_;
+            arcVerticalOverrideAxis_ = 0;
+        }
+
+        updateArcTwoPointWorkPlaneForView();
+        refreshArcCursorOnCurrentFrame();
+        update();
+        emitCoordinateUpdate();
     }
 
     int inferredArcChordAxis(const QPointF &screenPosition) const
@@ -11377,8 +11719,7 @@ private:
 
     QPointF constrainArcChordEndpoint(const QPointF &rawPoint,
                                       bool altModifier,
-                                      const QPointF &screenPosition,
-                                      bool mousePress)
+                                      const QPointF &screenPosition)
     {
         const WorkPlaneFrame oldFrame = viewportTransform_.workPlaneFrame();
         if (!isValidWorkPlaneFrame(oldFrame) || !arcReferenceFrameValid_) {
@@ -11392,7 +11733,7 @@ private:
                                                                oldFrame)
                                   : rawWorld;
         int axisKey = 0;
-        if (mousePress || !altModifier) {
+        if (!altModifier) {
             axisKey = arcAxisConstraintKey_;
             if (axisKey == 0 && !currentSnap_.isValid()) {
                 axisKey = inferredArcChordAxis(screenPosition);
@@ -11515,6 +11856,17 @@ private:
             return true;
         }
 
+        if (arcMode_ == ArcMode::TwoPoint && pendingPoints_.size() == 1) {
+            // X/Y/Z constrain the chord endpoint in two-point mode. Keep the
+            // reference plane active while refreshing so the endpoint stays
+            // anchored to the first point as the cursor is reprojected.
+            arcAxisConstraintKey_ = arcAxisConstraintKey_ == key ? 0 : key;
+            restoreArcChordReferencePlaneForEndpointPick();
+            refreshArcCursorOnCurrentFrame();
+            update();
+            return true;
+        }
+
         if (pendingPoints_.size() >= 2 && arcChordWorldPointsValid_ &&
             (key == Qt::Key_X || key == Qt::Key_Y)) {
             const Point3D chord = arcVectorSubtract(arcSecondPointWorld_,
@@ -11533,8 +11885,8 @@ private:
 
     void updateDrawingWorkPlaneFromHover(const QPointF &screenPosition)
     {
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
-            pendingPoints_.isEmpty() && arcPlaneLocked_ &&
+        if (activeTool_ == Tool::Arc && pendingPoints_.isEmpty() &&
+            arcPlaneLocked_ &&
             arcLockedFrameValid_) {
             viewportTransform_.setWorkPlaneFrame(arcLockedFrame_);
             return;
@@ -11880,13 +12232,102 @@ private:
                                               : QStringLiteral("off"))};
     }
 
-    QImage onePointArcHudTextImage(const ArcHudDisplay &display,
-                                   qreal devicePixelRatio) const
+    ArcHudDisplay twoPointArcHudDisplay() const
+    {
+        qreal chordLength = 0.0;
+        qreal height = 0.0;
+        if (pendingPoints_.size() == 1 && cursorValid_) {
+            const QPointF chord = cursorWorld_ - pendingPoints_[0];
+            chordLength = std::hypot(chord.x(), chord.y());
+        } else if (pendingPoints_.size() >= 2) {
+            const QPointF chord = pendingPoints_[1] - pendingPoints_[0];
+            chordLength = std::hypot(chord.x(), chord.y());
+            if (cursorValid_ && chordLength > 1.0e-9) {
+                const QPointF midpoint = (pendingPoints_[0] + pendingPoints_[1]) * 0.5;
+                const QPointF perpendicular(-chord.y() / chordLength,
+                                            chord.x() / chordLength);
+                height = std::abs(QPointF::dotProduct(cursorWorld_ - midpoint,
+                                                      perpendicular));
+            }
+        }
+
+        const DocumentSettings settings = document_.settings();
+        const qreal unitsPerMillimeter =
+            1.0 / millimetersPerDocumentUnit(settings.lengthUnit);
+        const QString chordText = arcTextInputMode_ == ArcTextInputMode::ChordLength
+                                       ? arcTextInput_ + QLatin1Char('|')
+                                       : QStringLiteral("%1 %2")
+                                             .arg(chordLength * unitsPerMillimeter,
+                                                  0, 'f', 3)
+                                             .arg(arcLengthUnitSuffix(settings.lengthUnit));
+        const QString heightText = arcTextInputMode_ == ArcTextInputMode::Sagitta
+                                       ? arcTextInput_ + QLatin1Char('|')
+                                       : QStringLiteral("%1 %2")
+                                             .arg(height * unitsPerMillimeter,
+                                                  0, 'f', 3)
+                                             .arg(arcLengthUnitSuffix(settings.lengthUnit));
+
+        QString stageHint;
+        if (arcTextInputMode_ != ArcTextInputMode::None) {
+            stageHint = QStringLiteral("Enter applies value");
+        } else if (pendingPoints_.isEmpty()) {
+            stageHint = QStringLiteral("Click first endpoint  •  L locks plane");
+        } else if (pendingPoints_.size() == 1) {
+            stageHint = QStringLiteral("Click chord end  •  D length  •  X/Y/Z axis  •  P perp  •  Alt bypass");
+        } else {
+            stageHint = QStringLiteral("Click arc height  •  H sagitta  •  P perpendicular plane %1  •  Alt bypass half-circle snap")
+                            .arg(arcPerpendicularPlaneActive_
+                                     ? QStringLiteral("ON")
+                                     : QStringLiteral("OFF"));
+            if (arcVerticalOverrideAxis_ != 0) {
+                stageHint += QStringLiteral("  •  %1 plane")
+                                 .arg(arcVerticalOverrideAxis_ == Qt::Key_X
+                                          ? QStringLiteral("X")
+                                          : QStringLiteral("Y"));
+            }
+        }
+        const QString dimensionsLine = pendingPoints_.size() >= 2
+                                           ? QStringLiteral("D: %1    H: %2")
+                                                 .arg(chordText, heightText)
+                                           : QStringLiteral("D: %1")
+                                                 .arg(chordText);
+        return {dimensionsLine,
+                QStringLiteral("%1  •  Esc exits")
+                    .arg(stageHint)};
+    }
+
+    void drawArcHudPanel(QPainter &painter,
+                         const ArcHudDisplay &display,
+                         qreal preferredWidth) const
+    {
+        painter.save();
+        const QRectF panel(12.0,
+                           std::max<qreal>(12.0, height() - 58.0),
+                           std::max<qreal>(1.0,
+                                           std::min<qreal>(preferredWidth,
+                                                           width() - 24.0)),
+                           46.0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(20, 20, 20, 170));
+        painter.drawRoundedRect(panel, 4.0, 4.0);
+        painter.setFont(QFont(QStringLiteral("Sans"), 9));
+        painter.setPen(QColor(225, 225, 225));
+        painter.drawText(QPointF(20.0, panel.top() + 17.0),
+                         display.dimensionsLine);
+        painter.setPen(QColor(170, 170, 170));
+        painter.drawText(QPointF(20.0, panel.top() + 35.0),
+                         display.instructionsLine);
+        painter.restore();
+    }
+
+    QImage arcHudTextImage(const ArcHudDisplay &display,
+                           qreal devicePixelRatio,
+                           qreal panelWidth) const
     {
         const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
         const qreal logicalWidth = std::max<qreal>(
             1.0,
-            std::min<qreal>(570.0, width() - 24.0));
+            std::min<qreal>(panelWidth, width() - 24.0));
         QImage image(QSize(qRound(logicalWidth * dpr), qRound(46.0 * dpr)),
                      QImage::Format_RGBA8888);
         image.setDevicePixelRatio(dpr);
@@ -11919,24 +12360,9 @@ private:
                                         drawCurve);
         if (arcMode_ == ArcMode::OnePoint) {
             const ArcHudDisplay display = onePointArcHudDisplay();
-            painter.save();
-            const QRectF panel(12.0,
-                               std::max<qreal>(12.0, height() - 58.0),
-                               std::max<qreal>(1.0,
-                                               std::min<qreal>(570.0,
-                                                               width() - 24.0)),
-                               46.0);
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(QColor(20, 20, 20, 170));
-            painter.drawRoundedRect(panel, 4.0, 4.0);
-            painter.setFont(QFont(QStringLiteral("Sans"), 9));
-            painter.setPen(QColor(225, 225, 225));
-            painter.drawText(QPointF(20.0, panel.top() + 17.0),
-                             display.dimensionsLine);
-            painter.setPen(QColor(170, 170, 170));
-            painter.drawText(QPointF(20.0, panel.top() + 35.0),
-                             display.instructionsLine);
-            painter.restore();
+            drawArcHudPanel(painter, display, 570.0);
+        } else if (arcMode_ == ArcMode::TwoPoint) {
+            drawArcHudPanel(painter, twoPointArcHudDisplay(), 750.0);
         }
     }
 

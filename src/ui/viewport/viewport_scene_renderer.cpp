@@ -3,6 +3,7 @@
 #include "viewport_scene_renderer.h"
 
 #include "blender_grid_renderer.h"
+#include "core/geometry/arc_curve_factory.h"
 #include "viewport_depth_geometry.h"
 
 #include <QImage>
@@ -125,6 +126,33 @@ void appendOverlayCircle(QVector<OverlayVertex> &vertices,
         appendOverlayLine(vertices, previous, next, color, width);
         previous = next;
     }
+}
+
+QColor twoPointArcGuideColor(const QPointF &localVector,
+                             const WorkPlaneFrame &frame)
+{
+    const Point3D worldVector{
+        localVector.x() * frame.xAxis.x + localVector.y() * frame.yAxis.x,
+        localVector.x() * frame.xAxis.y + localVector.y() * frame.yAxis.y,
+        localVector.x() * frame.xAxis.z + localVector.y() * frame.yAxis.z};
+    const qreal length = std::sqrt(worldVector.x * worldVector.x +
+                                   worldVector.y * worldVector.y +
+                                   worldVector.z * worldVector.z);
+    if (length <= 1.0e-9) {
+        return QColor(72, 72, 72);
+    }
+
+    constexpr qreal axisTolerance = 0.9999;
+    if (std::abs(worldVector.x) / length > axisTolerance) {
+        return QColor(255, 26, 26);
+    }
+    if (std::abs(worldVector.y) / length > axisTolerance) {
+        return QColor(26, 179, 26);
+    }
+    if (std::abs(worldVector.z) / length > axisTolerance) {
+        return QColor(51, 128, 255);
+    }
+    return QColor(92, 92, 92);
 }
 
 void appendOverlayRectangle(QVector<OverlayVertex> &vertices,
@@ -629,7 +657,7 @@ bool ViewportSceneRenderer::draw(
     return true;
 }
 
-bool ViewportSceneRenderer::drawArcOnePointOverlay(
+bool ViewportSceneRenderer::drawArcToolOverlay(
     const ViewportTransform &transform,
     const QSize &viewportSize,
     qreal devicePixelRatio,
@@ -637,11 +665,13 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
     const QVector<QPointF> &pendingPoints,
     const QPointF &cursorWorld,
     bool cursorValid,
+    ArcMode arcMode,
     qreal arcSweep,
     const QColor &curveColor,
     const SnapResult &currentSnap,
     qreal compassRotation,
     const QImage &hudText,
+    qreal hudPanelWidth,
     bool drawCurve,
     bool snapLabelsVisible)
 {
@@ -834,7 +864,7 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
         appendCompassLine(0.0, -crossLength, 0.0, crossLength, false);
     };
 
-    if (isValidWorkPlaneFrame(frame)) {
+    if (arcMode == ArcMode::OnePoint && isValidWorkPlaneFrame(frame)) {
         const QPointF compassCenter = pendingPoints.isEmpty()
                                           ? cursorWorld
                                           : pendingPoints.first();
@@ -846,7 +876,78 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
     const QColor startColor(204, 204, 51);
     const QColor endColor(51, 204, 51);
     const QColor pointColor(QStringLiteral("#f0a45a"));
-    if (!pendingPoints.isEmpty() && isValidWorkPlaneFrame(frame)) {
+    if (arcMode == ArcMode::TwoPoint && isValidWorkPlaneFrame(frame)) {
+        if (pendingPoints.size() == 1 && cursorValid) {
+            QPointF firstScreen;
+            QPointF cursorScreen;
+            if (projectFramePoint(pendingPoints.first(), &firstScreen) &&
+                projectFramePoint(cursorWorld, &cursorScreen)) {
+                appendOverlayLine(
+                    overlayVertices, firstScreen, cursorScreen,
+                    twoPointArcGuideColor(cursorWorld - pendingPoints.first(), frame),
+                    1.0);
+            }
+        } else if (pendingPoints.size() >= 2) {
+            const QPointF first = pendingPoints[0];
+            const QPointF second = pendingPoints[1];
+            const QPointF chord = second - first;
+            const qreal chordLength = std::hypot(chord.x(), chord.y());
+            QPointF firstScreen;
+            QPointF secondScreen;
+            const bool firstVisible = projectFramePoint(first, &firstScreen);
+            const bool secondVisible = projectFramePoint(second, &secondScreen);
+            if (firstVisible && secondVisible) {
+                appendOverlayLine(overlayVertices, firstScreen, secondScreen,
+                                  twoPointArcGuideColor(chord, frame), 1.0);
+            }
+
+            if (cursorValid && chordLength > 1.0e-9) {
+                const QPointF midpoint = (first + second) * 0.5;
+                QPointF midpointScreen;
+                QPointF cursorScreen;
+                if (projectFramePoint(midpoint, &midpointScreen) &&
+                    projectFramePoint(cursorWorld, &cursorScreen)) {
+                    appendOverlayLine(
+                        overlayVertices, midpointScreen, cursorScreen,
+                        twoPointArcGuideColor(cursorWorld - midpoint, frame),
+                        1.0);
+                }
+
+                CircularArc2D arc;
+                if (drawCurve &&
+                    makeCircularArcThroughPoint(first, second, cursorWorld, &arc)) {
+                    constexpr qreal twoPi = 6.28318530717958647692;
+                    constexpr int samplesPerRevolution = 96;
+                    const int sampleCount = std::max(
+                        8,
+                        static_cast<int>(std::ceil(
+                            std::abs(arc.sweepAngle) *
+                            samplesPerRevolution / twoPi)));
+                    QPointF previous;
+                    bool previousVisible = false;
+                    for (int index = 0; index <= sampleCount; ++index) {
+                        const qreal angle = arc.startAngle + arc.sweepAngle *
+                            (static_cast<qreal>(index) / sampleCount);
+                        QPointF projected;
+                        const QPointF point = arc.center +
+                            QPointF(arc.radius * std::cos(angle),
+                                    arc.radius * std::sin(angle));
+                        const bool visible = projectFramePoint(point, &projected);
+                        if (previousVisible && visible) {
+                            appendOverlayLine(overlayVertices,
+                                              previous,
+                                              projected,
+                                              resolvedCurveColor,
+                                              1.5);
+                        }
+                        previous = projected;
+                        previousVisible = visible;
+                    }
+                }
+            }
+        }
+    } else if (!pendingPoints.isEmpty() &&
+               isValidWorkPlaneFrame(frame)) {
         QPointF centerScreen;
         if (projectFramePoint(pendingPoints.first(), &centerScreen)) {
             if (pendingPoints.size() == 1) {
@@ -924,6 +1025,8 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
                 }
             }
         }
+    }
+    if (isValidWorkPlaneFrame(frame)) {
         for (const QPointF &point : pendingPoints) {
             QPointF screen;
             if (projectFramePoint(point, &screen)) {
@@ -935,7 +1038,8 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
                                     pointColor, 1.5);
             }
         }
-        if (cursorValid) {
+        if (cursorValid &&
+            (!pendingPoints.isEmpty() || arcMode == ArcMode::TwoPoint)) {
             QPointF cursorScreen;
             if (projectFramePoint(cursorWorld, &cursorScreen)) {
                 appendOverlayFilledCircle(overlayVertices,
@@ -1121,7 +1225,7 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
 
     const qreal panelWidth = std::max<qreal>(
         1.0,
-        std::min<qreal>(570.0, viewportSize.width() - 24.0));
+        std::min<qreal>(hudPanelWidth, viewportSize.width() - 24.0));
     const QRectF panel(12.0,
                        std::max<qreal>(12.0, viewportSize.height() - 58.0),
                        panelWidth,

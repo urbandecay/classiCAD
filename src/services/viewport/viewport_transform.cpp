@@ -88,6 +88,24 @@ constexpr qreal kBlenderViewportProjectionZoom = 2.0;
 // Blender 5.2's V3D_OP_TRACKBALLSIZE from view3d_navigate.hh.
 constexpr qreal kBlenderTrackballSize = 1.1;
 
+bool isAxisAlignedOrthographicView(ViewportViewPreset preset)
+{
+    switch (preset) {
+    case ViewportViewPreset::Top:
+    case ViewportViewPreset::Bottom:
+    case ViewportViewPreset::Front:
+    case ViewportViewPreset::Back:
+    case ViewportViewPreset::Right:
+    case ViewportViewPreset::Left:
+        return true;
+    case ViewportViewPreset::Isometric:
+    case ViewportViewPreset::Perspective:
+    case ViewportViewPreset::Custom:
+        return false;
+    }
+    return false;
+}
+
 qreal viewportFocalLengthPixels(const QSize &viewportSize, qreal lensMillimeters)
 {
     const qreal sensorFitExtent = std::max(viewportSize.width(),
@@ -966,7 +984,8 @@ void ViewportTransform::orbitByPixels(const QPointF &delta)
         orbitPivot_ = {previousTarget.x, previousTarget.y, previousTarget.z};
         pan_ = {};
     }
-    if (navigationPreferences_.autoPerspective &&
+    if (navigationPreferences_.autoPerspective && !perspective_ &&
+        isAxisAlignedOrthographicView(viewPreset_) &&
         (std::abs(delta.x()) > 0.0 || std::abs(delta.y()) > 0.0)) {
         perspective_ = true;
         zoom_ = std::clamp(zoom_,
@@ -1004,7 +1023,8 @@ void ViewportTransform::orbitToPosition(const QPointF &screenPosition,
         return;
     }
 
-    if (navigationPreferences_.autoPerspective) {
+    if (navigationPreferences_.autoPerspective && !perspective_ &&
+        isAxisAlignedOrthographicView(viewPreset_)) {
         perspective_ = true;
         zoom_ = std::clamp(zoom_,
                            minimumZoomForView(perspective_, cameraPreferences_,

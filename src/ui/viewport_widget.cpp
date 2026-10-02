@@ -4173,6 +4173,8 @@ protected:
             if (navigationMoved_) {
                 setCursor(Qt::ClosedHandCursor);
                 const ViewportViewPreset previousPreset = viewportTransform_.viewPreset();
+                const bool previousPerspective =
+                    viewportTransform_.isPerspectiveEnabled();
                 switch (navigationPressedAction_) {
                 case BlenderNavigationAction::Orbit:
                 case BlenderNavigationAction::Axis:
@@ -4207,7 +4209,9 @@ protected:
                 case BlenderNavigationAction::None:
                     break;
                 }
-                if (previousPreset != viewportTransform_.viewPreset()) {
+                if (previousPreset != viewportTransform_.viewPreset() ||
+                    previousPerspective !=
+                        viewportTransform_.isPerspectiveEnabled()) {
                     notifyViewStateChanged();
                 }
                 update();
@@ -4227,13 +4231,17 @@ protected:
             }
             if (orbiting_) {
                 const ViewportViewPreset previousPreset = viewportTransform_.viewPreset();
+                const bool previousPerspective =
+                    viewportTransform_.isPerspectiveEnabled();
                 if (viewportTransform_.navigationPreferences().orbitMethod ==
                     ViewportOrbitMethod::Trackball) {
                     viewportTransform_.orbitToPosition(screenPosition, size());
                 } else {
                     viewportTransform_.orbitByPixels(QPointF(delta));
                 }
-                if (previousPreset != viewportTransform_.viewPreset()) {
+                if (previousPreset != viewportTransform_.viewPreset() ||
+                    previousPerspective !=
+                        viewportTransform_.isPerspectiveEnabled()) {
                     notifyViewStateChanged();
                 }
             } else {

@@ -1429,11 +1429,6 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                            ? QStringLiteral("Move base point to destination  •  X/Y: constrain  •  Click: confirm  •  Esc: cancel")
                                            : QStringLiteral("Move selection  •  X/Y: constrain  •  B: choose base point  •  Click: confirm  •  Esc: cancel");
         painter.drawText(18, viewportSize.height() - 18, grabHint);
-    } else if (!joinActive) {
-        painter.setPen(QColor(QStringLiteral("#777777")));
-        painter.drawText(18,
-                         viewportSize.height() - 18,
-                         QStringLiteral("Shift-click: add/remove  •  Box select  •  G: Grab  •  Shift+D: copy in place  •  B: base point  •  X/Y: axis lock"));
     }
 }
 

@@ -2201,6 +2201,29 @@ public:
         cameraSettings.focalLengthMillimeters = preferences.focalLengthMillimeters;
         cameraSettings.clipStart = preferences.clipStart;
         cameraSettings.clipEnd = preferences.clipEnd;
+        const ViewportCameraState viewState = viewportTransform_.cameraState();
+        const Point3D target = viewportTransform_.viewTarget();
+        ProjectViewportViewState &storedView = cameraSettings.view;
+        storedView.zoom = viewState.zoom;
+        storedView.panX = viewState.pan.x();
+        storedView.panY = viewState.pan.y();
+        storedView.orbitPivotX = viewState.orbitPivot.x;
+        storedView.orbitPivotY = viewState.orbitPivot.y;
+        storedView.orbitPivotZ = viewState.orbitPivot.z;
+        storedView.yawRadians = viewState.yawRadians;
+        storedView.pitchRadians = viewState.pitchRadians;
+        storedView.perspective = viewState.perspective;
+        storedView.preset = static_cast<int>(viewState.preset);
+        storedView.gridViewDistance = viewState.gridViewDistance;
+        storedView.orientationW = viewState.orientation.w;
+        storedView.orientationX = viewState.orientation.x;
+        storedView.orientationY = viewState.orientation.y;
+        storedView.orientationZ = viewState.orientation.z;
+        storedView.hasOrientation = viewState.hasOrientation;
+        storedView.targetX = target.x;
+        storedView.targetY = target.y;
+        storedView.targetZ = target.z;
+        storedView.storedInProject = true;
         return classiCAD::saveVignolaDocument(path,
                                               document_,
                                               cameraSettings,
@@ -2236,6 +2259,26 @@ public:
         normalizeDisconnectedPolyCurveObjects();
         resetForDocumentReplacement();
         viewportTransform_.resetView();
+        if (cameraSettings.view.storedInProject) {
+            const ProjectViewportViewState &storedView = cameraSettings.view;
+            ViewportCameraState viewState;
+            viewState.zoom = storedView.zoom;
+            viewState.pan = QPointF(storedView.panX, storedView.panY);
+            viewState.orbitPivot = {storedView.orbitPivotX,
+                                    storedView.orbitPivotY,
+                                    storedView.orbitPivotZ};
+            viewState.yawRadians = storedView.yawRadians;
+            viewState.pitchRadians = storedView.pitchRadians;
+            viewState.perspective = storedView.perspective;
+            viewState.preset = static_cast<ViewportViewPreset>(storedView.preset);
+            viewState.gridViewDistance = storedView.gridViewDistance;
+            viewState.orientation = {storedView.orientationW,
+                                     storedView.orientationX,
+                                     storedView.orientationY,
+                                     storedView.orientationZ};
+            viewState.hasOrientation = storedView.hasOrientation;
+            viewportTransform_.setCameraState(viewState);
+        }
         notifyViewStateChanged();
         setCursor(Qt::ArrowCursor);
         update();

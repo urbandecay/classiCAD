@@ -33,12 +33,37 @@ void setError(QString *errorMessage, const QString &message)
 bool isValidProjectViewportCameraSettings(
     const classiCAD::ProjectViewportCameraSettings &settings)
 {
-    return std::isfinite(settings.focalLengthMillimeters) &&
-           settings.focalLengthMillimeters >= 1.0 &&
-           settings.focalLengthMillimeters <= 2000.0 &&
-           std::isfinite(settings.clipStart) && settings.clipStart >= 0.000001 &&
-           std::isfinite(settings.clipEnd) && settings.clipEnd > settings.clipStart &&
-           settings.clipEnd <= 1.0e9;
+    if (!std::isfinite(settings.focalLengthMillimeters) ||
+        settings.focalLengthMillimeters < 1.0 ||
+        settings.focalLengthMillimeters > 2000.0 ||
+        !std::isfinite(settings.clipStart) || settings.clipStart < 0.000001 ||
+        !std::isfinite(settings.clipEnd) || settings.clipEnd <= settings.clipStart ||
+        settings.clipEnd > 1.0e9) {
+        return false;
+    }
+    if (!settings.view.storedInProject) {
+        return true;
+    }
+
+    const classiCAD::ProjectViewportViewState &view = settings.view;
+    const double orientationLengthSquared =
+        view.orientationW * view.orientationW +
+        view.orientationX * view.orientationX +
+        view.orientationY * view.orientationY +
+        view.orientationZ * view.orientationZ;
+    return std::isfinite(view.zoom) && view.zoom > 0.0 && view.zoom <= 1.0e12 &&
+           std::isfinite(view.panX) && std::isfinite(view.panY) &&
+           std::isfinite(view.orbitPivotX) && std::isfinite(view.orbitPivotY) &&
+           std::isfinite(view.orbitPivotZ) && std::isfinite(view.yawRadians) &&
+           std::isfinite(view.pitchRadians) && view.preset >= 0 && view.preset <= 8 &&
+           std::isfinite(view.gridViewDistance) && view.gridViewDistance > 0.0 &&
+           std::isfinite(view.orientationW) && std::isfinite(view.orientationX) &&
+           std::isfinite(view.orientationY) && std::isfinite(view.orientationZ) &&
+           (!view.hasOrientation ||
+            (std::isfinite(orientationLengthSquared) &&
+             orientationLengthSquared > 1.0e-12)) &&
+           std::isfinite(view.targetX) && std::isfinite(view.targetY) &&
+           std::isfinite(view.targetZ);
 }
 
 QJsonObject projectViewportCameraSettingsToJson(
@@ -49,6 +74,30 @@ QJsonObject projectViewportCameraSettingsToJson(
                       settings.focalLengthMillimeters);
     serialized.insert(QStringLiteral("clipStart"), settings.clipStart);
     serialized.insert(QStringLiteral("clipEnd"), settings.clipEnd);
+    if (settings.view.storedInProject) {
+        const classiCAD::ProjectViewportViewState &view = settings.view;
+        QJsonObject viewState;
+        viewState.insert(QStringLiteral("zoom"), view.zoom);
+        viewState.insert(QStringLiteral("panX"), view.panX);
+        viewState.insert(QStringLiteral("panY"), view.panY);
+        viewState.insert(QStringLiteral("orbitPivotX"), view.orbitPivotX);
+        viewState.insert(QStringLiteral("orbitPivotY"), view.orbitPivotY);
+        viewState.insert(QStringLiteral("orbitPivotZ"), view.orbitPivotZ);
+        viewState.insert(QStringLiteral("yawRadians"), view.yawRadians);
+        viewState.insert(QStringLiteral("pitchRadians"), view.pitchRadians);
+        viewState.insert(QStringLiteral("perspective"), view.perspective);
+        viewState.insert(QStringLiteral("preset"), view.preset);
+        viewState.insert(QStringLiteral("gridViewDistance"), view.gridViewDistance);
+        viewState.insert(QStringLiteral("orientationW"), view.orientationW);
+        viewState.insert(QStringLiteral("orientationX"), view.orientationX);
+        viewState.insert(QStringLiteral("orientationY"), view.orientationY);
+        viewState.insert(QStringLiteral("orientationZ"), view.orientationZ);
+        viewState.insert(QStringLiteral("hasOrientation"), view.hasOrientation);
+        viewState.insert(QStringLiteral("targetX"), view.targetX);
+        viewState.insert(QStringLiteral("targetY"), view.targetY);
+        viewState.insert(QStringLiteral("targetZ"), view.targetZ);
+        serialized.insert(QStringLiteral("viewState"), viewState);
+    }
     return serialized;
 }
 
@@ -85,8 +134,55 @@ bool projectViewportCameraSettingsFromJson(
     settings->clipStart = clipStart.toDouble();
     settings->clipEnd = clipEnd.toDouble();
     settings->storedInProject = true;
+
+    const QJsonValue viewValue = camera.value(QStringLiteral("viewState"));
+    if (!viewValue.isUndefined()) {
+        if (!viewValue.isObject()) {
+            setError(errorMessage, QStringLiteral("Project viewport view state is invalid"));
+            return false;
+        }
+        const QJsonObject view = viewValue.toObject();
+        const auto readNumber = [&view](const QString &key, double *destination) {
+            const QJsonValue value = view.value(key);
+            if (!value.isDouble()) {
+                return false;
+            }
+            *destination = value.toDouble();
+            return true;
+        };
+        classiCAD::ProjectViewportViewState &restoredView = settings->view;
+        const QJsonValue perspective = view.value(QStringLiteral("perspective"));
+        const QJsonValue preset = view.value(QStringLiteral("preset"));
+        const QJsonValue hasOrientation = view.value(QStringLiteral("hasOrientation"));
+        if (!readNumber(QStringLiteral("zoom"), &restoredView.zoom) ||
+            !readNumber(QStringLiteral("panX"), &restoredView.panX) ||
+            !readNumber(QStringLiteral("panY"), &restoredView.panY) ||
+            !readNumber(QStringLiteral("orbitPivotX"), &restoredView.orbitPivotX) ||
+            !readNumber(QStringLiteral("orbitPivotY"), &restoredView.orbitPivotY) ||
+            !readNumber(QStringLiteral("orbitPivotZ"), &restoredView.orbitPivotZ) ||
+            !readNumber(QStringLiteral("yawRadians"), &restoredView.yawRadians) ||
+            !readNumber(QStringLiteral("pitchRadians"), &restoredView.pitchRadians) ||
+            !readNumber(QStringLiteral("gridViewDistance"),
+                        &restoredView.gridViewDistance) ||
+            !readNumber(QStringLiteral("orientationW"), &restoredView.orientationW) ||
+            !readNumber(QStringLiteral("orientationX"), &restoredView.orientationX) ||
+            !readNumber(QStringLiteral("orientationY"), &restoredView.orientationY) ||
+            !readNumber(QStringLiteral("orientationZ"), &restoredView.orientationZ) ||
+            !readNumber(QStringLiteral("targetX"), &restoredView.targetX) ||
+            !readNumber(QStringLiteral("targetY"), &restoredView.targetY) ||
+            !readNumber(QStringLiteral("targetZ"), &restoredView.targetZ) ||
+            !perspective.isBool() || !preset.isDouble() ||
+            !hasOrientation.isBool()) {
+            setError(errorMessage, QStringLiteral("Project viewport view state is incomplete"));
+            return false;
+        }
+        restoredView.perspective = perspective.toBool();
+        restoredView.preset = preset.toInt(-1);
+        restoredView.hasOrientation = hasOrientation.toBool();
+        restoredView.storedInProject = true;
+    }
     if (!isValidProjectViewportCameraSettings(*settings)) {
-        setError(errorMessage, QStringLiteral("Project viewport camera settings are out of range"));
+        setError(errorMessage, QStringLiteral("Project viewport settings are out of range"));
         return false;
     }
     return true;

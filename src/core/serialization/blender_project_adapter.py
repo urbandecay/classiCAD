@@ -7,7 +7,7 @@ import sys
 import traceback
 
 import bpy
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Quaternion, Vector
 
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
@@ -441,6 +441,7 @@ def create_project(document, destination_path):
     scene.unit_settings.length_unit = "MILLIMETERS"
     scene.unit_settings.scale_length = 0.001
     camera_settings = document.get("viewportCamera", {})
+    view_state = camera_settings.get("viewState", {})
     for screen in bpy.data.screens:
         for area in screen.areas:
             if area.type != "VIEW_3D":
@@ -449,6 +450,28 @@ def create_project(document, destination_path):
             view.lens = float(camera_settings.get("focalLengthMillimeters", 50.0))
             view.clip_start = float(camera_settings.get("clipStart", 0.01))
             view.clip_end = float(camera_settings.get("clipEnd", 1000.0))
+            if view_state:
+                region_3d = view.region_3d
+                zoom = max(float(view_state["zoom"]), 1.0e-12)
+                region_3d.view_location = Vector(
+                    (
+                        float(view_state["targetX"]),
+                        float(view_state["targetY"]),
+                        float(view_state["targetZ"]),
+                    )
+                )
+                region_3d.view_rotation = Quaternion(
+                    (
+                        float(view_state["orientationW"]),
+                        float(view_state["orientationX"]),
+                        float(view_state["orientationY"]),
+                        float(view_state["orientationZ"]),
+                    )
+                )
+                region_3d.view_distance = 60.0 / zoom
+                region_3d.view_perspective = (
+                    "PERSP" if bool(view_state["perspective"]) else "ORTHO"
+                )
 
     scene["classiCAD_format"] = PROJECT_FORMAT
     scene["classiCAD_format_version"] = PROJECT_FORMAT_VERSION

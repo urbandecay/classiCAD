@@ -833,7 +833,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
 
     const int arcModeValue = object.value(QStringLiteral("arcMode")).toInt(-1);
     if (arcModeValue < static_cast<int>(ArcMode::OnePoint) ||
-        arcModeValue > static_cast<int>(ArcMode::TwoPoint)) {
+        arcModeValue > static_cast<int>(ArcMode::ThreePoint)) {
         return false;
     }
 
@@ -1020,6 +1020,8 @@ QString arcModeName(ArcMode mode)
         return QStringLiteral("1 Point Arc");
     case ArcMode::TwoPoint:
         return QStringLiteral("2 Point Arc");
+    case ArcMode::ThreePoint:
+        return QStringLiteral("3 Point Arc");
     }
 
     return QStringLiteral("Arc");

@@ -2420,6 +2420,7 @@ private:
         auto *menu = new QMenu(button);
         QAction *onePointAction = menu->addAction(QStringLiteral("1 Point Arc"));
         QAction *twoPointAction = menu->addAction(QStringLiteral("2 Point Arc"));
+        QAction *threePointAction = menu->addAction(QStringLiteral("3 Point Arc"));
         button->setMenu(menu);
         // A quick click runs the default 1 Point Arc. Holding the button
         // opens this menu, matching the tool-flyout behavior requested here.
@@ -2430,6 +2431,9 @@ private:
         });
         connect(twoPointAction, &QAction::triggered, this, [this]() {
             activateArcMode(ArcMode::TwoPoint);
+        });
+        connect(threePointAction, &QAction::triggered, this, [this]() {
+            activateArcMode(ArcMode::ThreePoint);
         });
     }
 

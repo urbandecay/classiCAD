@@ -21,6 +21,7 @@ namespace classiCAD {
 enum class ArcMode {
     OnePoint,
     TwoPoint,
+    ThreePoint,
 };
 
 enum class SnapType {

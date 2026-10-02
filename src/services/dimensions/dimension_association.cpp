@@ -40,7 +40,7 @@ bool shapeCenter(const Shape &shape, QPointF *center)
         return false;
     }
 
-    if (shape.arcMode == ArcMode::TwoPoint) {
+    if (shape.arcMode != ArcMode::OnePoint) {
         const QPointF &first = shape.points[0];
         const QPointF &second = shape.points[1];
         const QPointF &third = shape.points[2];

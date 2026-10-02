@@ -763,7 +763,7 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
         return;
     }
 
-    if (arcMode == ArcMode::TwoPoint) {
+    if (arcMode == ArcMode::TwoPoint || arcMode == ArcMode::ThreePoint) {
         const WorkPlaneFrame frame = isValidWorkPlaneFrame(workPlaneFrame)
                                          ? workPlaneFrame
                                          : transform_.workPlaneFrame();
@@ -824,10 +824,12 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
             drawGuide(first, second, arcTwoPointGuideColor(chord, frame));
 
             if (cursorValid && chordLength > 1.0e-9) {
-                const QPointF midpoint = (first + second) * 0.5;
-                const QPointF heightVector = cursorWorld - midpoint;
-                drawGuide(midpoint, cursorWorld,
-                          arcTwoPointGuideColor(heightVector, frame));
+                if (arcMode == ArcMode::TwoPoint) {
+                    const QPointF midpoint = (first + second) * 0.5;
+                    const QPointF heightVector = cursorWorld - midpoint;
+                    drawGuide(midpoint, cursorWorld,
+                              arcTwoPointGuideColor(heightVector, frame));
+                }
                 if (drawCurve) {
                     painter.setPen(QPen(resolvedCurveColor, 1.5));
                     renderer_.drawCircularArc(painter, first, second,

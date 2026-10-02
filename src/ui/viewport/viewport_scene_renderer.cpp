@@ -876,7 +876,8 @@ bool ViewportSceneRenderer::drawArcToolOverlay(
     const QColor startColor(204, 204, 51);
     const QColor endColor(51, 204, 51);
     const QColor pointColor(QStringLiteral("#f0a45a"));
-    if (arcMode == ArcMode::TwoPoint && isValidWorkPlaneFrame(frame)) {
+    if ((arcMode == ArcMode::TwoPoint || arcMode == ArcMode::ThreePoint) &&
+        isValidWorkPlaneFrame(frame)) {
         if (pendingPoints.size() == 1 && cursorValid) {
             QPointF firstScreen;
             QPointF cursorScreen;
@@ -902,15 +903,17 @@ bool ViewportSceneRenderer::drawArcToolOverlay(
             }
 
             if (cursorValid && chordLength > 1.0e-9) {
-                const QPointF midpoint = (first + second) * 0.5;
-                QPointF midpointScreen;
-                QPointF cursorScreen;
-                if (projectFramePoint(midpoint, &midpointScreen) &&
-                    projectFramePoint(cursorWorld, &cursorScreen)) {
-                    appendOverlayLine(
-                        overlayVertices, midpointScreen, cursorScreen,
-                        twoPointArcGuideColor(cursorWorld - midpoint, frame),
-                        1.0);
+                if (arcMode == ArcMode::TwoPoint) {
+                    const QPointF midpoint = (first + second) * 0.5;
+                    QPointF midpointScreen;
+                    QPointF cursorScreen;
+                    if (projectFramePoint(midpoint, &midpointScreen) &&
+                        projectFramePoint(cursorWorld, &cursorScreen)) {
+                        appendOverlayLine(
+                            overlayVertices, midpointScreen, cursorScreen,
+                            twoPointArcGuideColor(cursorWorld - midpoint, frame),
+                            1.0);
+                    }
                 }
 
                 CircularArc2D arc;
@@ -1039,7 +1042,8 @@ bool ViewportSceneRenderer::drawArcToolOverlay(
             }
         }
         if (cursorValid &&
-            (!pendingPoints.isEmpty() || arcMode == ArcMode::TwoPoint)) {
+            (!pendingPoints.isEmpty() || arcMode == ArcMode::TwoPoint ||
+             arcMode == ArcMode::ThreePoint)) {
             QPointF cursorScreen;
             if (projectFramePoint(cursorWorld, &cursorScreen)) {
                 appendOverlayFilledCircle(overlayVertices,

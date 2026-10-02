@@ -649,7 +649,7 @@ bool SnapEngine::makeArcSnapGeometry(const Shape &shape,
     if (shape.geometryType != GeometryType::Arc || shape.points.size() < 3) {
         return false;
     }
-    if (shape.arcMode == ArcMode::TwoPoint) {
+    if (shape.arcMode != ArcMode::OnePoint) {
         return makeCircularArcGeometry(shape.points[0],
                                        shape.points[1],
                                        shape.points[2],

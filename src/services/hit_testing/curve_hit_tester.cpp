@@ -212,7 +212,7 @@ qreal CurveHitTester::distanceToArc(const QPointF &screenPosition,
     qreal radius = 0.0;
     qreal startAngle = 0.0;
     qreal sweepAngle = 0.0;
-    if (shape.arcMode == ArcMode::TwoPoint) {
+    if (shape.arcMode != ArcMode::OnePoint) {
         if (!makeCircularArcGeometry(shape.points[0],
                                      shape.points[1],
                                      shape.points[2],

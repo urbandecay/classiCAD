@@ -3,7 +3,8 @@
 #include "viewport/line_type_style.h"
 #include "input_helpers.h"
 #include "../core/debug_log.h"
-#include "../core/serialization/vignola_document_file.h"
+#include "../core/serialization/blender_project_file.h"
+#include "../core/serialization/rhino3dm_interchange.h"
 #include "services/dimensions/dimension_font.h"
 
 #include <QApplication>
@@ -1003,10 +1004,32 @@ private:
             initialPath = QDir(lastDirectory).filePath(QStringLiteral("Untitled.vignola"));
         }
 
-        return QFileDialog::getSaveFileName(this,
-                                            QStringLiteral("Save Vignola Project"),
-                                            initialPath,
-                                            QStringLiteral("Vignola Project (*.vignola)"));
+        QString selectedFilter = QFileInfo(initialPath).suffix().compare(
+                                     QStringLiteral("blend"), Qt::CaseInsensitive) == 0
+                                     ? QStringLiteral("Blender Project (*.blend)")
+                                     : QStringLiteral("Vignola Project (*.vignola)");
+        QString path = QFileDialog::getSaveFileName(
+            this,
+            QStringLiteral("Save Project"),
+            initialPath,
+            QStringLiteral("Vignola Project (*.vignola);;Blender Project (*.blend)"),
+            &selectedFilter);
+        if (path.isEmpty()) {
+            return {};
+        }
+
+        const QString selectedSuffix = selectedFilter.contains(QStringLiteral("*.blend"),
+                                                               Qt::CaseInsensitive)
+                                           ? QStringLiteral("blend")
+                                           : QStringLiteral("vignola");
+        const QFileInfo selectedPath(path);
+        if (selectedPath.suffix().isEmpty()) {
+            path += QStringLiteral(".") + selectedSuffix;
+        } else if (selectedPath.suffix().compare(selectedSuffix, Qt::CaseInsensitive) != 0) {
+            path = QDir(selectedPath.absolutePath()).filePath(
+                selectedPath.completeBaseName() + QStringLiteral(".") + selectedSuffix);
+        }
+        return path;
     }
 
     bool saveDocument(bool saveAs)
@@ -1022,7 +1045,9 @@ private:
                 return false;
             }
         }
-        if (QFileInfo(path).suffix().compare(QStringLiteral("vignola"), Qt::CaseInsensitive) != 0) {
+        const QString suffix = QFileInfo(path).suffix();
+        if (suffix.compare(QStringLiteral("vignola"), Qt::CaseInsensitive) != 0 &&
+            suffix.compare(QStringLiteral("blend"), Qt::CaseInsensitive) != 0) {
             path += QStringLiteral(".vignola");
         }
 
@@ -1056,9 +1081,9 @@ private:
         }
         const QString path = QFileDialog::getOpenFileName(
             this,
-            QStringLiteral("Open Vignola Project"),
+            QStringLiteral("Open Project"),
             initialPath,
-            QStringLiteral("Vignola Project (*.vignola)"));
+            QStringLiteral("Vignola and Blender Projects (*.vignola *.blend)"));
         if (path.isEmpty() || !maybeSaveDocument()) {
             return;
         }

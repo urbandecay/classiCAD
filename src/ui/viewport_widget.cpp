@@ -9,7 +9,8 @@
 #include "../core/geometry/work_plane.h"
 #include "../core/history/history.h"
 #include "../core/serialization/document_serializer.h"
-#include "../core/serialization/vignola_document_file.h"
+#include "../core/serialization/blender_project_file.h"
+#include "../core/serialization/rhino3dm_interchange.h"
 #include "../services/hit_testing/curve_hit_tester.h"
 #include "../services/dimensions/dimension_association.h"
 #include "../services/sampling/curve_sampler.h"
@@ -2195,14 +2196,40 @@ public:
 
     bool saveVignolaDocument(const QString &path, QString *errorMessage) const override
     {
-        return classiCAD::saveVignolaDocument(path, document_, errorMessage);
+        const ViewportCameraPreferences preferences = viewportTransform_.cameraPreferences();
+        ProjectViewportCameraSettings cameraSettings;
+        cameraSettings.focalLengthMillimeters = preferences.focalLengthMillimeters;
+        cameraSettings.clipStart = preferences.clipStart;
+        cameraSettings.clipEnd = preferences.clipEnd;
+        return classiCAD::saveVignolaDocument(path,
+                                              document_,
+                                              cameraSettings,
+                                              errorMessage);
     }
 
     bool loadVignolaDocument(const QString &path, QString *errorMessage) override
     {
         Document restoredDocument;
-        if (!classiCAD::loadVignolaDocument(path, &restoredDocument, errorMessage)) {
+        ProjectViewportCameraSettings cameraSettings;
+        if (!classiCAD::loadVignolaDocument(path,
+                                            &restoredDocument,
+                                            &cameraSettings,
+                                            errorMessage)) {
             return false;
+        }
+
+        if (cameraSettings.storedInProject) {
+            const ViewportCameraPreferences preferences{
+                cameraSettings.focalLengthMillimeters,
+                cameraSettings.clipStart,
+                cameraSettings.clipEnd};
+            if (!viewportTransform_.setCameraPreferences(preferences)) {
+                if (errorMessage != nullptr) {
+                    *errorMessage = QStringLiteral(
+                        "The project contains invalid viewport camera settings.");
+                }
+                return false;
+            }
         }
 
         document_ = std::move(restoredDocument);

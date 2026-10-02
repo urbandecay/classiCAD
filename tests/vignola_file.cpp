@@ -1,6 +1,7 @@
 #include "core/document/document.h"
 #include "core/serialization/document_serializer.h"
-#include "core/serialization/vignola_document_file.h"
+#include "core/serialization/blender_project_file.h"
+#include "core/serialization/rhino3dm_interchange.h"
 
 #include <opennurbs.h>
 
@@ -139,50 +140,6 @@ int main(int argc, char **argv)
     passed &= check(equivalentJson(documentToJson(source), documentToJson(restored)),
                     "Vignola save/load must preserve document geometry, IDs, layers, and dimension anchors");
 
-    ONX_Model nativeModel;
-    ON_wString readLog;
-    ON_TextLog textLog(readLog);
-    const std::wstring nativePath = path.toStdWString();
-    const bool nativeReadSucceeded = nativeModel.Read(nativePath.c_str(), &textLog);
-    passed &= check(nativeReadSucceeded,
-                    "a Vignola project must remain readable as a native openNURBS 3DM archive");
-    if (nativeReadSucceeded) {
-        passed &= check(nativeModel.ActiveComponentCount(
-                            ON_ModelComponent::Type::ModelGeometry) >= 3,
-                        "the 3DM archive must contain native curve and dimension geometry");
-        bool foundExportedXzCurve = false;
-        ONX_ModelComponentIterator geometryIterator(
-            nativeModel, ON_ModelComponent::Type::ModelGeometry);
-        for (ON_ModelComponentReference reference =
-                 geometryIterator.FirstComponentReference();
-             !reference.IsEmpty();
-             reference = geometryIterator.NextComponentReference()) {
-            const ON_ModelGeometryComponent *modelGeometry =
-                ON_ModelGeometryComponent::FromModelComponentRef(reference, nullptr);
-            const ON_NurbsCurve *curve = modelGeometry == nullptr
-                                             ? nullptr
-                                             : ON_NurbsCurve::Cast(
-                                                   modelGeometry->Geometry(nullptr));
-            if (curve == nullptr || curve->CVCount() < 2) {
-                continue;
-            }
-            ON_3dPoint first;
-            ON_3dPoint last;
-            if (curve->GetCV(0, first) && curve->GetCV(curve->CVCount() - 1, last) &&
-                std::abs(first.y - 2.5) < 1.0e-9 &&
-                std::abs(last.y - 2.5) < 1.0e-9 &&
-                std::abs(first.z - 1.5) < 1.0e-9 &&
-                std::abs(last.z - 6.0) < 1.0e-9) {
-                foundExportedXzCurve = true;
-            }
-        }
-        passed &= check(foundExportedXzCurve,
-                        "3DM export must lift local XZ NURBS coordinates into world XYZ");
-        ON_wString documentData;
-        passed &= check(nativeModel.GetDocumentUserString(L"Vignola.DocumentData", documentData),
-                        "the 3DM archive must carry the Vignola document metadata");
-    }
-
     ONX_Model rhinoModel;
     rhinoModel.m_settings.m_ModelUnitsAndTolerances.m_unit_system =
         ON::LengthUnitSystem::Inches;
@@ -229,6 +186,8 @@ int main(int argc, char **argv)
     const QString rhinoPath = QDir(temporaryDirectory.path()).filePath(
         QStringLiteral("ordinary-rhino-model.3dm"));
     const std::wstring wideRhinoPath = rhinoPath.toStdWString();
+    ON_wString writeLog;
+    ON_TextLog textLog(writeLog);
     passed &= check(rhinoModel.Write(wideRhinoPath.c_str(), 0, &textLog),
                     "test fixture must be a plain Rhino 3DM without Vignola metadata");
 

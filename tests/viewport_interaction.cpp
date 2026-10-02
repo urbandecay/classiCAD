@@ -5,7 +5,7 @@
 #include "ui/viewport/line_type_style.h"
 
 #include "core/document/document.h"
-#include "core/serialization/vignola_document_file.h"
+#include "core/serialization/blender_project_file.h"
 
 #include <QApplication>
 #include <QDebug>

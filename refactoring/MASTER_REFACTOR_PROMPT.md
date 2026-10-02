@@ -44,8 +44,10 @@ src/core/document/document.*       document-owned scene objects, layers, IDs, an
 src/core/document/document_settings.* persistent document display units and grid spacing
 src/core/document/selection_model.* selected object and control-point references
 src/core/history/history.*          document-level snapshot undo/redo ownership
-src/core/serialization/document_serializer.* versioned document/layer/object save/restore
-src/core/serialization/vignola_document_file.* `.vignola` and Rhino/openNURBS interchange with oriented-plane lifting
+src/core/serialization/document_serializer.* versioned classiCAD document/layer/object snapshot
+src/core/serialization/blender_project_file.* `.vignola`/`.blend` save/open through the pinned Blender 5.2.2 runtime
+src/core/serialization/blender_project_adapter.py Blender-native collections, Curve datablocks, and document Text datablock
+src/core/serialization/rhino3dm_interchange.* separate Rhino/openNURBS `.3dm` import with oriented-plane lifting
 src/core/model.*                   compatibility model, shape-plane frames, factories, serialization, helpers
 src/core/debug_log.*               application logging
 src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/frame picking, presets, zoom, pan, and Blender-style turntable/trackball orbit math
@@ -175,9 +177,16 @@ start of a shape command, shared input can inherit a frame from a planar scene
 object under the cursor, then locks that frame through the remaining points.
 Existing 2D editing, object snaps, trimming, and erase stay scoped to matching
 active frames so local operations do not unintentionally distort geometry on
-another plane. `.vignola` persistence and `.3dm` curve interchange preserve
-arbitrary planar frames; nonplanar spatial NURBS and mesh modeling remain
-future work.
+another plane. `.vignola` is the default extension and `.blend` is an optional
+extension for the same native Blender 5.2.2 project. The exact, versioned
+classiCAD document is stored in a Blender Text datablock, while Blender
+collections and Curve datablocks provide its scene structure. Blender Curve
+splines store rational single-span NURBS pieces split at the classiCAD knot
+boundaries because Curve RNA does not expose arbitrary knot arrays; the Text
+datablock keeps the exact classiCAD curve definition. Blender-side curve edits
+are not yet synchronized back into classiCAD. `.3dm` curve
+interchange remains a separate import path that preserves supported arbitrary
+planar frames; nonplanar spatial NURBS and mesh modeling remain future work.
 
 Do not begin by moving lines into arbitrary folders. First identify the owner of each piece of state and the direction of its dependencies.
 
@@ -553,6 +562,8 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 | 19. Workplane arc direction geometry | Complete | Added `core/geometry/arc_curve_factory.*` to choose the signed sweep containing the third point in local workplane coordinates and build exact rational quadratic NURBS spans. Two-point arc preview, committed geometry, and arc snap geometry now share that signed direction; screen-space circle fitting no longer controls the arc. Invalid/collinear arc definitions are rejected before commit. Added minor-side, major-sweep, and degenerate-input regression coverage. `cmake --build build`, all four CTest suites, `git diff --check`, and offscreen application startup passed. |
 | 20. Shared oriented drawing-plane input | In progress | Added `WorkPlaneFrame` geometry and backwards-compatible shape serialization while keeping committed curves as local `NurbsCurve2D`. Hovering a planar scene object makes the drawing frame follow that object's stored plane. In empty space, shared drawing input follows the add-on fallback within the supported principal planes: world XY through the origin in perspective, XY/XZ/YZ through the origin in fixed orthographic views, and the most view-aligned principal plane in oblique orthographic views. `LineTool` captures this frame on its first point, converts any later input from a changed frame back into its captured frame, renders the live cursor in that frame, and preserves the frame through shape commit. It also has passive in-plane world-axis inference, Shift direction lock, X/Y/Z axis keys where the axis lies in-plane, and Backspace point removal. Off-plane axis locking, camera-facing oblique planes, and the add-on's 3D normal lock remain unsupported while committed curves are planar `NurbsCurve2D`. Existing OSnap is reused with no new snap overlay. Renderer/depth geometry, hit-testing, sampling, dimensions, and Rhino/openNURBS lifting use the same mapping. Remaining tool modules still need explicit frame capture. `cmake --build build` and `git diff --check` passed. Tests were not run in this iteration. |
 | 21. Add-on Line world-axis input | Complete | Replaced plane-projected Line constraints with closest-point mouse-ray/world-line placement for XYZ, passive global-axis inference, Shift, and N normal locking. L controls plane locking; each new pivot moves the locked-normal plane. Line uses the actual camera-facing plane in oblique ortho, and the existing SnapEngine resolves enabled OSnaps across scene planes with actual world depth and preview endpoint snapping. Preview world vertices and planar NURBS runs feed GPU and painter rendering. Committed data remains local degree-1 NURBS; a chain changing planes creates planar component objects together through the ToolContext batch commit port, with one Undo. Added actual Qt-event/save-reload regressions for side-view Z drawing, all perspective world axes, a mixed-plane chain, atomic Undo, and cross-plane OSnap. Corrected the Rhino import test to distinguish tilted planar lines from genuinely nonplanar cubic curves. Build, all four CTest suites, the XCB native GPU interaction run with inspected Z preview, diff checks, and offscreen startup passed. Core regressions also cover normal locking, Shift direction preservation, and Backspace depth restoration. Remaining tool migrations belong to phase 20. Open app processes were confirmed to still run deleted older executables; the Update action is required to load the rebuilt app while preserving their scenes. |
+
+| 22. Blender-native `.vignola`/`.blend` file foundation | Complete | Replaced the native project save/open boundary with a Blender 5.2.2 background adapter using Blender's `open_mainfile` and `save_as_mainfile` APIs. Save As keeps `.vignola` as the default and offers `.blend`; both extensions store the exact versioned classiCAD document snapshot in a Blender Text datablock and organize existing curves under Blender collections and Curve objects. Because Curve RNA has no arbitrary knot-array field, rational NURBS are split into exact single-span NURBS pieces at their stored knot boundaries; general non-clamped curves use an adaptive sampled fallback. The Text snapshot retains each exact source curve. This step creates no mesh data. Removed the old 3DM-backed project save/load implementation; Rhino `.3dm` remains a separate import path, and old 3DM-backed `.vignola` archives are rejected without migration. The CMake build passed. Blender reopened the regenerated `Test_fixed.blend`, confirmed its classiCAD data, and showed the circle as four rational quadratic NURBS spans with coincident endpoints. The CTest suite was not run. |
 
 ## Required iteration report
 

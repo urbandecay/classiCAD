@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/classiCAD/serialization">
+        <file alias="blender_project_adapter.py">blender_project_adapter.py</file>
+    </qresource>
+</RCC>

@@ -48,7 +48,9 @@ set(CLASSICAD_CORE_SOURCES
     src/core/document/selection_model.cpp
     src/core/history/history.cpp
     src/core/serialization/document_serializer.cpp
-    src/core/serialization/vignola_document_file.cpp
+    src/core/serialization/blender_project_file.cpp
+    src/core/serialization/blender_project_adapter.qrc
+    src/core/serialization/rhino3dm_interchange.cpp
     src/core/model.cpp
 )
 
@@ -246,7 +248,9 @@ if (CLASSICAD_BUILD_TESTS)
         src/core/document/document.cpp
         src/core/document/document_settings.cpp
         src/core/serialization/document_serializer.cpp
-        src/core/serialization/vignola_document_file.cpp
+        src/core/serialization/blender_project_file.cpp
+        src/core/serialization/blender_project_adapter.qrc
+        src/core/serialization/rhino3dm_interchange.cpp
         src/core/model.cpp
     )
     target_include_directories(classicad_vignola_file_test PRIVATE

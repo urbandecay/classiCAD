@@ -11866,14 +11866,10 @@ private:
                                                   ? QStringLiteral("Click radius")
                                                   : QStringLiteral("Click sweep to finish");
         return {QStringLiteral("R: %1    ∠ %2").arg(radiusText, angleText),
-                QStringLiteral("%1  •  Esc exits  •  C snap %2  •  R radius  •  A angle  •  P %3  •  L %4")
+                QStringLiteral("%1  •  Esc exits  •  C snap %2  •  R radius  •  A angle  •  P perp  •  L plane lock")
                     .arg(stageHint,
                          arcAngleSnapEnabled_ ? QStringLiteral("on")
-                                              : QStringLiteral("off"),
-                         arcPerpendicularPlaneActive_ ? QStringLiteral("perp")
-                                                      : QStringLiteral("base"),
-                         arcPlaneLocked_ ? QStringLiteral("on")
-                                         : QStringLiteral("off"))};
+                                              : QStringLiteral("off"))};
     }
 
     QImage onePointArcHudTextImage(const ArcHudDisplay &display,

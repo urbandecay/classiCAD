@@ -7452,6 +7452,26 @@ private:
 
     SnapResult findSnapPoint(const QPointF &rawPoint) const
     {
+        const bool arcPlaneConstraintActive =
+            activeTool_ == Tool::Arc &&
+            (arcPlaneNormalLockKey_ != 0 || arcAxisConstraintKey_ != 0 ||
+             arcVerticalOverrideAxis_ != 0 || arcPerpendicularPlaneActive_);
+        if (arcPlaneConstraintActive) {
+            Point3D anchorWorld;
+            const Point3D *anchor = nullptr;
+            const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
+            if (!pendingPoints_.isEmpty() && isValidWorkPlaneFrame(frame)) {
+                anchorWorld = workPlaneFramePointToWorld(pendingPoints_.back(),
+                                                         frame);
+                anchor = &anchorWorld;
+            }
+            return snapEngine_.findSpatialSnapPoint(document_,
+                                                     worldToScreen(rawPoint),
+                                                     anchor,
+                                                     viewportTransform_,
+                                                     size());
+        }
+
         const bool serviceDrawingSnapActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::PointByArcs ||

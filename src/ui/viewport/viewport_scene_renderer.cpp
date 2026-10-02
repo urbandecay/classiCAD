@@ -7,7 +7,10 @@
 
 #include <QImage>
 #include <QDebug>
+#include <QFont>
+#include <QFontMetricsF>
 #include <QOpenGLContext>
+#include <QPainter>
 #include <QVector4D>
 
 #include <algorithm>
@@ -22,6 +25,210 @@ struct PictureVertex {
     QVector3D position;
     QVector2D textureCoordinate;
 };
+
+struct OverlayVertex {
+    float x = 0.0f;
+    float y = 0.0f;
+    float red = 1.0f;
+    float green = 1.0f;
+    float blue = 1.0f;
+    float alpha = 1.0f;
+    float u = 0.0f;
+    float v = 0.0f;
+};
+
+void appendOverlayVertex(QVector<OverlayVertex> &vertices,
+                         const QPointF &point,
+                         const QColor &color,
+                         qreal u = 0.0,
+                         qreal v = 0.0)
+{
+    vertices.append({static_cast<float>(point.x()),
+                     static_cast<float>(point.y()),
+                     static_cast<float>(color.redF()),
+                     static_cast<float>(color.greenF()),
+                     static_cast<float>(color.blueF()),
+                     static_cast<float>(color.alphaF()),
+                     static_cast<float>(u),
+                     static_cast<float>(v)});
+}
+
+void appendOverlayTriangle(QVector<OverlayVertex> &vertices,
+                           const QPointF &first,
+                           const QPointF &second,
+                           const QPointF &third,
+                           const QColor &color)
+{
+    appendOverlayVertex(vertices, first, color);
+    appendOverlayVertex(vertices, second, color);
+    appendOverlayVertex(vertices, third, color);
+}
+
+void appendOverlayLine(QVector<OverlayVertex> &vertices,
+                       const QPointF &first,
+                       const QPointF &second,
+                       const QColor &color,
+                       qreal width = 1.0)
+{
+    const QPointF delta = second - first;
+    const qreal length = std::hypot(delta.x(), delta.y());
+    if (!std::isfinite(length) || length <= 1.0e-9) {
+        return;
+    }
+    const QPointF normal(-delta.y() * width / (2.0 * length),
+                         delta.x() * width / (2.0 * length));
+    const QPointF firstLeft = first + normal;
+    const QPointF firstRight = first - normal;
+    const QPointF secondLeft = second + normal;
+    const QPointF secondRight = second - normal;
+    appendOverlayTriangle(vertices, firstLeft, firstRight, secondRight, color);
+    appendOverlayTriangle(vertices, firstLeft, secondRight, secondLeft, color);
+}
+
+void appendOverlayFilledCircle(QVector<OverlayVertex> &vertices,
+                               const QPointF &center,
+                               qreal radius,
+                               const QColor &color,
+                               int samples = 32)
+{
+    if (radius <= 0.0) {
+        return;
+    }
+    constexpr qreal twoPi = 6.28318530717958647692;
+    for (int index = 0; index < samples; ++index) {
+        const qreal firstAngle = twoPi * index / samples;
+        const qreal secondAngle = twoPi * (index + 1) / samples;
+        appendOverlayTriangle(
+            vertices,
+            center,
+            center + QPointF(radius * std::cos(firstAngle),
+                             radius * std::sin(firstAngle)),
+            center + QPointF(radius * std::cos(secondAngle),
+                             radius * std::sin(secondAngle)),
+            color);
+    }
+}
+
+void appendOverlayCircle(QVector<OverlayVertex> &vertices,
+                         const QPointF &center,
+                         qreal radius,
+                         const QColor &color,
+                         qreal width = 1.0,
+                         int samples = 48)
+{
+    constexpr qreal twoPi = 6.28318530717958647692;
+    QPointF previous = center + QPointF(radius, 0.0);
+    for (int index = 1; index <= samples; ++index) {
+        const qreal angle = twoPi * index / samples;
+        const QPointF next = center +
+            QPointF(radius * std::cos(angle), radius * std::sin(angle));
+        appendOverlayLine(vertices, previous, next, color, width);
+        previous = next;
+    }
+}
+
+void appendOverlayRectangle(QVector<OverlayVertex> &vertices,
+                            const QRectF &rect,
+                            const QColor &color,
+                            qreal width = 1.0)
+{
+    const QPointF topLeft = rect.topLeft();
+    const QPointF topRight = rect.topRight();
+    const QPointF bottomRight = rect.bottomRight();
+    const QPointF bottomLeft = rect.bottomLeft();
+    appendOverlayLine(vertices, topLeft, topRight, color, width);
+    appendOverlayLine(vertices, topRight, bottomRight, color, width);
+    appendOverlayLine(vertices, bottomRight, bottomLeft, color, width);
+    appendOverlayLine(vertices, bottomLeft, topLeft, color, width);
+}
+
+void appendOverlayDiamond(QVector<OverlayVertex> &vertices,
+                          const QPointF &center,
+                          qreal radius,
+                          const QColor &color,
+                          qreal width)
+{
+    const QPointF top = center + QPointF(0.0, -radius);
+    const QPointF right = center + QPointF(radius, 0.0);
+    const QPointF bottom = center + QPointF(0.0, radius);
+    const QPointF left = center + QPointF(-radius, 0.0);
+    appendOverlayLine(vertices, top, right, color, width);
+    appendOverlayLine(vertices, right, bottom, color, width);
+    appendOverlayLine(vertices, bottom, left, color, width);
+    appendOverlayLine(vertices, left, top, color, width);
+}
+
+QColor arcCompassColor(const Point3D &normal)
+{
+    constexpr qreal axisTolerance = 0.999999;
+    if (std::abs(normal.x) > axisTolerance) {
+        return QColor::fromRgbF(0.85, 0.0, 0.0, 1.0);
+    }
+    if (std::abs(normal.y) > axisTolerance) {
+        return QColor::fromRgbF(0.0, 0.60, 0.0, 1.0);
+    }
+    if (std::abs(normal.z) > axisTolerance) {
+        return QColor::fromRgbF(0.149, 0.376, 1.0, 1.0);
+    }
+    return QColor(225, 225, 225, 255);
+}
+
+void appendOverlayRoundedRect(QVector<OverlayVertex> &vertices,
+                              const QRectF &rect,
+                              qreal radius,
+                              const QColor &color)
+{
+    constexpr qreal halfPi = 1.57079632679489661923;
+    constexpr int cornerSamples = 6;
+    const qreal cornerRadius = std::clamp(
+        radius, 0.0, std::min(rect.width(), rect.height()) * 0.5);
+    QVector<QPointF> outline;
+    outline.reserve(cornerSamples * 4 + 4);
+    const std::array<QPointF, 4> centers = {
+        QPointF(rect.right() - cornerRadius, rect.top() + cornerRadius),
+        QPointF(rect.right() - cornerRadius, rect.bottom() - cornerRadius),
+        QPointF(rect.left() + cornerRadius, rect.bottom() - cornerRadius),
+        QPointF(rect.left() + cornerRadius, rect.top() + cornerRadius)};
+    const std::array<qreal, 4> starts = {-halfPi, 0.0, halfPi, 2.0 * halfPi};
+    for (int corner = 0; corner < 4; ++corner) {
+        for (int sample = 0; sample <= cornerSamples; ++sample) {
+            const qreal angle = starts[static_cast<std::size_t>(corner)] +
+                halfPi * sample / cornerSamples;
+            outline.append(centers[static_cast<std::size_t>(corner)] +
+                           QPointF(cornerRadius * std::cos(angle),
+                                   cornerRadius * std::sin(angle)));
+        }
+    }
+    const QPointF center = rect.center();
+    for (int index = 0; index < outline.size(); ++index) {
+        appendOverlayTriangle(vertices,
+                              center,
+                              outline[index],
+                              outline[(index + 1) % outline.size()],
+                              color);
+    }
+}
+
+QImage snapLabelImage(SnapType type, qreal devicePixelRatio)
+{
+    const QString label = snapTypeName(type);
+    QFont font(QStringLiteral("Sans"), 9, QFont::Bold);
+    const QFontMetricsF metrics(font);
+    const qreal logicalWidth = std::max<qreal>(1.0, metrics.horizontalAdvance(label));
+    const qreal logicalHeight = std::max<qreal>(1.0, metrics.height());
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    QImage image(QSize(static_cast<int>(std::ceil(logicalWidth * dpr)),
+                       static_cast<int>(std::ceil(logicalHeight * dpr))),
+                 QImage::Format_RGBA8888);
+    image.setDevicePixelRatio(dpr);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::TextAntialiasing, true);
+    painter.setFont(font);
+    painter.setPen(QColor(QStringLiteral("#63b5e8")));
+    painter.drawText(QPointF(0.0, metrics.ascent()), label);
+    return image;
+}
 
 QVector<QVector3D> controlGuideVertices(const Shape &shape)
 {
@@ -86,6 +293,12 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
         if (vertexArray_.isCreated()) {
             vertexArray_.destroy();
         }
+        if (overlayVertexBuffer_.isCreated()) {
+            overlayVertexBuffer_.destroy();
+        }
+        if (overlayVertexArray_.isCreated()) {
+            overlayVertexArray_.destroy();
+        }
         if (pictureVertexBuffer_.isCreated()) {
             pictureVertexBuffer_.destroy();
         }
@@ -99,9 +312,14 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
                 glDeleteTextures(1, &texture->texture);
             }
         }
+        if (overlayTextTexture_ != 0) {
+            glDeleteTextures(1, &overlayTextTexture_);
+            overlayTextTexture_ = 0;
+        }
         program_.removeAllShaders();
         pointProgram_.removeAllShaders();
         pictureProgram_.removeAllShaders();
+        overlayProgram_.removeAllShaders();
     }
 }
 
@@ -159,6 +377,73 @@ bool ViewportSceneRenderer::initializePicture()
         return false;
     }
     pictureInitialized_ = true;
+    return true;
+}
+
+bool ViewportSceneRenderer::initializeOverlay()
+{
+    if (overlayInitializationAttempted_) {
+        return overlayInitialized_;
+    }
+    overlayInitializationAttempted_ = true;
+    static constexpr const char *vertexShader = R"glsl(
+        #version 330 core
+        layout(location = 0) in vec2 aPosition;
+        layout(location = 1) in vec4 aColor;
+        layout(location = 2) in vec2 aTextureCoordinate;
+        uniform vec2 uViewportSize;
+        out vec4 vColor;
+        out vec2 vTextureCoordinate;
+        void main()
+        {
+            vec2 normalized = vec2(2.0 * aPosition.x / uViewportSize.x - 1.0,
+                                   1.0 - 2.0 * aPosition.y / uViewportSize.y);
+            gl_Position = vec4(normalized, 0.0, 1.0);
+            vColor = aColor;
+            vTextureCoordinate = aTextureCoordinate;
+        }
+    )glsl";
+    static constexpr const char *fragmentShader = R"glsl(
+        #version 330 core
+        in vec4 vColor;
+        in vec2 vTextureCoordinate;
+        uniform sampler2D uTextTexture;
+        uniform int uUseTexture;
+        out vec4 fragmentColor;
+        void main()
+        {
+            fragmentColor = uUseTexture == 0
+                                ? vColor
+                                : texture(uTextTexture, vTextureCoordinate) * vColor;
+        }
+    )glsl";
+    if (QOpenGLContext::currentContext() == nullptr ||
+        !initializeOpenGLFunctions() ||
+        !overlayProgram_.addShaderFromSourceCode(QOpenGLShader::Vertex,
+                                                  vertexShader) ||
+        !overlayProgram_.addShaderFromSourceCode(QOpenGLShader::Fragment,
+                                                  fragmentShader) ||
+        !overlayProgram_.link() || !overlayVertexArray_.create() ||
+        !overlayVertexBuffer_.create()) {
+        qWarning().noquote() << "Viewport overlay shader setup failed:"
+                             << overlayProgram_.log();
+        return false;
+    }
+
+    overlayVertexArray_.bind();
+    overlayVertexBuffer_.bind();
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex),
+                          reinterpret_cast<const void *>(offsetof(OverlayVertex, x)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex),
+                          reinterpret_cast<const void *>(offsetof(OverlayVertex, red)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(OverlayVertex),
+                          reinterpret_cast<const void *>(offsetof(OverlayVertex, u)));
+    overlayVertexBuffer_.release();
+    overlayVertexArray_.release();
+    overlayInitialized_ = true;
     return true;
 }
 
@@ -339,6 +624,514 @@ bool ViewportSceneRenderer::draw(
         boundProgram->release();
     }
     glDisable(GL_PROGRAM_POINT_SIZE);
+    glDisable(GL_BLEND);
+    return true;
+}
+
+bool ViewportSceneRenderer::drawArcOnePointOverlay(
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const WorkPlaneFrame &workPlaneFrame,
+    const QVector<QPointF> &pendingPoints,
+    const QPointF &cursorWorld,
+    bool cursorValid,
+    qreal arcSweep,
+    const SnapResult &currentSnap,
+    qreal compassRotation,
+    const QImage &hudText,
+    bool drawCurve,
+    bool snapLabelsVisible)
+{
+    if (QOpenGLContext::currentContext() == nullptr ||
+        viewportSize.width() <= 0 || viewportSize.height() <= 0 ||
+        !initializeOverlay()) {
+        return false;
+    }
+
+    constexpr qreal pi = 3.14159265358979323846;
+    constexpr qreal twoPi = 2.0 * pi;
+    QVector<OverlayVertex> overlayVertices;
+    overlayVertices.reserve(4500);
+    const WorkPlaneFrame frame = isValidWorkPlaneFrame(workPlaneFrame)
+                                     ? workPlaneFrame
+                                     : transform.workPlaneFrame();
+
+    const auto projectFramePoint = [&](const QPointF &localPoint,
+                                       QPointF *screenPoint) {
+        return isValidWorkPlaneFrame(frame) &&
+            transform.worldPointToScreen(
+                workPlaneFramePointToWorld(localPoint, frame),
+                viewportSize,
+                screenPoint);
+    };
+
+    const auto appendCompass = [&](const QPointF &localCenter,
+                                   qreal rotation) {
+        if (!isValidWorkPlaneFrame(frame)) {
+            return;
+        }
+        constexpr int ringSamples = 72;
+        constexpr int angleIncrementDegrees = 15;
+        constexpr qreal compassRadiusPixels = 62.5;
+        const Point3D centerWorld =
+            workPlaneFramePointToWorld(localCenter, frame);
+        QPointF centerScreen;
+        const Point3D viewDirection = transform.viewDirection();
+        const Point3D viewUp = transform.viewUp();
+        const Point3D rightUnnormalized = {
+            viewUp.y * viewDirection.z - viewUp.z * viewDirection.y,
+            viewUp.z * viewDirection.x - viewUp.x * viewDirection.z,
+            viewUp.x * viewDirection.y - viewUp.y * viewDirection.x};
+        const qreal rightLength = std::sqrt(
+            rightUnnormalized.x * rightUnnormalized.x +
+            rightUnnormalized.y * rightUnnormalized.y +
+            rightUnnormalized.z * rightUnnormalized.z);
+        if (rightLength <= 1.0e-12 ||
+            !transform.worldPointToScreenUnclipped(centerWorld,
+                                                    viewportSize,
+                                                    &centerScreen)) {
+            return;
+        }
+        const Point3D cameraRight = {rightUnnormalized.x / rightLength,
+                                     rightUnnormalized.y / rightLength,
+                                     rightUnnormalized.z / rightLength};
+        const Point3D cameraRightProbe = {
+            centerWorld.x + cameraRight.x,
+            centerWorld.y + cameraRight.y,
+            centerWorld.z + cameraRight.z};
+        QPointF cameraRightScreen;
+        if (!transform.worldPointToScreenUnclipped(cameraRightProbe,
+                                                    viewportSize,
+                                                    &cameraRightScreen)) {
+            return;
+        }
+        const qreal pixelsPerWorldUnit = std::hypot(
+            cameraRightScreen.x() - centerScreen.x(),
+            cameraRightScreen.y() - centerScreen.y());
+        if (!std::isfinite(pixelsPerWorldUnit) ||
+            pixelsPerWorldUnit <= 1.0e-9) {
+            return;
+        }
+        const qreal compassRadiusWorld =
+            compassRadiusPixels / pixelsPerWorldUnit;
+        constexpr qreal outerRadius = 1.0;
+        const qreal innerRadius = outerRadius * (80.0 / 120.0);
+        const qreal tickLength = outerRadius * (10.0 / 120.0);
+        const qreal crossLength = outerRadius * (10.0 / 120.0);
+        const qreal cosine = std::cos(rotation);
+        const qreal sine = std::sin(rotation);
+        const auto rotated = [cosine, sine](qreal x, qreal y) {
+            return QPointF(x * cosine - y * sine,
+                           x * sine + y * cosine);
+        };
+        const auto projectCompassPoint = [&](qreal x,
+                                             qreal y,
+                                             bool rotatePoint,
+                                             QPointF *screenPoint) {
+            if (screenPoint == nullptr) {
+                return false;
+            }
+            const QPointF local = rotatePoint ? rotated(x, y) : QPointF(x, y);
+            const Point3D worldPoint = {
+                centerWorld.x + compassRadiusWorld *
+                    (frame.xAxis.x * local.x() + frame.yAxis.x * local.y()),
+                centerWorld.y + compassRadiusWorld *
+                    (frame.xAxis.y * local.x() + frame.yAxis.y * local.y()),
+                centerWorld.z + compassRadiusWorld *
+                    (frame.xAxis.z * local.x() + frame.yAxis.z * local.y())};
+            return transform.worldPointToScreenUnclipped(worldPoint,
+                                                          viewportSize,
+                                                          screenPoint);
+        };
+        const QColor color = arcCompassColor(frame.normal);
+        const auto appendCompassLine = [&](qreal firstX,
+                                           qreal firstY,
+                                           qreal secondX,
+                                           qreal secondY,
+                                           bool rotateLine) {
+            QPointF first;
+            QPointF second;
+            if (projectCompassPoint(firstX, firstY, rotateLine, &first) &&
+                projectCompassPoint(secondX, secondY, rotateLine, &second)) {
+                appendOverlayLine(overlayVertices, first, second, color, 1.0);
+            }
+        };
+
+        for (int sample = 0; sample < ringSamples; ++sample) {
+            const qreal firstAngle = twoPi * sample / ringSamples;
+            const qreal secondAngle = twoPi * (sample + 1) / ringSamples;
+            appendCompassLine(outerRadius * std::cos(firstAngle),
+                              outerRadius * std::sin(firstAngle),
+                              outerRadius * std::cos(secondAngle),
+                              outerRadius * std::sin(secondAngle),
+                              true);
+        }
+        constexpr int tickCount = 360 / angleIncrementDegrees;
+        for (int tick = 0; tick < tickCount; ++tick) {
+            const qreal angle = twoPi * tick / tickCount;
+            appendCompassLine(outerRadius * std::cos(angle),
+                              outerRadius * std::sin(angle),
+                              (outerRadius - tickLength) * std::cos(angle),
+                              (outerRadius - tickLength) * std::sin(angle),
+                              true);
+        }
+        const auto appendProtractorArc = [&](qreal startAngle,
+                                             qreal endAngle) {
+            constexpr int arcSamples = 48;
+            QPointF first;
+            QPointF previous;
+            if (!projectCompassPoint(innerRadius * std::cos(startAngle),
+                                     innerRadius * std::sin(startAngle),
+                                     true,
+                                     &first)) {
+                return;
+            }
+            previous = first;
+            bool previousVisible = true;
+            for (int sample = 1; sample <= arcSamples; ++sample) {
+                const qreal fraction = static_cast<qreal>(sample) / arcSamples;
+                const qreal angle = startAngle +
+                    (endAngle - startAngle) * fraction;
+                QPointF next;
+                const bool nextVisible = projectCompassPoint(
+                    innerRadius * std::cos(angle),
+                    innerRadius * std::sin(angle),
+                    true,
+                    &next);
+                if (previousVisible && nextVisible) {
+                    appendOverlayLine(overlayVertices,
+                                      previous,
+                                      next,
+                                      color,
+                                      1.0);
+                }
+                previous = next;
+                previousVisible = nextVisible;
+            }
+            QPointF arcEnd;
+            if (projectCompassPoint(innerRadius * std::cos(endAngle),
+                                    innerRadius * std::sin(endAngle),
+                                    true,
+                                    &arcEnd)) {
+                appendOverlayLine(overlayVertices,
+                                  first,
+                                  arcEnd,
+                                  color,
+                                  1.0);
+            }
+        };
+        appendProtractorArc(200.0 * pi / 180.0,
+                            340.0 * pi / 180.0);
+        appendProtractorArc(20.0 * pi / 180.0,
+                            160.0 * pi / 180.0);
+        appendCompassLine(-crossLength, 0.0, crossLength, 0.0, false);
+        appendCompassLine(0.0, -crossLength, 0.0, crossLength, false);
+    };
+
+    if (isValidWorkPlaneFrame(frame)) {
+        const QPointF compassCenter = pendingPoints.isEmpty()
+                                          ? cursorWorld
+                                          : pendingPoints.first();
+        if (pendingPoints.isEmpty() ? cursorValid : true) {
+            appendCompass(compassCenter, compassRotation);
+        }
+    }
+
+    const QColor startColor(204, 204, 51);
+    const QColor endColor(51, 204, 51);
+    const QColor pointColor(QStringLiteral("#f0a45a"));
+    if (!pendingPoints.isEmpty() && isValidWorkPlaneFrame(frame)) {
+        QPointF centerScreen;
+        if (projectFramePoint(pendingPoints.first(), &centerScreen)) {
+            if (pendingPoints.size() == 1) {
+                QPointF cursorScreen;
+                if (cursorValid && projectFramePoint(cursorWorld, &cursorScreen)) {
+                    appendOverlayLine(overlayVertices,
+                                      centerScreen,
+                                      cursorScreen,
+                                      startColor,
+                                      1.0);
+                }
+            } else {
+                const QPointF center = pendingPoints[0];
+                const QPointF radiusVector = pendingPoints[1] - center;
+                const qreal radius = std::hypot(radiusVector.x(),
+                                                radiusVector.y());
+                if (radius > 1.0e-9) {
+                    const qreal startAngle = std::atan2(radiusVector.y(),
+                                                        radiusVector.x());
+                    QPointF startScreen;
+                    if (projectFramePoint(pendingPoints[1], &startScreen)) {
+                        appendOverlayLine(overlayVertices,
+                                          centerScreen,
+                                          startScreen,
+                                          startColor,
+                                          1.0);
+                    }
+                    const qreal displayedSweep = std::clamp(
+                        arcSweep, -twoPi + 1.0e-6, twoPi - 1.0e-6);
+                    if (drawCurve && std::abs(displayedSweep) > 1.0e-12) {
+                        constexpr int samplesPerRevolution = 96;
+                        const int sampleCount = std::max(
+                            8,
+                            static_cast<int>(std::ceil(
+                                std::abs(displayedSweep) *
+                                samplesPerRevolution / twoPi)));
+                        QPointF previous;
+                        bool previousValid = false;
+                        for (int index = 0; index <= sampleCount; ++index) {
+                            const qreal angle = startAngle + displayedSweep *
+                                (static_cast<qreal>(index) / sampleCount);
+                            QPointF projected;
+                            const bool projectedValid = projectFramePoint(
+                                center + QPointF(radius * std::cos(angle),
+                                                 radius * std::sin(angle)),
+                                &projected);
+                            if (previousValid && projectedValid) {
+                                appendOverlayLine(overlayVertices,
+                                                  previous,
+                                                  projected,
+                                                  QColor(Qt::black),
+                                                  1.0);
+                                appendOverlayFilledCircle(overlayVertices,
+                                                          projected,
+                                                          2.0,
+                                                          QColor(Qt::black),
+                                                          12);
+                            }
+                            previous = projected;
+                            previousValid = projectedValid;
+                        }
+                    }
+                    const qreal endAngle = startAngle + displayedSweep;
+                    QPointF endScreen;
+                    if (projectFramePoint(
+                            center + QPointF(radius * std::cos(endAngle),
+                                             radius * std::sin(endAngle)),
+                            &endScreen)) {
+                        appendOverlayLine(overlayVertices,
+                                          centerScreen,
+                                          endScreen,
+                                          endColor,
+                                          1.0);
+                    }
+                }
+            }
+        }
+        for (const QPointF &point : pendingPoints) {
+            QPointF screen;
+            if (projectFramePoint(point, &screen)) {
+                appendOverlayFilledCircle(overlayVertices,
+                                          screen,
+                                          5.0,
+                                          QColor(QStringLiteral("#282828")));
+                appendOverlayCircle(overlayVertices, screen, 5.0,
+                                    pointColor, 1.5);
+            }
+        }
+        if (cursorValid) {
+            QPointF cursorScreen;
+            if (projectFramePoint(cursorWorld, &cursorScreen)) {
+                appendOverlayFilledCircle(overlayVertices,
+                                          cursorScreen,
+                                          4.0,
+                                          pointColor);
+            }
+        }
+    }
+
+    QPointF snapScreen;
+    const bool snapScreenValid = currentSnap.isValid();
+    if (snapScreenValid) {
+        snapScreen = transform.worldToScreen(currentSnap.point, viewportSize);
+        const QColor snapColor(QStringLiteral("#63b5e8"));
+        switch (currentSnap.type) {
+        case SnapType::Endpoint:
+            appendOverlayCircle(overlayVertices, snapScreen, 7.0,
+                                snapColor, 2.0);
+            break;
+        case SnapType::Midpoint:
+            appendOverlayRectangle(overlayVertices,
+                                   QRectF(snapScreen - QPointF(6.0, 6.0),
+                                          snapScreen + QPointF(6.0, 6.0)),
+                                   snapColor,
+                                   2.0);
+            break;
+        case SnapType::ControlPoint:
+            appendOverlayRectangle(overlayVertices,
+                                   QRectF(snapScreen - QPointF(7.0, 7.0),
+                                          snapScreen + QPointF(7.0, 7.0)),
+                                   snapColor,
+                                   2.0);
+            break;
+        case SnapType::Intersection:
+            appendOverlayLine(overlayVertices,
+                              snapScreen - QPointF(7.0, 7.0),
+                              snapScreen + QPointF(7.0, 7.0),
+                              snapColor,
+                              2.0);
+            appendOverlayLine(overlayVertices,
+                              snapScreen - QPointF(7.0, -7.0),
+                              snapScreen + QPointF(7.0, -7.0),
+                              snapColor,
+                              2.0);
+            break;
+        case SnapType::Center:
+            appendOverlayCircle(overlayVertices, snapScreen, 7.0,
+                                snapColor, 2.0);
+            appendOverlayLine(overlayVertices,
+                              snapScreen - QPointF(9.0, 0.0),
+                              snapScreen + QPointF(9.0, 0.0),
+                              snapColor,
+                              2.0);
+            appendOverlayLine(overlayVertices,
+                              snapScreen - QPointF(0.0, 9.0),
+                              snapScreen + QPointF(0.0, 9.0),
+                              snapColor,
+                              2.0);
+            break;
+        case SnapType::Perpendicular: {
+            const QPointF corner = snapScreen + QPointF(-2.0, 3.0);
+            appendOverlayLine(overlayVertices,
+                              snapScreen + QPointF(-8.0, 3.0),
+                              corner,
+                              snapColor,
+                              2.0);
+            appendOverlayLine(overlayVertices,
+                              corner,
+                              snapScreen + QPointF(-2.0, -5.0),
+                              snapColor,
+                              2.0);
+            break;
+        }
+        case SnapType::Tangent:
+            appendOverlayCircle(overlayVertices, snapScreen, 6.0,
+                                snapColor, 2.0);
+            appendOverlayLine(overlayVertices,
+                              snapScreen + QPointF(-7.0, 4.0),
+                              snapScreen + QPointF(7.0, -4.0),
+                              snapColor,
+                              2.0);
+            break;
+        case SnapType::Near:
+            appendOverlayDiamond(overlayVertices,
+                                 snapScreen,
+                                 7.0,
+                                 snapColor,
+                                 2.0);
+            break;
+        case SnapType::None:
+            break;
+        }
+    }
+
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    const QSize pixelSize(qRound(viewportSize.width() * dpr),
+                          qRound(viewportSize.height() * dpr));
+    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    overlayProgram_.bind();
+    overlayProgram_.setUniformValue(
+        "uViewportSize",
+        QVector2D(static_cast<float>(viewportSize.width()),
+                  static_cast<float>(viewportSize.height())));
+    overlayProgram_.setUniformValue("uUseTexture", 0);
+
+    const auto drawVertices = [&](const QVector<OverlayVertex> &vertices,
+                                  bool useTexture,
+                                  const QImage &textureImage) {
+        if (vertices.isEmpty()) {
+            return;
+        }
+        overlayVertexArray_.bind();
+        overlayVertexBuffer_.bind();
+        overlayVertexBuffer_.allocate(
+            vertices.constData(),
+            static_cast<int>(vertices.size() * sizeof(OverlayVertex)));
+        overlayProgram_.setUniformValue("uUseTexture", useTexture ? 1 : 0);
+        if (useTexture) {
+            if (overlayTextTexture_ == 0) {
+                glGenTextures(1, &overlayTextTexture_);
+            }
+            const QImage rgbaImage =
+                textureImage.convertToFormat(QImage::Format_RGBA8888);
+            GLint previousUnpackAlignment = 4;
+            glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousUnpackAlignment);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, overlayTextTexture_);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D,
+                         0,
+                         GL_RGBA8,
+                         rgbaImage.width(),
+                         rgbaImage.height(),
+                         0,
+                         GL_RGBA,
+                         GL_UNSIGNED_BYTE,
+                         rgbaImage.constBits());
+            glPixelStorei(GL_UNPACK_ALIGNMENT, previousUnpackAlignment);
+            overlayProgram_.setUniformValue("uTextTexture", 0);
+        }
+        glDrawArrays(GL_TRIANGLES, 0, vertices.size());
+        if (useTexture) {
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
+        overlayVertexBuffer_.release();
+        overlayVertexArray_.release();
+    };
+
+    drawVertices(overlayVertices, false, {});
+
+    const auto makeTextureQuad = [](const QRectF &rect) {
+        QVector<OverlayVertex> vertices;
+        const QColor white(Qt::white);
+        appendOverlayVertex(vertices, rect.topLeft(), white, 0.0, 0.0);
+        appendOverlayVertex(vertices, rect.bottomLeft(), white, 0.0, 1.0);
+        appendOverlayVertex(vertices, rect.bottomRight(), white, 1.0, 1.0);
+        appendOverlayVertex(vertices, rect.topLeft(), white, 0.0, 0.0);
+        appendOverlayVertex(vertices, rect.bottomRight(), white, 1.0, 1.0);
+        appendOverlayVertex(vertices, rect.topRight(), white, 1.0, 0.0);
+        return vertices;
+    };
+
+    if (snapLabelsVisible && snapScreenValid) {
+        const QImage label = snapLabelImage(currentSnap.type, dpr);
+        const QFont labelFont(QStringLiteral("Sans"), 9, QFont::Bold);
+        const QFontMetricsF labelMetrics(labelFont);
+        const QRectF labelRect(snapScreen.x() + 10.0,
+                               snapScreen.y() - 10.0 - labelMetrics.ascent(),
+                               label.width() / dpr,
+                               label.height() / dpr);
+        drawVertices(makeTextureQuad(labelRect), true, label);
+    }
+
+    const qreal panelWidth = std::max<qreal>(
+        1.0,
+        std::min<qreal>(570.0, viewportSize.width() - 24.0));
+    const QRectF panel(12.0,
+                       std::max<qreal>(12.0, viewportSize.height() - 58.0),
+                       panelWidth,
+                       46.0);
+    QVector<OverlayVertex> panelVertices;
+    panelVertices.reserve(72);
+    appendOverlayRoundedRect(panelVertices,
+                             panel,
+                             4.0,
+                             QColor(20, 20, 20, 170));
+    drawVertices(panelVertices, false, {});
+    if (!hudText.isNull()) {
+        drawVertices(makeTextureQuad(panel), true, hudText);
+    }
+
+    overlayProgram_.release();
     glDisable(GL_BLEND);
     return true;
 }

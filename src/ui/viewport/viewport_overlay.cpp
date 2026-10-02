@@ -415,6 +415,11 @@ void ViewportOverlay::setSnapLabelsVisible(bool visible)
     snapLabelsVisible_ = visible;
 }
 
+bool ViewportOverlay::snapLabelsVisible() const
+{
+    return snapLabelsVisible_;
+}
+
 void ViewportOverlay::drawSnapMarker(QPainter &painter,
                                      SnapType type,
                                      const QPointF &worldPoint,

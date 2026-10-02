@@ -379,6 +379,11 @@ QString precisePointText(const QPointF &point)
         .arg(point.y(), 0, 'g', 12);
 }
 
+struct ArcHudDisplay {
+    QString dimensionsLine;
+    QString instructionsLine;
+};
+
 class ViewportWidget final : public ViewportWidgetApi {
 public:
     explicit ViewportWidget(QWidget *parent = nullptr)
@@ -3129,7 +3134,16 @@ protected:
         gpuPreviewStrokes.reserve(gpuPreviewStrokes.size() +
                                   gpuPreviewPictures.size());
 
+        const bool onePointArcPreview = activeTool_ == Tool::Arc &&
+                                        arcMode_ == ArcMode::OnePoint;
+        const QImage arcHudText = nativeRenderer != nullptr &&
+                                          onePointArcPreview
+                                      ? onePointArcHudTextImage(
+                                            onePointArcHudDisplay(),
+                                            devicePixelRatioF())
+                                      : QImage{};
         bool gpuPreviewRendered = false;
+        bool gpuArcOverlayRendered = false;
         QVector<const Shape *> failedScenePicturePreviews;
         if (nativeRenderer != nullptr) {
             painter.beginNativePainting();
@@ -3188,6 +3202,23 @@ protected:
                 gpuControlPointsDrawn = controlPointRenderer->draw(
                     gpuControlPointHandles, viewportTransform_, size(),
                     devicePixelRatioF());
+            }
+            if (onePointArcPreview && previewRenderer != nullptr) {
+                gpuArcOverlayRendered =
+                    previewRenderer->drawArcOnePointOverlay(
+                        viewportTransform_,
+                        size(),
+                        devicePixelRatioF(),
+                        viewportTransform_.workPlaneFrame(),
+                        pendingPoints_,
+                        cursorWorld_,
+                        cursorValid_,
+                        arcPreviewSweepAngle_,
+                        currentSnap_,
+                        arcCompassRotation(),
+                        arcHudText,
+                        !gpuActiveToolPreview || !gpuPreviewRendered,
+                        viewportOverlay_.snapLabelsVisible());
             }
             painter.endNativePainting();
             if (!sceneDrawn) {
@@ -3348,8 +3379,10 @@ protected:
             drawLineToolPreview(painter,
                                 !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::Arc) {
-            drawArcToolPreview(painter,
-                               !gpuActiveToolPreview || !gpuPreviewRendered);
+            if (!gpuArcOverlayRendered) {
+                drawArcToolPreview(painter,
+                                   !gpuActiveToolPreview || !gpuPreviewRendered);
+            }
         } else if (isCircleConstructionTool(activeTool_) && !pendingPoints_.isEmpty()) {
             drawCircleToolPreview(painter,
                                   !gpuActiveToolPreview || !gpuPreviewRendered);
@@ -11748,9 +11781,9 @@ private:
         arcPreviewPreviousAngle_ = angle;
     }
 
-    void drawArcToolPreview(QPainter &painter, bool drawCurve = true)
+    qreal arcCompassRotation() const
     {
-        qreal compassRotation = 0.0;
+        qreal rotation = 0.0;
         if (arcMode_ == ArcMode::OnePoint && !pendingPoints_.isEmpty()) {
             const QPointF center = pendingPoints_.first();
             const QPointF radiusVector = pendingPoints_.size() >= 2
@@ -11758,9 +11791,82 @@ private:
                                              : cursorWorld_ - center;
             if ((pendingPoints_.size() >= 2 || cursorValid_) &&
                 std::hypot(radiusVector.x(), radiusVector.y()) > 1.0e-9) {
-                compassRotation = std::atan2(radiusVector.y(), radiusVector.x());
+                rotation = std::atan2(radiusVector.y(), radiusVector.x());
             }
         }
+        return rotation;
+    }
+
+    ArcHudDisplay onePointArcHudDisplay() const
+    {
+        constexpr qreal pi = 3.14159265358979323846;
+        qreal radius = 0.0;
+        if (pendingPoints_.size() >= 2) {
+            const QPointF vector = pendingPoints_[1] - pendingPoints_[0];
+            radius = std::hypot(vector.x(), vector.y());
+        } else if (pendingPoints_.size() == 1 && cursorValid_) {
+            const QPointF vector = cursorWorld_ - pendingPoints_[0];
+            radius = std::hypot(vector.x(), vector.y());
+        }
+        const DocumentSettings settings = document_.settings();
+        const qreal unitsPerMillimeter =
+            1.0 / millimetersPerDocumentUnit(settings.lengthUnit);
+        const QString radiusText = arcTextInputMode_ == ArcTextInputMode::Radius
+                                       ? arcTextInput_ + QLatin1Char('|')
+                                       : QStringLiteral("%1 %2")
+                                             .arg(radius * unitsPerMillimeter,
+                                                  0,
+                                                  'f',
+                                                  3)
+                                             .arg(arcLengthUnitSuffix(settings.lengthUnit));
+        const QString angleText = arcTextInputMode_ == ArcTextInputMode::Angle
+                                      ? arcTextInput_ + QLatin1Char('|')
+                                      : QStringLiteral("%1°")
+                                            .arg(-arcPreviewSweepAngle_ * 180.0 / pi,
+                                                 0,
+                                                 'f',
+                                                 1);
+        const QString stageHint = arcTextInputMode_ != ArcTextInputMode::None
+                                      ? QStringLiteral("Enter applies value")
+                                      : pendingPoints_.isEmpty()
+                                            ? QStringLiteral("Click center")
+                                            : pendingPoints_.size() == 1
+                                                  ? QStringLiteral("Click radius")
+                                                  : QStringLiteral("Click sweep to finish");
+        return {QStringLiteral("R: %1    ∠ %2").arg(radiusText, angleText),
+                QStringLiteral("%1  •  Esc exits  •  C snap %2  •  R radius  •  A angle  •  P %3  •  L %4")
+                    .arg(stageHint,
+                         arcAngleSnapEnabled_ ? QStringLiteral("on")
+                                              : QStringLiteral("off"),
+                         arcPerpendicularPlaneActive_ ? QStringLiteral("perp")
+                                                      : QStringLiteral("base"),
+                         arcPlaneLocked_ ? QStringLiteral("on")
+                                         : QStringLiteral("off"))};
+    }
+
+    QImage onePointArcHudTextImage(const ArcHudDisplay &display,
+                                   qreal devicePixelRatio) const
+    {
+        const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+        const qreal logicalWidth = std::max<qreal>(
+            1.0,
+            std::min<qreal>(570.0, width() - 24.0));
+        QImage image(QSize(qRound(logicalWidth * dpr), qRound(46.0 * dpr)),
+                     QImage::Format_RGBA8888);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+        QPainter textPainter(&image);
+        textPainter.setRenderHint(QPainter::TextAntialiasing, true);
+        textPainter.setFont(QFont(QStringLiteral("Sans"), 9));
+        textPainter.setPen(QColor(225, 225, 225));
+        textPainter.drawText(QPointF(8.0, 17.0), display.dimensionsLine);
+        textPainter.setPen(QColor(170, 170, 170));
+        textPainter.drawText(QPointF(8.0, 35.0), display.instructionsLine);
+        return image;
+    }
+
+    void drawArcToolPreview(QPainter &painter, bool drawCurve = true)
+    {
         viewportOverlay_.drawArcPreview(painter,
                                         pendingPoints_,
                                         arcMode_,
@@ -11770,36 +11876,10 @@ private:
                                         currentSnap_,
                                         size(),
                                         viewportTransform_.workPlaneFrame(),
-                                        compassRotation,
+                                        arcCompassRotation(),
                                         drawCurve);
         if (arcMode_ == ArcMode::OnePoint) {
-            constexpr qreal pi = 3.14159265358979323846;
-            qreal radius = 0.0;
-            if (pendingPoints_.size() >= 2) {
-                const QPointF vector = pendingPoints_[1] - pendingPoints_[0];
-                radius = std::hypot(vector.x(), vector.y());
-            } else if (pendingPoints_.size() == 1 && cursorValid_) {
-                const QPointF vector = cursorWorld_ - pendingPoints_[0];
-                radius = std::hypot(vector.x(), vector.y());
-            }
-            const DocumentSettings settings = document_.settings();
-            const qreal unitsPerMillimeter =
-                1.0 / millimetersPerDocumentUnit(settings.lengthUnit);
-            const QString radiusText = arcTextInputMode_ == ArcTextInputMode::Radius
-                                           ? arcTextInput_ + QLatin1Char('|')
-                                           : QStringLiteral("%1 %2")
-                                                 .arg(radius * unitsPerMillimeter,
-                                                      0,
-                                                      'f',
-                                                      3)
-                                                 .arg(arcLengthUnitSuffix(settings.lengthUnit));
-            const QString angleText = arcTextInputMode_ == ArcTextInputMode::Angle
-                                          ? arcTextInput_ + QLatin1Char('|')
-                                          : QStringLiteral("%1°")
-                                                .arg(-arcPreviewSweepAngle_ * 180.0 / pi,
-                                                     0,
-                                                     'f',
-                                                     1);
+            const ArcHudDisplay display = onePointArcHudDisplay();
             painter.save();
             const QRectF panel(12.0,
                                std::max<qreal>(12.0, height() - 58.0),
@@ -11813,26 +11893,10 @@ private:
             painter.setFont(QFont(QStringLiteral("Sans"), 9));
             painter.setPen(QColor(225, 225, 225));
             painter.drawText(QPointF(20.0, panel.top() + 17.0),
-                             QStringLiteral("R: %1    ∠ %2")
-                                 .arg(radiusText, angleText));
+                             display.dimensionsLine);
             painter.setPen(QColor(170, 170, 170));
-            const QString stageHint = arcTextInputMode_ != ArcTextInputMode::None
-                                          ? QStringLiteral("Enter applies value")
-                                          : pendingPoints_.isEmpty()
-                                                ? QStringLiteral("Click center")
-                                                : pendingPoints_.size() == 1
-                                                      ? QStringLiteral("Click radius")
-                                                      : QStringLiteral("Click sweep to finish");
-            painter.drawText(
-                QPointF(20.0, panel.top() + 35.0),
-                QStringLiteral("%1  •  Esc exits  •  C snap %2  •  R radius  •  A angle  •  P %3  •  L %4")
-                    .arg(stageHint,
-                         arcAngleSnapEnabled_ ? QStringLiteral("on")
-                                              : QStringLiteral("off"),
-                         arcPerpendicularPlaneActive_ ? QStringLiteral("perp")
-                                                      : QStringLiteral("base"),
-                         arcPlaneLocked_ ? QStringLiteral("on")
-                                         : QStringLiteral("off")));
+            painter.drawText(QPointF(20.0, panel.top() + 35.0),
+                             display.instructionsLine);
             painter.restore();
         }
     }

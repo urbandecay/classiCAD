@@ -30,6 +30,7 @@ public:
                     const ViewportTransform &transform);
 
     void setSnapLabelsVisible(bool visible);
+    bool snapLabelsVisible() const;
     void drawSnapMarker(QPainter &painter,
                         SnapType type,
                         const QPointF &worldPoint,

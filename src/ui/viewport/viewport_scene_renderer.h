@@ -8,6 +8,7 @@
 #include <QColor>
 #include <QByteArray>
 #include <QHash>
+#include <QImage>
 #include <QOpenGLBuffer>
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLShaderProgram>
@@ -118,6 +119,19 @@ public:
               const ViewportTransform &transform,
               const QSize &viewportSize,
               qreal devicePixelRatio);
+    bool drawArcOnePointOverlay(const ViewportTransform &transform,
+                                const QSize &viewportSize,
+                                qreal devicePixelRatio,
+                                const WorkPlaneFrame &workPlaneFrame,
+                                const QVector<QPointF> &pendingPoints,
+                                const QPointF &cursorWorld,
+                                bool cursorValid,
+                                qreal arcSweep,
+                                const SnapResult &currentSnap,
+                                qreal compassRotation,
+                                const QImage &hudText,
+                                bool drawCurve,
+                                bool snapLabelsVisible);
     bool drawPicture(const Shape &picture,
                      const ViewportTransform &transform,
                      const QSize &viewportSize,
@@ -131,23 +145,30 @@ private:
     };
 
     bool initialize();
+    bool initializeOverlay();
     bool initializePicture();
 
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram pointProgram_;
     QOpenGLShaderProgram pictureProgram_;
+    QOpenGLShaderProgram overlayProgram_;
     QOpenGLVertexArrayObject vertexArray_;
+    QOpenGLVertexArrayObject overlayVertexArray_;
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer overlayVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer patternOffsetBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLVertexArrayObject pictureVertexArray_;
     QOpenGLBuffer pictureVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QHash<qint64, PictureTexture> pictureTextures_;
+    GLuint overlayTextTexture_ = 0;
     QVector<QByteArray> strokeGeometryKeys_;
     QVector<QPair<int, int>> strokeRanges_;
     QVector<QVector3D> cachedVertices_;
     QVector<float> cachedPatternOffsets_;
     bool initializationAttempted_ = false;
     bool initialized_ = false;
+    bool overlayInitializationAttempted_ = false;
+    bool overlayInitialized_ = false;
     bool pictureInitializationAttempted_ = false;
     bool pictureInitialized_ = false;
 };

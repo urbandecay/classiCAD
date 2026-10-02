@@ -73,6 +73,8 @@ public:
                         qreal arcSweep,
                         const SnapResult &currentSnap,
                         const QSize &viewportSize,
+                        const WorkPlaneFrame &workPlaneFrame = {},
+                        qreal compassRotation = 0.0,
                         bool drawCurve = true) const;
     void drawCirclePreview(QPainter &painter,
                            ToolId tool,

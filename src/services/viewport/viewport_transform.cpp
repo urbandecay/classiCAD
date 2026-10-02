@@ -493,6 +493,39 @@ bool ViewportTransform::worldPointToScreen(const Point3D &worldPosition,
            std::isfinite(screenPosition->y());
 }
 
+bool ViewportTransform::worldPointToScreenUnclipped(
+    const Point3D &worldPosition,
+    const QSize &viewportSize,
+    QPointF *screenPosition) const
+{
+    if (screenPosition == nullptr || viewportSize.width() <= 0 ||
+        viewportSize.height() <= 0) {
+        return false;
+    }
+
+    const CameraBasis basis = cameraBasis(orientation_);
+    const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
+    const Vec3 relative = subtract(asVec(worldPosition), target);
+    const qreal viewX = dot(relative, basis.right);
+    const qreal viewY = dot(relative, basis.up);
+    qreal scale = viewScalePixelsPerWorldUnit(viewportSize);
+    if (perspective_) {
+        const qreal focalLength = viewportFocalLengthPixels(
+            viewportSize, cameraPreferences_.focalLengthMillimeters);
+        const qreal cameraDistance = perspectiveCameraDistance(zoom_,
+                                                               cameraPreferences_);
+        const qreal depth = cameraDistance + dot(relative, basis.forward);
+        if (!std::isfinite(depth) || depth <= 1.0e-12) {
+            return false;
+        }
+        scale = focalLength / depth;
+    }
+    *screenPosition = QPointF(viewportSize.width() / 2.0 + viewX * scale,
+                              viewportSize.height() / 2.0 - viewY * scale);
+    return std::isfinite(screenPosition->x()) &&
+           std::isfinite(screenPosition->y());
+}
+
 WorkPlane ViewportTransform::workPlane() const
 {
     return workPlane_;

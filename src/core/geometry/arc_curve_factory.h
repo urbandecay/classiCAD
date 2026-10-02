@@ -19,4 +19,12 @@ bool makeCircularArcThroughPoint(const QPointF &start,
                                  const QPointF &through,
                                  CircularArc2D *arc);
 
+// Builds an exact rational circular arc from its center, radius, start angle,
+// and signed sweep in local workplane coordinates.
+bool makeCircularArcFromCenterSweep(const QPointF &center,
+                                    qreal radius,
+                                    qreal startAngle,
+                                    qreal sweepAngle,
+                                    CircularArc2D *arc);
+
 } // namespace classiCAD

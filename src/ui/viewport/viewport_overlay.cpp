@@ -21,6 +21,196 @@ constexpr qreal blenderAxisMarkerRadius = 8.0;
 constexpr qreal blenderMiniButtonSize = 28.0;
 constexpr qreal blenderGizmoSupersampling = 2.0;
 
+Point3D scalePoint(const Point3D &point, qreal scale)
+{
+    return {point.x * scale, point.y * scale, point.z * scale};
+}
+
+bool projectFramePoint(const ViewportTransform &transform,
+                       const WorkPlaneFrame &frame,
+                       const QPointF &localPoint,
+                       const QSize &viewportSize,
+                       QPointF *screenPoint)
+{
+    return transform.worldPointToScreen(
+        workPlaneFramePointToWorld(localPoint, frame), viewportSize, screenPoint);
+}
+
+QColor arcCompassColor(const Point3D &normal)
+{
+    constexpr qreal axisTolerance = 0.999999;
+    if (std::abs(normal.x) > axisTolerance) {
+        return QColor::fromRgbF(0.85, 0.0, 0.0, 1.0);
+    }
+    if (std::abs(normal.y) > axisTolerance) {
+        return QColor::fromRgbF(0.0, 0.60, 0.0, 1.0);
+    }
+    if (std::abs(normal.z) > axisTolerance) {
+        return QColor::fromRgbF(0.149, 0.376, 1.0, 1.0);
+    }
+    // The add-on uses black for oblique workplanes, which disappears against
+    // classiCAD's dark viewport. Keep the same neutral compass treatment with
+    // a light stroke so the overlay remains visible on that background.
+    return QColor(225, 225, 225, 255);
+}
+
+void drawArcCompass(QPainter &painter,
+                    const ViewportTransform &transform,
+                    const WorkPlaneFrame &frame,
+                    const QPointF &localCenter,
+                    const QSize &viewportSize,
+                    qreal rotation)
+{
+    constexpr qreal pi = 3.14159265358979323846;
+    constexpr int ringSamples = 72;
+    constexpr int angleIncrementDegrees = 15;
+    constexpr qreal compassRadiusPixels = 62.5;
+    if (!isValidWorkPlaneFrame(frame)) {
+        return;
+    }
+
+    const Point3D centerWorld = workPlaneFramePointToWorld(localCenter, frame);
+    QPointF centerScreen;
+    const Point3D rightUnnormalized = {
+        transform.viewUp().y * transform.viewDirection().z -
+            transform.viewUp().z * transform.viewDirection().y,
+        transform.viewUp().z * transform.viewDirection().x -
+            transform.viewUp().x * transform.viewDirection().z,
+        transform.viewUp().x * transform.viewDirection().y -
+            transform.viewUp().y * transform.viewDirection().x};
+    const qreal rightLength = std::sqrt(
+        rightUnnormalized.x * rightUnnormalized.x +
+        rightUnnormalized.y * rightUnnormalized.y +
+        rightUnnormalized.z * rightUnnormalized.z);
+    if (rightLength <= 1.0e-12 ||
+        !transform.worldPointToScreenUnclipped(centerWorld,
+                                               viewportSize,
+                                               &centerScreen)) {
+        return;
+    }
+    const Point3D cameraRight = scalePoint(rightUnnormalized, 1.0 / rightLength);
+    const Point3D cameraUp = transform.viewUp();
+    const auto dotProduct = [](const Point3D &first, const Point3D &second) {
+        return first.x * second.x + first.y * second.y + first.z * second.z;
+    };
+    // Work directly in screen pixels. This is the local camera projection of
+    // the workplane basis, scaled to the add-on's 125-pixel diameter. It stays
+    // constant at any zoom and cannot vanish when world-space precision gets
+    // too small to measure with projected probe points.
+    const QPointF planeXScreen(
+        compassRadiusPixels * dotProduct(frame.xAxis, cameraRight),
+        -compassRadiusPixels * dotProduct(frame.xAxis, cameraUp));
+    const QPointF planeYScreen(
+        compassRadiusPixels * dotProduct(frame.yAxis, cameraRight),
+        -compassRadiusPixels * dotProduct(frame.yAxis, cameraUp));
+    constexpr qreal outerRadius = 1.0;
+    const qreal innerRadius = outerRadius * (80.0 / 120.0);
+    const qreal tickLength = outerRadius * (10.0 / 120.0);
+    const qreal crossLength = outerRadius * (10.0 / 120.0);
+    const qreal cosine = std::cos(rotation);
+    const qreal sine = std::sin(rotation);
+    const auto rotate = [cosine, sine](qreal x, qreal y) {
+        return QPointF(x * cosine - y * sine,
+                       x * sine + y * cosine);
+    };
+    const auto projectCompassPoint = [&](qreal x,
+                                         qreal y,
+                                         bool rotatePoint,
+                                         QPointF *screen) {
+        const QPointF rotated = rotatePoint ? rotate(x, y) : QPointF(x, y);
+        if (screen == nullptr) {
+            return false;
+        }
+        const QPointF offset = planeXScreen * rotated.x() +
+                               planeYScreen * rotated.y();
+        *screen = centerScreen + offset;
+        return std::isfinite(screen->x()) && std::isfinite(screen->y());
+    };
+    const auto drawCompassLine = [&](qreal firstX,
+                                     qreal firstY,
+                                     qreal secondX,
+                                     qreal secondY,
+                                     bool rotateLine) {
+        QPointF first;
+        QPointF second;
+        if (projectCompassPoint(firstX, firstY, rotateLine, &first) &&
+            projectCompassPoint(secondX, secondY, rotateLine, &second)) {
+            painter.drawLine(first, second);
+        }
+    };
+
+    const QColor color = arcCompassColor(frame.normal);
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(color, 1.0));
+
+    for (int sample = 0; sample < ringSamples; ++sample) {
+        const qreal firstAngle = 2.0 * pi * sample / ringSamples;
+        const qreal secondAngle = 2.0 * pi * (sample + 1) / ringSamples;
+        drawCompassLine(outerRadius * std::cos(firstAngle),
+                        outerRadius * std::sin(firstAngle),
+                        outerRadius * std::cos(secondAngle),
+                        outerRadius * std::sin(secondAngle),
+                        true);
+    }
+
+    constexpr int tickCount = 360 / angleIncrementDegrees;
+    for (int tick = 0; tick < tickCount; ++tick) {
+        const qreal angle = 2.0 * pi * tick / tickCount;
+        drawCompassLine(outerRadius * std::cos(angle),
+                        outerRadius * std::sin(angle),
+                        (outerRadius - tickLength) * std::cos(angle),
+                        (outerRadius - tickLength) * std::sin(angle),
+                        true);
+    }
+
+    const auto drawProtractorArc = [&](qreal startAngle, qreal endAngle) {
+        constexpr int arcSamples = 48;
+        QPointF previous;
+        QPointF arcStart;
+        const bool startVisible = projectCompassPoint(
+            innerRadius * std::cos(startAngle),
+            innerRadius * std::sin(startAngle),
+            true,
+            &previous);
+        if (!startVisible) {
+            return;
+        }
+        arcStart = previous;
+        bool previousVisible = true;
+        for (int sample = 1; sample <= arcSamples; ++sample) {
+            const qreal fraction = static_cast<qreal>(sample) / arcSamples;
+            const qreal angle = startAngle + (endAngle - startAngle) * fraction;
+            QPointF next;
+            const bool nextVisible = projectCompassPoint(
+                innerRadius * std::cos(angle),
+                innerRadius * std::sin(angle),
+                true,
+                &next);
+            if (previousVisible && nextVisible) {
+                painter.drawLine(previous, next);
+            }
+            previous = next;
+            previousVisible = nextVisible;
+        }
+        QPointF arcEnd;
+        if (projectCompassPoint(innerRadius * std::cos(endAngle),
+                                innerRadius * std::sin(endAngle),
+                                true,
+                                &arcEnd)) {
+            painter.drawLine(arcStart, arcEnd);
+        }
+    };
+    drawProtractorArc(200.0 * pi / 180.0, 340.0 * pi / 180.0);
+    drawProtractorArc(20.0 * pi / 180.0, 160.0 * pi / 180.0);
+
+    drawCompassLine(-crossLength, 0.0, crossLength, 0.0, false);
+    drawCompassLine(0.0, -crossLength, 0.0, crossLength, false);
+    painter.restore();
+}
+
 struct BlenderAxisMarker {
     Point3D direction;
     QPointF screenPosition;
@@ -403,8 +593,128 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
                                      qreal arcSweep,
                                      const SnapResult &currentSnap,
                                      const QSize &viewportSize,
+                                     const WorkPlaneFrame &workPlaneFrame,
+                                     qreal compassRotation,
                                      bool drawCurve) const
 {
+    if (arcMode == ArcMode::OnePoint) {
+        const WorkPlaneFrame frame = isValidWorkPlaneFrame(workPlaneFrame)
+                                         ? workPlaneFrame
+                                         : transform_.workPlaneFrame();
+        if (isValidWorkPlaneFrame(frame)) {
+            const QPointF compassCenter = pendingPoints.isEmpty()
+                                              ? cursorWorld
+                                              : pendingPoints.first();
+            if (pendingPoints.isEmpty() ? cursorValid : true) {
+                drawArcCompass(painter,
+                               transform_,
+                               frame,
+                               compassCenter,
+                               viewportSize,
+                               compassRotation);
+            }
+        }
+
+        if (pendingPoints.isEmpty()) {
+            if (currentSnap.isValid()) {
+                drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+            }
+            return;
+        }
+
+        if (!isValidWorkPlaneFrame(frame)) {
+            return;
+        }
+        const QColor startColor(204, 204, 51);
+        const QColor endColor(51, 204, 51);
+        const auto screenPoint = [&](const QPointF &localPoint, QPointF *screen) {
+            return projectFramePoint(transform_, frame, localPoint, viewportSize, screen);
+        };
+        QPointF centerScreen;
+        if (!screenPoint(pendingPoints.first(), &centerScreen)) {
+            if (currentSnap.isValid()) {
+                drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+            }
+            return;
+        }
+
+        if (pendingPoints.size() == 1) {
+            QPointF cursorScreen;
+            if (cursorValid && screenPoint(cursorWorld, &cursorScreen)) {
+                painter.save();
+                painter.setRenderHint(QPainter::Antialiasing, true);
+                painter.setPen(QPen(startColor, 1.0));
+                painter.drawLine(centerScreen, cursorScreen);
+                painter.restore();
+            }
+        } else {
+            const QPointF center = pendingPoints[0];
+            const QPointF radiusVector = pendingPoints[1] - center;
+            const qreal radius = std::hypot(radiusVector.x(), radiusVector.y());
+            if (radius > 1.0e-9) {
+                const qreal startAngle = std::atan2(radiusVector.y(),
+                                                    radiusVector.x());
+                constexpr qreal twoPi = 6.28318530717958647692;
+                const qreal displayedSweep = std::clamp(arcSweep,
+                                                        -twoPi + 1.0e-6,
+                                                        twoPi - 1.0e-6);
+                QPointF startScreen;
+                const bool startVisible = screenPoint(pendingPoints[1], &startScreen);
+
+                painter.save();
+                painter.setRenderHint(QPainter::Antialiasing, true);
+                painter.setBrush(Qt::NoBrush);
+                if (startVisible) {
+                    painter.setPen(QPen(startColor, 1.0));
+                    painter.drawLine(centerScreen, startScreen);
+                }
+
+                if (drawCurve && std::abs(displayedSweep) > 1.0e-12) {
+                    constexpr int previewSamplesPerRevolution = 96;
+                    const int sampleCount = std::max(
+                        8,
+                        static_cast<int>(std::ceil(
+                            std::abs(displayedSweep) * previewSamplesPerRevolution /
+                            twoPi)));
+                    QPolygonF preview;
+                    preview.reserve(sampleCount + 1);
+                    for (int index = 0; index <= sampleCount; ++index) {
+                        const qreal angle = startAngle + displayedSweep *
+                            (static_cast<qreal>(index) / sampleCount);
+                        QPointF projected;
+                        if (screenPoint(center + QPointF(radius * std::cos(angle),
+                                                         radius * std::sin(angle)),
+                                        &projected)) {
+                            preview.append(projected);
+                        }
+                    }
+                    painter.setPen(QPen(QColor(0, 0, 0), 1.0));
+                    painter.drawPolyline(preview);
+                    painter.setPen(Qt::NoPen);
+                    painter.setBrush(QColor(0, 0, 0));
+                    for (const QPointF &point : preview) {
+                        painter.drawEllipse(point, 2.0, 2.0);
+                    }
+                }
+
+                const qreal endAngle = startAngle + displayedSweep;
+                QPointF endScreen;
+                if (screenPoint(center + QPointF(radius * std::cos(endAngle),
+                                                 radius * std::sin(endAngle)),
+                                &endScreen)) {
+                    painter.setPen(QPen(endColor, 1.0));
+                    painter.drawLine(centerScreen, endScreen);
+                }
+                painter.restore();
+            }
+        }
+
+        if (currentSnap.isValid()) {
+            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        }
+        return;
+    }
+
     if (pendingPoints.isEmpty()) {
         if (currentSnap.isValid()) {
             drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
@@ -414,47 +724,26 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
 
     const QColor arcColor(QStringLiteral("#e6b85c"));
     const QColor pointColor(QStringLiteral("#f0a45a"));
+
     painter.setPen(QPen(arcColor, 2.0));
     painter.setBrush(Qt::NoBrush);
 
-    if (arcMode == ArcMode::OnePoint) {
-        if (pendingPoints.size() == 1) {
-            if (cursorValid) {
-                painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
-                                 transform_.worldToScreen(cursorWorld, viewportSize));
-            }
-        } else if (cursorValid) {
-            painter.setPen(QPen(QColor(QStringLiteral("#8aa7c7")), 1.0, Qt::DashLine));
-            painter.drawLine(transform_.worldToScreen(pendingPoints[0], viewportSize),
-                             transform_.worldToScreen(pendingPoints[1], viewportSize));
-
-            painter.setPen(QPen(arcColor, 2.0));
-            if (drawCurve && std::abs(arcSweep) > 1e-12) {
-                renderer_.drawCenterArcWithSweep(painter,
-                                                 pendingPoints[0],
-                                                 pendingPoints[1],
-                                                 arcSweep,
-                                                 viewportSize);
-            }
+    if (pendingPoints.size() == 1) {
+        if (cursorValid) {
+            painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
+                             transform_.worldToScreen(cursorWorld, viewportSize));
         }
-    } else {
-        if (pendingPoints.size() == 1) {
-            if (cursorValid) {
-                painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
-                                 transform_.worldToScreen(cursorWorld, viewportSize));
-            }
-        } else if (cursorValid) {
-            painter.setPen(QPen(QColor(QStringLiteral("#8aa7c7")), 1.0, Qt::DashLine));
-            painter.drawLine(transform_.worldToScreen(pendingPoints[0], viewportSize),
-                             transform_.worldToScreen(pendingPoints[1], viewportSize));
-            painter.setPen(QPen(arcColor, 2.0));
-            if (drawCurve) {
-                renderer_.drawCircularArc(painter,
-                                          pendingPoints[0],
-                                          pendingPoints[1],
-                                          cursorWorld,
-                                          viewportSize);
-            }
+    } else if (cursorValid) {
+        painter.setPen(QPen(QColor(QStringLiteral("#8aa7c7")), 1.0, Qt::DashLine));
+        painter.drawLine(transform_.worldToScreen(pendingPoints[0], viewportSize),
+                         transform_.worldToScreen(pendingPoints[1], viewportSize));
+        painter.setPen(QPen(arcColor, 2.0));
+        if (drawCurve) {
+            renderer_.drawCircularArc(painter,
+                                      pendingPoints[0],
+                                      pendingPoints[1],
+                                      cursorWorld,
+                                      viewportSize);
         }
     }
 

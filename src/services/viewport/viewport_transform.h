@@ -132,6 +132,12 @@ public:
     bool worldPointToScreen(const Point3D &worldPosition,
                             const QSize &viewportSize,
                             QPointF *screenPosition) const;
+    // Same camera projection without scene clip-range rejection. HUD overlays
+    // such as the arc compass still need a screen anchor when their world
+    // point lies beyond the scene depth range at extreme zoom levels.
+    bool worldPointToScreenUnclipped(const Point3D &worldPosition,
+                                     const QSize &viewportSize,
+                                     QPointF *screenPosition) const;
     bool screenToWorldAxis(const QPointF &screenPosition,
                            const QSize &viewportSize,
                            const Point3D &origin,

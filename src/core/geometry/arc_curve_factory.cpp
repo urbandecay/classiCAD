@@ -161,4 +161,34 @@ bool makeCircularArcThroughPoint(const QPointF &start,
     return true;
 }
 
+bool makeCircularArcFromCenterSweep(const QPointF &center,
+                                    qreal radius,
+                                    qreal startAngle,
+                                    qreal sweepAngle,
+                                    CircularArc2D *arc)
+{
+    if (arc == nullptr || !std::isfinite(center.x()) ||
+        !std::isfinite(center.y()) || !std::isfinite(radius) ||
+        !std::isfinite(startAngle) || !std::isfinite(sweepAngle) ||
+        radius <= std::numeric_limits<qreal>::min() ||
+        std::abs(sweepAngle) <= 1.0e-12) {
+        return false;
+    }
+
+    const NurbsCurve2D curve = makeRationalArc(center,
+                                                radius,
+                                                startAngle,
+                                                sweepAngle);
+    if (!validateNurbsCurve(curve)) {
+        return false;
+    }
+
+    arc->center = center;
+    arc->radius = radius;
+    arc->startAngle = startAngle;
+    arc->sweepAngle = sweepAngle;
+    arc->curve = curve;
+    return true;
+}
+
 } // namespace classiCAD

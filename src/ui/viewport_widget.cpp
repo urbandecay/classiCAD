@@ -5093,6 +5093,16 @@ protected:
             return;
         }
 
+        if (activeTool_ == Tool::Arc && event->key() == Qt::Key_Escape) {
+            setTool(Tool::Select);
+            if (commandFinished_) {
+                commandFinished_(Tool::Select);
+            }
+            update();
+            event->accept();
+            return;
+        }
+
         if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
             handleOnePointArcKey(event)) {
             return;

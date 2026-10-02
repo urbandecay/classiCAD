@@ -2897,6 +2897,12 @@ protected:
             }
         }
 
+        const Layer *activeDrawingLayer =
+            document_.layer(document_.activeLayerId());
+        const QColor arcPreviewColor =
+            activeDrawingLayer != nullptr && activeDrawingLayer->color.isValid()
+                ? activeDrawingLayer->color
+                : QColor(QStringLiteral("#d28b45"));
         if (sceneRenderer != nullptr && previewRenderer != nullptr) {
             const auto addPreviewShape =
                 [&gpuPreviewGeometry](const Shape &shape,
@@ -2984,6 +2990,9 @@ protected:
                 };
 
             const QColor previewColor(QStringLiteral("#e6b85c"));
+            const QColor activeToolPreviewColor = activeTool_ == Tool::Arc
+                                                      ? arcPreviewColor
+                                                      : previewColor;
             for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
                 const Shape &preview = duplicatePreviewShapes_[index];
                 if (preview.geometryType == GeometryType::Picture) {
@@ -3026,7 +3035,8 @@ protected:
             if (controllerPreviewShapeVisible_ &&
                 !isDimensionGeometryType(controllerPreviewShape_.geometryType)) {
                 gpuActiveToolPreview |= addPreviewShape(
-                    controllerPreviewShape_, previewColor, 1.5f, false, 0.0f,
+                    controllerPreviewShape_, activeToolPreviewColor,
+                    1.5f, false, 0.0f,
                     false, false);
             }
 
@@ -3064,7 +3074,7 @@ protected:
                                   &toolPreview)) {
                     gpuActiveToolPreview |= addPreviewShape(
                         toolPreview,
-                        previewColor,
+                        activeToolPreviewColor,
                         2.0f,
                         false,
                         toolPreview.geometryType == GeometryType::Point ? 9.0f : 0.0f,
@@ -3214,6 +3224,7 @@ protected:
                         cursorWorld_,
                         cursorValid_,
                         arcPreviewSweepAngle_,
+                        arcPreviewColor,
                         currentSnap_,
                         arcCompassRotation(),
                         arcHudText,
@@ -3381,7 +3392,8 @@ protected:
         } else if (activeTool_ == Tool::Arc) {
             if (!gpuArcOverlayRendered) {
                 drawArcToolPreview(painter,
-                                   !gpuActiveToolPreview || !gpuPreviewRendered);
+                                   !gpuActiveToolPreview || !gpuPreviewRendered,
+                                   arcPreviewColor);
             }
         } else if (isCircleConstructionTool(activeTool_) && !pendingPoints_.isEmpty()) {
             drawCircleToolPreview(painter,
@@ -11865,7 +11877,9 @@ private:
         return image;
     }
 
-    void drawArcToolPreview(QPainter &painter, bool drawCurve = true)
+    void drawArcToolPreview(QPainter &painter,
+                            bool drawCurve,
+                            const QColor &curveColor)
     {
         viewportOverlay_.drawArcPreview(painter,
                                         pendingPoints_,
@@ -11877,6 +11891,7 @@ private:
                                         size(),
                                         viewportTransform_.workPlaneFrame(),
                                         arcCompassRotation(),
+                                        curveColor,
                                         drawCurve);
         if (arcMode_ == ArcMode::OnePoint) {
             const ArcHudDisplay display = onePointArcHudDisplay();

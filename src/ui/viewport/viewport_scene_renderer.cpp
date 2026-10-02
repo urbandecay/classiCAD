@@ -638,6 +638,7 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
     const QPointF &cursorWorld,
     bool cursorValid,
     qreal arcSweep,
+    const QColor &curveColor,
     const SnapResult &currentSnap,
     qreal compassRotation,
     const QImage &hudText,
@@ -650,6 +651,9 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
         return false;
     }
 
+    const QColor resolvedCurveColor = curveColor.isValid()
+                                          ? curveColor
+                                          : QColor(QStringLiteral("#d28b45"));
     constexpr qreal pi = 3.14159265358979323846;
     constexpr qreal twoPi = 2.0 * pi;
     QVector<OverlayVertex> overlayVertices;
@@ -893,12 +897,12 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
                                 appendOverlayLine(overlayVertices,
                                                   previous,
                                                   projected,
-                                                  QColor(Qt::black),
+                                                  resolvedCurveColor,
                                                   1.0);
                                 appendOverlayFilledCircle(overlayVertices,
                                                           projected,
                                                           2.0,
-                                                          QColor(Qt::black),
+                                                          resolvedCurveColor,
                                                           12);
                             }
                             previous = projected;

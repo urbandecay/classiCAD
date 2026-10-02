@@ -612,8 +612,12 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
                                      const QSize &viewportSize,
                                      const WorkPlaneFrame &workPlaneFrame,
                                      qreal compassRotation,
+                                     const QColor &curveColor,
                                      bool drawCurve) const
 {
+    const QColor resolvedCurveColor = curveColor.isValid()
+                                          ? curveColor
+                                          : QColor(QStringLiteral("#e6b85c"));
     if (arcMode == ArcMode::OnePoint) {
         const WorkPlaneFrame frame = isValidWorkPlaneFrame(workPlaneFrame)
                                          ? workPlaneFrame
@@ -705,10 +709,10 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
                             preview.append(projected);
                         }
                     }
-                    painter.setPen(QPen(QColor(0, 0, 0), 1.0));
+                    painter.setPen(QPen(resolvedCurveColor, 1.0));
                     painter.drawPolyline(preview);
                     painter.setPen(Qt::NoPen);
-                    painter.setBrush(QColor(0, 0, 0));
+                    painter.setBrush(resolvedCurveColor);
                     for (const QPointF &point : preview) {
                         painter.drawEllipse(point, 2.0, 2.0);
                     }
@@ -739,7 +743,7 @@ void ViewportOverlay::drawArcPreview(QPainter &painter,
         return;
     }
 
-    const QColor arcColor(QStringLiteral("#e6b85c"));
+    const QColor arcColor = resolvedCurveColor;
     const QColor pointColor(QStringLiteral("#f0a45a"));
 
     painter.setPen(QPen(arcColor, 2.0));

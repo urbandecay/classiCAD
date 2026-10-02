@@ -76,6 +76,7 @@ public:
                         const QSize &viewportSize,
                         const WorkPlaneFrame &workPlaneFrame = {},
                         qreal compassRotation = 0.0,
+                        const QColor &curveColor = QColor(),
                         bool drawCurve = true) const;
     void drawCirclePreview(QPainter &painter,
                            ToolId tool,

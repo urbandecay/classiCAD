@@ -127,6 +127,7 @@ public:
                                 const QPointF &cursorWorld,
                                 bool cursorValid,
                                 qreal arcSweep,
+                                const QColor &curveColor,
                                 const SnapResult &currentSnap,
                                 qreal compassRotation,
                                 const QImage &hudText,

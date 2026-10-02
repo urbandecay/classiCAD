@@ -542,6 +542,7 @@ bool ViewportSceneRenderer::draw(
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
+    glEnable(GL_MULTISAMPLE);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_PROGRAM_POINT_SIZE);
@@ -1032,6 +1033,7 @@ bool ViewportSceneRenderer::drawArcOnePointOverlay(
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
+    glEnable(GL_MULTISAMPLE);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     overlayProgram_.bind();

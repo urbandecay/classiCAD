@@ -21,6 +21,7 @@ ViewportGpuSurface::ViewportGpuSurface(QWidget *parent)
     format.setVersion(3, 3);
     format.setProfile(QSurfaceFormat::CoreProfile);
     format.setDepthBufferSize(24);
+    format.setSamples(4);
     setFormat(format);
     setAttribute(Qt::WA_TransparentForMouseEvents);
     setFocusPolicy(Qt::NoFocus);

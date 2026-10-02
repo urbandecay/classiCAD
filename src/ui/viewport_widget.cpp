@@ -703,7 +703,7 @@ public:
         } else {
             setCursor(Qt::CrossCursor);
         }
-        if (isCircleTangentTool(tool)) {
+        if (isCircleTangentTool(tool) || tool == Tool::Arc) {
             setFocus(Qt::OtherFocusReason);
         }
 
@@ -4928,6 +4928,20 @@ protected:
         emitCoordinateUpdate();
     }
 
+    bool event(QEvent *event) override
+    {
+        if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
+            activeTool_ == Tool::Arc) {
+            const auto *keyEvent = static_cast<const QKeyEvent *>(event);
+            if (keyEvent->modifiers() == Qt::NoModifier &&
+                (keyEvent->key() == Qt::Key_A || keyEvent->key() == Qt::Key_R)) {
+                event->accept();
+                return true;
+            }
+        }
+        return QWidget::event(event);
+    }
+
     void keyPressEvent(QKeyEvent *event) override
     {
         stopNavigationAnimation();
@@ -7669,6 +7683,21 @@ private:
             return constrainTwoPointArcThroughPoint(snappedOrRawPoint,
                                                     currentSnap_.isValid(),
                                                     altModifier);
+        }
+
+        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+            pendingPoints_.size() >= 2 && arcAngleValueLocked_ && !panning_) {
+            const QPointF center = pendingPoints_[0];
+            const QPointF radiusVector = pendingPoints_[1] - center;
+            const qreal radius = std::hypot(radiusVector.x(), radiusVector.y());
+            if (radius > 1.0e-9) {
+                currentSnap_ = SnapResult{};
+                const qreal startAngle = std::atan2(radiusVector.y(),
+                                                    radiusVector.x());
+                const qreal endAngle = startAngle + arcPreviewSweepAngle_;
+                return center + QPointF(radius * std::cos(endAngle),
+                                        radius * std::sin(endAngle));
+            }
         }
 
         if (isEllipseTool(activeTool_) && pendingPoints_.size() >= 2) {
@@ -10795,6 +10824,13 @@ private:
                     initializeArcPreviewTracking();
                 } else {
                     pendingPoints_[1] = start;
+                    arcPreviewStartAngle_ = angle;
+                    arcPreviewPreviousAngle_ = angle + arcPreviewSweepAngle_;
+                    arcPreviewInitialized_ = true;
+                    cursorWorld_ = center + QPointF(
+                        radius * std::cos(arcPreviewPreviousAngle_),
+                        radius * std::sin(arcPreviewPreviousAngle_));
+                    lastWorldPosition_ = cursorWorld_;
                 }
             }
         } else if (inputMode == ArcTextInputMode::Angle &&
@@ -10805,7 +10841,10 @@ private:
             const qreal degrees = angleInput.toDouble(&valid);
             if (valid && std::isfinite(degrees)) {
                 constexpr qreal pi = 3.14159265358979323846;
-                arcPreviewSweepAngle_ = degrees * pi / 180.0;
+                // Arc input uses the drafting convention: clockwise is positive.
+                // The stored workplane sweep follows the usual right-handed
+                // mathematical convention, where clockwise is negative.
+                arcPreviewSweepAngle_ = -degrees * pi / 180.0;
                 const QPointF radiusVector = pendingPoints_[1] - pendingPoints_[0];
                 arcPreviewStartAngle_ = std::atan2(radiusVector.y(),
                                                    radiusVector.x());
@@ -10820,6 +10859,7 @@ private:
                 lastWorldPosition_ = cursorWorld_;
                 cursorValid_ = true;
                 currentSnap_ = SnapResult{};
+                arcAngleValueLocked_ = true;
             }
         }
         update();
@@ -10945,7 +10985,10 @@ private:
                 (typedText.front().isDigit() || typedText.front() == QLatin1Char('.') ||
                  typedText.front() == QLatin1Char('-') ||
                  typedText.front() == QLatin1Char('+'))) {
-                beginArcTextInput(ArcTextInputMode::Radius, typedText);
+                beginArcTextInput(pendingPoints_.size() >= 2
+                                       ? ArcTextInputMode::Angle
+                                       : ArcTextInputMode::Radius,
+                                  typedText);
                 event->accept();
                 return true;
             }
@@ -11633,6 +11676,7 @@ private:
         arcPreviewInitialized_ = false;
         arcPreviewPreviousAngle_ = 0.0;
         arcPreviewSweepAngle_ = 0.0;
+        arcAngleValueLocked_ = false;
     }
 
     void initializeArcPreviewTracking()
@@ -11656,7 +11700,8 @@ private:
 
     void updateArcPreviewTracking(const QPointF &cursorWorld)
     {
-        if (arcMode_ != ArcMode::OnePoint || pendingPoints_.size() < 2) {
+        if (arcMode_ != ArcMode::OnePoint || pendingPoints_.size() < 2 ||
+            arcAngleValueLocked_) {
             return;
         }
 
@@ -11751,7 +11796,7 @@ private:
             const QString angleText = arcTextInputMode_ == ArcTextInputMode::Angle
                                           ? arcTextInput_ + QLatin1Char('|')
                                           : QStringLiteral("%1°")
-                                                .arg(arcPreviewSweepAngle_ * 180.0 / pi,
+                                                .arg(-arcPreviewSweepAngle_ * 180.0 / pi,
                                                      0,
                                                      'f',
                                                      1);
@@ -11771,11 +11816,13 @@ private:
                              QStringLiteral("R: %1    ∠ %2")
                                  .arg(radiusText, angleText));
             painter.setPen(QColor(170, 170, 170));
-            const QString stageHint = pendingPoints_.isEmpty()
-                                          ? QStringLiteral("Click center")
-                                          : pendingPoints_.size() == 1
-                                                ? QStringLiteral("Click radius")
-                                                : QStringLiteral("Click sweep to finish");
+            const QString stageHint = arcTextInputMode_ != ArcTextInputMode::None
+                                          ? QStringLiteral("Enter applies value")
+                                          : pendingPoints_.isEmpty()
+                                                ? QStringLiteral("Click center")
+                                                : pendingPoints_.size() == 1
+                                                      ? QStringLiteral("Click radius")
+                                                      : QStringLiteral("Click sweep to finish");
             painter.drawText(
                 QPointF(20.0, panel.top() + 35.0),
                 QStringLiteral("%1  •  Esc exits  •  C snap %2  •  R radius  •  A angle  •  P %3  •  L %4")
@@ -12175,6 +12222,7 @@ private:
     bool arcPreviewInitialized_ = false;
     qreal arcPreviewPreviousAngle_ = 0.0;
     qreal arcPreviewSweepAngle_ = 0.0;
+    bool arcAngleValueLocked_ = false;
     qreal arcPreviewStartAngle_ = 0.0;
     bool arcAngleSnapEnabled_ = true;
     bool arcPerpendicularPlaneActive_ = false;

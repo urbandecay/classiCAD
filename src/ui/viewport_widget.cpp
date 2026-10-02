@@ -11778,7 +11778,7 @@ private:
                                                 : QStringLiteral("Click sweep to finish");
             painter.drawText(
                 QPointF(20.0, panel.top() + 35.0),
-                QStringLiteral("%1  •  C snap %2  •  R radius  •  A angle  •  P %3  •  L %4")
+                QStringLiteral("%1  •  Esc exits  •  C snap %2  •  R radius  •  A angle  •  P %3  •  L %4")
                     .arg(stageHint,
                          arcAngleSnapEnabled_ ? QStringLiteral("on")
                                               : QStringLiteral("off"),

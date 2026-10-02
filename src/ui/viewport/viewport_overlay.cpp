@@ -1372,7 +1372,7 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                                 ? QStringLiteral("DUPLICATE  •  Move preview to destination  •  Click to place  •  Esc cancels")
                                                 : QStringLiteral("DUPLICATE  •  Click a base point on the selection  •  Esc/RMB cancels");
         painter.drawText(18, viewportSize.height() - 18, duplicateHint);
-    } else if (activeTool != Tool::Select) {
+    } else if (activeTool != Tool::Select && activeTool != Tool::Arc) {
         QString hint;
         if (isRectangleTool(activeTool)) {
             QString inputDescription;

@@ -122,6 +122,18 @@ public:
                            const QSize &viewportSize,
                            const WorkPlaneFrame &frame,
                            QPointF *workPlanePosition) const;
+    // Projects an infinite camera ray onto a plane without applying the
+    // scene clip range. Use for viewport overlays that must remain visible
+    // when clip start/end are adjusted.
+    bool screenToWorkPlaneUnclipped(const QPointF &screenPosition,
+                                    const QSize &viewportSize,
+                                    WorkPlane plane,
+                                    qreal planeOffset,
+                                    QPointF *workPlanePosition) const;
+    bool screenToWorkPlaneUnclipped(const QPointF &screenPosition,
+                                    const QSize &viewportSize,
+                                    const WorkPlaneFrame &frame,
+                                    QPointF *workPlanePosition) const;
     QPointF workPlaneToScreen(const QPointF &workPlanePosition,
                               const QSize &viewportSize,
                               WorkPlane plane,

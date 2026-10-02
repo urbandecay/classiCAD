@@ -9,7 +9,9 @@
 namespace classiCAD {
 namespace {
 
-constexpr int kGridStepCount = 8;
+// Cover the full orthographic navigation range, including the smallest
+// supported document grid spacing and the largest supported view distance.
+constexpr int kGridStepCount = 24;
 constexpr qreal kAxisOrthoSubdivisionFactor = 1000.0;
 
 std::array<qreal, kGridStepCount> gridSteps(bool fixedAxisOrthographic,
@@ -47,8 +49,10 @@ BlenderGridLevelSelection selectBlenderGridLevel(
         const qreal current = steps[static_cast<std::size_t>(index)];
         const qreal next = current * 10.0;
         if (next >= focusDistance || index == kGridStepCount - 1) {
+            const qreal levelFraction = std::min(
+                (focusDistance - current) / (next - current), 1.0);
             return {current,
-                    (focusDistance - current) / (next - current),
+                    levelFraction,
                     index,
                     kGridStepCount};
         }

@@ -79,6 +79,10 @@ namespace {
 
 constexpr qreal kViewportSensorWidthMillimeters = 36.0;
 constexpr qreal kViewportReferenceDistance = 60.0;
+// Keep orthographic navigation independent of camera clip settings. This
+// preserves the default 10,000-unit zoom-out range that a 1,000-unit clip end
+// previously happened to provide.
+constexpr qreal kMaximumOrthographicViewDistance = 10000.0;
 // BKE_camera_params_from_view3d uses CAMERA_PARAM_ZOOM_INIT_PERSP = 2.
 constexpr qreal kBlenderViewportProjectionZoom = 2.0;
 // Blender 5.2's V3D_OP_TRACKBALLSIZE from view3d_navigate.hh.
@@ -118,11 +122,31 @@ qreal maximumViewDistance(const ViewportCameraPreferences &preferences,
                     minimumViewDistance(gridSpacing));
 }
 
+qreal maximumOrthographicViewDistance(qreal gridSpacing)
+{
+    return std::max(kMaximumOrthographicViewDistance,
+                    minimumViewDistance(gridSpacing));
+}
+
 qreal minimumViewZoom(const ViewportCameraPreferences &preferences,
                       qreal gridSpacing)
 {
     return perspectiveReferenceDistance(preferences) /
            maximumViewDistance(preferences, gridSpacing);
+}
+
+qreal minimumOrthographicZoom(qreal gridSpacing)
+{
+    return kViewportReferenceDistance /
+           maximumOrthographicViewDistance(gridSpacing);
+}
+
+qreal minimumZoomForView(bool perspective,
+                         const ViewportCameraPreferences &preferences,
+                         qreal gridSpacing)
+{
+    return perspective ? minimumViewZoom(preferences, gridSpacing)
+                       : minimumOrthographicZoom(gridSpacing);
 }
 
 qreal maximumViewZoom(const ViewportCameraPreferences &preferences,
@@ -383,6 +407,78 @@ bool ViewportTransform::screenToWorkPlane(
            std::isfinite(workPlanePosition->y());
 }
 
+bool ViewportTransform::screenToWorkPlaneUnclipped(
+    const QPointF &screenPosition,
+    const QSize &viewportSize,
+    WorkPlane plane,
+    qreal planeOffset,
+    QPointF *workPlanePosition) const
+{
+    return screenToWorkPlaneUnclipped(screenPosition,
+                                      viewportSize,
+                                      makeWorkPlaneFrame(plane, planeOffset),
+                                      workPlanePosition);
+}
+
+bool ViewportTransform::screenToWorkPlaneUnclipped(
+    const QPointF &screenPosition,
+    const QSize &viewportSize,
+    const WorkPlaneFrame &frame,
+    QPointF *workPlanePosition) const
+{
+    if (workPlanePosition == nullptr || viewportSize.width() <= 0 ||
+        viewportSize.height() <= 0 || zoom_ <= 1.0e-15 ||
+        !isValidWorkPlaneFrame(frame)) {
+        return false;
+    }
+
+    const CameraBasis basis = cameraBasis(orientation_);
+    const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
+    const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0;
+    const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y();
+    const qreal viewScale = std::max<qreal>(
+        viewScalePixelsPerWorldUnit(viewportSize), 1.0e-15);
+    Vec3 rayOrigin;
+    Vec3 rayDirection;
+    if (perspective_) {
+        const qreal focalLength = viewportFocalLengthPixels(
+            viewportSize, cameraPreferences_.focalLengthMillimeters);
+        const qreal cameraDistance = perspectiveCameraDistance(
+            zoom_, cameraPreferences_);
+        rayOrigin = subtract(target, multiply(basis.forward, cameraDistance));
+        rayDirection = normalized(add(
+            basis.forward,
+            add(multiply(basis.right, pixelX / focalLength),
+                multiply(basis.up, pixelY / focalLength))));
+    } else {
+        rayOrigin = add(target,
+                        add(multiply(basis.right, pixelX / viewScale),
+                            multiply(basis.up, pixelY / viewScale)));
+        rayDirection = basis.forward;
+    }
+
+    const Vec3 planePoint = asVec(frame.origin);
+    const Vec3 planeNormal = asVec(frame.normal);
+    const qreal denominator = dot(planeNormal, rayDirection);
+    if (std::abs(denominator) <= 1.0e-12) {
+        return false;
+    }
+    const qreal distance = dot(planeNormal, subtract(planePoint, rayOrigin)) /
+                           denominator;
+    const qreal viewDepth = perspective_
+                                ? distance * dot(basis.forward, rayDirection)
+                                : distance;
+    if (!std::isfinite(viewDepth) || viewDepth < -1.0e-9) {
+        return false;
+    }
+
+    const Vec3 world = add(rayOrigin, multiply(rayDirection, distance));
+    *workPlanePosition = worldPointToWorkPlaneFrame(
+        {world.x, world.y, world.z}, frame);
+    return std::isfinite(workPlanePosition->x()) &&
+           std::isfinite(workPlanePosition->y());
+}
+
 bool ViewportTransform::screenToWorldAxis(const QPointF &screenPosition,
                                          const QSize &viewportSize,
                                          const Point3D &origin,
@@ -625,12 +721,13 @@ bool ViewportTransform::setCameraPreferences(
     }
     cameraPreferences_ = preferences;
     zoom_ = std::clamp(zoom_,
-                       minimumViewZoom(cameraPreferences_, gridSpacing_),
+                       minimumZoomForView(perspective_, cameraPreferences_,
+                                          gridSpacing_),
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
     gridViewDistance_ = std::clamp(
         gridViewDistance_,
         minimumViewDistance(gridSpacing_),
-        maximumViewDistance(cameraPreferences_, gridSpacing_));
+        maximumOrthographicViewDistance(gridSpacing_));
     return true;
 }
 
@@ -641,12 +738,13 @@ void ViewportTransform::setGridSpacing(qreal gridSpacing)
     }
     gridSpacing_ = gridSpacing;
     zoom_ = std::clamp(zoom_,
-                       minimumViewZoom(cameraPreferences_, gridSpacing_),
+                       minimumZoomForView(perspective_, cameraPreferences_,
+                                          gridSpacing_),
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
     gridViewDistance_ = std::clamp(
         gridViewDistance_,
         minimumViewDistance(gridSpacing_),
-        maximumViewDistance(cameraPreferences_, gridSpacing_));
+        maximumOrthographicViewDistance(gridSpacing_));
 }
 
 ViewportNavigationPreferences ViewportTransform::navigationPreferences() const
@@ -694,7 +792,8 @@ void ViewportTransform::setCameraState(const ViewportCameraState &state)
     orbitGestureActive_ = false;
     perspective_ = state.perspective;
     zoom_ = std::clamp(state.zoom,
-                       minimumViewZoom(cameraPreferences_, gridSpacing_),
+                       minimumZoomForView(perspective_, cameraPreferences_,
+                                          gridSpacing_),
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
     pan_ = state.pan;
     orbitPivot_ = state.orbitPivot;
@@ -711,7 +810,7 @@ void ViewportTransform::setCameraState(const ViewportCameraState &state)
     gridViewDistance_ = std::clamp(
         state.gridViewDistance,
         minimumViewDistance(gridSpacing_),
-        maximumViewDistance(cameraPreferences_, gridSpacing_));
+        maximumOrthographicViewDistance(gridSpacing_));
     orbitPivotLocked_ = false;
 }
 
@@ -723,11 +822,10 @@ bool ViewportTransform::isPerspectiveEnabled() const
 void ViewportTransform::setPerspectiveEnabled(bool enabled)
 {
     perspective_ = enabled;
-    if (perspective_) {
-        zoom_ = std::clamp(zoom_,
-                           minimumViewZoom(cameraPreferences_, gridSpacing_),
-                           maximumViewZoom(cameraPreferences_, gridSpacing_));
-    }
+    zoom_ = std::clamp(zoom_,
+                       minimumZoomForView(perspective_, cameraPreferences_,
+                                          gridSpacing_),
+                       maximumViewZoom(cameraPreferences_, gridSpacing_));
     if (enabled && viewPreset_ == ViewportViewPreset::Isometric) {
         viewPreset_ = ViewportViewPreset::Perspective;
     } else if (!enabled && viewPreset_ == ViewportViewPreset::Perspective) {
@@ -781,11 +879,10 @@ void ViewportTransform::setViewPreset(ViewportViewPreset preset)
     case ViewportViewPreset::Custom:
         break;
     }
-    if (perspective_) {
-        zoom_ = std::clamp(zoom_,
-                           minimumViewZoom(cameraPreferences_, gridSpacing_),
-                           maximumViewZoom(cameraPreferences_, gridSpacing_));
-    }
+    zoom_ = std::clamp(zoom_,
+                       minimumZoomForView(perspective_, cameraPreferences_,
+                                          gridSpacing_),
+                       maximumViewZoom(cameraPreferences_, gridSpacing_));
 }
 
 void ViewportTransform::setViewDirection(const Point3D &cameraDirection)
@@ -805,6 +902,9 @@ void ViewportTransform::setViewDirection(const Point3D &cameraDirection)
         std::atan2(direction.x, -direction.y),
         std::asin(std::clamp(direction.z, -1.0, 1.0)));
     perspective_ = false;
+    zoom_ = std::clamp(zoom_,
+                       minimumOrthographicZoom(gridSpacing_),
+                       maximumViewZoom(cameraPreferences_, gridSpacing_));
     viewPreset_ = ViewportViewPreset::Custom;
 
     constexpr qreal axisTolerance = 1.0e-8;
@@ -850,7 +950,8 @@ void ViewportTransform::orbitByPixels(const QPointF &delta)
         (std::abs(delta.x()) > 0.0 || std::abs(delta.y()) > 0.0)) {
         perspective_ = true;
         zoom_ = std::clamp(zoom_,
-                           minimumViewZoom(cameraPreferences_, gridSpacing_),
+                           minimumZoomForView(perspective_, cameraPreferences_,
+                                              gridSpacing_),
                            maximumViewZoom(cameraPreferences_, gridSpacing_));
     }
     const qreal radiansPerPixel =
@@ -886,7 +987,8 @@ void ViewportTransform::orbitToPosition(const QPointF &screenPosition,
     if (navigationPreferences_.autoPerspective) {
         perspective_ = true;
         zoom_ = std::clamp(zoom_,
-                           minimumViewZoom(cameraPreferences_, gridSpacing_),
+                           minimumZoomForView(perspective_, cameraPreferences_,
+                                              gridSpacing_),
                            maximumViewZoom(cameraPreferences_, gridSpacing_));
     }
 
@@ -960,14 +1062,14 @@ void ViewportTransform::panByPixels(const QPointF &delta,
 void ViewportTransform::resetView()
 {
     zoom_ = std::clamp(1.0,
-                       minimumViewZoom(cameraPreferences_, gridSpacing_),
+                       minimumOrthographicZoom(gridSpacing_),
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
     pan_ = {};
     orbitPivot_ = {};
     gridViewDistance_ = std::clamp(
         kViewportReferenceDistance,
         minimumViewDistance(gridSpacing_),
-        maximumViewDistance(cameraPreferences_, gridSpacing_));
+        maximumOrthographicViewDistance(gridSpacing_));
     orbitPivotLocked_ = false;
     workPlane_ = WorkPlane::XY;
     workPlaneOffset_ = 0.0;
@@ -1000,14 +1102,14 @@ void ViewportTransform::zoomAt(const QPointF &screenPosition,
         }
         zoom_ = std::clamp(
             zoom_ * factor,
-            minimumViewZoom(cameraPreferences_, gridSpacing_),
+            minimumZoomForView(perspective_, cameraPreferences_, gridSpacing_),
             maximumViewZoom(cameraPreferences_, gridSpacing_));
     };
     if (!perspective_) {
         gridViewDistance_ = std::clamp(
             gridViewDistance_ / factor,
             minimumViewDistance(gridSpacing_),
-            maximumViewDistance(cameraPreferences_, gridSpacing_));
+            maximumOrthographicViewDistance(gridSpacing_));
     }
     applyZoom();
     if (navigationPreferences_.zoomToMouse) {

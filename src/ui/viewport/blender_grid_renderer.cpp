@@ -50,11 +50,6 @@ Point3D multiply(const Point3D &point, qreal scalar)
     return {point.x * scalar, point.y * scalar, point.z * scalar};
 }
 
-qreal dot(const Point3D &first, const Point3D &second)
-{
-    return first.x * second.x + first.y * second.y + first.z * second.z;
-}
-
 QVector4D colorVector(const QColor &color, qreal opacity)
 {
     return {static_cast<float>(color.redF()),
@@ -112,6 +107,34 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
                          cameraPreferences.clipStart,
                          2.0 * cameraPreferences.clipEnd);
     }
+    return projection * view;
+}
+
+QMatrix4x4 gridViewProjection(const ViewportTransform &transform,
+                              const QSize &viewportSize,
+                              Point3D *renderCameraPosition)
+{
+    if (transform.isPerspectiveEnabled()) {
+        return viewProjection(transform, viewportSize, renderCameraPosition);
+    }
+
+    const Point3D target = transform.viewTarget();
+    const Point3D eye = add(target, transform.viewDirection());
+    if (renderCameraPosition != nullptr) {
+        *renderCameraPosition = transform.cameraPosition(viewportSize);
+    }
+
+    QMatrix4x4 view;
+    view.lookAt(asVector(eye), asVector(target), asVector(transform.viewUp()));
+
+    const qreal zoom = std::max<qreal>(
+        transform.viewScalePixelsPerWorldUnit(viewportSize), 1.0e-8);
+    QMatrix4x4 projection;
+    projection.ortho(-viewportSize.width() / (2.0 * zoom),
+                     viewportSize.width() / (2.0 * zoom),
+                     -viewportSize.height() / (2.0 * zoom),
+                     viewportSize.height() / (2.0 * zoom),
+                     0.01, 2.0);
     return projection * view;
 }
 
@@ -768,9 +791,9 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
     const QVector3D normal = asVector(planeNormal);
     const QVector3D planeBase = asVector(planeOrigin);
     Point3D renderCamera;
-    const QMatrix4x4 matrix = viewProjection(transform,
-                                             viewportSize,
-                                             &renderCamera);
+    const QMatrix4x4 matrix = gridViewProjection(transform,
+                                                 viewportSize,
+                                                 &renderCamera);
     const QVector3D eye = asVector(renderCamera);
     const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
     const QVector2D logicalViewport(static_cast<float>(viewportSize.width()),
@@ -804,8 +827,13 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
                              static_cast<float>(gridLevel.levelFraction));
     program_.setUniformValue("uGridLineCount", gridLineCount);
     program_.setUniformValue("uViewportSize", logicalViewport);
+    const qreal axisHalfExtent = perspective
+        ? transform.cameraPreferences().clipEnd
+        : 2.0 * std::max(viewportSize.width(), viewportSize.height()) /
+              std::max<qreal>(
+                  transform.viewScalePixelsPerWorldUnit(viewportSize), 1.0e-8);
     program_.setUniformValue("uFarClipDistance",
-                             static_cast<float>(transform.cameraPreferences().clipEnd));
+                             static_cast<float>(axisHalfExtent));
     program_.setUniformValue("uGridColor",
                              colorVector(appearance.gridColor, appearance.opacity));
     program_.setUniformValue("uGridEmphasisColor",

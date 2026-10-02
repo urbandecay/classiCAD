@@ -218,12 +218,14 @@ void appendOrthographicGridLine(const ViewportTransform &transform,
     }
     QPointF projectedStart;
     QPointF projectedEnd;
-    if (transform.worldPointToScreen(workPlanePointToWorld(start, plane, planeOffset),
-                                     viewportSize,
-                                     &projectedStart) &&
-        transform.worldPointToScreen(workPlanePointToWorld(end, plane, planeOffset),
-                                     viewportSize,
-                                     &projectedEnd)) {
+    if (transform.worldPointToScreenUnclipped(
+            workPlanePointToWorld(start, plane, planeOffset),
+            viewportSize,
+            &projectedStart) &&
+        transform.worldPointToScreenUnclipped(
+            workPlanePointToWorld(end, plane, planeOffset),
+            viewportSize,
+            &projectedEnd)) {
         const qreal desiredCount = std::ceil(QLineF(projectedStart, projectedEnd).length() /
                                              3.0);
         segmentCount = std::clamp(std::max(segmentCount,
@@ -257,12 +259,14 @@ void appendOrthographicGridLine(const ViewportTransform &transform,
         const QPointF second = start + (end - start) * secondT;
         QPointF firstScreen;
         QPointF secondScreen;
-        if (!transform.worldPointToScreen(workPlanePointToWorld(first, plane, planeOffset),
-                                          viewportSize,
-                                          &firstScreen) ||
-            !transform.worldPointToScreen(workPlanePointToWorld(second, plane, planeOffset),
-                                          viewportSize,
-                                          &secondScreen)) {
+        if (!transform.worldPointToScreenUnclipped(
+                workPlanePointToWorld(first, plane, planeOffset),
+                viewportSize,
+                &firstScreen) ||
+            !transform.worldPointToScreenUnclipped(
+                workPlanePointToWorld(second, plane, planeOffset),
+                viewportSize,
+                &secondScreen)) {
             continue;
         }
         const qreal screenLength = QLineF(firstScreen, secondScreen).length();
@@ -354,8 +358,8 @@ void ViewportRenderer::drawGrid(QPainter &painter,
                                                                viewportSize);
     const WorkPlane plane = gridFrame.plane;
     const qreal planeOffset = gridFrame.planeOffset;
-    const qreal farClipDistance = transform_.cameraPreferences().clipEnd;
     if (transform_.isPerspectiveEnabled()) {
+        const qreal farClipDistance = transform_.cameraPreferences().clipEnd;
         const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
         const Point3D planeNormal = workPlaneNormal(plane);
         const QPointF gridCenter = gridFrame.cameraRelativeOffset;
@@ -537,7 +541,6 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
                                                                viewportSize);
     const WorkPlane plane = gridFrame.plane;
     const qreal planeOffset = gridFrame.planeOffset;
-    const qreal farClipDistance = transform_.cameraPreferences().clipEnd;
     QPointF corners[4];
     const QPointF screenCorners[] = {{0.0, 0.0},
                                      {static_cast<qreal>(viewportSize.width()), 0.0},
@@ -546,11 +549,16 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
                                      {0.0, static_cast<qreal>(viewportSize.height())}};
     int cornerCount = 0;
     for (int index = 0; index < 4; ++index) {
-        if (!transform_.screenToWorkPlane(screenCorners[index],
-                                          viewportSize,
-                                          plane,
-                                          planeOffset,
-                                          &corners[cornerCount])) {
+        const bool resolved = transform_.isPerspectiveEnabled()
+                                  ? transform_.screenToWorkPlane(
+                                        screenCorners[index], viewportSize,
+                                        plane, planeOffset,
+                                        &corners[cornerCount])
+                                  : transform_.screenToWorkPlaneUnclipped(
+                                        screenCorners[index], viewportSize,
+                                        plane, planeOffset,
+                                        &corners[cornerCount]);
+        if (!resolved) {
             continue;
         }
         ++cornerCount;
@@ -570,6 +578,7 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
     }
 
     if (transform_.isPerspectiveEnabled()) {
+        const qreal farClipDistance = transform_.cameraPreferences().clipEnd;
         minimumU = std::max(minimumU, -farClipDistance);
         maximumU = std::min(maximumU, farClipDistance);
         minimumV = std::max(minimumV, -farClipDistance);

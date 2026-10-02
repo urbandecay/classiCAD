@@ -14,6 +14,11 @@ Point3D subtract(const Point3D &first, const Point3D &second)
     return {first.x - second.x, first.y - second.y, first.z - second.z};
 }
 
+Point3D add(const Point3D &first, const Point3D &second)
+{
+    return {first.x + second.x, first.y + second.y, first.z + second.z};
+}
+
 Point3D multiply(const Point3D &point, qreal scalar)
 {
     return {point.x * scalar, point.y * scalar, point.z * scalar};
@@ -110,19 +115,30 @@ BlenderGridFrame resolveBlenderGridFrame(const ViewportTransform &transform,
         frame.cameraRelativeOffset = worldPointToWorkPlane(gridFocus,
                                                             frame.plane);
     } else {
-        const QPointF viewportCenter(viewportSize.width() * 0.5,
-                                     viewportSize.height() * 0.5);
-        if (!transform.screenToWorkPlane(viewportCenter,
-                                         viewportSize,
-                                         frame.plane,
-                                         frame.planeOffset,
-                                         &frame.cameraRelativeOffset)) {
+        // Find the work-plane point under the orthographic view center with
+        // an infinite camera ray. screenToWorkPlane() applies scene clip
+        // planes, which must not affect grid placement.
+        const Point3D target = transform.viewTarget();
+        const Point3D rayDirection = multiply(transform.viewDirection(), -1.0);
+        const Point3D planePoint = workPlanePointToWorld(
+            {}, frame.plane, frame.planeOffset);
+        const Point3D planeNormal = workPlaneNormal(frame.plane);
+        const qreal denominator = dot(planeNormal, rayDirection);
+        if (std::abs(denominator) > 1.0e-8) {
+            const qreal distance = dot(planeNormal,
+                                       subtract(planePoint, target)) /
+                                   denominator;
+            const Point3D centerOnPlane = add(
+                target, multiply(rayDirection, distance));
             frame.cameraRelativeOffset = worldPointToWorkPlane(
-                transform.viewTarget(), frame.plane);
+                centerOnPlane, frame.plane);
+        } else {
+            frame.cameraRelativeOffset = worldPointToWorkPlane(
+                target, frame.plane);
         }
-        frame.focusDistance = frame.fixedAxisOrthographic
-                                  ? 60.0 / std::max<qreal>(transform.zoom(), 1.0e-8)
-                                  : camera.gridViewDistance;
+        // Orthographic zoom updates gridViewDistance independently of the
+        // scene clip range; use it for LOD selection in oblique views.
+        frame.focusDistance = camera.gridViewDistance;
     }
 
     if (!std::isfinite(frame.focusDistance) || frame.focusDistance <= 0.0) {

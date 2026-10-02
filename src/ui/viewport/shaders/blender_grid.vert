@@ -208,6 +208,11 @@ void main()
         // through the scene depth so coincident geometry does not z-fight.
         float zFactor = float(uIteration * 3 + line.level) / 12.0;
         thisClip.z += mix(0.00025, -0.00020, zFactor);
+    } else {
+        // Orthographic grid overlays are independent of camera clip planes.
+        // Keep their screen projection from the view matrix, but place every
+        // grid fragment at the far depth so scene geometry can still occlude it.
+        thisClip.z = thisClip.w;
     }
     vec4 pairedClip = uViewProjection * vec4(pairedWorldPosition, 1.0);
     vec2 thisScreen = screenPosition(thisClip);

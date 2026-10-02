@@ -141,6 +141,15 @@ qreal minimumOrthographicZoom(qreal gridSpacing)
            maximumOrthographicViewDistance(gridSpacing);
 }
 
+qreal orthographicGridDistanceForZoom(qreal zoom, qreal gridSpacing)
+{
+    const qreal viewDistance = kViewportReferenceDistance /
+                               std::max<qreal>(zoom, 1.0e-15);
+    return std::clamp(viewDistance,
+                      minimumViewDistance(gridSpacing),
+                      maximumOrthographicViewDistance(gridSpacing));
+}
+
 qreal minimumZoomForView(bool perspective,
                          const ViewportCameraPreferences &preferences,
                          qreal gridSpacing)
@@ -826,6 +835,12 @@ void ViewportTransform::setPerspectiveEnabled(bool enabled)
                        minimumZoomForView(perspective_, cameraPreferences_,
                                           gridSpacing_),
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
+    if (!perspective_) {
+        // Perspective zoom determines the camera distance used by grid LOD.
+        // Carry the same distance into free-angle orthographic mode so its
+        // grid does not retain a stale LOD from the previous ortho session.
+        gridViewDistance_ = orthographicGridDistanceForZoom(zoom_, gridSpacing_);
+    }
     if (enabled && viewPreset_ == ViewportViewPreset::Isometric) {
         viewPreset_ = ViewportViewPreset::Perspective;
     } else if (!enabled && viewPreset_ == ViewportViewPreset::Perspective) {
@@ -883,6 +898,9 @@ void ViewportTransform::setViewPreset(ViewportViewPreset preset)
                        minimumZoomForView(perspective_, cameraPreferences_,
                                           gridSpacing_),
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
+    if (!perspective_) {
+        gridViewDistance_ = orthographicGridDistanceForZoom(zoom_, gridSpacing_);
+    }
 }
 
 void ViewportTransform::setViewDirection(const Point3D &cameraDirection)
@@ -905,6 +923,7 @@ void ViewportTransform::setViewDirection(const Point3D &cameraDirection)
     zoom_ = std::clamp(zoom_,
                        minimumOrthographicZoom(gridSpacing_),
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
+    gridViewDistance_ = orthographicGridDistanceForZoom(zoom_, gridSpacing_);
     viewPreset_ = ViewportViewPreset::Custom;
 
     constexpr qreal axisTolerance = 1.0e-8;

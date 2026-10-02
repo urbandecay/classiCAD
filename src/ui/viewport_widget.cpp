@@ -7712,7 +7712,6 @@ private:
             if (currentSnap_.isValid()) {
                 // Keep SnapEngine's exact target and temporarily bypass the
                 // add-on's soft angular snap while geometry is acquired.
-                arcCompassRotation_ = angle;
                 return target;
             }
 
@@ -7727,7 +7726,6 @@ private:
             } else if (arcAngleSnapEnabled_) {
                 angle = snapOnePointArcAngle(angle);
             }
-            arcCompassRotation_ = angle;
             return center + QPointF(radius * std::cos(angle),
                                     radius * std::sin(angle));
         }
@@ -10712,7 +10710,6 @@ private:
         arcPlaneNormalLockKey_ = 0;
         arcVerticalOverrideAxis_ = 0;
         arcWasVertical_ = false;
-        arcCompassRotation_ = 0.0;
         arcPreviewStartAngle_ = 0.0;
         arcAngleSnapEnabled_ = true;
         arcPerpendicularPlaneActive_ = false;
@@ -10780,7 +10777,6 @@ private:
                     !currentSnap_.isValid()) {
                     angle = snapOnePointArcAngle(angle);
                 }
-                arcCompassRotation_ = angle;
                 arcPreviewStartAngle_ = angle;
                 const QPointF start = center +
                     QPointF(radius * std::cos(angle), radius * std::sin(angle));
@@ -10803,7 +10799,6 @@ private:
                 const QPointF radiusVector = pendingPoints_[1] - pendingPoints_[0];
                 arcPreviewStartAngle_ = std::atan2(radiusVector.y(),
                                                    radiusVector.x());
-                arcCompassRotation_ = arcPreviewStartAngle_;
                 arcPreviewPreviousAngle_ = arcPreviewStartAngle_ +
                                            arcPreviewSweepAngle_;
                 arcPreviewInitialized_ = true;
@@ -11039,7 +11034,6 @@ private:
         if (pendingPoints_.size() >= 2) {
             const QPointF radiusVector = pendingPoints_[1] - pendingPoints_[0];
             arcPreviewStartAngle_ = std::atan2(radiusVector.y(), radiusVector.x());
-            arcCompassRotation_ = arcPreviewStartAngle_;
             const QPointF cursorVector = cursorWorld_ - pendingPoints_[0];
             if (std::hypot(cursorVector.x(), cursorVector.y()) > 1.0e-9) {
                 arcPreviewPreviousAngle_ = std::atan2(cursorVector.y(), cursorVector.x());
@@ -11047,11 +11041,6 @@ private:
             } else {
                 arcPreviewPreviousAngle_ = arcPreviewStartAngle_ + previousSweep;
                 arcPreviewInitialized_ = true;
-            }
-        } else {
-            const QPointF radiusVector = cursorWorld_ - pendingPoints_[0];
-            if (std::hypot(radiusVector.x(), radiusVector.y()) > 1.0e-9) {
-                arcCompassRotation_ = std::atan2(radiusVector.y(), radiusVector.x());
             }
         }
         update();
@@ -11651,7 +11640,6 @@ private:
 
         arcPreviewStartAngle_ = std::atan2(radiusVector.y(),
                                            radiusVector.x());
-        arcCompassRotation_ = arcPreviewStartAngle_;
         arcPreviewPreviousAngle_ = arcPreviewStartAngle_;
         arcPreviewInitialized_ = true;
     }
@@ -11707,6 +11695,17 @@ private:
 
     void drawArcToolPreview(QPainter &painter, bool drawCurve = true)
     {
+        qreal compassRotation = 0.0;
+        if (arcMode_ == ArcMode::OnePoint && !pendingPoints_.isEmpty()) {
+            const QPointF center = pendingPoints_.first();
+            const QPointF radiusVector = pendingPoints_.size() >= 2
+                                             ? pendingPoints_[1] - center
+                                             : cursorWorld_ - center;
+            if ((pendingPoints_.size() >= 2 || cursorValid_) &&
+                std::hypot(radiusVector.x(), radiusVector.y()) > 1.0e-9) {
+                compassRotation = std::atan2(radiusVector.y(), radiusVector.x());
+            }
+        }
         viewportOverlay_.drawArcPreview(painter,
                                         pendingPoints_,
                                         arcMode_,
@@ -11716,7 +11715,7 @@ private:
                                         currentSnap_,
                                         size(),
                                         viewportTransform_.workPlaneFrame(),
-                                        arcCompassRotation_,
+                                        compassRotation,
                                         drawCurve);
         if (arcMode_ == ArcMode::OnePoint) {
             constexpr qreal pi = 3.14159265358979323846;
@@ -12166,7 +12165,6 @@ private:
     bool arcPreviewInitialized_ = false;
     qreal arcPreviewPreviousAngle_ = 0.0;
     qreal arcPreviewSweepAngle_ = 0.0;
-    qreal arcCompassRotation_ = 0.0;
     qreal arcPreviewStartAngle_ = 0.0;
     bool arcAngleSnapEnabled_ = true;
     bool arcPerpendicularPlaneActive_ = false;

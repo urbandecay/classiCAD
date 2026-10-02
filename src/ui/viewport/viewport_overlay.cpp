@@ -89,20 +89,26 @@ void drawArcCompass(QPainter &painter,
         return;
     }
     const Point3D cameraRight = scalePoint(rightUnnormalized, 1.0 / rightLength);
-    const Point3D cameraUp = transform.viewUp();
-    const auto dotProduct = [](const Point3D &first, const Point3D &second) {
-        return first.x * second.x + first.y * second.y + first.z * second.z;
-    };
-    // Work directly in screen pixels. This is the local camera projection of
-    // the workplane basis, scaled to the add-on's 125-pixel diameter. It stays
-    // constant at any zoom and cannot vanish when world-space precision gets
-    // too small to measure with projected probe points.
-    const QPointF planeXScreen(
-        compassRadiusPixels * dotProduct(frame.xAxis, cameraRight),
-        -compassRadiusPixels * dotProduct(frame.xAxis, cameraUp));
-    const QPointF planeYScreen(
-        compassRadiusPixels * dotProduct(frame.yAxis, cameraRight),
-        -compassRadiusPixels * dotProduct(frame.yAxis, cameraUp));
+    QPointF cameraRightScreen;
+    const Point3D cameraRightProbe{centerWorld.x + cameraRight.x,
+                                   centerWorld.y + cameraRight.y,
+                                   centerWorld.z + cameraRight.z};
+    if (!transform.worldPointToScreenUnclipped(cameraRightProbe,
+                                               viewportSize,
+                                               &cameraRightScreen)) {
+        return;
+    }
+    const qreal pixelsPerWorldUnit = std::hypot(
+        cameraRightScreen.x() - centerScreen.x(),
+        cameraRightScreen.y() - centerScreen.y());
+    if (!std::isfinite(pixelsPerWorldUnit) || pixelsPerWorldUnit <= 1.0e-9) {
+        return;
+    }
+    // Match the add-on: size the world-space compass from camera-right at its
+    // center depth, then project each workplane point through the actual view.
+    // This keeps the rotated marks on the same projected rays as the arc guide
+    // in perspective views as well as orthographic views.
+    const qreal compassRadiusWorld = compassRadiusPixels / pixelsPerWorldUnit;
     constexpr qreal outerRadius = 1.0;
     const qreal innerRadius = outerRadius * (80.0 / 120.0);
     const qreal tickLength = outerRadius * (10.0 / 120.0);
@@ -121,10 +127,16 @@ void drawArcCompass(QPainter &painter,
         if (screen == nullptr) {
             return false;
         }
-        const QPointF offset = planeXScreen * rotated.x() +
-                               planeYScreen * rotated.y();
-        *screen = centerScreen + offset;
-        return std::isfinite(screen->x()) && std::isfinite(screen->y());
+        const Point3D worldPoint{
+            centerWorld.x + compassRadiusWorld *
+                                (frame.xAxis.x * rotated.x() + frame.yAxis.x * rotated.y()),
+            centerWorld.y + compassRadiusWorld *
+                                (frame.xAxis.y * rotated.x() + frame.yAxis.y * rotated.y()),
+            centerWorld.z + compassRadiusWorld *
+                                (frame.xAxis.z * rotated.x() + frame.yAxis.z * rotated.y())};
+        return transform.worldPointToScreenUnclipped(worldPoint,
+                                                     viewportSize,
+                                                     screen);
     };
     const auto drawCompassLine = [&](qreal firstX,
                                      qreal firstY,

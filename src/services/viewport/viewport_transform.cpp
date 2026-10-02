@@ -800,9 +800,11 @@ void ViewportTransform::setCameraState(const ViewportCameraState &state)
     }
     orbitGestureActive_ = false;
     perspective_ = state.perspective;
+    const qreal minimumZoom = perspective_
+                                  ? minimumViewZoom(cameraPreferences_, gridSpacing_)
+                                  : std::numeric_limits<qreal>::min();
     zoom_ = std::clamp(state.zoom,
-                       minimumZoomForView(perspective_, cameraPreferences_,
-                                          gridSpacing_),
+                       minimumZoom,
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
     pan_ = state.pan;
     orbitPivot_ = state.orbitPivot;
@@ -831,10 +833,11 @@ bool ViewportTransform::isPerspectiveEnabled() const
 void ViewportTransform::setPerspectiveEnabled(bool enabled)
 {
     perspective_ = enabled;
-    zoom_ = std::clamp(zoom_,
-                       minimumZoomForView(perspective_, cameraPreferences_,
-                                          gridSpacing_),
-                       maximumViewZoom(cameraPreferences_, gridSpacing_));
+    if (perspective_) {
+        zoom_ = std::clamp(zoom_,
+                           minimumViewZoom(cameraPreferences_, gridSpacing_),
+                           maximumViewZoom(cameraPreferences_, gridSpacing_));
+    }
     if (!perspective_) {
         // Perspective zoom determines the camera distance used by grid LOD.
         // Carry the same distance into free-angle orthographic mode so its
@@ -894,10 +897,11 @@ void ViewportTransform::setViewPreset(ViewportViewPreset preset)
     case ViewportViewPreset::Custom:
         break;
     }
-    zoom_ = std::clamp(zoom_,
-                       minimumZoomForView(perspective_, cameraPreferences_,
-                                          gridSpacing_),
-                       maximumViewZoom(cameraPreferences_, gridSpacing_));
+    if (perspective_) {
+        zoom_ = std::clamp(zoom_,
+                           minimumViewZoom(cameraPreferences_, gridSpacing_),
+                           maximumViewZoom(cameraPreferences_, gridSpacing_));
+    }
     if (!perspective_) {
         gridViewDistance_ = orthographicGridDistanceForZoom(zoom_, gridSpacing_);
     }
@@ -920,9 +924,6 @@ void ViewportTransform::setViewDirection(const Point3D &cameraDirection)
         std::atan2(direction.x, -direction.y),
         std::asin(std::clamp(direction.z, -1.0, 1.0)));
     perspective_ = false;
-    zoom_ = std::clamp(zoom_,
-                       minimumOrthographicZoom(gridSpacing_),
-                       maximumViewZoom(cameraPreferences_, gridSpacing_));
     gridViewDistance_ = orthographicGridDistanceForZoom(zoom_, gridSpacing_);
     viewPreset_ = ViewportViewPreset::Custom;
 
@@ -1119,9 +1120,17 @@ void ViewportTransform::zoomAt(const QPointF &screenPosition,
                 2000.0);
             return;
         }
+        qreal minimumZoom = minimumZoomForView(
+            perspective_, cameraPreferences_, gridSpacing_);
+        if (!perspective_) {
+            // If a projection switch carried in a wider view than the
+            // orthographic navigation limit, preserve that scale until the
+            // user zooms back inside the normal range.
+            minimumZoom = std::min(minimumZoom, zoom_);
+        }
         zoom_ = std::clamp(
             zoom_ * factor,
-            minimumZoomForView(perspective_, cameraPreferences_, gridSpacing_),
+            minimumZoom,
             maximumViewZoom(cameraPreferences_, gridSpacing_));
     };
     if (!perspective_) {

@@ -20,6 +20,7 @@ public:
 private:
     enum class NumericInput { None, X, Y, Square };
     bool threePoint() const;
+    bool edgeBased() const;
     bool fromCenter() const;
     Point3D eventPoint(const ToolInput &input) const;
     Point3D planePoint(const ToolInput &input, ToolContext &context, bool allowSnap) const;

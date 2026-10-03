@@ -990,6 +990,13 @@ int main(int argc, char **argv)
               Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     sendMouse(viewport.get(), QEvent::MouseMove, rectangleEnd,
               Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, rectangleEnd,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, rectangleEnd,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    const QPointF rectangleWidth(290.0, 410.0);
+    sendMouse(viewport.get(), QEvent::MouseMove, rectangleWidth,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     application.processEvents();
     const QImage rectanglePreview = captureViewport(viewport.get());
     saveGridCapture(QStringLiteral("rectangle-preview"), rectanglePreview);
@@ -998,9 +1005,9 @@ int main(int argc, char **argv)
                             pixelsNearColor(beforeRectangle, rectangleLayerColor, 45) + 20,
                         "rectangle preview must use the active layer color in the native OpenGL viewport");
     }
-    sendMouse(viewport.get(), QEvent::MouseButtonPress, rectangleEnd,
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, rectangleWidth,
               Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    sendMouse(viewport.get(), QEvent::MouseButtonRelease, rectangleEnd,
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, rectangleWidth,
               Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     viewport->setTool(ToolId::Select);
     application.processEvents();

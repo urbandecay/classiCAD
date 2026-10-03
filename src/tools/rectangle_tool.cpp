@@ -51,6 +51,8 @@ QString lengthSuffix(DocumentLengthUnit unit)
 RectangleTool::RectangleTool(ToolId tool) : tool_(tool) {}
 ToolId RectangleTool::id() const { return tool_; }
 bool RectangleTool::threePoint() const { return tool_==ToolId::RectangleThreePoint; }
+bool RectangleTool::edgeBased() const
+{ return tool_==ToolId::Rectangle || threePoint(); }
 bool RectangleTool::fromCenter() const { return tool_==ToolId::RectangleFromCenter; }
 
 void RectangleTool::begin(ToolContext &context)
@@ -123,7 +125,7 @@ void RectangleTool::updateGeometry(const ToolInput &input, ToolContext &context)
         cursorValid_=true;
         return;
     }
-    if (!threePoint()) {
+    if (!edgeBased()) {
         frame_=basis(anchor_,referenceFrame_.normal);
         if (perpendicular_) {
             const Point3D view=context.viewportTransform().viewDirection();
@@ -179,8 +181,15 @@ void RectangleTool::updateGeometry(const ToolInput &input, ToolContext &context)
         dy_=dot(sub(heightPoint,edgeEnd_),frame_.yAxis);
         if (yLocked_) dy_=signY_*lockedY_;
         dx_=magnitude(sub(edgeEnd_,anchor_));
+        if (square_) {
+            const qreal side = (xLocked_ || yLocked_)
+                ? std::max(xLocked_ ? lockedX_ : 0.0, yLocked_ ? lockedY_ : 0.0)
+                : dx_;
+            dx_=side;
+            dy_=(yLocked_ ? signY_ : sign(dy_))*side;
+        }
         vertices_={{0,0},{dx_,0},{dx_,dy_},{0,dy_}};
-        cursor_=add(edgeEnd_,scale(frame_.yAxis,dy_));
+        cursor_=add(anchor_,add(scale(frame_.xAxis,dx_),scale(frame_.yAxis,dy_)));
     }
     cursorValid_=true;
     context.viewportTransform().setWorkPlaneFrame(frame_);
@@ -205,7 +214,7 @@ bool RectangleTool::handleMousePress(const ToolInput &input, ToolContext &contex
         anchor_=cursor_; referenceFrame_=frame_; referenceFrame_.origin=anchor_;
         frame_=referenceFrame_; stage_=1; planeLocked_=true;
         context.viewportTransform().setWorkPlaneFrame(frame_);
-    } else if (threePoint() && stage_==1) {
+    } else if (edgeBased() && stage_==1) {
         if (dx_<=epsilon) return true;
         edgeEnd_=cursor_; stage_=2;
         updateGeometry(input,context);
@@ -289,7 +298,8 @@ ToolPreview RectangleTool::preview() const
     result.workPlaneFrame=frame_; result.hasWorkPlaneFrame=isValidWorkPlaneFrame(frame_);
     result.planeLocked=planeLocked_ || stage_>0;
     if (stage_>0) result.points.append(worldPointToWorkPlaneFrame(anchor_,frame_));
-    if (threePoint() && stage_==2) result.points.append(worldPointToWorkPlaneFrame(edgeEnd_,frame_));
+    if (edgeBased() && stage_==2) result.points.append(
+        worldPointToWorkPlaneFrame(add(anchor_,scale(frame_.xAxis,dx_)),frame_));
     result.hasCursorPoint=cursorValid_; result.cursorVisible=cursorValid_;
     result.cursorPoint=worldPointToWorkPlaneFrame(cursor_,frame_);
     if (cursorValid_ && stage_>0) {
@@ -306,7 +316,7 @@ ToolPreview RectangleTool::preview() const
     }
     if (vertices_.size()==4 && std::abs(dx_)>epsilon && std::abs(dy_)>epsilon) {
         result.shape=rectangleShape(); result.hasShape=true;
-    } else if (threePoint() && stage_==1 && dx_>epsilon) {
+    } else if (edgeBased() && stage_==1 && dx_>epsilon) {
         result.shape.geometryType=GeometryType::Line;
         result.shape.points={worldPointToWorkPlaneFrame(anchor_,frame_),result.cursorPoint};
         result.shape.nurbs=makeDegreeOneNurbs(result.shape.points);
@@ -339,7 +349,7 @@ void RectangleTool::updateStatus(const ToolContext &context)
         instructions_=numeric_!=NumericInput::None
             ? QStringLiteral("Type dimension  •  Enter applies  •  Esc exits")
             : QStringLiteral("%1  •  X width  •  Y height  •  P perp%2  •  Esc exits")
-                .arg(threePoint() && stage_==1 ? QStringLiteral("Click edge endpoint") : QStringLiteral("Click to finish"),
+                .arg(edgeBased() && stage_==1 ? QStringLiteral("Click edge endpoint") : QStringLiteral("Click to finish"),
                      threePoint() ? QStringLiteral("  •  Alt bypass") : QStringLiteral("  •  Shift square"));
     }
     status_.state=ToolLifecycleState::Active; status_.text=instructions_;
@@ -351,6 +361,7 @@ void RectangleTool::publish(ToolContext &context)
 ToolStatus RectangleTool::status() const { return status_; }
 void RectangleTool::finish(ToolContext &context)
 {
+    if (vertices_.size()!=4 || std::abs(dx_)<=epsilon || std::abs(dy_)<=epsilon) return;
     const ToolPreview current=preview();
     if (current.hasShape && (!validateNurbsCurve(current.shape.nurbs) ||
         !context.commitShape(tool_,current.shape))) return;

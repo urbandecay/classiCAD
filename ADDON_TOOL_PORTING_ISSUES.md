@@ -106,6 +106,14 @@ misread or implemented incorrectly.
 
 ## Rectangle port findings
 
+- The user requested the line-then-width interaction shown in their reference
+  images for the app's Corner, Corner entry. Use the add-on's edge construction
+  stages there: first click anchors a line, second fixes the edge and begins the
+  rectangle width preview, and the final click commits. The supplied add-on's
+  named CornerCorner class uses opposite corners instead; document this explicit
+  user override rather than claiming those source handlers are identical.
+- Never commit the temporary edge as a finished rectangle through Enter or RMB.
+
 - Drag snap sources must be lifted through the selected object's frame and
   converted to the fixed drag frame before distance checks. Convert movement
   into each object's local axes; preserve any normal movement in its frame

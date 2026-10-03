@@ -3771,9 +3771,25 @@ int main(int argc, char **argv)
                             rectangle.preview().guides.first().color == QColor(255, 26, 26),
                         "rectangle axis-aligned cursor guide must be red like the add-on X axis");
         rectangle.handleMouseMove(rectangleInput({22.0, 23.0, 4.0}), rectangleContext);
-        if (rectangleId == ToolId::RectangleThreePoint) {
+        if (rectangleId == ToolId::Rectangle || rectangleId == ToolId::RectangleThreePoint) {
+            passed &= check(rectanglesCommitted.isEmpty() &&
+                                rectangle.preview().shape.geometryType == GeometryType::Line &&
+                                !rectangle.status().canCommit,
+                            "edge-based rectangles must preview only a line after the first click");
+            ToolInput prematureFinish;
+            prematureFinish.key = Qt::Key_Return;
+            rectangle.handleKey(prematureFinish, rectangleContext);
+            prematureFinish = rectangleInput({22.0, 23.0, 4.0});
+            prematureFinish.button = Qt::RightButton;
+            rectangle.handleMousePress(prematureFinish, rectangleContext);
+            passed &= check(rectanglesCommitted.isEmpty() &&
+                                rectangle.preview().shape.geometryType == GeometryType::Line,
+                            "Enter and RMB must not commit the temporary rectangle edge");
             rectangle.handleMousePress(rectangleInput({22.0, 18.0, 4.0}), rectangleContext);
             rectangle.handleMouseMove(rectangleInput({20.0, 25.0, 4.0}), rectangleContext);
+            passed &= check(rectanglesCommitted.isEmpty() &&
+                                rectangle.preview().shape.geometryType == GeometryType::Rectangle,
+                            "second rectangle click must lock the edge and preview width without committing");
         }
         const Shape beforeTyping = rectangle.preview().shape;
         const auto rectangleKey = [&](int key, const QString &text = {}) {

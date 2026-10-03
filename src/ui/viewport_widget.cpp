@@ -397,6 +397,21 @@ public:
                     cursorWorld_ = preview.cursorPoint;
                 }
             }
+            if (isPointCreationTool(activeTool_) && activeTool_ != Tool::Point) {
+                if (activeTool_ == Tool::PointByLine && preview.overridesSnap) {
+                    currentSnap_ = preview.snap;
+                }
+                pointPreviewShapes_ = preview.shapes;
+                pointPreviewGuides_ = preview.guides;
+                pointPreviewFrame_ = preview.workPlaneFrame;
+                pointPreviewWorldPoints_ = preview.worldPoints;
+                pointHudInstructionsLine_ = preview.hudInstructionsLine;
+                pointPreviewStage_ = preview.activeStage;
+                if (preview.hasCursorPoint && activeTool_ == Tool::PointByLine) {
+                    cursorWorld_ = preview.cursorPoint;
+                    cursorValid_ = true;
+                }
+            }
             update();
         });
         toolContext_.setStatusPublisher([this](const ToolStatus &status) {
@@ -557,6 +572,12 @@ public:
         ellipseHudDimensionsLine_.clear();
         ellipseHudInstructionsLine_.clear();
         ellipsePreviewGuides_.clear();
+        pointPreviewShapes_.clear();
+        pointPreviewGuides_.clear();
+        pointPreviewWorldPoints_.clear();
+        pointHudInstructionsLine_.clear();
+        pointPreviewStage_ = -1;
+        pointPreviewFrame_ = {};
         polygonHudDimensionsLine_.clear();
         polygonHudInstructionsLine_.clear();
         rectangleHudDimensionsLine_.clear();
@@ -582,8 +603,10 @@ public:
             repeatTool_ = tool;
             if (!isEraseLikeTool(tool) && tool != Tool::Rotate &&
                 tool != Tool::Scale && tool != Tool::Mirror) {
-                selectedShapeIndices_.clear();
-                selectedShapeIndex_ = ObjectId::invalid();
+                if (tool != Tool::PointCenter) {
+                    selectedShapeIndices_.clear();
+                    selectedShapeIndex_ = ObjectId::invalid();
+                }
             }
             selectionBoxActive_ = false;
             selectionBoxMoved_ = false;
@@ -3044,6 +3067,33 @@ protected:
                         }
                     }
                 }
+            } else if (isPointCreationTool(activeTool_) &&
+                       activeTool_ != Tool::Point) {
+                const QColor pointColor(QStringLiteral("#101010"));
+                const QColor arcColor(QStringLiteral("#33cc33"));
+                for (const Shape &preview : pointPreviewShapes_) {
+                    if (preview.geometryType == GeometryType::Point) continue;
+                    const bool isArc = preview.geometryType == GeometryType::Arc ||
+                                       preview.geometryType == GeometryType::Circle;
+                    gpuActiveToolPreview |= addPreviewShape(
+                        preview, isArc ? arcColor : pointColor,
+                        isArc ? 2.0f : 1.5f, false,
+                        0.0f, false, false);
+                }
+                for (const ToolPreviewGuide &guide : pointPreviewGuides_) {
+                    Shape line;
+                    line.geometryType = GeometryType::Line;
+                    line.points = {guide.line.p1(), guide.line.p2()};
+                    line.workPlane = WorkPlane::XY;
+                    line.workPlaneOffset = guide.hasWorkPlaneFrame
+                        ? guide.workPlaneFrame.origin.z
+                        : pointPreviewFrame_.origin.z;
+                    line.workPlaneFrame = guide.hasWorkPlaneFrame
+                        ? guide.workPlaneFrame : pointPreviewFrame_;
+                    gpuActiveToolPreview |= addPreviewShape(
+                        line, guide.color, 1.25f, false, 0.0f,
+                        guide.dashed, false);
+                }
             }
 
             if (activeTool_ == Tool::Point && cursorValid_) {
@@ -3439,6 +3489,9 @@ protected:
         } else if (activeTool_ == Tool::Point) {
             drawPointToolPreview(painter,
                                  !gpuActiveToolPreview || !gpuPreviewRendered);
+        } else if (isPointCreationTool(activeTool_)) {
+            drawPointConstructionToolPreview(
+                painter, !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::Rotate) {
             drawRotateToolPreview(painter,
                                   !gpuActiveToolPreview || !gpuPreviewRendered);
@@ -3503,6 +3556,7 @@ protected:
                                          joinShapeIndices_.size(),
                                          lineCommandActive_,
                                          toolStatus_.text,
+                                         pointHudInstructionsLine_,
                                          rotateStep_,
                                          grabActive_,
                                          grabPickingBasePoint_,
@@ -7756,11 +7810,32 @@ private:
             return result;
         }
 
+        if (activeTool_ == Tool::PointEdgeCenter) {
+            SnapEngine midpointSnapEngine = snapEngine_;
+            midpointSnapEngine.setSettings(
+                SnapSettings{true, false, true, false, false, false, false, false, false});
+            const SnapResult result = midpointSnapEngine.findEdgeCenterSnapPoint(
+                document_, worldToScreen(rawPoint), viewportTransform_, size());
+            traceSnapResult(result, true);
+            return result;
+        }
+
+        if (activeTool_ == Tool::PointByLine ||
+            activeTool_ == Tool::PointByArcs) {
+            const Point3D *anchor = activeTool_ == Tool::PointByLine &&
+                                            !pointPreviewWorldPoints_.isEmpty()
+                                        ? &pointPreviewWorldPoints_.back()
+                                        : nullptr;
+            const SnapResult result = snapEngine_.findSpatialSnapPoint(
+                document_, worldToScreen(rawPoint), anchor,
+                viewportTransform_, size(), pointPreviewWorldPoints_);
+            traceSnapResult(result, true);
+            return result;
+        }
+
         const bool serviceDrawingSnapActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
             activeTool_ == Tool::Arc || activeTool_ == Tool::Point ||
-            activeTool_ == Tool::PointByLine ||
-            activeTool_ == Tool::PointByArcs ||
             isCurveCreationTool(activeTool_) ||
             isCircleConstructionTool(activeTool_) ||
             isEllipseTool(activeTool_) || isRectangleTool(activeTool_) ||
@@ -12455,8 +12530,12 @@ private:
             viewportTransform_.setWorkPlaneFrame(toolDrawingFrame_);
             return;
         }
+        const bool unlockedPointInput =
+            (activeTool_ == Tool::PointByLine ||
+             activeTool_ == Tool::PointByArcs) && !toolDrawingPlaneLocked_;
         if ((activeTool_ == Tool::Line && linePreviewPlaneLocked_) ||
-            (activeTool_ != Tool::Line && !pendingPoints_.isEmpty())) {
+            (activeTool_ != Tool::Line && !pendingPoints_.isEmpty() &&
+             !unlockedPointInput)) {
             return;
         }
         const bool drawingShape =
@@ -13210,6 +13289,98 @@ private:
                                           drawPoint);
     }
 
+    void drawPointConstructionToolPreview(QPainter &painter,
+                                          bool drawPreviewGeometry = true)
+    {
+        if (drawPreviewGeometry) {
+            const QColor arcColor(QStringLiteral("#33cc33"));
+            for (const Shape &preview : pointPreviewShapes_) {
+                if (preview.geometryType == GeometryType::Point) continue;
+                const bool isArc = preview.geometryType == GeometryType::Arc ||
+                                   preview.geometryType == GeometryType::Circle;
+                const bool pointByArcsArc = activeTool_ == Tool::PointByArcs &&
+                                            isArc;
+                drawShape(painter, preview, true, false, true,
+                          pointByArcsArc ? arcColor : QColor(Qt::black));
+            }
+            for (const ToolPreviewGuide &guide : pointPreviewGuides_) {
+                Shape line;
+                line.geometryType = GeometryType::Line;
+                line.points = {guide.line.p1(), guide.line.p2()};
+                line.workPlane = WorkPlane::XY;
+                line.workPlaneOffset = guide.hasWorkPlaneFrame
+                    ? guide.workPlaneFrame.origin.z
+                    : pointPreviewFrame_.origin.z;
+                line.workPlaneFrame = guide.hasWorkPlaneFrame
+                    ? guide.workPlaneFrame : pointPreviewFrame_;
+                drawShape(painter, line, true, false, true, guide.color);
+            }
+        }
+
+        const QColor pointColor(Qt::black);
+        const auto drawPointCross = [&](const Point3D &worldPoint,
+                                        const WorkPlaneFrame &frame,
+                                        qreal markerSize) {
+            if (!isValidWorkPlaneFrame(frame)) return;
+            QPointF centerScreen;
+            if (!viewportTransform_.worldPointToScreen(worldPoint, size(),
+                                                       &centerScreen)) {
+                return;
+            }
+            const Point3D axes[] = {{1.0, 0.0, 0.0},
+                                    {0.0, 1.0, 0.0},
+                                    {0.0, 0.0, 1.0}};
+            painter.save();
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(pointColor, 2.0, Qt::SolidLine,
+                                Qt::RoundCap, Qt::RoundJoin));
+            for (const Point3D &axis : axes) {
+                QPointF axisScreens[2];
+                const Point3D samples[] = {
+                    {worldPoint.x - axis.x, worldPoint.y - axis.y,
+                     worldPoint.z - axis.z},
+                    {worldPoint.x + axis.x, worldPoint.y + axis.y,
+                     worldPoint.z + axis.z}};
+                const bool visible[2] = {
+                    viewportTransform_.worldPointToScreen(samples[0], size(),
+                                                          &axisScreens[0]),
+                    viewportTransform_.worldPointToScreen(samples[1], size(),
+                                                          &axisScreens[1])};
+                QPointF projectedDirection;
+                if (visible[0] && visible[1]) {
+                    projectedDirection = axisScreens[1] - axisScreens[0];
+                } else if (visible[0]) {
+                    projectedDirection = centerScreen - axisScreens[0];
+                } else if (visible[1]) {
+                    projectedDirection = axisScreens[1] - centerScreen;
+                }
+                const qreal projectedLength = std::hypot(projectedDirection.x(),
+                                                          projectedDirection.y());
+                if (projectedLength <= 1.0e-4) continue;
+                projectedDirection /= projectedLength;
+                const qreal halfSize = markerSize * 0.5;
+                painter.drawLine(centerScreen - projectedDirection * halfSize,
+                                 centerScreen + projectedDirection * halfSize);
+            }
+            painter.restore();
+        };
+        for (const Shape &preview : pointPreviewShapes_) {
+            if (preview.geometryType != GeometryType::Point ||
+                preview.points.isEmpty()) {
+                continue;
+            }
+            const WorkPlaneFrame frame = shapeWorkPlaneFrame(preview);
+            const qreal markerSize = activeTool_ == Tool::PointByArcs &&
+                                             pointPreviewStage_ == 5
+                                         ? 3.0 : 5.0;
+            drawPointCross(workPlaneFramePointToWorld(preview.points.first(), frame),
+                           frame, markerSize);
+        }
+        if (currentSnap_.isValid()) {
+            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        }
+    }
+
     void drawRotateToolPreview(QPainter &painter, bool drawGeometry = true)
     {
         viewportOverlay_.drawRotatePreview(painter,
@@ -13352,7 +13523,9 @@ private:
         input.viewportSize = size();
         input.snapResult = currentSnap_;
         input.snapType = currentSnap_.type;
-        if (activeTool_ != Tool::Line && input.snapResult.isValid() &&
+        if (activeTool_ != Tool::Line && activeTool_ != Tool::PointEdgeCenter &&
+            activeTool_ != Tool::PointByLine && activeTool_ != Tool::PointByArcs &&
+            input.snapResult.isValid() &&
             input.snapResult.hasWorldPoint &&
             isValidWorkPlaneFrame(input.workPlaneFrame)) {
             const QPointF snapPosition = worldPointToWorkPlaneFrame(
@@ -13551,6 +13724,12 @@ private:
     QString rectangleHudInstructionsLine_;
     QVector<ToolPreviewGuide> rectanglePreviewGuides_;
     QVector<ToolPreviewGuide> ellipsePreviewGuides_;
+    QVector<Shape> pointPreviewShapes_;
+    QVector<ToolPreviewGuide> pointPreviewGuides_;
+    QVector<Point3D> pointPreviewWorldPoints_;
+    QString pointHudInstructionsLine_;
+    int pointPreviewStage_ = -1;
+    WorkPlaneFrame pointPreviewFrame_;
     WorkPlaneFrame toolDrawingFrame_;
     bool toolDrawingPlaneLocked_ = false;
     // Temporary source-compatibility view. Document owns the storage and

@@ -2386,7 +2386,7 @@ private:
         QAction *pointByLineAction = menu->addAction(QStringLiteral("Point by Line"));
         QAction *pointByArcsAction = menu->addAction(QStringLiteral("Point by Arcs"));
         QAction *pointCenterAction = menu->addAction(QStringLiteral("Point Center"));
-        QAction *edgeCenterAction = menu->addAction(QStringLiteral("Curve Span Center"));
+        QAction *edgeCenterAction = menu->addAction(QStringLiteral("Edge Center"));
         button->setMenu(menu);
         button->setPopupMode(QToolButton::DelayedPopup);
         connect(pointAction, &QAction::triggered, this, [this]() {

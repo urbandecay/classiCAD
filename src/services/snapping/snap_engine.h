@@ -27,11 +27,27 @@ public:
                                     const ViewportTransform &transform,
                                     const QSize &viewportSize,
                                     const QVector<Point3D> &previewPoints = {}) const;
+    bool findAxisIntersectionWithHoveredEdge(const Document &document,
+                                             const QPointF &screenPosition,
+                                             const Point3D &axisOrigin,
+                                             const Point3D &axisDirection,
+                                             const Point3D &snapWorldPoint,
+                                             const ViewportTransform &transform,
+                                             const QSize &viewportSize,
+                                             Point3D *intersection,
+                                             qreal snapRadiusPixels = 12.0) const;
     void setSettings(const SnapSettings &settings);
     const SnapSettings &settings() const;
 
     QVector<SnapCandidate> snapCandidatesForShape(
         const Shape &shape,
+        const ViewportTransform &transform,
+        const QSize &viewportSize) const;
+    QVector<SnapCandidate> edgeCenterCandidatesForShape(
+        const Shape &shape) const;
+    SnapResult findEdgeCenterSnapPoint(
+        const Document &document,
+        const QPointF &screenPosition,
         const ViewportTransform &transform,
         const QSize &viewportSize) const;
     QVector<SnapCandidate> snapCandidatesForScene(

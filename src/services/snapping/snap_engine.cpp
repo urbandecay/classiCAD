@@ -913,6 +913,98 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     return candidates;
 }
 
+QVector<SnapCandidate> SnapEngine::edgeCenterCandidatesForShape(
+    const Shape &shape) const
+{
+    QVector<SnapCandidate> candidates;
+    if (shape.geometryType == GeometryType::Point ||
+        isDimensionGeometryType(shape.geometryType)) {
+        return candidates;
+    }
+    if (shape.geometryType == GeometryType::Rectangle ||
+        shape.geometryType == GeometryType::Polygon ||
+        shape.geometryType == GeometryType::Picture) {
+        const QVector<QPointF> vertices =
+            shape.geometryType == GeometryType::Polygon
+                ? polygonVerticesForShape(shape)
+                : shape.geometryType == GeometryType::Picture
+                      ? pictureFrameCorners(shape)
+                      : rectangleVertices(shape);
+        for (int index = 0; index < vertices.size(); ++index) {
+            candidates.append({SnapType::Midpoint,
+                               (vertices[index] +
+                                vertices[(index + 1) % vertices.size()]) * 0.5});
+        }
+        return candidates;
+    }
+    if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
+        for (int index = 0; index + 1 < shape.points.size(); ++index) {
+            candidates.append({SnapType::Midpoint,
+                               (shape.points[index] + shape.points[index + 1]) * 0.5});
+        }
+        return candidates;
+    }
+    if (shape.geometryType == GeometryType::PolyCurve) {
+        for (const Shape::NurbsCurve2D &component : shape.components) {
+            QPointF midpoint;
+            if (nurbsCurvePointAtFraction(component, 0.5, &midpoint)) {
+                candidates.append({SnapType::Midpoint, midpoint});
+            }
+        }
+        return candidates;
+    }
+
+    Shape::NurbsCurve2D curve;
+    if (subdivisionCurve(shape, &curve)) {
+        QPointF midpoint;
+        if (nurbsCurvePointAtFraction(curve, 0.5, &midpoint)) {
+            candidates.append({SnapType::Midpoint, midpoint});
+        }
+    }
+    return candidates;
+}
+
+SnapResult SnapEngine::findEdgeCenterSnapPoint(
+    const Document &document,
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize) const
+{
+    SnapResult best;
+    if (!settings_.enabled || viewportSize.isEmpty()) {
+        return best;
+    }
+    constexpr qreal snapRadiusPixels = 12.0;
+    qreal bestDistance = snapRadiusPixels;
+    for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
+        const ObjectId objectId = document.objectIdAt(shapeIndex);
+        if (!document.isObjectVisible(objectId)) {
+            continue;
+        }
+        const Shape &shape = document[shapeIndex];
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        for (const SnapCandidate &candidate : edgeCenterCandidatesForShape(shape)) {
+            const Point3D worldPoint =
+                workPlaneFramePointToWorld(candidate.point, frame);
+            QPointF candidateScreen;
+            if (!transform.worldPointToScreen(worldPoint, viewportSize,
+                                              &candidateScreen)) {
+                continue;
+            }
+            const qreal distance = std::hypot(candidateScreen.x() - screenPosition.x(),
+                                              candidateScreen.y() - screenPosition.y());
+            if (distance <= bestDistance) {
+                bestDistance = distance;
+                best.type = SnapType::Midpoint;
+                best.point = transform.screenToWorld(candidateScreen, viewportSize);
+                best.worldPoint = worldPoint;
+                best.hasWorldPoint = true;
+            }
+        }
+    }
+    return best;
+}
+
 QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
     const Document &document,
     const QVector<int> &excludedShapeIndices,
@@ -2002,10 +2094,195 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
             }
         }
     }
-    if (settings_.endpoint) {
-        for (const Point3D &point : previewPoints) considerWorld(SnapType::Endpoint, point);
+    const bool anySnapModeEnabled = settings_.endpoint || settings_.midpoint ||
+                                    settings_.intersection || settings_.center ||
+                                    settings_.perpendicular || settings_.tangent ||
+                                    settings_.near || settings_.controlPoint;
+    if (anySnapModeEnabled) {
+        // The add-on self-snaps Point by Line/Arcs preview points whenever
+        // any OSnap mode is active, even if endpoint snapping itself is off.
+        // Like its modal handler, let the closest self point replace the
+        // scene snap only when it is strictly closer to the cursor.
+        for (const Point3D &point : previewPoints) {
+            QPointF screen;
+            if (!transform.worldPointToScreen(point, viewportSize, &screen)) {
+                continue;
+            }
+            const qreal distance = std::hypot(screen.x() - screenPosition.x(),
+                                              screen.y() - screenPosition.y());
+            if (distance < 12.0 && distance < bestDistance) {
+                bestDistance = distance;
+                bestPriority = 1;
+                best.type = SnapType::Endpoint;
+                best.worldPoint = point;
+                best.hasWorldPoint = true;
+                best.point = transform.screenToWorld(screen, viewportSize);
+            }
+        }
     }
     return best;
+}
+
+bool SnapEngine::findAxisIntersectionWithHoveredEdge(
+    const Document &document,
+    const QPointF &screenPosition,
+    const Point3D &axisOrigin,
+    const Point3D &axisDirection,
+    const Point3D &snapWorldPoint,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    Point3D *intersection,
+    qreal snapRadiusPixels) const
+{
+    if (intersection == nullptr || viewportSize.isEmpty() ||
+        !std::isfinite(snapRadiusPixels) || snapRadiusPixels < 0.0) {
+        return false;
+    }
+    const qreal axisLengthSquared = axisDirection.x * axisDirection.x +
+                                    axisDirection.y * axisDirection.y +
+                                    axisDirection.z * axisDirection.z;
+    if (axisLengthSquared <= 1.0e-18) return false;
+
+    bool found = false;
+    qreal bestSnapGapSquared = std::numeric_limits<qreal>::infinity();
+    qreal bestScreenGapSquared = snapRadiusPixels * snapRadiusPixels;
+    const auto considerWorldSegment = [&](const Point3D &first,
+                                          const Point3D &second) {
+        QPointF firstScreen;
+        QPointF secondScreen;
+        if (!transform.worldPointToScreen(first, viewportSize, &firstScreen) ||
+            !transform.worldPointToScreen(second, viewportSize, &secondScreen)) {
+            return;
+        }
+        const QPointF screenEdge = secondScreen - firstScreen;
+        const qreal screenLengthSquared = QPointF::dotProduct(screenEdge,
+                                                               screenEdge);
+        const qreal screenFraction = screenLengthSquared <= 1.0e-18
+            ? 0.0
+            : std::clamp(QPointF::dotProduct(screenPosition - firstScreen,
+                                             screenEdge) /
+                             screenLengthSquared,
+                         0.0, 1.0);
+        const QPointF closestScreen = firstScreen + screenEdge * screenFraction;
+        const QPointF screenDelta = closestScreen - screenPosition;
+        const qreal screenGapSquared = QPointF::dotProduct(screenDelta,
+                                                            screenDelta);
+        if (screenGapSquared > snapRadiusPixels * snapRadiusPixels) return;
+
+        const Point3D edge = {second.x - first.x, second.y - first.y,
+                              second.z - first.z};
+        const qreal edgeLengthSquared = edge.x * edge.x + edge.y * edge.y +
+                                        edge.z * edge.z;
+        if (edgeLengthSquared <= 1.0e-18) return;
+        const qreal snapFraction = std::clamp(
+            ((snapWorldPoint.x - first.x) * edge.x +
+             (snapWorldPoint.y - first.y) * edge.y +
+             (snapWorldPoint.z - first.z) * edge.z) / edgeLengthSquared,
+            0.0, 1.0);
+        const Point3D nearestToSnap = {
+            first.x + edge.x * snapFraction,
+            first.y + edge.y * snapFraction,
+            first.z + edge.z * snapFraction};
+        const qreal snapDx = nearestToSnap.x - snapWorldPoint.x;
+        const qreal snapDy = nearestToSnap.y - snapWorldPoint.y;
+        const qreal snapDz = nearestToSnap.z - snapWorldPoint.z;
+        const qreal snapGapSquared = snapDx * snapDx + snapDy * snapDy +
+                                     snapDz * snapDz;
+        if (snapGapSquared > bestSnapGapSquared + 1.0e-12 ||
+            (std::abs(snapGapSquared - bestSnapGapSquared) <= 1.0e-12 &&
+             screenGapSquared >= bestScreenGapSquared)) {
+            return;
+        }
+
+        const qreal axisEdgeDot = axisDirection.x * edge.x +
+                                  axisDirection.y * edge.y +
+                                  axisDirection.z * edge.z;
+        const Point3D offset = {axisOrigin.x - first.x,
+                                axisOrigin.y - first.y,
+                                axisOrigin.z - first.z};
+        const qreal axisOffset = axisDirection.x * offset.x +
+                                 axisDirection.y * offset.y +
+                                 axisDirection.z * offset.z;
+        const qreal edgeOffset = edge.x * offset.x + edge.y * offset.y +
+                                 edge.z * offset.z;
+        const qreal denominator = axisLengthSquared * edgeLengthSquared -
+                                  axisEdgeDot * axisEdgeDot;
+        if (denominator <= 1.0e-14 * axisLengthSquared * edgeLengthSquared) {
+            return;
+        }
+        const qreal axisParameter =
+            (axisEdgeDot * edgeOffset - edgeLengthSquared * axisOffset) /
+            denominator;
+        const Point3D candidate = {
+            axisOrigin.x + axisDirection.x * axisParameter,
+            axisOrigin.y + axisDirection.y * axisParameter,
+            axisOrigin.z + axisDirection.z * axisParameter};
+        if (!std::isfinite(candidate.x) || !std::isfinite(candidate.y) ||
+            !std::isfinite(candidate.z)) {
+            return;
+        }
+        found = true;
+        bestSnapGapSquared = snapGapSquared;
+        bestScreenGapSquared = screenGapSquared;
+        *intersection = candidate;
+    };
+    const auto appendCurveSegments = [&](const Shape::NurbsCurve2D &curve,
+                                         const WorkPlaneFrame &frame) {
+        if (!validateNurbsCurve(curve)) return;
+        const QVector<double> fullKnots = expandedNurbsKnotVector(curve);
+        constexpr int samplesPerSpan = 64;
+        for (int span = curve.degree; span < curve.controlPoints.size(); ++span) {
+            const qreal start = fullKnots[span];
+            const qreal end = fullKnots[span + 1];
+            if (end <= start) continue;
+            QPointF previous;
+            if (!evaluateNurbsPoint(curve, start, &previous)) continue;
+            for (int sample = 1; sample <= samplesPerSpan; ++sample) {
+                const qreal parameter = start + (end - start) * sample /
+                                                   samplesPerSpan;
+                QPointF current;
+                if (!evaluateNurbsPoint(curve, parameter, &current)) continue;
+                considerWorldSegment(
+                    workPlaneFramePointToWorld(previous, frame),
+                    workPlaneFramePointToWorld(current, frame));
+                previous = current;
+            }
+        }
+    };
+    const auto appendClosedVertices = [&](const QVector<QPointF> &vertices,
+                                          const WorkPlaneFrame &frame) {
+        for (int index = 0; index < vertices.size(); ++index) {
+            considerWorldSegment(
+                workPlaneFramePointToWorld(vertices[index], frame),
+                workPlaneFramePointToWorld(vertices[(index + 1) % vertices.size()],
+                                           frame));
+        }
+    };
+
+    for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
+        if (!document.isObjectVisible(document.objectIdAt(shapeIndex))) continue;
+        const Shape &shape = document[shapeIndex];
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        if (shape.geometryType == GeometryType::PolyCurve) {
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                appendCurveSegments(component, frame);
+            }
+            continue;
+        }
+        Shape::NurbsCurve2D curve;
+        if (subdivisionCurve(shape, &curve)) {
+            appendCurveSegments(curve, frame);
+            continue;
+        }
+        if (shape.geometryType == GeometryType::Rectangle) {
+            appendClosedVertices(rectangleVertices(shape), frame);
+        } else if (shape.geometryType == GeometryType::Polygon) {
+            appendClosedVertices(polygonVerticesForShape(shape), frame);
+        } else if (shape.geometryType == GeometryType::Picture) {
+            appendClosedVertices(pictureFrameCorners(shape), frame);
+        }
+    }
+    return found;
 }
 
 SnapResult SnapEngine::findSnapPoint(const Document &document,

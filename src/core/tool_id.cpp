@@ -188,7 +188,7 @@ QString toolName(ToolId tool)
     case ToolId::PointCenter:
         return QStringLiteral("Point Center");
     case ToolId::PointEdgeCenter:
-        return QStringLiteral("Curve Span Center");
+        return QStringLiteral("Edge Center");
     case ToolId::PerpendicularFromEdge:
         return QStringLiteral("Perpendicular from Edge");
     case ToolId::TangentToTwoCurves:

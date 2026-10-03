@@ -174,3 +174,54 @@ misread or implemented incorrectly.
   points in the curve's own plane.
 - Store the closed rectangle as a degree-1 NURBS and use its CVs for rendering,
   hit testing, corner snaps, control points, and sampling after edits.
+
+## Point tool port findings
+
+- `PointTool_ByLine` inherits `LineTool_Poly`. Shift direction locking applies
+  even when OSnap is active, the axis lock is reset after each committed
+  segment, and the tool commits points without line geometry. Reset the
+  inferred axis when a geometry snap takes over so the active segment does not
+  keep a stale axis color.
+- For a constrained Point by Line snap, first resolve the hovered edge/axis
+  crossing when edge or intersection snapping is enabled. A marker at the
+  original edge point does not mean the constrained preview landed on the
+  edge. If no crossing is available, project the snapped world point onto the
+  constrained direction; do not project its screen ray instead.
+- Point by Line and Point by Arcs self-snap their preview points whenever any
+  OSnap mode is enabled, even when endpoint snapping is off. Compare that
+  self-snap with the scene snap by cursor distance; do not gate it on the
+  endpoint toggle or let a farther self point replace a nearer scene snap.
+- The effective Point by Line `L` handler is inherited plane lock. The shared
+  modal handler also advertises `L` for length, but that mapping is unreachable
+  because the tool consumes `L` first. Direct numeric typing sets a length and
+  Enter commits that point. Keep the UI aligned with the active handler rather
+  than the conflicting hint.
+- Point by Arcs uses a 125 px compass centered at the hover before the first
+  center click, at the first arc center while choosing the second center, and
+  at the active arc center afterward. Do not draw extra center/cursor crosses
+  or a full second-circle outline at the second radius stage.
+- Point by Arcs `L` toggles plane locking after drawing starts. When unlocked,
+  the second arc center can be off the first arc's plane; when locked, project
+  it onto the first arc's plane. `P` remaps the bridge and arcs into the
+  perpendicular plane and changes the lock state with the perpendicular mode.
+  The add-on only accepts `P` while choosing a radius or sweep, not while
+  choosing the second arc center. Turning perpendicular mode off unlocks the
+  current perpendicular plane; it does not restore the original plane. If `P`
+  is turned on again after that unlock, the add-on uses world Z as its fallback
+  reference normal unless `L` has locked a plane again. During radius stages,
+  derive the perpendicular bridge from the displayed, angle-snapped radius
+  endpoint, and size the stage-3 compass at Arc 1's center even though the
+  pointer is choosing Arc 2's center.
+- Match point marker defaults: world-axis crosses, 5 px for ordinary preview
+  points, 3 px for final arc intersections, and a 50 px wide setup crosshair.
+  The Point by Arcs compass is opaque black. Arc and guide colors match the
+  add-on defaults; its separate color/size preferences still have no app-side
+  controls.
+- Point Center chooses the first selected edge chain, falling back to selected
+  points, fits their best-fit plane and circle, and previews a smooth circle
+  or Catmull-Rom outline plus the center. Edge Center is an OSnap midpoint
+  operation; resolve the click's current midpoint instead of committing an
+  earlier hover result.
+- Point Center exits on its one-shot click or a finish key even when there is
+  no valid fitted point. Edge Center stays active after a left-click without a
+  midpoint, but Enter/Space/right-click exits even when no point is available.

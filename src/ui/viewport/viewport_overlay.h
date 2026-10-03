@@ -151,6 +151,7 @@ public:
                         int joinCount,
                         bool lineCommandActive,
                         const QString &lineCommandStatus,
+                        const QString &pointToolInstructions,
                         int rotateStep,
                         bool grabActive,
                         bool grabPickingBasePoint,

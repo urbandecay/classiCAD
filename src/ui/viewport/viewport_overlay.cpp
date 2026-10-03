@@ -3,6 +3,7 @@
 #include "core/geometry/circle_construction.h"
 
 #include <QFont>
+#include <QFontMetrics>
 #include <QImage>
 #include <QLineF>
 #include <QPolygonF>
@@ -1482,6 +1483,7 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                      int joinCount,
                                      bool lineCommandActive,
                                      const QString &lineCommandStatus,
+                                     const QString &pointToolInstructions,
                                      int rotateStep,
                                      bool grabActive,
                                      bool grabPickingBasePoint,
@@ -1538,6 +1540,44 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
         painter.drawText(18,
                          viewportSize.height() - 18,
                          QStringLiteral("Click the first and second points of the mirror axis  •  Esc/RMB cancels"));
+    } else if (activeTool == Tool::PointByLine ||
+               activeTool == Tool::PointByArcs ||
+               activeTool == Tool::PointCenter ||
+               activeTool == Tool::PointEdgeCenter) {
+        painter.save();
+        const QRectF panel(12.0,
+                           std::max<qreal>(12.0, viewportSize.height() - 58.0),
+                           std::max<qreal>(1.0,
+                                           std::min<qreal>(750.0,
+                                                           viewportSize.width() - 24.0)),
+                           46.0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(20, 20, 20, 170));
+        painter.drawRoundedRect(panel, 4.0, 4.0);
+        painter.setFont(QFont(QStringLiteral("Sans"), 9));
+        const QFontMetrics metrics(painter.font());
+        const int textWidth = std::max(1, static_cast<int>(panel.width() - 16.0));
+        painter.setPen(QColor(225, 225, 225));
+        const QString title = lineCommandStatus.isEmpty()
+                                  ? toolName(activeTool)
+                                  : lineCommandStatus;
+        painter.drawText(QPointF(20.0, panel.top() + 17.0),
+                         metrics.elidedText(title, Qt::ElideRight, textWidth));
+        painter.setPen(QColor(170, 170, 170));
+        QString instructions = pointToolInstructions;
+        if (instructions.isEmpty() && activeTool == Tool::PointByLine) {
+            instructions = QStringLiteral("Click points • Shift locks direction • X/Y/Z axis • type length + Enter • L plane lock • Enter/Space/RMB finishes • Esc cancels");
+        } else if (instructions.isEmpty() && activeTool == Tool::PointByArcs) {
+            instructions = QStringLiteral("Click center, radius, sweep for each arc • P perpendicular • C angle snap • R radius • A angle • Esc cancels");
+        } else if (instructions.isEmpty() && activeTool == Tool::PointCenter) {
+            instructions = QStringLiteral("Click to place the fitted center • Enter confirms • Esc cancels");
+        } else if (instructions.isEmpty()) {
+            instructions = QStringLiteral("Hover an enabled midpoint snap • Click places • Esc cancels");
+        }
+        painter.drawText(QPointF(20.0, panel.top() + 35.0),
+                         metrics.elidedText(instructions, Qt::ElideRight,
+                                            textWidth));
+        painter.restore();
     } else if (activeTool == Tool::Line && lineCommandActive) {
         painter.save();
         const QRectF panel(12.0,

@@ -26,9 +26,25 @@ struct ToolStatus {
 };
 
 struct ToolPreviewGuide {
+    ToolPreviewGuide() = default;
+    ToolPreviewGuide(const QLineF &guideLine,
+                     const QColor &guideColor,
+                     bool isDashed = false,
+                     const WorkPlaneFrame &guideFrame = {},
+                     bool hasGuideFrame = false)
+        : line(guideLine),
+          color(guideColor),
+          dashed(isDashed),
+          workPlaneFrame(guideFrame),
+          hasWorkPlaneFrame(hasGuideFrame)
+    {
+    }
+
     QLineF line;
     QColor color;
     bool dashed = false;
+    WorkPlaneFrame workPlaneFrame;
+    bool hasWorkPlaneFrame = false;
 };
 
 struct ToolPreview {
@@ -50,6 +66,7 @@ struct ToolPreview {
     QString statusText;
     QString hudDimensionsLine;
     QString hudInstructionsLine;
+    int activeStage = -1;
 };
 
 class InteractionTool {

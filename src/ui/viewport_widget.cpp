@@ -7556,9 +7556,11 @@ private:
     {
         const bool traceSnaps = qEnvironmentVariable("CLASSICAD_SNAP_TRACE") ==
                                 QStringLiteral("1");
+        const bool traceAngularDimension =
+            activeTool_ == Tool::AngularDimension;
         const auto traceSnapResult = [&](const SnapResult &result,
                                          bool spatial) {
-            if (!traceSnaps) {
+            if (!traceSnaps && !traceAngularDimension) {
                 return;
             }
 

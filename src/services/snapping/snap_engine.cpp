@@ -2052,6 +2052,7 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
 
     const QPointF cursorScreen = transform.worldToScreen(rawPoint, viewportSize);
     constexpr qreal snapRadiusPixels = 12.0;
+    constexpr qreal nearSnapRadiusPixels = 18.0;
     qreal bestDistance = snapRadiusPixels;
     int bestPriority = -1;
     const auto consider = [&](const SnapCandidate &candidate) {
@@ -2063,7 +2064,10 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
         // Center is also within range, do not let a closer point on the curve
         // hide that intentional target.
         const int priority = candidate.type == SnapType::Near ? 0 : 1;
-        if (distance <= snapRadiusPixels &&
+        const qreal candidateRadius = candidate.type == SnapType::Near
+                                          ? nearSnapRadiusPixels
+                                          : snapRadiusPixels;
+        if (distance <= candidateRadius &&
             (priority > bestPriority ||
              (priority == bestPriority && distance <= bestDistance))) {
             bestDistance = distance;
@@ -2080,7 +2084,9 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
          nearCandidatesForScene(coplanarScene,
                                 rawPoint,
                                 transform,
-                                viewportSize)) {
+                                viewportSize,
+                                {},
+                                nearSnapRadiusPixels)) {
         consider(candidate);
     }
 

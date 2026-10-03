@@ -82,6 +82,13 @@ misread or implemented incorrectly.
 - Verify snap behavior in oblique views and with intersections between curved
   objects. A top-view line-only test will not catch screen-space circle fitting
   or missing curve intersections.
+- For dimension tools, log cursor-move snap results as well as clicks. A click
+  can record `Near` successfully while the following preview move fails; click
+  logs alone cannot identify which edge the preview is targeting.
+- Keep `Near` acquisition tolerance large enough for the visible cursor-to-edge
+  gap. In the angular-dimension trace, snapping stopped at a 12 px radius while
+  the cursor was about 15 px from the adjacent edge; widen `Near` to 18 px while
+  keeping specific snaps at 12 px.
 - Box selection must project each object's local points through that object's
   stored frame into the view. Do not filter candidates to the active drawing
   plane or project every object's local coordinates as if they shared it.

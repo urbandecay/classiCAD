@@ -4,6 +4,7 @@
 #include "arc_tool.h"
 #include "circle_tool.h"
 #include "circle_tangent_tool.h"
+#include "curve_drawing_tool.h"
 #include "dimension_tool.h"
 #include "erase_tool.h"
 #include "ellipse_tool.h"
@@ -12,12 +13,14 @@
 #include "nurbs_tool.h"
 #include "perpendicular_from_curve_tool.h"
 #include "point_tool.h"
+#include "point_construction_tool.h"
 #include "polygon_tool.h"
 #include "rectangle_tool.h"
 #include "rotate_tool.h"
 #include "select_tool.h"
 #include "tangent_from_curve_tool.h"
 #include "trim_tool.h"
+#include "two_curve_line_tool.h"
 
 namespace classiCAD {
 
@@ -25,9 +28,17 @@ ToolRegistry::ToolRegistry()
 {
     add(std::make_unique<SelectTool>());
     add(std::make_unique<PointTool>());
+    add(std::make_unique<PointConstructionTool>(ToolId::PointByLine));
+    add(std::make_unique<PointConstructionTool>(ToolId::PointByArcs));
+    add(std::make_unique<PointConstructionTool>(ToolId::PointCenter));
+    add(std::make_unique<PointConstructionTool>(ToolId::PointEdgeCenter));
     add(std::make_unique<LineTool>());
     add(std::make_unique<TangentFromCurveTool>());
     add(std::make_unique<PerpendicularFromCurveTool>());
+    add(std::make_unique<PerpendicularFromCurveTool>(
+        ToolId::PerpendicularFromEdge, true));
+    add(std::make_unique<TwoCurveLineTool>(ToolId::TangentToTwoCurves));
+    add(std::make_unique<TwoCurveLineTool>(ToolId::PerpendicularToTwoCurves));
     add(std::make_unique<ArcTool>());
     add(std::make_unique<RectangleTool>());
     add(std::make_unique<RectangleTool>(ToolId::RectangleFromCenter));
@@ -49,6 +60,8 @@ ToolRegistry::ToolRegistry()
     add(std::make_unique<EllipseTool>(ToolId::EllipseFromFoci));
     add(std::make_unique<BezierTool>());
     add(std::make_unique<NurbsTool>());
+    add(std::make_unique<CurveDrawingTool>(ToolId::CurveInterpolate));
+    add(std::make_unique<CurveDrawingTool>(ToolId::CurveFreehand));
     add(std::make_unique<RotateTool>());
     add(std::make_unique<MirrorTool>());
     add(std::make_unique<TrimTool>());

@@ -1,4 +1,5 @@
 #pragma once
+#include "../core/document/document_settings.h"
 #include "tool.h"
 namespace classiCAD {
 class LineTool final : public InteractionTool {
@@ -14,6 +15,11 @@ public:
     ToolStatus status() const override;
 private:
     Point3D resolveCursorPoint(const ToolInput &input, const ToolContext &context);
+    void applyTypedLengthToCursor(ToolContext &context);
+    void updateStatus(const ToolContext &context);
+    bool appendCurrentPoint(const ToolInput &input,
+                            ToolContext &context,
+                            bool applyPendingLength = false);
     Point3D inferredAxisDirection(const ToolInput &input, const ToolContext &context) const;
     void publish(ToolContext &context);
     void reset();
@@ -24,6 +30,7 @@ private:
     int constraintAxisKey_ = 0;
     bool normalLock_ = false;
     bool planeLocked_ = false;
+    QString lengthInput_;
     Point3D shiftLockDirection_;
     bool shiftLockActive_ = false;
     ToolInput lastInput_;

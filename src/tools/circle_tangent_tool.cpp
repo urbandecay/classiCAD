@@ -849,6 +849,7 @@ void CircleTangentTool::begin(ToolContext &context)
     closedCurveTargets_.clear();
     circleTargets_.clear();
     exactSolutions_.clear();
+    drawingFrame_ = context.viewportTransform().workPlaneFrame();
     previewShape_ = Shape{};
     previewAvailable_ = false;
     hasLastPreviewInput_ = false;
@@ -894,6 +895,16 @@ bool CircleTangentTool::handleMousePress(const ToolInput &input,
             status_.text = QStringLiteral("Choose a different curve");
             publish(context);
             return true;
+        }
+
+        if (selectedCurveIds_.isEmpty()) {
+            drawingFrame_ = shapeWorkPlaneFrame(shape);
+            if (!isValidWorkPlaneFrame(drawingFrame_)) {
+                status_.text = QStringLiteral("That curve has no valid drawing plane");
+                publish(context);
+                return true;
+            }
+            context.viewportTransform().setWorkPlaneFrame(drawingFrame_);
         }
 
         QVector<QVector<QPointF>> sampledCurves;
@@ -1016,6 +1027,9 @@ void CircleTangentTool::cancel(ToolContext &context)
 ToolPreview CircleTangentTool::preview() const
 {
     ToolPreview result;
+    result.workPlaneFrame = drawingFrame_;
+    result.hasWorkPlaneFrame = isValidWorkPlaneFrame(drawingFrame_);
+    result.planeLocked = !selectedCurveIds_.isEmpty();
     result.shape = previewShape_;
     result.hasShape = previewAvailable_;
     result.statusText = status_.text;
@@ -1037,13 +1051,19 @@ bool CircleTangentTool::collectTargetCurves(
     }
     sampledCurves->clear();
 
-    QVector<Shape::NurbsCurve2D> curves = context.curveSampler().curvesForShape(shape);
-    if (shape.geometryType == GeometryType::Polygon && shape.points.size() >= 3) {
-        QVector<QPointF> closedPolygon = shape.points;
-        closedPolygon.append(shape.points.first());
-        curves.append(makeDegreeOneNurbs(closedPolygon));
+    const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(shape);
+    const qreal normalDot = sourceFrame.normal.x * drawingFrame_.normal.x +
+                            sourceFrame.normal.y * drawingFrame_.normal.y +
+                            sourceFrame.normal.z * drawingFrame_.normal.z;
+    if (!isValidWorkPlaneFrame(sourceFrame) ||
+        !isValidWorkPlaneFrame(drawingFrame_) ||
+        std::abs(std::abs(normalDot) - 1.0) > 1.0e-6 ||
+        std::abs(signedDistanceFromWorkPlaneFrame(sourceFrame.origin,
+                                                  drawingFrame_)) > 1.0e-7) {
+        return false;
     }
 
+    QVector<Shape::NurbsCurve2D> curves = context.curveSampler().curvesForShape(shape);
     for (const Shape::NurbsCurve2D &curve : curves) {
         if (!validateNurbsCurve(curve)) {
             continue;
@@ -1074,7 +1094,13 @@ bool CircleTangentTool::collectTargetCurves(
                 const qreal fraction = static_cast<qreal>(sample) / samplesPerSpan;
                 QPointF point;
                 if (evaluateNurbsPoint(curve, start + (end - start) * fraction, &point)) {
-                    points.append(point);
+                    const Point3D world = workPlaneFramePointToWorld(point,
+                                                                     sourceFrame);
+                    if (std::abs(signedDistanceFromWorkPlaneFrame(world,
+                                                                  drawingFrame_)) > 1.0e-7) {
+                        return false;
+                    }
+                    points.append(worldPointToWorkPlaneFrame(world, drawingFrame_));
                 }
             }
         }
@@ -1131,6 +1157,9 @@ bool CircleTangentTool::cycleTangentSolution(int direction,
                                                 ArcMode::TwoPoint,
                                                 0.0,
                                                 &previewShape_);
+        if (previewAvailable_) {
+            previewShape_.workPlaneFrame = drawingFrame_;
+        }
     }
     status_.state = ToolLifecycleState::Active;
     status_.canCommit = previewAvailable_;
@@ -1202,6 +1231,9 @@ bool CircleTangentTool::updateCirclePreview(const ToolInput &input,
                                                 ArcMode::TwoPoint,
                                                 0.0,
                                                 &previewShape_);
+        if (previewAvailable_) {
+            previewShape_.workPlaneFrame = drawingFrame_;
+        }
     }
 
     status_.state = ToolLifecycleState::Active;

@@ -15,6 +15,7 @@ ToolId TangentFromCurveTool::id() const
 void TangentFromCurveTool::begin(ToolContext &context)
 {
     curveObjectId_ = ObjectId::invalid();
+    drawingFrame_ = context.viewportTransform().workPlaneFrame();
     curvePickScreen_ = QPointF();
     tangentPoint_ = QPointF();
     tangentPreviewAvailable_ = false;
@@ -66,6 +67,8 @@ bool TangentFromCurveTool::handleMousePress(const ToolInput &input,
         }
 
         curveObjectId_ = context.document().objectIdAt(shapeIndex);
+        drawingFrame_ = shapeWorkPlaneFrame(shape);
+        context.viewportTransform().setWorkPlaneFrame(drawingFrame_);
         curvePickScreen_ = input.screenPosition;
         context.selection().setObjectIds({curveObjectId_}, curveObjectId_);
         status_.text = QStringLiteral("Curve selected — move to an endpoint and click to place the tangent line");
@@ -90,9 +93,16 @@ bool TangentFromCurveTool::handleMousePress(const ToolInput &input,
                              {tangentPoint_, endpoint},
                              ArcMode::TwoPoint,
                              0.0,
-                             &line) ||
-        !context.commitShape(ToolId::Line, line)) {
+                             &line)) {
         status_.text = QStringLiteral("Could not create the tangent line");
+        publish(context);
+        return true;
+    }
+    line.workPlane = context.viewportTransform().workPlane();
+    line.workPlaneOffset = context.viewportTransform().workPlaneOffset();
+    line.workPlaneFrame = drawingFrame_;
+    if (!context.commitShape(ToolId::Line, line)) {
+        status_.text = QStringLiteral("Could not commit the tangent line");
         publish(context);
         return true;
     }
@@ -126,6 +136,7 @@ bool TangentFromCurveTool::handleKey(const ToolInput &input,
     status_.text = QStringLiteral("Tangent line cancelled");
     status_.canCommit = false;
     curveObjectId_ = ObjectId::invalid();
+    drawingFrame_ = {};
     tangentPreviewAvailable_ = false;
     publish(context);
     context.finishTool(ToolId::Select);
@@ -135,6 +146,7 @@ bool TangentFromCurveTool::handleKey(const ToolInput &input,
 void TangentFromCurveTool::cancel(ToolContext &context)
 {
     curveObjectId_ = ObjectId::invalid();
+    drawingFrame_ = {};
     tangentPreviewAvailable_ = false;
     status_.state = ToolLifecycleState::Cancelled;
     status_.text = QStringLiteral("Tangent line cancelled");
@@ -145,6 +157,12 @@ void TangentFromCurveTool::cancel(ToolContext &context)
 ToolPreview TangentFromCurveTool::preview() const
 {
     ToolPreview result;
+    result.workPlaneFrame = drawingFrame_;
+    result.hasWorkPlaneFrame = isValidWorkPlaneFrame(drawingFrame_);
+    result.planeLocked = curveObjectId_.isValid();
+    result.workPlaneFrame = drawingFrame_;
+    result.hasWorkPlaneFrame = isValidWorkPlaneFrame(drawingFrame_);
+    result.planeLocked = curveObjectId_.isValid();
     if (tangentPreviewAvailable_) {
         result.points.append(tangentPoint_);
     }
@@ -163,6 +181,7 @@ bool TangentFromCurveTool::updateTangentPreview(const ToolInput &input,
     const Shape *shape = context.document().shape(curveObjectId_);
     if (shape == nullptr) {
         curveObjectId_ = ObjectId::invalid();
+        drawingFrame_ = {};
         tangentPreviewAvailable_ = false;
         status_.text = QStringLiteral("Selected curve is no longer available");
         status_.canCommit = false;

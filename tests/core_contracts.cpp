@@ -34,6 +34,7 @@
 #include "tools/perpendicular_from_curve_tool.h"
 #include "tools/point_tool.h"
 #include "tools/polygon_tool.h"
+#include "tools/rectangle_tool.h"
 #include "tools/tangent_from_curve_tool.h"
 #include "tools/tool_context.h"
 #include "tools/tool_registry.h"
@@ -3604,6 +3605,113 @@ int main(int argc, char **argv)
     }
     passed &= check(arcsUseVisibleTangencies,
                     "three circular arcs must use only tangent contacts on their visible spans");
+
+    for (ToolId rectangleId : {ToolId::Rectangle, ToolId::RectangleFromCenter,
+                               ToolId::RectangleThreePoint}) {
+        Document rectangleDocument;
+        SelectionModel rectangleSelection;
+        History rectangleHistory(rectangleDocument);
+        ViewportTransform rectangleTransform;
+        rectangleTransform.setViewPreset(ViewportViewPreset::Top);
+        const Point3D rectangleAnchor{12.0, 15.0, 4.0};
+        rectangleTransform.setWorkPlaneFrame(makeWorkPlaneFrameFromNormal(
+            rectangleAnchor, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0}));
+        CurveSampler rectangleSampler;
+        CurveHitTester rectangleHitTester;
+        SnapEngine rectangleSnaps;
+        ToolContext rectangleContext(rectangleDocument, rectangleSelection,
+            rectangleHistory, rectangleTransform, rectangleSampler,
+            rectangleHitTester, rectangleSnaps);
+        QVector<Shape> rectanglesCommitted;
+        ToolId rectangleFinished = rectangleId;
+        rectangleContext.setShapeCommitter([&](ToolId, const Shape &shape) {
+            rectanglesCommitted.append(shape);
+            return true;
+        });
+        rectangleContext.setToolFinisher([&](ToolId tool) { rectangleFinished = tool; });
+        const auto rectangleInput = [&](Point3D world) {
+            ToolInput input;
+            input.button = Qt::LeftButton;
+            input.modifiers = Qt::AltModifier;
+            input.viewportSize = QSize(640, 480);
+            input.workPlaneFrame = rectangleTransform.workPlaneFrame();
+            rectangleTransform.worldPointToScreen(world, input.viewportSize, &input.screenPosition);
+            input.worldPosition = worldPointToWorkPlaneFrame(world, input.workPlaneFrame);
+            input.rawWorldPosition = input.worldPosition;
+            input.snapType = SnapType::Endpoint;
+            return input;
+        };
+        RectangleTool rectangle(rectangleId);
+        rectangle.begin(rectangleContext);
+        rectangle.handleMousePress(rectangleInput(rectangleAnchor), rectangleContext);
+        rectangle.handleMouseMove(rectangleInput({22.0, 15.0, 4.0}), rectangleContext);
+        passed &= check(rectangle.preview().guides.size() == 1 &&
+                            rectangle.preview().guides.first().color == QColor(255, 26, 26),
+                        "rectangle axis-aligned cursor guide must be red like the add-on X axis");
+        rectangle.handleMouseMove(rectangleInput({22.0, 23.0, 4.0}), rectangleContext);
+        if (rectangleId == ToolId::RectangleThreePoint) {
+            rectangle.handleMousePress(rectangleInput({22.0, 18.0, 4.0}), rectangleContext);
+            rectangle.handleMouseMove(rectangleInput({20.0, 25.0, 4.0}), rectangleContext);
+        }
+        const Shape beforeTyping = rectangle.preview().shape;
+        const auto rectangleKey = [&](int key, const QString &text = {}) {
+            ToolInput input;
+            input.key = key; input.text = text;
+            rectangle.handleKey(input, rectangleContext);
+        };
+        rectangleKey(Qt::Key_X);
+        rectangleKey(Qt::Key_4, QStringLiteral("4"));
+        rectangleKey(Qt::Key_0, QStringLiteral("0"));
+        passed &= check(rectangle.preview().shape.nurbs.controlPoints == beforeTyping.nurbs.controlPoints &&
+                            rectangle.preview().hudDimensionsLine.contains(QStringLiteral("X: 40|")),
+                        "rectangle pending dimensions must stay in the X HUD field without changing geometry");
+        rectangleKey(Qt::Key_Return);
+        rectangleKey(Qt::Key_Y);
+        rectangleKey(Qt::Key_1, QStringLiteral("1"));
+        rectangleKey(Qt::Key_8, QStringLiteral("8"));
+        rectangleKey(Qt::Key_Return);
+        const auto rectangleSizes = [](const Shape &shape) {
+            const auto &cv = shape.nurbs.controlPoints;
+            return cv.size() == 5
+                ? QPointF(QLineF(cv[0], cv[1]).length(), QLineF(cv[1], cv[2]).length())
+                : QPointF{};
+        };
+        passed &= check(pointsAlmostEqual(rectangleSizes(rectangle.preview().shape), QPointF(40.0, 18.0)),
+                        "all rectangle tools must apply X/Y as full dimensions, including center construction");
+        if (rectangleId != ToolId::RectangleThreePoint) {
+            rectangleKey(Qt::Key_Shift);
+            passed &= check(pointsAlmostEqual(rectangleSizes(rectangle.preview().shape), QPointF(40.0, 40.0)),
+                            "rectangle square mode must use the larger locked side");
+            rectangleKey(Qt::Key_Shift);
+        }
+        rectangleKey(Qt::Key_P);
+        const ToolPreview perpendicularRectangle = rectangle.preview();
+        const Point3D normal = perpendicularRectangle.workPlaneFrame.normal;
+        const Point3D retainedAnchor = workPlaneFramePointToWorld(
+            perpendicularRectangle.points.first(), perpendicularRectangle.workPlaneFrame);
+        passed &= check(isValidWorkPlaneFrame(perpendicularRectangle.workPlaneFrame) &&
+                            std::abs(normal.z) < 1.0e-8 &&
+                            std::abs(retainedAnchor.x - rectangleAnchor.x) < 1.0e-8 &&
+                            std::abs(retainedAnchor.y - rectangleAnchor.y) < 1.0e-8 &&
+                            std::abs(retainedAnchor.z - rectangleAnchor.z) < 1.0e-8 &&
+                            pointsAlmostEqual(rectangleSizes(perpendicularRectangle.shape), QPointF(40.0, 18.0)),
+                        "rectangle P must create a perpendicular 3D frame without moving the anchor or locked dimensions");
+        rectangleTransform.setViewPreset(ViewportViewPreset::Perspective);
+        rectangle.handleMousePress(rectangleInput({22.0, 23.0, 14.0}), rectangleContext);
+        passed &= check(rectanglesCommitted.size() == 1 && rectangleFinished == ToolId::Select &&
+                            validateNurbsCurve(rectanglesCommitted.first().nurbs) &&
+                            rectanglesCommitted.first().nurbs.degree == 1 &&
+                            rectanglesCommitted.first().nurbs.controlPoints.first() ==
+                                rectanglesCommitted.first().nurbs.controlPoints.last() &&
+                            rectangleSampler.curvesForShape(rectanglesCommitted.first()).size() == 1,
+                        "rectangle commit must store one closed planar degree-1 NURBS and exit the tool");
+        rectangle.begin(rectangleContext);
+        rectangle.handleMousePress(rectangleInput(rectangleAnchor), rectangleContext);
+        rectangleKey(Qt::Key_Escape);
+        passed &= check(rectangleFinished == ToolId::Select && !rectangle.preview().hasShape &&
+                            rectangle.preview().points.isEmpty() && rectanglesCommitted.size() == 1,
+                        "rectangle Escape must exit and clear unfinished geometry without committing it");
+    }
 
     {
         Document lineDocument;

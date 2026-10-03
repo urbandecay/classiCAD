@@ -41,6 +41,15 @@ enum class ToolId : int {
     AngularDimension = 30,
     Scale = 31,
     Picture = 32,
+    CurveInterpolate = 33,
+    CurveFreehand = 34,
+    PointByLine = 35,
+    PointByArcs = 36,
+    PointCenter = 37,
+    PointEdgeCenter = 38,
+    PerpendicularFromEdge = 39,
+    TangentToTwoCurves = 40,
+    PerpendicularToTwoCurves = 41,
 };
 
 enum class EllipseMode {
@@ -82,6 +91,9 @@ PolygonMode polygonModeForTool(ToolId tool);
 bool isCircleConstructionTool(ToolId tool);
 bool isCircleTangentTool(ToolId tool);
 bool isCircleTool(ToolId tool);
+bool isPointCreationTool(ToolId tool);
+bool isCurveCreationTool(ToolId tool);
+bool isTwoCurveLineTool(ToolId tool);
 bool isDimensionTool(ToolId tool);
 QString toolName(ToolId tool);
 QString scaleModeName(ScaleMode mode);

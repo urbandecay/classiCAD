@@ -35,6 +35,7 @@ private:
     QVector<ObjectId> selectedCurveIds_;
     QVector<QVector<QVector<QPointF>>> sampledCurveGroups_;
     QVector<bool> closedCurveTargets_;
+    WorkPlaneFrame drawingFrame_;
     QVector<TangentCircleCandidate> circleTargets_;
     QVector<TangentCircleCandidate> exactSolutions_;
     ToolInput lastPreviewInput_;

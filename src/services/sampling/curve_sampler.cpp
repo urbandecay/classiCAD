@@ -110,6 +110,7 @@ QVector<Shape::NurbsCurve2D> CurveSampler::curvesForShape(const Shape &shape) co
         return {makeBezierNurbs(shape.points)};
     }
     if (shape.geometryType == GeometryType::Rectangle && shape.points.size() >= 2) {
+        if (validateNurbsCurve(shape.nurbs)) return {shape.nurbs};
         QVector<QPointF> vertices;
         if (shape.points.size() >= 4) {
             vertices = {shape.points[0], shape.points[1], shape.points[2], shape.points[3]};

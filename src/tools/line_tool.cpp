@@ -29,6 +29,33 @@ Point3D axisDirection(int key)
     default: return {};
     }
 }
+bool isLengthCharacter(const QChar character)
+{
+    return character.isDigit() || character.isLetter() ||
+           character == QLatin1Char('.') || character == QLatin1Char(',') ||
+           character == QLatin1Char('-') || character == QLatin1Char('+') ||
+           character == QLatin1Char('/') || character == QLatin1Char('\'') ||
+           character == QLatin1Char('"') || character == QLatin1Char(' ');
+}
+bool canStartLengthInput(const QString &text)
+{
+    if (text.isEmpty()) return false;
+    const QChar first = text.front();
+    return first.isDigit() || first == QLatin1Char('.') ||
+           first == QLatin1Char(',') || first == QLatin1Char('-') ||
+           first == QLatin1Char('+');
+}
+QString lengthUnitSuffix(DocumentLengthUnit unit)
+{
+    switch (unit) {
+    case DocumentLengthUnit::Millimeter: return QStringLiteral("mm");
+    case DocumentLengthUnit::Centimeter: return QStringLiteral("cm");
+    case DocumentLengthUnit::Meter: return QStringLiteral("m");
+    case DocumentLengthUnit::Inch: return QStringLiteral("in");
+    case DocumentLengthUnit::Foot: return QStringLiteral("ft");
+    }
+    return QStringLiteral("mm");
+}
 // Preserve the longest planar runs. Changing planes creates component curves
 // rather than storing nonplanar points in a NurbsCurve2D.
 QVector<Shape> planarRuns(const QVector<Point3D> &points,
@@ -109,6 +136,7 @@ void LineTool::reset()
     constraintAxisKey_ = 0;
     normalLock_ = false;
     planeLocked_ = false;
+    lengthInput_.clear();
     shiftLockDirection_ = {};
     shiftLockActive_ = false;
     lastInput_ = {};
@@ -119,7 +147,7 @@ void LineTool::begin(ToolContext &context)
 {
     reset();
     status_.state = ToolLifecycleState::Active;
-    status_.text = QStringLiteral("Line: pick first point");
+    updateStatus(context);
     publish(context);
 }
 bool LineTool::handleMousePress(const ToolInput &input, ToolContext &context)
@@ -130,12 +158,19 @@ bool LineTool::handleMousePress(const ToolInput &input, ToolContext &context)
     }
     if (input.button != Qt::LeftButton) return false;
     lastInput_ = input;
+    appendCurrentPoint(input, context);
+    return true;
+}
+bool LineTool::appendCurrentPoint(const ToolInput &input,
+                                  ToolContext &context,
+                                  bool applyPendingLength)
+{
     if (points_.isEmpty()) {
         if (!planeLocked_) {
             drawingFrame_ = isValidWorkPlaneFrame(input.workPlaneFrame)
                 ? input.workPlaneFrame : context.viewportTransform().workPlaneFrame();
         }
-        if (!isValidWorkPlaneFrame(drawingFrame_)) return false;
+        if (!isValidWorkPlaneFrame(drawingFrame_)) return true;
         snap_ = context.snapEngine().findSpatialSnapPoint(context.document(),
             input.screenPosition, nullptr, context.viewportTransform(), input.viewportSize);
         cursorPoint_ = snap_.hasWorldPoint ? snap_.worldPoint
@@ -143,6 +178,7 @@ bool LineTool::handleMousePress(const ToolInput &input, ToolContext &context)
         planeLocked_ = true;
     } else {
         cursorPoint_ = resolveCursorPoint(input, context);
+        if (applyPendingLength) applyTypedLengthToCursor(context);
         if (length(subtract(cursorPoint_, points_.back())) <= 1.0e-8) return true;
     }
     points_.append(cursorPoint_);
@@ -164,9 +200,10 @@ bool LineTool::handleMousePress(const ToolInput &input, ToolContext &context)
         constraintAxisKey_ = 0;
         normalLock_ = false;
     }
+    lengthInput_.clear();
     shiftLockActive_ = false;
     status_.canCommit = points_.size() >= 2;
-    status_.text = QStringLiteral("Line: %1 points  •  Right-click to finish").arg(points_.size());
+    updateStatus(context);
     publish(context);
     return true;
 }
@@ -183,11 +220,60 @@ bool LineTool::handleMouseMove(const ToolInput &input, ToolContext &context)
     }
     cursorPoint_ = resolveCursorPoint(input, context);
     hasCursorPoint_ = true;
+    updateStatus(context);
     publish(context);
     return true;
 }
 bool LineTool::handleKey(const ToolInput &input, ToolContext &context)
 {
+    if (input.key == Qt::Key_Escape) {
+        cancel(context);
+        context.finishTool(ToolId::Select);
+        return true;
+    }
+
+    if (!lengthInput_.isEmpty()) {
+        if (input.key == Qt::Key_Backspace) {
+            lengthInput_.chop(1);
+            updateStatus(context);
+            publish(context);
+            return true;
+        }
+        if (input.key == Qt::Key_Return || input.key == Qt::Key_Enter) {
+            qreal distance = 0.0;
+            if (!points_.isEmpty() &&
+                parseDocumentLengthInput(lengthInput_,
+                                         context.document().settings().lengthUnit,
+                                         &distance)) {
+                appendCurrentPoint(lastInput_, context, true);
+            } else {
+                status_.text = QStringLiteral("Line: enter a valid segment length");
+                publish(context);
+            }
+            return true;
+        }
+        const QString typedText = input.text;
+        if (!typedText.isEmpty() &&
+            !(input.modifiers & (Qt::ControlModifier | Qt::AltModifier |
+                                 Qt::MetaModifier))) {
+            bool accepted = true;
+            for (const QChar character : typedText) {
+                if (!isLengthCharacter(character)) {
+                    accepted = false;
+                    break;
+                }
+            }
+            if (accepted) {
+                lengthInput_.append(typedText == QStringLiteral(",")
+                                        ? QStringLiteral(".")
+                                        : typedText.toLower());
+                updateStatus(context);
+                publish(context);
+                return true;
+            }
+        }
+    }
+
     if (input.key == Qt::Key_L) {
         planeLocked_ = !planeLocked_;
         if (planeLocked_) {
@@ -200,8 +286,7 @@ bool LineTool::handleKey(const ToolInput &input, ToolContext &context)
             drawingFrame_.origin.z += drawingFrame_.normal.z * offset;
             context.viewportTransform().setWorkPlaneFrame(drawingFrame_);
         }
-        status_.text = planeLocked_ ? QStringLiteral("Line: plane locked")
-                                  : QStringLiteral("Line: plane unlocked");
+        updateStatus(context);
         publish(context);
         return true;
     }
@@ -218,6 +303,7 @@ bool LineTool::handleKey(const ToolInput &input, ToolContext &context)
         shiftLockActive_ = false;
         cursorPoint_ = resolveCursorPoint(lastInput_, context);
         status_.canCommit = points_.size() >= 2;
+        updateStatus(context);
         publish(context);
         return true;
     }
@@ -233,17 +319,26 @@ bool LineTool::handleKey(const ToolInput &input, ToolContext &context)
         }
         shiftLockActive_ = false;
         if (!points_.isEmpty()) cursorPoint_ = resolveCursorPoint(lastInput_, context);
-        status_.text = normalLock_ ? QStringLiteral("Line: normal direction locked")
-            : constraintAxisKey_ != 0
-                ? QStringLiteral("Line: constrained to world %1").arg(QChar(constraintAxisKey_))
-                : QStringLiteral("Line: axis constraint cleared");
+        updateStatus(context);
         publish(context);
         return true;
     }
-    if (input.key != Qt::Key_Escape) return false;
-    cancel(context);
-    context.finishTool(ToolId::Select);
-    return true;
+    if (input.key == Qt::Key_Return || input.key == Qt::Key_Enter ||
+        input.key == Qt::Key_Space) {
+        commit(context);
+        return true;
+    }
+
+    const bool plainTextInput =
+        !(input.modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+    if (!points_.isEmpty() && plainTextInput && canStartLengthInput(input.text)) {
+        lengthInput_ = input.text == QStringLiteral(",")
+            ? QStringLiteral(".") : input.text.toLower();
+        updateStatus(context);
+        publish(context);
+        return true;
+    }
+    return false;
 }
 void LineTool::cancel(ToolContext &context)
 {
@@ -362,6 +457,73 @@ Point3D LineTool::resolveCursorPoint(const ToolInput &input, const ToolContext &
     return {reference.x + direction.x * distance,
             reference.y + direction.y * distance,
             reference.z + direction.z * distance};
+}
+void LineTool::applyTypedLengthToCursor(ToolContext &context)
+{
+    if (points_.isEmpty() || lengthInput_.isEmpty()) return;
+    qreal distance = 0.0;
+    if (!parseDocumentLengthInput(lengthInput_,
+                                 context.document().settings().lengthUnit,
+                                 &distance)) {
+        return;
+    }
+    distance = std::max<qreal>(0.0001, std::abs(distance));
+    const Point3D reference = points_.back();
+    Point3D direction = normalized(subtract(cursorPoint_, reference));
+    if (length(direction) <= 1.0e-12) {
+        direction = axisDirection(constraintAxisKey_);
+        if (length(direction) <= 1.0e-12 && normalLock_) {
+            direction = drawingFrame_.normal;
+        }
+        if (length(direction) <= 1.0e-12 && shiftLockActive_) {
+            direction = shiftLockDirection_;
+        }
+        if (length(direction) <= 1.0e-12 && points_.size() >= 2) {
+            direction = subtract(points_.back(), points_[points_.size() - 2]);
+        }
+        if (length(direction) <= 1.0e-12) direction = drawingFrame_.xAxis;
+        direction = normalized(direction);
+    }
+    cursorPoint_ = {reference.x + direction.x * distance,
+                    reference.y + direction.y * distance,
+                    reference.z + direction.z * distance};
+    hasCursorPoint_ = true;
+}
+void LineTool::updateStatus(const ToolContext &context)
+{
+    status_.canCommit = points_.size() >= 2;
+    if (points_.isEmpty()) {
+        status_.text = QStringLiteral("Line: click the first point");
+        return;
+    }
+
+    const DocumentLengthUnit unit = context.document().settings().lengthUnit;
+    const qreal unitScale = millimetersPerDocumentUnit(unit);
+    const qreal segmentLength = hasCursorPoint_
+        ? length(subtract(cursorPoint_, points_.back())) / unitScale : 0.0;
+    if (!lengthInput_.isEmpty()) {
+        const bool hasExplicitUnit = std::any_of(
+            lengthInput_.cbegin(), lengthInput_.cend(),
+            [](QChar character) {
+                return character.isLetter() || character == QLatin1Char('\'') ||
+                       character == QLatin1Char('"');
+            });
+        status_.text = QStringLiteral("Line: segment %1%2")
+            .arg(lengthInput_ + QLatin1Char('|'),
+                 hasExplicitUnit ? QString() : QStringLiteral(" %1").arg(lengthUnitSuffix(unit)));
+    } else {
+        status_.text = QStringLiteral("Line: segment %1 %2")
+            .arg(QString::number(segmentLength, 'g', 5), lengthUnitSuffix(unit));
+    }
+    if (constraintAxisKey_ != 0) {
+        status_.text += QStringLiteral(" • %1 axis")
+            .arg(QChar(constraintAxisKey_));
+    } else if (normalLock_) {
+        status_.text += QStringLiteral(" • normal locked");
+    } else if (shiftLockActive_) {
+        status_.text += QStringLiteral(" • direction locked");
+    }
+    if (planeLocked_) status_.text += QStringLiteral(" • plane locked");
 }
 void LineTool::publish(ToolContext &context)
 {

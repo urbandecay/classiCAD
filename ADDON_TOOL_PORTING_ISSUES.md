@@ -76,3 +76,28 @@ misread or implemented incorrectly.
   app's ortho modifier is active; it only skips inference for geometry snaps
   or Alt bypass. Do not suppress this behavior just because `orthoEnabled` is
   set.
+
+## Rectangle port findings
+
+- Review `rectangle_tools.py` together with `modal_core.py`,
+  `text_entry_utils.py`, and the rectangle branches in `tool_previews.py` and
+  `hud_overlay.py`. X/Y dimension entry comes from the shared modal handler.
+- Center-corner numeric X/Y values are full width/height, although the tool
+  uses half-extents internally. Preserve the cursor's sign when locking a
+  dimension. Keep pending text in the X/Y HUD field until Enter applies it.
+- Shift toggles square mode only in center-corner and corner-corner modes.
+  Use the larger live dimension, or the larger locked dimension, for its side.
+  Direct number typing enters the shared square side only in square mode.
+- The two corner tools must not infer world-axis directions: that would zero
+  one dimension and collapse the rectangle. P chooses a view-aligned vertical
+  plane from the reference normal before resolving the cursor ray; using the
+  floor snap point in that mode collapses its height.
+- Three-point rectangles first define an edge in the reference plane, then
+  resolve height along the line through the edge endpoint. P changes that
+  height direction to the captured reference normal. It does not turn the
+  first edge-picking stage into the corner tools' vertical plane.
+- Use the tool's actual preview shape for OpenGL rendering and markers.
+  Rebuilding a rectangle from generic pending points loses locked dimensions
+  and perpendicular behavior. Suppress the generic HUD hint in every mode.
+- Store the closed rectangle as a degree-1 NURBS and use its CVs for rendering,
+  hit testing, corner snaps, control points, and sampling after edits.

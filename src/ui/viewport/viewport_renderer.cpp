@@ -686,6 +686,10 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
 
 QVector<QPointF> ViewportRenderer::rectangleVertices(const Shape &shape) const
 {
+    if (shape.geometryType == GeometryType::Rectangle &&
+        isValidNurbsCurve(shape.nurbs) && shape.nurbs.controlPoints.size() == 5) {
+        return shape.nurbs.controlPoints.mid(0, 4);
+    }
     if (shape.geometryType != GeometryType::Rectangle || shape.points.size() < 2) {
         return {};
     }
@@ -845,6 +849,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
         }
     } else if (shape.geometryType == GeometryType::Rectangle && shape.points.size() >= 2) {
+        if (isValidNurbsCurve(shape.nurbs)) {
+            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+            return;
+        }
         const QVector<QPointF> vertices = rectangleVertices(shape);
         if (vertices.size() >= 4) {
             QPainterPath rectanglePath;

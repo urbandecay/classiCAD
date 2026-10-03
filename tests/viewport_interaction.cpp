@@ -966,6 +966,20 @@ int main(int argc, char **argv)
     passed &= check(viewport->viewPreset() == ViewportViewPreset::Custom,
                     "Shift plus the configured pan button must orbit the actual viewport camera");
 
+    const QColor rectangleLayerColor(36, 180, 220);
+    ViewportLayerCommandRequest rectangleColorRequest;
+    rectangleColorRequest.command = ViewportLayerCommand::SetColor;
+    QColor previousRectangleLayerColor;
+    for (const ViewportLayerInfo &layer : viewport->layerInfos()) {
+        if (layer.active) {
+            rectangleColorRequest.layerId = layer.id;
+            previousRectangleLayerColor = layer.color;
+            break;
+        }
+    }
+    rectangleColorRequest.color = rectangleLayerColor;
+    passed &= check(viewport->executeLayerCommand(rectangleColorRequest).accepted,
+                    "rectangle preview test must configure a distinct active layer color");
     const QImage beforeRectangle = captureViewport(viewport.get());
     viewport->setTool(ToolId::Rectangle);
     const QPointF rectangleStart(170.0, 290.0);
@@ -978,20 +992,11 @@ int main(int argc, char **argv)
               Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     application.processEvents();
     const QImage rectanglePreview = captureViewport(viewport.get());
-    const auto previewGoldPixels = [](const QImage &image) {
-        int count = 0;
-        for (int y = 0; y < image.height(); ++y) {
-            for (int x = 0; x < image.width(); ++x) {
-                const QColor color = image.pixelColor(x, y);
-                count += color.red() > 175 && color.green() > 115 &&
-                         color.green() < 215 && color.blue() < 140;
-            }
-        }
-        return count;
-    };
+    saveGridCapture(QStringLiteral("rectangle-preview"), rectanglePreview);
     if (QApplication::platformName() == QStringLiteral("xcb")) {
-        passed &= check(previewGoldPixels(rectanglePreview) > 20,
-                        "in-progress rectangle preview must be rendered into the native OpenGL viewport");
+        passed &= check(pixelsNearColor(rectanglePreview, rectangleLayerColor, 45) >
+                            pixelsNearColor(beforeRectangle, rectangleLayerColor, 45) + 20,
+                        "rectangle preview must use the active layer color in the native OpenGL viewport");
     }
     sendMouse(viewport.get(), QEvent::MouseButtonPress, rectangleEnd,
               Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
@@ -1013,8 +1018,11 @@ int main(int argc, char **argv)
         return count;
     };
     passed &= check(afterRectangle != beforeRectangle &&
-                        orangePixels(afterRectangle) > orangePixels(beforeRectangle) + 25,
+                        pixelsNearColor(afterRectangle, rectangleLayerColor, 45) >
+                            pixelsNearColor(beforeRectangle, rectangleLayerColor, 45) + 25,
                     "committed rectangle stroke must appear after viewport rendering");
+    rectangleColorRequest.color = previousRectangleLayerColor;
+    viewport->executeLayerCommand(rectangleColorRequest);
 
     QTemporaryDir pictureDirectory;
     QImage pictureImage(64, 64, QImage::Format_ARGB32);

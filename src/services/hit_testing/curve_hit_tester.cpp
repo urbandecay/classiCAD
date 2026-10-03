@@ -37,6 +37,10 @@ qreal CurveHitTester::distanceToSegment(const QPointF &point,
 
 QVector<QPointF> CurveHitTester::rectangleVertices(const Shape &shape) const
 {
+    if (shape.geometryType == GeometryType::Rectangle &&
+        validateNurbsCurve(shape.nurbs) && shape.nurbs.controlPoints.size() == 5) {
+        return shape.nurbs.controlPoints.mid(0, 4);
+    }
     if (shape.geometryType != GeometryType::Rectangle || shape.points.size() < 2) {
         return {};
     }
@@ -369,6 +373,9 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                           viewportSize);
     }
     if (shape.geometryType == GeometryType::Rectangle) {
+        if (validateNurbsCurve(shape.nurbs)) {
+            return distanceToNurbsCurve(screenPosition, shape.nurbs, transform, viewportSize);
+        }
         const QVector<QPointF> vertices = rectangleVertices(shape);
         if (vertices.size() < 4) {
             return 1.0e9;
@@ -437,6 +444,7 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
 
 QVector<QPointF> CurveHitTester::controlPointsForShape(const Shape &shape) const
 {
+    if (shape.geometryType == GeometryType::Rectangle) return rectangleVertices(shape);
     if (shape.geometryType == GeometryType::Point ||
         isDimensionGeometryType(shape.geometryType)) {
         return {};

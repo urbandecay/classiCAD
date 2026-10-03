@@ -86,6 +86,25 @@ bool isCircleTool(ToolId tool)
     return isCircleConstructionTool(tool) || isCircleTangentTool(tool);
 }
 
+bool isPointCreationTool(ToolId tool)
+{
+    return tool == ToolId::Point || tool == ToolId::PointByLine ||
+           tool == ToolId::PointByArcs || tool == ToolId::PointCenter ||
+           tool == ToolId::PointEdgeCenter;
+}
+
+bool isCurveCreationTool(ToolId tool)
+{
+    return tool == ToolId::Bezier || tool == ToolId::Nurbs ||
+           tool == ToolId::CurveInterpolate || tool == ToolId::CurveFreehand;
+}
+
+bool isTwoCurveLineTool(ToolId tool)
+{
+    return tool == ToolId::TangentToTwoCurves ||
+           tool == ToolId::PerpendicularToTwoCurves;
+}
+
 bool isDimensionTool(ToolId tool)
 {
     return tool == ToolId::LinearDimension || tool == ToolId::AngularDimension;
@@ -158,6 +177,24 @@ QString toolName(ToolId tool)
         return QStringLiteral("Angular Dimension");
     case ToolId::Picture:
         return QStringLiteral("Picture");
+    case ToolId::CurveInterpolate:
+        return QStringLiteral("Interpolate Curve");
+    case ToolId::CurveFreehand:
+        return QStringLiteral("Freehand Curve");
+    case ToolId::PointByLine:
+        return QStringLiteral("Point by Line");
+    case ToolId::PointByArcs:
+        return QStringLiteral("Point by Arcs");
+    case ToolId::PointCenter:
+        return QStringLiteral("Point Center");
+    case ToolId::PointEdgeCenter:
+        return QStringLiteral("Curve Span Center");
+    case ToolId::PerpendicularFromEdge:
+        return QStringLiteral("Perpendicular from Edge");
+    case ToolId::TangentToTwoCurves:
+        return QStringLiteral("Tangent to Two Curves");
+    case ToolId::PerpendicularToTwoCurves:
+        return QStringLiteral("Perpendicular to Two Curves");
     }
 
     return QStringLiteral("Unknown");
@@ -198,6 +235,10 @@ int requiredPoints(ToolId tool)
     case ToolId::PolygonEdge:
         return 2;
     case ToolId::Point:
+    case ToolId::PointByLine:
+    case ToolId::PointByArcs:
+    case ToolId::PointCenter:
+    case ToolId::PointEdgeCenter:
         return 1;
     case ToolId::Picture:
         return 2;
@@ -213,6 +254,11 @@ int requiredPoints(ToolId tool)
     case ToolId::Mirror:
     case ToolId::TangentFromCurve:
     case ToolId::PerpendicularFromCurve:
+    case ToolId::PerpendicularFromEdge:
+    case ToolId::TangentToTwoCurves:
+    case ToolId::PerpendicularToTwoCurves:
+    case ToolId::CurveInterpolate:
+    case ToolId::CurveFreehand:
         return 0;
     case ToolId::RectangleThreePoint:
     case ToolId::CircleThreePoint:

@@ -38,6 +38,7 @@ set(CLASSICAD_CORE_SOURCES
     src/core/geometry/geometry_type.cpp
     src/core/geometry/nurbs_curve.cpp
     src/core/geometry/arc_curve_factory.cpp
+    src/core/geometry/interpolating_curve_factory.cpp
     src/core/geometry/work_plane.cpp
     src/core/geometry/curve_evaluator.cpp
     src/core/geometry/circle_construction.cpp
@@ -74,6 +75,9 @@ set(CLASSICAD_TOOL_SOURCES
     src/tools/arc_tool.cpp
     src/tools/erase_tool.cpp
     src/tools/point_tool.cpp
+    src/tools/point_construction_tool.cpp
+    src/tools/curve_drawing_tool.cpp
+    src/tools/two_curve_line_tool.cpp
     src/tools/line_tool.cpp
     src/tools/tangent_from_curve_tool.cpp
     src/tools/perpendicular_from_curve_tool.cpp

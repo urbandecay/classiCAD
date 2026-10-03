@@ -380,6 +380,13 @@ public:
                     cursorWorld_ = preview.cursorPoint;
                 }
             }
+            if (isRectangleTool(activeTool_)) {
+                rectangleHudDimensionsLine_ = preview.hudDimensionsLine;
+                rectangleHudInstructionsLine_ = preview.hudInstructionsLine;
+                rectanglePreviewGuides_ = preview.guides;
+                cursorValid_ = preview.hasCursorPoint;
+                if (preview.hasCursorPoint) cursorWorld_ = preview.cursorPoint;
+            }
             if (isPolygonTool(activeTool_)) {
                 polygonHudDimensionsLine_ = preview.hudDimensionsLine;
                 polygonHudInstructionsLine_ = preview.hudInstructionsLine;
@@ -550,6 +557,9 @@ public:
         ellipsePreviewGuides_.clear();
         polygonHudDimensionsLine_.clear();
         polygonHudInstructionsLine_.clear();
+        rectangleHudDimensionsLine_.clear();
+        rectangleHudInstructionsLine_.clear();
+        rectanglePreviewGuides_.clear();
         resetArcPreviewTracking();
         resetArcInputState();
         lineCommandActive_ = tool == Tool::Line;
@@ -2906,7 +2916,8 @@ protected:
             const QColor previewColor(QStringLiteral("#e6b85c"));
             const QColor activeToolPreviewColor =
                 activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_) ||
-                        isEllipseTool(activeTool_) || isPolygonTool(activeTool_)
+                        isEllipseTool(activeTool_) || isPolygonTool(activeTool_) ||
+                        isRectangleTool(activeTool_)
                     ? arcPreviewColor
                     : previewColor;
             for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
@@ -2956,7 +2967,25 @@ protected:
                     false, false);
             }
 
-            if (isCircleConstructionTool(activeTool_)) {
+            if (isRectangleTool(activeTool_)) {
+                const QColor markerColor(QStringLiteral("#101010"));
+                for (const ToolPreviewGuide &guide : rectanglePreviewGuides_) {
+                    gpuActiveToolPreview |= addSolidPreviewLine(
+                        guide.line.p1(), guide.line.p2(), guide.color, 1.5f);
+                }
+                for (const QPointF &point : pendingPoints_) {
+                    gpuActiveToolPreview |= addPreviewPoint(point, markerColor, 5.0f, false);
+                }
+                if (cursorValid_) {
+                    gpuActiveToolPreview |= addPreviewPoint(cursorWorld_, markerColor, 5.0f, false);
+                }
+                if (controllerPreviewShapeVisible_ &&
+                    controllerPreviewShape_.geometryType == GeometryType::Rectangle) {
+                    for (const QPointF &point : rectangleVertices(controllerPreviewShape_)) {
+                        gpuActiveToolPreview |= addPreviewPoint(point, markerColor, 5.0f, false);
+                    }
+                }
+            } else if (isCircleConstructionTool(activeTool_)) {
                 const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
                 const auto circleGuideColor = [&](const QPointF &delta) {
                     const qreal worldX = frame.xAxis.x * delta.x() +
@@ -3042,6 +3071,7 @@ protected:
                        !isEllipseTool(activeTool_) &&
                        !isCircleConstructionTool(activeTool_) &&
                        !isPolygonTool(activeTool_) &&
+                       !isRectangleTool(activeTool_) &&
                        !pendingPoints_.isEmpty() && cursorValid_) {
                 QVector<QPointF> candidatePoints = pendingPoints_;
                 candidatePoints.append(cursorWorld_);
@@ -3660,6 +3690,7 @@ protected:
              activeTool_ == Tool::PointByArcs ||
              activeTool_ == Tool::CurveInterpolate ||
              activeTool_ == Tool::CurveFreehand ||
+             isRectangleTool(activeTool_) ||
              isTwoCurveLineTool(activeTool_)) &&
             activeToolController_ != nullptr) {
             const ToolInput input = makeToolInput(event, screenPosition,
@@ -8047,6 +8078,10 @@ private:
 
     QVector<QPointF> rectangleVertices(const Shape &shape) const
     {
+        if (shape.geometryType == GeometryType::Rectangle &&
+            validateNurbsCurve(shape.nurbs) && shape.nurbs.controlPoints.size() == 5) {
+            return shape.nurbs.controlPoints.mid(0, 4);
+        }
         if (shape.geometryType != GeometryType::Rectangle || shape.points.size() < 2) {
             return {};
         }
@@ -10668,6 +10703,9 @@ private:
                 controlPointIndex < shape.points.size()) {
                 shape.points[controlPointIndex] += delta;
             }
+            if (shape.geometryType == GeometryType::Rectangle) {
+                shape.points = rectangleVertices(shape);
+            }
             return;
         }
 
@@ -12752,14 +12790,36 @@ private:
 
     void drawRectangleToolPreview(QPainter &painter, bool drawCurve = true)
     {
-        viewportOverlay_.drawRectanglePreview(painter,
-                                              activeTool_,
-                                              pendingPoints_,
-                                              cursorWorld_,
-                                              cursorValid_,
-                                              currentSnap_,
-                                              size(),
-                                              drawCurve);
+        if (drawCurve) {
+            if (controllerPreviewShapeVisible_) {
+                const Layer *layer = document_.layer(document_.activeLayerId());
+                const QColor color = layer != nullptr && layer->color.isValid()
+                    ? layer->color : QColor(QStringLiteral("#000000"));
+                drawShape(painter, controllerPreviewShape_, true, false, true, color);
+            }
+            QVector<QPointF> markers = pendingPoints_;
+            if (controllerPreviewShapeVisible_ &&
+                controllerPreviewShape_.geometryType == GeometryType::Rectangle) {
+                markers += rectangleVertices(controllerPreviewShape_);
+            }
+            painter.save();
+            painter.setRenderHint(QPainter::Antialiasing, true);
+            for (const ToolPreviewGuide &guide : rectanglePreviewGuides_) {
+                painter.setPen(QPen(guide.color, 1.5));
+                painter.drawLine(worldToScreen(guide.line.p1()),worldToScreen(guide.line.p2()));
+            }
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(QStringLiteral("#101010")));
+            for (const QPointF &point : markers) {
+                painter.drawEllipse(worldToScreen(point), 2.5, 2.5);
+            }
+            if (cursorValid_) painter.drawEllipse(worldToScreen(cursorWorld_), 2.5, 2.5);
+            painter.restore();
+        }
+        if (currentSnap_.isValid()) drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        drawArcHudPanel(painter,
+                        {rectangleHudDimensionsLine_, rectangleHudInstructionsLine_},
+                        750.0);
     }
 
     void drawPolygonToolPreview(QPainter &painter, bool drawCurve = true)
@@ -13055,6 +13115,9 @@ private:
             if (result.points.size() != 4) {
                 return false;
             }
+            QVector<QPointF> closedPoints = result.points;
+            closedPoints.append(closedPoints.first());
+            result.nurbs = makeDegreeOneNurbs(closedPoints);
         } else if (isPolygonTool(tool)) {
             result.points = makeRegularPolygonPoints(
                 polygonModeForTool(tool), points, polygonSideCount_);
@@ -13177,6 +13240,9 @@ private:
     QString ellipseHudInstructionsLine_;
     QString polygonHudDimensionsLine_;
     QString polygonHudInstructionsLine_;
+    QString rectangleHudDimensionsLine_;
+    QString rectangleHudInstructionsLine_;
+    QVector<ToolPreviewGuide> rectanglePreviewGuides_;
     QVector<ToolPreviewGuide> ellipsePreviewGuides_;
     WorkPlaneFrame toolDrawingFrame_;
     bool toolDrawingPlaneLocked_ = false;

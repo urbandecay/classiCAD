@@ -2112,12 +2112,14 @@ private:
         group->setExclusive(true);
 
         selectToolButton_ = addToolButton(layout, group, QStringLiteral("↖\nSelect"), Tool::Select, true);
-        addToolButton(layout, group, QStringLiteral("•\nPoint"), Tool::Point);
+        pointToolButton_ = addToolButton(layout, group, QStringLiteral("•\nPoint"), Tool::Point);
+        createPointToolMenu(pointToolButton_);
         lineToolButton_ = addToolButton(layout, group, QStringLiteral("╱\nLine"), Tool::Line);
         createLineToolMenu(lineToolButton_);
         arcToolButton_ = addToolButton(layout, group, QStringLiteral("⌒\nArc"), Tool::Arc);
         createArcToolMenu(arcToolButton_);
-        addToolButton(layout, group, QStringLiteral("∿\nBezier"), Tool::Bezier);
+        bezierToolButton_ = addToolButton(layout, group, QStringLiteral("∿\nBezier"), Tool::Bezier);
+        createCurveToolMenu(bezierToolButton_);
         addToolButton(layout, group, QStringLiteral("N\nNURBS"), Tool::Nurbs);
         rectangleToolButton_ = addToolButton(layout,
                                              group,
@@ -2356,6 +2358,80 @@ private:
         statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
     }
 
+    void activatePointTool(ToolId tool)
+    {
+        if (pointToolButton_ != nullptr) {
+            pointToolButton_->setChecked(true);
+        }
+        viewport_->setTool(tool);
+        statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
+    }
+
+    void activateCurveTool(ToolId tool)
+    {
+        if (bezierToolButton_ != nullptr) {
+            bezierToolButton_->setChecked(true);
+        }
+        viewport_->setTool(tool);
+        statusBar()->showMessage(QStringLiteral("Active tool: %1").arg(toolName(tool)));
+    }
+
+    void createPointToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+        auto *menu = new QMenu(button);
+        QAction *pointAction = menu->addAction(QStringLiteral("Point"));
+        QAction *pointByLineAction = menu->addAction(QStringLiteral("Point by Line"));
+        QAction *pointByArcsAction = menu->addAction(QStringLiteral("Point by Arcs"));
+        QAction *pointCenterAction = menu->addAction(QStringLiteral("Point Center"));
+        QAction *edgeCenterAction = menu->addAction(QStringLiteral("Curve Span Center"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+        connect(pointAction, &QAction::triggered, this, [this]() {
+            activatePointTool(Tool::Point);
+        });
+        connect(pointByLineAction, &QAction::triggered, this, [this]() {
+            activatePointTool(Tool::PointByLine);
+        });
+        connect(pointByArcsAction, &QAction::triggered, this, [this]() {
+            activatePointTool(Tool::PointByArcs);
+        });
+        connect(pointCenterAction, &QAction::triggered, this, [this]() {
+            activatePointTool(Tool::PointCenter);
+        });
+        connect(edgeCenterAction, &QAction::triggered, this, [this]() {
+            activatePointTool(Tool::PointEdgeCenter);
+        });
+    }
+
+    void createCurveToolMenu(QToolButton *button)
+    {
+        if (button == nullptr) {
+            return;
+        }
+        auto *menu = new QMenu(button);
+        QAction *bezierAction = menu->addAction(QStringLiteral("Bezier"));
+        QAction *nurbsAction = menu->addAction(QStringLiteral("NURBS"));
+        QAction *interpolateAction = menu->addAction(QStringLiteral("Interpolate Curve"));
+        QAction *freehandAction = menu->addAction(QStringLiteral("Freehand Curve"));
+        button->setMenu(menu);
+        button->setPopupMode(QToolButton::DelayedPopup);
+        connect(bezierAction, &QAction::triggered, this, [this]() {
+            activateCurveTool(Tool::Bezier);
+        });
+        connect(nurbsAction, &QAction::triggered, this, [this]() {
+            activateCurveTool(Tool::Nurbs);
+        });
+        connect(interpolateAction, &QAction::triggered, this, [this]() {
+            activateCurveTool(Tool::CurveInterpolate);
+        });
+        connect(freehandAction, &QAction::triggered, this, [this]() {
+            activateCurveTool(Tool::CurveFreehand);
+        });
+    }
+
     void activateDimensionTool(ToolId tool)
     {
         if (dimensionToolButton_ != nullptr) {
@@ -2396,6 +2472,12 @@ private:
         QAction *tangentAction = menu->addAction(QStringLiteral("Tangent from Curve"));
         QAction *perpendicularAction =
             menu->addAction(QStringLiteral("Perpendicular from Curve"));
+        QAction *perpendicularEdgeAction =
+            menu->addAction(QStringLiteral("Perpendicular from Edge"));
+        QAction *tangentTwoAction =
+            menu->addAction(QStringLiteral("Tangent to Two Curves"));
+        QAction *perpendicularTwoAction =
+            menu->addAction(QStringLiteral("Perpendicular to Two Curves"));
         button->setMenu(menu);
         // A quick click runs Line; holding the button exposes the line variants.
         button->setPopupMode(QToolButton::DelayedPopup);
@@ -2408,6 +2490,15 @@ private:
         });
         connect(perpendicularAction, &QAction::triggered, this, [this]() {
             activateLineTool(Tool::PerpendicularFromCurve);
+        });
+        connect(perpendicularEdgeAction, &QAction::triggered, this, [this]() {
+            activateLineTool(Tool::PerpendicularFromEdge);
+        });
+        connect(tangentTwoAction, &QAction::triggered, this, [this]() {
+            activateLineTool(Tool::TangentToTwoCurves);
+        });
+        connect(perpendicularTwoAction, &QAction::triggered, this, [this]() {
+            activateLineTool(Tool::PerpendicularToTwoCurves);
         });
     }
 
@@ -3987,6 +4078,8 @@ private:
     QLabel *coordinateLabel_ = nullptr;
     QLabel *toolHelp_ = nullptr;
     QToolButton *selectToolButton_ = nullptr;
+    QToolButton *pointToolButton_ = nullptr;
+    QToolButton *bezierToolButton_ = nullptr;
     QToolButton *lineToolButton_ = nullptr;
     QToolButton *arcToolButton_ = nullptr;
     QToolButton *rectangleToolButton_ = nullptr;

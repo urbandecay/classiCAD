@@ -1,12 +1,13 @@
 #pragma once
 
-#include "core/document/object_id.h"
 #include "tool.h"
 
 namespace classiCAD {
 
-class TangentFromCurveTool final : public InteractionTool {
+class CurveDrawingTool final : public InteractionTool {
 public:
+    explicit CurveDrawingTool(ToolId tool);
+
     ToolId id() const override;
     void begin(ToolContext &context) override;
     bool handleMousePress(const ToolInput &input, ToolContext &context) override;
@@ -17,14 +18,23 @@ public:
     ToolStatus status() const override;
 
 private:
-    bool updateTangentPreview(const ToolInput &input, ToolContext &context);
+    bool isFreehand() const;
+    bool appendPoint(const QPointF &point);
+    Shape makePreviewShape(bool includeCursor) const;
+    void finish(ToolContext &context);
     void publish(ToolContext &context);
 
-    ObjectId curveObjectId_ = ObjectId::invalid();
+    ToolId tool_;
+    QVector<QPointF> points_;
     WorkPlaneFrame drawingFrame_;
-    QPointF curvePickScreen_;
-    QPointF tangentPoint_;
-    bool tangentPreviewAvailable_ = false;
+    WorkPlaneFrame frameBeforeAxisLock_;
+    QPointF cursorPoint_;
+    QPointF lastSampleScreen_;
+    bool hasCursorPoint_ = false;
+    bool hasSampleScreen_ = false;
+    bool drawing_ = false;
+    bool planeLocked_ = false;
+    int normalAxisLockKey_ = 0;
     ToolStatus status_;
 };
 

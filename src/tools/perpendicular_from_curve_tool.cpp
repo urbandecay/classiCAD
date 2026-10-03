@@ -6,18 +6,28 @@
 
 namespace classiCAD {
 
+PerpendicularFromCurveTool::PerpendicularFromCurveTool(ToolId tool,
+                                                       bool edgeOnly)
+    : tool_(tool)
+    , edgeOnly_(edgeOnly)
+{
+}
+
 ToolId PerpendicularFromCurveTool::id() const
 {
-    return ToolId::PerpendicularFromCurve;
+    return tool_;
 }
 
 void PerpendicularFromCurveTool::begin(ToolContext &context)
 {
     curveObjectId_ = ObjectId::invalid();
+    drawingFrame_ = context.viewportTransform().workPlaneFrame();
     perpendicularPoint_ = QPointF();
     perpendicularPreviewAvailable_ = false;
     status_.state = ToolLifecycleState::Active;
-    status_.text = QStringLiteral("Click a curve to start a perpendicular line");
+    status_.text = edgeOnly_
+                       ? QStringLiteral("Click a line edge to start a perpendicular line")
+                       : QStringLiteral("Click a curve to start a perpendicular line");
     status_.canCommit = false;
     publish(context);
 }
@@ -36,12 +46,22 @@ bool PerpendicularFromCurveTool::handleMousePress(const ToolInput &input,
             context.viewportTransform(),
             input.viewportSize);
         if (shapeIndex < 0) {
-            status_.text = QStringLiteral("Click a visible curve to start a perpendicular line");
+            status_.text = edgeOnly_
+                               ? QStringLiteral("Click a visible line edge")
+                               : QStringLiteral("Click a visible curve to start a perpendicular line");
             publish(context);
             return true;
         }
 
         const Shape &shape = context.document()[shapeIndex];
+        if (edgeOnly_ && shape.geometryType != GeometryType::Line &&
+            shape.geometryType != GeometryType::PolyCurve &&
+            !(shape.geometryType == GeometryType::Nurbs &&
+              shape.nurbs.degree == 1)) {
+            status_.text = QStringLiteral("Choose a straight curve or line edge");
+            publish(context);
+            return true;
+        }
         switch (shape.geometryType) {
         case GeometryType::Line:
         case GeometryType::Arc:
@@ -64,6 +84,8 @@ bool PerpendicularFromCurveTool::handleMousePress(const ToolInput &input,
         }
 
         curveObjectId_ = context.document().objectIdAt(shapeIndex);
+        drawingFrame_ = shapeWorkPlaneFrame(shape);
+        context.viewportTransform().setWorkPlaneFrame(drawingFrame_);
         context.selection().setObjectIds({curveObjectId_}, curveObjectId_);
         status_.text = QStringLiteral(
             "Curve selected — move to a line endpoint and click to place the perpendicular line");
@@ -88,9 +110,16 @@ bool PerpendicularFromCurveTool::handleMousePress(const ToolInput &input,
                              {perpendicularPoint_, endpoint},
                              ArcMode::TwoPoint,
                              0.0,
-                             &line) ||
-        !context.commitShape(ToolId::Line, line)) {
+                             &line)) {
         status_.text = QStringLiteral("Could not create the perpendicular line");
+        publish(context);
+        return true;
+    }
+    line.workPlane = context.viewportTransform().workPlane();
+    line.workPlaneOffset = context.viewportTransform().workPlaneOffset();
+    line.workPlaneFrame = drawingFrame_;
+    if (!context.commitShape(ToolId::Line, line)) {
+        status_.text = QStringLiteral("Could not commit the perpendicular line");
         publish(context);
         return true;
     }
@@ -124,6 +153,7 @@ bool PerpendicularFromCurveTool::handleKey(const ToolInput &input,
     status_.text = QStringLiteral("Perpendicular line cancelled");
     status_.canCommit = false;
     curveObjectId_ = ObjectId::invalid();
+    drawingFrame_ = {};
     perpendicularPreviewAvailable_ = false;
     publish(context);
     context.finishTool(ToolId::Select);
@@ -133,6 +163,7 @@ bool PerpendicularFromCurveTool::handleKey(const ToolInput &input,
 void PerpendicularFromCurveTool::cancel(ToolContext &context)
 {
     curveObjectId_ = ObjectId::invalid();
+    drawingFrame_ = {};
     perpendicularPreviewAvailable_ = false;
     status_.state = ToolLifecycleState::Cancelled;
     status_.text = QStringLiteral("Perpendicular line cancelled");
@@ -143,6 +174,9 @@ void PerpendicularFromCurveTool::cancel(ToolContext &context)
 ToolPreview PerpendicularFromCurveTool::preview() const
 {
     ToolPreview result;
+    result.workPlaneFrame = drawingFrame_;
+    result.hasWorkPlaneFrame = isValidWorkPlaneFrame(drawingFrame_);
+    result.planeLocked = curveObjectId_.isValid();
     if (perpendicularPreviewAvailable_) {
         result.points.append(perpendicularPoint_);
     }
@@ -162,6 +196,7 @@ bool PerpendicularFromCurveTool::updatePerpendicularPreview(
     const Shape *shape = context.document().shape(curveObjectId_);
     if (shape == nullptr) {
         curveObjectId_ = ObjectId::invalid();
+        drawingFrame_ = {};
         perpendicularPreviewAvailable_ = false;
         status_.text = QStringLiteral("Selected curve is no longer available");
         status_.canCommit = false;

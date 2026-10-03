@@ -1585,6 +1585,7 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                                 : QStringLiteral("DUPLICATE  •  Click a base point on the selection  •  Esc/RMB cancels");
         painter.drawText(18, viewportSize.height() - 18, duplicateHint);
     } else if (activeTool != Tool::Select && activeTool != Tool::Arc &&
+               !isRectangleTool(activeTool) &&
                !isPolygonTool(activeTool) &&
                !isCircleConstructionTool(activeTool) &&
                !isEllipseTool(activeTool)) {

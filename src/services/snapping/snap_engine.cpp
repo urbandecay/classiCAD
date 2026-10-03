@@ -34,6 +34,10 @@ const SnapSettings &SnapEngine::settings() const
 
 QVector<QPointF> SnapEngine::rectangleVertices(const Shape &shape) const
 {
+    if (shape.geometryType == GeometryType::Rectangle &&
+        validateNurbsCurve(shape.nurbs) && shape.nurbs.controlPoints.size() == 5) {
+        return shape.nurbs.controlPoints.mid(0, 4);
+    }
     if (shape.geometryType != GeometryType::Rectangle || shape.points.size() < 2) {
         return {};
     }

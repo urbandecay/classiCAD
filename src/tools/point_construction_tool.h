@@ -4,9 +4,9 @@
 
 namespace classiCAD {
 
-class ShapeCreationTool : public InteractionTool {
+class PointConstructionTool final : public InteractionTool {
 public:
-    ShapeCreationTool(ToolId tool, int requiredPoints);
+    explicit PointConstructionTool(ToolId tool);
 
     ToolId id() const override;
     void begin(ToolContext &context) override;
@@ -17,23 +17,30 @@ public:
     ToolPreview preview() const override;
     ToolStatus status() const override;
 
-protected:
-    const QVector<QPointF> &points() const;
-    int requiredPointCount() const;
-    virtual bool buildShape(const ToolContext &context, Shape *shape) const = 0;
-    void clearPoints(ToolContext &context);
+private:
+    bool addPointOnCurve(const Shape &shape,
+                         const QPointF &cursor,
+                         bool edgeCenter,
+                         QPointF *point,
+                         WorkPlaneFrame *frame) const;
+    void finishPointChain(ToolContext &context);
     void publish(ToolContext &context);
 
-private:
     ToolId tool_;
-    int requiredPoints_;
     QVector<QPointF> points_;
+    QVector<QPointF> arcCenters_;
+    QVector<qreal> arcRadii_;
+    QVector<qreal> arcStartAngles_;
+    QVector<qreal> arcSweepAngles_;
     WorkPlaneFrame drawingFrame_;
     WorkPlaneFrame frameBeforeAxisLock_;
-    int normalAxisLockKey_ = 0;
+    QPointF cursorPoint_;
+    bool hasCursorPoint_ = false;
     bool planeLocked_ = false;
-    bool frameCaptured_ = false;
-    bool manualPlaneLock_ = false;
+    int normalAxisLockKey_ = 0;
+    int arcStage_ = 0;
+    qreal previousArcAngle_ = 0.0;
+    bool hasPreviousArcAngle_ = false;
     ToolStatus status_;
 };
 

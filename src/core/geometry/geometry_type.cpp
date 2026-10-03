@@ -90,12 +90,17 @@ GeometryType geometryTypeForTool(ToolId tool)
     case ToolId::AngularDimension:
         return GeometryType::AngularDimension;
     case ToolId::Line:
+    case ToolId::PerpendicularFromEdge:
+    case ToolId::TangentToTwoCurves:
+    case ToolId::PerpendicularToTwoCurves:
         return GeometryType::Line;
     case ToolId::Arc:
         return GeometryType::Arc;
     case ToolId::Bezier:
         return GeometryType::Bezier;
     case ToolId::Nurbs:
+    case ToolId::CurveInterpolate:
+    case ToolId::CurveFreehand:
         return GeometryType::Nurbs;
     case ToolId::Rectangle:
     case ToolId::RectangleFromCenter:
@@ -118,6 +123,10 @@ GeometryType geometryTypeForTool(ToolId tool)
     case ToolId::EllipseFromFoci:
         return GeometryType::Ellipse;
     case ToolId::Point:
+    case ToolId::PointByLine:
+    case ToolId::PointByArcs:
+    case ToolId::PointCenter:
+    case ToolId::PointEdgeCenter:
         return GeometryType::Point;
     case ToolId::Picture:
         return GeometryType::Picture;

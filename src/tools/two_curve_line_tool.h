@@ -5,8 +5,10 @@
 
 namespace classiCAD {
 
-class TangentFromCurveTool final : public InteractionTool {
+class TwoCurveLineTool final : public InteractionTool {
 public:
+    explicit TwoCurveLineTool(ToolId tool);
+
     ToolId id() const override;
     void begin(ToolContext &context) override;
     bool handleMousePress(const ToolInput &input, ToolContext &context) override;
@@ -17,14 +19,21 @@ public:
     ToolStatus status() const override;
 
 private:
-    bool updateTangentPreview(const ToolInput &input, ToolContext &context);
+    bool collectCurves(const Shape &shape,
+                       QVector<Shape::NurbsCurve2D> *curves) const;
+    bool updateSolution(const ToolInput &input, const ToolContext &context);
+    void finish(ToolContext &context);
     void publish(ToolContext &context);
 
-    ObjectId curveObjectId_ = ObjectId::invalid();
+    ToolId tool_;
+    ObjectId firstCurveId_ = ObjectId::invalid();
+    ObjectId secondCurveId_ = ObjectId::invalid();
+    QVector<Shape::NurbsCurve2D> firstCurves_;
+    QVector<Shape::NurbsCurve2D> secondCurves_;
     WorkPlaneFrame drawingFrame_;
-    QPointF curvePickScreen_;
-    QPointF tangentPoint_;
-    bool tangentPreviewAvailable_ = false;
+    QPointF firstPoint_;
+    QPointF secondPoint_;
+    bool solutionAvailable_ = false;
     ToolStatus status_;
 };
 

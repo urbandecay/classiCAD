@@ -66,6 +66,69 @@ int main(int argc, char **argv)
             ++failures;
         }
     }
+    // A drawn line and the union of overlapping lines have the same two CVs,
+    // but Join stores its result as GeometryType::Nurbs. Both must accept a
+    // body click and drag, including when their control points are displayed.
+    {
+        view.viewportTransform_.resetView();
+        view.viewportTransform_.setViewPreset(ViewportViewPreset::Top);
+        view.viewportTransform_.setPerspectiveEnabled(false);
+        view.setOsnapEnabled(false);
+        view.controlPointsVisible_ = true;
+        Shape first;
+        first.geometryType = GeometryType::Line;
+        first.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        first.nurbs = makeDegreeOneNurbs({QPointF(-40, 0), QPointF(20, 0)});
+        first.points = first.nurbs.controlPoints;
+        Shape second = first;
+        second.nurbs = makeDegreeOneNurbs({QPointF(-10, 0), QPointF(60, 0)});
+        second.points = second.nurbs.controlPoints;
+        Shape drawn = first;
+        drawn.nurbs = makeDegreeOneNurbs({QPointF(-40, -30), QPointF(60, -30)});
+        drawn.points = drawn.nurbs.controlPoints;
+        view.shapes_ = {first, second, drawn};
+        const ObjectId drawnId = view.shapes_.objectIdAt(2);
+        view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0),
+                                      view.shapes_.objectIdAt(1)};
+        view.selectedShapeIndex_ = view.selectedShapeIndices_.last();
+        view.beginJoinMode();
+        const ObjectId joinedId = view.selectedShapeIndex_;
+        const auto mouse = [&](QEvent::Type type, const QPointF &position,
+                               Qt::MouseButton button, Qt::MouseButtons buttons) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+            QMouseEvent event(type, position, position, button, buttons, Qt::NoModifier);
+#else
+            QMouseEvent event(type, position, button, buttons, Qt::NoModifier);
+#endif
+            QApplication::sendEvent(&view, &event);
+        };
+        for (const ObjectId id : {joinedId, drawnId}) {
+            const int index = view.objectIndex(id);
+            if (index < 0) {
+                qWarning() << "Join drag fixture lost its curve";
+                ++failures;
+                continue;
+            }
+            const QVector<QPointF> before = view.shapes_[index].nurbs.controlPoints;
+            view.clearSelection();
+            const QPointF body = view.viewportTransform_.workPlaneToScreen(
+                (before.first() + before.last()) * 0.5, view.size(),
+                shapeWorkPlaneFrame(view.shapes_[index]));
+            mouse(QEvent::MouseButtonPress, body, Qt::LeftButton, Qt::LeftButton);
+            const bool grabbed = view.draggingSelected_ && view.selectedShapeIndex_ == id;
+            mouse(QEvent::MouseMove, body + QPointF(35, 20), Qt::NoButton, Qt::LeftButton);
+            mouse(QEvent::MouseButtonRelease, body + QPointF(35, 20), Qt::LeftButton, Qt::NoButton);
+            const QVector<QPointF> after = view.shapes_[view.objectIndex(id)].nurbs.controlPoints;
+            const QPointF startDelta = after.first() - before.first();
+            const QPointF endDelta = after.last() - before.last();
+            if (!grabbed || std::hypot(startDelta.x(), startDelta.y()) < 1.0e-5 ||
+                std::hypot(startDelta.x() - endDelta.x(),
+                           startDelta.y() - endDelta.y()) > 1.0e-7) {
+                qWarning() << "Body drag must move both drawn and joined two-CV curves" << id.value();
+                ++failures;
+            }
+        }
+    }
     if (app.arguments().contains(QStringLiteral("--join-only"))) {
         qInfo() << "Join overlap failures:" << failures;
         return failures ? 1 : 0;

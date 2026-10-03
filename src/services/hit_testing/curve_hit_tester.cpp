@@ -360,17 +360,20 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                          viewportSize)
                    : distanceToArc(screenPosition, shape, transform, viewportSize);
     }
-    if ((shape.geometryType == GeometryType::Bezier ||
-         shape.geometryType == GeometryType::Nurbs) && shape.points.size() >= 4) {
-        return validateNurbsCurve(shape.nurbs)
-                   ? distanceToNurbsCurve(screenPosition,
-                                         shape.nurbs,
-                                         transform,
-                                         viewportSize)
-                   : distanceToCubicCurve(screenPosition,
+    if (shape.geometryType == GeometryType::Bezier ||
+        shape.geometryType == GeometryType::Nurbs) {
+        if (validateNurbsCurve(shape.nurbs)) {
+            return distanceToNurbsCurve(screenPosition,
+                                       shape.nurbs,
+                                       transform,
+                                       viewportSize);
+        }
+        return shape.points.size() >= 4
+                   ? distanceToCubicCurve(screenPosition,
                                           shape,
                                           transform,
-                                          viewportSize);
+                                          viewportSize)
+                   : 1.0e9;
     }
     if (shape.geometryType == GeometryType::Rectangle) {
         if (validateNurbsCurve(shape.nurbs)) {

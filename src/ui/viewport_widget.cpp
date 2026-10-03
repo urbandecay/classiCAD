@@ -8850,8 +8850,10 @@ private:
         int sourceShapeIndex,
         int sourceComponentIndex,
         const Shape::NurbsCurve2D &sourceCurve,
-        const SampledNurbsCurve2D *sourceSamplesOverride = nullptr,
-        const QVector<EraseCurveSampleCache> *sceneCache = nullptr) const
+        const QVector<EraseCurveSampleCache> *sceneCache = nullptr,
+        QVector<quint64> *pointBoundaryObjectIds = nullptr,
+        int *nurbsSeedSolves = nullptr,
+        int *visiblePointChecks = nullptr) const
     {
         QVector<qreal> parameters;
         if (sourceShapeIndex < 0 || sourceShapeIndex >= shapes_.size() ||
@@ -8859,532 +8861,473 @@ private:
             return parameters;
         }
 
-        SampledNurbsCurve2D generatedSourceSamples;
-        const SampledNurbsCurve2D *sourceSamples = sourceSamplesOverride;
-        const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(shapes_[sourceShapeIndex]);
-        if (sourceSamples == nullptr) {
-            if (!sampleNurbsCurveForErase(sourceCurve,
-                                          sourceFrame,
-                                          &generatedSourceSamples)) {
-                return parameters;
-            }
-            sourceSamples = &generatedSourceSamples;
-        } else if (sourceSamples->screenPoints.size() < 2 ||
-                   sourceSamples->parameters.size() != sourceSamples->screenPoints.size()) {
+        const WorkPlaneFrame sourceFrame =
+            shapeWorkPlaneFrame(shapes_[sourceShapeIndex]);
+        if (!isValidWorkPlaneFrame(sourceFrame)) {
             return parameters;
         }
 
-        const auto parameterAtIntersection = [](const QPointF &first,
-                                                 const QPointF &second,
-                                                 const QPointF &intersection) {
-            const QPointF direction = second - first;
-            const qreal lengthSquared = QPointF::dotProduct(direction, direction);
-            if (lengthSquared <= 1.0e-12) {
-                return 0.0;
-            }
-            return std::clamp(QPointF::dotProduct(intersection - first, direction) /
-                                  lengthSquared,
-                                  0.0,
-                                  1.0);
-        };
-
-        const auto boundsOverlap = [](const QRectF &first, const QRectF &second) {
-            return first.right() >= second.left() &&
-                   second.right() >= first.left() &&
-                   first.bottom() >= second.top() &&
-                   second.bottom() >= first.top();
-        };
+        qreal sourceDomainStart = 0.0;
+        qreal sourceDomainEnd = 0.0;
+        if (!nurbsParameterDomain(sourceCurve,
+                                  &sourceDomainStart,
+                                  &sourceDomainEnd)) {
+            return parameters;
+        }
+        const qreal sourceDomainLength = sourceDomainEnd - sourceDomainStart;
+        if (sourceDomainLength <= 0.0) {
+            return parameters;
+        }
 
         const auto appendUniqueParameter = [&](qreal parameter) {
-            QPointF candidateWorld;
-            if (!evaluateNurbsPoint(sourceCurve, parameter, &candidateWorld)) {
-                parameters.append(parameter);
-                return;
-            }
-            const QPointF candidateScreen = viewportTransform_.workPlaneToScreen(
-                candidateWorld, size(), sourceFrame);
+            const qreal parameterTolerance =
+                std::max<qreal>(1.0e-12, sourceDomainLength * 1.0e-9);
             for (const qreal existingParameter : parameters) {
-                QPointF existingWorld;
-                if (evaluateNurbsPoint(sourceCurve, existingParameter, &existingWorld)) {
-                    const QPointF existingScreen = viewportTransform_.workPlaneToScreen(
-                        existingWorld, size(), sourceFrame);
-                    if (std::hypot(candidateScreen.x() - existingScreen.x(),
-                                   candidateScreen.y() - existingScreen.y()) <= 0.1) {
-                        return;
-                    }
-                }
-            }
-            parameters.append(parameter);
-        };
-        const auto appendPointBoundary = [&](int pointShapeIndex,
-                                             qreal parameter) {
-            appendUniqueParameter(parameter);
-            DebugLog::instance().write(
-                QStringLiteral("trim point boundary targetShape=%1 pointShape=%2 parameter=%3")
-                    .arg(sourceShapeIndex)
-                    .arg(pointShapeIndex)
-                    .arg(parameter, 0, 'g', 12));
-        };
-
-        const auto maximumSampledSegmentLength = [](const SampledNurbsCurve2D &sampled) {
-            qreal maximumLength = 0.0;
-            for (int index = 1; index < sampled.screenPoints.size(); ++index) {
-                const QPointF delta = sampled.screenPoints[index] -
-                                      sampled.screenPoints[index - 1];
-                maximumLength = std::max(maximumLength,
-                                         std::hypot(delta.x(), delta.y()));
-            }
-            return maximumLength;
-        };
-        const qreal sourceSampleSegmentLength = sourceCurve.degree > 1
-                                                    ? maximumSampledSegmentLength(*sourceSamples)
-                                                    : 0.0;
-
-        const auto collectIntersections =
-            [&](const SampledNurbsCurve2D &otherSamples,
-                const Shape::NurbsCurve2D &otherCurve,
-                const WorkPlaneFrame &otherFrame) {
-                if (otherSamples.screenPoints.size() < 2 ||
-                    otherSamples.parameters.size() != otherSamples.screenPoints.size()) {
+                if (std::abs(existingParameter - parameter) <=
+                    parameterTolerance) {
                     return;
                 }
+            }
+            parameters.append(std::clamp(parameter,
+                                         sourceDomainStart,
+                                         sourceDomainEnd));
+        };
 
-                const bool useBounds =
-                    !sourceSamples->bounds.isNull() && !otherSamples.bounds.isNull() &&
-                    sourceSamples->segmentBounds.size() ==
-                        sourceSamples->screenPoints.size() - 1 &&
-                    otherSamples.segmentBounds.size() ==
-                        otherSamples.screenPoints.size() - 1;
-                qreal curvedSegmentLength = sourceSampleSegmentLength;
-                if (otherCurve.degree > 1) {
-                    curvedSegmentLength = std::max(
-                        curvedSegmentLength,
-                        maximumSampledSegmentLength(otherSamples));
+        struct ParameterSpan {
+            qreal start = 0.0;
+            qreal end = 0.0;
+            qreal minimumX = 0.0;
+            qreal minimumY = 0.0;
+            qreal maximumX = 0.0;
+            qreal maximumY = 0.0;
+        };
+        struct CurveCandidate {
+            int shapeIndex = -1;
+            int componentIndex = -1;
+            WorkPlaneFrame frame;
+            Shape::NurbsCurve2D curve;
+        };
+
+        const auto curvePointInSourceFrame =
+            [&](const Shape::NurbsCurve2D &curve,
+                const WorkPlaneFrame &frame,
+                qreal parameter,
+                QPointF *point) {
+                QPointF localPoint;
+                if (point == nullptr ||
+                    !evaluateNurbsPoint(curve, parameter, &localPoint)) {
+                    return false;
                 }
-                const qreal tangentCandidateTolerancePixels =
-                    std::max<qreal>(2.0, curvedSegmentLength * 0.05);
-                if (useBounds && !boundsOverlap(sourceSamples->bounds,
-                                                otherSamples.bounds.adjusted(
-                                                    -tangentCandidateTolerancePixels,
-                                                    -tangentCandidateTolerancePixels,
-                                                    tangentCandidateTolerancePixels,
-                                                    tangentCandidateTolerancePixels))) {
-                    return;
+                *point = worldPointToWorkPlaneFrame(
+                    workPlaneFramePointToWorld(localPoint, frame), sourceFrame);
+                return std::isfinite(point->x()) && std::isfinite(point->y());
+            };
+        const auto curveDerivativeInSourceFrame =
+            [&](const Shape::NurbsCurve2D &curve,
+                const WorkPlaneFrame &frame,
+                qreal parameter,
+                QPointF *derivative) {
+                QPointF localDerivative;
+                if (derivative == nullptr ||
+                    !evaluateNurbsDerivative(curve,
+                                             parameter,
+                                             &localDerivative)) {
+                    return false;
                 }
-
-                // A previously trimmed endpoint can lie just off the sampled
-                // chord. Recognize endpoint contacts before strict segment
-                // crossings, otherwise an entire neighboring section is lost.
-                for (int endpoint : {0, int(otherSamples.screenPoints.size() - 1)}) {
-                    const QPointF point = otherSamples.screenPoints[endpoint];
-                    qreal bestDistance = 1.0;
-                    qreal bestParameter = 0.0;
-                    bool found = false;
-                    for (int i = 1; i < sourceSamples->screenPoints.size(); ++i) {
-                        const QPointF a = sourceSamples->screenPoints[i - 1];
-                        const QPointF b = sourceSamples->screenPoints[i];
-                        const qreal distance = distanceToSegment(point, a, b);
-                        if (distance <= bestDistance) {
-                            bestDistance = distance;
-                            bestParameter = sourceSamples->parameters[i - 1] +
-                                (sourceSamples->parameters[i] - sourceSamples->parameters[i - 1]) *
-                                parameterAtIntersection(a, b, point);
-                            found = true;
-                        }
-                    }
-                    if (found) {
-                        appendUniqueParameter(bestParameter);
-                    }
+                const Point3D worldDerivative{
+                    frame.xAxis.x * localDerivative.x() +
+                        frame.yAxis.x * localDerivative.y(),
+                    frame.xAxis.y * localDerivative.x() +
+                        frame.yAxis.y * localDerivative.y(),
+                    frame.xAxis.z * localDerivative.x() +
+                        frame.yAxis.z * localDerivative.y()};
+                *derivative = QPointF(
+                    worldDerivative.x * sourceFrame.xAxis.x +
+                        worldDerivative.y * sourceFrame.xAxis.y +
+                        worldDerivative.z * sourceFrame.xAxis.z,
+                    worldDerivative.x * sourceFrame.yAxis.x +
+                        worldDerivative.y * sourceFrame.yAxis.y +
+                        worldDerivative.z * sourceFrame.yAxis.z);
+                return std::isfinite(derivative->x()) &&
+                       std::isfinite(derivative->y());
+            };
+        const auto parameterSpans =
+            [&](const Shape::NurbsCurve2D &curve,
+                const WorkPlaneFrame &frame) {
+                QVector<ParameterSpan> spans;
+                if (!isValidNurbsCurve(curve) ||
+                    !isValidWorkPlaneFrame(frame)) {
+                    return spans;
                 }
-
-                const qreal spatialCellSizePixels = std::max<qreal>(
-                    8.0, tangentCandidateTolerancePixels * 2.0);
-                constexpr qint64 maximumSpatialCellsPerSegment = 256;
-                const auto spatialCellCoordinate = [=](qreal coordinate) {
-                    return static_cast<int>(std::floor(coordinate /
-                                                       spatialCellSizePixels));
-                };
-                const auto spatialCellKey = [](int x, int y) {
-                    return (static_cast<quint64>(static_cast<quint32>(x)) << 32) |
-                           static_cast<quint32>(y);
-                };
-                const auto cellCountForBounds = [=](int firstX,
-                                                    int lastX,
-                                                    int firstY,
-                                                    int lastY) {
-                    const qint64 xCount = static_cast<qint64>(lastX) - firstX + 1;
-                    const qint64 yCount = static_cast<qint64>(lastY) - firstY + 1;
-                    if (xCount <= 0 || yCount <= 0 ||
-                        xCount > maximumSpatialCellsPerSegment / yCount) {
-                        return maximumSpatialCellsPerSegment + 1;
-                    }
-                    return xCount * yCount;
-                };
-
-                QHash<quint64, QVector<int>> otherSegmentGrid;
-                QVector<int> longOtherSegments;
-                const int otherSegmentCount = otherSamples.screenPoints.size() - 1;
-                if (useBounds) {
-                    for (int otherSegment = 1;
-                         otherSegment <= otherSegmentCount;
-                         ++otherSegment) {
-                        const QRectF &bounds =
-                            otherSamples.segmentBounds[otherSegment - 1];
-                        const int firstX = spatialCellCoordinate(bounds.left());
-                        const int lastX = spatialCellCoordinate(bounds.right());
-                        const int firstY = spatialCellCoordinate(bounds.top());
-                        const int lastY = spatialCellCoordinate(bounds.bottom());
-                        if (cellCountForBounds(firstX, lastX, firstY, lastY) >
-                            maximumSpatialCellsPerSegment) {
-                            longOtherSegments.append(otherSegment);
-                            continue;
-                        }
-                        for (int cellX = firstX; cellX <= lastX; ++cellX) {
-                            for (int cellY = firstY; cellY <= lastY; ++cellY) {
-                                otherSegmentGrid[spatialCellKey(cellX, cellY)]
-                                    .append(otherSegment);
-                            }
-                        }
-                    }
-                }
-
-                constexpr qreal tangentContactTolerancePixels = 0.001;
-                const auto squaredScreenDistance = [](const QPointF &first,
-                                                       const QPointF &second) {
-                    const QPointF delta = first - second;
-                    return QPointF::dotProduct(delta, delta);
-                };
-                const auto separationSquared = [&](qreal sourceParameter,
-                                                   qreal otherParameter) {
-                    QPointF sourceWorld;
-                    QPointF otherWorld;
-                    if (!evaluateNurbsPoint(sourceCurve, sourceParameter, &sourceWorld) ||
-                        !evaluateNurbsPoint(otherCurve, otherParameter, &otherWorld)) {
-                        return 1.0e30;
-                    }
-                    return squaredScreenDistance(
-                        viewportTransform_.workPlaneToScreen(sourceWorld,
-                                                             size(),
-                                                             sourceFrame),
-                        viewportTransform_.workPlaneToScreen(otherWorld,
-                                                             size(),
-                                                             otherFrame));
-                };
-                const auto goldenMinimum = [](qreal low,
-                                              qreal high,
-                                              const auto &valueAt) {
-                    constexpr qreal ratio = 0.6180339887498948482;
-                    qreal first = high - (high - low) * ratio;
-                    qreal second = low + (high - low) * ratio;
-                    qreal firstValue = valueAt(first);
-                    qreal secondValue = valueAt(second);
-                    for (int iteration = 0; iteration < 20; ++iteration) {
-                        if (firstValue <= secondValue) {
-                            high = second;
-                            second = first;
-                            secondValue = firstValue;
-                            first = high - (high - low) * ratio;
-                            firstValue = valueAt(first);
-                        } else {
-                            low = first;
-                            first = second;
-                            firstValue = secondValue;
-                            second = low + (high - low) * ratio;
-                            secondValue = valueAt(second);
-                        }
-                    }
-                    return (low + high) * 0.5;
-                };
-
-                QVector<QPair<qreal, qreal>> refinedTangentContacts;
-                QVector<int> candidateGeneration(otherSegmentCount + 1, 0);
-                for (int sourceSegment = 1;
-                     sourceSegment < sourceSamples->screenPoints.size();
-                     ++sourceSegment) {
-                    const QPointF &sourceStart =
-                        sourceSamples->screenPoints[sourceSegment - 1];
-                    const QPointF &sourceEnd =
-                        sourceSamples->screenPoints[sourceSegment];
-                    QVector<int> candidateOtherSegments;
-                    QRectF sourceBounds;
-                    if (useBounds) {
-                        sourceBounds =
-                            sourceSamples->segmentBounds[sourceSegment - 1].adjusted(
-                                -tangentCandidateTolerancePixels,
-                                -tangentCandidateTolerancePixels,
-                                tangentCandidateTolerancePixels,
-                                tangentCandidateTolerancePixels);
-                        const int firstX = spatialCellCoordinate(sourceBounds.left());
-                        const int lastX = spatialCellCoordinate(sourceBounds.right());
-                        const int firstY = spatialCellCoordinate(sourceBounds.top());
-                        const int lastY = spatialCellCoordinate(sourceBounds.bottom());
-                        if (cellCountForBounds(firstX, lastX, firstY, lastY) >
-                            maximumSpatialCellsPerSegment) {
-                            candidateOtherSegments.reserve(otherSegmentCount);
-                            for (int otherSegment = 1;
-                                 otherSegment <= otherSegmentCount;
-                                 ++otherSegment) {
-                                candidateOtherSegments.append(otherSegment);
-                            }
-                        } else {
-                            const auto appendCandidate = [&](int otherSegment) {
-                                if (candidateGeneration[otherSegment] != sourceSegment) {
-                                    candidateGeneration[otherSegment] = sourceSegment;
-                                    candidateOtherSegments.append(otherSegment);
-                                }
-                            };
-                            for (const int otherSegment : longOtherSegments) {
-                                appendCandidate(otherSegment);
-                            }
-                            for (int cellX = firstX; cellX <= lastX; ++cellX) {
-                                for (int cellY = firstY; cellY <= lastY; ++cellY) {
-                                    const auto cell = otherSegmentGrid.constFind(
-                                        spatialCellKey(cellX, cellY));
-                                    if (cell == otherSegmentGrid.cend()) {
-                                        continue;
-                                    }
-                                    for (const int otherSegment : cell.value()) {
-                                        appendCandidate(otherSegment);
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        candidateOtherSegments.reserve(otherSegmentCount);
-                        for (int otherSegment = 1;
-                             otherSegment <= otherSegmentCount;
-                             ++otherSegment) {
-                            candidateOtherSegments.append(otherSegment);
-                        }
-                    }
-                    std::sort(candidateOtherSegments.begin(), candidateOtherSegments.end());
-
-                    for (const int otherSegment : candidateOtherSegments) {
-                        if (useBounds &&
-                            !boundsOverlap(sourceBounds,
-                                           otherSamples.segmentBounds[otherSegment - 1])) {
-                            continue;
-                        }
-
-                        const QPointF &otherStart =
-                            otherSamples.screenPoints[otherSegment - 1];
-                        const QPointF &otherEnd =
-                            otherSamples.screenPoints[otherSegment];
-                        const QPointF sourceDirection = sourceEnd - sourceStart;
-                        const QPointF otherDirection = otherEnd - otherStart;
-                        const qreal directionProduct =
-                            std::hypot(sourceDirection.x(), sourceDirection.y()) *
-                            std::hypot(otherDirection.x(), otherDirection.y());
-                        const bool nearlyParallel =
-                            directionProduct > 1.0e-12 &&
-                            std::abs(QPointF::dotProduct(sourceDirection,
-                                                        otherDirection)) /
-                                    directionProduct >=
-                                0.9;
-                        QPointF intersection;
-                        if (segmentIntersection(sourceStart,
-                                                sourceEnd,
-                                                otherStart,
-                                                otherEnd,
-                                                &intersection)) {
-                            if (!nearlyParallel) {
-                                const qreal localParameter = parameterAtIntersection(
-                                    sourceStart,
-                                    sourceEnd,
-                                    intersection);
-                                appendUniqueParameter(
-                                    sourceSamples->parameters[sourceSegment - 1] +
-                                    (sourceSamples->parameters[sourceSegment] -
-                                     sourceSamples->parameters[sourceSegment - 1]) *
-                                        localParameter);
-                                continue;
-                            }
-                        }
-
-                        if (!nearlyParallel) {
-                            continue;
-                        }
-
-                        qreal closestDistance = 1.0e30;
-                        QPointF closestPairMidpoint;
-                        const auto considerClosestPoints = [&](const QPointF &first,
-                                                               const QPointF &second) {
-                            const qreal distance = std::hypot(first.x() - second.x(),
-                                                              first.y() - second.y());
-                            if (distance < closestDistance) {
-                                closestDistance = distance;
-                                closestPairMidpoint = (first + second) * 0.5;
-                            }
-                        };
-                        const qreal sourceStartOnOther = parameterAtIntersection(
-                            otherStart, otherEnd, sourceStart);
-                        const QPointF sourceStartProjection =
-                            otherStart + (otherEnd - otherStart) * sourceStartOnOther;
-                        considerClosestPoints(sourceStart, sourceStartProjection);
-                        const qreal sourceEndOnOther = parameterAtIntersection(
-                            otherStart, otherEnd, sourceEnd);
-                        const QPointF sourceEndProjection =
-                            otherStart + (otherEnd - otherStart) * sourceEndOnOther;
-                        considerClosestPoints(sourceEnd, sourceEndProjection);
-                        const qreal otherStartOnSource = parameterAtIntersection(
-                            sourceStart, sourceEnd, otherStart);
-                        const QPointF otherStartProjection =
-                            sourceStart + (sourceEnd - sourceStart) * otherStartOnSource;
-                        considerClosestPoints(otherStartProjection, otherStart);
-                        const qreal otherEndOnSource = parameterAtIntersection(
-                            sourceStart, sourceEnd, otherEnd);
-                        const QPointF otherEndProjection =
-                            sourceStart + (sourceEnd - sourceStart) * otherEndOnSource;
-                        considerClosestPoints(otherEndProjection, otherEnd);
-                        if (closestDistance > tangentCandidateTolerancePixels) {
-                            continue;
-                        }
-                        const bool alreadyRefined = std::any_of(
-                            refinedTangentContacts.cbegin(),
-                            refinedTangentContacts.cend(),
-                            [&](const QPair<qreal, qreal> &contact) {
-                                QPointF contactWorld;
-                                if (!evaluateNurbsPoint(sourceCurve,
-                                                        contact.first,
-                                                        &contactWorld)) {
-                                    return false;
-                                }
-                                const QPointF contactScreen =
-                                    viewportTransform_.workPlaneToScreen(
-                                        contactWorld, size(), sourceFrame);
-                                return std::hypot(contactScreen.x() - closestPairMidpoint.x(),
-                                                  contactScreen.y() - closestPairMidpoint.y()) <=
-                                       1.0;
-                            });
-                        if (alreadyRefined) {
-                            continue;
-                        }
-
-                        constexpr int refinementNeighborSegments = 2;
-                        const int sourceLowIndex =
-                            std::max(0, sourceSegment - 1 - refinementNeighborSegments);
-                        const int sourceHighIndex = std::min(
-                            static_cast<int>(sourceSamples->parameters.size()) - 1,
-                            sourceSegment + refinementNeighborSegments);
-                        const int otherLowIndex =
-                            std::max(0, otherSegment - 1 - refinementNeighborSegments);
-                        const int otherHighIndex = std::min(
-                            static_cast<int>(otherSamples.parameters.size()) - 1,
-                            otherSegment + refinementNeighborSegments);
-                        const qreal sourceLow =
-                            sourceSamples->parameters[sourceLowIndex];
-                        const qreal sourceHigh =
-                            sourceSamples->parameters[sourceHighIndex];
-                        const qreal otherLow = otherSamples.parameters[otherLowIndex];
-                        const qreal otherHigh = otherSamples.parameters[otherHighIndex];
-                        const auto nearestOtherParameter = [&](qreal sourceParameter) {
-                            return goldenMinimum(
-                                otherLow,
-                                otherHigh,
-                                [&](qreal parameter) {
-                                    return separationSquared(sourceParameter, parameter);
-                                });
-                        };
-                        const qreal sourceParameter = goldenMinimum(
-                            sourceLow,
-                            sourceHigh,
-                            [&](qreal parameter) {
-                                const qreal otherParameter =
-                                    nearestOtherParameter(parameter);
-                                return separationSquared(parameter, otherParameter);
-                            });
-                        const qreal otherParameter =
-                            nearestOtherParameter(sourceParameter);
-                        const qreal contactError =
-                            separationSquared(sourceParameter, otherParameter);
-                        if (contactError <= tangentContactTolerancePixels *
-                                                tangentContactTolerancePixels) {
-                            refinedTangentContacts.append(
-                                qMakePair(sourceParameter, contactError));
-                        }
-                    }
-                }
-
-                QVector<QPair<qreal, qreal>> uniqueTangentContacts;
-                for (const QPair<qreal, qreal> &candidate : refinedTangentContacts) {
-                    QPointF candidateWorld;
-                    if (!evaluateNurbsPoint(sourceCurve, candidate.first, &candidateWorld)) {
+                const QVector<double> fullKnots =
+                    expandedNurbsKnotVector(curve);
+                for (int knotIndex = curve.degree;
+                     knotIndex < curve.controlPoints.size();
+                     ++knotIndex) {
+                    const qreal spanStart = fullKnots[knotIndex];
+                    const qreal spanEnd = fullKnots[knotIndex + 1];
+                    if (spanEnd - spanStart <= 1.0e-12) {
                         continue;
                     }
-                    const QPointF candidateScreen = viewportTransform_.workPlaneToScreen(
-                        candidateWorld, size(), sourceFrame);
-                    int nearbyContact = -1;
-                    for (int index = 0; index < uniqueTangentContacts.size(); ++index) {
-                        QPointF existingWorld;
-                        if (!evaluateNurbsPoint(sourceCurve,
-                                               uniqueTangentContacts[index].first,
-                                               &existingWorld)) {
-                            continue;
-                        }
-                        const QPointF existingScreen =
-                            viewportTransform_.workPlaneToScreen(
-                                existingWorld, size(), sourceFrame);
-                        if (std::hypot(candidateScreen.x() - existingScreen.x(),
-                                       candidateScreen.y() - existingScreen.y()) <= 1.0) {
-                            nearbyContact = index;
-                            break;
-                        }
-                    }
-                    if (nearbyContact < 0) {
-                        uniqueTangentContacts.append(candidate);
-                    } else if (candidate.second <
-                               uniqueTangentContacts[nearbyContact].second) {
-                        uniqueTangentContacts[nearbyContact] = candidate;
-                    }
-                }
-                for (const QPair<qreal, qreal> &contact : uniqueTangentContacts) {
-                    appendUniqueParameter(contact.first);
-                }
-            };
 
+                    ParameterSpan span;
+                    span.start = spanStart;
+                    span.end = spanEnd;
+                    span.minimumX = std::numeric_limits<qreal>::infinity();
+                    span.minimumY = std::numeric_limits<qreal>::infinity();
+                    span.maximumX = -std::numeric_limits<qreal>::infinity();
+                    span.maximumY = -std::numeric_limits<qreal>::infinity();
+                    for (int controlPointIndex =
+                             knotIndex - curve.degree;
+                         controlPointIndex <= knotIndex;
+                         ++controlPointIndex) {
+                        const QPointF point = worldPointToWorkPlaneFrame(
+                            workPlaneFramePointToWorld(
+                                curve.controlPoints[controlPointIndex], frame),
+                            sourceFrame);
+                        span.minimumX = std::min(span.minimumX, point.x());
+                        span.minimumY = std::min(span.minimumY, point.y());
+                        span.maximumX = std::max(span.maximumX, point.x());
+                        span.maximumY = std::max(span.maximumY, point.y());
+                    }
+                    spans.append(span);
+                }
+                return spans;
+            };
+        const auto hullsOverlap = [](const ParameterSpan &first,
+                                     const ParameterSpan &second,
+                                     qreal tolerance) {
+            return first.maximumX + tolerance >= second.minimumX &&
+                   second.maximumX + tolerance >= first.minimumX &&
+                   first.maximumY + tolerance >= second.minimumY &&
+                   second.maximumY + tolerance >= first.minimumY;
+        };
+
+        QVector<CurveCandidate> otherCurves;
         if (sceneCache != nullptr) {
-            for (const EraseCurveSampleCache &other : *sceneCache) {
-                if (other.shapeIndex == sourceShapeIndex &&
-                    other.componentIndex == sourceComponentIndex) {
+            otherCurves.reserve(sceneCache->size());
+            for (const EraseCurveSampleCache &cachedCurve : *sceneCache) {
+                if (cachedCurve.shapeIndex < 0 ||
+                    cachedCurve.shapeIndex >= shapes_.size()) {
                     continue;
                 }
-                if (!workPlaneFramesCoplanar(sourceFrame, other.workPlaneFrame)) {
-                    continue;
-                }
-                collectIntersections(other.sampled, other.curve, other.workPlaneFrame);
+                CurveCandidate candidate;
+                candidate.shapeIndex = cachedCurve.shapeIndex;
+                candidate.componentIndex = cachedCurve.componentIndex;
+                candidate.frame = isValidWorkPlaneFrame(
+                                      cachedCurve.workPlaneFrame)
+                                      ? cachedCurve.workPlaneFrame
+                                      : shapeWorkPlaneFrame(
+                                            shapes_[cachedCurve.shapeIndex]);
+                candidate.curve = cachedCurve.curve;
+                otherCurves.append(candidate);
             }
         } else {
             for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
-                const QVector<Shape::NurbsCurve2D> otherCurves =
+                if (!document_.isObjectVisible(shapes_.objectIdAt(shapeIndex))) {
+                    continue;
+                }
+                const QVector<Shape::NurbsCurve2D> curves =
                     eraseIntersectionCurvesForShape(shapes_[shapeIndex]);
+                const WorkPlaneFrame frame =
+                    shapeWorkPlaneFrame(shapes_[shapeIndex]);
                 for (int componentIndex = 0;
-                     componentIndex < otherCurves.size();
+                     componentIndex < curves.size();
                      ++componentIndex) {
-                    if (shapeIndex == sourceShapeIndex &&
-                        componentIndex == sourceComponentIndex) {
+                    CurveCandidate candidate;
+                    candidate.shapeIndex = shapeIndex;
+                    candidate.componentIndex = componentIndex;
+                    candidate.frame = frame;
+                    candidate.curve = curves[componentIndex];
+                    otherCurves.append(candidate);
+                }
+            }
+        }
+
+        constexpr qreal seedFractions[] = {0.0, 0.25, 0.5, 0.75, 1.0};
+        const auto refineNurbsIntersection =
+            [&](const Shape::NurbsCurve2D &otherCurve,
+                const WorkPlaneFrame &otherFrame,
+                const ParameterSpan &sourceSpan,
+                const ParameterSpan &otherSpan,
+                qreal sourceSeed,
+                qreal otherSeed,
+                qreal geometryTolerance,
+                qreal *sourceParameter) {
+                qreal sourceFraction = sourceSeed;
+                qreal otherFraction = otherSeed;
+                qreal damping = 1.0e-4;
+                const qreal sourceSpanLength =
+                    sourceSpan.end - sourceSpan.start;
+                const qreal otherSpanLength =
+                    otherSpan.end - otherSpan.start;
+                const auto evaluatePair =
+                    [&](qreal sourceFractionValue,
+                        qreal otherFractionValue,
+                        QPointF *sourcePoint,
+                        QPointF *otherPoint) {
+                        return curvePointInSourceFrame(
+                                   sourceCurve,
+                                   sourceFrame,
+                                   sourceSpan.start +
+                                       sourceSpanLength * sourceFractionValue,
+                                   sourcePoint) &&
+                               curvePointInSourceFrame(
+                                   otherCurve,
+                                   otherFrame,
+                                   otherSpan.start +
+                                       otherSpanLength * otherFractionValue,
+                                   otherPoint);
+                    };
+
+                for (int iteration = 0; iteration < 40; ++iteration) {
+                    const qreal currentSourceParameter =
+                        sourceSpan.start + sourceSpanLength * sourceFraction;
+                    const qreal currentOtherParameter =
+                        otherSpan.start + otherSpanLength * otherFraction;
+                    QPointF sourcePoint;
+                    QPointF otherPoint;
+                    QPointF sourceDerivative;
+                    QPointF otherDerivative;
+                    if (!evaluatePair(sourceFraction,
+                                      otherFraction,
+                                      &sourcePoint,
+                                      &otherPoint)) {
+                        return false;
+                    }
+                    const QPointF residual = sourcePoint - otherPoint;
+                    const qreal currentDistanceSquared =
+                        QPointF::dotProduct(residual, residual);
+                    if (currentDistanceSquared <=
+                        geometryTolerance * geometryTolerance) {
+                        *sourceParameter = currentSourceParameter;
+                        return true;
+                    }
+                    if (!curveDerivativeInSourceFrame(sourceCurve,
+                                                      sourceFrame,
+                                                      currentSourceParameter,
+                                                      &sourceDerivative) ||
+                        !curveDerivativeInSourceFrame(otherCurve,
+                                                      otherFrame,
+                                                      currentOtherParameter,
+                                                      &otherDerivative)) {
+                        return false;
+                    }
+
+                    const QPointF sourceJacobian =
+                        sourceDerivative * sourceSpanLength;
+                    const QPointF otherJacobian =
+                        otherDerivative * -otherSpanLength;
+                    const qreal h00 =
+                        QPointF::dotProduct(sourceJacobian,
+                                            sourceJacobian);
+                    const qreal h01 =
+                        QPointF::dotProduct(sourceJacobian,
+                                            otherJacobian);
+                    const qreal h11 =
+                        QPointF::dotProduct(otherJacobian,
+                                            otherJacobian);
+                    const qreal g0 =
+                        QPointF::dotProduct(sourceJacobian, residual);
+                    const qreal g1 =
+                        QPointF::dotProduct(otherJacobian, residual);
+                    const qreal hessianScale =
+                        std::max<qreal>({h00, h11, 1.0e-24});
+
+                    bool acceptedStep = false;
+                    for (int dampingAttempt = 0;
+                         dampingAttempt < 8 && !acceptedStep;
+                         ++dampingAttempt) {
+                        const qreal diagonal00 =
+                            h00 + damping * hessianScale;
+                        const qreal diagonal11 =
+                            h11 + damping * hessianScale;
+                        const qreal determinant =
+                            diagonal00 * diagonal11 - h01 * h01;
+                        if (std::abs(determinant) <= 1.0e-30) {
+                            damping *= 10.0;
+                            continue;
+                        }
+                        const qreal sourceStep =
+                            (-g0 * diagonal11 + h01 * g1) / determinant;
+                        const qreal otherStep =
+                            (h01 * g0 - diagonal00 * g1) / determinant;
+                        if (!std::isfinite(sourceStep) ||
+                            !std::isfinite(otherStep)) {
+                            damping *= 10.0;
+                            continue;
+                        }
+
+                        for (int lineSearch = 0;
+                             lineSearch < 9;
+                             ++lineSearch) {
+                            const qreal fraction =
+                                std::ldexp(1.0, -lineSearch);
+                            const qreal candidateSourceFraction =
+                                std::clamp(sourceFraction +
+                                               sourceStep * fraction,
+                                           0.0,
+                                           1.0);
+                            const qreal candidateOtherFraction =
+                                std::clamp(otherFraction +
+                                               otherStep * fraction,
+                                           0.0,
+                                           1.0);
+                            if (candidateSourceFraction == sourceFraction &&
+                                candidateOtherFraction == otherFraction) {
+                                continue;
+                            }
+                            QPointF candidateSourcePoint;
+                            QPointF candidateOtherPoint;
+                            if (!evaluatePair(candidateSourceFraction,
+                                              candidateOtherFraction,
+                                              &candidateSourcePoint,
+                                              &candidateOtherPoint)) {
+                                continue;
+                            }
+                            const QPointF candidateResidual =
+                                candidateSourcePoint - candidateOtherPoint;
+                            const qreal candidateDistanceSquared =
+                                QPointF::dotProduct(candidateResidual,
+                                                    candidateResidual);
+                            if (candidateDistanceSquared <
+                                    currentDistanceSquared ||
+                                candidateDistanceSquared <=
+                                    geometryTolerance * geometryTolerance) {
+                                sourceFraction =
+                                    candidateSourceFraction;
+                                otherFraction =
+                                    candidateOtherFraction;
+                                damping = std::max<qreal>(
+                                    1.0e-12, damping * 0.25);
+                                acceptedStep = true;
+                                break;
+                            }
+                        }
+                        if (!acceptedStep) {
+                            damping *= 10.0;
+                        }
+                    }
+                    if (!acceptedStep) {
+                        return false;
+                    }
+                }
+
+                QPointF sourcePoint;
+                QPointF otherPoint;
+                if (!evaluatePair(sourceFraction,
+                                  otherFraction,
+                                  &sourcePoint,
+                                  &otherPoint) ||
+                    std::hypot(sourcePoint.x() - otherPoint.x(),
+                               sourcePoint.y() - otherPoint.y()) >
+                        geometryTolerance) {
+                    return false;
+                }
+                *sourceParameter =
+                    sourceSpan.start + sourceSpanLength * sourceFraction;
+                return true;
+            };
+
+        const QVector<ParameterSpan> sourceSpans =
+            parameterSpans(sourceCurve, sourceFrame);
+        for (const CurveCandidate &other : otherCurves) {
+            if (other.shapeIndex == sourceShapeIndex &&
+                other.componentIndex == sourceComponentIndex) {
+                continue;
+            }
+            if (!workPlaneFramesCoplanar(sourceFrame, other.frame)) {
+                continue;
+            }
+            const QVector<ParameterSpan> otherSpans =
+                parameterSpans(other.curve, other.frame);
+            for (const ParameterSpan &sourceSpan : sourceSpans) {
+                for (const ParameterSpan &otherSpan : otherSpans) {
+                    qreal coordinateScale = 1.0;
+                    for (const qreal value : {
+                             sourceSpan.minimumX,
+                             sourceSpan.minimumY,
+                             sourceSpan.maximumX,
+                             sourceSpan.maximumY,
+                             otherSpan.minimumX,
+                             otherSpan.minimumY,
+                             otherSpan.maximumX,
+                             otherSpan.maximumY}) {
+                        coordinateScale =
+                            std::max(coordinateScale, std::abs(value));
+                    }
+                    const qreal geometryTolerance =
+                        std::max<qreal>(1.0e-7,
+                                        coordinateScale * 1.0e-10);
+                    if (!hullsOverlap(sourceSpan,
+                                      otherSpan,
+                                      geometryTolerance)) {
                         continue;
                     }
 
-                    const WorkPlaneFrame otherFrame =
-                        shapeWorkPlaneFrame(shapes_[shapeIndex]);
-                    if (!workPlaneFramesCoplanar(sourceFrame, otherFrame)) {
-                        continue;
-                    }
-                    SampledNurbsCurve2D otherSamples;
-                    if (sampleNurbsCurveForErase(otherCurves[componentIndex],
-                                                 otherFrame,
-                                                 &otherSamples)) {
-                        collectIntersections(otherSamples,
-                                             otherCurves[componentIndex],
-                                             otherFrame);
+                    for (const qreal sourceSeed : seedFractions) {
+                        for (const qreal otherSeed : seedFractions) {
+                            if (nurbsSeedSolves != nullptr) {
+                                ++*nurbsSeedSolves;
+                            }
+                            qreal intersectionParameter = 0.0;
+                            if (refineNurbsIntersection(
+                                    other.curve,
+                                    other.frame,
+                                    sourceSpan,
+                                    otherSpan,
+                                    sourceSeed,
+                                    otherSeed,
+                                    geometryTolerance,
+                                    &intersectionParameter)) {
+                                appendUniqueParameter(intersectionParameter);
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // A placed point can mark an intentional trim boundary when it lies
-        // on the target curve. It has no sampled curve of its own, so include
-        // it separately from curve-to-curve intersections.
+        const auto squaredDistanceAtParameter =
+            [&](qreal parameter, const QPointF &point) {
+                QPointF curvePoint;
+                if (!evaluateNurbsPoint(sourceCurve,
+                                        parameter,
+                                        &curvePoint)) {
+                    return std::numeric_limits<qreal>::infinity();
+                }
+                const QPointF delta = curvePoint - point;
+                return QPointF::dotProduct(delta, delta);
+            };
+        const auto goldenMinimum =
+            [&](qreal low, qreal high, const QPointF &point) {
+                constexpr qreal ratio = 0.6180339887498948482;
+                qreal first = high - (high - low) * ratio;
+                qreal second = low + (high - low) * ratio;
+                qreal firstValue =
+                    squaredDistanceAtParameter(first, point);
+                qreal secondValue =
+                    squaredDistanceAtParameter(second, point);
+                for (int iteration = 0; iteration < 36; ++iteration) {
+                    if (firstValue <= secondValue) {
+                        high = second;
+                        second = first;
+                        secondValue = firstValue;
+                        first = high - (high - low) * ratio;
+                        firstValue =
+                            squaredDistanceAtParameter(first, point);
+                    } else {
+                        low = first;
+                        first = second;
+                        firstValue = secondValue;
+                        second = low + (high - low) * ratio;
+                        secondValue =
+                            squaredDistanceAtParameter(second, point);
+                    }
+                }
+                return (low + high) * 0.5;
+            };
+
         for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
             if (shapeIndex == sourceShapeIndex ||
                 !document_.isObjectVisible(shapes_.objectIdAt(shapeIndex))) {
@@ -9395,15 +9338,20 @@ private:
                 pointShape.points.isEmpty()) {
                 continue;
             }
+            if (visiblePointChecks != nullptr) {
+                ++*visiblePointChecks;
+            }
 
             const Point3D pointWorld =
                 shapePointToWorld(pointShape, pointShape.points.first());
             const qreal worldCoordinateScale = std::max<qreal>(
                 {1.0, std::abs(pointWorld.x), std::abs(pointWorld.y),
                  std::abs(pointWorld.z), std::abs(sourceFrame.origin.x),
-                 std::abs(sourceFrame.origin.y), std::abs(sourceFrame.origin.z)});
+                 std::abs(sourceFrame.origin.y),
+                 std::abs(sourceFrame.origin.z)});
             const qreal planeTolerance =
-                std::max<qreal>(1.0e-7, worldCoordinateScale * 1.0e-12);
+                std::max<qreal>(1.0e-7,
+                                worldCoordinateScale * 1.0e-12);
             const qreal planeDistance =
                 signedDistanceFromWorkPlaneFrame(pointWorld, sourceFrame);
             if (!std::isfinite(planeDistance) ||
@@ -9414,95 +9362,82 @@ private:
                 worldPointToWorkPlaneFrame(pointWorld, sourceFrame);
             qreal localCoordinateScale =
                 std::max<qreal>({1.0, std::abs(pointLocal.x()),
-                                 std::abs(pointLocal.y()),
-                                 worldCoordinateScale * 1.0e-12});
+                                 std::abs(pointLocal.y())});
             for (const QPointF &controlPoint : sourceCurve.controlPoints) {
-                localCoordinateScale = std::max<qreal>(
-                    {localCoordinateScale, std::abs(controlPoint.x()),
-                     std::abs(controlPoint.y())});
+                localCoordinateScale =
+                    std::max<qreal>({localCoordinateScale,
+                                     std::abs(controlPoint.x()),
+                                     std::abs(controlPoint.y())});
             }
             const qreal geometryTolerance =
-                std::max<qreal>(1.0e-7, localCoordinateScale * 1.0e-9);
+                std::max<qreal>(1.0e-7,
+                                localCoordinateScale * 1.0e-9);
 
-            qreal closestDistanceSquared = 1.0e30;
-            qreal closestSegmentStart = 0.0;
-            qreal closestSegmentEnd = 0.0;
-            for (int sample = 1; sample < sourceSamples->parameters.size(); ++sample) {
-                QPointF first;
-                QPointF second;
-                if (!evaluateNurbsPoint(sourceCurve,
-                                        sourceSamples->parameters[sample - 1],
-                                        &first) ||
-                    !evaluateNurbsPoint(sourceCurve,
-                                        sourceSamples->parameters[sample],
-                                        &second)) {
-                    continue;
+            qreal closestDistanceSquared =
+                std::numeric_limits<qreal>::infinity();
+            qreal closestParameter = sourceDomainStart;
+            constexpr int pointSearchSubdivisions = 8;
+            for (const ParameterSpan &span : sourceSpans) {
+                qreal sampleParameters[pointSearchSubdivisions + 1];
+                qreal sampleDistances[pointSearchSubdivisions + 1];
+                for (int sample = 0;
+                     sample <= pointSearchSubdivisions;
+                     ++sample) {
+                    const qreal fraction =
+                        static_cast<qreal>(sample) /
+                        pointSearchSubdivisions;
+                    sampleParameters[sample] =
+                        span.start + (span.end - span.start) * fraction;
+                    sampleDistances[sample] = squaredDistanceAtParameter(
+                        sampleParameters[sample], pointLocal);
+                    if (sampleDistances[sample] < closestDistanceSquared) {
+                        closestDistanceSquared = sampleDistances[sample];
+                        closestParameter = sampleParameters[sample];
+                    }
                 }
-                const QPointF direction = second - first;
-                const qreal lengthSquared = QPointF::dotProduct(direction, direction);
-                const qreal fraction = lengthSquared <= 1.0e-20
-                                           ? 0.0
-                                           : std::clamp(
-                                                 QPointF::dotProduct(pointLocal - first,
-                                                                     direction) /
-                                                     lengthSquared,
-                                                 0.0,
-                                                 1.0);
-                const QPointF closest = first + direction * fraction;
-                const QPointF delta = pointLocal - closest;
-                const qreal distanceSquared = QPointF::dotProduct(delta, delta);
-                if (distanceSquared < closestDistanceSquared) {
-                    closestDistanceSquared = distanceSquared;
-                    closestSegmentStart = sourceSamples->parameters[sample - 1];
-                    closestSegmentEnd = sourceSamples->parameters[sample];
+                for (int sample = 0;
+                     sample <= pointSearchSubdivisions;
+                     ++sample) {
+                    const qreal previousDistance =
+                        sample > 0 ? sampleDistances[sample - 1]
+                                   : std::numeric_limits<qreal>::infinity();
+                    const qreal nextDistance =
+                        sample < pointSearchSubdivisions
+                            ? sampleDistances[sample + 1]
+                            : std::numeric_limits<qreal>::infinity();
+                    if (sampleDistances[sample] > previousDistance ||
+                        sampleDistances[sample] > nextDistance) {
+                        continue;
+                    }
+                    const qreal low =
+                        sampleParameters[std::max(0, sample - 1)];
+                    const qreal high =
+                        sampleParameters[std::min(pointSearchSubdivisions,
+                                                  sample + 1)];
+                    if (high - low <= 1.0e-14) {
+                        continue;
+                    }
+                    const qreal candidateParameter =
+                        goldenMinimum(low, high, pointLocal);
+                    const qreal candidateDistanceSquared =
+                        squaredDistanceAtParameter(candidateParameter,
+                                                   pointLocal);
+                    if (candidateDistanceSquared < closestDistanceSquared) {
+                        closestDistanceSquared = candidateDistanceSquared;
+                        closestParameter = candidateParameter;
+                    }
                 }
             }
 
-            // Refine the sampled closest point against the exact NURBS so a
-            // trim ending at the point retains the point's precise location.
-            qreal low = closestSegmentStart;
-            qreal high = closestSegmentEnd;
-            constexpr qreal goldenRatio = 0.6180339887498948482;
-            qreal firstParameter = high - (high - low) * goldenRatio;
-            qreal secondParameter = low + (high - low) * goldenRatio;
-            const auto squaredDistanceAt = [&](qreal parameter) {
-                QPointF curvePoint;
-                if (!evaluateNurbsPoint(sourceCurve, parameter, &curvePoint)) {
-                    return 1.0e30;
-                }
-                const QPointF delta = curvePoint - pointLocal;
-                return QPointF::dotProduct(delta, delta);
-            };
-            qreal firstDistance = squaredDistanceAt(firstParameter);
-            qreal secondDistance = squaredDistanceAt(secondParameter);
-            for (int iteration = 0; iteration < 36; ++iteration) {
-                if (firstDistance <= secondDistance) {
-                    high = secondParameter;
-                    secondParameter = firstParameter;
-                    secondDistance = firstDistance;
-                    firstParameter = high - (high - low) * goldenRatio;
-                    firstDistance = squaredDistanceAt(firstParameter);
-                } else {
-                    low = firstParameter;
-                    firstParameter = secondParameter;
-                    firstDistance = secondDistance;
-                    secondParameter = low + (high - low) * goldenRatio;
-                    secondDistance = squaredDistanceAt(secondParameter);
-                }
-            }
-            const qreal refinedParameter = (low + high) * 0.5;
-            if (squaredDistanceAt(refinedParameter) <=
+            if (closestDistanceSquared <=
                 geometryTolerance * geometryTolerance) {
-                appendPointBoundary(shapeIndex, refinedParameter);
-            } else {
-                // Preserve exact endpoint and linear-span hits where the
-                // minimum lands on a sample interval boundary.
-                const qreal startDistance = squaredDistanceAt(closestSegmentStart);
-                const qreal endDistance = squaredDistanceAt(closestSegmentEnd);
-                if (startDistance <= geometryTolerance * geometryTolerance) {
-                    appendPointBoundary(shapeIndex, closestSegmentStart);
-                } else if (endDistance <= geometryTolerance * geometryTolerance) {
-                    appendPointBoundary(shapeIndex, closestSegmentEnd);
+                appendUniqueParameter(closestParameter);
+                if (pointBoundaryObjectIds != nullptr) {
+                    const quint64 objectId =
+                        shapes_.objectIdAt(shapeIndex).value();
+                    if (!pointBoundaryObjectIds->contains(objectId)) {
+                        pointBoundaryObjectIds->append(objectId);
+                    }
                 }
             }
         }
@@ -9566,6 +9501,8 @@ private:
 
     void prepareEraseGeometryCache()
     {
+        QElapsedTimer totalTimer;
+        totalTimer.start();
         eraseTargetShapeIndices_.clear();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
@@ -9575,14 +9512,38 @@ private:
         eraseCacheViewportSize_ = size();
 
         const QVector<int> selectedTargets = eraseSelectionTargets();
+        QStringList selectedDescriptions;
+        for (const int shapeIndex : selectedTargets) {
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                continue;
+            }
+            const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+            selectedDescriptions.append(
+                QStringLiteral("%1:%2:%3")
+                    .arg(shapeIndex)
+                    .arg(objectId.value())
+                    .arg(geometryTypeName(shapes_[shapeIndex].geometryType)));
+        }
+        DebugLog::instance().write(
+            QStringLiteral("trim cache begin selected=[%1]")
+                .arg(selectedDescriptions.join(',')));
         if (selectedTargets.isEmpty()) {
+            DebugLog::instance().write(
+                QStringLiteral("trim cache ready selected=0 sceneCurves=0 targetCurves=0 totalUs=%1")
+                    .arg(totalTimer.nsecsElapsed() / 1000));
             return;
         }
 
+        QElapsedTimer samplingTimer;
+        samplingTimer.start();
         eraseSceneCurveCaches_ = curveSampler_.sampleDocument(document_,
                                                               viewportTransform_,
                                                               size());
+        const qint64 samplingUs = samplingTimer.nsecsElapsed() / 1000;
 
+        qint64 boundaryUs = 0;
+        int nurbsSeedSolves = 0;
+        int visiblePointChecks = 0;
         for (const int shapeIndex : selectedTargets) {
             bool hasTargetCurve = false;
             for (const EraseCurveSampleCache &sceneCurve : eraseSceneCurveCaches_) {
@@ -9591,25 +9552,75 @@ private:
                 }
 
                 EraseCurveSampleCache targetCurve = sceneCurve;
+                QElapsedTimer boundaryTimer;
+                boundaryTimer.start();
+                QVector<quint64> pointBoundaryObjectIds;
+                int targetSeedSolves = 0;
+                int targetPointChecks = 0;
                 targetCurve.intersectionParameters = eraseIntersectionParameters(
                     shapeIndex,
                     sceneCurve.componentIndex,
                     sceneCurve.curve,
-                    &sceneCurve.sampled,
-                    &eraseSceneCurveCaches_);
+                    &eraseSceneCurveCaches_,
+                    &pointBoundaryObjectIds,
+                    &targetSeedSolves,
+                    &targetPointChecks);
+                const qint64 targetBoundaryUs = boundaryTimer.nsecsElapsed() / 1000;
+                boundaryUs += targetBoundaryUs;
+                nurbsSeedSolves += targetSeedSolves;
+                visiblePointChecks += targetPointChecks;
+
+                QStringList pointIds;
+                for (const quint64 pointId : pointBoundaryObjectIds) {
+                    pointIds.append(QString::number(pointId));
+                }
+                QStringList boundaryParameters;
+                for (const qreal parameter : targetCurve.intersectionParameters) {
+                    boundaryParameters.append(QString::number(parameter, 'g', 10));
+                }
+                const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+                DebugLog::instance().write(
+                    QStringLiteral("trim cache target shape=%1 object=%2 type=%3 component=%4 displaySamples=%5 boundaries=[%6] pointObjects=[%7] nurbsSeedSolves=%8 pointChecks=%9 boundaryUs=%10")
+                        .arg(shapeIndex)
+                        .arg(objectId.value())
+                        .arg(geometryTypeName(shapes_[shapeIndex].geometryType))
+                        .arg(sceneCurve.componentIndex)
+                        .arg(sceneCurve.sampled.parameters.size())
+                        .arg(boundaryParameters.join(','))
+                        .arg(pointIds.join(','))
+                        .arg(targetSeedSolves)
+                        .arg(targetPointChecks)
+                        .arg(targetBoundaryUs));
                 eraseTargetCurveCaches_.append(targetCurve);
                 hasTargetCurve = true;
             }
             if (hasTargetCurve) {
                 eraseTargetShapeIndices_.append(shapes_.objectIdAt(shapeIndex));
+            } else {
+                const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+                DebugLog::instance().write(
+                    QStringLiteral("trim cache target unavailable shape=%1 object=%2 type=%3")
+                        .arg(shapeIndex)
+                        .arg(objectId.value())
+                        .arg(geometryTypeName(shapes_[shapeIndex].geometryType)));
             }
         }
 
+        int totalSamplePoints = 0;
+        for (const EraseCurveSampleCache &sceneCurve : eraseSceneCurveCaches_) {
+            totalSamplePoints += sceneCurve.sampled.parameters.size();
+        }
         DebugLog::instance().write(
-            QStringLiteral("erase cache prepared selectedShapes=%1 sceneCurves=%2 targetCurves=%3")
+            QStringLiteral("trim cache ready selected=%1 sceneCurves=%2 targetCurves=%3 displaySamples=%4 samplingUs=%5 boundaryUs=%6 nurbsSeedSolves=%7 pointChecks=%8 totalUs=%9")
                 .arg(eraseTargetShapeIndices_.size())
                 .arg(eraseSceneCurveCaches_.size())
-                .arg(eraseTargetCurveCaches_.size()));
+                .arg(eraseTargetCurveCaches_.size())
+                .arg(totalSamplePoints)
+                .arg(samplingUs)
+                .arg(boundaryUs)
+                .arg(nurbsSeedSolves)
+                .arg(visiblePointChecks)
+                .arg(totalTimer.nsecsElapsed() / 1000));
     }
 
     qreal distanceToCachedEraseShape(const QPointF &screenPosition,
@@ -9660,6 +9671,8 @@ private:
 
     void updateTrimHover(const QPointF &screenPosition)
     {
+        QElapsedTimer hoverTimer;
+        hoverTimer.start();
         invalidateEraseGeometryCacheForView();
         if (trimHoverPositionValid_ && eraseGeometryCachePrepared_ &&
             trimHoverScreenPosition_ == screenPosition) {
@@ -9705,21 +9718,82 @@ private:
         }
         trimHoverComponentIndex_ = closestComponentIndex;
         updateErasePreviewIntervals(true, closestShapeIndex, closestComponentIndex);
+
+        const qint64 elapsedUs = hoverTimer.nsecsElapsed() / 1000;
+        if (!trimHoverTimingWindow_.isValid()) {
+            trimHoverTimingWindow_.start();
+        }
+        trimHoverWindowTotalUs_ += elapsedUs;
+        trimHoverWindowMaxUs_ = std::max(trimHoverWindowMaxUs_, elapsedUs);
+        ++trimHoverWindowEvents_;
+        if (elapsedUs >= 20000 || trimHoverTimingWindow_.elapsed() >= 1000) {
+            QString targetDescription = QStringLiteral("none");
+            int previewIntervalCount = 0;
+            if (closestShapeIndex >= 0 && closestShapeIndex < shapes_.size()) {
+                const ObjectId objectId = shapes_.objectIdAt(closestShapeIndex);
+                targetDescription =
+                    QStringLiteral("%1:%2:%3 component=%4")
+                        .arg(closestShapeIndex)
+                        .arg(objectId.value())
+                        .arg(geometryTypeName(shapes_[closestShapeIndex].geometryType))
+                        .arg(closestComponentIndex);
+                for (const EraseCurveSampleCache &targetCurve :
+                     eraseTargetCurveCaches_) {
+                    if (targetCurve.shapeIndex == closestShapeIndex &&
+                        targetCurve.componentIndex == closestComponentIndex) {
+                        previewIntervalCount = targetCurve.previewIntervals.size();
+                        break;
+                    }
+                }
+            }
+            DebugLog::instance().write(
+                QStringLiteral("trim hover window events=%1 totalUs=%2 averageUs=%3 maxUs=%4 target=%5 previewIntervals=%6 at=%7")
+                    .arg(trimHoverWindowEvents_)
+                    .arg(trimHoverWindowTotalUs_)
+                    .arg(trimHoverWindowTotalUs_ /
+                         std::max(1, trimHoverWindowEvents_))
+                    .arg(trimHoverWindowMaxUs_)
+                    .arg(targetDescription)
+                    .arg(previewIntervalCount)
+                    .arg(pointText(screenPosition)));
+            trimHoverTimingWindow_.restart();
+            trimHoverWindowTotalUs_ = 0;
+            trimHoverWindowMaxUs_ = 0;
+            trimHoverWindowEvents_ = 0;
+        }
     }
 
     void trimAtScreenPosition(const QPointF &screenPosition)
     {
+        QElapsedTimer clickTimer;
+        clickTimer.start();
         updateTrimHover(screenPosition);
         if (eraseCandidateShapeIndices_.isEmpty()) {
             DebugLog::instance().write(
-                QStringLiteral("trim click ignored no selected curve under cursor at=%1 selectedTargets=%2 sampledTargets=%3")
+                QStringLiteral("trim click ignored target=none at=%1 selectedTargets=%2 sampledTargets=%3 elapsedUs=%4")
                     .arg(pointText(screenPosition))
                     .arg(eraseTargetShapeIndices_.size())
-                    .arg(eraseTargetCurveCaches_.size()));
+                    .arg(eraseTargetCurveCaches_.size())
+                    .arg(clickTimer.nsecsElapsed() / 1000));
             return;
         }
 
+        const ObjectId targetId = eraseCandidateShapeIndices_.first();
+        const int targetIndex = objectIndex(targetId);
+        DebugLog::instance().write(
+            QStringLiteral("trim click target shape=%1 object=%2 type=%3 component=%4 at=%5")
+                .arg(targetIndex)
+                .arg(targetId.value())
+                .arg(targetIndex >= 0 && targetIndex < shapes_.size()
+                         ? geometryTypeName(shapes_[targetIndex].geometryType)
+                         : QStringLiteral("unknown"))
+                .arg(trimHoverComponentIndex_)
+                .arg(pointText(screenPosition)));
         applyEraseCandidates(nullptr, trimHoverComponentIndex_);
+        DebugLog::instance().write(
+            QStringLiteral("trim click complete object=%1 elapsedUs=%2")
+                .arg(targetId.value())
+                .arg(clickTimer.nsecsElapsed() / 1000));
         eraseStrokeActive_ = false;
         eraseCandidateShapeIndices_.clear();
         eraseStrokeScreenPath_.clear();
@@ -9730,7 +9804,6 @@ private:
         trimHoverPositionValid_ = false;
         trimHoverComponentIndex_ = -1;
         update();
-        DebugLog::instance().write(QStringLiteral("trim click applied"));
     }
 
     void updateTrimBoxPreview()
@@ -10408,12 +10481,21 @@ private:
                     cachedIntersectionParameters);
             }
             if (removedIntervals.isEmpty()) {
-                if (activeTool_ == Tool::Trim && trimBox == nullptr &&
-                    sourceComponentIndex == onlyComponentIndex) {
+                if (activeTool_ == Tool::Trim &&
+                    (trimBox != nullptr ||
+                     sourceComponentIndex == onlyComponentIndex)) {
+                    const ObjectId objectId = sourceShapeIndex >= 0 &&
+                                                      sourceShapeIndex < shapes_.size()
+                                                  ? shapes_.objectIdAt(sourceShapeIndex)
+                                                  : ObjectId::invalid();
                     DebugLog::instance().write(
-                        QStringLiteral("trim interval empty shape=%1 component=%2 intersections=%3 frameValid=%4")
+                        QStringLiteral("trim section empty object=%1 shape=%2 type=%3 component=%4 mode=%5 boundaries=%6 frameValid=%7")
+                            .arg(objectId.value())
                             .arg(sourceShapeIndex)
+                            .arg(geometryTypeName(shape.geometryType))
                             .arg(sourceComponentIndex)
+                            .arg(trimBox != nullptr ? QStringLiteral("box")
+                                                    : QStringLiteral("click"))
                             .arg(cachedIntersectionParameters == nullptr
                                      ? 0
                                      : cachedIntersectionParameters->size())
@@ -10423,16 +10505,56 @@ private:
                 continue;
             }
 
-            if (activeTool_ == Tool::Trim && trimBox == nullptr &&
-                sourceComponentIndex == onlyComponentIndex) {
+            if (activeTool_ == Tool::Trim &&
+                (trimBox != nullptr ||
+                 sourceComponentIndex == onlyComponentIndex)) {
+                const ObjectId objectId = sourceShapeIndex >= 0 &&
+                                                  sourceShapeIndex < shapes_.size()
+                                              ? shapes_.objectIdAt(sourceShapeIndex)
+                                              : ObjectId::invalid();
+                QStringList removedParameterText;
+                for (const ParameterInterval &interval : removedIntervals) {
+                    QPointF startLocal;
+                    QPointF endLocal;
+                    QString segmentWorldText = QStringLiteral("world=unavailable");
+                    if (evaluateNurbsPoint(sourceCurve, interval.start, &startLocal) &&
+                        evaluateNurbsPoint(sourceCurve, interval.end, &endLocal)) {
+                        const Point3D startWorld = workPlaneFramePointToWorld(
+                            startLocal, sourceFrame);
+                        const Point3D endWorld = workPlaneFramePointToWorld(
+                            endLocal, sourceFrame);
+                        segmentWorldText =
+                            QStringLiteral("world=(%1,%2,%3)->(%4,%5,%6)")
+                                .arg(startWorld.x, 0, 'g', 8)
+                                .arg(startWorld.y, 0, 'g', 8)
+                                .arg(startWorld.z, 0, 'g', 8)
+                                .arg(endWorld.x, 0, 'g', 8)
+                                .arg(endWorld.y, 0, 'g', 8)
+                                .arg(endWorld.z, 0, 'g', 8);
+                    }
+                    removedParameterText.append(
+                        QStringLiteral("u%1..%2 %3")
+                            .arg(interval.start, 0, 'g', 10)
+                            .arg(interval.end, 0, 'g', 10)
+                            .arg(segmentWorldText));
+                }
+                QStringList boundaryParameterText;
+                if (cachedIntersectionParameters != nullptr) {
+                    for (const qreal parameter : *cachedIntersectionParameters) {
+                        boundaryParameterText.append(
+                            QString::number(parameter, 'g', 10));
+                    }
+                }
                 DebugLog::instance().write(
-                    QStringLiteral("trim interval applied shape=%1 component=%2 intervals=%3 intersections=%4 frameValid=%5")
+                    QStringLiteral("trim section remove object=%1 shape=%2 type=%3 component=%4 mode=%5 intervals=[%6] boundaries=[%7] frameValid=%8")
+                        .arg(objectId.value())
                         .arg(sourceShapeIndex)
+                        .arg(geometryTypeName(shape.geometryType))
                         .arg(sourceComponentIndex)
-                        .arg(removedIntervals.size())
-                        .arg(cachedIntersectionParameters == nullptr
-                                 ? 0
-                                 : cachedIntersectionParameters->size())
+                        .arg(trimBox != nullptr ? QStringLiteral("box")
+                                                : QStringLiteral("click"))
+                        .arg(removedParameterText.join(','))
+                        .arg(boundaryParameterText.join(','))
                         .arg(isValidWorkPlaneFrame(sourceFrame)));
             }
 
@@ -10531,6 +10653,8 @@ private:
         if (eraseCandidateShapeIndices_.isEmpty()) {
             return;
         }
+        QElapsedTimer operationTimer;
+        operationTimer.start();
 
         QVector<int> indices;
         for (const ObjectId objectId : eraseCandidateShapeIndices_) {
@@ -10543,31 +10667,71 @@ private:
         indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
 
         QVector<QPair<int, QVector<Shape>>> changes;
+        qint64 geometryEvaluationUs = 0;
         for (auto iterator = indices.crbegin(); iterator != indices.crend(); ++iterator) {
             if (*iterator < 0 || *iterator >= shapes_.size()) {
                 continue;
             }
 
             QVector<Shape> replacement;
-            if (trimShapeAtEraserStroke(shapes_[*iterator],
-                                        eraseStrokeScreenPath_,
-                                        &replacement,
-                                        *iterator,
-                                        &eraseTargetCurveCaches_,
-                                        trimBox,
-                                        onlyComponentIndex)) {
+            QElapsedTimer evaluationTimer;
+            evaluationTimer.start();
+            const bool changed = trimShapeAtEraserStroke(shapes_[*iterator],
+                                                         eraseStrokeScreenPath_,
+                                                         &replacement,
+                                                         *iterator,
+                                                         &eraseTargetCurveCaches_,
+                                                         trimBox,
+                                                         onlyComponentIndex);
+            const qint64 evaluationUs = evaluationTimer.nsecsElapsed() / 1000;
+            geometryEvaluationUs += evaluationUs;
+            const ObjectId objectId = shapes_.objectIdAt(*iterator);
+            if (activeTool_ == Tool::Trim) {
+                DebugLog::instance().write(
+                    QStringLiteral("trim evaluate target shape=%1 object=%2 type=%3 changed=%4 outputPieces=%5 elapsedUs=%6")
+                        .arg(*iterator)
+                        .arg(objectId.value())
+                        .arg(geometryTypeName(shapes_[*iterator].geometryType))
+                        .arg(changed)
+                        .arg(replacement.size())
+                        .arg(evaluationUs));
+            }
+            if (changed) {
                 changes.append(qMakePair(*iterator, replacement));
             }
         }
 
         if (changes.isEmpty()) {
-            DebugLog::instance().write(QStringLiteral("erase found no trim interval"));
+            if (activeTool_ == Tool::Trim) {
+                QStringList candidateDescriptions;
+                for (const int shapeIndex : indices) {
+                    const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+                    candidateDescriptions.append(
+                        QStringLiteral("%1:%2:%3")
+                            .arg(shapeIndex)
+                            .arg(objectId.value())
+                            .arg(geometryTypeName(shapes_[shapeIndex].geometryType)));
+                }
+                DebugLog::instance().write(
+                    QStringLiteral("trim commit no-change mode=%1 candidates=[%2] geometryUs=%3 totalUs=%4")
+                        .arg(trimBox != nullptr ? QStringLiteral("box")
+                                                : QStringLiteral("click"))
+                        .arg(candidateDescriptions.join(','))
+                        .arg(geometryEvaluationUs)
+                        .arg(operationTimer.nsecsElapsed() / 1000));
+            } else {
+                DebugLog::instance().write(QStringLiteral("erase found no trim interval"));
+            }
             return;
         }
 
+        QElapsedTimer commitTimer;
+        commitTimer.start();
         recordGeometryChange();
         int removedCount = 0;
+        int generatedPieceCount = 0;
         QVector<ObjectId> removedObjectIds;
+        QStringList changedObjectDescriptions;
         for (const QPair<int, QVector<Shape>> &change : changes) {
             const int shapeIndex = change.first;
             if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
@@ -10575,6 +10739,13 @@ private:
             }
 
             const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+            generatedPieceCount += change.second.size();
+            changedObjectDescriptions.append(
+                QStringLiteral("%1:%2:%3->%4")
+                    .arg(shapeIndex)
+                    .arg(objectId.value())
+                    .arg(geometryTypeName(shapes_[shapeIndex].geometryType))
+                    .arg(change.second.size()));
             if (change.second.isEmpty()) {
                 shapes_.removeAt(shapeIndex);
                 removedObjectIds.append(objectId);
@@ -10616,6 +10787,23 @@ private:
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
         dragHistoryRecorded_ = false;
+        if (activeTool_ == Tool::Trim) {
+            QStringList removedIds;
+            for (const ObjectId objectId : removedObjectIds) {
+                removedIds.append(QString::number(objectId.value()));
+            }
+            DebugLog::instance().write(
+                QStringLiteral("trim commit complete mode=%1 candidates=%2 changedObjects=[%3] generatedPieces=%4 removedObjects=[%5] geometryUs=%6 commitUs=%7 totalUs=%8")
+                    .arg(trimBox != nullptr ? QStringLiteral("box")
+                                            : QStringLiteral("click"))
+                    .arg(indices.size())
+                    .arg(changedObjectDescriptions.join(','))
+                    .arg(generatedPieceCount)
+                    .arg(removedIds.join(','))
+                    .arg(geometryEvaluationUs)
+                    .arg(commitTimer.nsecsElapsed() / 1000)
+                    .arg(operationTimer.nsecsElapsed() / 1000));
+        }
         DebugLog::instance().write(QStringLiteral("erase segment applied candidates=%1 changed=%2 removed=%3 shapes=%4")
                                        .arg(indices.size())
                                        .arg(changes.size())
@@ -13998,6 +14186,10 @@ private:
     bool trimHoverPositionValid_ = false;
     int trimHoverComponentIndex_ = -1;
     QPointF trimHoverScreenPosition_{0.0, 0.0};
+    QElapsedTimer trimHoverTimingWindow_;
+    qint64 trimHoverWindowTotalUs_ = 0;
+    qint64 trimHoverWindowMaxUs_ = 0;
+    int trimHoverWindowEvents_ = 0;
     qreal &zoom_;
     bool panning_ = false;
     bool orbiting_ = false;

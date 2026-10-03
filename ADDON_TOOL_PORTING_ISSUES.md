@@ -79,6 +79,9 @@ misread or implemented incorrectly.
 - Box selection must project each object's local points through that object's
   stored frame into the view. Do not filter candidates to the active drawing
   plane or project every object's local coordinates as if they shared it.
+- Left-to-right box selection uses the actual projected geometry bounds; do
+  not enlarge those bounds by a screen-space margin, which forces unnecessary
+  empty space between the object and the window edge.
 
 ## Polygon port findings
 

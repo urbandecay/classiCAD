@@ -6137,8 +6137,12 @@ private:
         selection_.toggle(objectId);
     }
 
-    QRectF selectionBoundsForShape(const Shape &shape) const
+    QRectF selectionBoundsForShape(const Shape &shape,
+                                   bool *hasProjectedPoints = nullptr) const
     {
+        if (hasProjectedPoints != nullptr) {
+            *hasProjectedPoints = false;
+        }
         QVector<QPointF> points = controlPointsForShape(shape);
         // Keep the source points in the selection bounds as well as the
         // stored NURBS CVs. This covers endpoints that are represented by
@@ -6181,20 +6185,24 @@ private:
         if (!initialized) {
             return {};
         }
+        if (hasProjectedPoints != nullptr) {
+            *hasProjectedPoints = true;
+        }
 
-        // A line or a point can have a zero-width bounding box. The small
-        // padding keeps box selection usable at normal zoom levels and also
-        // covers the visible stroke/point marker.
-        return QRectF(QPointF(minX, minY), QPointF(maxX, maxY))
-            .adjusted(-5.0, -5.0, 5.0, 5.0);
+        // Window selection uses the geometry's true projected bounds. Padding
+        // these bounds makes a fully enclosed object fail when it lies close
+        // to the selection rectangle's edge.
+        return QRectF(QPointF(minX, minY), QPointF(maxX, maxY));
     }
 
     bool shapeMatchesSelectionBox(const Shape &shape,
                                   const QRectF &box,
                                   bool crossingSelection) const
     {
-        const QRectF bounds = selectionBoundsForShape(shape).normalized();
-        if (bounds.isNull()) {
+        bool hasProjectedPoints = false;
+        const QRectF bounds = selectionBoundsForShape(shape, &hasProjectedPoints)
+                                  .normalized();
+        if (!hasProjectedPoints) {
             return false;
         }
 
@@ -6202,7 +6210,11 @@ private:
         // left to right and crossing selection when dragged from right to
         // left. The crossing window includes anything that touches it.
         if (!crossingSelection) {
-            return box.normalized().contains(bounds);
+            const QRectF window = box.normalized();
+            return bounds.left() >= window.left() &&
+                   bounds.right() <= window.right() &&
+                   bounds.top() >= window.top() &&
+                   bounds.bottom() <= window.bottom();
         }
 
         // QRectF::intersects() can exclude a contact that falls exactly on

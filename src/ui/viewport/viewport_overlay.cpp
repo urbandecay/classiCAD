@@ -82,16 +82,25 @@ QColor arcCompassColor(const Point3D &normal)
     return QColor(225, 225, 225, 255);
 }
 
+QString rotateSnapIncrementLabel(qreal incrementDegrees, bool useRadians)
+{
+    if (useRadians) {
+        const int denominator = qRound(180.0 / incrementDegrees);
+        return QStringLiteral("π/%1").arg(denominator);
+    }
+    return QStringLiteral("%1°").arg(incrementDegrees, 0, 'g', 4);
+}
+
 void drawArcCompass(QPainter &painter,
                     const ViewportTransform &transform,
                     const WorkPlaneFrame &frame,
                     const QPointF &localCenter,
                     const QSize &viewportSize,
-                    qreal rotation)
+                    qreal rotation,
+                    qreal angleIncrementDegrees = 15.0)
 {
     constexpr qreal pi = 3.14159265358979323846;
     constexpr int ringSamples = 72;
-    constexpr int angleIncrementDegrees = 15;
     constexpr qreal compassRadiusPixels = 62.5;
     if (!isValidWorkPlaneFrame(frame)) {
         return;
@@ -196,7 +205,9 @@ void drawArcCompass(QPainter &painter,
                         true);
     }
 
-    constexpr int tickCount = 360 / angleIncrementDegrees;
+    const int tickCount = std::max(
+        1,
+        qRound(360.0 / std::max<qreal>(angleIncrementDegrees, 1.0e-9)));
     for (int tick = 0; tick < tickCount; ++tick) {
         const qreal angle = 2.0 * pi * tick / tickCount;
         drawCompassLine(outerRadius * std::cos(angle),
@@ -1323,9 +1334,15 @@ void ViewportOverlay::drawRotatePreview(QPainter &painter,
                                         const QPointF &cursorWorld,
                                         bool cursorValid,
                                         int rotateStep,
+                                        const WorkPlaneFrame &rotateFrame,
                                         const QPointF &rotateBaseWorld,
                                         const QPointF &rotateReferenceWorld,
                                         qreal rotatePreviewAngle,
+                                        const QString &rotateAngleInput,
+                                        bool rotateAngleInputActive,
+                                        bool rotateAngleSnapEnabled,
+                                        qreal rotateAngleSnapIncrementDegrees,
+                                        bool rotateAngleInputInRadians,
                                         const SnapResult &currentSnap,
                                         const QSize &viewportSize,
                                         bool drawGeometry) const
@@ -1337,7 +1354,36 @@ void ViewportOverlay::drawRotatePreview(QPainter &painter,
     const QColor rotateColor(QStringLiteral("#e6b85c"));
     const QColor guideColor(QStringLiteral("#8aa7c7"));
     const QColor pointColor(QStringLiteral("#f0a45a"));
-    const QPointF cursorScreen = transform_.worldToScreen(cursorWorld, viewportSize);
+    const WorkPlaneFrame frame = isValidWorkPlaneFrame(rotateFrame)
+                                     ? rotateFrame
+                                     : transform_.workPlaneFrame();
+    QPointF cursorScreen;
+    if (!transform_.worldPointToScreen(
+            workPlaneFramePointToWorld(cursorWorld, frame),
+            viewportSize,
+            &cursorScreen)) {
+        return;
+    }
+
+    QPointF compassCenter = cursorWorld;
+    qreal compassRotation = 0.0;
+    if (rotateStep >= 1) {
+        compassCenter = rotateBaseWorld;
+        if (rotateStep == 1) {
+            const QPointF reference = cursorWorld - rotateBaseWorld;
+            compassRotation = std::atan2(reference.y(), reference.x());
+        } else {
+            const QPointF reference = rotateReferenceWorld - rotateBaseWorld;
+            compassRotation = std::atan2(reference.y(), reference.x());
+        }
+    }
+    drawArcCompass(painter,
+                   transform_,
+                   frame,
+                   compassCenter,
+                   viewportSize,
+                   compassRotation,
+                   rotateAngleSnapIncrementDegrees);
 
     if (drawGeometry) {
         painter.setBrush(Qt::NoBrush);
@@ -1345,18 +1391,23 @@ void ViewportOverlay::drawRotatePreview(QPainter &painter,
             painter.setPen(QPen(pointColor, 1.5));
             painter.drawEllipse(cursorScreen, 6.0, 6.0);
         } else {
-            const QPointF baseScreen = transform_.worldToScreen(rotateBaseWorld, viewportSize);
+            const QPointF baseScreen = transform_.workPlaneToScreen(
+                rotateBaseWorld, viewportSize, frame);
             painter.setPen(QPen(pointColor, 1.5));
             painter.drawEllipse(baseScreen, 6.0, 6.0);
             if (rotateStep >= 1) {
-                painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
+                painter.setPen(QPen(guideColor, 1.2, Qt::DashLine));
                 painter.drawLine(baseScreen, cursorScreen);
             }
             if (rotateStep >= 2) {
                 const QPointF referenceScreen =
-                    transform_.worldToScreen(rotateReferenceWorld, viewportSize);
-                painter.setPen(QPen(rotateColor, 1.0, Qt::DashLine));
+                    transform_.workPlaneToScreen(rotateReferenceWorld,
+                                                 viewportSize,
+                                                 frame);
+                painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
                 painter.drawLine(baseScreen, referenceScreen);
+                painter.setPen(QPen(rotateColor, 1.6));
+                painter.drawLine(baseScreen, cursorScreen);
             }
         }
         painter.setPen(QPen(pointColor, 1.5));
@@ -1366,16 +1417,33 @@ void ViewportOverlay::drawRotatePreview(QPainter &painter,
     if (rotateStep >= 2) {
         painter.setPen(QColor(QStringLiteral("#d0d0d0")));
         painter.setFont(QFont(QStringLiteral("Sans"), 9));
-        const QString angleText = QStringLiteral("%1°")
-                                       .arg(rotatePreviewAngle *
-                                                180.0 /
-                                                3.14159265358979323846,
-                                            0,
-                                            'f',
-                                            1);
+        const QString angleUnit = rotateAngleInputInRadians
+                                      ? QStringLiteral(" rad")
+                                      : QStringLiteral("°");
+        const QString angleText = rotateAngleInputActive &&
+                                          !rotateAngleInput.isEmpty()
+                                      ? QStringLiteral("∠ %1°")
+                                            .arg(rotateAngleInput)
+                                      : QStringLiteral("∠ %1%2%3")
+                                            .arg(rotateAngleInputInRadians
+                                                     ? rotatePreviewAngle
+                                                     : rotatePreviewAngle *
+                                                           180.0 /
+                                                           3.14159265358979323846,
+                                                 0,
+                                                 'f',
+                                                 rotateAngleInputInRadians ? 3 : 1)
+                                            .arg(angleUnit)
+                                            .arg(rotateAngleSnapEnabled
+                                                     ? QStringLiteral("  •  %1")
+                                                           .arg(rotateSnapIncrementLabel(
+                                                               rotateAngleSnapIncrementDegrees,
+                                                               rotateAngleInputInRadians))
+                                                     : QString());
         painter.drawText(cursorScreen + QPointF(12.0, -10.0), angleText);
     }
-    if (currentSnap.isValid()) {
+    if (currentSnap.isValid() &&
+        !(rotateAngleInputActive && !rotateAngleInput.isEmpty())) {
         drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
     }
 }
@@ -1485,6 +1553,10 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                      const QString &lineCommandStatus,
                                      const QString &pointToolInstructions,
                                      int rotateStep,
+                                     bool rotateAngleSnapEnabled,
+                                     bool rotateAngleInputActive,
+                                     qreal rotateAngleSnapIncrementDegrees,
+                                     bool rotateAngleInputInRadians,
                                      bool grabActive,
                                      bool grabPickingBasePoint,
                                      bool grabHasBasePoint,
@@ -1530,10 +1602,25 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
     } else if (activeTool == Tool::Rotate) {
         painter.setPen(QColor(QStringLiteral("#777777")));
         const QString rotateHint = rotateStep == 0
-                                       ? QStringLiteral("Click rotation center  •  Esc/RMB cancels")
-                                       : rotateStep == 1
-                                             ? QStringLiteral("Click starting direction  •  Esc/RMB cancels")
-                                             : QStringLiteral("Click ending direction to rotate  •  Esc/RMB cancels");
+                                       ? QStringLiteral("Click pivot  •  X/Y/Z plane  •  P perpendicular  •  Esc/RMB cancel")
+                                     : rotateStep == 1
+                                             ? QStringLiteral("Click reference  •  C %1 snap %2  •  P perpendicular  •  Esc/RMB cancel")
+                                                   .arg(rotateSnapIncrementLabel(
+                                                       rotateAngleSnapIncrementDegrees,
+                                                       rotateAngleInputInRadians))
+                                                   .arg(rotateAngleSnapEnabled
+                                                            ? QStringLiteral("on")
+                                                            : QStringLiteral("off"))
+                                             : QStringLiteral("Click/Enter confirm%3  •  A angle (deg)  •  C %1 snap %2  •  P perpendicular  •  Esc/RMB cancel")
+                                                   .arg(rotateSnapIncrementLabel(
+                                                       rotateAngleSnapIncrementDegrees,
+                                                       rotateAngleInputInRadians))
+                                                   .arg(rotateAngleSnapEnabled
+                                                            ? QStringLiteral("on")
+                                                            : QStringLiteral("off"))
+                                                   .arg(rotateAngleInputActive
+                                                            ? QStringLiteral(" (typing)")
+                                                            : QString());
         painter.drawText(18, viewportSize.height() - 18, rotateHint);
     } else if (activeTool == Tool::Mirror) {
         painter.setPen(QColor(QStringLiteral("#777777")));

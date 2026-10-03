@@ -174,6 +174,49 @@ Point3D arcVectorCross(const Point3D &first, const Point3D &second)
             first.x * second.y - first.y * second.x};
 }
 
+Point3D rotateWorldVector(const Point3D &vector,
+                          const Point3D &axis,
+                          qreal angle)
+{
+    const qreal axisLength = arcVectorLength(axis);
+    if (axisLength <= 1.0e-12 || std::abs(angle) <= 1.0e-15) {
+        return vector;
+    }
+    const Point3D unitAxis = arcVectorScale(axis, 1.0 / axisLength);
+    const qreal cosine = std::cos(angle);
+    const qreal sine = std::sin(angle);
+    return arcVectorAdd(
+        arcVectorAdd(arcVectorScale(vector, cosine),
+                     arcVectorScale(arcVectorCross(unitAxis, vector), sine)),
+        arcVectorScale(unitAxis,
+                       arcVectorDot(unitAxis, vector) * (1.0 - cosine)));
+}
+
+Point3D rotateWorldPoint(const Point3D &point,
+                         const Point3D &pivot,
+                         const Point3D &axis,
+                         qreal angle)
+{
+    return arcVectorAdd(pivot,
+                        rotateWorldVector(arcVectorSubtract(point, pivot),
+                                          axis,
+                                          angle));
+}
+
+WorkPlaneFrame rotateWorkPlaneFrame(const WorkPlaneFrame &frame,
+                                    const Point3D &pivot,
+                                    const Point3D &axis,
+                                    qreal angle)
+{
+    WorkPlaneFrame result = frame;
+    result.origin = rotateWorldPoint(frame.origin, pivot, axis, angle);
+    result.xAxis = rotateWorldVector(frame.xAxis, axis, angle);
+    result.yAxis = rotateWorldVector(frame.yAxis, axis, angle);
+    result.normal = rotateWorldVector(frame.normal, axis, angle);
+    result.valid = isValidWorkPlaneFrame(result);
+    return result;
+}
+
 qreal snapOnePointArcAngle(qreal angle)
 {
     constexpr qreal pi = 3.14159265358979323846;
@@ -201,6 +244,14 @@ QString arcLengthUnitSuffix(DocumentLengthUnit unit)
         return QStringLiteral("ft");
     }
     return QStringLiteral("mm");
+}
+
+QString precisePoint3DText(const Point3D &point)
+{
+    return QStringLiteral("(%1,%2,%3)")
+        .arg(point.x, 0, 'g', 12)
+        .arg(point.y, 0, 'g', 12)
+        .arg(point.z, 0, 'g', 12);
 }
 
 } // namespace
@@ -1238,6 +1289,45 @@ public:
         update();
     }
 
+    RotateToolPreferences rotateToolPreferences() const override
+    {
+        return rotateToolPreferences_;
+    }
+
+    bool setRotateToolPreferences(
+        const RotateToolPreferences &preferences) override
+    {
+        constexpr qreal supportedDegreeIncrements[]{1.0, 2.0, 3.0, 5.0, 10.0,
+                                                      15.0, 22.5, 30.0, 45.0,
+                                                      60.0, 90.0};
+        constexpr qreal supportedRadianIncrements[]{1.0, 2.0, 3.0, 5.0, 10.0,
+                                                      15.0, 22.5, 30.0, 45.0,
+                                                      60.0, 90.0};
+        const auto isSupportedIncrement = [](qreal value,
+                                             const qreal *increments,
+                                             std::size_t count) {
+            return std::any_of(increments, increments + count,
+                               [value](qreal increment) {
+                                   return std::abs(value - increment) < 1.0e-9;
+                               });
+        };
+        if (!isSupportedIncrement(preferences.angleSnapIncrementDegrees,
+                                  std::begin(supportedDegreeIncrements),
+                                  std::size(supportedDegreeIncrements)) ||
+            !isSupportedIncrement(preferences.angleSnapIncrementRadiansDegrees,
+                                  std::begin(supportedRadianIncrements),
+                                  std::size(supportedRadianIncrements)) ||
+            !std::isfinite(preferences.angleSnapStrengthDegrees) ||
+            preferences.angleSnapStrengthDegrees < 0.1 ||
+            preferences.angleSnapStrengthDegrees > 45.0) {
+            return false;
+        }
+        rotateToolPreferences_ = preferences;
+        rotateAngleSnapEnabled_ = preferences.angleSnapEnabled;
+        update();
+        return true;
+    }
+
     DocumentSettings documentSettings() const override
     {
         return document_.settings();
@@ -1543,7 +1633,9 @@ public:
 
         QVector<ObjectId> validSelection;
         for (const ObjectId objectId : selected) {
-            if (objectIndex(objectId) >= 0 && !validSelection.contains(objectId)) {
+            if (objectIndex(objectId) >= 0 &&
+                document_.isObjectEditable(objectId) &&
+                !validSelection.contains(objectId)) {
                 validSelection.append(objectId);
             }
         }
@@ -1552,12 +1644,9 @@ public:
             return false;
         }
 
+        resetRotateInteraction();
         setTool(Tool::Rotate);
         rotateShapeIndices_ = validSelection;
-        rotateStep_ = 0;
-        rotateBaseWorld_ = QPointF();
-        rotateReferenceWorld_ = QPointF();
-        rotatePreviewAngle_ = 0.0;
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
         update();
@@ -2626,9 +2715,7 @@ protected:
                                    scaleMode_);
             } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
                        rotateShapeIndices_.contains(objectId)) {
-                rotateShapeGeometry(&depthShape,
-                                    rotateBaseWorld_,
-                                    rotatePreviewAngle_);
+                rotateShapeGeometry(&depthShape, rotatePreviewAngle_);
             }
             visibleShapes.append(std::move(depthShape));
         }
@@ -2668,9 +2755,7 @@ protected:
                                        scaleMode_);
                 } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
                            rotateShapeIndices_.contains(objectId)) {
-                    rotateShapeGeometry(&handleShape,
-                                        rotateBaseWorld_,
-                                        rotatePreviewAngle_);
+                    rotateShapeGeometry(&handleShape, rotatePreviewAngle_);
                 }
 
                 const QVector<QPointF> controlPoints =
@@ -2905,9 +2990,7 @@ protected:
                           layerLineWeightMm);
             } else if (rotatePreview) {
                 Shape previewShape = shapes_[index];
-                rotateShapeGeometry(&previewShape,
-                                    rotateBaseWorld_,
-                                    rotatePreviewAngle_);
+                rotateShapeGeometry(&previewShape, rotatePreviewAngle_);
                 drawShape(scenePainter,
                           previewShape,
                           false,
@@ -3518,7 +3601,6 @@ protected:
                         rotateShapeIndices_.contains(shapes_.objectIdAt(shapeIndex))) {
                         Shape previewShape = shapes_[shapeIndex];
                         rotateShapeGeometry(&previewShape,
-                                            rotateBaseWorld_,
                                             rotatePreviewAngle_);
                         drawControlPoints(painter, previewShape, shapeIndex,
                                           !gpuControlPointsDrawn);
@@ -3655,6 +3737,10 @@ protected:
                                          toolStatus_.text,
                                          pointHudInstructionsLine_,
                                          rotateStep_,
+                                         rotateAngleSnapEnabled_,
+                                         rotateAngleInputActive_,
+                                         rotateSnapIncrementDegrees(),
+                                         rotateToolPreferences_.useRadians,
                                          grabActive_,
                                          grabPickingBasePoint_,
                                          grabHasBasePoint_,
@@ -4600,8 +4686,10 @@ protected:
         }
 
         if (activeTool_ == Tool::Rotate) {
-            if (!panning_ && rotateStep_ == 2) {
-                rotatePreviewAngle_ = rotationAngleForPoint(cursorWorld_);
+            if (!panning_ && rotateStep_ == 1) {
+                updateRotateReferencePreview(cursorWorld_);
+            } else if (!panning_ && rotateStep_ == 2) {
+                updateRotatePreview(cursorWorld_);
             }
             update();
             emitCoordinateUpdate();
@@ -5262,6 +5350,10 @@ protected:
 
         if (activeTool_ == Tool::Rotate && event->key() == Qt::Key_Escape) {
             cancelRotate();
+            return;
+        }
+
+        if (activeTool_ == Tool::Rotate && handleRotateKey(event)) {
             return;
         }
 
@@ -8137,6 +8229,20 @@ private:
             }
         };
 
+        if (activeTool_ == Tool::Rotate) {
+            const Point3D *anchor = nullptr;
+            if (rotateStep_ == 1) {
+                anchor = &rotateBaseWorldPoint_;
+            } else if (rotateStep_ == 2) {
+                anchor = &rotateReferenceWorldPoint_;
+            }
+            const SnapResult result = snapEngine_.findSpatialSnapPoint(
+                document_, worldToScreen(rawPoint), anchor,
+                viewportTransform_, size());
+            traceSnapResult(result, true);
+            return result;
+        }
+
         const bool arcPlaneConstraintActive =
             activeTool_ == Tool::Arc &&
             (arcPlaneNormalLockKey_ != 0 || arcAxisConstraintKey_ != 0 ||
@@ -8196,7 +8302,7 @@ private:
             isCurveCreationTool(activeTool_) ||
             isCircleConstructionTool(activeTool_) ||
             isEllipseTool(activeTool_) || isRectangleTool(activeTool_) ||
-            isPolygonTool(activeTool_) || activeTool_ == Tool::Rotate ||
+            isPolygonTool(activeTool_) ||
             activeTool_ == Tool::Scale || activeTool_ == Tool::Picture ||
             activeTool_ == Tool::Mirror || isDimensionTool(activeTool_) ||
             activeTool_ == Tool::TangentFromCurve ||
@@ -11706,9 +11812,32 @@ private:
     {
         rotateShapeIndices_.clear();
         rotateStep_ = 0;
+        rotateFrame_ = {};
+        rotatePrimaryFrame_ = {};
+        rotatePrePivotPlaneFrame_ = {};
+        rotatePrePivotFloorFrame_ = {};
+        rotatePrePivotFloorNormal_ = {};
+        rotateBaseWorldPoint_ = {};
+        rotateReferenceWorldPoint_ = {};
+        rotateReferenceNormal_ = {};
         rotateBaseWorld_ = QPointF();
         rotateReferenceWorld_ = QPointF();
         rotatePreviewAngle_ = 0.0;
+        rotateAccumulatedAngle_ = 0.0;
+        rotateLastRawAngle_ = 0.0;
+        rotateReferenceAngle_ = 0.0;
+        rotateHasPreviousAngle_ = false;
+        rotateAngleSnapEnabled_ = rotateToolPreferences_.angleSnapEnabled;
+        rotateAngleInputActive_ = false;
+        rotateAngleInputManual_ = false;
+        rotateAngleInput_.clear();
+        rotateAngleInputDirection_ = 1.0;
+        rotateAngleInputDirectionCaptured_ = false;
+        rotateLastPointerPoint_ = QPointF();
+        rotatePerpendicularActive_ = false;
+        rotatePrePivotPerpendicularActive_ = false;
+        rotateAxisLockKey_ = 0;
+        currentSnap_ = SnapResult{};
     }
 
     qreal rotationAngleForPoint(const QPointF &worldPoint) const
@@ -11721,63 +11850,197 @@ private:
         }
 
         constexpr qreal pi = 3.14159265358979323846;
-        constexpr qreal twoPi = 2.0 * pi;
         qreal angle = std::atan2(endVector.y(), endVector.x()) -
                       std::atan2(startVector.y(), startVector.x());
-        while (angle > pi) {
-            angle -= twoPi;
-        }
-        while (angle < -pi) {
-            angle += twoPi;
-        }
-        return angle;
+        return std::remainder(angle, 2.0 * pi);
     }
 
-    QPointF rotatePointAround(const QPointF &point,
-                              const QPointF &base,
-                              qreal angle) const
+    qreal rotateSnapIncrementDegrees() const
     {
-        const qreal cosine = std::cos(angle);
-        const qreal sine = std::sin(angle);
-        const QPointF offset = point - base;
-        return base + QPointF(offset.x() * cosine - offset.y() * sine,
-                              offset.x() * sine + offset.y() * cosine);
+        return rotateToolPreferences_.useRadians
+                   ? rotateToolPreferences_.angleSnapIncrementRadiansDegrees
+                   : rotateToolPreferences_.angleSnapIncrementDegrees;
     }
 
-    void rotateShapeGeometry(Shape *shape,
-                             const QPointF &base,
-                             qreal angle) const
+    qreal snapRotateAngle(qreal angle) const
     {
-        if (shape == nullptr) {
+        constexpr qreal pi = 3.14159265358979323846;
+        const qreal increment = rotateSnapIncrementDegrees() * pi / 180.0;
+        const qreal strength =
+            rotateToolPreferences_.angleSnapStrengthDegrees * pi / 180.0;
+        const qreal nearest = std::round(angle / increment) * increment;
+        return std::abs(angle - nearest) <= strength ? nearest : angle;
+    }
+
+    void updateRotateReferencePreview(const QPointF &point)
+    {
+        if (rotateStep_ != 1) {
+            return;
+        }
+        const QPointF planePoint = rotateSnappedPoint(point);
+        const QPointF offset = planePoint - rotateBaseWorld_;
+        const qreal radius = std::hypot(offset.x(), offset.y());
+        if (radius <= 1.0e-12) {
             return;
         }
 
-        if (shape->geometryType == GeometryType::Rectangle && shape->points.size() == 2) {
-            shape->points = rectangleVertices(*shape);
+        qreal angle = std::atan2(offset.y(), offset.x());
+        if (rotateAngleSnapEnabled_ && !currentSnap_.isValid()) {
+            angle = snapRotateAngle(angle);
         }
-        for (QPointF &point : shape->points) {
-            point = rotatePointAround(point, base, angle);
+        cursorWorld_ = rotateBaseWorld_ +
+                       QPointF(radius * std::cos(angle),
+                               radius * std::sin(angle));
+    }
+
+    void updateRotatePreview(const QPointF &point)
+    {
+        if (rotateStep_ != 2) {
+            return;
         }
-        for (QPointF &point : shape->nurbs.controlPoints) {
-            point = rotatePointAround(point, base, angle);
+
+        rotateLastPointerPoint_ = rotateSnappedPoint(point);
+        if (rotateAngleInputManual_) {
+            updateRotateCursorForPreviewAngle();
+            return;
         }
-        for (Shape::NurbsCurve2D &component : shape->components) {
-            for (QPointF &point : component.controlPoints) {
-                point = rotatePointAround(point, base, angle);
+
+        const QPointF offset = rotateLastPointerPoint_ - rotateBaseWorld_;
+        if (std::hypot(offset.x(), offset.y()) <= 1.0e-12) {
+            return;
+        }
+
+        const qreal radius = std::hypot(offset.x(), offset.y());
+        qreal rawAngle = std::atan2(offset.y(), offset.x());
+        if (currentSnap_.isValid()) {
+            cursorWorld_ = rotateLastPointerPoint_;
+        } else if (rotateAngleSnapEnabled_) {
+            rawAngle = snapRotateAngle(rawAngle);
+            cursorWorld_ = rotateBaseWorld_ +
+                           QPointF(radius * std::cos(rawAngle),
+                                   radius * std::sin(rawAngle));
+        }
+
+        constexpr qreal pi = 3.14159265358979323846;
+        constexpr qreal twoPi = 2.0 * pi;
+        if (!rotateHasPreviousAngle_) {
+            rotateLastRawAngle_ = rawAngle;
+            rotateHasPreviousAngle_ = true;
+        } else {
+            qreal delta = rawAngle - rotateLastRawAngle_;
+            if (delta > pi) {
+                delta -= twoPi;
+            } else if (delta < -pi) {
+                delta += twoPi;
+            }
+            rotateAccumulatedAngle_ += delta;
+            rotateLastRawAngle_ = rawAngle;
+        }
+        rotatePreviewAngle_ = rotateAccumulatedAngle_;
+    }
+
+    QPointF rotateSnappedPoint(const QPointF &point) const
+    {
+        if (rotateStep_ > 0 && currentSnap_.isValid() &&
+            currentSnap_.hasWorldPoint &&
+            isValidWorkPlaneFrame(rotateFrame_)) {
+            return worldPointToWorkPlaneFrame(currentSnap_.worldPoint,
+                                              rotateFrame_);
+        }
+        return point;
+    }
+
+    void updateRotateCursorForPreviewAngle()
+    {
+        if (rotateStep_ != 2) {
+            return;
+        }
+        QPointF radial = rotateLastPointerPoint_ - rotateBaseWorld_;
+        qreal radius = std::hypot(radial.x(), radial.y());
+        if (radius <= 1.0e-12) {
+            radial = rotateReferenceWorld_ - rotateBaseWorld_;
+            radius = std::hypot(radial.x(), radial.y());
+        }
+        if (radius <= 1.0e-12) {
+            return;
+        }
+
+        const qreal angle = rotateReferenceAngle_ + rotatePreviewAngle_;
+        cursorWorld_ = rotateBaseWorld_ +
+                       QPointF(radius * std::cos(angle),
+                               radius * std::sin(angle));
+        rawCursorWorld_ = cursorWorld_;
+        lastWorldPosition_ = cursorWorld_;
+    }
+
+    bool setRotateTypedAngle(const QString &text)
+    {
+        bool validAngle = false;
+        const qreal degrees = text.toDouble(&validAngle);
+        if (!validAngle || !std::isfinite(degrees)) {
+            return false;
+        }
+        if (!rotateAngleInputDirectionCaptured_) {
+            rotateAngleInputDirection_ = rotateAccumulatedAngle_ < -1.0e-12
+                                             ? -1.0
+                                             : 1.0;
+            rotateAngleInputDirectionCaptured_ = true;
+        }
+        const qreal angleRadians =
+            degrees * 3.14159265358979323846 / 180.0;
+        rotatePreviewAngle_ = rotateAngleInputDirection_ * angleRadians;
+        rotateAccumulatedAngle_ = rotatePreviewAngle_;
+        rotateAngleInputManual_ = true;
+        updateRotateCursorForPreviewAngle();
+        return true;
+    }
+
+    void rotateShapeGeometry(Shape *shape, qreal angle) const
+    {
+        if (shape == nullptr || !isValidWorkPlaneFrame(rotateFrame_)) {
+            return;
+        }
+
+        shape->workPlaneFrame = rotateWorkPlaneFrame(
+            shapeWorkPlaneFrame(*shape),
+            rotateBaseWorldPoint_,
+            rotateFrame_.normal,
+            angle);
+    }
+
+    void rotateShapes(const QVector<ObjectId> &objectIds, qreal angle)
+    {
+        for (const ObjectId objectId : objectIds) {
+            const int shapeIndex = objectIndex(objectId);
+            if (shapeIndex >= 0 && document_.isObjectEditable(objectId)) {
+                rotateShapeGeometry(&shapes_[shapeIndex], angle);
             }
         }
     }
 
-    void rotateShapes(const QVector<ObjectId> &objectIds,
-                      const QPointF &base,
-                      qreal angle)
+    void commitRotate(qreal angle)
     {
-        for (const ObjectId objectId : objectIds) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex >= 0) {
-                rotateShapeGeometry(&shapes_[shapeIndex], base, angle);
-            }
+        if (!std::isfinite(angle)) {
+            return;
         }
+        if (std::abs(angle) > 1.0e-12) {
+            recordGeometryChange();
+            rotateShapes(rotateShapeIndices_, angle);
+            updateAssociativeDimensions(document_, curveSampler_);
+            notifyLayersChanged();
+        }
+
+        DebugLog::instance().write(QStringLiteral("rotate committed shapes=%1 angleDegrees=%2 pivot=%3 reference=%4")
+                                       .arg(rotateShapeIndices_.size())
+                                       .arg(angle * 180.0 / 3.14159265358979323846, 0, 'f', 4)
+                                       .arg(precisePoint3DText(rotateBaseWorldPoint_))
+                                       .arg(pointText(rotateReferenceWorld_)));
+        resetRotateInteraction();
+        setTool(Tool::Select);
+        if (commandFinished_) {
+            commandFinished_(Tool::Select);
+        }
+        update();
     }
 
     bool handleRotatePoint(const QPointF &worldPoint)
@@ -11788,58 +12051,384 @@ private:
 
         constexpr qreal minimumPointDistance = 1.0e-9;
         if (rotateStep_ == 0) {
-            rotateBaseWorld_ = worldPoint;
+            const WorkPlaneFrame inputFrame =
+                isValidWorkPlaneFrame(viewportTransform_.workPlaneFrame())
+                    ? viewportTransform_.workPlaneFrame()
+                    : makeWorkPlaneFrame(WorkPlane::XY, 0.0);
+            rotateBaseWorldPoint_ = currentSnap_.isValid() &&
+                                            currentSnap_.hasWorldPoint
+                                        ? currentSnap_.worldPoint
+                                        : workPlaneFramePointToWorld(worldPoint,
+                                                                     inputFrame);
+            rotateFrame_ = inputFrame;
+            rotateFrame_.origin = rotateBaseWorldPoint_;
+            const bool usedPrePivotPerpendicular =
+                rotatePrePivotPerpendicularActive_ &&
+                isValidWorkPlaneFrame(rotatePrePivotFloorFrame_);
+            rotatePrimaryFrame_ = usedPrePivotPerpendicular
+                                      ? rotatePrePivotFloorFrame_
+                                      : rotateFrame_;
+            rotatePrimaryFrame_.origin = rotateBaseWorldPoint_;
+            rotateReferenceNormal_ = usedPrePivotPerpendicular
+                                         ? rotatePrePivotFloorNormal_
+                                         : rotateFrame_.normal;
+            rotatePrePivotPerpendicularActive_ = false;
+            rotatePrePivotPlaneFrame_ = {};
+            rotatePrePivotFloorFrame_ = {};
+            rotatePrePivotFloorNormal_ = {};
+            rotateAxisLockKey_ = 0;
+            rotateBaseWorld_ = QPointF();
+            rotateReferenceWorld_ = QPointF();
             rotateStep_ = 1;
             rotatePreviewAngle_ = 0.0;
-            DebugLog::instance().write(QStringLiteral("rotate center=%1")
-                                           .arg(pointText(rotateBaseWorld_)));
+            rotateAccumulatedAngle_ = 0.0;
+            rotateHasPreviousAngle_ = false;
+            rotateAngleInputManual_ = false;
+            rotateAngleInputActive_ = false;
+            rotateAngleInput_.clear();
+            currentSnap_ = SnapResult{};
+            cursorWorld_ = rotateBaseWorld_;
+            viewportTransform_.setWorkPlaneFrame(rotateFrame_);
+            DebugLog::instance().write(QStringLiteral("rotate pivot=%1 planeNormal=(%2,%3,%4)")
+                                           .arg(precisePoint3DText(rotateBaseWorldPoint_))
+                                           .arg(rotateFrame_.normal.x, 0, 'g', 10)
+                                           .arg(rotateFrame_.normal.y, 0, 'g', 10)
+                                           .arg(rotateFrame_.normal.z, 0, 'g', 10));
             update();
             return true;
         }
 
         if (rotateStep_ == 1) {
-            if (std::hypot(worldPoint.x() - rotateBaseWorld_.x(),
-                           worldPoint.y() - rotateBaseWorld_.y()) <=
-                minimumPointDistance) {
+            updateRotateReferencePreview(worldPoint);
+            const QPointF reference = cursorWorld_ - rotateBaseWorld_;
+            const qreal radius = std::hypot(reference.x(), reference.y());
+            if (radius <= minimumPointDistance) {
                 DebugLog::instance().write(QStringLiteral("rotate reference ignored at center"));
                 return false;
             }
 
-            rotateReferenceWorld_ = worldPoint;
+            rotateReferenceWorld_ = cursorWorld_;
+            rotateReferenceWorldPoint_ = workPlaneFramePointToWorld(
+                rotateReferenceWorld_, rotateFrame_);
+            rotateLastPointerPoint_ = rotateReferenceWorld_;
+            rotateReferenceAngle_ = std::atan2(reference.y(), reference.x());
             rotateStep_ = 2;
             rotatePreviewAngle_ = 0.0;
+            rotateAccumulatedAngle_ = 0.0;
+            rotateLastRawAngle_ = rotateReferenceAngle_;
+            rotateHasPreviousAngle_ = true;
+            rotateAngleInputManual_ = false;
+            rotateAngleInputActive_ = false;
+            rotateAngleInput_.clear();
             DebugLog::instance().write(QStringLiteral("rotate reference=%1")
                                            .arg(pointText(rotateReferenceWorld_)));
             update();
             return true;
         }
 
+        updateRotatePreview(worldPoint);
+        if (rotateAngleInputActive_ && !rotateAngleInput_.isEmpty()) {
+            if (!setRotateTypedAngle(rotateAngleInput_)) {
+                return false;
+            }
+        }
         if (std::hypot(worldPoint.x() - rotateBaseWorld_.x(),
                        worldPoint.y() - rotateBaseWorld_.y()) <=
-            minimumPointDistance) {
+                minimumPointDistance &&
+            std::abs(rotatePreviewAngle_) <= minimumPointDistance) {
             DebugLog::instance().write(QStringLiteral("rotate final point ignored at center"));
             return false;
         }
 
-        const qreal angle = rotationAngleForPoint(worldPoint);
-        if (std::abs(angle) > 1.0e-12) {
-            recordGeometryChange();
-            rotateShapes(rotateShapeIndices_, rotateBaseWorld_, angle);
+        commitRotate(rotatePreviewAngle_);
+        return true;
+    }
+
+    void remapRotateCursorToFrame(const WorkPlaneFrame &frame,
+                                  const WorkPlaneFrame &previousFrame)
+    {
+        const Point3D previousWorld = workPlaneFramePointToWorld(cursorWorld_,
+                                                                  previousFrame);
+        viewportTransform_.setWorkPlaneFrame(frame);
+        QPointF remapped;
+        if (!viewportTransform_.screenToWorkPlane(
+                QPointF(lastMousePosition_), size(), frame, &remapped)) {
+            remapped = worldPointToWorkPlaneFrame(previousWorld, frame);
+        }
+        cursorWorld_ = remapped;
+        rawCursorWorld_ = remapped;
+        lastWorldPosition_ = remapped;
+        if (currentSnap_.isValid() && currentSnap_.hasWorldPoint) {
+            currentSnap_.point = worldPointToWorkPlaneFrame(
+                currentSnap_.worldPoint, frame);
+        }
+    }
+
+    bool setRotatePrePivotAxisPlane(int key)
+    {
+        const WorkPlaneFrame currentFrame = viewportTransform_.workPlaneFrame();
+        if (!isValidWorkPlaneFrame(currentFrame)) {
+            return false;
+        }
+        if (rotateAxisLockKey_ == key) {
+            rotateAxisLockKey_ = 0;
+            rotatePrePivotPerpendicularActive_ = false;
+            rotatePrePivotPlaneFrame_ = {};
+            rotatePrePivotFloorFrame_ = {};
+            rotatePrePivotFloorNormal_ = {};
+            updateDrawingWorkPlaneFromHover(QPointF(lastMousePosition_));
+            return true;
         }
 
-        DebugLog::instance().write(QStringLiteral("rotate committed shapes=%1 angleDegrees=%2 base=%3 reference=%4 final=%5")
-                                       .arg(rotateShapeIndices_.size())
-                                       .arg(angle * 180.0 / 3.14159265358979323846, 0, 'f', 4)
-                                       .arg(pointText(rotateBaseWorld_))
-                                       .arg(pointText(rotateReferenceWorld_))
-                                       .arg(pointText(worldPoint)));
-        resetRotateInteraction();
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
+        const Point3D cursorWorld = workPlaneFramePointToWorld(cursorWorld_,
+                                                               currentFrame);
+        Point3D normal;
+        if (key == Qt::Key_X) normal = {1.0, 0.0, 0.0};
+        if (key == Qt::Key_Y) normal = {0.0, 1.0, 0.0};
+        if (key == Qt::Key_Z) normal = {0.0, 0.0, 1.0};
+        const Point3D preferred = key == Qt::Key_X
+                                      ? currentFrame.yAxis
+                                      : currentFrame.xAxis;
+        rotatePrePivotPlaneFrame_ = makeWorkPlaneFrameFromNormal(
+            cursorWorld, normal, preferred);
+        if (!isValidWorkPlaneFrame(rotatePrePivotPlaneFrame_)) {
+            return false;
         }
-        update();
+        rotateAxisLockKey_ = key;
+        rotatePrePivotPerpendicularActive_ = false;
+        rotatePrePivotFloorFrame_ = {};
+        rotatePrePivotFloorNormal_ = {};
+        remapRotateCursorToFrame(rotatePrePivotPlaneFrame_, currentFrame);
         return true;
+    }
+
+    bool toggleRotatePerpendicularPlane()
+    {
+        if (rotateStep_ == 0) {
+            if (rotatePrePivotPerpendicularActive_) {
+                rotatePrePivotPerpendicularActive_ = false;
+                rotatePrePivotPlaneFrame_ = {};
+                rotatePrePivotFloorFrame_ = {};
+                rotatePrePivotFloorNormal_ = {};
+                rotateAxisLockKey_ = 0;
+                updateDrawingWorkPlaneFromHover(QPointF(lastMousePosition_));
+                return true;
+            }
+
+            const WorkPlaneFrame baseFrame = viewportTransform_.workPlaneFrame();
+            if (!isValidWorkPlaneFrame(baseFrame)) {
+                return true;
+            }
+            const Point3D viewDirection = viewportTransform_.viewDirection();
+            const qreal xAlignment = std::abs(arcVectorDot(viewDirection,
+                                                           baseFrame.xAxis));
+            const qreal yAlignment = std::abs(arcVectorDot(viewDirection,
+                                                           baseFrame.yAxis));
+            const Point3D normal = xAlignment > yAlignment
+                                       ? baseFrame.xAxis
+                                       : baseFrame.yAxis;
+            const Point3D preferred = xAlignment > yAlignment
+                                          ? baseFrame.yAxis
+                                          : baseFrame.xAxis;
+            const Point3D cursorWorld = workPlaneFramePointToWorld(cursorWorld_,
+                                                                   baseFrame);
+            rotatePrePivotPlaneFrame_ = makeWorkPlaneFrameFromNormal(
+                cursorWorld, normal, preferred);
+            if (isValidWorkPlaneFrame(rotatePrePivotPlaneFrame_)) {
+                rotatePrePivotFloorFrame_ = baseFrame;
+                rotatePrePivotFloorNormal_ = baseFrame.normal;
+                rotatePrePivotPerpendicularActive_ = true;
+                rotateAxisLockKey_ = 0;
+                remapRotateCursorToFrame(rotatePrePivotPlaneFrame_, baseFrame);
+            }
+            return true;
+        }
+
+        const WorkPlaneFrame oldFrame = rotateFrame_;
+        Point3D targetWorld = workPlaneFramePointToWorld(cursorWorld_, oldFrame);
+        WorkPlaneFrame nextFrame;
+        if (rotatePerpendicularActive_) {
+            nextFrame = rotatePrimaryFrame_;
+            rotatePerpendicularActive_ = false;
+        } else {
+            const Point3D bridgePoint = rotateStep_ == 1
+                                            ? targetWorld
+                                            : rotateReferenceWorldPoint_;
+            Point3D bridge = arcVectorSubtract(bridgePoint,
+                                               rotateBaseWorldPoint_);
+            bridge = arcVectorSubtract(
+                bridge,
+                arcVectorScale(rotateReferenceNormal_,
+                               arcVectorDot(bridge,
+                                            rotateReferenceNormal_)));
+            const qreal bridgeLength = arcVectorLength(bridge);
+            if (bridgeLength <= 1.0e-9) {
+                return true;
+            }
+            const Point3D xAxis = arcVectorScale(bridge, 1.0 / bridgeLength);
+            const Point3D yAxis = rotateReferenceNormal_;
+            const Point3D normal = arcVectorCross(xAxis, yAxis);
+            nextFrame = WorkPlaneFrame{rotateBaseWorldPoint_,
+                                       xAxis,
+                                       yAxis,
+                                       normal,
+                                       true};
+            rotatePerpendicularActive_ = true;
+        }
+
+        if (!isValidWorkPlaneFrame(nextFrame)) {
+            return true;
+        }
+        rotateFrame_ = nextFrame;
+        viewportTransform_.setWorkPlaneFrame(rotateFrame_);
+        cursorWorld_ = worldPointToWorkPlaneFrame(targetWorld, rotateFrame_);
+        rawCursorWorld_ = cursorWorld_;
+        lastWorldPosition_ = cursorWorld_;
+        if (currentSnap_.isValid() && currentSnap_.hasWorldPoint) {
+            currentSnap_.point = worldPointToWorkPlaneFrame(
+                currentSnap_.worldPoint, rotateFrame_);
+        }
+        if (rotateStep_ == 2) {
+            rotateReferenceWorld_ = worldPointToWorkPlaneFrame(
+                rotateReferenceWorldPoint_, rotateFrame_);
+            const QPointF reference = rotateReferenceWorld_ - rotateBaseWorld_;
+            rotateReferenceAngle_ = std::atan2(reference.y(), reference.x());
+            rotateAngleInputActive_ = false;
+            rotateAngleInputManual_ = false;
+            rotateAngleInput_.clear();
+            const QPointF direction = cursorWorld_ - rotateBaseWorld_;
+            if (std::hypot(direction.x(), direction.y()) > 1.0e-12) {
+                rotateLastRawAngle_ = std::atan2(direction.y(), direction.x());
+                rotateAccumulatedAngle_ = rotationAngleForPoint(cursorWorld_);
+                rotatePreviewAngle_ = rotateAccumulatedAngle_;
+                rotateHasPreviousAngle_ = true;
+            } else {
+                rotateHasPreviousAngle_ = false;
+            }
+            rotateLastPointerPoint_ = cursorWorld_;
+        }
+        return true;
+    }
+
+    bool handleRotateKey(QKeyEvent *event)
+    {
+        if (event == nullptr || activeTool_ != Tool::Rotate ||
+            event->isAutoRepeat() || event->modifiers() != Qt::NoModifier) {
+            return false;
+        }
+
+        if ((event->key() == Qt::Key_Return ||
+             event->key() == Qt::Key_Enter ||
+             event->key() == Qt::Key_Space) && rotateStep_ == 2) {
+            if (rotateAngleInputActive_ && !rotateAngleInput_.isEmpty()) {
+                if (!setRotateTypedAngle(rotateAngleInput_)) {
+                    event->accept();
+                    return true;
+                }
+            }
+            commitRotate(rotatePreviewAngle_);
+            event->accept();
+            return true;
+        }
+
+        if (rotateStep_ == 2 && event->key() == Qt::Key_A) {
+            rotateAngleInputActive_ = true;
+            rotateAngleInputManual_ = false;
+            rotateAngleInput_.clear();
+            rotateAngleInputDirectionCaptured_ = false;
+            update();
+            event->accept();
+            return true;
+        }
+
+        if (event->key() == Qt::Key_C) {
+            rotateAngleSnapEnabled_ = !rotateAngleSnapEnabled_;
+            if (rotateStep_ == 1) {
+                updateRotateReferencePreview(cursorWorld_);
+            } else if (rotateStep_ == 2) {
+                if (rotateAngleSnapEnabled_ && !currentSnap_.isValid()) {
+                    const QPointF offset = cursorWorld_ - rotateBaseWorld_;
+                    if (std::hypot(offset.x(), offset.y()) > 1.0e-12) {
+                        rotateLastRawAngle_ = std::atan2(offset.y(), offset.x());
+                        rotateHasPreviousAngle_ = true;
+                    }
+                }
+            }
+            update();
+            event->accept();
+            return true;
+        }
+
+        if (event->key() == Qt::Key_P) {
+            toggleRotatePerpendicularPlane();
+            update();
+            event->accept();
+            return true;
+        }
+
+        if (rotateStep_ == 0 &&
+            (event->key() == Qt::Key_X || event->key() == Qt::Key_Y ||
+             event->key() == Qt::Key_Z)) {
+            setRotatePrePivotAxisPlane(event->key());
+            update();
+            event->accept();
+            return true;
+        }
+
+        if (rotateStep_ == 2 && rotateAngleInputActive_) {
+            if (event->key() == Qt::Key_Backspace) {
+                rotateAngleInput_.chop(1);
+                rotateAngleInputManual_ = !rotateAngleInput_.isEmpty();
+                if (rotateAngleInput_.isEmpty()) {
+                    rotateAngleInputDirectionCaptured_ = false;
+                    rotateAngleInputManual_ = false;
+                    updateRotatePreview(rotateLastPointerPoint_);
+                } else {
+                    setRotateTypedAngle(rotateAngleInput_);
+                }
+                update();
+                event->accept();
+                return true;
+            }
+
+            const QString text = event->text();
+            if (text.size() == 1) {
+                const QChar character = text.front();
+                const bool digit = character.isDigit();
+                const bool decimal = character == QLatin1Char('.') &&
+                                     !rotateAngleInput_.contains(QLatin1Char('.'));
+                const bool sign = (character == QLatin1Char('-') ||
+                                   character == QLatin1Char('+')) &&
+                                  rotateAngleInput_.isEmpty();
+                if (digit || decimal || sign) {
+                    if (rotateAngleInput_.isEmpty()) {
+                        rotateAngleInputDirectionCaptured_ = false;
+                    }
+                    rotateAngleInput_.append(character);
+                    setRotateTypedAngle(rotateAngleInput_);
+                    update();
+                    event->accept();
+                    return true;
+                }
+            }
+        }
+
+        if (rotateStep_ == 2) {
+            const QString text = event->text();
+            if (text.size() == 1 &&
+                (text.front().isDigit() || text.front() == QLatin1Char('.') ||
+                 text.front() == QLatin1Char('-') ||
+                 text.front() == QLatin1Char('+'))) {
+                rotateAngleInputActive_ = true;
+                rotateAngleInput_ = text;
+                rotateAngleInputDirectionCaptured_ = false;
+                setRotateTypedAngle(rotateAngleInput_);
+                update();
+                event->accept();
+                return true;
+            }
+        }
+        return false;
     }
 
     void cancelRotate()
@@ -13528,6 +14117,28 @@ private:
             viewportTransform_.setWorkPlaneFrame(arcLockedFrame_);
             return;
         }
+        if (activeTool_ == Tool::Rotate) {
+            if (rotateStep_ > 0 && isValidWorkPlaneFrame(rotateFrame_)) {
+                viewportTransform_.setWorkPlaneFrame(rotateFrame_);
+                return;
+            }
+            if ((rotateAxisLockKey_ != 0 ||
+                 rotatePrePivotPerpendicularActive_) &&
+                isValidWorkPlaneFrame(rotatePrePivotPlaneFrame_)) {
+                viewportTransform_.setWorkPlaneFrame(rotatePrePivotPlaneFrame_);
+                return;
+            }
+
+            const int shapeIndex = curveHitTester_.hitTestShapeOnAnyWorkPlane(
+                document_, screenPosition, viewportTransform_, size());
+            if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
+                viewportTransform_.setWorkPlaneFrame(
+                    shapeWorkPlaneFrame(shapes_[shapeIndex]));
+            } else {
+                useAddonCompatibleDrawingPlane();
+            }
+            return;
+        }
         if (activeTool_ != Tool::Line && toolDrawingPlaneLocked_ &&
             isValidWorkPlaneFrame(toolDrawingFrame_)) {
             viewportTransform_.setWorkPlaneFrame(toolDrawingFrame_);
@@ -14390,9 +15001,17 @@ private:
                                            cursorWorld_,
                                            cursorValid_,
                                            rotateStep_,
+                                           isValidWorkPlaneFrame(rotateFrame_)
+                                               ? rotateFrame_
+                                               : viewportTransform_.workPlaneFrame(),
                                            rotateBaseWorld_,
                                            rotateReferenceWorld_,
                                            rotatePreviewAngle_,
+                                           rotateAngleInput_,
+                                           rotateAngleInputActive_,
+                                           rotateAngleSnapEnabled_,
+                                           rotateSnapIncrementDegrees(),
+                                           rotateToolPreferences_.useRadians,
                                            currentSnap_,
                                            size(),
                                            drawGeometry);
@@ -14850,9 +15469,32 @@ private:
     QVector<ObjectId> scaleShapeIds_;
     QVector<ObjectId> mirrorShapeIndices_;
     int rotateStep_ = 0;
+    WorkPlaneFrame rotateFrame_;
+    WorkPlaneFrame rotatePrimaryFrame_;
+    WorkPlaneFrame rotatePrePivotPlaneFrame_;
+    WorkPlaneFrame rotatePrePivotFloorFrame_;
+    RotateToolPreferences rotateToolPreferences_;
+    Point3D rotateBaseWorldPoint_;
+    Point3D rotateReferenceWorldPoint_;
+    Point3D rotateReferenceNormal_;
+    Point3D rotatePrePivotFloorNormal_;
     QPointF rotateBaseWorld_{0.0, 0.0};
     QPointF rotateReferenceWorld_{0.0, 0.0};
     qreal rotatePreviewAngle_ = 0.0;
+    qreal rotateAccumulatedAngle_ = 0.0;
+    qreal rotateLastRawAngle_ = 0.0;
+    qreal rotateReferenceAngle_ = 0.0;
+    bool rotateHasPreviousAngle_ = false;
+    bool rotateAngleSnapEnabled_ = true;
+    bool rotateAngleInputActive_ = false;
+    bool rotateAngleInputManual_ = false;
+    QString rotateAngleInput_;
+    qreal rotateAngleInputDirection_ = 1.0;
+    bool rotateAngleInputDirectionCaptured_ = false;
+    QPointF rotateLastPointerPoint_;
+    bool rotatePerpendicularActive_ = false;
+    bool rotatePrePivotPerpendicularActive_ = false;
+    int rotateAxisLockKey_ = 0;
     ScaleMode scaleMode_ = ScaleMode::TwoD;
     int scaleStep_ = 0;
     QPointF scaleBaseWorld_{0.0, 0.0};

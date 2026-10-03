@@ -262,6 +262,7 @@ public:
                                const BlenderGridAppearance &gridAppearance,
                                const ViewportCameraPreferences &cameraPreferences,
                                const ViewportNavigationPreferences &navigationPreferences,
+                               const RotateToolPreferences &rotateToolPreferences,
                                int viewportAaSamples,
                                QWidget *parent = nullptr)
         : QDialog(parent)
@@ -308,7 +309,8 @@ public:
                 pages_->addWidget(createViewportPage(snapLabelsVisible,
                                                      smoothCurveDisplay,
                                                      gridAppearance,
-                                                     cameraPreferences));
+                                                     cameraPreferences,
+                                                     rotateToolPreferences));
             } else if (category == QStringLiteral("Dimensions")) {
                 pages_->addWidget(createDimensionPage(architecturalDimensionFont));
             } else if (category == QStringLiteral("Navigation")) {
@@ -392,12 +394,75 @@ public:
         return preferences;
     }
 
+    RotateToolPreferences rotateToolPreferences() const
+    {
+        RotateToolPreferences preferences = rotateToolPreferences_;
+        const qreal selectedIncrement =
+            rotateAngleSnapIncrementCombo_->currentData().toDouble();
+        if (rotateAngleInputRadiansCheckBox_->isChecked()) {
+            preferences.angleSnapIncrementRadiansDegrees = selectedIncrement;
+        } else {
+            preferences.angleSnapIncrementDegrees = selectedIncrement;
+        }
+        preferences.angleSnapStrengthDegrees =
+            rotateAngleSnapStrengthSpinBox_->value();
+        preferences.angleSnapEnabled = rotateAngleSnapEnabledCheckBox_->isChecked();
+        preferences.useRadians = rotateAngleInputRadiansCheckBox_->isChecked();
+        return preferences;
+    }
+
     int viewportAaSamples() const
     {
         return viewportAaCombo_->currentData().toInt();
     }
 
 private:
+    void populateRotateSnapIncrements(bool useRadians)
+    {
+        if (rotateAngleSnapIncrementCombo_ == nullptr) {
+            return;
+        }
+        rotateAngleSnapIncrementCombo_->clear();
+        const qreal degreeIncrements[]{1.0, 2.0, 3.0, 5.0, 10.0,
+                                        15.0, 22.5, 30.0, 45.0, 90.0};
+        const qreal radianIncrements[]{1.0, 2.0, 3.0, 5.0, 10.0,
+                                        15.0, 22.5, 30.0, 45.0, 60.0, 90.0};
+        if (useRadians) {
+            const int denominators[]{180, 90, 60, 36, 18, 12, 8, 6, 4, 3, 2};
+            for (int index = 0; index < 11; ++index) {
+                rotateAngleSnapIncrementCombo_->addItem(
+                    QStringLiteral("π/%1 (%2°)")
+                        .arg(denominators[index])
+                        .arg(radianIncrements[index], 0, 'g', 4),
+                    radianIncrements[index]);
+            }
+        } else {
+            for (const qreal increment : degreeIncrements) {
+                if (qFuzzyCompare(
+                        rotateToolPreferences_.angleSnapIncrementDegrees, 60.0) &&
+                    qFuzzyCompare(increment, 90.0)) {
+                    rotateAngleSnapIncrementCombo_->addItem(
+                        QStringLiteral("60 Degrees"), 60.0);
+                }
+                rotateAngleSnapIncrementCombo_->addItem(
+                    QStringLiteral("%1 %2")
+                        .arg(increment, 0, 'g', 4)
+                        .arg(qFuzzyCompare(increment, 1.0)
+                                 ? QStringLiteral("Degree")
+                                 : QStringLiteral("Degrees")),
+                    increment);
+            }
+        }
+        const qreal selectedIncrement = useRadians
+                                            ? rotateToolPreferences_.angleSnapIncrementRadiansDegrees
+                                            : rotateToolPreferences_.angleSnapIncrementDegrees;
+        int index = rotateAngleSnapIncrementCombo_->findData(selectedIncrement);
+        if (index < 0) {
+            index = rotateAngleSnapIncrementCombo_->findData(15.0);
+        }
+        rotateAngleSnapIncrementCombo_->setCurrentIndex(index);
+    }
+
     QWidget *createPlaceholderPage(const QString &category)
     {
         auto *page = new QWidget;
@@ -493,9 +558,11 @@ private:
     QWidget *createViewportPage(bool snapLabelsVisible,
                                 bool smoothCurveDisplay,
                                 const BlenderGridAppearance &gridAppearance,
-                                const ViewportCameraPreferences &cameraPreferences)
+                                const ViewportCameraPreferences &cameraPreferences,
+                                const RotateToolPreferences &rotateToolPreferences)
     {
         gridAppearance_ = gridAppearance;
+        rotateToolPreferences_ = rotateToolPreferences;
         auto *scrollArea = new QScrollArea;
         scrollArea->setWidgetResizable(true);
         auto *content = new QWidget;
@@ -536,6 +603,63 @@ private:
         curveHint->setWordWrap(true);
         curveLayout->addWidget(curveHint);
         layout->addWidget(curveBox);
+
+        auto *rotateBox = new QGroupBox(QStringLiteral("Rotate Tool"));
+        auto *rotateLayout = new QFormLayout(rotateBox);
+        rotateAngleSnapEnabledCheckBox_ = new QCheckBox(
+            QStringLiteral("Enable soft angle snap"));
+        rotateAngleSnapEnabledCheckBox_->setObjectName(
+            QStringLiteral("rotateAngleSnapEnabledPreference"));
+        rotateAngleSnapEnabledCheckBox_->setChecked(
+            rotateToolPreferences.angleSnapEnabled);
+        rotateLayout->addRow(QString(), rotateAngleSnapEnabledCheckBox_);
+
+        rotateAngleSnapIncrementCombo_ = new QComboBox;
+        rotateAngleSnapIncrementCombo_->setObjectName(
+            QStringLiteral("rotateAngleSnapIncrementPreference"));
+        populateRotateSnapIncrements(rotateToolPreferences.useRadians);
+        rotateLayout->addRow(QStringLiteral("Snap increment"),
+                             rotateAngleSnapIncrementCombo_);
+
+        rotateAngleSnapStrengthSpinBox_ = new QDoubleSpinBox;
+        rotateAngleSnapStrengthSpinBox_->setObjectName(
+            QStringLiteral("rotateAngleSnapStrengthPreference"));
+        rotateAngleSnapStrengthSpinBox_->setRange(0.1, 45.0);
+        rotateAngleSnapStrengthSpinBox_->setSingleStep(0.5);
+        rotateAngleSnapStrengthSpinBox_->setDecimals(1);
+        rotateAngleSnapStrengthSpinBox_->setSuffix(QStringLiteral("°"));
+        rotateAngleSnapStrengthSpinBox_->setValue(
+            rotateToolPreferences.angleSnapStrengthDegrees);
+        rotateLayout->addRow(QStringLiteral("Snap tolerance"),
+                             rotateAngleSnapStrengthSpinBox_);
+
+        rotateAngleInputRadiansCheckBox_ = new QCheckBox(
+            QStringLiteral("Use radians for angle readout"));
+        rotateAngleInputRadiansCheckBox_->setObjectName(
+            QStringLiteral("rotateAngleInputRadiansPreference"));
+        rotateAngleInputRadiansCheckBox_->setChecked(
+            rotateToolPreferences.useRadians);
+        rotateLayout->addRow(QString(), rotateAngleInputRadiansCheckBox_);
+        connect(rotateAngleInputRadiansCheckBox_, &QCheckBox::toggled,
+                this, [this](bool useRadians) {
+                    const qreal selectedIncrement =
+                        rotateAngleSnapIncrementCombo_->currentData().toDouble();
+                    if (rotateToolPreferences_.useRadians) {
+                        rotateToolPreferences_.angleSnapIncrementRadiansDegrees =
+                            selectedIncrement;
+                    } else {
+                        rotateToolPreferences_.angleSnapIncrementDegrees =
+                            selectedIncrement;
+                    }
+                    rotateToolPreferences_.useRadians = useRadians;
+                    populateRotateSnapIncrements(useRadians);
+                });
+        auto *rotateHint = new QLabel(QStringLiteral(
+            "C toggles angle snapping while rotating. Typed angles use degrees; positive values follow the current turn direction."));
+        rotateHint->setObjectName(QStringLiteral("preferencesHint"));
+        rotateHint->setWordWrap(true);
+        rotateLayout->addRow(rotateHint);
+        layout->addWidget(rotateBox);
 
         auto *gridBox = new QGroupBox(QStringLiteral("Grid and Axes"));
         auto *gridLayout = new QFormLayout(gridBox);
@@ -856,6 +980,11 @@ private:
     QComboBox *dimensionFontCombo_ = nullptr;
     QCheckBox *snapLabelsCheckBox_ = nullptr;
     QCheckBox *smoothCurveDisplayCheckBox_ = nullptr;
+    QCheckBox *rotateAngleSnapEnabledCheckBox_ = nullptr;
+    QComboBox *rotateAngleSnapIncrementCombo_ = nullptr;
+    QDoubleSpinBox *rotateAngleSnapStrengthSpinBox_ = nullptr;
+    QCheckBox *rotateAngleInputRadiansCheckBox_ = nullptr;
+    RotateToolPreferences rotateToolPreferences_;
     BlenderGridAppearance gridAppearance_;
     QDoubleSpinBox *gridOpacitySpinBox_ = nullptr;
     QCheckBox *gridStippleCheckBox_ = nullptr;
@@ -1344,7 +1473,18 @@ private:
         if (rotateToolButton_ != nullptr) {
             rotateToolButton_->setChecked(true);
         }
-        statusBar()->showMessage(QStringLiteral("Rotate: click center, start direction, then end direction"));
+        const RotateToolPreferences preferences = viewport_->rotateToolPreferences();
+        const qreal snapIncrement = preferences.useRadians
+                                        ? preferences.angleSnapIncrementRadiansDegrees
+                                        : preferences.angleSnapIncrementDegrees;
+        const QString snapIncrementLabel = preferences.useRadians
+                                               ? QStringLiteral("π/%1")
+                                                     .arg(qRound(180.0 / snapIncrement))
+                                               : QStringLiteral("%1°")
+                                                     .arg(snapIncrement, 0, 'g', 4);
+        statusBar()->showMessage(
+            QStringLiteral("Rotate: click pivot, reference, then end direction  •  A angle (deg)  •  C %1 snap")
+                .arg(snapIncrementLabel));
     }
 
     void startScale(ScaleMode mode)
@@ -2801,6 +2941,26 @@ private:
                                                 : ViewportZoomAxis::Vertical;
         viewport_->setNavigationPreferences(navigationPreferences);
 
+        RotateToolPreferences rotatePreferences;
+        rotatePreferences.angleSnapIncrementDegrees = settings.value(
+            QStringLiteral("rotate/angleSnapIncrementDegrees"),
+            rotatePreferences.angleSnapIncrementDegrees).toDouble();
+        rotatePreferences.angleSnapIncrementRadiansDegrees = settings.value(
+            QStringLiteral("rotate/angleSnapIncrementRadiansDegrees"),
+            rotatePreferences.angleSnapIncrementRadiansDegrees).toDouble();
+        rotatePreferences.angleSnapStrengthDegrees = settings.value(
+            QStringLiteral("rotate/angleSnapStrengthDegrees"),
+            rotatePreferences.angleSnapStrengthDegrees).toDouble();
+        rotatePreferences.angleSnapEnabled = settings.value(
+            QStringLiteral("rotate/angleSnapEnabled"),
+            rotatePreferences.angleSnapEnabled).toBool();
+        rotatePreferences.useRadians = settings.value(
+            QStringLiteral("rotate/useRadians"),
+            rotatePreferences.useRadians).toBool();
+        if (!viewport_->setRotateToolPreferences(rotatePreferences)) {
+            viewport_->setRotateToolPreferences(RotateToolPreferences{});
+        }
+
         const int requestedAaSamples = settings.value(
             QStringLiteral("system/viewportAaSamples"), 8).toInt();
         const int viewportAaSamples = requestedAaSamples == 2 || requestedAaSamples == 4 ||
@@ -2857,6 +3017,7 @@ private:
             viewport_->gridAppearance(),
             viewport_->cameraPreferences(),
             viewport_->navigationPreferences(),
+            viewport_->rotateToolPreferences(),
             viewport_->viewportAntiAliasingSamples(),
             this);
         if (dialog.exec() == QDialog::Accepted) {
@@ -2867,6 +3028,7 @@ private:
             applyGridAppearance(dialog.gridAppearance(), true);
             applyCameraPreferences(dialog.cameraPreferences(), true);
             applyNavigationPreferences(dialog.navigationPreferences(), true);
+            applyRotateToolPreferences(dialog.rotateToolPreferences(), true);
             applyViewportAntiAliasingSamples(dialog.viewportAaSamples(), true);
         }
     }
@@ -2990,6 +3152,30 @@ private:
                               preferences.zoomMethod == ViewportZoomMethod::Scale ? 1 : 0);
             settings.setValue(QStringLiteral("navigation/zoomAxis"),
                               preferences.zoomAxis == ViewportZoomAxis::Horizontal ? 1 : 0);
+            settings.sync();
+        }
+    }
+
+    void applyRotateToolPreferences(
+        const RotateToolPreferences &preferences,
+        bool save)
+    {
+        if (viewport_ == nullptr ||
+            !viewport_->setRotateToolPreferences(preferences)) {
+            return;
+        }
+        if (save) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("rotate/angleSnapIncrementDegrees"),
+                              preferences.angleSnapIncrementDegrees);
+            settings.setValue(QStringLiteral("rotate/angleSnapIncrementRadiansDegrees"),
+                              preferences.angleSnapIncrementRadiansDegrees);
+            settings.setValue(QStringLiteral("rotate/angleSnapStrengthDegrees"),
+                              preferences.angleSnapStrengthDegrees);
+            settings.setValue(QStringLiteral("rotate/angleSnapEnabled"),
+                              preferences.angleSnapEnabled);
+            settings.setValue(QStringLiteral("rotate/useRadians"),
+                              preferences.useRadians);
             settings.sync();
         }
     }

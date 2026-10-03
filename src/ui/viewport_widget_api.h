@@ -98,6 +98,14 @@ struct ViewportUiCallbacks {
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate;
 };
 
+struct RotateToolPreferences {
+    qreal angleSnapIncrementDegrees = 15.0;
+    qreal angleSnapIncrementRadiansDegrees = 15.0;
+    qreal angleSnapStrengthDegrees = 6.0;
+    bool angleSnapEnabled = true;
+    bool useRadians = false;
+};
+
 class ViewportWidgetApi : public QWidget {
 public:
     explicit ViewportWidgetApi(QWidget *parent = nullptr)
@@ -122,6 +130,9 @@ public:
     virtual void setControlPointsVisible(bool visible) = 0;
     virtual void setSnapLabelsVisible(bool visible) = 0;
     virtual void setSmoothCurveDisplay(bool enabled) = 0;
+    virtual RotateToolPreferences rotateToolPreferences() const = 0;
+    virtual bool setRotateToolPreferences(
+        const RotateToolPreferences &preferences) = 0;
     virtual DocumentSettings documentSettings() const = 0;
     virtual bool setDocumentSettings(const DocumentSettings &settings) = 0;
     virtual BlenderGridAppearance gridAppearance() const = 0;

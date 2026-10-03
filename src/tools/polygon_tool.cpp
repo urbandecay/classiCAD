@@ -168,7 +168,7 @@ bool PolygonTool::handleMousePress(const ToolInput &input, ToolContext &context)
 
         referenceFrame_ = drawingFrame_;
         context.viewportTransform().setWorkPlaneFrame(drawingFrame_);
-        const QPointF firstPoint = input.worldPosition;
+        const QPointF firstPoint = input.positionInFrame(referenceFrame_);
         anchorWorld_ = workPlaneFramePointToWorld(firstPoint, referenceFrame_);
         points_.append(firstPoint);
         cursorPoint_ = firstPoint;
@@ -441,8 +441,11 @@ Point3D PolygonTool::cursorWorldPoint(const ToolInput &input,
     const WorkPlaneFrame &eventFrame = isValidWorkPlaneFrame(input.workPlaneFrame)
                                            ? input.workPlaneFrame
                                            : drawingFrame_;
-    const Point3D eventWorld = workPlaneFramePointToWorld(input.worldPosition,
-                                                           eventFrame);
+    const Point3D eventWorld = input.snapResult.isValid() &&
+                                       input.snapResult.hasWorldPoint
+                                   ? input.resolvedWorldPoint()
+                                   : workPlaneFramePointToWorld(input.worldPosition,
+                                                                eventFrame);
     if (input.snapType != SnapType::None || input.orthoEnabled ||
         !isValidWorkPlaneFrame(referenceFrame_)) {
         return eventWorld;

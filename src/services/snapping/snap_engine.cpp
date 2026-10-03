@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace classiCAD {
 namespace {
@@ -19,6 +20,74 @@ QPointF ellipseCenter(const Shape &shape)
         return (shape.nurbs.controlPoints[0] + shape.nurbs.controlPoints[4]) * 0.5;
     }
     return shape.points.isEmpty() ? QPointF{} : shape.points.first();
+}
+
+bool workPlaneFramesAreCoplanar(const WorkPlaneFrame &first,
+                                const WorkPlaneFrame &second)
+{
+    if (!isValidWorkPlaneFrame(first) || !isValidWorkPlaneFrame(second)) {
+        return false;
+    }
+
+    constexpr qreal angularTolerance = 1.0e-8;
+    if (std::abs(std::abs(first.normal.x * second.normal.x +
+                          first.normal.y * second.normal.y +
+                          first.normal.z * second.normal.z) - 1.0) >
+        angularTolerance) {
+        return false;
+    }
+
+    const qreal coordinateScale = std::max<qreal>(
+        {1.0, std::abs(first.origin.x), std::abs(first.origin.y),
+         std::abs(first.origin.z), std::abs(second.origin.x),
+         std::abs(second.origin.y), std::abs(second.origin.z)});
+    const qreal distanceTolerance = std::max<qreal>(
+        1.0e-7,
+        std::numeric_limits<qreal>::epsilon() * coordinateScale * 64.0);
+    return std::abs(signedDistanceFromWorkPlaneFrame(first.origin, second)) <=
+           distanceTolerance;
+}
+
+QPointF mapPointBetweenFrames(const QPointF &point,
+                              const WorkPlaneFrame &source,
+                              const WorkPlaneFrame &destination)
+{
+    return worldPointToWorkPlaneFrame(
+        workPlaneFramePointToWorld(point, source), destination);
+}
+
+void mapCurveBetweenFrames(Shape::NurbsCurve2D *curve,
+                           const WorkPlaneFrame &source,
+                           const WorkPlaneFrame &destination)
+{
+    if (curve == nullptr) {
+        return;
+    }
+    for (QPointF &point : curve->controlPoints) {
+        point = mapPointBetweenFrames(point, source, destination);
+    }
+}
+
+Shape mapShapeBetweenFrames(const Shape &shape,
+                            const WorkPlaneFrame &destination)
+{
+    Shape mapped = shape;
+    const WorkPlaneFrame source = shapeWorkPlaneFrame(shape);
+    for (QPointF &point : mapped.points) {
+        point = mapPointBetweenFrames(point, source, destination);
+    }
+    mapCurveBetweenFrames(&mapped.nurbs, source, destination);
+    for (Shape::NurbsCurve2D &component : mapped.components) {
+        mapCurveBetweenFrames(&component, source, destination);
+    }
+    const qreal normalAlignment = source.normal.x * destination.normal.x +
+                                  source.normal.y * destination.normal.y +
+                                  source.normal.z * destination.normal.z;
+    if (normalAlignment < 0.0) {
+        mapped.arcSweep = -mapped.arcSweep;
+    }
+    mapped.workPlaneFrame = destination;
+    return mapped;
 }
 
 } // namespace
@@ -1954,6 +2023,33 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
         return best;
     }
 
+    // Each planar curve owns a local frame whose origin is often its first
+    // picked point. Compare actual planes here, then express eligible geometry
+    // in the active drawing frame before generating snaps. Exact frame equality
+    // incorrectly drops every other curve that lies on the same plane.
+    const WorkPlaneFrame activeFrame = transform.workPlaneFrame();
+    if (!isValidWorkPlaneFrame(activeFrame)) {
+        return best;
+    }
+    QVector<SceneObject> coplanarObjects;
+    coplanarObjects.reserve(document.size());
+    for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
+        if (excludedShapeIndices.contains(shapeIndex) ||
+            !document.isObjectVisible(document.objectIdAt(shapeIndex))) {
+            continue;
+        }
+        const Shape &shape = document[shapeIndex];
+        const WorkPlaneFrame shapeFrame = shapeWorkPlaneFrame(shape);
+        if (!workPlaneFramesAreCoplanar(shapeFrame, activeFrame)) {
+            continue;
+        }
+        SceneObject snapObject;
+        snapObject.geometry = mapShapeBetweenFrames(shape, activeFrame);
+        coplanarObjects.append(std::move(snapObject));
+    }
+    Document coplanarScene;
+    coplanarScene.replaceObjects(coplanarObjects);
+
     const QPointF cursorScreen = transform.worldToScreen(rawPoint, viewportSize);
     constexpr qreal snapRadiusPixels = 12.0;
     qreal bestDistance = snapRadiusPixels;
@@ -1974,42 +2070,42 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
             bestPriority = priority;
             best.type = candidate.type;
             best.point = candidate.point;
+            best.worldPoint = workPlaneFramePointToWorld(candidate.point,
+                                                         activeFrame);
+            best.hasWorldPoint = true;
         }
     };
 
     for (const SnapCandidate &candidate :
-         nearCandidatesForScene(document,
+         nearCandidatesForScene(coplanarScene,
                                 rawPoint,
                                 transform,
-                                viewportSize,
-                                excludedShapeIndices)) {
+                                viewportSize)) {
         consider(candidate);
     }
 
     for (const SnapCandidate &candidate :
-         snapCandidatesForScene(document,
-                               excludedShapeIndices,
+         snapCandidatesForScene(coplanarScene,
+                               {},
                                transform,
                                viewportSize)) {
         consider(candidate);
     }
     if (!pendingPoints.isEmpty()) {
         for (const SnapCandidate &candidate :
-             perpendicularCandidates(document,
+             perpendicularCandidates(coplanarScene,
                                      pendingPoints.back(),
                                      rawPoint,
                                      transform,
-                                     viewportSize,
-                                     excludedShapeIndices)) {
+                                     viewportSize)) {
             consider(candidate);
         }
         if (includeTangentCandidates) {
             for (const SnapCandidate &candidate :
-                 tangentCandidates(document,
+                 tangentCandidates(coplanarScene,
                                    pendingPoints.back(),
                                    transform,
-                                   viewportSize,
-                                   excludedShapeIndices)) {
+                                   viewportSize)) {
                 consider(candidate);
             }
         }
@@ -2031,20 +2127,26 @@ DragSnapResult SnapEngine::findDragSnap(
     }
 
     QVector<SnapCandidate> sourceCandidates;
+    struct WorldCandidate { SnapType type; Point3D point; int shapeIndex; };
+    QVector<WorldCandidate> worldSources;
     for (const int shapeIndex : selectedShapeIndices) {
         if (shapeIndex >= 0 && shapeIndex < document.size()) {
             const Shape &shape = document[shapeIndex];
             QVector<SnapCandidate> candidates = snapCandidatesForShape(
                 shape, transform, viewportSize);
-            for (SnapCandidate &candidate : candidates) {
-                candidate.point = worldPointToWorkPlaneFrame(
-                    workPlaneFramePointToWorld(candidate.point, shapeWorkPlaneFrame(shape)),
-                    transform.workPlaneFrame());
+            for (SnapCandidate candidate : candidates) {
+                const Point3D world = workPlaneFramePointToWorld(
+                    candidate.point, shapeWorkPlaneFrame(shape));
+                worldSources.append({candidate.type, world, shapeIndex});
+                if (std::abs(signedDistanceFromWorkPlaneFrame(
+                        world, transform.workPlaneFrame())) <= 1.0e-7) {
+                    candidate.point = worldPointToWorkPlaneFrame(world, transform.workPlaneFrame());
+                    sourceCandidates.append(candidate);
+                }
             }
-            sourceCandidates += candidates;
         }
     }
-    if (sourceCandidates.isEmpty()) {
+    if (worldSources.isEmpty()) {
         return best;
     }
 
@@ -2151,14 +2253,21 @@ DragSnapResult SnapEngine::findDragSnap(
                 continue;
             }
 
+            if (!workPlaneFramesAreCoplanar(shapeWorkPlaneFrame(shape),
+                                           transform.workPlaneFrame())) continue;
+
             const QVector<QPointF> &linePoints = shape.nurbs.controlPoints.isEmpty()
                                                      ? shape.points
                                                      : shape.nurbs.controlPoints;
             for (int segment = 0; segment + 1 < linePoints.size(); ++segment) {
                 const QPointF endpoints[2]{linePoints[segment], linePoints[segment + 1]};
                 for (int endpoint = 0; endpoint < 2; ++endpoint) {
-                    const QPointF &sourcePoint = endpoints[endpoint];
-                    const QPointF &fixedPoint = endpoints[1 - endpoint];
+                    const QPointF sourcePoint = mapPointBetweenFrames(
+                        endpoints[endpoint], shapeWorkPlaneFrame(shape),
+                        transform.workPlaneFrame());
+                    const QPointF fixedPoint = mapPointBetweenFrames(
+                        endpoints[1 - endpoint], shapeWorkPlaneFrame(shape),
+                        transform.workPlaneFrame());
                     for (const SnapCandidate &target :
                          tangentCandidates(document,
                                            fixedPoint,
@@ -2172,6 +2281,53 @@ DragSnapResult SnapEngine::findDragSnap(
                                  -1);
                     }
                 }
+            }
+        }
+    }
+    // Object dragging can translate the entire planar curve in world XYZ.
+    // Match actual endpoint projections, then retain the full displacement;
+    // flattening either endpoint into the drag frame loses its depth.
+    for (int index = 0; index < document.size(); ++index) {
+        if (selectedShapeIndices.contains(index) ||
+            !document.isObjectVisible(document.objectIdAt(index))) continue;
+        const Shape &targetShape = document[index];
+        for (const SnapCandidate &target : snapCandidatesForShape(targetShape, transform, viewportSize)) {
+            if ((target.type == SnapType::Endpoint && !settings_.endpoint) ||
+                (target.type == SnapType::Midpoint && !settings_.midpoint) ||
+                (target.type == SnapType::Center && !settings_.center) ||
+                (target.type == SnapType::ControlPoint && !settings_.controlPoint) ||
+                target.type == SnapType::Near || target.type == SnapType::Intersection) continue;
+            const Point3D targetWorld = workPlaneFramePointToWorld(
+                target.point, shapeWorkPlaneFrame(targetShape));
+            QPointF targetScreen;
+            if (!transform.worldPointToScreen(targetWorld, viewportSize, &targetScreen)) continue;
+            for (const WorldCandidate &source : worldSources) {
+                QPointF sourceScreen;
+                if (!transform.worldPointToScreen(source.point, viewportSize, &sourceScreen)) continue;
+                const qreal distance = std::hypot(targetScreen.x()-sourceScreen.x(),
+                                                   targetScreen.y()-sourceScreen.y());
+                if (distance > snapRadiusPixels ||
+                    (bestPriority == 1 && distance > bestDistance)) continue;
+                bestDistance = distance;
+                bestPriority = 1;
+                best.type = target.type;
+                best.sourcePoint = std::abs(signedDistanceFromWorkPlaneFrame(
+                    source.point, transform.workPlaneFrame())) <= 1.0e-7
+                    ? worldPointToWorkPlaneFrame(source.point, transform.workPlaneFrame())
+                    : transform.screenToWorld(sourceScreen, viewportSize);
+                best.targetPoint = std::abs(signedDistanceFromWorkPlaneFrame(
+                    targetWorld, transform.workPlaneFrame())) <= 1.0e-7
+                    ? worldPointToWorkPlaneFrame(targetWorld, transform.workPlaneFrame())
+                    : transform.screenToWorld(targetScreen, viewportSize);
+                best.translation = best.targetPoint-best.sourcePoint;
+                best.targetShapeIndex = index;
+                best.targetComponentIndex = target.componentIndex;
+                best.worldSourcePoint = source.point;
+                best.worldTargetPoint = targetWorld;
+                best.worldTranslation = {targetWorld.x-source.point.x,
+                                         targetWorld.y-source.point.y,
+                                         targetWorld.z-source.point.z};
+                best.hasWorldTranslation = true;
             }
         }
     }

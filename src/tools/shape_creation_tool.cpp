@@ -95,7 +95,7 @@ bool ShapeCreationTool::handleMousePress(const ToolInput &input,
         planeLocked_ = true;
     }
 
-    points_.append(input.worldPosition);
+    points_.append(input.positionInFrame(drawingFrame_));
     publish(context);
     if (points_.size() != requiredPoints_) {
         return true;

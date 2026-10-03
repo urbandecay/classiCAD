@@ -465,11 +465,12 @@ int main(int argc, char **argv)
                             chainResult.objects().isEmpty(),
                         "one Undo must remove the whole XYZ drawing command");
         Document snapSource;
-        Shape elevatedPoint;
-        elevatedPoint.geometryType = GeometryType::Point;
-        elevatedPoint.workPlaneOffset = 10.0;
-        elevatedPoint.points = {QPointF(5.0, 6.0)};
-        snapSource.append(elevatedPoint);
+        Shape elevatedLine;
+        elevatedLine.geometryType = GeometryType::Line;
+        elevatedLine.workPlaneOffset = 10.0;
+        elevatedLine.points = {QPointF(5.0, 6.0), QPointF(10.0, 6.0)};
+        elevatedLine.nurbs = makeDegreeOneNurbs(elevatedLine.points);
+        snapSource.append(elevatedLine);
         passed &= check(saveVignolaDocument(path, snapSource, &error) &&
                             probe->loadVignolaDocument(path, &error),
                         "spatial OSnap fixture must load");
@@ -498,7 +499,82 @@ int main(int argc, char **argv)
                 std::abs(end.y - 6.0) < 1.0e-6 && std::abs(end.z - 10.0) < 1.0e-6;
         }
         passed &= check(snapped,
-                        "Line OSnap must keep the actual XYZ depth of an endpoint on another plane");
+                        "Line OSnap must keep the actual XYZ depth of a line endpoint on another plane");
+        Document dragFixture;
+        Shape dragSource;
+        dragSource.geometryType = GeometryType::Line;
+        dragSource.points = {{0,0},{20,0}};
+        dragSource.nurbs = makeDegreeOneNurbs(dragSource.points);
+        dragSource.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 4.0);
+        Shape dragTarget = dragSource;
+        dragTarget.points = {{0.5,0},{-20,0}};
+        dragTarget.nurbs = makeDegreeOneNurbs(dragTarget.points);
+        dragTarget.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 7.0);
+        dragFixture.append(dragSource);
+        dragFixture.append(dragTarget);
+        passed &= check(saveVignolaDocument(path, dragFixture, &error) &&
+                            probe->loadVignolaDocument(path, &error),
+                        "cross-plane object drag fixture must load");
+        probe->setTool(ToolId::Select);
+        probe->setSnapModes(true,false,false,false,false,false,false,false);
+        probe->setViewPreset(ViewportViewPreset::Top);
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Top),
+                        "object drag camera transition must finish");
+        ViewportTransform dragProjection;
+        dragProjection.setViewPreset(ViewportViewPreset::Top);
+        QPointF dragStart;
+        dragProjection.worldPointToScreen({10,0,4}, interactionViewportSize, &dragStart);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, dragStart,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseMove, dragStart+QPointF(5,0),
+                  Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonRelease, dragStart+QPointF(5,0),
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        Document draggedResult;
+        bool dragSnapped = probe->saveVignolaDocument(path, &error) &&
+            loadVignolaDocument(path, &draggedResult, &error) && draggedResult.size()==2;
+        if (dragSnapped) {
+            const Shape &moved = draggedResult[0];
+            const Point3D end = workPlaneFramePointToWorld(moved.nurbs.controlPoints.first(),
+                                                          shapeWorkPlaneFrame(moved));
+            dragSnapped = std::abs(end.x-0.5)<1e-6 && std::abs(end.y)<1e-6 &&
+                          std::abs(end.z-7.0)<1e-6;
+        }
+        passed &= check(dragSnapped,
+                        "Select dragging must place the actual 3D line endpoint on the other plane's endpoint");
+        dragSource.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XZ,4.0);
+        dragTarget.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XZ,7.0);
+        dragFixture = Document{};
+        dragFixture.append(dragSource);
+        dragFixture.append(dragTarget);
+        passed &= check(saveVignolaDocument(path, dragFixture, &error) &&
+                            probe->loadVignolaDocument(path, &error),
+                        "edge-on drag fixture must load");
+        probe->setTool(ToolId::Select);
+        probe->setViewPreset(ViewportViewPreset::Top);
+        waitForViewPreset(probe.get(), ViewportViewPreset::Top);
+        dragProjection.worldPointToScreen({10,4,0}, interactionViewportSize, &dragStart);
+        QPointF sourceEndScreen, targetEndScreen;
+        dragProjection.worldPointToScreen({0,4,0}, interactionViewportSize, &sourceEndScreen);
+        dragProjection.worldPointToScreen({0.5,7,0}, interactionViewportSize, &targetEndScreen);
+        const QPointF edgeOnDragEnd = dragStart+targetEndScreen-sourceEndScreen+QPointF(1,0);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, dragStart,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseMove, edgeOnDragEnd,
+                  Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonRelease, edgeOnDragEnd,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        bool edgeOnSnapped = probe->saveVignolaDocument(path, &error) &&
+            loadVignolaDocument(path, &draggedResult, &error) && draggedResult.size()==2;
+        if (edgeOnSnapped) {
+            const Shape &moved = draggedResult[0];
+            const Point3D end = workPlaneFramePointToWorld(moved.nurbs.controlPoints.first(),
+                                                          shapeWorkPlaneFrame(moved));
+            edgeOnSnapped = std::abs(end.x-0.5)<1e-6 && std::abs(end.y-7.0)<1e-6 &&
+                            std::abs(end.z)<1e-6;
+        }
+        passed &= check(edgeOnSnapped,
+                        "An edge-on object plane must not block Select dragging and endpoint snapping");
         probe->createNewDocument();
         probe->setOsnapEnabled(false);
         probe->setViewPreset(ViewportViewPreset::Isometric);

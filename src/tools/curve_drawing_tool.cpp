@@ -83,8 +83,9 @@ bool CurveDrawingTool::handleMousePress(const ToolInput &input,
         context.viewportTransform().setWorkPlaneFrame(drawingFrame_);
         drawing_ = true;
         planeLocked_ = true;
-        appendPoint(input.worldPosition);
-        cursorPoint_ = input.worldPosition;
+        const QPointF point = input.positionInFrame(drawingFrame_);
+        appendPoint(point);
+        cursorPoint_ = point;
         lastSampleScreen_ = input.screenPosition;
         hasCursorPoint_ = true;
         hasSampleScreen_ = true;
@@ -97,16 +98,18 @@ bool CurveDrawingTool::handleMousePress(const ToolInput &input,
     }
 
     if (isFreehand()) {
-        appendPoint(input.worldPosition);
-        cursorPoint_ = input.worldPosition;
+        const QPointF point = input.positionInFrame(drawingFrame_);
+        appendPoint(point);
+        cursorPoint_ = point;
         finish(context);
         return true;
     }
 
-    if (!appendPoint(input.worldPosition)) {
+    const QPointF point = input.positionInFrame(drawingFrame_);
+    if (!appendPoint(point)) {
         status_.text = QStringLiteral("Pick a point farther from the previous point");
     } else {
-        cursorPoint_ = input.worldPosition;
+        cursorPoint_ = point;
         status_.text = QStringLiteral("Interpolate Curve: %1 points • Enter to finish")
                            .arg(points_.size());
     }
@@ -124,14 +127,14 @@ bool CurveDrawingTool::handleMouseMove(const ToolInput &input,
         }
         return false;
     }
-    cursorPoint_ = input.worldPosition;
+    cursorPoint_ = input.positionInFrame(drawingFrame_);
     hasCursorPoint_ = true;
     if (isFreehand()) {
         const qreal screenDistance = std::hypot(
             input.screenPosition.x() - lastSampleScreen_.x(),
             input.screenPosition.y() - lastSampleScreen_.y());
         if (!hasSampleScreen_ || screenDistance >= 2.0) {
-            appendPoint(input.worldPosition);
+            appendPoint(input.positionInFrame(drawingFrame_));
             lastSampleScreen_ = input.screenPosition;
             hasSampleScreen_ = true;
         }

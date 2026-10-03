@@ -4639,8 +4639,7 @@ protected:
                                 findDragSnap(dragIndices, false, false);
                             if (specificDragSnap.isValid()) {
                                 currentDragSnap_ = specificDragSnap;
-                                translateShapes(dragIndices,
-                                                specificDragSnap.translation);
+                                applyObjectDragSnap(dragIndices, specificDragSnap);
                                 dragSnapCursorWorld_ = rawCursorWorld_;
                                 nearDragFreeSourcePointValid_ = false;
                                 DebugLog::instance().write(
@@ -4718,7 +4717,7 @@ protected:
                                 snapEvaluationMicroseconds =
                                     snapTimer.nsecsElapsed() / 1000;
                                 if (currentDragSnap_.isValid()) {
-                                    translateShapes(dragIndices, currentDragSnap_.translation);
+                                    applyObjectDragSnap(dragIndices, currentDragSnap_);
                                     dragSnapLocked_ = true;
                                     dragSnapCursorWorld_ = rawCursorWorld_;
                                     nearDragFreeSourcePointValid_ =
@@ -7745,16 +7744,26 @@ private:
             return result;
         }
 
+        if (activeTool_ == Tool::Line && lineCommandActive_) {
+            const Point3D *anchor = linePreviewWorldPoints_.isEmpty()
+                ? nullptr : &linePreviewWorldPoints_.back();
+            const SnapResult result = snapEngine_.findSpatialSnapPoint(
+                document_, worldToScreen(rawPoint), anchor,
+                viewportTransform_, size(), linePreviewWorldPoints_);
+            traceSnapResult(result, true);
+            return result;
+        }
+
         const bool serviceDrawingSnapActive =
             (activeTool_ == Tool::Line && lineCommandActive_) ||
-            activeTool_ == Tool::Arc || activeTool_ == Tool::PointByArcs ||
-            activeTool_ == Tool::CurveFreehand ||
+            activeTool_ == Tool::Arc || activeTool_ == Tool::Point ||
+            activeTool_ == Tool::PointByLine ||
+            activeTool_ == Tool::PointByArcs ||
+            isCurveCreationTool(activeTool_) ||
             isCircleConstructionTool(activeTool_) ||
-            activeTool_ == Tool::Point || activeTool_ == Tool::PointByLine ||
-            activeTool_ == Tool::CurveInterpolate || activeTool_ == Tool::Rotate ||
-            activeTool_ == Tool::Scale ||
             isEllipseTool(activeTool_) || isRectangleTool(activeTool_) ||
-            activeTool_ == Tool::Picture ||
+            isPolygonTool(activeTool_) || activeTool_ == Tool::Rotate ||
+            activeTool_ == Tool::Scale || activeTool_ == Tool::Picture ||
             activeTool_ == Tool::Mirror || isDimensionTool(activeTool_) ||
             activeTool_ == Tool::TangentFromCurve ||
             activeTool_ == Tool::PerpendicularFromCurve;
@@ -8042,7 +8051,8 @@ private:
             }
         }
 
-        if (isEllipseTool(activeTool_) && pendingPoints_.size() >= 2) {
+        if (activeToolController_ == nullptr &&
+            isEllipseTool(activeTool_) && pendingPoints_.size() >= 2) {
             const EllipseMode mode = ellipseModeForTool(activeTool_);
             if (mode == EllipseMode::CenterAxisRadius ||
                 mode == EllipseMode::AxisEndpoints) {
@@ -8064,7 +8074,8 @@ private:
             }
         }
 
-        if (activeTool_ == Tool::RectangleThreePoint && pendingPoints_.size() >= 2) {
+        if (activeToolController_ == nullptr &&
+            activeTool_ == Tool::RectangleThreePoint && pendingPoints_.size() >= 2) {
             const QPointF edge = pendingPoints_[1] - pendingPoints_[0];
             const qreal edgeLength = std::hypot(edge.x(), edge.y());
             if (edgeLength > 1.0e-9) {
@@ -10982,6 +10993,27 @@ private:
         }
     }
 
+    void applyObjectDragSnap(const QVector<ObjectId> &objectIds,
+                             const DragSnapResult &snap)
+    {
+        if (!snap.hasWorldTranslation) {
+            translateShapes(objectIds, snap.translation);
+            return;
+        }
+        for (const ObjectId objectId : objectIds) {
+            const int index = objectIndex(objectId);
+            if (index < 0 || index >= shapes_.size()) continue;
+            WorkPlaneFrame frame = shapeWorkPlaneFrame(shapes_[index]);
+            frame.origin.x += snap.worldTranslation.x;
+            frame.origin.y += snap.worldTranslation.y;
+            frame.origin.z += snap.worldTranslation.z;
+            shapes_[index].workPlaneFrame = frame;
+        }
+        DebugLog::instance().write(QStringLiteral("object-drag-snap applied targetShape=%1 worldDelta=(%2,%3,%4)")
+            .arg(snap.targetShapeIndex).arg(snap.worldTranslation.x,0,'g',12)
+            .arg(snap.worldTranslation.y,0,'g',12).arg(snap.worldTranslation.z,0,'g',12));
+    }
+
     QPointF constrainDragDelta(const QPointF &delta) const
     {
         switch (dragAxisLock_) {
@@ -12431,11 +12463,28 @@ private:
         if (!drawingShape && !selectingObject) {
             return;
         }
-        const int shapeIndex = curveHitTester_.hitTestShapeOnAnyWorkPlane(
-            document_, screenPosition, viewportTransform_, size());
+        const int shapeIndex = selectingObject
+            ? curveHitTester_.hitTestShape(document_, screenPosition, viewportTransform_, size())
+            : curveHitTester_.hitTestShapeOnAnyWorkPlane(
+                  document_, screenPosition, viewportTransform_, size());
         if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
             const Shape &shape = shapes_[shapeIndex];
             const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+            const Point3D viewNormal = viewportTransform_.viewDirection();
+            const qreal planeFacing = std::abs(frame.normal.x*viewNormal.x +
+                frame.normal.y*viewNormal.y + frame.normal.z*viewNormal.z);
+            if (selectingObject && !controlPointsVisible_ && planeFacing < 0.15) {
+                // An almost edge-on object plane makes tiny cursor moves
+                // produce enormous world deltas. Drag through the visible
+                // pick depth on a plane facing the camera instead.
+                Point3D pickWorld = frame.origin;
+                curveHitTester_.hitTestVisibleDepth(document_, screenPosition,
+                    viewportTransform_, size(), &pickWorld);
+                WorkPlaneFrame dragFrame = viewAlignedDrawingFrame();
+                dragFrame.origin = pickWorld;
+                viewportTransform_.setWorkPlaneFrame(dragFrame);
+                return;
+            }
             if (drawingShape || selectingObject) {
                 QPointF planePoint;
                 if (!drawingShape || viewportTransform_.screenToWorkPlane(
@@ -13299,7 +13348,21 @@ private:
         input.workPlaneFrame = viewportTransform_.workPlaneFrame();
         input.orthoEnabled = orthoEnabled_;
         input.viewportSize = size();
+        input.snapResult = currentSnap_;
         input.snapType = currentSnap_.type;
+        if (activeTool_ != Tool::Line && input.snapResult.isValid() &&
+            input.snapResult.hasWorldPoint &&
+            isValidWorkPlaneFrame(input.workPlaneFrame)) {
+            const QPointF snapPosition = worldPointToWorkPlaneFrame(
+                input.snapResult.worldPoint, input.workPlaneFrame);
+            if (std::hypot(snapPosition.x() - worldPosition.x(),
+                           snapPosition.y() - worldPosition.y()) > 1.0e-7) {
+                // A tool constraint may project or redirect the acquired snap.
+                // Keep that constrained preview point authoritative instead of
+                // letting a consumer restore the unconstrained target.
+                input.snapResult = SnapResult{};
+            }
+        }
         if (event != nullptr) {
             input.button = event->button();
             input.buttons = event->buttons();

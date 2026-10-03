@@ -73,6 +73,12 @@ misread or implemented incorrectly.
   snaps carry a world-space point as well as a plane-local point; use the world
   point when the constraint is spatial instead of reinterpreting the local
   projection in the active workplane.
+- A curve's workplane origin is its local coordinate origin, not the identity
+  of the geometric plane. Drawing tools may capture a different origin for
+  every shape on the same plane. Compare coplanarity for drawing snaps, then
+  map each target through world space into the active frame before computing
+  the preview or clicked point; exact frame matching silently disables snaps
+  after the first point.
 - Verify snap behavior in oblique views and with intersections between curved
   objects. A top-view line-only test will not catch screen-space circle fitting
   or missing curve intersections.
@@ -140,5 +146,24 @@ misread or implemented incorrectly.
 - Use the tool's actual preview shape for OpenGL rendering and markers.
   Rebuilding a rectangle from generic pending points loses locked dimensions
   and perpendicular behavior. Suppress the generic HUD hint in every mode.
+- A valid OSnap must override automatic axis inference. In the height stage,
+  calculate the height from the snapped world point, not the raw screen ray.
+  Preserve the already chosen edge: an off-axis target supplies its height
+  component rather than changing the rectangle's width. Do not apply legacy
+  viewport rectangle/ellipse constraints before the active controller resolves
+  its input; that can discard the snap before the preview receives it.
+- Line drawing uses one spatial snap result for both its preview and marker.
+  Do not let the viewport select a current-plane marker independently from the
+  controller's 3D target; coincident projections on separate workplanes can
+  otherwise produce inconsistent visible snaps.
+- Distinguish drawing a line from dragging an existing line in Select mode.
+  Logs with lineActive=0 and dragging=1 exercise object drag snapping. Compare
+  its source and target endpoints in world XYZ and preserve the full world
+  translation when applying a snap; projecting both into the drag plane loses
+  depth and excluding off-plane targets makes visible endpoints unresponsive.
+- Almost edge-on object planes magnify a few pixels of mouse motion into huge
+  world displacements. For ordinary Select dragging in that case, resolve input
+  on a camera-facing plane through the visible pick depth. Keep editing control
+  points in the curve's own plane.
 - Store the closed rectangle as a degree-1 NURBS and use its CVs for rendering,
   hit testing, corner snaps, control points, and sampling after edits.

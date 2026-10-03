@@ -2983,6 +2983,28 @@ int main(int argc, char **argv)
                         framedDragSnap.translation == QPointF(),
                     "Drag snaps must map source points from the object's frame before measuring or translating");
 
+    Document spatialDragDocument;
+    Shape spatialDragSource;
+    spatialDragSource.geometryType = GeometryType::Line;
+    spatialDragSource.points = {{0,0},{20,0}};
+    spatialDragSource.nurbs = makeDegreeOneNurbs(spatialDragSource.points);
+    spatialDragSource.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 4.0);
+    Shape spatialDragTarget = spatialDragSource;
+    spatialDragTarget.points = {{0.5,0},{-20,0}};
+    spatialDragTarget.nurbs = makeDegreeOneNurbs(spatialDragTarget.points);
+    spatialDragTarget.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 7.0);
+    spatialDragDocument.append(spatialDragSource);
+    spatialDragDocument.append(spatialDragTarget);
+    ViewportTransform spatialDragTransform;
+    spatialDragTransform.setViewPreset(ViewportViewPreset::Top);
+    const DragSnapResult spatialDragSnap = endpointControlPointSnapEngine.findDragSnap(
+        spatialDragDocument, {0}, spatialDragTransform, viewportSize);
+    passed &= check(spatialDragSnap.type == SnapType::Endpoint &&
+        spatialDragSnap.hasWorldTranslation &&
+        std::abs(spatialDragSnap.worldTranslation.x - 0.5) < 1e-9 &&
+        std::abs(spatialDragSnap.worldTranslation.z - 3.0) < 1e-9,
+        "Dragging endpoints on separate planes must retain their full XYZ snap correction");
+
     Document toolDocument;
     SelectionModel toolSelection;
     History toolHistory(toolDocument);
@@ -3763,6 +3785,44 @@ int main(int argc, char **argv)
             input.snapType = SnapType::Endpoint;
             return input;
         };
+        if (rectangleId == ToolId::Rectangle || rectangleId == ToolId::RectangleThreePoint) {
+            RectangleTool snapProbe(rectangleId);
+            snapProbe.begin(rectangleContext);
+            snapProbe.handleMousePress(rectangleInput(rectangleAnchor), rectangleContext);
+            const auto snappedInput = [&](Point3D target, Point3D mouse) {
+                ToolInput input = rectangleInput(target);
+                input.modifiers = Qt::NoModifier;
+                rectangleTransform.worldPointToScreen(mouse, input.viewportSize,
+                                                       &input.screenPosition);
+                input.rawWorldPosition = worldPointToWorkPlaneFrame(mouse, input.workPlaneFrame);
+                input.snapResult.type = SnapType::Endpoint;
+                input.snapResult.point = input.worldPosition;
+                input.snapResult.worldPoint = target;
+                input.snapResult.hasWorldPoint = true;
+                return input;
+            };
+            const auto cursorMatches = [&](Point3D target) {
+                const ToolPreview preview = snapProbe.preview();
+                const Point3D cursor = workPlaneFramePointToWorld(preview.cursorPoint,
+                                                                 preview.workPlaneFrame);
+                return std::abs(cursor.x - target.x) < 1e-7 &&
+                       std::abs(cursor.y - target.y) < 1e-7 &&
+                       std::abs(cursor.z - target.z) < 1e-7;
+            };
+            snapProbe.handleMouseMove(snappedInput({22.0, 15.4, 4.0}, {22.0, 15.0, 4.0}),
+                                      rectangleContext);
+            passed &= check(cursorMatches({22.0, 15.4, 4.0}),
+                            "rectangle edge OSnap must override automatic axis alignment");
+            snapProbe.handleMousePress(snappedInput({22.0, 15.0, 4.0}, {22.0, 15.0, 4.0}),
+                                       rectangleContext);
+            for (qreal mouseHeight : {22.6, 23.4}) {
+                snapProbe.handleMouseMove(snappedInput({22.0, 23.0, 4.0},
+                                                       {22.0, mouseHeight, 4.0}), rectangleContext);
+                passed &= check(cursorMatches({22.0, 23.0, 4.0}),
+                                "rectangle height preview must use OSnap rather than raw screen input");
+            }
+            snapProbe.cancel(rectangleContext);
+        }
         RectangleTool rectangle(rectangleId);
         rectangle.begin(rectangleContext);
         rectangle.handleMousePress(rectangleInput(rectangleAnchor), rectangleContext);

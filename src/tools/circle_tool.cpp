@@ -169,7 +169,7 @@ bool CircleTool::handleMousePress(const ToolInput &input, ToolContext &context)
         context.viewportTransform().setWorkPlaneFrame(drawingFrame_);
         frameCaptured_ = true;
         planeLocked_ = true;
-        cursorPoint_ = input.worldPosition;
+        cursorPoint_ = input.positionInFrame(drawingFrame_);
         hasCursorPoint_ = true;
     } else {
         cursorPoint_ = resolveCursor(input);
@@ -229,7 +229,9 @@ bool CircleTool::handleMouseMove(const ToolInput &input, ToolContext &context)
         context.viewportTransform().setWorkPlaneFrame(drawingFrame_);
     }
 
-    cursorPoint_ = points_.isEmpty() ? input.worldPosition : resolveCursor(input);
+    cursorPoint_ = points_.isEmpty()
+                       ? input.positionInFrame(drawingFrame_)
+                       : resolveCursor(input);
     if (!points_.isEmpty() &&
         !(isThreePoint() && threePointPointsInDrawingFrame_)) {
         updatePerpendicularDrawingFrame(cursorPoint_, context);
@@ -538,7 +540,12 @@ void CircleTool::updatePerpendicularDrawingFrame(const QPointF &cursorPoint,
 
 QPointF CircleTool::resolveCursor(const ToolInput &input) const
 {
-    QPointF target = input.worldPosition;
+    const WorkPlaneFrame &inputFrame =
+        isThreePoint() && threePointPointsInDrawingFrame_
+            ? drawingFrame_ : referenceFrame_;
+    QPointF target = isValidWorkPlaneFrame(inputFrame)
+                         ? input.positionInFrame(inputFrame)
+                         : input.worldPosition;
     const bool altBypass = input.modifiers.testFlag(Qt::AltModifier);
     const int pointCount = points_.size();
     if (pointCount == 0 || !isValidWorkPlaneFrame(drawingFrame_)) {

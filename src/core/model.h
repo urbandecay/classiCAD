@@ -114,6 +114,11 @@ struct DragSnapResult {
     int targetShapeIndex = -1;
     int targetComponentIndex = -1;
 
+    Point3D worldSourcePoint;
+    Point3D worldTargetPoint;
+    Point3D worldTranslation;
+    bool hasWorldTranslation = false;
+
     bool isValid() const
     {
         return type != SnapType::None;

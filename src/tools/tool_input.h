@@ -25,7 +25,30 @@ struct ToolInput {
     int wheelAngleDelta = 0;
     int wheelPixelDelta = 0;
     QSize viewportSize;
+    SnapResult snapResult;
     SnapType snapType = SnapType::None;
+
+    Point3D resolvedWorldPoint() const
+    {
+        if (snapResult.isValid() && snapResult.hasWorldPoint) {
+            return snapResult.worldPoint;
+        }
+        const WorkPlaneFrame frame = isValidWorkPlaneFrame(workPlaneFrame)
+                                         ? workPlaneFrame
+                                         : makeWorkPlaneFrame(WorkPlane::XY, 0.0);
+        return workPlaneFramePointToWorld(worldPosition, frame);
+    }
+
+    QPointF positionInFrame(const WorkPlaneFrame &frame) const
+    {
+        const WorkPlaneFrame target = isValidWorkPlaneFrame(frame)
+                                          ? frame
+                                          : (isValidWorkPlaneFrame(workPlaneFrame)
+                                                 ? workPlaneFrame
+                                                 : makeWorkPlaneFrame(
+                                                       WorkPlane::XY, 0.0));
+        return worldPointToWorkPlaneFrame(resolvedWorldPoint(), target);
+    }
 };
 
 } // namespace classiCAD

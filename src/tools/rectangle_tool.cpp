@@ -67,6 +67,9 @@ void RectangleTool::begin(ToolContext &context)
 
 Point3D RectangleTool::eventPoint(const ToolInput &input) const
 {
+    if (input.snapResult.isValid() && input.snapResult.hasWorldPoint) {
+        return input.resolvedWorldPoint();
+    }
     return workPlaneFramePointToWorld(input.worldPosition,
         isValidWorkPlaneFrame(input.workPlaneFrame) ? input.workPlaneFrame : frame_);
 }
@@ -75,7 +78,7 @@ Point3D RectangleTool::planePoint(const ToolInput &input, ToolContext &context,
                                  bool allowSnap) const
 {
     const Point3D target=eventPoint(input);
-    if (allowSnap && input.snapType!=SnapType::None &&
+    if ((allowSnap || perpendicular_) && input.snapType!=SnapType::None &&
         magnitude(sub(target,anchor_))>1.0e-6) {
         return sub(target,scale(frame_.normal,dot(sub(target,frame_.origin),frame_.normal)));
     }
@@ -90,7 +93,8 @@ Point3D RectangleTool::planePoint(const ToolInput &input, ToolContext &context,
 Point3D RectangleTool::inferAxis(const ToolInput &input, ToolContext &context,
                                 const Point3D &anchor, const Point3D &target) const
 {
-    if (input.modifiers.testFlag(Qt::AltModifier)) return target;
+    if (input.snapType!=SnapType::None ||
+        input.modifiers.testFlag(Qt::AltModifier)) return target;
     QPointF origin;
     if (!context.viewportTransform().worldPointToScreenUnclipped(
             anchor,input.viewportSize,&origin)) return target;
@@ -173,7 +177,9 @@ void RectangleTool::updateGeometry(const ToolInput &input, ToolContext &context)
         frame_.normal=unit(cross(frame_.xAxis,frame_.yAxis)); frame_.valid=true;
         if (xLocked_) edgeEnd_=add(anchor_,scale(edge,lockedX_));
         Point3D heightPoint;
-        if (!context.viewportTransform().screenToWorldAxis(input.screenPosition,
+        if (input.snapType!=SnapType::None) {
+            heightPoint=eventPoint(input);
+        } else if (!context.viewportTransform().screenToWorldAxis(input.screenPosition,
                 input.viewportSize,edgeEnd_,frame_.yAxis,&heightPoint)) {
             heightPoint=planePoint(input,context,false);
         }

@@ -572,7 +572,9 @@ Point3D EllipseTool::inputWorldPoint(const ToolInput &input,
         !std::isfinite(input.worldPosition.y())) {
         return {};
     }
-    return pointFromFrame(input.worldPosition, inputFrame);
+    return input.snapResult.isValid() && input.snapResult.hasWorldPoint
+               ? input.resolvedWorldPoint()
+               : pointFromFrame(input.worldPosition, inputFrame);
 }
 
 Point3D EllipseTool::projectedCursorPoint(const ToolInput &input,
@@ -601,7 +603,8 @@ Point3D EllipseTool::resolveMajorPoint(const ToolInput &input,
                                       const ToolContext &context) const
 {
     Point3D target = projectedCursorPoint(input, referenceFrame_, context);
-    if (input.modifiers.testFlag(Qt::AltModifier) || points_.isEmpty()) {
+    if (input.snapType != SnapType::None ||
+        input.modifiers.testFlag(Qt::AltModifier) || points_.isEmpty()) {
         return target;
     }
 

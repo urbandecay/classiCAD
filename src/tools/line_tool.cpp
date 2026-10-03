@@ -171,8 +171,11 @@ bool LineTool::appendCurrentPoint(const ToolInput &input,
                 ? input.workPlaneFrame : context.viewportTransform().workPlaneFrame();
         }
         if (!isValidWorkPlaneFrame(drawingFrame_)) return true;
-        snap_ = context.snapEngine().findSpatialSnapPoint(context.document(),
-            input.screenPosition, nullptr, context.viewportTransform(), input.viewportSize);
+        snap_ = input.snapResult.isValid() && input.snapResult.hasWorldPoint
+            ? input.snapResult
+            : context.snapEngine().findSpatialSnapPoint(
+                  context.document(), input.screenPosition, nullptr,
+                  context.viewportTransform(), input.viewportSize);
         cursorPoint_ = snap_.hasWorldPoint ? snap_.worldPoint
             : workPlaneFramePointToWorld(input.worldPosition, drawingFrame_);
         planeLocked_ = true;
@@ -416,8 +419,11 @@ Point3D LineTool::inferredAxisDirection(const ToolInput &input,
 Point3D LineTool::resolveCursorPoint(const ToolInput &input, const ToolContext &context)
 {
     const Point3D reference = points_.back();
-    snap_ = context.snapEngine().findSpatialSnapPoint(context.document(),
-        input.screenPosition, &reference, context.viewportTransform(), input.viewportSize, points_);
+    snap_ = input.snapResult.isValid() && input.snapResult.hasWorldPoint
+        ? input.snapResult
+        : context.snapEngine().findSpatialSnapPoint(
+              context.document(), input.screenPosition, &reference,
+              context.viewportTransform(), input.viewportSize, points_);
     const bool geometrySnap = snap_.hasWorldPoint || input.snapType != SnapType::None;
     const WorkPlaneFrame inputFrame = isValidWorkPlaneFrame(input.workPlaneFrame)
         ? input.workPlaneFrame : drawingFrame_;

@@ -499,6 +499,15 @@ public:
                     cursorValid_ = true;
                 }
             }
+            if (isEllipseTool(activeTool_)) {
+                ellipsePreviewGuides_ = preview.guides;
+                ellipseHudDimensionsLine_ = preview.hudDimensionsLine;
+                ellipseHudInstructionsLine_ = preview.hudInstructionsLine;
+                cursorValid_ = preview.hasCursorPoint;
+                if (preview.hasCursorPoint) {
+                    cursorWorld_ = preview.cursorPoint;
+                }
+            }
             update();
         });
         toolContext_.setStatusPublisher([this](const ToolStatus &status) {
@@ -661,6 +670,9 @@ public:
         controllerPreviewShapeVisible_ = false;
         circleHudDimensionsLine_.clear();
         circleHudInstructionsLine_.clear();
+        ellipseHudDimensionsLine_.clear();
+        ellipseHudInstructionsLine_.clear();
+        ellipsePreviewGuides_.clear();
         resetArcPreviewTracking();
         resetArcInputState();
         lineCommandActive_ = tool == Tool::Line;
@@ -3016,7 +3028,8 @@ protected:
 
             const QColor previewColor(QStringLiteral("#e6b85c"));
             const QColor activeToolPreviewColor =
-                activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_)
+                activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_) ||
+                        isEllipseTool(activeTool_)
                     ? arcPreviewColor
                     : previewColor;
             for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
@@ -3148,6 +3161,7 @@ protected:
                        !isPointCreationTool(activeTool_) &&
                        !isCurveCreationTool(activeTool_) &&
                        !isTwoCurveLineTool(activeTool_) &&
+                       !isEllipseTool(activeTool_) &&
                        !isCircleConstructionTool(activeTool_) &&
                        !pendingPoints_.isEmpty() && cursorValid_) {
                 QVector<QPointF> candidatePoints = pendingPoints_;
@@ -12665,14 +12679,19 @@ private:
 
     void drawEllipseToolPreview(QPainter &painter, bool drawCurve = true)
     {
+        if (drawCurve && controllerPreviewShapeVisible_) {
+            drawShape(painter, controllerPreviewShape_, true);
+        }
         viewportOverlay_.drawEllipsePreview(painter,
-                                             activeTool_,
                                              pendingPoints_,
                                              cursorWorld_,
                                              cursorValid_,
+                                             ellipsePreviewGuides_,
                                              currentSnap_,
-                                             size(),
-                                             drawCurve);
+                                             size());
+        drawArcHudPanel(painter,
+                        {ellipseHudDimensionsLine_, ellipseHudInstructionsLine_},
+                        750.0);
     }
 
     void drawRectangleToolPreview(QPainter &painter, bool drawCurve = true)
@@ -13081,6 +13100,9 @@ private:
     ToolStatus toolStatus_;
     QString circleHudDimensionsLine_;
     QString circleHudInstructionsLine_;
+    QString ellipseHudDimensionsLine_;
+    QString ellipseHudInstructionsLine_;
+    QVector<ToolPreviewGuide> ellipsePreviewGuides_;
     WorkPlaneFrame toolDrawingFrame_;
     bool toolDrawingPlaneLocked_ = false;
     // Temporary source-compatibility view. Document owns the storage and

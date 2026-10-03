@@ -3,6 +3,8 @@
 #include "core/model.h"
 #include "tool_input.h"
 
+#include <QColor>
+#include <QLineF>
 #include <QString>
 #include <QVector>
 
@@ -23,8 +25,15 @@ struct ToolStatus {
     bool canCommit = false;
 };
 
+struct ToolPreviewGuide {
+    QLineF line;
+    QColor color;
+    bool dashed = false;
+};
+
 struct ToolPreview {
     QVector<QPointF> points;
+    QVector<ToolPreviewGuide> guides;
     WorkPlaneFrame workPlaneFrame;
     bool hasWorkPlaneFrame = false;
     QPointF cursorPoint;

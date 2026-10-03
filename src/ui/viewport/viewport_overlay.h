@@ -2,6 +2,7 @@
 
 #include "core/model.h"
 #include "core/tool_id.h"
+#include "tools/tool.h"
 #include "viewport_renderer.h"
 
 #include <QPainter>
@@ -89,13 +90,12 @@ public:
                            const QColor &curveColor,
                            bool drawCurve = true) const;
     void drawEllipsePreview(QPainter &painter,
-                            ToolId tool,
                             const QVector<QPointF> &pendingPoints,
                             const QPointF &cursorWorld,
                             bool cursorValid,
+                            const QVector<ToolPreviewGuide> &guides,
                             const SnapResult &currentSnap,
-                            const QSize &viewportSize,
-                            bool drawCurve = true) const;
+                            const QSize &viewportSize) const;
     void drawRectanglePreview(QPainter &painter,
                               ToolId tool,
                               const QVector<QPointF> &pendingPoints,

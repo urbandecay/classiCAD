@@ -76,6 +76,9 @@ misread or implemented incorrectly.
 - Verify snap behavior in oblique views and with intersections between curved
   objects. A top-view line-only test will not catch screen-space circle fitting
   or missing curve intersections.
+- Box selection must project each object's local points through that object's
+  stored frame into the view. Do not filter candidates to the active drawing
+  plane or project every object's local coordinates as if they shared it.
 
 ## Polygon port findings
 

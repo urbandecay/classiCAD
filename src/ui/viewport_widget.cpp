@@ -6155,12 +6155,17 @@ private:
         qreal minY = 0.0;
         qreal maxY = 0.0;
         bool initialized = false;
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
         for (const QPointF &point : points) {
             if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
                 continue;
             }
 
-            const QPointF screenPoint = worldToScreen(point);
+            QPointF screenPoint;
+            if (!viewportTransform_.worldPointToScreen(
+                    workPlaneFramePointToWorld(point, frame), size(), &screenPoint)) {
+                continue;
+            }
             if (!initialized) {
                 minX = maxX = screenPoint.x();
                 minY = maxY = screenPoint.y();
@@ -6255,10 +6260,6 @@ private:
             for (int index = 0; index < shapes_.size(); ++index) {
                 const ObjectId objectId = shapes_.objectIdAt(index);
                 if (!document_.isObjectEditable(objectId)) {
-                    continue;
-                }
-                if (!workPlaneMatches(shapeWorkPlaneFrame(shapes_[index]),
-                                      viewportTransform_.workPlaneFrame())) {
                     continue;
                 }
                 if (shapeMatchesSelectionBox(shapes_[index],

@@ -67,6 +67,8 @@ namespace classiCAD {
 
 namespace {
 
+constexpr qreal kDragSnapBreakawayPixels = 36.0;
+
 void fillViewportBackground(QPainter &painter, const QRect &bounds)
 {
     if (bounds.isEmpty()) {
@@ -4499,18 +4501,18 @@ protected:
             const QPointF delta = rawCursorWorld_ - lastControlPointWorld_;
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
                 qint64 snapEvaluationMicroseconds = -1;
-                constexpr qreal dragSnapBreakawayPixels = 18.0;
                 const qreal cursorDistanceFromSnap =
                     std::hypot(screenPosition.x() - worldToScreen(dragSnapCursorWorld_).x(),
                                screenPosition.y() - worldToScreen(dragSnapCursorWorld_).y());
 
-                if (dragSnapLocked_ && cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
+                if (dragSnapLocked_ &&
+                    cursorDistanceFromSnap <= kDragSnapBreakawayPixels) {
                     DebugLog::instance().write(
                         QStringLiteral("control point snap-hold shape=%1 index=%2 cursorDistance=%3 breakaway=%4")
                             .arg(selectedIndex)
                             .arg(controlPointIndex_)
                             .arg(cursorDistanceFromSnap, 0, 'f', 2)
-                            .arg(dragSnapBreakawayPixels, 0, 'f', 2));
+                            .arg(kDragSnapBreakawayPixels, 0, 'f', 2));
                 } else if (dragSnapLocked_) {
                     const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
                     beginDragHistory();
@@ -4676,7 +4678,6 @@ protected:
                                 nearDragFreeSourcePointValid_ = false;
                             }
                         } else {
-                            constexpr qreal dragSnapBreakawayPixels = 18.0;
                             const qreal cursorDistanceFromSnap =
                                 std::hypot(
                                     screenPosition.x() -
@@ -4685,14 +4686,15 @@ protected:
                                         worldToScreen(dragSnapCursorWorld_).y());
 
                             if (dragSnapLocked_ &&
-                                cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
+                                cursorDistanceFromSnap <=
+                                    kDragSnapBreakawayPixels) {
                                 // Keep the geometry attached while the cursor is still near
                                 // the snap point for non-Near snaps.
                                 DebugLog::instance().write(
                                     QStringLiteral("selection drag snap-hold shape=%1 cursorDistance=%2 breakaway=%3")
                                         .arg(selectedIndex)
                                         .arg(cursorDistanceFromSnap, 0, 'f', 2)
-                                        .arg(dragSnapBreakawayPixels, 0, 'f', 2));
+                                        .arg(kDragSnapBreakawayPixels, 0, 'f', 2));
                             } else if (dragSnapLocked_) {
                                 // Release from the snap using the complete cursor movement
                                 // since the snap was acquired, so the line leaves cleanly.
@@ -7540,6 +7542,176 @@ private:
 
     SnapResult findSnapPoint(const QPointF &rawPoint) const
     {
+        const bool traceSnaps = qEnvironmentVariable("CLASSICAD_SNAP_TRACE") ==
+                                QStringLiteral("1");
+        const auto traceSnapResult = [&](const SnapResult &result,
+                                         bool spatial) {
+            if (!traceSnaps) {
+                return;
+            }
+
+            const WorkPlaneFrame activeFrame = viewportTransform_.workPlaneFrame();
+            const QPointF cursorScreen = worldToScreen(rawPoint);
+            QPointF markerScreen = cursorScreen;
+            if (result.isValid()) {
+                markerScreen = worldToScreen(result.point);
+            }
+            Point3D resultWorld = workPlaneFramePointToWorld(rawPoint, activeFrame);
+            QPointF resultWorldScreen = markerScreen;
+            if (result.isValid()) {
+                resultWorld = result.hasWorldPoint
+                                  ? result.worldPoint
+                                  : workPlaneFramePointToWorld(result.point,
+                                                               activeFrame);
+                viewportTransform_.worldPointToScreen(resultWorld,
+                                                      size(),
+                                                      &resultWorldScreen);
+            }
+            const qreal markerTargetGap = result.isValid()
+                ? std::hypot(markerScreen.x() - resultWorldScreen.x(),
+                             markerScreen.y() - resultWorldScreen.y())
+                : 0.0;
+            const auto point3DText = [](const Point3D &point) {
+                return QStringLiteral("(%1, %2, %3)")
+                    .arg(point.x, 0, 'g', 12)
+                    .arg(point.y, 0, 'g', 12)
+                    .arg(point.z, 0, 'g', 12);
+            };
+            const auto frameText = [&point3DText](const WorkPlaneFrame &frame) {
+                return QStringLiteral("origin=%1 x=%2 y=%3 n=%4")
+                    .arg(point3DText(frame.origin),
+                         point3DText(frame.xAxis),
+                         point3DText(frame.yAxis),
+                         point3DText(frame.normal));
+            };
+
+            DebugLog::instance().write(
+                QStringLiteral("osnap-trace selected tool=%1 mode=%2 type=%3 rawLocal=%4 cursorPx=%5 resultLocal=%6 markerPx=%7 resultWorld=%8 resultWorldPx=%9 markerWorldGapPx=%10 activeFrame={%11}")
+                    .arg(toolName(activeTool_),
+                         spatial ? QStringLiteral("spatial")
+                                 : QStringLiteral("planar"),
+                         snapTypeName(result.type),
+                         precisePointText(rawPoint),
+                         precisePointText(cursorScreen),
+                         precisePointText(result.point),
+                         precisePointText(markerScreen),
+                         point3DText(resultWorld),
+                         precisePointText(resultWorldScreen))
+                    .arg(markerTargetGap, 0, 'f', 4)
+                    .arg(frameText(activeFrame)));
+
+            const SnapSettings settings = snapEngine_.settings();
+            const auto snapTypeEnabled = [&settings](SnapType type) {
+                switch (type) {
+                case SnapType::Endpoint: return settings.endpoint;
+                case SnapType::Midpoint: return settings.midpoint;
+                case SnapType::Intersection: return settings.intersection;
+                case SnapType::Center: return settings.center;
+                case SnapType::Perpendicular: return settings.perpendicular;
+                case SnapType::Tangent: return settings.tangent;
+                case SnapType::ControlPoint: return settings.controlPoint;
+                case SnapType::Near: return settings.near;
+                case SnapType::None: return false;
+                }
+                return false;
+            };
+            for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
+                const Shape &shape = document_[shapeIndex];
+                const bool visible =
+                    document_.isObjectVisible(document_.objectIdAt(shapeIndex));
+                const WorkPlaneFrame targetFrame = shapeWorkPlaneFrame(shape);
+                const bool frameMatches = workPlaneMatches(targetFrame, activeFrame);
+                const QVector<SnapCandidate> candidates =
+                    visible ? snapEngine_.snapCandidatesForShape(shape,
+                                                                 viewportTransform_,
+                                                                 size())
+                            : QVector<SnapCandidate>{};
+                if (candidates.isEmpty()) {
+                    DebugLog::instance().write(
+                        QStringLiteral("osnap-trace shape shape=%1 geometry=%2 visible=%3 activeFrameMatch=%4 candidateCount=0 reason=%5 targetFrame={%6}")
+                            .arg(shapeIndex)
+                            .arg(geometryTypeName(shape.geometryType))
+                            .arg(visible)
+                            .arg(frameMatches)
+                            .arg(!visible ? QStringLiteral("hidden")
+                                          : QStringLiteral("no-supported-snap-candidates"))
+                            .arg(frameText(targetFrame)));
+                    continue;
+                }
+                for (const SnapCandidate &candidate : candidates) {
+                    const Point3D candidateWorld =
+                        workPlaneFramePointToWorld(candidate.point, targetFrame);
+                    QPointF candidateScreen;
+                    const bool projectable = viewportTransform_.worldPointToScreen(
+                        candidateWorld, size(), &candidateScreen);
+                    QPointF unclippedCandidateScreen;
+                    const bool projectableWithoutClip =
+                        viewportTransform_.worldPointToScreenUnclipped(
+                            candidateWorld, size(), &unclippedCandidateScreen);
+                    const QPointF diagnosticCandidateScreen = projectable
+                        ? candidateScreen
+                        : unclippedCandidateScreen;
+                    const qreal cursorDistance =
+                        (projectable || projectableWithoutClip)
+                            ? std::hypot(diagnosticCandidateScreen.x() - cursorScreen.x(),
+                                         diagnosticCandidateScreen.y() - cursorScreen.y())
+                            : std::numeric_limits<qreal>::infinity();
+                    const qreal resultCandidateDistance =
+                        std::hypot(candidateWorld.x - resultWorld.x,
+                                   candidateWorld.y - resultWorld.y,
+                                   candidateWorld.z - resultWorld.z);
+                    const bool selectedCandidate = result.isValid() &&
+                        candidate.type == result.type &&
+                        (spatial || frameMatches) &&
+                        resultCandidateDistance <= 1.0e-7;
+                    if (!selectedCandidate && cursorDistance > 36.0) {
+                        continue;
+                    }
+                    const QPointF activePlanePoint =
+                        worldPointToWorkPlaneFrame(candidateWorld, activeFrame);
+                    const QPointF activePlaneScreen = worldToScreen(activePlanePoint);
+                    const bool enabled = snapTypeEnabled(candidate.type);
+                    const bool inRadius = cursorDistance <= 12.0;
+                    const QString reason = !visible
+                        ? QStringLiteral("hidden")
+                        : (!frameMatches
+                               ? QStringLiteral("workplane-mismatch")
+                               : (!enabled
+                                      ? QStringLiteral("snap-type-disabled")
+                                      : (!projectable
+                                             ? (projectableWithoutClip
+                                                    ? QStringLiteral("outside-clip-range")
+                                                    : QStringLiteral("projection-failed"))
+                                             : (!inRadius
+                                                    ? QStringLiteral("outside-snap-radius")
+                                                    : (selectedCandidate
+                                                           ? QStringLiteral("selected")
+                                                           : QStringLiteral("eligible-not-selected"))))));
+                    DebugLog::instance().write(
+                        QStringLiteral("osnap-trace candidate shape=%1 geometry=%2 type=%3 selected=%4 enabled=%5 visible=%6 activeFrameMatch=%7 pointLocal=%8 pointWorld=%9 targetPx=%10 unclippedPx=%11 activePlanePx=%12 cursorDistancePx=%13 reason=%14 targetFrame={%15}")
+                            .arg(shapeIndex)
+                            .arg(geometryTypeName(shape.geometryType),
+                                 snapTypeName(candidate.type),
+                                 selectedCandidate ? QStringLiteral("1")
+                                                   : QStringLiteral("0"),
+                                 enabled ? QStringLiteral("1") : QStringLiteral("0"),
+                                 visible ? QStringLiteral("1") : QStringLiteral("0"),
+                                 frameMatches ? QStringLiteral("1")
+                                              : QStringLiteral("0"),
+                                 precisePointText(candidate.point),
+                                 point3DText(candidateWorld),
+                                 projectable ? precisePointText(candidateScreen)
+                                             : QStringLiteral("unprojectable"),
+                                 projectableWithoutClip
+                                     ? precisePointText(unclippedCandidateScreen)
+                                     : QStringLiteral("unprojectable"),
+                                 precisePointText(activePlaneScreen))
+                            .arg(cursorDistance, 0, 'f', 4)
+                            .arg(reason, frameText(targetFrame)));
+                }
+            }
+        };
+
         const bool arcPlaneConstraintActive =
             activeTool_ == Tool::Arc &&
             (arcPlaneNormalLockKey_ != 0 || arcAxisConstraintKey_ != 0 ||
@@ -7553,11 +7725,11 @@ private:
                                                          frame);
                 anchor = &anchorWorld;
             }
-            return snapEngine_.findSpatialSnapPoint(document_,
-                                                     worldToScreen(rawPoint),
-                                                     anchor,
-                                                     viewportTransform_,
-                                                     size());
+            const SnapResult result = snapEngine_.findSpatialSnapPoint(
+                document_, worldToScreen(rawPoint), anchor,
+                viewportTransform_, size());
+            traceSnapResult(result, true);
+            return result;
         }
 
         const bool serviceDrawingSnapActive =
@@ -7573,12 +7745,11 @@ private:
             activeTool_ == Tool::Mirror || isDimensionTool(activeTool_) ||
             activeTool_ == Tool::TangentFromCurve ||
             activeTool_ == Tool::PerpendicularFromCurve;
-        return snapEngine_.findSnapPoint(document_,
-                                         rawPoint,
-                                         serviceDrawingSnapActive,
-                                         pendingPoints_,
-                                         viewportTransform_,
-                                         size());
+        const SnapResult result = snapEngine_.findSnapPoint(
+            document_, rawPoint, serviceDrawingSnapActive, pendingPoints_,
+            viewportTransform_, size());
+        traceSnapResult(result, false);
+        return result;
 
         SnapResult best;
         const bool drawingSnapActive =
@@ -8138,11 +8309,50 @@ private:
 
     int hitTestShape(const QPointF &screenPosition) const
     {
-        return curveHitTester_.hitTestShape(document_,
-                                            screenPosition,
-                                            viewportTransform_,
-                                            size(),
-                                            true);
+        const int hitShapeIndex = curveHitTester_.hitTestShape(document_,
+                                                               screenPosition,
+                                                               viewportTransform_,
+                                                               size(),
+                                                               true);
+        if (qEnvironmentVariable("CLASSICAD_SNAP_TRACE") ==
+            QStringLiteral("1")) {
+            constexpr qreal selectionRadiusPixels = 9.0;
+            const WorkPlaneFrame activeFrame = viewportTransform_.workPlaneFrame();
+            for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
+                const ObjectId objectId = document_.objectIdAt(shapeIndex);
+                const bool visible = document_.isObjectVisible(objectId);
+                const bool editable = document_.isObjectEditable(objectId);
+                const Shape &shape = document_[shapeIndex];
+                const WorkPlaneFrame targetFrame = shapeWorkPlaneFrame(shape);
+                ViewportTransform shapeTransform = viewportTransform_;
+                shapeTransform.setWorkPlaneFrame(targetFrame);
+                const qreal distancePixels =
+                    visible ? curveHitTester_.distanceToShape(screenPosition,
+                                                             shape,
+                                                             shapeTransform,
+                                                             size())
+                            : std::numeric_limits<qreal>::infinity();
+                const QString reason = !visible
+                    ? QStringLiteral("hidden")
+                    : (!editable
+                           ? QStringLiteral("not-editable")
+                           : (distancePixels <= selectionRadiusPixels
+                                  ? QStringLiteral("within-hit-radius")
+                                  : QStringLiteral("outside-hit-radius")));
+                DebugLog::instance().write(
+                    QStringLiteral("selection-trace screen=%1 chosen=%2 candidate=%3 geometry=%4 visible=%5 editable=%6 activeFrameMatch=%7 distancePx=%8 reason=%9")
+                        .arg(precisePointText(screenPosition))
+                        .arg(hitShapeIndex)
+                        .arg(shapeIndex)
+                        .arg(geometryTypeName(shape.geometryType))
+                        .arg(visible)
+                        .arg(editable)
+                        .arg(workPlaneMatches(targetFrame, activeFrame))
+                        .arg(distancePixels, 0, 'f', 4)
+                        .arg(reason));
+            }
+        }
+        return hitShapeIndex;
     }
 
     bool insertNurbsKnot(QVector<HomogeneousControlPoint2D> *controlPoints,
@@ -10722,17 +10932,19 @@ private:
         }
 
         Shape &shape = shapes_[index];
-        for (QPointF &point : shape.points) {
-            point += delta;
-        }
-        for (QPointF &point : shape.nurbs.controlPoints) {
-            point += delta;
-        }
-        for (Shape::NurbsCurve2D &component : shape.components) {
-            for (QPointF &point : component.controlPoints) {
-                point += delta;
-            }
-        }
+        const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
+        const Point3D end = workPlaneFramePointToWorld(delta, inputFrame);
+        WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        const Point3D displacedOrigin{frame.origin.x + end.x - inputFrame.origin.x,
+                                     frame.origin.y + end.y - inputFrame.origin.y,
+                                     frame.origin.z + end.z - inputFrame.origin.z};
+        const QPointF localDelta = worldPointToWorkPlaneFrame(displacedOrigin, frame);
+        translateShapeGeometry(shape, localDelta);
+        const Point3D planarEnd = workPlaneFramePointToWorld(localDelta, frame);
+        frame.origin.x += displacedOrigin.x - planarEnd.x;
+        frame.origin.y += displacedOrigin.y - planarEnd.y;
+        frame.origin.z += displacedOrigin.z - planarEnd.z;
+        shape.workPlaneFrame = frame;
     }
 
     void translateShapeGeometry(Shape &shape, const QPointF &delta) const
@@ -10778,13 +10990,12 @@ private:
         }
 
         if (dragSnapLocked_) {
-            constexpr qreal dragSnapBreakawayPixels = 18.0;
             const QPointF cursorScreen = worldToScreen(rawCursorWorld_);
             const QPointF snapScreen = worldToScreen(dragSnapCursorWorld_);
             const qreal cursorDistanceFromSnap =
                 std::hypot(cursorScreen.x() - snapScreen.x(),
                            cursorScreen.y() - snapScreen.y());
-            if (cursorDistanceFromSnap <= dragSnapBreakawayPixels) {
+            if (cursorDistanceFromSnap <= kDragSnapBreakawayPixels) {
                 return;
             }
             dragSnapLocked_ = false;
@@ -12021,8 +12232,10 @@ private:
 
         const Point3D rawWorld = workPlaneFramePointToWorld(rawPoint, oldFrame);
         Point3D targetWorld = currentSnap_.isValid()
-                                  ? workPlaneFramePointToWorld(currentSnap_.point,
-                                                               oldFrame)
+                                  ? (currentSnap_.hasWorldPoint
+                                         ? currentSnap_.worldPoint
+                                         : workPlaneFramePointToWorld(
+                                               currentSnap_.point, oldFrame))
                                   : rawWorld;
         int axisKey = 0;
         if (!altModifier) {
@@ -12181,6 +12394,9 @@ private:
 
     void updateDrawingWorkPlaneFromHover(const QPointF &screenPosition)
     {
+        if (draggingSelected_ || draggingControlPoint_ || grabActive_ || duplicateActive_) {
+            return;
+        }
         if (activeTool_ == Tool::Arc && pendingPoints_.isEmpty() &&
             arcPlaneLocked_ &&
             arcLockedFrameValid_) {
@@ -12198,8 +12414,8 @@ private:
         }
         const bool drawingShape =
             geometryTypeForTool(activeTool_) != GeometryType::Invalid;
-        const bool selectingCustomPlane = activeTool_ == Tool::Select;
-        if (!drawingShape && !selectingCustomPlane) {
+        const bool selectingObject = activeTool_ == Tool::Select;
+        if (!drawingShape && !selectingObject) {
             return;
         }
         const int shapeIndex = curveHitTester_.hitTestShapeOnAnyWorkPlane(
@@ -12207,16 +12423,29 @@ private:
         if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
             const Shape &shape = shapes_[shapeIndex];
             const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-            const bool customShapeFrame =
-                isValidWorkPlaneFrame(shape.workPlaneFrame) &&
-                !workPlaneMatches(frame,
-                                  makeWorkPlaneFrame(shape.workPlane,
-                                                     shape.workPlaneOffset));
-            if (drawingShape || customShapeFrame) {
+            if (drawingShape || selectingObject) {
                 QPointF planePoint;
                 if (!drawingShape || viewportTransform_.screenToWorkPlane(
                         screenPosition, size(), frame, &planePoint)) {
                     viewportTransform_.setWorkPlaneFrame(frame);
+                    if (qEnvironmentVariable("CLASSICAD_SNAP_TRACE") ==
+                        QStringLiteral("1")) {
+                        const auto point3DText = [](const Point3D &point) {
+                            return QStringLiteral("(%1, %2, %3)")
+                                .arg(point.x, 0, 'g', 12)
+                                .arg(point.y, 0, 'g', 12)
+                                .arg(point.z, 0, 'g', 12);
+                        };
+                        DebugLog::instance().write(
+                            QStringLiteral("osnap-trace hover-frame shape=%1 geometry=%2 screen=%3 origin=%4 x=%5 y=%6 normal=%7")
+                                .arg(shapeIndex)
+                                .arg(geometryTypeName(shape.geometryType))
+                                .arg(precisePointText(screenPosition))
+                                .arg(point3DText(frame.origin))
+                                .arg(point3DText(frame.xAxis))
+                                .arg(point3DText(frame.yAxis))
+                                .arg(point3DText(frame.normal)));
+                    }
                     return;
                 }
             }

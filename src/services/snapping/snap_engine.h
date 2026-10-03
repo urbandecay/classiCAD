@@ -128,19 +128,8 @@ private:
     QVector<SnapCandidate> perpendicularCandidatesForNurbsCurve(
         const Shape::NurbsCurve2D &curve,
         const QPointF &originWorld) const;
-    bool makeCircularArcGeometry(const QPointF &startWorld,
-                                 const QPointF &endWorld,
-                                 const QPointF &throughWorld,
-                                 const ViewportTransform &transform,
-                                 const QSize &viewportSize,
-                                 QPointF *center,
-                                 qreal *radius,
-                                 qreal *startAngle,
-                                 qreal *sweepAngle) const;
     bool makeArcSnapGeometry(const Shape &shape,
-                             const ViewportTransform &transform,
-                             const QSize &viewportSize,
-                             QPointF *centerScreen,
+                             QPointF *center,
                              qreal *radius,
                              qreal *startAngle,
                              qreal *sweepAngle) const;
@@ -149,8 +138,6 @@ private:
                            qreal angle) const;
     bool arcSnapPointAtFraction(const Shape &shape,
                                 qreal fraction,
-                                const ViewportTransform &transform,
-                                const QSize &viewportSize,
                                 QPointF *point) const;
 
     SnapSettings settings_;

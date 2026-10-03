@@ -1,5 +1,6 @@
 #include "snap_engine.h"
 
+#include "core/geometry/arc_curve_factory.h"
 #include "core/geometry/curve_evaluator.h"
 #include <QDataStream>
 #include <QHash>
@@ -569,118 +570,47 @@ QVector<SnapCandidate> SnapEngine::perpendicularCandidatesForNurbsCurve(
     return candidates;
 }
 
-bool SnapEngine::makeCircularArcGeometry(
-    const QPointF &startWorld,
-    const QPointF &endWorld,
-    const QPointF &throughWorld,
-    const ViewportTransform &transform,
-    const QSize &viewportSize,
-    QPointF *center,
-    qreal *radius,
-    qreal *startAngle,
-    qreal *sweepAngle) const
-{
-    const QPointF start = transform.worldToScreen(startWorld, viewportSize);
-    const QPointF end = transform.worldToScreen(endWorld, viewportSize);
-    const QPointF through = transform.worldToScreen(throughWorld, viewportSize);
-    const qreal startSquared = QPointF::dotProduct(start, start);
-    const qreal endSquared = QPointF::dotProduct(end, end);
-    const qreal throughSquared = QPointF::dotProduct(through, through);
-    const qreal denominator = 2.0 *
-        (start.x() * (end.y() - through.y()) +
-         end.x() * (through.y() - start.y()) +
-         through.x() * (start.y() - end.y()));
-    if (std::abs(denominator) < 1.0e-9) {
-        return false;
-    }
-
-    const QPointF circleCenter(
-        (startSquared * (end.y() - through.y()) +
-         endSquared * (through.y() - start.y()) +
-         throughSquared * (start.y() - end.y())) / denominator,
-        (startSquared * (through.x() - end.x()) +
-         endSquared * (start.x() - through.x()) +
-         throughSquared * (end.x() - start.x())) / denominator);
-    const qreal circleRadius = std::hypot(start.x() - circleCenter.x(),
-                                          start.y() - circleCenter.y());
-    if (circleRadius <= 1.0e-9) {
-        return false;
-    }
-
-    constexpr qreal twoPi = 6.28318530717958647692;
-    const auto normalizeAngle = [twoPi](qreal angle) {
-        angle = std::fmod(angle, twoPi);
-        return angle < 0.0 ? angle + twoPi : angle;
-    };
-    const qreal first = std::atan2(start.y() - circleCenter.y(),
-                                   start.x() - circleCenter.x());
-    const qreal second = std::atan2(end.y() - circleCenter.y(),
-                                    end.x() - circleCenter.x());
-    const qreal throughAngle = std::atan2(through.y() - circleCenter.y(),
-                                          through.x() - circleCenter.x());
-    const qreal counterClockwiseSweep = normalizeAngle(second - first);
-    const qreal throughSweep = normalizeAngle(throughAngle - first);
-    if (counterClockwiseSweep <= 1.0e-9) {
-        return false;
-    }
-
-    const qreal selectedSweep = throughSweep <= counterClockwiseSweep + 1.0e-7
-                                    ? counterClockwiseSweep
-                                    : -(twoPi - counterClockwiseSweep);
-    if (center != nullptr) {
-        *center = circleCenter;
-    }
-    if (radius != nullptr) {
-        *radius = circleRadius;
-    }
-    if (startAngle != nullptr) {
-        *startAngle = first;
-    }
-    if (sweepAngle != nullptr) {
-        *sweepAngle = selectedSweep;
-    }
-    return true;
-}
-
 bool SnapEngine::makeArcSnapGeometry(const Shape &shape,
-                                     const ViewportTransform &transform,
-                                     const QSize &viewportSize,
-                                     QPointF *centerScreen,
-                                     qreal *radius,
-                                     qreal *startAngle,
-                                     qreal *sweepAngle) const
+                                    QPointF *center,
+                                    qreal *radius,
+                                    qreal *startAngle,
+                                    qreal *sweepAngle) const
 {
     if (shape.geometryType != GeometryType::Arc || shape.points.size() < 3) {
         return false;
     }
     if (shape.arcMode != ArcMode::OnePoint) {
-        return makeCircularArcGeometry(shape.points[0],
-                                       shape.points[1],
-                                       shape.points[2],
-                                       transform,
-                                       viewportSize,
-                                       centerScreen,
-                                       radius,
-                                       startAngle,
-                                       sweepAngle);
+        CircularArc2D arc;
+        if (!makeCircularArcThroughPoint(shape.points[0],
+                                         shape.points[1],
+                                         shape.points[2],
+                                         &arc)) {
+            return false;
+        }
+        if (center != nullptr) *center = arc.center;
+        if (radius != nullptr) *radius = arc.radius;
+        if (startAngle != nullptr) *startAngle = arc.startAngle;
+        if (sweepAngle != nullptr) *sweepAngle = arc.sweepAngle;
+        return true;
     }
 
-    const QPointF center = transform.worldToScreen(shape.points[0], viewportSize);
-    const QPointF start = transform.worldToScreen(shape.points[1], viewportSize);
-    const QPointF end = transform.worldToScreen(shape.points[2], viewportSize);
-    const qreal arcRadius = std::hypot(start.x() - center.x(), start.y() - center.y());
+    const QPointF arcCenter = shape.points[0];
+    const QPointF start = shape.points[1];
+    const QPointF end = shape.points[2];
+    const qreal arcRadius = std::hypot(start.x() - arcCenter.x(),
+                                       start.y() - arcCenter.y());
     if (arcRadius <= 1.0e-9) {
         return false;
     }
 
     constexpr qreal pi = 3.14159265358979323846;
     constexpr qreal twoPi = 2.0 * pi;
-    const qreal firstAngle = std::atan2(start.y() - center.y(),
-                                        start.x() - center.x());
+    const qreal firstAngle = std::atan2(start.y() - arcCenter.y(),
+                                        start.x() - arcCenter.x());
     qreal selectedSweep = shape.arcSweep;
     if (std::abs(selectedSweep) <= 1.0e-9) {
-        const qreal endAngle = std::atan2(end.y() - center.y(),
-                                          end.x() - center.x());
+        const qreal endAngle = std::atan2(end.y() - arcCenter.y(),
+                                          end.x() - arcCenter.x());
         selectedSweep = endAngle - firstAngle;
         if (selectedSweep > pi) {
             selectedSweep -= twoPi;
@@ -689,9 +619,7 @@ bool SnapEngine::makeArcSnapGeometry(const Shape &shape,
         }
     }
 
-    if (centerScreen != nullptr) {
-        *centerScreen = center;
-    }
+    if (center != nullptr) *center = arcCenter;
     if (radius != nullptr) {
         *radius = arcRadius;
     }
@@ -725,29 +653,19 @@ bool SnapEngine::arcAngleIsOnSweep(qreal startAngle,
 
 bool SnapEngine::arcSnapPointAtFraction(const Shape &shape,
                                         qreal fraction,
-                                        const ViewportTransform &transform,
-                                        const QSize &viewportSize,
                                         QPointF *point) const
 {
     QPointF center;
     qreal radius = 0.0;
     qreal startAngle = 0.0;
     qreal sweepAngle = 0.0;
-    if (!makeArcSnapGeometry(shape,
-                             transform,
-                             viewportSize,
-                             &center,
-                             &radius,
-                             &startAngle,
-                             &sweepAngle)) {
+    if (!makeArcSnapGeometry(shape, &center, &radius, &startAngle, &sweepAngle)) {
         return false;
     }
     const qreal angle = startAngle + sweepAngle * fraction;
     if (point != nullptr) {
-        *point = transform.screenToWorld(
-            QPointF(center.x() + radius * std::cos(angle),
-                    center.y() + radius * std::sin(angle)),
-            viewportSize);
+        *point = center + QPointF(radius * std::cos(angle),
+                                  radius * std::sin(angle));
     }
     return true;
 }
@@ -757,6 +675,8 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     const ViewportTransform &transform,
     const QSize &viewportSize) const
 {
+    Q_UNUSED(transform);
+    Q_UNUSED(viewportSize);
     QVector<SnapCandidate> candidates;
     if (isDimensionGeometryType(shape.geometryType)) {
         return candidates;
@@ -859,12 +779,10 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
                                                       : shape.points[1];
             if (!nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
                 QPointF evaluatedEndpoint;
-                if (arcSnapPointAtFraction(shape, 0.0, transform, viewportSize,
-                                           &evaluatedEndpoint)) {
+                if (arcSnapPointAtFraction(shape, 0.0, &evaluatedEndpoint)) {
                     start = evaluatedEndpoint;
                 }
-                if (arcSnapPointAtFraction(shape, 1.0, transform, viewportSize,
-                                           &evaluatedEndpoint)) {
+                if (arcSnapPointAtFraction(shape, 1.0, &evaluatedEndpoint)) {
                     end = evaluatedEndpoint;
                 }
             }
@@ -874,19 +792,16 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         candidates.append({SnapType::Endpoint, start});
         candidates.append({SnapType::Endpoint, end});
         QPointF midpoint;
-        if (arcSnapPointAtFraction(shape, 0.5, transform, viewportSize, &midpoint)) {
+        if (arcSnapPointAtFraction(shape, 0.5, &midpoint)) {
             candidates.append({SnapType::Midpoint, midpoint});
         }
         QPointF center;
         if (makeArcSnapGeometry(shape,
-                                transform,
-                                viewportSize,
                                 &center,
                                 nullptr,
                                 nullptr,
                                 nullptr)) {
-            candidates.append({SnapType::Center,
-                               transform.screenToWorld(center, viewportSize)});
+            candidates.append({SnapType::Center, center});
         }
         return candidates;
     }
@@ -935,8 +850,62 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
     const ViewportTransform &transform,
     const QSize &viewportSize) const
 {
+    Q_UNUSED(viewportSize);
     QVector<SnapCandidate> candidates;
-    QVector<LineSegment> segments;
+    struct IntersectionSegment {
+        QPointF start;
+        QPointF end;
+        qreal startParameter = 0.0;
+        qreal endParameter = 0.0;
+        int curveIndex = -1;
+        int pathIndex = -1;
+    };
+    QVector<Shape::NurbsCurve2D> intersectionCurves;
+    QVector<IntersectionSegment> intersectionSegments;
+    const auto appendIntersectionCurve = [&](const Shape::NurbsCurve2D &curve) {
+        if (!settings_.intersection || !validateNurbsCurve(curve)) {
+            return;
+        }
+        const int curveIndex = intersectionCurves.size();
+        intersectionCurves.append(curve);
+        const Shape::NurbsCurve2D &sampleCurve = intersectionCurves.back();
+        const QVector<double> fullKnots = expandedNurbsKnotVector(sampleCurve);
+        constexpr int samplesPerSpan = 64;
+        for (int spanIndex = sampleCurve.degree;
+             spanIndex < sampleCurve.controlPoints.size();
+             ++spanIndex) {
+            const qreal spanStart = fullKnots[spanIndex];
+            const qreal spanEnd = fullKnots[spanIndex + 1];
+            if (spanEnd <= spanStart) {
+                continue;
+            }
+            QPointF previousPoint;
+            if (!evaluateNurbsPoint(sampleCurve, spanStart, &previousPoint)) {
+                continue;
+            }
+            qreal previousParameter = spanStart;
+            for (int sample = 1; sample <= samplesPerSpan; ++sample) {
+                const qreal fraction = static_cast<qreal>(sample) / samplesPerSpan;
+                const qreal parameter = spanStart + (spanEnd - spanStart) * fraction;
+                QPointF point;
+                if (!evaluateNurbsPoint(sampleCurve, parameter, &point)) {
+                    continue;
+                }
+                if (std::hypot(point.x() - previousPoint.x(),
+                               point.y() - previousPoint.y()) > 1.0e-12) {
+                    intersectionSegments.append({previousPoint,
+                                                 point,
+                                                 previousParameter,
+                                                 parameter,
+                                                 curveIndex,
+                                                 curveIndex});
+                }
+                previousPoint = point;
+                previousParameter = parameter;
+            }
+        }
+    };
+
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
         if (excludedShapeIndices.contains(shapeIndex)) {
             continue;
@@ -955,6 +924,77 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
         if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
             shape.components.isEmpty()) {
             continue;
+        }
+
+        if (settings_.intersection) {
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                for (const Shape::NurbsCurve2D &component : shape.components) {
+                    appendIntersectionCurve(component);
+                }
+            } else if (validateNurbsCurve(shape.nurbs)) {
+                appendIntersectionCurve(shape.nurbs);
+            } else {
+                Shape::NurbsCurve2D intersectionCurve;
+                if (shape.geometryType == GeometryType::Line &&
+                    shape.points.size() >= 2) {
+                    intersectionCurve = makeDegreeOneNurbs(shape.points);
+                } else if (shape.geometryType == GeometryType::Bezier &&
+                           shape.points.size() >= 2) {
+                    intersectionCurve = makeBezierNurbs(shape.points);
+                } else if (shape.geometryType == GeometryType::Circle &&
+                           shape.points.size() >= 2) {
+                    intersectionCurve = makeCircleNurbs(shape.points);
+                } else if (shape.geometryType == GeometryType::Arc &&
+                           shape.points.size() >= 3) {
+                    CircularArc2D arc;
+                    if (shape.arcMode == ArcMode::OnePoint) {
+                        const QPointF radiusVector = shape.points[1] - shape.points[0];
+                        const qreal radius = std::hypot(radiusVector.x(),
+                                                        radiusVector.y());
+                        const qreal startAngle = std::atan2(radiusVector.y(),
+                                                           radiusVector.x());
+                        qreal sweep = shape.arcSweep;
+                        if (std::abs(sweep) <= 1.0e-9) {
+                            const QPointF endVector = shape.points[2] - shape.points[0];
+                            sweep = std::atan2(endVector.y(), endVector.x()) - startAngle;
+                            constexpr qreal pi = 3.14159265358979323846;
+                            constexpr qreal twoPi = 2.0 * pi;
+                            if (sweep > pi) sweep -= twoPi;
+                            if (sweep < -pi) sweep += twoPi;
+                        }
+                        makeCircularArcFromCenterSweep(shape.points[0],
+                                                       radius,
+                                                       startAngle,
+                                                       sweep,
+                                                       &arc);
+                    } else {
+                        makeCircularArcThroughPoint(shape.points[0],
+                                                    shape.points[1],
+                                                    shape.points[2],
+                                                    &arc);
+                    }
+                    intersectionCurve = arc.curve;
+                } else if (shape.geometryType == GeometryType::Rectangle) {
+                    QVector<QPointF> points = rectangleVertices(shape);
+                    if (!points.isEmpty()) {
+                        points.append(points.first());
+                        intersectionCurve = makeDegreeOneNurbs(points);
+                    }
+                } else if (shape.geometryType == GeometryType::Polygon) {
+                    QVector<QPointF> points = polygonVerticesForShape(shape);
+                    if (!points.isEmpty()) {
+                        points.append(points.first());
+                        intersectionCurve = makeDegreeOneNurbs(points);
+                    }
+                } else if (shape.geometryType == GeometryType::Picture) {
+                    QVector<QPointF> points = pictureFrameCorners(shape);
+                    if (!points.isEmpty()) {
+                        points.append(points.first());
+                        intersectionCurve = makeDegreeOneNurbs(points);
+                    }
+                }
+                appendIntersectionCurve(intersectionCurve);
+            }
         }
 
         if (settings_.controlPoint) {
@@ -1061,7 +1101,6 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                 if (settings_.endpoint) {
                     candidates.append({SnapType::Endpoint, start});
                 }
-                segments.append({start, end});
                 if (settings_.midpoint) {
                     candidates.append({SnapType::Midpoint, (start + end) / 2.0});
                 }
@@ -1075,12 +1114,10 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                                                               : shape.points[1];
             if (!nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
                 QPointF evaluatedEndpoint;
-                if (arcSnapPointAtFraction(shape, 0.0, transform, viewportSize,
-                                           &evaluatedEndpoint)) {
+                if (arcSnapPointAtFraction(shape, 0.0, &evaluatedEndpoint)) {
                     start = evaluatedEndpoint;
                 }
-                if (arcSnapPointAtFraction(shape, 1.0, transform, viewportSize,
-                                           &evaluatedEndpoint)) {
+                if (arcSnapPointAtFraction(shape, 1.0, &evaluatedEndpoint)) {
                     end = evaluatedEndpoint;
                 }
             }
@@ -1090,22 +1127,18 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             }
             if (settings_.midpoint) {
                 QPointF midpoint;
-                if (arcSnapPointAtFraction(shape, 0.5, transform, viewportSize,
-                                           &midpoint)) {
+                if (arcSnapPointAtFraction(shape, 0.5, &midpoint)) {
                     candidates.append({SnapType::Midpoint, midpoint});
                 }
             }
             if (settings_.center) {
                 QPointF center;
                 if (makeArcSnapGeometry(shape,
-                                        transform,
-                                        viewportSize,
                                         &center,
                                         nullptr,
                                         nullptr,
                                         nullptr)) {
-                    candidates.append({SnapType::Center,
-                                       transform.screenToWorld(center, viewportSize)});
+                    candidates.append({SnapType::Center, center});
                 }
             }
             continue;
@@ -1137,7 +1170,6 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
         for (int index = 0; index + 1 < shape.points.size(); ++index) {
             const QPointF start = shape.points[index];
             const QPointF end = shape.points[index + 1];
-            segments.append({start, end});
             if (settings_.midpoint) {
                 candidates.append({SnapType::Midpoint, (start + end) / 2.0});
             }
@@ -1145,15 +1177,159 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
     }
 
     if (settings_.intersection) {
-        for (int first = 0; first < segments.size(); ++first) {
-            for (int second = first + 1; second < segments.size(); ++second) {
+        QVector<int> orderedSegments(intersectionSegments.size());
+        for (int index = 0; index < orderedSegments.size(); ++index) {
+            orderedSegments[index] = index;
+        }
+        const auto minimumX = [&](int index) {
+            const IntersectionSegment &segment = intersectionSegments[index];
+            return std::min(segment.start.x(), segment.end.x());
+        };
+        std::sort(orderedSegments.begin(), orderedSegments.end(),
+                  [&](int first, int second) {
+                      return minimumX(first) < minimumX(second);
+                  });
+        const auto refineIntersection = [&](int firstCurveIndex,
+                                            int secondCurveIndex,
+                                            qreal firstParameter,
+                                            qreal secondParameter,
+                                            qreal firstParameterMin,
+                                            qreal firstParameterMax,
+                                            qreal secondParameterMin,
+                                            qreal secondParameterMax,
+                                            QPointF *point) {
+            const Shape::NurbsCurve2D &firstCurve =
+                intersectionCurves[firstCurveIndex];
+            const Shape::NurbsCurve2D &secondCurve =
+                intersectionCurves[secondCurveIndex];
+            constexpr qreal epsilon = 1.0e-12;
+            for (int iteration = 0; iteration < 24; ++iteration) {
+                QPointF firstPoint;
+                QPointF secondPoint;
+                QPointF firstDerivative;
+                QPointF secondDerivative;
+                if (!evaluateNurbsPoint(firstCurve, firstParameter, &firstPoint) ||
+                    !evaluateNurbsPoint(secondCurve, secondParameter, &secondPoint) ||
+                    !evaluateNurbsDerivative(firstCurve, firstParameter,
+                                             &firstDerivative) ||
+                    !evaluateNurbsDerivative(secondCurve, secondParameter,
+                                             &secondDerivative)) {
+                    return false;
+                }
+                const QPointF difference = firstPoint - secondPoint;
+                const qreal separation = std::hypot(difference.x(), difference.y());
+                if (separation <= 1.0e-8) {
+                    *point = (firstPoint + secondPoint) * 0.5;
+                    return true;
+                }
+                const qreal determinant = -crossProduct(firstDerivative,
+                                                        secondDerivative);
+                const qreal derivativeScale =
+                    std::hypot(firstDerivative.x(), firstDerivative.y()) *
+                    std::hypot(secondDerivative.x(), secondDerivative.y());
+                if (derivativeScale <= epsilon ||
+                    std::abs(determinant) <= epsilon * derivativeScale) {
+                    return false;
+                }
+                const qreal firstDelta =
+                    (difference.x() * secondDerivative.y() -
+                     secondDerivative.x() * difference.y()) / determinant;
+                const qreal secondDelta =
+                    (-firstDerivative.x() * difference.y() +
+                     difference.x() * firstDerivative.y()) / determinant;
+                const qreal nextFirst = std::clamp(firstParameter + firstDelta,
+                                                   firstParameterMin,
+                                                   firstParameterMax);
+                const qreal nextSecond = std::clamp(secondParameter + secondDelta,
+                                                    secondParameterMin,
+                                                    secondParameterMax);
+                if (std::abs(nextFirst - firstParameter) <= 1.0e-14 &&
+                    std::abs(nextSecond - secondParameter) <= 1.0e-14) {
+                    return false;
+                }
+                firstParameter = nextFirst;
+                secondParameter = nextSecond;
+            }
+            QPointF firstPoint;
+            QPointF secondPoint;
+            if (!evaluateNurbsPoint(firstCurve, firstParameter, &firstPoint) ||
+                !evaluateNurbsPoint(secondCurve, secondParameter, &secondPoint) ||
+                std::hypot(firstPoint.x() - secondPoint.x(),
+                           firstPoint.y() - secondPoint.y()) > 1.0e-7) {
+                return false;
+            }
+            *point = (firstPoint + secondPoint) * 0.5;
+            return true;
+        };
+
+        for (int orderedIndex = 0; orderedIndex < orderedSegments.size();
+             ++orderedIndex) {
+            const IntersectionSegment &first =
+                intersectionSegments[orderedSegments[orderedIndex]];
+            const qreal firstMaxX = std::max(first.start.x(), first.end.x());
+            const qreal firstMinY = std::min(first.start.y(), first.end.y());
+            const qreal firstMaxY = std::max(first.start.y(), first.end.y());
+            for (int nextIndex = orderedIndex + 1;
+                 nextIndex < orderedSegments.size(); ++nextIndex) {
+                const IntersectionSegment &second =
+                    intersectionSegments[orderedSegments[nextIndex]];
+                if (minimumX(orderedSegments[nextIndex]) > firstMaxX) {
+                    break;
+                }
+                if (first.pathIndex == second.pathIndex ||
+                    std::max(second.start.y(), second.end.y()) < firstMinY ||
+                    std::min(second.start.y(), second.end.y()) > firstMaxY) {
+                    continue;
+                }
                 QPointF intersection;
-                if (segmentIntersection(segments[first].start,
-                                        segments[first].end,
-                                        segments[second].start,
-                                        segments[second].end,
+                if (!segmentIntersection(first.start, first.end,
+                                        second.start, second.end,
                                         &intersection)) {
-                    candidates.append({SnapType::Intersection, intersection});
+                    continue;
+                }
+                const QPointF firstDirection = first.end - first.start;
+                const QPointF secondDirection = second.end - second.start;
+                const qreal firstLengthSquared =
+                    QPointF::dotProduct(firstDirection, firstDirection);
+                const qreal secondLengthSquared =
+                    QPointF::dotProduct(secondDirection, secondDirection);
+                if (firstLengthSquared <= 1.0e-24 ||
+                    secondLengthSquared <= 1.0e-24) {
+                    continue;
+                }
+                const qreal firstFraction = std::clamp(
+                    QPointF::dotProduct(intersection - first.start,
+                                        firstDirection) / firstLengthSquared,
+                    0.0, 1.0);
+                const qreal secondFraction = std::clamp(
+                    QPointF::dotProduct(intersection - second.start,
+                                        secondDirection) / secondLengthSquared,
+                    0.0, 1.0);
+                QPointF refinedIntersection;
+                if (!refineIntersection(
+                        first.curveIndex,
+                        second.curveIndex,
+                        first.startParameter +
+                            (first.endParameter - first.startParameter) * firstFraction,
+                        second.startParameter +
+                            (second.endParameter - second.startParameter) * secondFraction,
+                        std::min(first.startParameter, first.endParameter),
+                        std::max(first.startParameter, first.endParameter),
+                        std::min(second.startParameter, second.endParameter),
+                        std::max(second.startParameter, second.endParameter),
+                        &refinedIntersection)) {
+                    continue;
+                }
+                const bool duplicate = std::any_of(
+                    candidates.cbegin(), candidates.cend(),
+                    [&](const SnapCandidate &candidate) {
+                        return candidate.type == SnapType::Intersection &&
+                               std::hypot(candidate.point.x() - refinedIntersection.x(),
+                                          candidate.point.y() - refinedIntersection.y()) <=
+                                   1.0e-7;
+                    });
+                if (!duplicate) {
+                    candidates.append({SnapType::Intersection, refinedIntersection});
                 }
             }
         }
@@ -1205,11 +1381,7 @@ bool SnapEngine::perpendicularPointForShape(const Shape &shape,
             // Legacy arc fallback: committed arcs use their stored NURBS above.
             constexpr int arcSegments = 128;
             QPointF previousWorld;
-            if (arcSnapPointAtFraction(shape,
-                                       0.0,
-                                       transform,
-                                       viewportSize,
-                                       &previousWorld)) {
+            if (arcSnapPointAtFraction(shape, 0.0, &previousWorld)) {
                 QPointF previousScreen = transform.worldToScreen(previousWorld,
                                                                   viewportSize);
                 for (int segmentIndex = 1; segmentIndex <= arcSegments;
@@ -1218,8 +1390,6 @@ bool SnapEngine::perpendicularPointForShape(const Shape &shape,
                     if (!arcSnapPointAtFraction(
                             shape,
                             static_cast<qreal>(segmentIndex) / arcSegments,
-                            transform,
-                            viewportSize,
                             &currentWorld)) {
                         break;
                     }
@@ -1266,6 +1436,7 @@ QVector<SnapCandidate> SnapEngine::perpendicularCandidates(
     const QSize &viewportSize,
     const QVector<int> &excludedShapeIndices) const
 {
+    Q_UNUSED(viewportSize);
     QVector<SnapCandidate> candidates;
     if (!settings_.perpendicular) {
         return candidates;
@@ -1316,34 +1487,33 @@ QVector<SnapCandidate> SnapEngine::perpendicularCandidates(
             continue;
         }
         if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
+            if (validateNurbsCurve(shape.nurbs)) {
+                candidates += perpendicularCandidatesForNurbsCurve(shape.nurbs,
+                                                                   origin);
+                continue;
+            }
             QPointF center;
             qreal radius = 0.0;
             qreal startAngle = 0.0;
             qreal sweepAngle = 0.0;
             if (!makeArcSnapGeometry(shape,
-                                     transform,
-                                     viewportSize,
                                      &center,
                                      &radius,
                                      &startAngle,
                                      &sweepAngle)) {
                 continue;
             }
-            const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
-            const QPointF fromCenter = originScreen - center;
+            const QPointF fromCenter = origin - center;
             const qreal distanceFromCenter = std::hypot(fromCenter.x(), fromCenter.y());
-            const auto appendIfOnArc = [&](const QPointF &candidateScreen) {
-                const qreal candidateAngle = std::atan2(candidateScreen.y() - center.y(),
-                                                         candidateScreen.x() - center.x());
+            const auto appendIfOnArc = [&](const QPointF &candidate) {
+                const qreal candidateAngle = std::atan2(candidate.y() - center.y(),
+                                                         candidate.x() - center.x());
                 if (arcAngleIsOnSweep(startAngle, sweepAngle, candidateAngle)) {
-                    candidates.append({SnapType::Perpendicular,
-                                       transform.screenToWorld(candidateScreen,
-                                                               viewportSize)});
+                    candidates.append({SnapType::Perpendicular, candidate});
                 }
             };
             if (distanceFromCenter <= epsilon) {
-                const QPointF cursorScreen = transform.worldToScreen(cursor, viewportSize);
-                const QPointF towardCursor = cursorScreen - center;
+                const QPointF towardCursor = cursor - center;
                 const qreal cursorDistance = std::hypot(towardCursor.x(), towardCursor.y());
                 if (cursorDistance > epsilon) {
                     appendIfOnArc(center + towardCursor * (radius / cursorDistance));
@@ -1425,8 +1595,6 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
                           transform.workPlaneFrame())) {
         return candidates;
     }
-    const QPointF originScreen = transform.worldToScreen(origin, viewportSize);
-
     if (shape.geometryType == GeometryType::Circle &&
         validateNurbsCurve(shape.nurbs)) {
         return tangentCandidatesForNurbsCurve(shape.nurbs,
@@ -1473,18 +1641,16 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
     }
 
     if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
-        QPointF centerScreen;
+        QPointF center;
         qreal radius = 0.0;
         qreal startAngle = 0.0;
         qreal sweepAngle = 0.0;
         if (makeArcSnapGeometry(shape,
-                                transform,
-                                viewportSize,
-                                &centerScreen,
+                                &center,
                                 &radius,
                                 &startAngle,
                                 &sweepAngle)) {
-            const QPointF fromCenter = originScreen - centerScreen;
+            const QPointF fromCenter = origin - center;
             const qreal distanceFromCenter = std::hypot(fromCenter.x(), fromCenter.y());
             if (distanceFromCenter >= radius - epsilon && distanceFromCenter > epsilon) {
                 const QPointF radialDirection = fromCenter / distanceFromCenter;
@@ -1493,20 +1659,17 @@ QVector<SnapCandidate> SnapEngine::tangentCandidatesForShape(
                 const qreal radialDistance = radius * radiusRatio;
                 const qreal tangentDistance =
                     radius * std::sqrt(std::max(0.0, 1.0 - radiusRatio * radiusRatio));
-                const auto appendIfOnArc = [&](const QPointF &candidateScreen) {
-                    const qreal candidateAngle =
-                        std::atan2(candidateScreen.y() - centerScreen.y(),
-                                   candidateScreen.x() - centerScreen.x());
+                const auto appendIfOnArc = [&](const QPointF &candidate) {
+                    const qreal candidateAngle = std::atan2(candidate.y() - center.y(),
+                                                            candidate.x() - center.x());
                     if (arcAngleIsOnSweep(startAngle, sweepAngle, candidateAngle)) {
-                        candidates.append({
-                            SnapType::Tangent,
-                            transform.screenToWorld(candidateScreen, viewportSize)});
+                        candidates.append({SnapType::Tangent, candidate});
                     }
                 };
-                appendIfOnArc(centerScreen + radialDirection * radialDistance +
+                appendIfOnArc(center + radialDirection * radialDistance +
                               tangentDirection * tangentDistance);
                 if (tangentDistance > epsilon) {
-                    appendIfOnArc(centerScreen + radialDirection * radialDistance -
+                    appendIfOnArc(center + radialDirection * radialDistance -
                                   tangentDirection * tangentDistance);
                 }
             }
@@ -1645,19 +1808,13 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
             } else if (shape.geometryType == GeometryType::Arc) {
                 constexpr int arcSegments = 96;
                 QPointF previousPoint;
-                if (arcSnapPointAtFraction(shape,
-                                           0.0,
-                                           transform,
-                                           viewportSize,
-                                           &previousPoint)) {
+                if (arcSnapPointAtFraction(shape, 0.0, &previousPoint)) {
                     for (int segmentIndex = 1; segmentIndex <= arcSegments;
                          ++segmentIndex) {
                         QPointF currentPoint;
                         if (!arcSnapPointAtFraction(
                                 shape,
                                 static_cast<qreal>(segmentIndex) / arcSegments,
-                                transform,
-                                viewportSize,
                                 &currentPoint)) {
                             break;
                         }
@@ -1876,9 +2033,15 @@ DragSnapResult SnapEngine::findDragSnap(
     QVector<SnapCandidate> sourceCandidates;
     for (const int shapeIndex : selectedShapeIndices) {
         if (shapeIndex >= 0 && shapeIndex < document.size()) {
-            sourceCandidates += snapCandidatesForShape(document[shapeIndex],
-                                                       transform,
-                                                       viewportSize);
+            const Shape &shape = document[shapeIndex];
+            QVector<SnapCandidate> candidates = snapCandidatesForShape(
+                shape, transform, viewportSize);
+            for (SnapCandidate &candidate : candidates) {
+                candidate.point = worldPointToWorkPlaneFrame(
+                    workPlaneFramePointToWorld(candidate.point, shapeWorkPlaneFrame(shape)),
+                    transform.workPlaneFrame());
+            }
+            sourceCandidates += candidates;
         }
     }
     if (sourceCandidates.isEmpty()) {
@@ -1886,11 +2049,39 @@ DragSnapResult SnapEngine::findDragSnap(
     }
 
     constexpr qreal snapRadiusPixels = 12.0;
-    const QVector<SnapCandidate> targetCandidates =
+    QVector<SnapCandidate> targetCandidates =
         snapCandidatesForScene(document,
                                selectedShapeIndices,
                                transform,
                                viewportSize);
+    for (int index = 0; index < document.size(); ++index) {
+        if (selectedShapeIndices.contains(index) ||
+            !document.isObjectVisible(document.objectIdAt(index))) {
+            continue;
+        }
+        const Shape &shape = document[index];
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        if (workPlaneMatches(frame, transform.workPlaneFrame())) {
+            continue;
+        }
+        // Project only targets on the drag plane: different local origins and
+        // axes do not imply different geometric planes.
+        for (SnapCandidate candidate : snapCandidatesForShape(shape, transform, viewportSize)) {
+            if ((candidate.type == SnapType::Endpoint && !settings_.endpoint) ||
+                (candidate.type == SnapType::Midpoint && !settings_.midpoint) ||
+                (candidate.type == SnapType::Center && !settings_.center) ||
+                (candidate.type == SnapType::ControlPoint && !settings_.controlPoint)) {
+                continue;
+            }
+            const Point3D world = workPlaneFramePointToWorld(candidate.point, frame);
+            if (std::abs(signedDistanceFromWorkPlaneFrame(world, transform.workPlaneFrame())) > 1.0e-7) {
+                continue;
+            }
+            candidate.point = worldPointToWorkPlaneFrame(world, transform.workPlaneFrame());
+            candidate.shapeIndex = index;
+            targetCandidates.append(candidate);
+        }
+    }
     qreal bestDistance = snapRadiusPixels;
     int bestPriority = -1;
     const auto consider = [&](SnapType type,
@@ -1939,7 +2130,7 @@ DragSnapResult SnapEngine::findDragSnap(
 
     for (const SnapCandidate &source : sourceCandidates) {
         for (const SnapCandidate &target : targetCandidates) {
-            consider(source.type,
+            consider(target.type,
                      source.point,
                      target.point,
                      target.shapeIndex,

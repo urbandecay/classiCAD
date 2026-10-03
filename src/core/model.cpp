@@ -476,8 +476,8 @@ QVector<QPointF> makeRegularPolygonPoints(PolygonMode mode,
         radius = edgeLength / (2.0 * sine);
         const qreal apothem = radius * std::cos(halfStep);
         const QPointF edgeUnit = edge / edgeLength;
-        const QPointF rightNormal(edgeUnit.y(), -edgeUnit.x());
-        center = (first + points[1]) * 0.5 + rightNormal * apothem;
+        const QPointF leftNormal(-edgeUnit.y(), edgeUnit.x());
+        center = (first + points[1]) * 0.5 + leftNormal * apothem;
         const QPointF toFirst = first - center;
         startAngle = std::atan2(toFirst.y(), toFirst.x());
     } else {

@@ -541,9 +541,11 @@ int main(int argc, char **argv)
                         pointsAlmostEqual(oppositeEdgeMidpoint, QPointF(0.0, 5.0)),
                     "polygon builders must honor center/corner, center/tangent, corner/edge, and odd-side span construction");
 
+    QVector<QPointF> closedCenterCornerPolygon = centerCornerPolygon;
+    closedCenterCornerPolygon.append(centerCornerPolygon.first());
     const Shape polygonShape{GeometryType::Polygon,
                              centerCornerPolygon,
-                             {},
+                             makeDegreeOneNurbs(closedCenterCornerPolygon),
                              ArcMode::TwoPoint,
                              0.0,
                              {},
@@ -1972,8 +1974,8 @@ int main(int argc, char **argv)
                                            viewportTransform.worldToScreen(
                                                QPointF(5.0, 0.0), viewportSize),
                                            viewportTransform,
-                                           viewportSize) == -1,
-                    "XY-plane selection must not treat an XZ curve as local XY geometry");
+                                           viewportSize) == 0,
+                    "selection must project a visible curve from its own workplane instead of filtering it by the active plane");
     ViewportTransform frontTransform;
     frontTransform.setWorkPlane(WorkPlane::XZ);
     frontTransform.setViewPreset(ViewportViewPreset::Front);
@@ -2274,6 +2276,112 @@ int main(int argc, char **argv)
     passed &= check(endpointSnap.type == SnapType::Endpoint &&
                         std::hypot(endpointSnap.point.x(), endpointSnap.point.y()) <= 1.0e-9,
                     "snap engine must select the nearest enabled endpoint");
+
+    const QVector<QPointF> upperArcDefinition{QPointF(-3.0, 3.0),
+                                               QPointF(7.0, 3.0),
+                                               QPointF(2.0, 8.0)};
+    CircularArc2D upperArcGeometry;
+    const bool upperArcGeometryCreated = makeCircularArcThroughPoint(
+        upperArcDefinition[0], upperArcDefinition[1], upperArcDefinition[2],
+        &upperArcGeometry);
+    Shape upperArcShape;
+    upperArcShape.geometryType = GeometryType::Arc;
+    upperArcShape.points = upperArcDefinition;
+    upperArcShape.nurbs = upperArcGeometry.curve;
+    upperArcShape.arcMode = ArcMode::ThreePoint;
+    Document upperArcDocument;
+    upperArcDocument.append(upperArcShape);
+    ViewportTransform isometricSnapTransform;
+    isometricSnapTransform.setViewPreset(ViewportViewPreset::Isometric);
+    SnapSettings arcSnapSettings;
+    arcSnapSettings.enabled = true;
+    arcSnapSettings.endpoint = false;
+    arcSnapSettings.midpoint = true;
+    arcSnapSettings.intersection = false;
+    arcSnapSettings.center = true;
+    SnapEngine arcSnapEngine;
+    arcSnapEngine.setSettings(arcSnapSettings);
+    const QVector<SnapCandidate> isometricArcCandidates =
+        arcSnapEngine.snapCandidatesForScene(upperArcDocument, {},
+                                             isometricSnapTransform, viewportSize);
+    const auto candidateForType = [](const QVector<SnapCandidate> &snapCandidates,
+                                     SnapType type) -> const SnapCandidate * {
+        for (const SnapCandidate &candidate : snapCandidates) {
+            if (candidate.type == type) {
+                return &candidate;
+            }
+        }
+        return nullptr;
+    };
+    const SnapCandidate *arcCenterCandidate =
+        candidateForType(isometricArcCandidates, SnapType::Center);
+    const SnapCandidate *arcMidpointCandidate =
+        candidateForType(isometricArcCandidates, SnapType::Midpoint);
+    arcSnapSettings.perpendicular = true;
+    arcSnapEngine.setSettings(arcSnapSettings);
+    const QVector<SnapCandidate> isometricArcPerpendiculars =
+        arcSnapEngine.perpendicularCandidates(upperArcDocument,
+                                              QPointF(2.0, 10.0),
+                                              QPointF(2.0, 9.0),
+                                              isometricSnapTransform,
+                                              viewportSize);
+    const bool exactUpperArcPerpendicular = std::any_of(
+        isometricArcPerpendiculars.cbegin(), isometricArcPerpendiculars.cend(),
+        [](const SnapCandidate &candidate) {
+            return std::hypot(candidate.point.x() - 2.0,
+                              candidate.point.y() - 8.0) <= 1.0e-7;
+        });
+    passed &= check(upperArcGeometryCreated && arcCenterCandidate != nullptr &&
+                        arcMidpointCandidate != nullptr &&
+                        std::hypot(arcCenterCandidate->point.x() - 2.0,
+                                   arcCenterCandidate->point.y() - 3.0) <= 1.0e-7 &&
+                        std::hypot(arcMidpointCandidate->point.x() - 2.0,
+                                   arcMidpointCandidate->point.y() - 8.0) <= 1.0e-7 &&
+                        exactUpperArcPerpendicular,
+                    "arc center, midpoint, and perpendicular snaps must use local NURBS geometry under an isometric view");
+
+    Document circleIntersectionDocument;
+    Shape firstIntersectionCircle;
+    firstIntersectionCircle.geometryType = GeometryType::Circle;
+    firstIntersectionCircle.points = {QPointF(0.0, 0.0), QPointF(5.0, 0.0)};
+    firstIntersectionCircle.nurbs = makeCircleNurbs(firstIntersectionCircle.points);
+    Shape secondIntersectionCircle;
+    secondIntersectionCircle.geometryType = GeometryType::Circle;
+    secondIntersectionCircle.points = {QPointF(6.0, 0.0), QPointF(11.0, 0.0)};
+    secondIntersectionCircle.nurbs = makeCircleNurbs(secondIntersectionCircle.points);
+    circleIntersectionDocument.append(firstIntersectionCircle);
+    circleIntersectionDocument.append(secondIntersectionCircle);
+    SnapSettings intersectionSnapSettings;
+    intersectionSnapSettings.enabled = true;
+    intersectionSnapSettings.endpoint = false;
+    intersectionSnapSettings.midpoint = false;
+    intersectionSnapSettings.intersection = true;
+    intersectionSnapSettings.center = false;
+    SnapEngine intersectionSnapEngine;
+    intersectionSnapEngine.setSettings(intersectionSnapSettings);
+    const QVector<SnapCandidate> circleIntersectionCandidates =
+        intersectionSnapEngine.snapCandidatesForScene(circleIntersectionDocument, {},
+                                                     isometricSnapTransform,
+                                                     viewportSize);
+    const auto containsIntersection = [&](const QPointF &expected) {
+        return std::any_of(circleIntersectionCandidates.cbegin(),
+                           circleIntersectionCandidates.cend(),
+                           [&](const SnapCandidate &candidate) {
+                               return candidate.type == SnapType::Intersection &&
+                                      std::hypot(candidate.point.x() - expected.x(),
+                                                 candidate.point.y() - expected.y()) <=
+                                          1.0e-7;
+                           });
+    };
+    const int circleIntersectionCount = static_cast<int>(std::count_if(
+        circleIntersectionCandidates.cbegin(), circleIntersectionCandidates.cend(),
+        [](const SnapCandidate &candidate) {
+            return candidate.type == SnapType::Intersection;
+        }));
+    passed &= check(circleIntersectionCount == 2 &&
+                        containsIntersection(QPointF(3.0, 4.0)) &&
+                        containsIntersection(QPointF(3.0, -4.0)),
+                    "curve intersection snaps must refine NURBS circle crossings to exact local coordinates");
 
     Document polygonSnapDocument;
     polygonSnapDocument.append(polygonShape);
@@ -2860,6 +2968,20 @@ int main(int argc, char **argv)
                         reverseDirectionSnap.sourcePoint == QPointF(50.0, 50.0) &&
                         reverseDirectionSnap.targetPoint == QPointF(50.0, 52.0),
                     "Bezier endpoints must remain snap sources when dragging the curve toward a rectangle");
+
+    Shape framedDragSource = reverseDragSnapDocument[1];
+    framedDragSource.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+    framedDragSource.workPlaneFrame.origin.y = 2.0;
+    Document framedDragDocument;
+    framedDragDocument.append(reverseDragSnapDocument[0]);
+    framedDragDocument.append(framedDragSource);
+    const DragSnapResult framedDragSnap = endpointControlPointSnapEngine.findDragSnap(
+        framedDragDocument, {1}, viewportTransform, viewportSize);
+    passed &= check(framedDragSnap.isValid() &&
+                        framedDragSnap.sourcePoint == QPointF(50.0, 52.0) &&
+                        framedDragSnap.targetPoint == QPointF(50.0, 52.0) &&
+                        framedDragSnap.translation == QPointF(),
+                    "Drag snaps must map source points from the object's frame before measuring or translating");
 
     Document toolDocument;
     SelectionModel toolSelection;

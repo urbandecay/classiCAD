@@ -526,13 +526,11 @@ int CurveHitTester::hitTestShape(const Document &document,
             continue;
         }
         const Shape &shape = document[index];
-        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
-                              transform.workPlaneFrame())) {
-            continue;
-        }
+        ViewportTransform shapeTransform = transform;
+        shapeTransform.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
         const qreal distance = distanceToShape(screenPosition,
                                                shape,
-                                               transform,
+                                               shapeTransform,
                                                viewportSize);
         if (distance <= closestDistance) {
             closestDistance = distance;

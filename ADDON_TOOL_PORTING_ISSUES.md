@@ -58,6 +58,25 @@ misread or implemented incorrectly.
 - Arc angles use clockwise as the positive direction. The arc compass and
   sweep preview must stay aligned as the start point changes.
 
+## General snapping findings
+
+- Compute snap geometry in the curve's stored workplane coordinates. Do not
+  fit a circle or arc after projecting its points into screen space: an oblique
+  view projects a circle as an ellipse and shifts center, midpoint,
+  perpendicular, and tangent results. Project only when measuring cursor
+  distance or drawing a marker.
+- Intersection snaps must consider the stored NURBS spans for curved geometry,
+  not just line-segment shapes. Use tessellation only to find candidate
+  parameter intervals, then evaluate and refine intersections on the source
+  curves.
+- Preserve the full snap result through axis and plane constraints. Spatial
+  snaps carry a world-space point as well as a plane-local point; use the world
+  point when the constraint is spatial instead of reinterpreting the local
+  projection in the active workplane.
+- Verify snap behavior in oblique views and with intersections between curved
+  objects. A top-view line-only test will not catch screen-space circle fitting
+  or missing curve intersections.
+
 ## Polygon port findings
 
 - In `radCAD/operators/polygon_tools.py`, each polygon class defines
@@ -72,12 +91,20 @@ misread or implemented incorrectly.
   silently substitute the captured frame's X/Y axes.
 - Check all polygon modes (center-corner, center-tangent, corner-corner, and
   edge). A fix applied only to the easiest mode is not a complete port.
+- Corner-corner construction must preserve the two clicked adjacent vertices;
+  choose the center on the side that makes the second click the next vertex.
 - The polygon add-on still runs its implicit global-axis inference when the
   app's ortho modifier is active; it only skips inference for geometry snaps
   or Alt bypass. Do not suppress this behavior just because `orthoEnabled` is
   set.
 
 ## Rectangle port findings
+
+- Drag snap sources must be lifted through the selected object's frame and
+  converted to the fixed drag frame before distance checks. Convert movement
+  into each object's local axes; preserve any normal movement in its frame
+  origin. Do not change the input frame from hover while dragging. A marker
+  on a target does not prove that the moved geometry reached that target.
 
 - Review `rectangle_tools.py` together with `modal_core.py`,
   `text_entry_utils.py`, and the rectangle branches in `tool_previews.py` and

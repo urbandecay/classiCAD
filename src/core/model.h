@@ -166,6 +166,7 @@ struct EraseCurveSampleCache {
     Shape::NurbsCurve2D curve;
     SampledNurbsCurve2D sampled;
     QVector<qreal> intersectionParameters;
+    QVector<quint64> intersectionObjectIds;
     QVector<ParameterInterval> previewIntervals;
     int previewStrokePointCount = 0;
 };

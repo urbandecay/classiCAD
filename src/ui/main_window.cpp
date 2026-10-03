@@ -1325,7 +1325,6 @@ private:
             return;
         }
 
-        statusBar()->showMessage(viewport_->joinStatusText());
     }
 
     void startRotate()

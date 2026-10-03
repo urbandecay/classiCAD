@@ -1941,13 +1941,22 @@ public:
         controlPointIndex_ = -1;
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
-        notifyJoinStatus();
         update();
-        DebugLog::instance().write(QStringLiteral("beginJoinMode"));
+        DebugLog::instance().write(
+            QStringLiteral("beginJoinMode preselected=%1")
+                .arg(joinShapeIndices_.size()));
+        if (joinShapeIndices_.size() >= 2) {
+            if (!applyJoin()) {
+                cancelJoinMode(false);
+            }
+            return true;
+        }
+
+        notifyJoinStatus();
         return true;
     }
 
-    void cancelJoinMode()
+    void cancelJoinMode(bool notifyStatus = true)
     {
         if (!joinActive_) {
             return;
@@ -1961,7 +1970,9 @@ public:
                                   ? ObjectId::invalid()
                                   : selectedShapeIndices_.back();
         setCursor(Qt::ArrowCursor);
-        notifyJoinStatus();
+        if (notifyStatus) {
+            notifyJoinStatus();
+        }
         update();
         DebugLog::instance().write(QStringLiteral("cancelJoinMode"));
     }
@@ -1972,7 +1983,7 @@ public:
             return QString();
         }
 
-        return QStringLiteral("Join: %1 curves selected  •  Click connected curves in order  •  Enter to join  •  Esc to cancel")
+        return QStringLiteral("Join: %1 curves selected  •  Click connected curves to join  •  Esc to cancel")
             .arg(joinShapeIndices_.size());
     }
 
@@ -1987,13 +1998,42 @@ public:
             return false;
         }
 
+        const int referenceShapeIndex = objectIndex(joinShapeIndices_.first());
+        if (referenceShapeIndex < 0 || referenceShapeIndex >= shapes_.size()) {
+            notifyJoinStatus(QStringLiteral("Join failed — selected curves are unavailable"));
+            return false;
+        }
+        const Shape &referenceShape = shapes_[referenceShapeIndex];
+        const WorkPlaneFrame joinFrame = shapeWorkPlaneFrame(referenceShape);
+        const WorkPlane joinWorkPlane = referenceShape.workPlane;
+        const qreal joinWorkPlaneOffset = referenceShape.workPlaneOffset;
         QVector<Shape::NurbsCurve2D> components;
         for (const ObjectId objectId : joinShapeIndices_) {
             const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
-                !appendJoinComponents(shapes_[shapeIndex], &components)) {
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
                 notifyJoinStatus(QStringLiteral("Join failed — select lines or curves only"));
                 return false;
+            }
+            const Shape &sourceShape = shapes_[shapeIndex];
+            const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(sourceShape);
+            if (!workPlaneFramesCoplanar(joinFrame, sourceFrame)) {
+                notifyJoinStatus(QStringLiteral("Join failed — curves must lie on the same plane"));
+                return false;
+            }
+            const int firstComponent = components.size();
+            if (!appendJoinComponents(sourceShape, &components)) {
+                notifyJoinStatus(QStringLiteral("Join failed — select lines or curves only"));
+                return false;
+            }
+            for (int componentIndex = firstComponent;
+                 componentIndex < components.size();
+                 ++componentIndex) {
+                for (QPointF &controlPoint :
+                     components[componentIndex].controlPoints) {
+                    controlPoint = worldPointToWorkPlaneFrame(
+                        workPlaneFramePointToWorld(controlPoint, sourceFrame),
+                        joinFrame);
+                }
             }
         }
 
@@ -2002,14 +2042,55 @@ public:
             return false;
         }
 
-        if (!joinComponentsAreContinuous(components)) {
+        const qreal selectedJoinTolerance = selectedJoinEndpointTolerance();
+        fuseOverlappingLineComponents(&components, selectedJoinTolerance);
+        if (!joinComponentsAreContinuous(components, selectedJoinTolerance)) {
             QVector<Shape::NurbsCurve2D> orderedComponents;
-            if (!orderJoinComponents(components, &orderedComponents)) {
+            if (!orderJoinComponents(components,
+                                     &orderedComponents,
+                                     selectedJoinTolerance)) {
                 notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
+                qreal nearestEndpointGap =
+                    std::numeric_limits<qreal>::infinity();
+                for (int first = 0; first < components.size(); ++first) {
+                    QPointF firstStart;
+                    QPointF firstEnd;
+                    if (!nurbsCurveEndpoints(components[first],
+                                             &firstStart,
+                                             &firstEnd)) {
+                        continue;
+                    }
+                    for (int second = first + 1;
+                         second < components.size();
+                         ++second) {
+                        QPointF secondStart;
+                        QPointF secondEnd;
+                        if (!nurbsCurveEndpoints(components[second],
+                                                 &secondStart,
+                                                 &secondEnd)) {
+                            continue;
+                        }
+                        for (const QPointF &firstEndPoint : {firstStart, firstEnd}) {
+                            for (const QPointF &secondEndPoint : {secondStart,
+                                                                  secondEnd}) {
+                                nearestEndpointGap = std::min(
+                                    nearestEndpointGap,
+                                    std::hypot(firstEndPoint.x() -
+                                                   secondEndPoint.x(),
+                                               firstEndPoint.y() -
+                                                   secondEndPoint.y()));
+                            }
+                        }
+                    }
+                }
+                const qreal viewScale =
+                    viewportTransform_.viewScalePixelsPerWorldUnit(size());
                 DebugLog::instance().write(
-                    QStringLiteral("applyJoin rejected disconnected components=%1 tolerance=%2")
+                    QStringLiteral("applyJoin rejected disconnected components=%1 tolerance=%2 nearestEndpointGap=%3 nearestGapPixels=%4")
                         .arg(components.size())
-                        .arg(joinEndpointTolerance(), 0, 'f', 6));
+                        .arg(selectedJoinTolerance, 0, 'f', 6)
+                        .arg(nearestEndpointGap, 0, 'f', 6)
+                        .arg(nearestEndpointGap * viewScale, 0, 'f', 2));
                 return false;
             }
             components = orderedComponents;
@@ -2017,7 +2098,8 @@ public:
                                            .arg(components.size()));
         }
 
-        if (!closeJoinGaps(&components) || !joinComponentsAreContinuous(components)) {
+        if (!closeJoinGaps(&components, selectedJoinTolerance) ||
+            !joinComponentsAreContinuous(components, selectedJoinTolerance)) {
             notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
             DebugLog::instance().write(QStringLiteral("applyJoin rejected reordered components=%1")
                                            .arg(components.size()));
@@ -2046,16 +2128,19 @@ public:
             shapes_.removeAt(*index);
         }
 
-        Shape joined{GeometryType::PolyCurve,
-                     polyCurvePoints(components),
-                     Shape::NurbsCurve2D{},
-                     ArcMode::TwoPoint,
-                     0.0,
-                     {},
-                     components};
-        joined.workPlane = viewportTransform_.workPlane();
-        joined.workPlaneOffset = viewportTransform_.workPlaneOffset();
-        joined.workPlaneFrame = viewportTransform_.workPlaneFrame();
+        Shape joined;
+        if (components.size() == 1) {
+            joined.geometryType = GeometryType::Nurbs;
+            joined.nurbs = components.first();
+            joined.points = joined.nurbs.controlPoints;
+        } else {
+            joined.geometryType = GeometryType::PolyCurve;
+            joined.points = polyCurvePoints(components);
+            joined.components = components;
+        }
+        joined.workPlane = joinWorkPlane;
+        joined.workPlaneOffset = joinWorkPlaneOffset;
+        joined.workPlaneFrame = joinFrame;
         const ObjectId joinedObjectId = shapes_.insert(insertIndex, joined);
 
         joinActive_ = false;
@@ -3925,11 +4010,15 @@ protected:
                 selectedShapeIndices_.append(objectId);
             }
             selectedShapeIndex_ = objectId;
-            notifyJoinStatus();
             DebugLog::instance().write(QStringLiteral("join selected shape=%1 total=%2")
                                            .arg(shapeIndex)
                                            .arg(joinShapeIndices_.size()));
             update();
+            if (joinShapeIndices_.size() >= 2) {
+                applyJoin();
+            } else {
+                notifyJoinStatus();
+            }
             return;
         }
 
@@ -5697,6 +5786,153 @@ private:
         return false;
     }
 
+    void fuseOverlappingLineComponents(
+        QVector<Shape::NurbsCurve2D> *components,
+        qreal tolerance) const
+    {
+        if (components == nullptr || components->size() < 2) {
+            return;
+        }
+
+        // Compare each straight span of a degree-1 spline, including bent
+        // polylines. Keep the original knot domains and rational data when
+        // splitting; only a fused union receives a new line representation.
+        QVector<Shape::NurbsCurve2D> spans;
+        for (const Shape::NurbsCurve2D &curve : *components) {
+            if (curve.degree != 1 || curve.controlPoints.size() <= 2) {
+                spans.append(curve);
+                continue;
+            }
+            const QVector<double> knots = expandedKnotVector(curve);
+            QVector<Shape::NurbsCurve2D> curveSpans;
+            bool splitValid = true;
+            for (int knotIndex = curve.degree;
+                 knotIndex < curve.controlPoints.size();
+                 ++knotIndex) {
+                if (knots[knotIndex + 1] <= knots[knotIndex]) {
+                    continue;
+                }
+                Shape::NurbsCurve2D span;
+                if (!trimNurbsCurve(curve,
+                                    knots[knotIndex],
+                                    knots[knotIndex + 1],
+                                    &span)) {
+                    splitValid = false;
+                    break;
+                }
+                curveSpans.append(span);
+            }
+            if (splitValid && !curveSpans.isEmpty()) {
+                spans += curveSpans;
+            } else {
+                spans.append(curve);
+            }
+        }
+        *components = spans;
+
+        bool merged = true;
+        while (merged) {
+            merged = false;
+            for (int firstIndex = 0;
+                 firstIndex < components->size() && !merged;
+                 ++firstIndex) {
+                const Shape::NurbsCurve2D &firstCurve =
+                    components->at(firstIndex);
+                if (firstCurve.degree != 1 ||
+                    firstCurve.controlPoints.size() != 2) {
+                    continue;
+                }
+
+                QPointF firstStart;
+                QPointF firstEnd;
+                if (!nurbsCurveEndpoints(firstCurve, &firstStart, &firstEnd)) {
+                    continue;
+                }
+                const QPointF firstDirection = firstEnd - firstStart;
+                const qreal firstLength = std::hypot(firstDirection.x(),
+                                                     firstDirection.y());
+                if (firstLength <= tolerance) {
+                    continue;
+                }
+                const QPointF axis = firstDirection / firstLength;
+
+                for (int secondIndex = firstIndex + 1;
+                     secondIndex < components->size();
+                     ++secondIndex) {
+                    const Shape::NurbsCurve2D &secondCurve =
+                        components->at(secondIndex);
+                    if (secondCurve.degree != 1 ||
+                        secondCurve.controlPoints.size() != 2) {
+                        continue;
+                    }
+
+                    QPointF secondStart;
+                    QPointF secondEnd;
+                    if (!nurbsCurveEndpoints(secondCurve,
+                                             &secondStart,
+                                             &secondEnd)) {
+                        continue;
+                    }
+                    const QPointF secondDirection = secondEnd - secondStart;
+                    const qreal secondLength = std::hypot(secondDirection.x(),
+                                                          secondDirection.y());
+                    if (secondLength <= tolerance) {
+                        continue;
+                    }
+                    const QPointF secondAxis = secondDirection / secondLength;
+                    const qreal directionCross =
+                        axis.x() * secondAxis.y() - axis.y() * secondAxis.x();
+                    if (std::abs(directionCross) > 1.0e-6) {
+                        continue;
+                    }
+
+                    const auto perpendicularDistance =
+                        [&](const QPointF &point) {
+                            const QPointF delta = point - firstStart;
+                            return std::abs(axis.x() * delta.y() -
+                                            axis.y() * delta.x());
+                        };
+                    if (perpendicularDistance(secondStart) > tolerance ||
+                        perpendicularDistance(secondEnd) > tolerance) {
+                        continue;
+                    }
+
+                    const qreal firstProjection =
+                        QPointF::dotProduct(firstEnd - firstStart, axis);
+                    const qreal secondStartProjection =
+                        QPointF::dotProduct(secondStart - firstStart, axis);
+                    const qreal secondEndProjection =
+                        QPointF::dotProduct(secondEnd - firstStart, axis);
+                    const qreal firstLow = std::min<qreal>(0.0, firstProjection);
+                    const qreal firstHigh = std::max<qreal>(0.0, firstProjection);
+                    const qreal secondLow = std::min(secondStartProjection,
+                                                     secondEndProjection);
+                    const qreal secondHigh = std::max(secondStartProjection,
+                                                      secondEndProjection);
+                    if (secondLow > firstHigh + tolerance ||
+                        firstLow > secondHigh + tolerance) {
+                        continue;
+                    }
+
+                    const qreal unionLow = std::min(firstLow, secondLow);
+                    const qreal unionHigh = std::max(firstHigh, secondHigh);
+                    const QPointF fusedStart = firstStart + axis * unionLow;
+                    const QPointF fusedEnd = firstStart + axis * unionHigh;
+                    (*components)[firstIndex] =
+                        makeDegreeOneNurbs({fusedStart, fusedEnd});
+                    components->removeAt(secondIndex);
+                    merged = true;
+                    DebugLog::instance().write(
+                        QStringLiteral("applyJoin fused overlapping line components=%1,%2 gapOrOverlapTolerance=%3")
+                            .arg(firstIndex)
+                            .arg(secondIndex)
+                            .arg(tolerance, 0, 'f', 6));
+                    break;
+                }
+            }
+        }
+    }
+
     bool nurbsCurveEndpoints(const Shape::NurbsCurve2D &curve,
                              QPointF *start,
                              QPointF *end) const
@@ -5730,6 +5966,17 @@ private:
                                      1.0e-9));
     }
 
+    qreal selectedJoinEndpointTolerance() const
+    {
+        constexpr qreal minimumTolerance = 1.0e-5;
+        constexpr qreal screenTolerancePixels = 10.0;
+        return std::max(minimumTolerance,
+                        screenTolerancePixels /
+                            std::max(viewportTransform_.viewScalePixelsPerWorldUnit(
+                                         size()),
+                                     1.0e-9));
+    }
+
     Shape::NurbsCurve2D reversedNurbsCurve(const Shape::NurbsCurve2D &curve) const
     {
         if (!isValidNurbsCurve(curve)) {
@@ -5755,7 +6002,8 @@ private:
     }
 
     bool orderJoinComponents(const QVector<Shape::NurbsCurve2D> &input,
-                             QVector<Shape::NurbsCurve2D> *ordered) const
+                             QVector<Shape::NurbsCurve2D> *ordered,
+                             qreal tolerance) const
     {
         if (ordered == nullptr || input.isEmpty()) {
             return false;
@@ -5775,7 +6023,6 @@ private:
             ends.append(end);
         }
 
-        const qreal tolerance = joinEndpointTolerance();
         const auto endpointsMatch = [tolerance](const QPointF &first,
                                                   const QPointF &second) {
             return std::hypot(first.x() - second.x(), first.y() - second.y()) <= tolerance;
@@ -5854,13 +6101,13 @@ private:
         return false;
     }
 
-    bool closeJoinGaps(QVector<Shape::NurbsCurve2D> *components) const
+    bool closeJoinGaps(QVector<Shape::NurbsCurve2D> *components,
+                       qreal tolerance) const
     {
         if (components == nullptr || components->isEmpty()) {
             return false;
         }
 
-        const qreal tolerance = joinEndpointTolerance();
         for (int index = 0; index + 1 < components->size(); ++index) {
             QPointF previousEnd;
             QPointF nextStart;
@@ -5908,9 +6155,9 @@ private:
                                   point);
     }
 
-    bool joinComponentsAreContinuous(const QVector<Shape::NurbsCurve2D> &components) const
+    bool joinComponentsAreContinuous(const QVector<Shape::NurbsCurve2D> &components,
+                                     qreal joinTolerance) const
     {
-        const qreal joinTolerance = joinEndpointTolerance();
         for (int index = 0; index + 1 < components.size(); ++index) {
             QPointF firstEnd;
             QPointF nextStart;
@@ -6013,7 +6260,8 @@ private:
                 group.append(curves[index]);
             }
             QVector<Shape::NurbsCurve2D> ordered;
-            if (group.size() > 1 && orderJoinComponents(group, &ordered)) {
+            if (group.size() > 1 &&
+                orderJoinComponents(group, &ordered, joinEndpointTolerance())) {
                 group = ordered;
             }
             groups.append(group);
@@ -6054,7 +6302,10 @@ private:
             QVector<QVector<Shape::NurbsCurve2D>> validGroups;
             for (const auto &group : connectedGroups) {
                 QVector<Shape::NurbsCurve2D> ordered;
-                if (group.size() > 1 && !orderJoinComponents(group, &ordered)) {
+                if (group.size() > 1 &&
+                    !orderJoinComponents(group,
+                                         &ordered,
+                                         joinEndpointTolerance())) {
                     // A connected branch is not one continuous spline. Keep
                     // each branch as its own selectable curve object.
                     for (const Shape::NurbsCurve2D &curve : group) {
@@ -8851,7 +9102,7 @@ private:
         int sourceComponentIndex,
         const Shape::NurbsCurve2D &sourceCurve,
         const QVector<EraseCurveSampleCache> *sceneCache = nullptr,
-        QVector<quint64> *pointBoundaryObjectIds = nullptr,
+        QVector<quint64> *intersectionObjectIds = nullptr,
         int *nurbsSeedSolves = nullptr,
         int *visiblePointChecks = nullptr) const
     {
@@ -9281,6 +9532,14 @@ private:
                                     geometryTolerance,
                                     &intersectionParameter)) {
                                 appendUniqueParameter(intersectionParameter);
+                                if (intersectionObjectIds != nullptr &&
+                                    other.shapeIndex != sourceShapeIndex) {
+                                    const quint64 objectId =
+                                        shapes_.objectIdAt(other.shapeIndex).value();
+                                    if (!intersectionObjectIds->contains(objectId)) {
+                                        intersectionObjectIds->append(objectId);
+                                    }
+                                }
                             }
                         }
                     }
@@ -9432,11 +9691,11 @@ private:
             if (closestDistanceSquared <=
                 geometryTolerance * geometryTolerance) {
                 appendUniqueParameter(closestParameter);
-                if (pointBoundaryObjectIds != nullptr) {
+                if (intersectionObjectIds != nullptr) {
                     const quint64 objectId =
                         shapes_.objectIdAt(shapeIndex).value();
-                    if (!pointBoundaryObjectIds->contains(objectId)) {
-                        pointBoundaryObjectIds->append(objectId);
+                    if (!intersectionObjectIds->contains(objectId)) {
+                        intersectionObjectIds->append(objectId);
                     }
                 }
             }
@@ -9554,7 +9813,7 @@ private:
                 EraseCurveSampleCache targetCurve = sceneCurve;
                 QElapsedTimer boundaryTimer;
                 boundaryTimer.start();
-                QVector<quint64> pointBoundaryObjectIds;
+                QVector<quint64> intersectionObjectIds;
                 int targetSeedSolves = 0;
                 int targetPointChecks = 0;
                 targetCurve.intersectionParameters = eraseIntersectionParameters(
@@ -9562,17 +9821,18 @@ private:
                     sceneCurve.componentIndex,
                     sceneCurve.curve,
                     &eraseSceneCurveCaches_,
-                    &pointBoundaryObjectIds,
+                    &intersectionObjectIds,
                     &targetSeedSolves,
                     &targetPointChecks);
+                targetCurve.intersectionObjectIds = intersectionObjectIds;
                 const qint64 targetBoundaryUs = boundaryTimer.nsecsElapsed() / 1000;
                 boundaryUs += targetBoundaryUs;
                 nurbsSeedSolves += targetSeedSolves;
                 visiblePointChecks += targetPointChecks;
 
-                QStringList pointIds;
-                for (const quint64 pointId : pointBoundaryObjectIds) {
-                    pointIds.append(QString::number(pointId));
+                QStringList intersectionIds;
+                for (const quint64 objectId : intersectionObjectIds) {
+                    intersectionIds.append(QString::number(objectId));
                 }
                 QStringList boundaryParameters;
                 for (const qreal parameter : targetCurve.intersectionParameters) {
@@ -9580,14 +9840,14 @@ private:
                 }
                 const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
                 DebugLog::instance().write(
-                    QStringLiteral("trim cache target shape=%1 object=%2 type=%3 component=%4 displaySamples=%5 boundaries=[%6] pointObjects=[%7] nurbsSeedSolves=%8 pointChecks=%9 boundaryUs=%10")
+                    QStringLiteral("trim cache target shape=%1 object=%2 type=%3 component=%4 displaySamples=%5 boundaries=[%6] intersectingObjects=[%7] nurbsSeedSolves=%8 pointChecks=%9 boundaryUs=%10")
                         .arg(shapeIndex)
                         .arg(objectId.value())
                         .arg(geometryTypeName(shapes_[shapeIndex].geometryType))
                         .arg(sceneCurve.componentIndex)
                         .arg(sceneCurve.sampled.parameters.size())
                         .arg(boundaryParameters.join(','))
-                        .arg(pointIds.join(','))
+                        .arg(intersectionIds.join(','))
                         .arg(targetSeedSolves)
                         .arg(targetPointChecks)
                         .arg(targetBoundaryUs));
@@ -10600,6 +10860,87 @@ private:
         }
 
         const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(shape);
+        const bool wholeObjectOnIntersectionFreeErase =
+            activeTool_ == Tool::Erase && trimBox == nullptr;
+        QVector<QVector<ParameterInterval>> eraseHitIntervals;
+        QVector<QVector<qreal>> eraseBoundaryParameters;
+        QVector<QVector<quint64>> eraseIntersectionObjectIds;
+        if (wholeObjectOnIntersectionFreeErase) {
+            eraseHitIntervals.resize(sourceCurves.size());
+            eraseBoundaryParameters.resize(sourceCurves.size());
+            eraseIntersectionObjectIds.resize(sourceCurves.size());
+            bool strokeHitsObject = false;
+            bool objectHasIntersection = false;
+            for (int componentIndex = 0;
+                 componentIndex < sourceCurves.size();
+                 ++componentIndex) {
+                const Shape::NurbsCurve2D &sourceCurve =
+                    sourceCurves[componentIndex];
+                const EraseCurveSampleCache *cachedTargetCurve = nullptr;
+                if (cachedTargets != nullptr) {
+                    for (const EraseCurveSampleCache &cachedTarget : *cachedTargets) {
+                        if (cachedTarget.shapeIndex == sourceShapeIndex &&
+                            cachedTarget.componentIndex == componentIndex) {
+                            cachedTargetCurve = &cachedTarget;
+                            break;
+                        }
+                    }
+                }
+
+                if (cachedTargetCurve != nullptr) {
+                    eraseBoundaryParameters[componentIndex] =
+                        cachedTargetCurve->intersectionParameters;
+                    eraseIntersectionObjectIds[componentIndex] =
+                        cachedTargetCurve->intersectionObjectIds;
+                } else {
+                    eraseBoundaryParameters[componentIndex] =
+                        eraseIntersectionParameters(sourceShapeIndex,
+                                                    componentIndex,
+                                                    sourceCurve,
+                                                    nullptr,
+                                                    &eraseIntersectionObjectIds[componentIndex]);
+                }
+                qreal componentDomainStart = 0.0;
+                qreal componentDomainEnd = 0.0;
+                const qreal componentDomainLength =
+                    nurbsParameterDomain(sourceCurve,
+                                         &componentDomainStart,
+                                         &componentDomainEnd)
+                        ? componentDomainEnd - componentDomainStart
+                        : 0.0;
+                const qreal boundaryTolerance = std::max<qreal>(
+                    1.0e-12, componentDomainLength * 1.0e-9);
+                const bool hasInteriorIntersection = std::any_of(
+                    eraseBoundaryParameters[componentIndex].begin(),
+                    eraseBoundaryParameters[componentIndex].end(),
+                    [&](qreal parameter) {
+                        return parameter > componentDomainStart + boundaryTolerance &&
+                               parameter < componentDomainEnd - boundaryTolerance;
+                    });
+                eraseHitIntervals[componentIndex] = eraserIntervalsForCurve(
+                    sourceCurve, stroke, sourceFrame);
+                strokeHitsObject = strokeHitsObject ||
+                                   !eraseHitIntervals[componentIndex].isEmpty();
+                objectHasIntersection = objectHasIntersection ||
+                                        hasInteriorIntersection ||
+                                        !eraseIntersectionObjectIds[componentIndex].isEmpty();
+            }
+
+            if (strokeHitsObject && !objectHasIntersection) {
+                const ObjectId objectId = sourceShapeIndex >= 0 &&
+                                                  sourceShapeIndex < shapes_.size()
+                                              ? shapes_.objectIdAt(sourceShapeIndex)
+                                              : ObjectId::invalid();
+                DebugLog::instance().write(
+                    QStringLiteral("erase whole-object object=%1 shape=%2 type=%3 components=%4 reason=no-intersections")
+                        .arg(objectId.value())
+                        .arg(sourceShapeIndex)
+                        .arg(geometryTypeName(shape.geometryType))
+                        .arg(sourceCurves.size()));
+                return true;
+            }
+        }
+
         QVector<Shape::NurbsCurve2D> remainingCurves;
         bool changed = false;
         for (int sourceComponentIndex = 0;
@@ -10652,6 +10993,11 @@ private:
                 removedIntervals = boundEraseIntervals(sourceCurve,
                                                        hitIntervals,
                                                        *intersections);
+            } else if (wholeObjectOnIntersectionFreeErase) {
+                removedIntervals = boundEraseIntervals(
+                    sourceCurve,
+                    eraseHitIntervals[sourceComponentIndex],
+                    eraseBoundaryParameters[sourceComponentIndex]);
             } else {
                 removedIntervals = eraseIntervalsBoundedByIntersections(
                     sourceShapeIndex,

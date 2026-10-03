@@ -14,6 +14,62 @@ int main(int argc, char **argv)
     ViewportWidget view;
     view.resize(640, 480);
     int failures = 0;
+    // A bent degree-1 spline overlaps two straight curves along its long
+    // leg. Join must fuse that leg and retain the bend in one selected object.
+    for (const bool reversed : {false, true}) {
+        Shape bent;
+        bent.geometryType = GeometryType::Nurbs;
+        bent.nurbs = makeDegreeOneNurbs(
+            {QPointF(0, 0), QPointF(100, 0), QPointF(100, -10)});
+        bent.points = bent.nurbs.controlPoints;
+        bent.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        Shape firstOverlap;
+        firstOverlap.geometryType = GeometryType::Line;
+        firstOverlap.workPlaneFrame = bent.workPlaneFrame;
+        firstOverlap.workPlaneFrame.origin = {10, 5, 0};
+        firstOverlap.nurbs = makeDegreeOneNurbs(
+            {QPointF(-60, -5), QPointF(30, -5)});
+        firstOverlap.points = firstOverlap.nurbs.controlPoints;
+        Shape secondOverlap = bent;
+        secondOverlap.geometryType = GeometryType::Line;
+        secondOverlap.nurbs = makeDegreeOneNurbs(
+            {QPointF(20, 0), QPointF(80, 0)});
+        if (reversed) {
+            firstOverlap.nurbs = view.reversedNurbsCurve(firstOverlap.nurbs);
+            secondOverlap.nurbs = view.reversedNurbsCurve(secondOverlap.nurbs);
+        }
+        secondOverlap.points = secondOverlap.nurbs.controlPoints;
+        view.shapes_ = {bent, firstOverlap, secondOverlap};
+        view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0),
+                                      view.shapes_.objectIdAt(1),
+                                      view.shapes_.objectIdAt(2)};
+        view.selectedShapeIndex_ = view.selectedShapeIndices_.last();
+        view.beginJoinMode();
+        bool joinedCorrectly = !view.joinActive_ && view.shapes_.size() == 1 &&
+                               view.selectedShapeIndices_.size() == 1;
+        if (joinedCorrectly) {
+            const Shape &joined = view.shapes_[0];
+            joinedCorrectly = joined.geometryType == GeometryType::PolyCurve &&
+                               joined.components.size() == 2;
+            qreal length = 0;
+            for (const auto &component : joined.components) {
+                QPointF start;
+                QPointF end;
+                joinedCorrectly = joinedCorrectly && validateNurbsCurve(component, nullptr) &&
+                    view.nurbsCurveEndpoints(component, &start, &end);
+                length += std::hypot(end.x() - start.x(), end.y() - start.y());
+            }
+            joinedCorrectly = joinedCorrectly && std::abs(length - 160.0) < 1.0e-7;
+        }
+        if (!joinedCorrectly) {
+            qWarning() << "Join must fuse overlapping spans of a bent spline" << reversed;
+            ++failures;
+        }
+    }
+    if (app.arguments().contains(QStringLiteral("--join-only"))) {
+        qInfo() << "Join overlap failures:" << failures;
+        return failures ? 1 : 0;
+    }
     // Trim previews contain screen coordinates. Navigating after a hover
     // must refresh both the displayed preview and the click target, while
     // the actual cut stays in the curve's original local frame.

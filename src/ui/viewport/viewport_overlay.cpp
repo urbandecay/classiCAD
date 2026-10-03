@@ -1513,7 +1513,7 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
         painter.setPen(QColor(QStringLiteral("#f0a45a")));
         painter.drawText(18,
                          viewportSize.height() - 42,
-                         QStringLiteral("JOIN  •  %1 curves selected  •  Enter to join  •  Esc to cancel")
+                         QStringLiteral("JOIN  •  %1 curves selected  •  Click connected curves to join  •  Esc to cancel")
                              .arg(joinCount));
     }
 

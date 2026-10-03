@@ -66,7 +66,8 @@ public:
                               const Point3D &cursor,
                               bool cursorValid,
                               const QSize &viewportSize,
-                              bool drawCurve) const;
+                              bool drawCurve,
+                              const WorkPlaneFrame &workPlaneFrame = {}) const;
     void drawArcPreview(QPainter &painter,
                         const QVector<QPointF> &pendingPoints,
                         ArcMode arcMode,
@@ -149,6 +150,7 @@ public:
                         bool joinActive,
                         int joinCount,
                         bool lineCommandActive,
+                        const QString &lineCommandStatus,
                         int rotateStep,
                         bool grabActive,
                         bool grabPickingBasePoint,

@@ -597,35 +597,96 @@ void ViewportOverlay::drawWorldLinePreview(QPainter &painter,
                                           const Point3D &cursor,
                                           bool cursorValid,
                                           const QSize &viewportSize,
-                                          bool drawCurve) const
+                                          bool drawCurve,
+                                          const WorkPlaneFrame &workPlaneFrame) const
 {
     painter.save();
-    QPointF previous;
-    bool previousValid = false;
-    painter.setPen(QPen(QColor(QStringLiteral("#e6b85c")), 2.0));
-    for (const Point3D &point : points) {
-        QPointF screen;
-        const bool valid = transform_.worldPointToScreen(point, viewportSize, &screen);
-        if (drawCurve && previousValid && valid) painter.drawLine(previous, screen);
-        previous = screen;
-        previousValid = valid;
-    }
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor baseColor(QStringLiteral("#000000"));
+    QColor activeColor = baseColor;
+    QPointF previousScreen;
     QPointF cursorScreen;
+    bool previousValid = false;
     const bool validCursor = cursorValid &&
         transform_.worldPointToScreen(cursor, viewportSize, &cursorScreen);
-    if (drawCurve && previousValid && validCursor) painter.drawLine(previous, cursorScreen);
-    painter.setPen(QPen(QColor(QStringLiteral("#f0a45a")), 1.5));
-    painter.setBrush(QColor(QStringLiteral("#282828")));
-    for (const Point3D &point : points) {
-        QPointF screen;
-        if (transform_.worldPointToScreen(point, viewportSize, &screen)) {
-            painter.drawEllipse(screen, 5.0, 5.0);
+    if (validCursor && !points.isEmpty()) {
+        Point3D direction{cursor.x - points.back().x,
+                          cursor.y - points.back().y,
+                          cursor.z - points.back().z};
+        const qreal magnitude = std::sqrt(direction.x * direction.x +
+                                          direction.y * direction.y +
+                                          direction.z * direction.z);
+        if (magnitude > 1.0e-12) {
+            direction.x /= magnitude;
+            direction.y /= magnitude;
+            direction.z /= magnitude;
+            if (std::abs(direction.x) > 0.9999) {
+                activeColor = QColor::fromRgbF(1.0, 0.1, 0.1, 1.0);
+            } else if (std::abs(direction.y) > 0.9999) {
+                activeColor = QColor::fromRgbF(0.1, 0.7, 0.1, 1.0);
+            } else if (std::abs(direction.z) > 0.9999) {
+                activeColor = QColor::fromRgbF(0.2, 0.5, 1.0, 1.0);
+            }
         }
     }
-    if (validCursor) {
-        painter.setBrush(QColor(QStringLiteral("#f0a45a")));
-        painter.drawEllipse(cursorScreen, 4.0, 4.0);
+
+    if (points.size() >= 2) {
+        transform_.worldPointToScreen(points.front(), viewportSize, &previousScreen);
+        previousValid = true;
+        for (int index = 1; index < points.size(); ++index) {
+            QPointF nextScreen;
+            const bool nextValid = transform_.worldPointToScreen(
+                points[index], viewportSize, &nextScreen);
+            if (drawCurve && previousValid && nextValid) {
+                painter.setPen(QPen(baseColor, 1.0));
+                painter.drawLine(previousScreen, nextScreen);
+            }
+            previousScreen = nextScreen;
+            previousValid = nextValid;
+        }
+    } else if (!points.isEmpty()) {
+        previousValid = transform_.worldPointToScreen(
+            points.back(), viewportSize, &previousScreen);
     }
+    if (!points.isEmpty() && previousValid && validCursor &&
+        (drawCurve || activeColor != baseColor)) {
+        painter.setPen(QPen(activeColor, 1.0));
+        painter.drawLine(previousScreen, cursorScreen);
+    }
+
+    Point3D axisX = isValidWorkPlaneFrame(workPlaneFrame)
+        ? workPlaneFrame.xAxis : Point3D{1.0, 0.0, 0.0};
+    Point3D axisY = isValidWorkPlaneFrame(workPlaneFrame)
+        ? workPlaneFrame.yAxis : Point3D{0.0, 1.0, 0.0};
+    const auto drawCross = [&](const Point3D &worldPoint, qreal halfSize) {
+        QPointF center;
+        if (!transform_.worldPointToScreen(worldPoint, viewportSize, &center)) return;
+        const auto projectedAxis = [&](const Point3D &axis, const QPointF &fallback) {
+            const Point3D offsetPoint{worldPoint.x + axis.x,
+                                      worldPoint.y + axis.y,
+                                      worldPoint.z + axis.z};
+            QPointF endpoint;
+            if (!transform_.worldPointToScreen(offsetPoint, viewportSize, &endpoint)) {
+                return fallback;
+            }
+            QPointF vector = endpoint - center;
+            const qreal screenLength = std::hypot(vector.x(), vector.y());
+            if (screenLength <= 1.0e-4) return fallback;
+            return vector / screenLength;
+        };
+        QPointF directionX = projectedAxis(axisX, QPointF(1.0, 0.0));
+        QPointF directionY = projectedAxis(axisY, QPointF(0.0, 1.0));
+        if (std::abs(QPointF::dotProduct(directionX, directionY)) > 0.98) {
+            directionY = QPointF(-directionX.y(), directionX.x());
+        }
+        painter.setPen(QPen(baseColor, 1.5));
+        painter.drawLine(center - directionX * halfSize,
+                         center + directionX * halfSize);
+        painter.drawLine(center - directionY * halfSize,
+                         center + directionY * halfSize);
+    };
+    for (const Point3D &point : points) drawCross(point, 2.5);
+    if (validCursor) drawCross(cursor, 2.5);
     painter.restore();
 }
 
@@ -1175,7 +1236,11 @@ void ViewportOverlay::drawPolygonPreview(QPainter &painter,
     }
 
     const QColor polygonColor(QStringLiteral("#e6b85c"));
-    const QColor guideColor(QStringLiteral("#8aa7c7"));
+    const QColor guideColor = cursorValid
+                                  ? arcTwoPointGuideColor(
+                                        cursorWorld - pendingPoints.first(),
+                                        transform_.workPlaneFrame())
+                                  : QColor(92, 92, 92);
     const QColor pointColor(QStringLiteral("#f0a45a"));
     QVector<QPointF> candidatePoints = pendingPoints;
     if (cursorValid) {
@@ -1191,11 +1256,14 @@ void ViewportOverlay::drawPolygonPreview(QPainter &painter,
 
     painter.save();
     painter.setBrush(Qt::NoBrush);
-    if (vertices.size() < 3 && cursorValid) {
-        painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
+    if (cursorValid) {
+        painter.setPen(QPen(guideColor,
+                            1.0,
+                            vertices.size() < 3 ? Qt::DashLine : Qt::SolidLine));
         painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
                          transform_.worldToScreen(cursorWorld, viewportSize));
-    } else if (drawCurve && vertices.size() >= 3) {
+    }
+    if (drawCurve && vertices.size() >= 3) {
         painter.setPen(QPen(polygonColor, 2.0));
         for (int index = 0; index < vertices.size(); ++index) {
             painter.drawLine(transform_.worldToScreen(vertices[index], viewportSize),
@@ -1413,6 +1481,7 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                      bool joinActive,
                                      int joinCount,
                                      bool lineCommandActive,
+                                     const QString &lineCommandStatus,
                                      int rotateStep,
                                      bool grabActive,
                                      bool grabPickingBasePoint,
@@ -1470,10 +1539,27 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                          viewportSize.height() - 18,
                          QStringLiteral("Click the first and second points of the mirror axis  •  Esc/RMB cancels"));
     } else if (activeTool == Tool::Line && lineCommandActive) {
-        painter.setPen(QColor(QStringLiteral("#777777")));
-        painter.drawText(18,
-                         viewportSize.height() - 18,
-                         QStringLiteral("Click to place connected points  •  Right-click to finish"));
+        painter.save();
+        const QRectF panel(12.0,
+                           std::max<qreal>(12.0, viewportSize.height() - 58.0),
+                           std::max<qreal>(1.0,
+                                           std::min<qreal>(750.0,
+                                                           viewportSize.width() - 24.0)),
+                           46.0);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(20, 20, 20, 170));
+        painter.drawRoundedRect(panel, 4.0, 4.0);
+        painter.setFont(QFont(QStringLiteral("Sans"), 9));
+        painter.setPen(QColor(225, 225, 225));
+        painter.drawText(QPointF(20.0, panel.top() + 17.0),
+                         lineCommandStatus.isEmpty()
+                             ? QStringLiteral("Line")
+                             : lineCommandStatus);
+        painter.setPen(QColor(170, 170, 170));
+        painter.drawText(
+            QPointF(20.0, panel.top() + 35.0),
+            QStringLiteral("Click point  •  Type length, Enter applies  •  X/Y/Z axis  •  Shift direction  •  N normal  •  L plane lock  •  Space/RMB finish  •  Esc exits"));
+        painter.restore();
     } else if (activeTool == Tool::Picture) {
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,
@@ -1499,6 +1585,7 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                                 : QStringLiteral("DUPLICATE  •  Click a base point on the selection  •  Esc/RMB cancels");
         painter.drawText(18, viewportSize.height() - 18, duplicateHint);
     } else if (activeTool != Tool::Select && activeTool != Tool::Arc &&
+               !isPolygonTool(activeTool) &&
                !isCircleConstructionTool(activeTool) &&
                !isEllipseTool(activeTool)) {
         QString hint;

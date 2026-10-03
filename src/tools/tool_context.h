@@ -30,6 +30,8 @@ public:
                                                   const QVector<QPointF> &)>;
     using ArcModeProvider = std::function<ArcMode()>;
     using ArcSweepProvider = std::function<qreal()>;
+    using PolygonSideCountProvider = std::function<int()>;
+    using PolygonSideCountSetter = std::function<void(int)>;
 
     ToolContext(Document &document,
                 SelectionModel &selection,
@@ -56,6 +58,8 @@ public:
     void setPointConstraint(PointConstraint constraint);
     void setArcModeProvider(ArcModeProvider provider);
     void setArcSweepProvider(ArcSweepProvider provider);
+    void setPolygonSideCountCallbacks(PolygonSideCountProvider provider,
+                                     PolygonSideCountSetter setter);
 
     bool createShape(ToolId tool,
                      const QVector<QPointF> &points,
@@ -72,6 +76,8 @@ public:
                            const QVector<QPointF> &points) const;
     ArcMode arcMode() const;
     qreal arcSweep() const;
+    int polygonSideCount() const;
+    void setPolygonSideCount(int sideCount) const;
 
 private:
     Document &document_;
@@ -90,6 +96,8 @@ private:
     PointConstraint pointConstraint_;
     ArcModeProvider arcModeProvider_;
     ArcSweepProvider arcSweepProvider_;
+    PolygonSideCountProvider polygonSideCountProvider_;
+    PolygonSideCountSetter polygonSideCountSetter_;
 };
 
 } // namespace classiCAD

@@ -94,6 +94,13 @@ void ToolContext::setArcSweepProvider(ArcSweepProvider provider)
     arcSweepProvider_ = std::move(provider);
 }
 
+void ToolContext::setPolygonSideCountCallbacks(PolygonSideCountProvider provider,
+                                              PolygonSideCountSetter setter)
+{
+    polygonSideCountProvider_ = std::move(provider);
+    polygonSideCountSetter_ = std::move(setter);
+}
+
 bool ToolContext::createShape(ToolId tool,
                               const QVector<QPointF> &points,
                               ArcMode arcMode,
@@ -162,6 +169,18 @@ ArcMode ToolContext::arcMode() const
 qreal ToolContext::arcSweep() const
 {
     return arcSweepProvider_ ? arcSweepProvider_() : 0.0;
+}
+
+int ToolContext::polygonSideCount() const
+{
+    return polygonSideCountProvider_ ? polygonSideCountProvider_() : 32;
+}
+
+void ToolContext::setPolygonSideCount(int sideCount) const
+{
+    if (polygonSideCountSetter_) {
+        polygonSideCountSetter_(sideCount);
+    }
 }
 
 } // namespace classiCAD

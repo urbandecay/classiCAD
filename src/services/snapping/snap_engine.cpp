@@ -831,7 +831,7 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         shape.geometryType == GeometryType::Picture) {
         const QVector<QPointF> vertices =
             shape.geometryType == GeometryType::Polygon
-                ? shape.points
+                ? polygonVerticesForShape(shape)
                 : shape.geometryType == GeometryType::Picture
                       ? pictureFrameCorners(shape)
                       : rectangleVertices(shape);
@@ -1047,7 +1047,7 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             shape.geometryType == GeometryType::Picture) {
             const QVector<QPointF> vertices =
                 shape.geometryType == GeometryType::Polygon
-                    ? shape.points
+                    ? polygonVerticesForShape(shape)
                     : shape.geometryType == GeometryType::Picture
                           ? pictureFrameCorners(shape)
                           : rectangleVertices(shape);
@@ -1597,8 +1597,8 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
                    shape.geometryType == GeometryType::Polygon ||
                    shape.geometryType == GeometryType::Picture) {
             const QVector<QPointF> vertices =
-                shape.geometryType == GeometryType::Polygon
-                    ? shape.points
+                   shape.geometryType == GeometryType::Polygon
+                    ? polygonVerticesForShape(shape)
                     : shape.geometryType == GeometryType::Picture
                           ? pictureFrameCorners(shape)
                           : rectangleVertices(shape);

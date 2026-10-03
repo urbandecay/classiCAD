@@ -658,10 +658,14 @@ void ViewportRenderer::drawOrigin(QPainter &painter,
     };
     const auto projectGridPoint = [this, &viewportSize, plane, planeOffset](
                                       const QPointF &point) {
-        return transform_.workPlaneToScreen(point,
-                                            viewportSize,
-                                            plane,
-                                            planeOffset);
+        QPointF screenPoint;
+        if (!transform_.worldPointToScreenUnclipped(
+                workPlanePointToWorld(point, plane, planeOffset),
+                viewportSize,
+                &screenPoint)) {
+            return QPointF();
+        }
+        return screenPoint;
     };
     if (gridFrame.visibleAxes[static_cast<size_t>(globalUAxis)]) {
         QColor color = axisColors[static_cast<size_t>(globalUAxis)];
@@ -708,15 +712,18 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  const QString &layerLineType,
                                  qreal layerLineWeightMm) const
 {
-    if (shape.points.isEmpty()) {
+    if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
+        shape.components.isEmpty()) {
         return;
     }
 
-    const QColor curveColor = selected ? QColor(QStringLiteral("#5da9e9"))
-                                       : preview ? QColor(QStringLiteral("#e6b85c"))
-                                                 : layerColor.isValid()
-                                                     ? layerColor
-                                                     : QColor(QStringLiteral("#d28b45"));
+    const QColor curveColor = selected
+                                  ? QColor(QStringLiteral("#5da9e9"))
+                                  : layerColor.isValid()
+                                        ? layerColor
+                                        : preview
+                                              ? QColor(QStringLiteral("#e6b85c"))
+                                              : QColor(QStringLiteral("#d28b45"));
     const QColor controlColor = QColor(QStringLiteral("#8aa7c7"));
     const qreal storedWidth = layerLineWeightMm > 0.0
                                   ? std::clamp(layerLineWeightMm * 6.0, 1.0, 10.0)
@@ -848,14 +855,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
             rectanglePath.closeSubpath();
             painter.drawPath(rectanglePath);
         }
-    } else if (shape.geometryType == GeometryType::Polygon && shape.points.size() >= 3) {
-        QPainterPath polygonPath;
-        polygonPath.moveTo(worldToScreen(shape.points.first(), viewportSize));
-        for (int index = 1; index < shape.points.size(); ++index) {
-            polygonPath.lineTo(worldToScreen(shape.points[index], viewportSize));
+    } else if (shape.geometryType == GeometryType::Polygon) {
+        if (isValidNurbsCurve(shape.nurbs)) {
+            drawNurbsCurve(painter, shape.nurbs, viewportSize);
         }
-        polygonPath.closeSubpath();
-        painter.drawPath(polygonPath);
     } else if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
         if (isValidNurbsCurve(shape.nurbs)) {
             drawNurbsCurve(painter, shape.nurbs, viewportSize);
@@ -1279,32 +1282,21 @@ void ViewportRenderer::drawCenterArcWithSweep(QPainter &painter,
                                               qreal sweepAngle,
                                               const QSize &viewportSize) const
 {
-    const QPointF center = worldToScreen(centerWorld, viewportSize);
-    const QPointF start = worldToScreen(startWorld, viewportSize);
-    const qreal radius = std::hypot(start.x() - center.x(), start.y() - center.y());
+    const QPointF startVector = startWorld - centerWorld;
+    const qreal radius = std::hypot(startVector.x(), startVector.y());
     if (radius <= 1e-9 || std::abs(sweepAngle) <= 1e-9) {
         return;
     }
 
-    const qreal startAngle = std::atan2(start.y() - center.y(),
-                                        start.x() - center.x());
-    const int steps = std::clamp(
-        static_cast<int>(std::ceil(std::abs(sweepAngle) * radius / 8.0)),
-        12,
-        256);
-    QPainterPath path;
-    for (int step = 0; step <= steps; ++step) {
-        const qreal fraction = static_cast<qreal>(step) / steps;
-        const qreal angle = startAngle + sweepAngle * fraction;
-        const QPointF point(center.x() + radius * std::cos(angle),
-                            center.y() + radius * std::sin(angle));
-        if (step == 0) {
-            path.moveTo(point);
-        } else {
-            path.lineTo(point);
-        }
+    CircularArc2D arc;
+    if (makeCircularArcFromCenterSweep(
+            centerWorld,
+            radius,
+            std::atan2(startVector.y(), startVector.x()),
+            sweepAngle,
+            &arc)) {
+        drawNurbsCurve(painter, arc.curve, viewportSize);
     }
-    painter.drawPath(path);
 }
 
 void ViewportRenderer::drawCenterArc(QPainter &painter,
@@ -1313,21 +1305,19 @@ void ViewportRenderer::drawCenterArc(QPainter &painter,
                                      const QPointF &endWorld,
                                      const QSize &viewportSize) const
 {
-    const QPointF center = worldToScreen(centerWorld, viewportSize);
-    const QPointF start = worldToScreen(startWorld, viewportSize);
-    const QPointF end = worldToScreen(endWorld, viewportSize);
-    const qreal radius = std::hypot(start.x() - center.x(), start.y() - center.y());
+    const QPointF startVector = startWorld - centerWorld;
+    const QPointF endVector = endWorld - centerWorld;
+    const qreal radius = std::hypot(startVector.x(), startVector.y());
     if (radius <= 1e-9) {
-        painter.drawLine(start, end);
+        painter.drawLine(worldToScreen(startWorld, viewportSize),
+                         worldToScreen(endWorld, viewportSize));
         return;
     }
 
     constexpr qreal pi = 3.14159265358979323846;
     constexpr qreal twoPi = 2.0 * pi;
-    const qreal startAngle = std::atan2(start.y() - center.y(),
-                                        start.x() - center.x());
-    const qreal endAngle = std::atan2(end.y() - center.y(),
-                                      end.x() - center.x());
+    const qreal startAngle = std::atan2(startVector.y(), startVector.x());
+    const qreal endAngle = std::atan2(endVector.y(), endVector.x());
     qreal sweepAngle = endAngle - startAngle;
     if (sweepAngle > pi) {
         sweepAngle -= twoPi;
@@ -1336,7 +1326,8 @@ void ViewportRenderer::drawCenterArc(QPainter &painter,
     }
 
     if (std::abs(sweepAngle) <= 1e-9) {
-        painter.drawLine(start, end);
+        painter.drawLine(worldToScreen(startWorld, viewportSize),
+                         worldToScreen(endWorld, viewportSize));
         return;
     }
     drawCenterArcWithSweep(painter,

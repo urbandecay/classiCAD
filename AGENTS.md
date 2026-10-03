@@ -26,8 +26,10 @@ representation and conform to Rhino/openNURBS conventions.
   supported planes: perspective uses world XY through the origin; fixed
   orthographic views use XY, XZ, or YZ through the origin; oblique orthographic
   views use the principal plane whose normal is most aligned with the view.
-  Each drawing tool must capture its frame at its first point and keep later
-  points, previews, and committed geometry in that frame. Existing OSnap
+  Each drawing tool must capture its reference frame at its first point and
+  keep its anchor stable in world space. A tool modifier such as the add-on's
+  perpendicular mode may derive a new drawing frame after that point; remap
+  the preview and committed local geometry into that frame. Existing OSnap
   supplies snap points; do not add a second snap overlay or snap model for
   plane handling.
   Line follows the requested add-on behavior beyond the principal-plane
@@ -70,6 +72,15 @@ Reference documentation:
 - Run an offscreen startup smoke test with
   `QT_QPA_PLATFORM=offscreen ./build/classiCAD` when practical.
 - Preserve existing user changes and inspect `git status` before committing.
+
+## Add-on tool ports
+
+- Read `ADDON_TOOL_PORTING_ISSUES.md` completely before starting each add-on
+  tool port. Add every newly discovered mismatch or failed assumption there
+  while the port is in progress, then keep its checklist current.
+- Port the add-on's effective behavior from its actual final method
+  definitions, including later definitions that shadow earlier ones. Do not
+  infer key behavior from a dead/overridden implementation or from a summary.
 
 ## Scalable refactoring
 

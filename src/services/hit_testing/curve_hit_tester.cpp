@@ -408,18 +408,12 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
         }
         return distance;
     }
-    if (shape.geometryType == GeometryType::Polygon && shape.points.size() >= 3) {
-        qreal distance = std::numeric_limits<qreal>::infinity();
-        for (int index = 0; index < shape.points.size(); ++index) {
-            distance = std::min(
-                distance,
-                distanceToSegment(screenPosition,
-                                  transform.worldToScreen(shape.points[index], viewportSize),
-                                  transform.worldToScreen(
-                                      shape.points[(index + 1) % shape.points.size()],
-                                      viewportSize)));
-        }
-        return distance;
+    if (shape.geometryType == GeometryType::Polygon &&
+        validateNurbsCurve(shape.nurbs)) {
+        return distanceToNurbsCurve(screenPosition,
+                                   shape.nurbs,
+                                   transform,
+                                   viewportSize);
     }
     if (shape.geometryType == GeometryType::Line) {
         if (validateNurbsCurve(shape.nurbs)) {
@@ -453,6 +447,9 @@ QVector<QPointF> CurveHitTester::controlPointsForShape(const Shape &shape) const
             controlPoints += component.controlPoints;
         }
         return controlPoints;
+    }
+    if (shape.geometryType == GeometryType::Polygon) {
+        return polygonVerticesForShape(shape);
     }
     if (!shape.nurbs.controlPoints.isEmpty()) {
         return shape.nurbs.controlPoints;

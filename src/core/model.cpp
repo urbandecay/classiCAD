@@ -13,6 +13,20 @@ namespace classiCAD {
 
 namespace {
 
+bool validClosedPolygonNurbs(const Shape::NurbsCurve2D &curve)
+{
+    if (!validateNurbsCurve(curve) || curve.degree != 1 ||
+        curve.controlPoints.size() < 4) {
+        return false;
+    }
+    const QPointF closure = curve.controlPoints.first() -
+                            curve.controlPoints.last();
+    if (std::hypot(closure.x(), closure.y()) > 1.0e-9) {
+        return false;
+    }
+    return true;
+}
+
 QJsonArray point3DToJson(const Point3D &point)
 {
     QJsonArray value;
@@ -87,6 +101,17 @@ Point3D shapePointToWorld(const Shape &shape, const QPointF &point)
 QPointF shapeWorldPointToLocal(const Shape &shape, const Point3D &point)
 {
     return worldPointToWorkPlaneFrame(point, shapeWorkPlaneFrame(shape));
+}
+
+QVector<QPointF> polygonVerticesForShape(const Shape &shape)
+{
+    if (shape.geometryType != GeometryType::Polygon ||
+        !validClosedPolygonNurbs(shape.nurbs)) {
+        return {};
+    }
+    QVector<QPointF> vertices = shape.nurbs.controlPoints;
+    vertices.removeLast();
+    return vertices.size() >= 3 ? vertices : QVector<QPointF>{};
 }
 
 HomogeneousControlPoint2D blendHomogeneousControlPoints(
@@ -402,9 +427,9 @@ QVector<QPointF> makeRegularPolygonPoints(PolygonMode mode,
         return {};
     }
 
-    sides = std::clamp(sides, 3, 256);
+    sides = std::clamp(sides, 3, 1001);
     if (mode == PolygonMode::Edge && sides % 2 == 0) {
-        sides = sides == 256 ? 255 : sides + 1;
+        ++sides;
     }
 
     constexpr qreal pi = 3.14159265358979323846;
@@ -451,8 +476,8 @@ QVector<QPointF> makeRegularPolygonPoints(PolygonMode mode,
         radius = edgeLength / (2.0 * sine);
         const qreal apothem = radius * std::cos(halfStep);
         const QPointF edgeUnit = edge / edgeLength;
-        const QPointF leftNormal(-edgeUnit.y(), edgeUnit.x());
-        center = (first + points[1]) * 0.5 + leftNormal * apothem;
+        const QPointF rightNormal(edgeUnit.y(), -edgeUnit.x());
+        center = (first + points[1]) * 0.5 + rightNormal * apothem;
         const QPointF toFirst = first - center;
         startAngle = std::atan2(toFirst.y(), toFirst.x());
     } else {
@@ -703,9 +728,9 @@ bool nurbsFromJson(const QJsonValue &value, Shape::NurbsCurve2D *curve)
     curve->controlPoints = controlPoints;
     curve->weights = weights;
     curve->knots = knots;
-    // Point, rectangle, and polygon records carry an empty placeholder
-    // NURBS object. Preserve that representation, but reject any populated
-    // curve that does not satisfy the shared core invariants.
+    // Point and rectangle records carry an empty placeholder NURBS object.
+    // Preserve that representation, but reject any populated curve that
+    // does not satisfy the shared core invariants.
     if (!curve->controlPoints.isEmpty() || !curve->weights.isEmpty() ||
         !curve->knots.isEmpty()) {
         if (!validateNurbsCurve(*curve)) {
@@ -838,16 +863,23 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     }
 
     QVector<QPointF> points;
-    if (!pointsFromJson(object.value(QStringLiteral("points")), &points)) {
-        return false;
-    }
-    if (geometryType == GeometryType::Polygon && points.size() < 3) {
+    const QJsonValue pointsValue = object.value(QStringLiteral("points"));
+    if (!pointsFromJson(pointsValue, &points) &&
+        !(geometryType == GeometryType::Polygon && pointsValue.isUndefined())) {
         return false;
     }
     if (isDimensionGeometryType(geometryType) && points.size() != 3) {
         return false;
     }
 
+    Shape::NurbsCurve2D nurbs;
+    if (!nurbsFromJson(object.value(QStringLiteral("nurbs")), &nurbs)) {
+        return false;
+    }
+    if (geometryType == GeometryType::Polygon &&
+        !validClosedPolygonNurbs(nurbs)) {
+        return false;
+    }
     QImage pictureImage;
     if (geometryType == GeometryType::Picture) {
         const QJsonValue imageValue = object.value(QStringLiteral("pictureImage"));
@@ -868,11 +900,6 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         if (pictureImage.isNull()) {
             return false;
         }
-    }
-
-    Shape::NurbsCurve2D nurbs;
-    if (!nurbsFromJson(object.value(QStringLiteral("nurbs")), &nurbs)) {
-        return false;
     }
 
     const QJsonValue arcSweepValue = object.value(QStringLiteral("arcSweep"));

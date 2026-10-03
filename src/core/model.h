@@ -152,6 +152,7 @@ struct Shape {
 WorkPlaneFrame shapeWorkPlaneFrame(const Shape &shape);
 Point3D shapePointToWorld(const Shape &shape, const QPointF &point);
 QPointF shapeWorldPointToLocal(const Shape &shape, const Point3D &point);
+QVector<QPointF> polygonVerticesForShape(const Shape &shape);
 
 struct EraseCurveSampleCache {
     int shapeIndex = -1;

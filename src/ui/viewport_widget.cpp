@@ -117,6 +117,12 @@ Shape pictureFrameOutline(const Shape &picture)
     frame.geometryType = GeometryType::Polygon;
     frame.pictureImage = QImage();
     frame.pictureImageData.clear();
+    const QVector<QPointF> corners = pictureFrameCorners(picture);
+    if (corners.size() == 4) {
+        QVector<QPointF> closedCorners = corners;
+        closedCorners.append(closedCorners.first());
+        frame.nurbs = makeDegreeOneNurbs(closedCorners);
+    }
     return frame;
 }
 
@@ -176,140 +182,6 @@ qreal snapOnePointArcAngle(qreal angle)
     return std::abs(std::remainder(angle - nearest, twoPi)) <= snapTolerance
                ? nearest
                : angle;
-}
-
-bool parseArcNumber(const QString &text, qreal *value)
-{
-    if (value == nullptr) {
-        return false;
-    }
-    const QString token = text.trimmed();
-    const qsizetype slash = token.indexOf(QLatin1Char('/'));
-    if (slash >= 0) {
-        bool numeratorValid = false;
-        bool denominatorValid = false;
-        const qreal numerator = token.left(slash).trimmed().toDouble(&numeratorValid);
-        const qreal denominator = token.mid(slash + 1).trimmed().toDouble(&denominatorValid);
-        if (!numeratorValid || !denominatorValid || std::abs(denominator) <= 1.0e-12) {
-            return false;
-        }
-        *value = numerator / denominator;
-        return std::isfinite(*value);
-    }
-    bool valid = false;
-    const qreal parsed = token.toDouble(&valid);
-    if (!valid || !std::isfinite(parsed)) {
-        return false;
-    }
-    *value = parsed;
-    return true;
-}
-
-bool parseArcAdditiveLength(const QString &text, qreal *value)
-{
-    if (value == nullptr) {
-        return false;
-    }
-    const QString normalized = text.trimmed().replace(QLatin1Char('\t'),
-                                                       QLatin1Char(' '));
-    if (normalized.isEmpty()) {
-        return false;
-    }
-    const QStringList terms = normalized.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-    qreal sum = 0.0;
-    for (const QString &term : terms) {
-        qreal parsed = 0.0;
-        if (!parseArcNumber(term, &parsed)) {
-            return false;
-        }
-        sum += parsed;
-    }
-    *value = sum;
-    return std::isfinite(sum);
-}
-
-bool parseArcLengthInput(const QString &input,
-                         DocumentLengthUnit defaultUnit,
-                         qreal *millimeters)
-{
-    if (millimeters == nullptr) {
-        return false;
-    }
-    QString text = input.trimmed().toLower();
-    if (text.isEmpty()) {
-        return false;
-    }
-
-    const qsizetype feetMark = text.indexOf(QLatin1Char('\''));
-    if (feetMark >= 0) {
-        qreal feet = 0.0;
-        if (!parseArcAdditiveLength(text.left(feetMark), &feet)) {
-            return false;
-        }
-        QString inchesText = text.mid(feetMark + 1).trimmed();
-        inchesText.remove(QLatin1Char('"'));
-        inchesText.remove(QStringLiteral("inches"));
-        inchesText.remove(QStringLiteral("inch"));
-        inchesText.remove(QStringLiteral("in"));
-        qreal inches = 0.0;
-        if (!inchesText.isEmpty() && !parseArcAdditiveLength(inchesText, &inches)) {
-            return false;
-        }
-        *millimeters = feet * 304.8 + inches * 25.4;
-        return std::isfinite(*millimeters);
-    }
-
-    qreal unitScale = millimetersPerDocumentUnit(defaultUnit);
-    const auto stripSuffix = [&](const QStringList &suffixes, qreal scale) {
-        for (const QString &suffix : suffixes) {
-            if (text.endsWith(suffix)) {
-                text.chop(suffix.size());
-                text = text.trimmed();
-                unitScale = scale;
-                return true;
-            }
-        }
-        return false;
-    };
-    if (text.endsWith(QLatin1Char('"')) || text.endsWith(QStringLiteral("in")) ||
-        text.endsWith(QStringLiteral("inch")) || text.endsWith(QStringLiteral("inches"))) {
-        text.remove(QLatin1Char('"'));
-        stripSuffix({QStringLiteral("inches"), QStringLiteral("inch"),
-                     QStringLiteral("in")}, 25.4);
-    } else if (!stripSuffix({QStringLiteral("mm"), QStringLiteral("millimeters"),
-                             QStringLiteral("millimeter")}, 1.0) &&
-               !stripSuffix({QStringLiteral("µm"), QStringLiteral("um"),
-                             QStringLiteral("micrometers"),
-                             QStringLiteral("micrometer")}, 0.001) &&
-               !stripSuffix({QStringLiteral("cm"), QStringLiteral("centimeters"),
-                             QStringLiteral("centimeter")}, 10.0) &&
-               !stripSuffix({QStringLiteral("km"), QStringLiteral("kilometers"),
-                             QStringLiteral("kilometer")}, 1000000.0) &&
-               !stripSuffix({QStringLiteral("m"), QStringLiteral("meters"),
-                             QStringLiteral("meter")}, 1000.0) &&
-               !stripSuffix({QStringLiteral("ft"), QStringLiteral("feet"),
-                             QStringLiteral("foot")}, 304.8)) {
-        // A bare imperial feet value is already covered by the active unit.
-    }
-
-    qreal value = 0.0;
-    if (!parseArcAdditiveLength(text, &value)) {
-        return false;
-    }
-    if (defaultUnit == DocumentLengthUnit::Foot &&
-        unitScale == millimetersPerDocumentUnit(defaultUnit) &&
-        text.contains(QLatin1Char(' '))) {
-        const QStringList parts = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-        qreal feet = 0.0;
-        qreal inches = 0.0;
-        if (parts.size() >= 2 && parseArcNumber(parts.first(), &feet) &&
-            parseArcAdditiveLength(parts.mid(1).join(QLatin1Char(' ')), &inches)) {
-            value = feet * 12.0 + inches;
-            unitScale = 25.4;
-        }
-    }
-    *millimeters = value * unitScale;
-    return std::isfinite(*millimeters);
 }
 
 QString arcLengthUnitSuffix(DocumentLengthUnit unit)
@@ -508,6 +380,14 @@ public:
                     cursorWorld_ = preview.cursorPoint;
                 }
             }
+            if (isPolygonTool(activeTool_)) {
+                polygonHudDimensionsLine_ = preview.hudDimensionsLine;
+                polygonHudInstructionsLine_ = preview.hudInstructionsLine;
+                cursorValid_ = preview.hasCursorPoint;
+                if (preview.hasCursorPoint) {
+                    cursorWorld_ = preview.cursorPoint;
+                }
+            }
             update();
         });
         toolContext_.setStatusPublisher([this](const ToolStatus &status) {
@@ -526,6 +406,11 @@ public:
         toolContext_.setArcSweepProvider([this] {
             return arcPreviewSweepAngle_;
         });
+        toolContext_.setPolygonSideCountCallbacks(
+            [this] { return polygonSideCount_; },
+            [this](int sideCount) {
+                polygonSideCount_ = std::clamp(sideCount, 3, 1001);
+            });
         setMinimumSize(480, 320);
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
@@ -629,16 +514,6 @@ public:
             pendingPicturePath_.clear();
             repeatTool_ = Tool::Select;
         }
-        if (previousTool != tool) {
-            polygonWheelRemainder_ = 0;
-        }
-        if (isPolygonTool(tool) && polygonModeForTool(tool) == PolygonMode::Edge &&
-            polygonSideCount_ % 2 == 0) {
-            --polygonSideCount_;
-        }
-        if (!isPolygonTool(tool)) {
-            polygonWheelRemainder_ = 0;
-        }
         if (activeToolController_ != nullptr && activeToolController_->id() != tool) {
             activeToolController_->cancel(toolContext_);
         }
@@ -673,6 +548,8 @@ public:
         ellipseHudDimensionsLine_.clear();
         ellipseHudInstructionsLine_.clear();
         ellipsePreviewGuides_.clear();
+        polygonHudDimensionsLine_.clear();
+        polygonHudInstructionsLine_.clear();
         resetArcPreviewTracking();
         resetArcInputState();
         lineCommandActive_ = tool == Tool::Line;
@@ -3029,7 +2906,7 @@ protected:
             const QColor previewColor(QStringLiteral("#e6b85c"));
             const QColor activeToolPreviewColor =
                 activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_) ||
-                        isEllipseTool(activeTool_)
+                        isEllipseTool(activeTool_) || isPolygonTool(activeTool_)
                     ? arcPreviewColor
                     : previewColor;
             for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
@@ -3152,7 +3029,8 @@ protected:
             } else if (activeTool_ == Tool::Line) {
                 for (const Shape &preview : linePreviewShapes_) {
                     gpuActiveToolPreview |= addPreviewShape(
-                        preview, previewColor, 2.0f, false, 0.0f, false, false);
+                        preview, QColor(QStringLiteral("#000000")),
+                        1.0f, false, 0.0f, false, false);
                 }
             } else if (activeTool_ != Tool::Picture &&
                        activeTool_ != Tool::Mirror &&
@@ -3163,6 +3041,7 @@ protected:
                        !isTwoCurveLineTool(activeTool_) &&
                        !isEllipseTool(activeTool_) &&
                        !isCircleConstructionTool(activeTool_) &&
+                       !isPolygonTool(activeTool_) &&
                        !pendingPoints_.isEmpty() && cursorValid_) {
                 QVector<QPointF> candidatePoints = pendingPoints_;
                 candidatePoints.append(cursorWorld_);
@@ -3591,6 +3470,7 @@ protected:
                                          joinActive_,
                                          joinShapeIndices_.size(),
                                          lineCommandActive_,
+                                         toolStatus_.text,
                                          rotateStep_,
                                          grabActive_,
                                          grabPickingBasePoint_,
@@ -3641,7 +3521,9 @@ protected:
         } else if (activeTool_ == Tool::Arc &&
                    (arcMode_ == ArcMode::TwoPoint ||
                     arcMode_ == ArcMode::ThreePoint) &&
-                   pendingPoints_.size() == 1) {
+                   pendingPoints_.size() == 1 &&
+                   !(arcMode_ == ArcMode::TwoPoint &&
+                     arcPerpendicularPlaneActive_)) {
             restoreArcChordReferencePlaneForEndpointPick();
         }
         QPointF rawWorldPosition;
@@ -4237,6 +4119,11 @@ protected:
             } else if (isPolygonTool(activeTool_)) {
                 completedShape.points = makeRegularPolygonPoints(
                     polygonModeForTool(activeTool_), pendingPoints_, polygonSideCount_);
+                if (completedShape.points.size() >= 3) {
+                    QVector<QPointF> closedPoints = completedShape.points;
+                    closedPoints.append(closedPoints.first());
+                    completedShape.nurbs = makeDegreeOneNurbs(closedPoints);
+                }
             }
             if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint) {
                 constexpr qreal twoPi = 6.28318530717958647692;
@@ -4432,7 +4319,9 @@ protected:
         } else if (activeTool_ == Tool::Arc &&
                    (arcMode_ == ArcMode::TwoPoint ||
                     arcMode_ == ArcMode::ThreePoint) &&
-                   pendingPoints_.size() == 1) {
+                   pendingPoints_.size() == 1 &&
+                   !(arcMode_ == ArcMode::TwoPoint &&
+                     arcPerpendicularPlaneActive_)) {
             restoreArcChordReferencePlaneForEndpointPick();
         }
         if (!viewportTransform_.screenToWorkPlane(screenPosition,
@@ -5078,25 +4967,15 @@ protected:
             return;
         }
 
-        if (isPolygonTool(activeTool_) && !pendingPoints_.isEmpty()) {
-            polygonWheelRemainder_ += event->angleDelta().y();
-            const int wheelSteps = polygonWheelRemainder_ / 120;
-            if (wheelSteps != 0) {
-                polygonWheelRemainder_ %= 120;
-                const int stepSize = polygonModeForTool(activeTool_) == PolygonMode::Edge
-                                         ? 2
-                                         : 1;
-                const int maximumSideCount = polygonModeForTool(activeTool_) ==
-                                                     PolygonMode::Edge
-                                                 ? 255
-                                                 : 256;
-                polygonSideCount_ = std::clamp(polygonSideCount_ + wheelSteps * stepSize,
-                                               3,
-                                               maximumSideCount);
-                if (polygonModeForTool(activeTool_) == PolygonMode::Edge &&
-                    polygonSideCount_ % 2 == 0) {
-                    polygonSideCount_ += wheelSteps > 0 ? 1 : -1;
-                }
+        if (isPolygonTool(activeTool_) && activeToolController_ != nullptr) {
+            ToolInput input;
+            input.workPlaneFrame = viewportTransform_.workPlaneFrame();
+            input.screenPosition = eventPosition(event);
+            input.viewportSize = size();
+            input.modifiers = event->modifiers();
+            input.wheelAngleDelta = event->angleDelta().y();
+            input.wheelPixelDelta = event->pixelDelta().y();
+            if (activeToolController_->handleWheel(input, toolContext_)) {
                 update();
                 emitCoordinateUpdate();
             }
@@ -8144,7 +8023,9 @@ private:
         if (activeTool_ == Tool::Arc &&
             (arcMode_ == ArcMode::TwoPoint ||
              arcMode_ == ArcMode::ThreePoint) &&
-            pendingPoints_.size() == 1) {
+            pendingPoints_.size() == 1 &&
+            !(arcMode_ == ArcMode::TwoPoint &&
+              arcPerpendicularPlaneActive_)) {
             restoreArcChordReferencePlaneForEndpointPick();
             QPointF rawAtScreen;
             if (viewportTransform_.screenToWorkPlane(
@@ -8671,11 +8552,11 @@ private:
             return {makeBezierNurbs(shape.points)};
         }
 
-        if ((shape.geometryType == GeometryType::Rectangle ||
-             shape.geometryType == GeometryType::Polygon) &&
-            shape.points.size() >= 2) {
+        if (shape.geometryType == GeometryType::Polygon ||
+            (shape.geometryType == GeometryType::Rectangle &&
+             shape.points.size() >= 2)) {
             const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
-                                                  ? shape.points
+                                                  ? polygonVerticesForShape(shape)
                                                   : rectangleVertices(shape);
             const int minimumVertices = shape.geometryType == GeometryType::Polygon ? 3 : 4;
             if (vertices.size() < minimumVertices) {
@@ -10998,6 +10879,8 @@ private:
         arcAxisConstraintKey_ = 0;
         arcPlaneNormalLockKey_ = 0;
         arcVerticalOverrideAxis_ = 0;
+        arcTwoPointPerpendicularNormal_ = {};
+        arcTwoPointPerpendicularNormalValid_ = false;
         arcWasVertical_ = false;
         arcPreviewStartAngle_ = 0.0;
         arcAngleSnapEnabled_ = true;
@@ -11020,6 +10903,8 @@ private:
         }
 
         arcReferenceNormal_ = arcReferenceFrame_.normal;
+        arcTwoPointPerpendicularNormal_ = {};
+        arcTwoPointPerpendicularNormalValid_ = false;
         arcFirstPointWorld_ = workPlaneFramePointToWorld(localPoint,
                                                           arcReferenceFrame_);
         arcChordWorldPointsValid_ = false;
@@ -11046,9 +10931,9 @@ private:
 
         if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint) {
             qreal distance = 0.0;
-            if (parseArcLengthInput(input,
-                                    document_.settings().lengthUnit,
-                                    &distance)) {
+            if (parseDocumentLengthInput(input,
+                                         document_.settings().lengthUnit,
+                                         &distance)) {
                 distance = std::abs(distance);
                 if (inputMode == ArcTextInputMode::ChordLength &&
                     pendingPoints_.size() == 1) {
@@ -11065,9 +10950,9 @@ private:
 
         if (inputMode == ArcTextInputMode::Radius) {
             qreal radius = 0.0;
-            if (parseArcLengthInput(input,
-                                   document_.settings().lengthUnit,
-                                   &radius) &&
+            if (parseDocumentLengthInput(input,
+                                        document_.settings().lengthUnit,
+                                        &radius) &&
                 !pendingPoints_.isEmpty()) {
                 radius = std::max<qreal>(0.1, std::abs(radius));
                 const QPointF center = pendingPoints_.first();
@@ -11643,19 +11528,47 @@ private:
         if (!arcReferenceFrameValid_) {
             return {};
         }
+
+        // Match the add-on's orthonormal_basis_from_normal(): the manual X/Y
+        // orientations are based on the reference normal and world axes, not
+        // on whichever X/Y rotation happened to be in the captured frame.
+        Point3D referenceNormal = arcReferenceNormal_;
+        const qreal normalLength = arcVectorLength(referenceNormal);
+        if (normalLength <= 1.0e-9) {
+            return {};
+        }
+        referenceNormal = arcVectorScale(referenceNormal, 1.0 / normalLength);
+        const Point3D worldX{1.0, 0.0, 0.0};
+        const Point3D worldY{0.0, 1.0, 0.0};
+        const Point3D referenceAxis =
+            std::abs(arcVectorDot(referenceNormal, worldX)) < 0.99
+                ? worldX
+                : worldY;
+        Point3D basisY = arcVectorCross(referenceNormal, referenceAxis);
+        const qreal basisYLength = arcVectorLength(basisY);
+        if (basisYLength <= 1.0e-9) {
+            return {};
+        }
+        basisY = arcVectorScale(basisY, 1.0 / basisYLength);
+        Point3D basisX = arcVectorCross(basisY, referenceNormal);
+        const qreal basisXLength = arcVectorLength(basisX);
+        if (basisXLength <= 1.0e-9) {
+            return {};
+        }
+        basisX = arcVectorScale(basisX, 1.0 / basisXLength);
+
         if (arcVerticalOverrideAxis_ == Qt::Key_X) {
-            return arcReferenceFrame_.xAxis;
+            return basisX;
         }
         if (arcVerticalOverrideAxis_ == Qt::Key_Y) {
-            return arcReferenceFrame_.yAxis;
+            return basisY;
         }
 
         const Point3D viewForward = viewportTransform_.viewDirection();
-        return std::abs(arcVectorDot(viewForward, arcReferenceFrame_.xAxis)) >
-                       std::abs(arcVectorDot(viewForward,
-                                             arcReferenceFrame_.yAxis))
-                   ? arcReferenceFrame_.xAxis
-                   : arcReferenceFrame_.yAxis;
+        return std::abs(arcVectorDot(viewForward, basisX)) >
+                       std::abs(arcVectorDot(viewForward, basisY))
+                   ? basisX
+                   : basisY;
     }
 
     void restoreArcChordReferencePlaneForEndpointPick()
@@ -11687,6 +11600,13 @@ private:
         if (!haveEndpoint) {
             return;
         }
+        // In the add-on, P changes the chord-picking plane immediately.
+        // Keep that chosen plane fixed while the second endpoint is moving;
+        // only build the final arc frame after the chord has been committed.
+        if (arcMode_ == ArcMode::TwoPoint &&
+            pendingPoints_.size() == 1 && !arcChordWorldPointsValid_) {
+            return;
+        }
         const Point3D endpoint = previewEndpointWorld != nullptr
                                      ? *previewEndpointWorld
                                      : arcSecondPointWorld_;
@@ -11705,7 +11625,52 @@ private:
         arcWasVertical_ = isVertical;
 
         WorkPlaneFrame frame = arcReferenceFrame_;
-        if (isVertical) {
+        if (arcMode_ == ArcMode::TwoPoint) {
+            Point3D planeNormal;
+            if (isVertical) {
+                planeNormal = arcVerticalPlaneNormal();
+            } else if (arcPerpendicularPlaneActive_) {
+                planeNormal = arcTwoPointPerpendicularNormalValid_
+                                  ? arcTwoPointPerpendicularNormal_
+                                  : arcVectorCross(chordDirection,
+                                                   arcReferenceNormal_);
+                const Point3D viewForward = viewportTransform_.viewDirection();
+                if (arcVectorDot(planeNormal, viewForward) > 0.0) {
+                    planeNormal = arcVectorScale(planeNormal, -1.0);
+                }
+            } else {
+                planeNormal = arcReferenceNormal_;
+            }
+
+            // A snapped endpoint can sit slightly outside the selected plane.
+            // Make the arc plane contain the final chord while keeping its
+            // normal as close as possible to the add-on's selected normal.
+            planeNormal = arcVectorSubtract(
+                planeNormal,
+                arcVectorScale(chordDirection,
+                               arcVectorDot(planeNormal, chordDirection)));
+            const qreal planeNormalLength = arcVectorLength(planeNormal);
+            if (planeNormalLength > 1.0e-9) {
+                planeNormal = arcVectorScale(planeNormal,
+                                             1.0 / planeNormalLength);
+                Point3D arcY = arcVectorCross(planeNormal, chordDirection);
+                const qreal arcYLength = arcVectorLength(arcY);
+                if (arcYLength > 1.0e-9) {
+                    arcY = arcVectorScale(arcY, 1.0 / arcYLength);
+                    frame.origin = arcVectorScale(
+                        arcVectorAdd(arcFirstPointWorld_, endpoint), 0.5);
+                    frame.xAxis = chordDirection;
+                    frame.yAxis = arcY;
+                    frame.normal = arcVectorCross(chordDirection, arcY);
+                    const qreal frameNormalLength = arcVectorLength(frame.normal);
+                    if (frameNormalLength > 1.0e-9) {
+                        frame.normal = arcVectorScale(frame.normal,
+                                                      1.0 / frameNormalLength);
+                        frame.valid = true;
+                    }
+                }
+            }
+        } else if (isVertical) {
             const Point3D midpoint = arcVectorScale(
                 arcVectorAdd(arcFirstPointWorld_, endpoint), 0.5);
             frame = makeWorkPlaneFrameFromNormal(midpoint,
@@ -11824,6 +11789,77 @@ private:
 
     void toggleTwoPointArcPerpendicularPlane()
     {
+        if (arcMode_ == ArcMode::TwoPoint && pendingPoints_.size() == 1 &&
+            arcReferenceFrameValid_) {
+            if (arcPerpendicularPlaneActive_) {
+                arcPerpendicularPlaneActive_ = false;
+                arcTwoPointPerpendicularNormal_ = {};
+                arcTwoPointPerpendicularNormalValid_ = false;
+                arcVerticalOverrideAxis_ = 0;
+                restoreArcChordReferencePlaneForEndpointPick();
+                pendingPoints_[0] = worldPointToWorkPlaneFrame(
+                    arcFirstPointWorld_, viewportTransform_.workPlaneFrame());
+            } else {
+                const Point3D endpoint = arcResolvedChordPointValid_
+                                             ? arcResolvedChordPointWorld_
+                                             : workPlaneFramePointToWorld(
+                                                   cursorWorld_,
+                                                   viewportTransform_.workPlaneFrame());
+                const Point3D bridge = arcVectorSubtract(endpoint,
+                                                         arcFirstPointWorld_);
+                const qreal bridgeLength = arcVectorLength(bridge);
+                if (bridgeLength <= 1.0e-9) {
+                    return;
+                }
+                const Point3D bridgeDirection =
+                    arcVectorScale(bridge, 1.0 / bridgeLength);
+                Point3D normal = arcVectorCross(bridgeDirection,
+                                                arcReferenceNormal_);
+                const qreal normalLength = arcVectorLength(normal);
+                if (normalLength <= 1.0e-9) {
+                    return;
+                }
+                normal = arcVectorScale(normal, 1.0 / normalLength);
+                Point3D floorNormal = arcReferenceNormal_;
+                const qreal floorNormalLength = arcVectorLength(floorNormal);
+                if (floorNormalLength <= 1.0e-9) {
+                    return;
+                }
+                floorNormal = arcVectorScale(floorNormal,
+                                             1.0 / floorNormalLength);
+                Point3D planeX = arcVectorCross(floorNormal, normal);
+                const qreal planeXLength = arcVectorLength(planeX);
+                if (planeXLength <= 1.0e-9) {
+                    return;
+                }
+
+                WorkPlaneFrame frame;
+                frame.origin = arcFirstPointWorld_;
+                frame.xAxis = arcVectorScale(planeX, 1.0 / planeXLength);
+                frame.yAxis = floorNormal;
+                frame.normal = normal;
+                frame.valid = true;
+                if (!isValidWorkPlaneFrame(frame)) {
+                    return;
+                }
+
+                arcPerpendicularPlaneActive_ = true;
+                arcTwoPointPerpendicularNormal_ = normal;
+                arcTwoPointPerpendicularNormalValid_ = true;
+                arcVerticalOverrideAxis_ = 0;
+                viewportTransform_.setWorkPlaneFrame(frame);
+                arcInputFrame_ = frame;
+                arcInputFrameValid_ = true;
+                pendingPoints_[0] = worldPointToWorkPlaneFrame(
+                    arcFirstPointWorld_, frame);
+            }
+
+            refreshArcCursorOnCurrentFrame();
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
         if (pendingPoints_.size() == 1 && arcReferenceFrameValid_) {
             // Match the add-on: P can choose the arc plane while the chord
             // endpoint is still moving. The next cursor update resolves the
@@ -11859,6 +11895,23 @@ private:
         } else {
             arcPerpendicularPlaneActive_ = !arcPerpendicularPlaneActive_;
             arcVerticalOverrideAxis_ = 0;
+            if (arcPerpendicularPlaneActive_) {
+                arcTwoPointPerpendicularNormal_ = arcVectorCross(
+                    chordDirection, arcReferenceNormal_);
+                const qreal normalLength =
+                    arcVectorLength(arcTwoPointPerpendicularNormal_);
+                if (normalLength > 1.0e-9) {
+                    arcTwoPointPerpendicularNormal_ = arcVectorScale(
+                        arcTwoPointPerpendicularNormal_, 1.0 / normalLength);
+                    arcTwoPointPerpendicularNormalValid_ = true;
+                } else {
+                    arcTwoPointPerpendicularNormal_ = {};
+                    arcTwoPointPerpendicularNormalValid_ = false;
+                }
+            } else {
+                arcTwoPointPerpendicularNormal_ = {};
+                arcTwoPointPerpendicularNormalValid_ = false;
+            }
         }
 
         updateArcTwoPointWorkPlaneForView();
@@ -11963,7 +12016,9 @@ private:
 
         arcResolvedChordPointWorld_ = targetWorld;
         arcResolvedChordPointValid_ = true;
-        updateArcTwoPointWorkPlaneForView(&targetWorld);
+        if (arcMode_ != ArcMode::TwoPoint || arcChordWorldPointsValid_) {
+            updateArcTwoPointWorkPlaneForView(&targetWorld);
+        }
         const WorkPlaneFrame newFrame = viewportTransform_.workPlaneFrame();
         const QPointF targetLocal = worldPointToWorkPlaneFrame(targetWorld,
                                                                newFrame);
@@ -12060,11 +12115,11 @@ private:
         if ((arcMode_ == ArcMode::TwoPoint ||
              arcMode_ == ArcMode::ThreePoint) &&
             pendingPoints_.size() == 1) {
-            // X/Y/Z constrain the chord endpoint in two-point mode. Keep the
-            // reference plane active while refreshing so the endpoint stays
-            // anchored to the first point as the cursor is reprojected.
             arcAxisConstraintKey_ = arcAxisConstraintKey_ == key ? 0 : key;
-            restoreArcChordReferencePlaneForEndpointPick();
+            if (!(arcMode_ == ArcMode::TwoPoint &&
+                  arcPerpendicularPlaneActive_)) {
+                restoreArcChordReferencePlaneForEndpointPick();
+            }
             refreshArcCursorOnCurrentFrame();
             update();
             return true;
@@ -12246,7 +12301,8 @@ private:
     {
         if (activeTool_ == Tool::Line && !linePreviewWorldPoints_.isEmpty()) {
             viewportOverlay_.drawWorldLinePreview(painter, linePreviewWorldPoints_,
-                linePreviewWorldCursor_, cursorValid_, size(), drawCurve);
+                linePreviewWorldCursor_, cursorValid_, size(), drawCurve,
+                linePreviewFrame_);
             if (currentSnap_.isValid()) {
                 drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
             }
@@ -12708,6 +12764,15 @@ private:
 
     void drawPolygonToolPreview(QPainter &painter, bool drawCurve = true)
     {
+        if (drawCurve && controllerPreviewShapeVisible_) {
+            const Layer *activeLayer = document_.layer(document_.activeLayerId());
+            const QColor previewColor =
+                activeLayer != nullptr && activeLayer->color.isValid()
+                    ? activeLayer->color
+                    : QColor(QStringLiteral("#d28b45"));
+            drawShape(painter, controllerPreviewShape_, true, false, true,
+                      previewColor);
+        }
         viewportOverlay_.drawPolygonPreview(painter,
                                             activeTool_,
                                             polygonSideCount_,
@@ -12716,7 +12781,10 @@ private:
                                             cursorValid_,
                                             currentSnap_,
                                             size(),
-                                            drawCurve);
+                                            false);
+        drawArcHudPanel(painter,
+                        {polygonHudDimensionsLine_, polygonHudInstructionsLine_},
+                        750.0);
     }
 
     void drawControlPoints(QPainter &painter,
@@ -12993,6 +13061,9 @@ private:
             if (result.points.size() < 3) {
                 return false;
             }
+            QVector<QPointF> closedPoints = result.points;
+            closedPoints.append(closedPoints.first());
+            result.nurbs = makeDegreeOneNurbs(closedPoints);
         } else if (isCircleConstructionTool(tool)) {
             if (tool == ToolId::CircleDiameter) {
                 if (!makeCircleDefinitionFromDiameter(points[0],
@@ -13071,6 +13142,8 @@ private:
     int arcAxisConstraintKey_ = 0;
     int arcPlaneNormalLockKey_ = 0;
     int arcVerticalOverrideAxis_ = 0;
+    Point3D arcTwoPointPerpendicularNormal_;
+    bool arcTwoPointPerpendicularNormalValid_ = false;
     bool arcWasVertical_ = false;
     bool controlPointsVisible_ = false;
     Document document_;
@@ -13102,6 +13175,8 @@ private:
     QString circleHudInstructionsLine_;
     QString ellipseHudDimensionsLine_;
     QString ellipseHudInstructionsLine_;
+    QString polygonHudDimensionsLine_;
+    QString polygonHudInstructionsLine_;
     QVector<ToolPreviewGuide> ellipsePreviewGuides_;
     WorkPlaneFrame toolDrawingFrame_;
     bool toolDrawingPlaneLocked_ = false;
@@ -13120,8 +13195,7 @@ private:
     QVector<Shape> linePreviewShapes_;
     bool linePreviewPlaneLocked_ = false;
     bool controllerPreviewShapeVisible_ = false;
-    int polygonSideCount_ = 6;
-    int polygonWheelRemainder_ = 0;
+    int polygonSideCount_ = 32;
     QPointF &pan_;
     QPointF lastWorldPosition_{0.0, 0.0};
     QPointF rawCursorWorld_{0.0, 0.0};

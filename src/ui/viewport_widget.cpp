@@ -2004,6 +2004,13 @@ public:
             return false;
         }
         const Shape &referenceShape = shapes_[referenceShapeIndex];
+        const SceneObject *referenceObject =
+            document_.object(joinShapeIndices_.first());
+        if (referenceObject == nullptr) {
+            notifyJoinStatus(QStringLiteral("Join failed — selected curves are unavailable"));
+            return false;
+        }
+        const LayerId joinedLayerId = referenceObject->layerId;
         const WorkPlaneFrame joinFrame = shapeWorkPlaneFrame(referenceShape);
         const WorkPlane joinWorkPlane = referenceShape.workPlane;
         const qreal joinWorkPlaneOffset = referenceShape.workPlaneOffset;
@@ -2141,7 +2148,11 @@ public:
         joined.workPlane = joinWorkPlane;
         joined.workPlaneOffset = joinWorkPlaneOffset;
         joined.workPlaneFrame = joinFrame;
-        const ObjectId joinedObjectId = shapes_.insert(insertIndex, joined);
+        SceneObject joinedObject;
+        joinedObject.layerId = joinedLayerId;
+        joinedObject.geometry = joined;
+        const ObjectId joinedObjectId =
+            shapes_.insertObject(insertIndex, joinedObject);
 
         joinActive_ = false;
         joinShapeIndices_.clear();
@@ -6504,6 +6515,109 @@ private:
                                   const QRectF &box,
                                   bool crossingSelection) const
     {
+        const QRectF selectionRect = box.normalized();
+        constexpr qreal crossingTolerancePixels = 2.0;
+        const QRectF hitRect = crossingSelection
+                                   ? selectionRect.adjusted(-crossingTolerancePixels,
+                                                            -crossingTolerancePixels,
+                                                            crossingTolerancePixels,
+                                                            crossingTolerancePixels)
+                                   : selectionRect;
+
+        const auto pointInside = [&hitRect](const QPointF &point) {
+            return hitRect.left() <= point.x() && point.x() <= hitRect.right() &&
+                   hitRect.top() <= point.y() && point.y() <= hitRect.bottom();
+        };
+        const auto segmentIntersectsRect = [&hitRect](const QPointF &start,
+                                                       const QPointF &end) {
+            // Liang-Barsky clipping checks the actual projected segment. This
+            // avoids selecting a distant diagonal curve just because its
+            // axis-aligned bounding box overlaps the crossing window.
+            const qreal dx = end.x() - start.x();
+            const qreal dy = end.y() - start.y();
+            const qreal p[] = {-dx, dx, -dy, dy};
+            const qreal q[] = {start.x() - hitRect.left(),
+                               hitRect.right() - start.x(),
+                               start.y() - hitRect.top(),
+                               hitRect.bottom() - start.y()};
+            qreal firstFraction = 0.0;
+            qreal lastFraction = 1.0;
+            for (int edge = 0; edge < 4; ++edge) {
+                if (std::abs(p[edge]) <= 1.0e-12) {
+                    if (q[edge] < 0.0) {
+                        return false;
+                    }
+                    continue;
+                }
+                const qreal fraction = q[edge] / p[edge];
+                if (p[edge] < 0.0) {
+                    firstFraction = std::max(firstFraction, fraction);
+                } else {
+                    lastFraction = std::min(lastFraction, fraction);
+                }
+                if (firstFraction > lastFraction) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        const QVector<Shape::NurbsCurve2D> curves =
+            curveSampler_.curvesForShape(shape);
+        if (!curves.isEmpty()) {
+            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+            bool sampledGeometry = false;
+            bool intersects = false;
+            for (const Shape::NurbsCurve2D &curve : curves) {
+                SampledNurbsCurve2D sampled;
+                if (!curveSampler_.sampleNurbsCurve(curve,
+                                                     frame,
+                                                     viewportTransform_,
+                                                     size(),
+                                                     &sampled)) {
+                    return false;
+                }
+                sampledGeometry = true;
+                for (const QPointF &point : sampled.screenPoints) {
+                    if (!crossingSelection && !pointInside(point)) {
+                        return false;
+                    }
+                    if (crossingSelection && pointInside(point)) {
+                        intersects = true;
+                    }
+                }
+                if (crossingSelection) {
+                    for (int index = 1;
+                         index < sampled.screenPoints.size();
+                         ++index) {
+                        if (segmentIntersectsRect(sampled.screenPoints[index - 1],
+                                                  sampled.screenPoints[index])) {
+                            intersects = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!sampledGeometry) {
+                return false;
+            }
+            return crossingSelection ? intersects : true;
+        }
+
+        if (shape.geometryType == GeometryType::Point && !shape.points.isEmpty()) {
+            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+            QPointF screenPoint;
+            if (!viewportTransform_.worldPointToScreen(
+                    workPlaneFramePointToWorld(shape.points.first(), frame),
+                    size(),
+                    &screenPoint)) {
+                return false;
+            }
+            return pointInside(screenPoint);
+        }
+
+        // Non-curve geometry such as pictures and dimensions has no NURBS
+        // path to sample, so retain its existing projected-bounds selection.
         bool hasProjectedPoints = false;
         const QRectF bounds = selectionBoundsForShape(shape, &hasProjectedPoints)
                                   .normalized();
@@ -6512,28 +6626,19 @@ private:
         }
 
         // CAD-style selection windows use containment when dragged from
-        // left to right and crossing selection when dragged from right to
-        // left. The crossing window includes anything that touches it.
+        // left to right and curve intersection when dragged from right to
+        // left.
         if (!crossingSelection) {
-            const QRectF window = box.normalized();
-            return bounds.left() >= window.left() &&
-                   bounds.right() <= window.right() &&
-                   bounds.top() >= window.top() &&
-                   bounds.bottom() <= window.bottom();
+            return bounds.left() >= selectionRect.left() &&
+                   bounds.right() <= selectionRect.right() &&
+                   bounds.top() >= selectionRect.top() &&
+                   bounds.bottom() <= selectionRect.bottom();
         }
 
-        // QRectF::intersects() can exclude a contact that falls exactly on
-        // an edge. Include the visible stroke/point tolerance and compare
-        // the normalized edges inclusively so a touching curve is selected.
-        constexpr qreal crossingTolerancePixels = 2.0;
-        const QRectF crossingBox = box.normalized().adjusted(-crossingTolerancePixels,
-                                                              -crossingTolerancePixels,
-                                                              crossingTolerancePixels,
-                                                              crossingTolerancePixels);
-        return bounds.left() <= crossingBox.right() &&
-               crossingBox.left() <= bounds.right() &&
-               bounds.top() <= crossingBox.bottom() &&
-               crossingBox.top() <= bounds.bottom();
+        return bounds.left() <= hitRect.right() &&
+               hitRect.left() <= bounds.right() &&
+               bounds.top() <= hitRect.bottom() &&
+               hitRect.top() <= bounds.bottom();
     }
 
     void beginSelectionBox(const QPointF &screenPosition, bool additive)

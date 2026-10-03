@@ -9623,11 +9623,11 @@ private:
                 .arg(totalTimer.nsecsElapsed() / 1000));
     }
 
+
     qreal distanceToCachedEraseShape(const QPointF &screenPosition,
                                      int shapeIndex,
                                      int *closestComponentIndex = nullptr) const
     {
-        constexpr qreal eraserRadiusPixels = 10.0;
         qreal distance = 1.0e9;
         if (closestComponentIndex != nullptr) {
             *closestComponentIndex = -1;
@@ -9637,28 +9637,10 @@ private:
                 continue;
             }
 
-            qreal componentDistance = 1.0e9;
-            for (int sample = 1;
-                 sample < targetCurve.sampled.screenPoints.size();
-                 ++sample) {
-                if (targetCurve.sampled.segmentBounds.size() ==
-                    targetCurve.sampled.screenPoints.size() - 1) {
-                    const QRectF &bounds =
-                        targetCurve.sampled.segmentBounds[sample - 1];
-                    if (screenPosition.x() < bounds.left() - eraserRadiusPixels ||
-                        screenPosition.x() > bounds.right() + eraserRadiusPixels ||
-                        screenPosition.y() < bounds.top() - eraserRadiusPixels ||
-                        screenPosition.y() > bounds.bottom() + eraserRadiusPixels) {
-                        continue;
-                    }
-                }
-
-                componentDistance = std::min(
-                    componentDistance,
-                    distanceToSegment(screenPosition,
-                                      targetCurve.sampled.screenPoints[sample - 1],
-                                      targetCurve.sampled.screenPoints[sample]));
-            }
+            const qreal componentDistance = closestNurbsScreenDistance(
+                targetCurve.curve,
+                targetCurve.workPlaneFrame,
+                screenPosition);
             if (componentDistance < distance) {
                 distance = componentDistance;
                 if (closestComponentIndex != nullptr) {
@@ -9913,13 +9895,121 @@ private:
                 .arg(candidateCount));
     }
 
-    QVector<ParameterInterval> eraserIntervalsForCurve(
+    qreal closestNurbsScreenDistance(
         const Shape::NurbsCurve2D &curve,
-        const QVector<QPointF> &stroke,
-        const WorkPlaneFrame &workPlaneFrame) const
+        const WorkPlaneFrame &workPlaneFrame,
+        const QPointF &screenPosition) const
+    {
+        if (!isValidNurbsCurve(curve) ||
+            !isValidWorkPlaneFrame(workPlaneFrame)) {
+            return std::numeric_limits<qreal>::infinity();
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const auto squaredDistanceAt = [&](qreal parameter) {
+            QPointF localPoint;
+            if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
+                return std::numeric_limits<qreal>::infinity();
+            }
+            const QPointF curveScreen =
+                viewportTransform_.workPlaneToScreen(localPoint,
+                                                     size(),
+                                                     workPlaneFrame);
+            const QPointF delta = curveScreen - screenPosition;
+            return QPointF::dotProduct(delta, delta);
+        };
+        const auto goldenMinimum = [&](qreal low, qreal high) {
+            constexpr qreal ratio = 0.6180339887498948482;
+            qreal first = high - (high - low) * ratio;
+            qreal second = low + (high - low) * ratio;
+            qreal firstValue = squaredDistanceAt(first);
+            qreal secondValue = squaredDistanceAt(second);
+            for (int iteration = 0; iteration < 32; ++iteration) {
+                if (firstValue <= secondValue) {
+                    high = second;
+                    second = first;
+                    secondValue = firstValue;
+                    first = high - (high - low) * ratio;
+                    firstValue = squaredDistanceAt(first);
+                } else {
+                    low = first;
+                    first = second;
+                    firstValue = secondValue;
+                    second = low + (high - low) * ratio;
+                    secondValue = squaredDistanceAt(second);
+                }
+            }
+            return (low + high) * 0.5;
+        };
+
+        qreal closestDistanceSquared =
+            std::numeric_limits<qreal>::infinity();
+        for (int knotIndex = curve.degree;
+             knotIndex < curve.controlPoints.size();
+             ++knotIndex) {
+            const qreal spanStart = fullKnots[knotIndex];
+            const qreal spanEnd = fullKnots[knotIndex + 1];
+            if (spanEnd - spanStart <= 1.0e-12) {
+                continue;
+            }
+
+            const int subdivisions = std::max(24, curve.degree * 16);
+            QVector<qreal> sampleParameters;
+            QVector<qreal> sampleDistances;
+            sampleParameters.reserve(subdivisions + 1);
+            sampleDistances.reserve(subdivisions + 1);
+            for (int sample = 0; sample <= subdivisions; ++sample) {
+                const qreal fraction =
+                    static_cast<qreal>(sample) / subdivisions;
+                const qreal parameter =
+                    spanStart + (spanEnd - spanStart) * fraction;
+                const qreal distanceSquared =
+                    squaredDistanceAt(parameter);
+                sampleParameters.append(parameter);
+                sampleDistances.append(distanceSquared);
+                closestDistanceSquared =
+                    std::min(closestDistanceSquared, distanceSquared);
+            }
+
+            for (int sample = 0; sample <= subdivisions; ++sample) {
+                const qreal previousDistance =
+                    sample > 0 ? sampleDistances[sample - 1]
+                               : std::numeric_limits<qreal>::infinity();
+                const qreal nextDistance =
+                    sample < subdivisions
+                        ? sampleDistances[sample + 1]
+                        : std::numeric_limits<qreal>::infinity();
+                if (sampleDistances[sample] > previousDistance ||
+                    sampleDistances[sample] > nextDistance) {
+                    continue;
+                }
+
+                const qreal low =
+                    sampleParameters[std::max(0, sample - 1)];
+                const qreal high =
+                    sampleParameters[std::min(subdivisions, sample + 1)];
+                if (high - low <= 1.0e-14) {
+                    continue;
+                }
+                const qreal candidate =
+                    goldenMinimum(low, high);
+                closestDistanceSquared =
+                    std::min(closestDistanceSquared,
+                             squaredDistanceAt(candidate));
+            }
+        }
+        return std::sqrt(closestDistanceSquared);
+    }
+
+    QVector<ParameterInterval> eraserIntervalsForNurbsStrokeSegment(
+        const Shape::NurbsCurve2D &curve,
+        const WorkPlaneFrame &workPlaneFrame,
+        const QPointF &strokeStart,
+        const QPointF &strokeEnd) const
     {
         QVector<ParameterInterval> intervals;
-        if (!isValidNurbsCurve(curve) || stroke.isEmpty()) {
+        if (!isValidNurbsCurve(curve) ||
+            !isValidWorkPlaneFrame(workPlaneFrame)) {
             return intervals;
         }
 
@@ -9931,76 +10021,228 @@ private:
             return intervals;
         }
 
-        int nonZeroSpans = 0;
-        for (int index = curve.degree; index < curve.controlPoints.size(); ++index) {
-            if (fullKnots[index + 1] > fullKnots[index]) {
-                ++nonZeroSpans;
-            }
-        }
-        const int sampleCount = std::max(256, nonZeroSpans * 128);
         constexpr qreal eraserRadiusPixels = 10.0;
-        const auto insideEraser = [&](qreal parameter) {
-            QPointF worldPoint;
-            if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
-                return false;
+        const qreal eraserRadiusSquared =
+            eraserRadiusPixels * eraserRadiusPixels;
+        const auto squaredDistanceAt = [&](qreal parameter) {
+            QPointF localPoint;
+            if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
+                return std::numeric_limits<qreal>::infinity();
             }
-            return distanceToEraserStroke(
-                       viewportTransform_.workPlaneToScreen(worldPoint,
-                                                            size(),
-                                                            workPlaneFrame),
-                       stroke) <= eraserRadiusPixels;
+            const QPointF curveScreen =
+                viewportTransform_.workPlaneToScreen(localPoint,
+                                                     size(),
+                                                     workPlaneFrame);
+            const qreal distance = distanceToSegment(curveScreen,
+                                                     strokeStart,
+                                                     strokeEnd);
+            return distance * distance;
         };
-
-        const auto refineBoundary = [&](qreal first,
-                                        qreal second,
-                                        bool firstInside) {
-            qreal low = first;
-            qreal high = second;
-            for (int iteration = 0; iteration < 30; ++iteration) {
-                const qreal middle = (low + high) * 0.5;
-                if (insideEraser(middle) == firstInside) {
-                    low = middle;
+        const auto goldenMinimum = [&](qreal low, qreal high) {
+            constexpr qreal ratio = 0.6180339887498948482;
+            qreal first = high - (high - low) * ratio;
+            qreal second = low + (high - low) * ratio;
+            qreal firstValue = squaredDistanceAt(first);
+            qreal secondValue = squaredDistanceAt(second);
+            for (int iteration = 0; iteration < 32; ++iteration) {
+                if (firstValue <= secondValue) {
+                    high = second;
+                    second = first;
+                    secondValue = firstValue;
+                    first = high - (high - low) * ratio;
+                    firstValue = squaredDistanceAt(first);
                 } else {
-                    high = middle;
+                    low = first;
+                    first = second;
+                    firstValue = secondValue;
+                    second = low + (high - low) * ratio;
+                    secondValue = squaredDistanceAt(second);
+                }
+            }
+            return (low + high) * 0.5;
+        };
+        const auto refineBoundary = [&](qreal outsideParameter,
+                                        qreal insideParameter,
+                                        bool outsideIsFirst) {
+            qreal low = outsideIsFirst ? outsideParameter : insideParameter;
+            qreal high = outsideIsFirst ? insideParameter : outsideParameter;
+            for (int iteration = 0; iteration < 36; ++iteration) {
+                const qreal middle = (low + high) * 0.5;
+                const bool middleInside =
+                    squaredDistanceAt(middle) <= eraserRadiusSquared;
+                if (middleInside) {
+                    if (outsideIsFirst) {
+                        high = middle;
+                    } else {
+                        low = middle;
+                    }
+                } else {
+                    if (outsideIsFirst) {
+                        low = middle;
+                    } else {
+                        high = middle;
+                    }
                 }
             }
             return (low + high) * 0.5;
         };
 
-        qreal previousParameter = domainStart;
-        bool previousInside = insideEraser(previousParameter);
-        qreal intervalStart = previousInside ? domainStart : -1.0;
-        for (int sample = 1; sample <= sampleCount; ++sample) {
-            const qreal currentParameter =
-                domainStart + domainLength * sample / sampleCount;
-            const bool currentInside = insideEraser(currentParameter);
-            if (currentInside != previousInside) {
-                const qreal boundary = refineBoundary(previousParameter,
-                                                       currentParameter,
-                                                       previousInside);
-                if (currentInside) {
-                    intervalStart = boundary;
-                } else if (intervalStart >= 0.0) {
-                    intervals.append(ParameterInterval{intervalStart, boundary});
-                    intervalStart = -1.0;
+        for (int knotIndex = curve.degree;
+             knotIndex < curve.controlPoints.size();
+             ++knotIndex) {
+            const qreal spanStart = fullKnots[knotIndex];
+            const qreal spanEnd = fullKnots[knotIndex + 1];
+            if (spanEnd - spanStart <= 1.0e-12) {
+                continue;
+            }
+
+            const int subdivisions = std::max(24, curve.degree * 16);
+            QVector<qreal> sampleParameters;
+            QVector<qreal> sampleDistances;
+            sampleParameters.reserve(subdivisions + 1);
+            sampleDistances.reserve(subdivisions + 1);
+            for (int sample = 0; sample <= subdivisions; ++sample) {
+                const qreal fraction =
+                    static_cast<qreal>(sample) / subdivisions;
+                const qreal parameter =
+                    spanStart + (spanEnd - spanStart) * fraction;
+                sampleParameters.append(parameter);
+                sampleDistances.append(squaredDistanceAt(parameter));
+            }
+
+            for (int sample = 0; sample <= subdivisions; ++sample) {
+                const qreal previousDistance =
+                    sample > 0 ? sampleDistances[sample - 1]
+                               : std::numeric_limits<qreal>::infinity();
+                const qreal nextDistance =
+                    sample < subdivisions
+                        ? sampleDistances[sample + 1]
+                        : std::numeric_limits<qreal>::infinity();
+                if (sampleDistances[sample] > previousDistance ||
+                    sampleDistances[sample] > nextDistance) {
+                    continue;
+                }
+
+                const qreal low =
+                    sampleParameters[std::max(0, sample - 1)];
+                const qreal high =
+                    sampleParameters[std::min(subdivisions, sample + 1)];
+                qreal minimumParameter = sampleParameters[sample];
+                if (high - low > 1.0e-14) {
+                    minimumParameter = goldenMinimum(low, high);
+                }
+                if (squaredDistanceAt(minimumParameter) >
+                    eraserRadiusSquared) {
+                    continue;
+                }
+
+                qreal leftBoundary = spanStart;
+                int previous = sample;
+                while (previous >= 0 &&
+                       sampleParameters[previous] >= minimumParameter) {
+                    --previous;
+                }
+                while (previous >= 0 &&
+                       sampleDistances[previous] <= eraserRadiusSquared) {
+                    --previous;
+                }
+                if (previous >= 0) {
+                    leftBoundary = refineBoundary(sampleParameters[previous],
+                                                  minimumParameter,
+                                                  true);
+                }
+
+                qreal rightBoundary = spanEnd;
+                int next = sample;
+                while (next <= subdivisions &&
+                       sampleParameters[next] <= minimumParameter) {
+                    ++next;
+                }
+                while (next <= subdivisions &&
+                       sampleDistances[next] <= eraserRadiusSquared) {
+                    ++next;
+                }
+                if (next <= subdivisions) {
+                    rightBoundary = refineBoundary(sampleParameters[next],
+                                                   minimumParameter,
+                                                   false);
+                }
+
+                if (rightBoundary - leftBoundary > 0.0) {
+                    intervals.append({leftBoundary, rightBoundary});
                 }
             }
-            previousParameter = currentParameter;
-            previousInside = currentInside;
         }
 
-        if (intervalStart >= 0.0) {
-            intervals.append(ParameterInterval{intervalStart, domainEnd});
-        }
-
-        const qreal mergeTolerance = std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
+        std::sort(intervals.begin(),
+                  intervals.end(),
+                  [](const ParameterInterval &first,
+                     const ParameterInterval &second) {
+                      return first.start < second.start;
+                  });
+        const qreal mergeTolerance =
+            std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
         QVector<ParameterInterval> merged;
         for (const ParameterInterval &interval : intervals) {
             if (interval.end - interval.start <= mergeTolerance) {
                 continue;
             }
-            if (!merged.isEmpty() && interval.start <= merged.last().end + mergeTolerance) {
-                merged.last().end = std::max(merged.last().end, interval.end);
+            if (!merged.isEmpty() &&
+                interval.start <= merged.last().end + mergeTolerance) {
+                merged.last().end =
+                    std::max(merged.last().end, interval.end);
+            } else {
+                merged.append(interval);
+            }
+        }
+        return merged;
+    }
+
+    QVector<ParameterInterval> eraserIntervalsForCurve(
+        const Shape::NurbsCurve2D &curve,
+        const QVector<QPointF> &stroke,
+        const WorkPlaneFrame &workPlaneFrame) const
+    {
+        QVector<ParameterInterval> intervals;
+        if (!isValidNurbsCurve(curve) || stroke.isEmpty()) {
+            return intervals;
+        }
+        if (stroke.size() == 1) {
+            intervals = eraserIntervalsForNurbsStrokeSegment(
+                curve, workPlaneFrame, stroke.first(), stroke.first());
+        } else {
+            for (int index = 1; index < stroke.size(); ++index) {
+                const QVector<ParameterInterval> segmentIntervals =
+                    eraserIntervalsForNurbsStrokeSegment(
+                        curve,
+                        workPlaneFrame,
+                        stroke[index - 1],
+                        stroke[index]);
+                intervals += segmentIntervals;
+            }
+        }
+
+        const QVector<double> fullKnots = expandedKnotVector(curve);
+        const qreal domainStart = fullKnots[curve.degree];
+        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
+        const qreal domainLength = domainEnd - domainStart;
+        const qreal mergeTolerance =
+            std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
+        std::sort(intervals.begin(),
+                  intervals.end(),
+                  [](const ParameterInterval &first,
+                     const ParameterInterval &second) {
+                      return first.start < second.start;
+                  });
+        QVector<ParameterInterval> merged;
+        for (const ParameterInterval &interval : intervals) {
+            if (interval.end - interval.start <= mergeTolerance) {
+                continue;
+            }
+            if (!merged.isEmpty() &&
+                interval.start <= merged.last().end + mergeTolerance) {
+                merged.last().end =
+                    std::max(merged.last().end, interval.end);
             } else {
                 merged.append(interval);
             }
@@ -10015,70 +10257,6 @@ private:
         return eraserIntervalsForCurve(curve,
                                        stroke,
                                        viewportTransform_.workPlaneFrame());
-    }
-
-    qreal distanceBetweenScreenSegments(const QPointF &firstStart,
-                                        const QPointF &firstEnd,
-                                        const QPointF &secondStart,
-                                        const QPointF &secondEnd) const
-    {
-        return std::min({distanceToSegment(firstStart, secondStart, secondEnd),
-                         distanceToSegment(firstEnd, secondStart, secondEnd),
-                         distanceToSegment(secondStart, firstStart, firstEnd),
-                         distanceToSegment(secondEnd, firstStart, firstEnd)});
-    }
-
-    QVector<ParameterInterval> eraserIntervalsForSampledCurveSegment(
-        const SampledNurbsCurve2D &sampled,
-        const QPointF &strokeStart,
-        const QPointF &strokeEnd) const
-    {
-        QVector<ParameterInterval> intervals;
-        if (sampled.parameters.size() < 2 ||
-            sampled.parameters.size() != sampled.screenPoints.size()) {
-            return intervals;
-        }
-
-        constexpr qreal eraserRadiusPixels = 10.0;
-        const QRectF strokeBounds = QRectF(strokeStart, strokeEnd).normalized();
-        const bool hasBounds = sampled.segmentBounds.size() ==
-                               sampled.screenPoints.size() - 1;
-        bool inside = false;
-        qreal intervalStart = 0.0;
-        for (int sample = 1; sample < sampled.screenPoints.size(); ++sample) {
-            bool segmentInside = false;
-            bool boundsMayBeNear = !hasBounds;
-            if (hasBounds) {
-                const QRectF &curveBounds = sampled.segmentBounds[sample - 1];
-                boundsMayBeNear =
-                    curveBounds.right() >= strokeBounds.left() - eraserRadiusPixels &&
-                    strokeBounds.right() >= curveBounds.left() - eraserRadiusPixels &&
-                    curveBounds.bottom() >= strokeBounds.top() - eraserRadiusPixels &&
-                    strokeBounds.bottom() >= curveBounds.top() - eraserRadiusPixels;
-            }
-            if (boundsMayBeNear) {
-                segmentInside =
-                    distanceBetweenScreenSegments(sampled.screenPoints[sample - 1],
-                                                  sampled.screenPoints[sample],
-                                                  strokeStart,
-                                                  strokeEnd) <= eraserRadiusPixels;
-            }
-
-            if (segmentInside && !inside) {
-                intervalStart = sampled.parameters[sample - 1];
-                inside = true;
-            } else if (!segmentInside && inside) {
-                intervals.append(ParameterInterval{intervalStart,
-                                                   sampled.parameters[sample - 1]});
-                inside = false;
-            }
-        }
-
-        if (inside) {
-            intervals.append(ParameterInterval{intervalStart,
-                                               sampled.parameters.last()});
-        }
-        return intervals;
     }
 
     QVector<ParameterInterval> boundEraseIntervals(
@@ -10315,8 +10493,9 @@ private:
             QVector<ParameterInterval> newHitIntervals;
             int firstStrokeSegment = targetCurve.previewStrokePointCount;
             if (targetCurve.previewStrokePointCount == 0) {
-                newHitIntervals = eraserIntervalsForSampledCurveSegment(
-                    targetCurve.sampled,
+                newHitIntervals = eraserIntervalsForNurbsStrokeSegment(
+                    targetCurve.curve,
+                    targetCurve.workPlaneFrame,
                     eraseStrokeScreenPath_.first(),
                     eraseStrokeScreenPath_.first());
                 firstStrokeSegment = 1;
@@ -10326,8 +10505,9 @@ private:
                  strokeSegment < strokePointCount;
                  ++strokeSegment) {
                 const QVector<ParameterInterval> segmentIntervals =
-                    eraserIntervalsForSampledCurveSegment(
-                        targetCurve.sampled,
+                    eraserIntervalsForNurbsStrokeSegment(
+                        targetCurve.curve,
+                        targetCurve.workPlaneFrame,
                         eraseStrokeScreenPath_[strokeSegment - 1],
                         eraseStrokeScreenPath_[strokeSegment]);
                 for (const ParameterInterval &interval : segmentIntervals) {

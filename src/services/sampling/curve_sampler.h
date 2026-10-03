@@ -13,6 +13,11 @@ public:
                           const ViewportTransform &transform,
                           const QSize &viewportSize,
                           SampledNurbsCurve2D *sampled) const;
+    bool sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
+                          const WorkPlaneFrame &workPlaneFrame,
+                          const ViewportTransform &transform,
+                          const QSize &viewportSize,
+                          SampledNurbsCurve2D *sampled) const;
 
     QVector<Shape::NurbsCurve2D> curvesForShape(const Shape &shape) const;
     QVector<EraseCurveSampleCache> sampleDocument(

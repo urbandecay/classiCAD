@@ -162,6 +162,7 @@ QVector<QPointF> polygonVerticesForShape(const Shape &shape);
 struct EraseCurveSampleCache {
     int shapeIndex = -1;
     int componentIndex = -1;
+    WorkPlaneFrame workPlaneFrame;
     Shape::NurbsCurve2D curve;
     SampledNurbsCurve2D sampled;
     QVector<qreal> intersectionParameters;

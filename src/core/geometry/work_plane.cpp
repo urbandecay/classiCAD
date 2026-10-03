@@ -269,4 +269,22 @@ bool workPlaneFramesMatch(const WorkPlaneFrame &first,
            near(first.normal.z, second.normal.z);
 }
 
+bool workPlaneFramesCoplanar(const WorkPlaneFrame &first,
+                             const WorkPlaneFrame &second,
+                             qreal distanceTolerance)
+{
+    if (!isValidWorkPlaneFrame(first) || !isValidWorkPlaneFrame(second) ||
+        !std::isfinite(distanceTolerance) || distanceTolerance < 0.0) {
+        return false;
+    }
+
+    const qreal normalAlignment = std::abs(dot(first.normal, second.normal));
+    if (1.0 - normalAlignment > 1.0e-8) {
+        return false;
+    }
+
+    return std::abs(dot(subtract(second.origin, first.origin), first.normal)) <=
+           distanceTolerance;
+}
+
 } // namespace classiCAD

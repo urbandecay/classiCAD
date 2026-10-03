@@ -2137,13 +2137,39 @@ int main(int argc, char **argv)
                             1.0e-12,
                     "viewport navigation preferences must retain the selected trackball mode and sensitivity");
 
-    passed &= check(sampler.sampleDocument(xzDocument,
-                                           viewportTransform,
-                                           viewportSize).isEmpty() &&
-                        sampler.sampleDocument(xzDocument,
-                                               frontTransform,
-                                               viewportSize).size() == 1,
-                    "erase sampling must only include curves on the active workplane");
+    const auto topEraseSamples = sampler.sampleDocument(xzDocument,
+                                                        viewportTransform,
+                                                        viewportSize);
+    const auto frontEraseSamples = sampler.sampleDocument(xzDocument,
+                                                          frontTransform,
+                                                          viewportSize);
+    bool eraseSamplesUseObjectFrames = topEraseSamples.size() == 1 &&
+                                        frontEraseSamples.size() == 1;
+    const auto checkEraseProjection = [&](const auto &samples,
+                                           const ViewportTransform &transform) {
+        for (const auto &cache : samples) {
+            if (!workPlaneFramesMatch(cache.workPlaneFrame,
+                                       shapeWorkPlaneFrame(xzDocument[0]))) {
+                return false;
+            }
+            for (int sample = 0; sample < cache.sampled.parameters.size(); ++sample) {
+                QPointF local;
+                if (!evaluateNurbsPoint(cache.curve, cache.sampled.parameters[sample], &local)) {
+                    return false;
+                }
+                const QPointF expected = transform.workPlaneToScreen(
+                    local, viewportSize, shapeWorkPlaneFrame(xzDocument[0]));
+                if (QLineF(expected, cache.sampled.screenPoints[sample]).length() > 1.0e-9) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+    eraseSamplesUseObjectFrames &= checkEraseProjection(topEraseSamples, viewportTransform) &&
+                                   checkEraseProjection(frontEraseSamples, frontTransform);
+    passed &= check(eraseSamplesUseObjectFrames,
+                    "erase sampling must project visible curves through their own frames in every view");
     SnapEngine planeSnapEngine;
     SnapSettings planeSnapSettings;
     planeSnapSettings.enabled = true;

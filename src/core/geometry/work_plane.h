@@ -58,6 +58,9 @@ qreal signedDistanceFromWorkPlaneFrame(const Point3D &point,
                                        const WorkPlaneFrame &frame);
 bool workPlaneFramesMatch(const WorkPlaneFrame &first,
                           const WorkPlaneFrame &second);
+bool workPlaneFramesCoplanar(const WorkPlaneFrame &first,
+                             const WorkPlaneFrame &second,
+                             qreal distanceTolerance = 1.0e-7);
 
 inline bool workPlaneMatches(WorkPlane firstPlane,
                              qreal firstOffset,

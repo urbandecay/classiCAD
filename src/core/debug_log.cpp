@@ -15,7 +15,8 @@ DebugLog &DebugLog::instance()
 
 DebugLog::DebugLog()
 {
-    file_.setFileName(QStringLiteral("/tmp/classiCAD.log"));
+    file_.setFileName(qEnvironmentVariable("CLASSICAD_LOG_PATH",
+                                          QStringLiteral("/tmp/classiCAD.log")));
     file_.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
 }
 

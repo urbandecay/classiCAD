@@ -14,6 +14,107 @@ int main(int argc, char **argv)
     ViewportWidget view;
     view.resize(640, 480);
     int failures = 0;
+    // Trim previews contain screen coordinates. Navigating after a hover
+    // must refresh both the displayed preview and the click target, while
+    // the actual cut stays in the curve's original local frame.
+    for (int navigation = 0; navigation < 8; ++navigation) {
+        view.resize(640, 480);
+        view.viewportTransform_.resetView();
+        view.viewportTransform_.setViewPreset(ViewportViewPreset::Top);
+        view.viewportTransform_.setPerspectiveEnabled(true);
+        view.viewportTransform_.zoom() = 0.8;
+        view.viewportTransform_.setCameraPreferences(ViewportCameraPreferences{});
+        const WorkPlaneFrame frame = makeWorkPlaneFrameFromNormal(
+            {15.0, -10.0, 5.0}, {0.1, 0.2, 1.0});
+        Shape source;
+        source.geometryType = GeometryType::Line;
+        source.nurbs = makeDegreeOneNurbs({QPointF(-80, 0), QPointF(80, 0)});
+        source.points = source.nurbs.controlPoints;
+        source.workPlaneFrame = frame;
+        Shape cutter = source;
+        cutter.nurbs = makeDegreeOneNurbs({QPointF(0, -80), QPointF(0, 80)});
+        cutter.points = cutter.nurbs.controlPoints;
+        view.shapes_ = {source, cutter};
+        const ObjectId sourceId = view.shapes_.objectIdAt(0);
+        view.selectedShapeIndices_ = {sourceId};
+        view.selectedShapeIndex_ = sourceId;
+        view.setTool(Tool::Trim);
+        view.eraseGeometryCachePrepared_ = false;
+        view.trimHoverPositionValid_ = false;
+        const auto hoverPosition = [&]() {
+            return view.viewportTransform_.workPlaneToScreen(
+                QPointF(-40, 0), view.size(), frame);
+        };
+        view.updateTrimHover(hoverPosition());
+        if (view.eraseCandidateShapeIndices_.size() != 1) {
+            qWarning() << "Navigation trim fixture did not find its source" << navigation;
+            ++failures;
+            continue;
+        }
+        switch (navigation) {
+        case 0: view.viewportTransform_.orbitByPixels(QPointF(45, -20)); break;
+        case 1: view.viewportTransform_.zoomAt(QPointF(330, 245), 1.7, view.size()); break;
+        case 2: view.viewportTransform_.panByPixels(QPointF(35, -20), view.size()); break;
+        case 3: view.viewportTransform_.setPerspectiveEnabled(false); break;
+        case 4: view.resize(800, 600); break;
+        case 5: {
+            auto preferences = view.viewportTransform_.cameraPreferences();
+            preferences.focalLengthMillimeters = 65;
+            view.viewportTransform_.setCameraPreferences(preferences);
+            break;
+        }
+        case 6: {
+            auto preferences = view.viewportTransform_.cameraPreferences();
+            preferences.clipEnd = 2000;
+            view.viewportTransform_.setCameraPreferences(preferences);
+            break;
+        }
+        case 7: view.viewportTransform_.setViewPreset(ViewportViewPreset::Isometric); break;
+        }
+        if (navigation % 2 == 0) {
+            // This is also called at the start of painting, so navigation
+            // cannot leave an old orange preview visible without mouse motion.
+            view.invalidateEraseGeometryCacheForView();
+            if (view.eraseGeometryCachePrepared_ ||
+                !view.eraseCandidateShapeIndices_.isEmpty() ||
+                !view.eraseTargetCurveCaches_.isEmpty()) {
+                qWarning() << "Navigation left a stale trim overlay" << navigation;
+                ++failures;
+            }
+        }
+        view.updateTrimHover(hoverPosition());
+        bool aligned = view.eraseCandidateShapeIndices_.contains(sourceId) &&
+                       view.trimHoverComponentIndex_ == 0;
+        for (const auto &cache : view.eraseTargetCurveCaches_) {
+            for (int sample = 0; sample < cache.sampled.parameters.size(); ++sample) {
+                QPointF local;
+                view.evaluateNurbsPoint(cache.curve, cache.sampled.parameters[sample], &local);
+                const QPointF expected = view.viewportTransform_.workPlaneToScreen(
+                    local, view.size(), frame);
+                aligned &= QLineF(expected, cache.sampled.screenPoints[sample]).length() < 1.0e-7;
+            }
+            aligned &= !cache.previewIntervals.isEmpty();
+        }
+        if (!aligned) {
+            qWarning() << "Trim preview missed the curve after navigation" << navigation;
+            ++failures;
+        }
+        view.trimAtScreenPosition(hoverPosition());
+        const int sourceIndex = view.objectIndex(sourceId);
+        if (sourceIndex < 0 || view.shapes_.size() != 2 ||
+            !workPlaneFramesMatch(shapeWorkPlaneFrame(view.shapes_[sourceIndex]), frame) ||
+            view.shapes_[sourceIndex].nurbs.controlPoints.isEmpty() ||
+            std::abs(view.shapes_[sourceIndex].nurbs.controlPoints.first().x()) > 1.0e-5 ||
+            std::abs(view.shapes_[sourceIndex].nurbs.controlPoints.last().x() - 80) > 1.0e-5) {
+            qWarning() << "Trim click failed to remove the left half after navigation" << navigation;
+            ++failures;
+        }
+    }
+    view.resize(640, 480);
+    view.viewportTransform_.resetView();
+    view.viewportTransform_.setCameraPreferences(ViewportCameraPreferences{});
+    view.setTool(Tool::Select);
+
     // Rotate the circle's storage seam through every quadrant. The cut
     // must depend on the crossing line, never the circle construction point.
     for (int angle = 0; angle < 360; angle += 15) {

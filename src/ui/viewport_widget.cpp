@@ -2545,6 +2545,7 @@ protected:
                        ViewportSceneRenderer *previewRenderer,
                        ViewportControlPointRenderer *controlPointRenderer)
     {
+        invalidateEraseGeometryCacheForView();
         updateAssociativeDimensions(document_, curveSampler_);
         const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
         viewportRenderer_.setGridBaseStep(baseGridStep);
@@ -8792,90 +8793,14 @@ private:
     }
 
     bool sampleNurbsCurveForErase(const Shape::NurbsCurve2D &curve,
+                                  const WorkPlaneFrame &workPlaneFrame,
                                   SampledNurbsCurve2D *sampled) const
     {
         return curveSampler_.sampleNurbsCurve(curve,
+                                              workPlaneFrame,
                                               viewportTransform_,
                                               size(),
                                               sampled);
-
-        // Kept below as a migration reference while erase-cache ownership
-        // moves fully into the sampling service.
-        if (sampled == nullptr || !isValidNurbsCurve(curve)) {
-            return false;
-        }
-
-        sampled->parameters.clear();
-        sampled->screenPoints.clear();
-        sampled->segmentBounds.clear();
-        sampled->bounds = QRectF();
-
-        const QVector<double> fullKnots = expandedKnotVector(curve);
-        const qreal domainStart = fullKnots[curve.degree];
-        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
-        if (domainEnd <= domainStart) {
-            return false;
-        }
-
-        int nonZeroSpans = 0;
-        for (int index = curve.degree; index < curve.controlPoints.size(); ++index) {
-            if (fullKnots[index + 1] > fullKnots[index]) {
-                ++nonZeroSpans;
-            }
-        }
-
-        // Use enough points for a responsive partial-erase preview while
-        // avoiding the old 256-sample minimum for every curve. Degree-1
-        // spans get a little more density because a long straight span still
-        // needs a visible partial interval when the eraser crosses it.
-        const int samplesPerSpan = curve.degree <= 1 ? 64 : 32;
-        const int maxSampleCount = 2048;
-        const int samplesForEachSpan =
-            std::max(1, std::min(samplesPerSpan,
-                                  maxSampleCount / std::max(1, nonZeroSpans)));
-        sampled->parameters.reserve(nonZeroSpans * samplesForEachSpan + 1);
-        sampled->screenPoints.reserve(nonZeroSpans * samplesForEachSpan + 1);
-        for (int spanIndex = curve.degree;
-             spanIndex < curve.controlPoints.size();
-             ++spanIndex) {
-            const qreal spanStart = fullKnots[spanIndex];
-            const qreal spanEnd = fullKnots[spanIndex + 1];
-            if (spanEnd <= spanStart) {
-                continue;
-            }
-
-            for (int sample = 0; sample <= samplesForEachSpan; ++sample) {
-                if (spanIndex > curve.degree && sample == 0) {
-                    continue;
-                }
-
-                const qreal fraction = static_cast<qreal>(sample) /
-                                       samplesForEachSpan;
-                const qreal parameter = spanStart + (spanEnd - spanStart) * fraction;
-                QPointF worldPoint;
-                if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
-                    sampled->parameters.clear();
-                    sampled->screenPoints.clear();
-                    sampled->segmentBounds.clear();
-                    sampled->bounds = QRectF();
-                    return false;
-                }
-                sampled->parameters.append(parameter);
-                sampled->screenPoints.append(worldToScreen(worldPoint));
-            }
-        }
-
-        sampled->segmentBounds.reserve(sampled->screenPoints.size() - 1);
-        sampled->bounds = QRectF(sampled->screenPoints.first(),
-                                 sampled->screenPoints.first());
-        for (int sample = 1; sample < sampled->screenPoints.size(); ++sample) {
-            const QPointF &first = sampled->screenPoints[sample - 1];
-            const QPointF &second = sampled->screenPoints[sample];
-            sampled->segmentBounds.append(QRectF(first, second).normalized());
-            sampled->bounds = sampled->bounds.united(QRectF(second, second));
-        }
-
-        return sampled->parameters.size() >= 2;
     }
 
     QVector<Shape::NurbsCurve2D> eraseIntersectionCurvesForShape(
@@ -8936,8 +8861,11 @@ private:
 
         SampledNurbsCurve2D generatedSourceSamples;
         const SampledNurbsCurve2D *sourceSamples = sourceSamplesOverride;
+        const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(shapes_[sourceShapeIndex]);
         if (sourceSamples == nullptr) {
-            if (!sampleNurbsCurveForErase(sourceCurve, &generatedSourceSamples)) {
+            if (!sampleNurbsCurveForErase(sourceCurve,
+                                          sourceFrame,
+                                          &generatedSourceSamples)) {
                 return parameters;
             }
             sourceSamples = &generatedSourceSamples;
@@ -8973,11 +8901,13 @@ private:
                 parameters.append(parameter);
                 return;
             }
-            const QPointF candidateScreen = worldToScreen(candidateWorld);
+            const QPointF candidateScreen = viewportTransform_.workPlaneToScreen(
+                candidateWorld, size(), sourceFrame);
             for (const qreal existingParameter : parameters) {
                 QPointF existingWorld;
                 if (evaluateNurbsPoint(sourceCurve, existingParameter, &existingWorld)) {
-                    const QPointF existingScreen = worldToScreen(existingWorld);
+                    const QPointF existingScreen = viewportTransform_.workPlaneToScreen(
+                        existingWorld, size(), sourceFrame);
                     if (std::hypot(candidateScreen.x() - existingScreen.x(),
                                    candidateScreen.y() - existingScreen.y()) <= 0.1) {
                         return;
@@ -8985,6 +8915,15 @@ private:
                 }
             }
             parameters.append(parameter);
+        };
+        const auto appendPointBoundary = [&](int pointShapeIndex,
+                                             qreal parameter) {
+            appendUniqueParameter(parameter);
+            DebugLog::instance().write(
+                QStringLiteral("trim point boundary targetShape=%1 pointShape=%2 parameter=%3")
+                    .arg(sourceShapeIndex)
+                    .arg(pointShapeIndex)
+                    .arg(parameter, 0, 'g', 12));
         };
 
         const auto maximumSampledSegmentLength = [](const SampledNurbsCurve2D &sampled) {
@@ -9003,7 +8942,8 @@ private:
 
         const auto collectIntersections =
             [&](const SampledNurbsCurve2D &otherSamples,
-                const Shape::NurbsCurve2D &otherCurve) {
+                const Shape::NurbsCurve2D &otherCurve,
+                const WorkPlaneFrame &otherFrame) {
                 if (otherSamples.screenPoints.size() < 2 ||
                     otherSamples.parameters.size() != otherSamples.screenPoints.size()) {
                     return;
@@ -9122,8 +9062,13 @@ private:
                         !evaluateNurbsPoint(otherCurve, otherParameter, &otherWorld)) {
                         return 1.0e30;
                     }
-                    return squaredScreenDistance(worldToScreen(sourceWorld),
-                                                  worldToScreen(otherWorld));
+                    return squaredScreenDistance(
+                        viewportTransform_.workPlaneToScreen(sourceWorld,
+                                                             size(),
+                                                             sourceFrame),
+                        viewportTransform_.workPlaneToScreen(otherWorld,
+                                                             size(),
+                                                             otherFrame));
                 };
                 const auto goldenMinimum = [](qreal low,
                                               qreal high,
@@ -9304,7 +9249,9 @@ private:
                                                         &contactWorld)) {
                                     return false;
                                 }
-                                const QPointF contactScreen = worldToScreen(contactWorld);
+                                const QPointF contactScreen =
+                                    viewportTransform_.workPlaneToScreen(
+                                        contactWorld, size(), sourceFrame);
                                 return std::hypot(contactScreen.x() - closestPairMidpoint.x(),
                                                   contactScreen.y() - closestPairMidpoint.y()) <=
                                        1.0;
@@ -9364,7 +9311,8 @@ private:
                     if (!evaluateNurbsPoint(sourceCurve, candidate.first, &candidateWorld)) {
                         continue;
                     }
-                    const QPointF candidateScreen = worldToScreen(candidateWorld);
+                    const QPointF candidateScreen = viewportTransform_.workPlaneToScreen(
+                        candidateWorld, size(), sourceFrame);
                     int nearbyContact = -1;
                     for (int index = 0; index < uniqueTangentContacts.size(); ++index) {
                         QPointF existingWorld;
@@ -9373,7 +9321,9 @@ private:
                                                &existingWorld)) {
                             continue;
                         }
-                        const QPointF existingScreen = worldToScreen(existingWorld);
+                        const QPointF existingScreen =
+                            viewportTransform_.workPlaneToScreen(
+                                existingWorld, size(), sourceFrame);
                         if (std::hypot(candidateScreen.x() - existingScreen.x(),
                                        candidateScreen.y() - existingScreen.y()) <= 1.0) {
                             nearbyContact = index;
@@ -9398,7 +9348,10 @@ private:
                     other.componentIndex == sourceComponentIndex) {
                     continue;
                 }
-                collectIntersections(other.sampled, other.curve);
+                if (!workPlaneFramesCoplanar(sourceFrame, other.workPlaneFrame)) {
+                    continue;
+                }
+                collectIntersections(other.sampled, other.curve, other.workPlaneFrame);
             }
         } else {
             for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
@@ -9412,12 +9365,144 @@ private:
                         continue;
                     }
 
+                    const WorkPlaneFrame otherFrame =
+                        shapeWorkPlaneFrame(shapes_[shapeIndex]);
+                    if (!workPlaneFramesCoplanar(sourceFrame, otherFrame)) {
+                        continue;
+                    }
                     SampledNurbsCurve2D otherSamples;
                     if (sampleNurbsCurveForErase(otherCurves[componentIndex],
+                                                 otherFrame,
                                                  &otherSamples)) {
                         collectIntersections(otherSamples,
-                                             otherCurves[componentIndex]);
+                                             otherCurves[componentIndex],
+                                             otherFrame);
                     }
+                }
+            }
+        }
+
+        // A placed point can mark an intentional trim boundary when it lies
+        // on the target curve. It has no sampled curve of its own, so include
+        // it separately from curve-to-curve intersections.
+        for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
+            if (shapeIndex == sourceShapeIndex ||
+                !document_.isObjectVisible(shapes_.objectIdAt(shapeIndex))) {
+                continue;
+            }
+            const Shape &pointShape = shapes_[shapeIndex];
+            if (pointShape.geometryType != GeometryType::Point ||
+                pointShape.points.isEmpty()) {
+                continue;
+            }
+
+            const Point3D pointWorld =
+                shapePointToWorld(pointShape, pointShape.points.first());
+            const qreal worldCoordinateScale = std::max<qreal>(
+                {1.0, std::abs(pointWorld.x), std::abs(pointWorld.y),
+                 std::abs(pointWorld.z), std::abs(sourceFrame.origin.x),
+                 std::abs(sourceFrame.origin.y), std::abs(sourceFrame.origin.z)});
+            const qreal planeTolerance =
+                std::max<qreal>(1.0e-7, worldCoordinateScale * 1.0e-12);
+            const qreal planeDistance =
+                signedDistanceFromWorkPlaneFrame(pointWorld, sourceFrame);
+            if (!std::isfinite(planeDistance) ||
+                std::abs(planeDistance) > planeTolerance) {
+                continue;
+            }
+            const QPointF pointLocal =
+                worldPointToWorkPlaneFrame(pointWorld, sourceFrame);
+            qreal localCoordinateScale =
+                std::max<qreal>({1.0, std::abs(pointLocal.x()),
+                                 std::abs(pointLocal.y()),
+                                 worldCoordinateScale * 1.0e-12});
+            for (const QPointF &controlPoint : sourceCurve.controlPoints) {
+                localCoordinateScale = std::max<qreal>(
+                    {localCoordinateScale, std::abs(controlPoint.x()),
+                     std::abs(controlPoint.y())});
+            }
+            const qreal geometryTolerance =
+                std::max<qreal>(1.0e-7, localCoordinateScale * 1.0e-9);
+
+            qreal closestDistanceSquared = 1.0e30;
+            qreal closestSegmentStart = 0.0;
+            qreal closestSegmentEnd = 0.0;
+            for (int sample = 1; sample < sourceSamples->parameters.size(); ++sample) {
+                QPointF first;
+                QPointF second;
+                if (!evaluateNurbsPoint(sourceCurve,
+                                        sourceSamples->parameters[sample - 1],
+                                        &first) ||
+                    !evaluateNurbsPoint(sourceCurve,
+                                        sourceSamples->parameters[sample],
+                                        &second)) {
+                    continue;
+                }
+                const QPointF direction = second - first;
+                const qreal lengthSquared = QPointF::dotProduct(direction, direction);
+                const qreal fraction = lengthSquared <= 1.0e-20
+                                           ? 0.0
+                                           : std::clamp(
+                                                 QPointF::dotProduct(pointLocal - first,
+                                                                     direction) /
+                                                     lengthSquared,
+                                                 0.0,
+                                                 1.0);
+                const QPointF closest = first + direction * fraction;
+                const QPointF delta = pointLocal - closest;
+                const qreal distanceSquared = QPointF::dotProduct(delta, delta);
+                if (distanceSquared < closestDistanceSquared) {
+                    closestDistanceSquared = distanceSquared;
+                    closestSegmentStart = sourceSamples->parameters[sample - 1];
+                    closestSegmentEnd = sourceSamples->parameters[sample];
+                }
+            }
+
+            // Refine the sampled closest point against the exact NURBS so a
+            // trim ending at the point retains the point's precise location.
+            qreal low = closestSegmentStart;
+            qreal high = closestSegmentEnd;
+            constexpr qreal goldenRatio = 0.6180339887498948482;
+            qreal firstParameter = high - (high - low) * goldenRatio;
+            qreal secondParameter = low + (high - low) * goldenRatio;
+            const auto squaredDistanceAt = [&](qreal parameter) {
+                QPointF curvePoint;
+                if (!evaluateNurbsPoint(sourceCurve, parameter, &curvePoint)) {
+                    return 1.0e30;
+                }
+                const QPointF delta = curvePoint - pointLocal;
+                return QPointF::dotProduct(delta, delta);
+            };
+            qreal firstDistance = squaredDistanceAt(firstParameter);
+            qreal secondDistance = squaredDistanceAt(secondParameter);
+            for (int iteration = 0; iteration < 36; ++iteration) {
+                if (firstDistance <= secondDistance) {
+                    high = secondParameter;
+                    secondParameter = firstParameter;
+                    secondDistance = firstDistance;
+                    firstParameter = high - (high - low) * goldenRatio;
+                    firstDistance = squaredDistanceAt(firstParameter);
+                } else {
+                    low = firstParameter;
+                    firstParameter = secondParameter;
+                    firstDistance = secondDistance;
+                    secondParameter = low + (high - low) * goldenRatio;
+                    secondDistance = squaredDistanceAt(secondParameter);
+                }
+            }
+            const qreal refinedParameter = (low + high) * 0.5;
+            if (squaredDistanceAt(refinedParameter) <=
+                geometryTolerance * geometryTolerance) {
+                appendPointBoundary(shapeIndex, refinedParameter);
+            } else {
+                // Preserve exact endpoint and linear-span hits where the
+                // minimum lands on a sample interval boundary.
+                const qreal startDistance = squaredDistanceAt(closestSegmentStart);
+                const qreal endDistance = squaredDistanceAt(closestSegmentEnd);
+                if (startDistance <= geometryTolerance * geometryTolerance) {
+                    appendPointBoundary(shapeIndex, closestSegmentStart);
+                } else if (endDistance <= geometryTolerance * geometryTolerance) {
+                    appendPointBoundary(shapeIndex, closestSegmentEnd);
                 }
             }
         }
@@ -9442,12 +9527,52 @@ private:
         return targets;
     }
 
+    void invalidateEraseGeometryCacheForView()
+    {
+        if (!eraseGeometryCachePrepared_) {
+            return;
+        }
+        const ViewportCameraState camera = viewportTransform_.cameraState();
+        const ViewportCameraPreferences preferences = viewportTransform_.cameraPreferences();
+        const ViewportCameraState &cached = eraseCacheCameraState_;
+        if (eraseCacheViewportSize_ == size() &&
+            camera.zoom == cached.zoom && camera.pan == cached.pan &&
+            camera.perspective == cached.perspective &&
+            camera.orbitPivot.x == cached.orbitPivot.x &&
+            camera.orbitPivot.y == cached.orbitPivot.y &&
+            camera.orbitPivot.z == cached.orbitPivot.z &&
+            camera.orientation.w == cached.orientation.w &&
+            camera.orientation.x == cached.orientation.x &&
+            camera.orientation.y == cached.orientation.y &&
+            camera.orientation.z == cached.orientation.z &&
+            preferences.focalLengthMillimeters == eraseCacheCameraPreferences_.focalLengthMillimeters &&
+            preferences.clipStart == eraseCacheCameraPreferences_.clipStart &&
+            preferences.clipEnd == eraseCacheCameraPreferences_.clipEnd) {
+            return;
+        }
+
+        eraseGeometryCachePrepared_ = false;
+        trimHoverPositionValid_ = false;
+        trimHoverComponentIndex_ = -1;
+        eraseCandidateShapeIndices_.clear();
+        eraseSceneCurveCaches_.clear();
+        eraseTargetCurveCaches_.clear();
+        eraseTargetShapeIndices_.clear();
+        if (!eraseStrokeActive_ && !trimBoxSelectionActive_) {
+            eraseStrokeScreenPath_.clear();
+        }
+        DebugLog::instance().write(QStringLiteral("trim/erase projection cache invalidated by camera or viewport change"));
+    }
+
     void prepareEraseGeometryCache()
     {
         eraseTargetShapeIndices_.clear();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = true;
+        eraseCacheCameraState_ = viewportTransform_.cameraState();
+        eraseCacheCameraPreferences_ = viewportTransform_.cameraPreferences();
+        eraseCacheViewportSize_ = size();
 
         const QVector<int> selectedTargets = eraseSelectionTargets();
         if (selectedTargets.isEmpty()) {
@@ -9457,29 +9582,6 @@ private:
         eraseSceneCurveCaches_ = curveSampler_.sampleDocument(document_,
                                                               viewportTransform_,
                                                               size());
-        if (eraseSceneCurveCaches_.isEmpty()) {
-            // Compatibility fallback for malformed legacy shapes while the
-            // remaining erase-intersection code finishes its migration.
-            for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
-                const QVector<Shape::NurbsCurve2D> curves =
-                    eraseIntersectionCurvesForShape(shapes_[shapeIndex]);
-                for (int componentIndex = 0;
-                     componentIndex < curves.size();
-                     ++componentIndex) {
-                    if (!isValidNurbsCurve(curves[componentIndex])) {
-                        continue;
-                    }
-
-                    EraseCurveSampleCache cache;
-                    cache.shapeIndex = shapeIndex;
-                    cache.componentIndex = componentIndex;
-                    cache.curve = curves[componentIndex];
-                    if (sampleNurbsCurveForErase(cache.curve, &cache.sampled)) {
-                        eraseSceneCurveCaches_.append(cache);
-                    }
-                }
-            }
-        }
 
         for (const int shapeIndex : selectedTargets) {
             bool hasTargetCurve = false;
@@ -9558,6 +9660,7 @@ private:
 
     void updateTrimHover(const QPointF &screenPosition)
     {
+        invalidateEraseGeometryCacheForView();
         if (trimHoverPositionValid_ && eraseGeometryCachePrepared_ &&
             trimHoverScreenPosition_ == screenPosition) {
             return;
@@ -9609,7 +9712,10 @@ private:
         updateTrimHover(screenPosition);
         if (eraseCandidateShapeIndices_.isEmpty()) {
             DebugLog::instance().write(
-                QStringLiteral("trim click ignored no selected curve under cursor"));
+                QStringLiteral("trim click ignored no selected curve under cursor at=%1 selectedTargets=%2 sampledTargets=%3")
+                    .arg(pointText(screenPosition))
+                    .arg(eraseTargetShapeIndices_.size())
+                    .arg(eraseTargetCurveCaches_.size()));
             return;
         }
 
@@ -9632,6 +9738,7 @@ private:
         if (!trimBoxSelectionActive_) {
             return;
         }
+        invalidateEraseGeometryCacheForView();
         if (!eraseGeometryCachePrepared_) {
             prepareEraseGeometryCache();
         }
@@ -9666,6 +9773,7 @@ private:
             const QVector<ParameterInterval> hitIntervals =
                 curveIntervalsInsideScreenBox(targetCurve.curve,
                                               targetCurve.sampled,
+                                              targetCurve.workPlaneFrame,
                                               box);
             targetCurve.previewIntervals = boundEraseIntervals(
                 targetCurve.curve,
@@ -9734,7 +9842,8 @@ private:
 
     QVector<ParameterInterval> eraserIntervalsForCurve(
         const Shape::NurbsCurve2D &curve,
-        const QVector<QPointF> &stroke) const
+        const QVector<QPointF> &stroke,
+        const WorkPlaneFrame &workPlaneFrame) const
     {
         QVector<ParameterInterval> intervals;
         if (!isValidNurbsCurve(curve) || stroke.isEmpty()) {
@@ -9762,8 +9871,11 @@ private:
             if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
                 return false;
             }
-            return distanceToEraserStroke(worldToScreen(worldPoint), stroke) <=
-                   eraserRadiusPixels;
+            return distanceToEraserStroke(
+                       viewportTransform_.workPlaneToScreen(worldPoint,
+                                                            size(),
+                                                            workPlaneFrame),
+                       stroke) <= eraserRadiusPixels;
         };
 
         const auto refineBoundary = [&](qreal first,
@@ -9821,6 +9933,15 @@ private:
             }
         }
         return merged;
+    }
+
+    QVector<ParameterInterval> eraserIntervalsForCurve(
+        const Shape::NurbsCurve2D &curve,
+        const QVector<QPointF> &stroke) const
+    {
+        return eraserIntervalsForCurve(curve,
+                                       stroke,
+                                       viewportTransform_.workPlaneFrame());
     }
 
     qreal distanceBetweenScreenSegments(const QPointF &firstStart,
@@ -10014,6 +10135,7 @@ private:
     QVector<ParameterInterval> curveIntervalsInsideScreenBox(
         const Shape::NurbsCurve2D &curve,
         const SampledNurbsCurve2D &sampled,
+        const WorkPlaneFrame &workPlaneFrame,
         const QRectF &box) const
     {
         QVector<ParameterInterval> intervals;
@@ -10026,7 +10148,8 @@ private:
         const auto isInside = [&](qreal parameter) {
             QPointF worldPoint;
             return evaluateNurbsPoint(curve, parameter, &worldPoint) &&
-                   region.contains(worldToScreen(worldPoint));
+                   region.contains(viewportTransform_.workPlaneToScreen(
+                       worldPoint, size(), workPlaneFrame));
         };
         const auto refineBoundary = [&](qreal first,
                                         qreal second,
@@ -10082,6 +10205,18 @@ private:
                                      int onlyShapeIndex = -1,
                                      int onlyComponentIndex = -1)
     {
+        invalidateEraseGeometryCacheForView();
+        if (!eraseGeometryCachePrepared_) {
+            prepareEraseGeometryCache();
+            if (eraseStrokeActive_ && !eraseStrokeScreenPath_.isEmpty()) {
+                eraseAlongScreenSegment(eraseStrokeScreenPath_.first(),
+                                        eraseStrokeScreenPath_.first());
+                for (int point = 1; point < eraseStrokeScreenPath_.size(); ++point) {
+                    eraseAlongScreenSegment(eraseStrokeScreenPath_[point - 1],
+                                            eraseStrokeScreenPath_[point]);
+                }
+            }
+        }
         if (eraseStrokeScreenPath_.isEmpty()) {
             return;
         }
@@ -10147,8 +10282,12 @@ private:
         const QVector<QPointF> &stroke,
         const QVector<qreal> *cachedIntersectionParameters = nullptr) const
     {
+        const WorkPlaneFrame workPlaneFrame =
+            sourceShapeIndex >= 0 && sourceShapeIndex < shapes_.size()
+                ? shapeWorkPlaneFrame(shapes_[sourceShapeIndex])
+                : viewportTransform_.workPlaneFrame();
         const QVector<ParameterInterval> hitIntervals =
-            eraserIntervalsForCurve(curve, stroke);
+            eraserIntervalsForCurve(curve, stroke, workPlaneFrame);
         if (hitIntervals.isEmpty()) {
             return {};
         }
@@ -10175,10 +10314,8 @@ private:
         }
         replacement->clear();
 
-        if (shape.geometryType == GeometryType::Point ||
-            shape.geometryType == GeometryType::Rectangle ||
-            shape.geometryType == GeometryType::Polygon) {
-            return true;
+        if (shape.geometryType == GeometryType::Point) {
+            return false;
         }
 
         QVector<Shape::NurbsCurve2D> sourceCurves;
@@ -10188,10 +10325,28 @@ private:
             sourceCurves.append(shape.nurbs);
         } else if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
             sourceCurves.append(makeDegreeOneNurbs(shape.points));
+        } else if (shape.geometryType == GeometryType::Rectangle ||
+                   shape.geometryType == GeometryType::Polygon) {
+            const QVector<QPointF> vertices =
+                shape.geometryType == GeometryType::Rectangle
+                    ? rectangleVertices(shape)
+                    : polygonVerticesForShape(shape);
+            const int minimumVertices = shape.geometryType == GeometryType::Rectangle
+                                            ? 4
+                                            : 3;
+            if (vertices.size() < minimumVertices) {
+                return false;
+            }
+            sourceCurves.reserve(vertices.size());
+            for (int index = 0; index < vertices.size(); ++index) {
+                sourceCurves.append(makeDegreeOneNurbs(
+                    {vertices[index], vertices[(index + 1) % vertices.size()]}));
+            }
         } else {
-            return true;
+            return false;
         }
 
+        const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(shape);
         QVector<Shape::NurbsCurve2D> remainingCurves;
         bool changed = false;
         for (int sourceComponentIndex = 0;
@@ -10223,12 +10378,17 @@ private:
                     cachedTargetCurve != nullptr ? &cachedTargetCurve->sampled
                                                  : &fallbackSamples;
                 if (cachedTargetCurve == nullptr &&
-                    !sampleNurbsCurveForErase(sourceCurve, &fallbackSamples)) {
+                    !sampleNurbsCurveForErase(sourceCurve,
+                                              sourceFrame,
+                                              &fallbackSamples)) {
                     remainingCurves.append(sourceCurve);
                     continue;
                 }
                 const QVector<ParameterInterval> hitIntervals =
-                    curveIntervalsInsideScreenBox(sourceCurve, *samples, *trimBox);
+                    curveIntervalsInsideScreenBox(sourceCurve,
+                                                  *samples,
+                                                  sourceFrame,
+                                                  *trimBox);
                 QVector<qreal> fallbackIntersections;
                 const QVector<qreal> *intersections = cachedIntersectionParameters;
                 if (intersections == nullptr) {
@@ -10248,8 +10408,32 @@ private:
                     cachedIntersectionParameters);
             }
             if (removedIntervals.isEmpty()) {
+                if (activeTool_ == Tool::Trim && trimBox == nullptr &&
+                    sourceComponentIndex == onlyComponentIndex) {
+                    DebugLog::instance().write(
+                        QStringLiteral("trim interval empty shape=%1 component=%2 intersections=%3 frameValid=%4")
+                            .arg(sourceShapeIndex)
+                            .arg(sourceComponentIndex)
+                            .arg(cachedIntersectionParameters == nullptr
+                                     ? 0
+                                     : cachedIntersectionParameters->size())
+                            .arg(isValidWorkPlaneFrame(sourceFrame)));
+                }
                 remainingCurves.append(sourceCurve);
                 continue;
+            }
+
+            if (activeTool_ == Tool::Trim && trimBox == nullptr &&
+                sourceComponentIndex == onlyComponentIndex) {
+                DebugLog::instance().write(
+                    QStringLiteral("trim interval applied shape=%1 component=%2 intervals=%3 intersections=%4 frameValid=%5")
+                        .arg(sourceShapeIndex)
+                        .arg(sourceComponentIndex)
+                        .arg(removedIntervals.size())
+                        .arg(cachedIntersectionParameters == nullptr
+                                 ? 0
+                                 : cachedIntersectionParameters->size())
+                        .arg(isValidWorkPlaneFrame(sourceFrame)));
             }
 
             changed = true;
@@ -13808,6 +13992,9 @@ private:
     QVector<EraseCurveSampleCache> eraseSceneCurveCaches_;
     QVector<EraseCurveSampleCache> eraseTargetCurveCaches_;
     bool eraseGeometryCachePrepared_ = false;
+    ViewportCameraState eraseCacheCameraState_;
+    ViewportCameraPreferences eraseCacheCameraPreferences_;
+    QSize eraseCacheViewportSize_;
     bool trimHoverPositionValid_ = false;
     int trimHoverComponentIndex_ = -1;
     QPointF trimHoverScreenPosition_{0.0, 0.0};

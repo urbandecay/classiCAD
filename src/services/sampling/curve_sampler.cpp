@@ -11,7 +11,21 @@ bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                                     const QSize &viewportSize,
                                     SampledNurbsCurve2D *sampled) const
 {
-    if (sampled == nullptr || !validateNurbsCurve(curve)) {
+    return sampleNurbsCurve(curve,
+                            transform.workPlaneFrame(),
+                            transform,
+                            viewportSize,
+                            sampled);
+}
+
+bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
+                                    const WorkPlaneFrame &workPlaneFrame,
+                                    const ViewportTransform &transform,
+                                    const QSize &viewportSize,
+                                    SampledNurbsCurve2D *sampled) const
+{
+    if (sampled == nullptr || !validateNurbsCurve(curve) ||
+        !isValidWorkPlaneFrame(workPlaneFrame)) {
         return false;
     }
 
@@ -73,7 +87,9 @@ bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
             }
             sampled->parameters.append(parameter);
             sampled->screenPoints.append(
-                transform.worldToScreen(worldPoint, viewportSize));
+                transform.workPlaneToScreen(worldPoint,
+                                            viewportSize,
+                                            workPlaneFrame));
         }
     }
 
@@ -131,9 +147,23 @@ QVector<Shape::NurbsCurve2D> CurveSampler::curvesForShape(const Shape &shape) co
         }
         return curves;
     }
-    if (shape.geometryType == GeometryType::Polygon &&
-        validateNurbsCurve(shape.nurbs)) {
-        return {shape.nurbs};
+    if (shape.geometryType == GeometryType::Polygon) {
+        if (validateNurbsCurve(shape.nurbs)) {
+            return {shape.nurbs};
+        }
+
+        const QVector<QPointF> vertices = polygonVerticesForShape(shape);
+        if (vertices.size() < 3) {
+            return {};
+        }
+
+        QVector<Shape::NurbsCurve2D> curves;
+        curves.reserve(vertices.size());
+        for (int index = 0; index < vertices.size(); ++index) {
+            curves.append(makeDegreeOneNurbs(
+                {vertices[index], vertices[(index + 1) % vertices.size()]}));
+        }
+        return curves;
     }
     return {};
 }
@@ -149,10 +179,7 @@ QVector<EraseCurveSampleCache> CurveSampler::sampleDocument(
             continue;
         }
         const Shape &shape = document[shapeIndex];
-        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
-                              transform.workPlaneFrame())) {
-            continue;
-        }
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
         const QVector<Shape::NurbsCurve2D> curves = curvesForShape(shape);
         for (int componentIndex = 0; componentIndex < curves.size(); ++componentIndex) {
             if (!validateNurbsCurve(curves[componentIndex])) {
@@ -162,8 +189,10 @@ QVector<EraseCurveSampleCache> CurveSampler::sampleDocument(
             EraseCurveSampleCache cache;
             cache.shapeIndex = shapeIndex;
             cache.componentIndex = componentIndex;
+            cache.workPlaneFrame = frame;
             cache.curve = curves[componentIndex];
             if (sampleNurbsCurve(cache.curve,
+                                 frame,
                                  transform,
                                  viewportSize,
                                  &cache.sampled)) {

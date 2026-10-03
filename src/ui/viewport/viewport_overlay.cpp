@@ -903,15 +903,55 @@ void ViewportOverlay::drawCirclePreview(QPainter &painter,
                                         bool cursorValid,
                                         const SnapResult &currentSnap,
                                         const QSize &viewportSize,
+                                        const WorkPlaneFrame &workPlaneFrame,
+                                        const QColor &curveColor,
                                         bool drawCurve) const
 {
+    const QColor fallbackCurveColor(QStringLiteral("#d28b45"));
+    const QColor defaultGuideColor(128, 128, 128, 180);
+    const QColor pointColor(QStringLiteral("#101010"));
+    const QColor pointOutlineColor(QStringLiteral("#b0b0b0"));
+    const auto guideColorFor = [&](const QPointF &delta) {
+        if (!isValidWorkPlaneFrame(workPlaneFrame) ||
+            std::hypot(delta.x(), delta.y()) <= 1.0e-9) {
+            return defaultGuideColor;
+        }
+        const qreal worldX = workPlaneFrame.xAxis.x * delta.x() +
+                             workPlaneFrame.yAxis.x * delta.y();
+        const qreal worldY = workPlaneFrame.xAxis.y * delta.x() +
+                             workPlaneFrame.yAxis.y * delta.y();
+        const qreal worldZ = workPlaneFrame.xAxis.z * delta.x() +
+                             workPlaneFrame.yAxis.z * delta.y();
+        const qreal magnitude = std::sqrt(worldX * worldX + worldY * worldY +
+                                          worldZ * worldZ);
+        if (magnitude <= 1.0e-9) {
+            return defaultGuideColor;
+        }
+        const qreal x = std::abs(worldX / magnitude);
+        const qreal y = std::abs(worldY / magnitude);
+        const qreal z = std::abs(worldZ / magnitude);
+        if (x > 0.9999) return QColor(255, 26, 26);
+        if (y > 0.9999) return QColor(26, 179, 26);
+        if (z > 0.9999) return QColor(51, 128, 255);
+        return defaultGuideColor;
+    };
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
     if (pendingPoints.isEmpty()) {
+        if (cursorValid) {
+            const QPointF screen = transform_.worldToScreen(cursorWorld, viewportSize);
+            painter.setPen(QPen(pointOutlineColor, 1.0));
+            painter.setBrush(pointColor);
+            painter.drawEllipse(screen, 3.0, 3.0);
+        }
+        painter.restore();
+        if (currentSnap.isValid()) {
+            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        }
         return;
     }
 
-    const QColor circleColor(QStringLiteral("#e6b85c"));
-    const QColor guideColor(QStringLiteral("#8aa7c7"));
-    const QColor pointColor(QStringLiteral("#f0a45a"));
     QVector<QPointF> candidatePoints = pendingPoints;
     if (cursorValid) {
         candidatePoints.append(cursorWorld);
@@ -938,44 +978,46 @@ void ViewportOverlay::drawCirclePreview(QPainter &painter,
     if (drawCurve && definitionValid) {
         const Shape::NurbsCurve2D curve = makeCircleNurbs(definition);
         if (validateNurbsCurve(curve)) {
-            painter.save();
-            painter.setPen(QPen(circleColor, 2.0));
+            painter.setPen(QPen(curveColor.isValid() ? curveColor
+                                                    : fallbackCurveColor,
+                                1.6));
             painter.setBrush(Qt::NoBrush);
             renderer_.drawNurbsCurve(painter, curve, viewportSize);
-            painter.restore();
         }
     }
 
-    painter.save();
-    painter.setPen(QPen(guideColor, 1.0, Qt::DashLine));
+    painter.setPen(QPen(defaultGuideColor, 1.0));
     if (cursorValid) {
         const QPointF previous = tool == ToolId::CircleThreePoint && pendingPoints.size() >= 2
                                      ? pendingPoints.back()
                                      : pendingPoints.first();
+        const QColor guideColor = guideColorFor(cursorWorld - previous);
+        painter.setPen(QPen(guideColor, 1.0));
         painter.drawLine(transform_.worldToScreen(previous, viewportSize),
                          transform_.worldToScreen(cursorWorld, viewportSize));
         if (tool == ToolId::CircleThreePoint && pendingPoints.size() >= 2) {
+            painter.setPen(QPen(guideColorFor(pendingPoints[1] - pendingPoints[0]), 1.0));
             painter.drawLine(transform_.worldToScreen(pendingPoints.first(), viewportSize),
                              transform_.worldToScreen(pendingPoints[1], viewportSize));
         }
     }
 
-    painter.setPen(QPen(pointColor, 1.5));
-    painter.setBrush(QColor(QStringLiteral("#282828")));
+    painter.setPen(QPen(pointOutlineColor, 1.0));
+    painter.setBrush(pointColor);
     for (const QPointF &point : pendingPoints) {
-        painter.drawEllipse(transform_.worldToScreen(point, viewportSize), 5.0, 5.0);
+        painter.drawEllipse(transform_.worldToScreen(point, viewportSize), 2.5, 2.5);
     }
     if (cursorValid) {
         const QPointF cursorScreen = transform_.worldToScreen(cursorWorld, viewportSize);
-        painter.setPen(QPen(pointColor, 2.0));
+        painter.setPen(QPen(pointOutlineColor, 1.0));
         painter.setBrush(pointColor);
-        painter.drawEllipse(cursorScreen, 4.0, 4.0);
+        painter.drawEllipse(cursorScreen, 2.5, 2.5);
     }
-    if (definitionValid && !definition.isEmpty()) {
+    if (tool == ToolId::Circle && definitionValid && !definition.isEmpty()) {
         const QPointF centerScreen = transform_.worldToScreen(definition.first(), viewportSize);
-        painter.setPen(QPen(pointColor, 1.5));
-        painter.setBrush(QColor(QStringLiteral("#282828")));
-        painter.drawEllipse(centerScreen, 5.0, 5.0);
+        painter.setPen(QPen(pointOutlineColor, 1.0));
+        painter.setBrush(pointColor);
+        painter.drawEllipse(centerScreen, 2.5, 2.5);
     }
     painter.restore();
 
@@ -1492,7 +1534,8 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                                                 ? QStringLiteral("DUPLICATE  •  Move preview to destination  •  Click to place  •  Esc cancels")
                                                 : QStringLiteral("DUPLICATE  •  Click a base point on the selection  •  Esc/RMB cancels");
         painter.drawText(18, viewportSize.height() - 18, duplicateHint);
-    } else if (activeTool != Tool::Select && activeTool != Tool::Arc) {
+    } else if (activeTool != Tool::Select && activeTool != Tool::Arc &&
+               !isCircleConstructionTool(activeTool)) {
         QString hint;
         if (isRectangleTool(activeTool)) {
             QString inputDescription;

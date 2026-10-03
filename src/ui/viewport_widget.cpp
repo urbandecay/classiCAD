@@ -491,6 +491,14 @@ public:
                     viewportTransform_.workPlaneFrame();
             }
             controllerPreviewShapeVisible_ = preview.hasShape;
+            if (isCircleConstructionTool(activeTool_)) {
+                circleHudDimensionsLine_ = preview.hudDimensionsLine;
+                circleHudInstructionsLine_ = preview.hudInstructionsLine;
+                if (preview.hasCursorPoint) {
+                    cursorWorld_ = preview.cursorPoint;
+                    cursorValid_ = true;
+                }
+            }
             update();
         });
         toolContext_.setStatusPublisher([this](const ToolStatus &status) {
@@ -651,6 +659,8 @@ public:
         linePreviewPlaneLocked_ = false;
         controllerPreviewShape_ = Shape{};
         controllerPreviewShapeVisible_ = false;
+        circleHudDimensionsLine_.clear();
+        circleHudInstructionsLine_.clear();
         resetArcPreviewTracking();
         resetArcInputState();
         lineCommandActive_ = tool == Tool::Line;
@@ -2974,6 +2984,21 @@ protected:
                                            true, false);
                 };
 
+            const auto addSolidPreviewLine =
+                [&](const QPointF &first,
+                    const QPointF &second,
+                    const QColor &color,
+                    float width) {
+                    Shape line;
+                    line.geometryType = GeometryType::Line;
+                    line.points = {first, second};
+                    line.workPlane = viewportTransform_.workPlane();
+                    line.workPlaneOffset = viewportTransform_.workPlaneOffset();
+                    line.workPlaneFrame = viewportTransform_.workPlaneFrame();
+                    return addPreviewShape(line, color, width, false, 0.0f,
+                                           false, false);
+                };
+
             const auto addPreviewPoint =
                 [&](const QPointF &point,
                     const QColor &color,
@@ -2990,9 +3015,10 @@ protected:
                 };
 
             const QColor previewColor(QStringLiteral("#e6b85c"));
-            const QColor activeToolPreviewColor = activeTool_ == Tool::Arc
-                                                      ? arcPreviewColor
-                                                      : previewColor;
+            const QColor activeToolPreviewColor =
+                activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_)
+                    ? arcPreviewColor
+                    : previewColor;
             for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
                 const Shape &preview = duplicatePreviewShapes_[index];
                 if (preview.geometryType == GeometryType::Picture) {
@@ -3040,6 +3066,65 @@ protected:
                     false, false);
             }
 
+            if (isCircleConstructionTool(activeTool_)) {
+                const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
+                const auto circleGuideColor = [&](const QPointF &delta) {
+                    const qreal worldX = frame.xAxis.x * delta.x() +
+                                         frame.yAxis.x * delta.y();
+                    const qreal worldY = frame.xAxis.y * delta.x() +
+                                         frame.yAxis.y * delta.y();
+                    const qreal worldZ = frame.xAxis.z * delta.x() +
+                                         frame.yAxis.z * delta.y();
+                    const qreal magnitude = std::sqrt(worldX * worldX +
+                                                      worldY * worldY +
+                                                      worldZ * worldZ);
+                    if (magnitude <= 1.0e-9) {
+                        return QColor(128, 128, 128, 180);
+                    }
+                    const qreal x = std::abs(worldX / magnitude);
+                    const qreal y = std::abs(worldY / magnitude);
+                    const qreal z = std::abs(worldZ / magnitude);
+                    if (x > 0.9999) return QColor(255, 26, 26);
+                    if (y > 0.9999) return QColor(26, 179, 26);
+                    if (z > 0.9999) return QColor(51, 128, 255);
+                    return QColor(128, 128, 128, 180);
+                };
+                const QColor markerColor(QStringLiteral("#101010"));
+                if (pendingPoints_.isEmpty()) {
+                    if (cursorValid_) {
+                        gpuActiveToolPreview |= addPreviewPoint(
+                            cursorWorld_, markerColor, 5.0f, false);
+                    }
+                } else {
+                    for (const QPointF &point : pendingPoints_) {
+                        gpuActiveToolPreview |= addPreviewPoint(
+                            point, markerColor, 5.0f, false);
+                    }
+                    if (cursorValid_) {
+                        gpuActiveToolPreview |= addPreviewPoint(
+                            cursorWorld_, markerColor, 5.0f, false);
+                        if (activeTool_ == Tool::CircleThreePoint &&
+                            pendingPoints_.size() >= 2) {
+                            gpuActiveToolPreview |= addSolidPreviewLine(
+                                pendingPoints_.first(), pendingPoints_[1],
+                                circleGuideColor(pendingPoints_[1] -
+                                                 pendingPoints_.first()),
+                                1.0f);
+                            gpuActiveToolPreview |= addSolidPreviewLine(
+                                pendingPoints_[1], cursorWorld_,
+                                circleGuideColor(cursorWorld_ - pendingPoints_[1]),
+                                1.0f);
+                        } else {
+                            gpuActiveToolPreview |= addSolidPreviewLine(
+                                pendingPoints_.first(), cursorWorld_,
+                                circleGuideColor(cursorWorld_ -
+                                                 pendingPoints_.first()),
+                                1.0f);
+                        }
+                    }
+                }
+            }
+
             if (activeTool_ == Tool::Point && cursorValid_) {
                 Shape pointPreview;
                 if (makeToolShape(Tool::Point,
@@ -3063,6 +3148,7 @@ protected:
                        !isPointCreationTool(activeTool_) &&
                        !isCurveCreationTool(activeTool_) &&
                        !isTwoCurveLineTool(activeTool_) &&
+                       !isCircleConstructionTool(activeTool_) &&
                        !pendingPoints_.isEmpty() && cursorValid_) {
                 QVector<QPointF> candidatePoints = pendingPoints_;
                 candidatePoints.append(cursorWorld_);
@@ -3408,7 +3494,7 @@ protected:
                                    !gpuActiveToolPreview || !gpuPreviewRendered,
                                    arcPreviewColor);
             }
-        } else if (isCircleConstructionTool(activeTool_) && !pendingPoints_.isEmpty()) {
+        } else if (isCircleConstructionTool(activeTool_)) {
             drawCircleToolPreview(painter,
                                   !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (isCircleTangentTool(activeTool_)) {
@@ -12535,14 +12621,38 @@ private:
 
     void drawCircleToolPreview(QPainter &painter, bool drawCurve = true)
     {
-        viewportOverlay_.drawCirclePreview(painter,
-                                           activeTool_,
-                                           pendingPoints_,
-                                           cursorWorld_,
-                                           cursorValid_,
-                                           currentSnap_,
-                                           size(),
-                                           drawCurve);
+        const Layer *activeLayer = document_.layer(document_.activeLayerId());
+        const QColor previewColor =
+            activeLayer != nullptr && activeLayer->color.isValid()
+                ? activeLayer->color
+                : QColor(QStringLiteral("#d28b45"));
+        const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
+        const bool previewUsesSeparateFrame =
+            controllerPreviewShapeVisible_ &&
+            isValidWorkPlaneFrame(controllerPreviewShape_.workPlaneFrame) &&
+            isValidWorkPlaneFrame(inputFrame) &&
+            !workPlaneFramesMatch(controllerPreviewShape_.workPlaneFrame,
+                                  inputFrame);
+        if (drawCurve && previewUsesSeparateFrame) {
+            drawShape(painter, controllerPreviewShape_, true);
+        }
+        if (drawCurve) {
+            viewportOverlay_.drawCirclePreview(painter,
+                                               activeTool_,
+                                               pendingPoints_,
+                                               cursorWorld_,
+                                               cursorValid_,
+                                               currentSnap_,
+                                               size(),
+                                               inputFrame,
+                                               previewColor,
+                                               !previewUsesSeparateFrame);
+        } else if (currentSnap_.isValid()) {
+            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        }
+        drawArcHudPanel(painter,
+                        {circleHudDimensionsLine_, circleHudInstructionsLine_},
+                        750.0);
     }
 
     void drawCircleTangentToolPreview(QPainter &painter,
@@ -12969,6 +13079,8 @@ private:
     ToolRegistry toolRegistry_;
     InteractionTool *activeToolController_ = nullptr;
     ToolStatus toolStatus_;
+    QString circleHudDimensionsLine_;
+    QString circleHudInstructionsLine_;
     WorkPlaneFrame toolDrawingFrame_;
     bool toolDrawingPlaneLocked_ = false;
     // Temporary source-compatibility view. Document owns the storage and

@@ -85,6 +85,8 @@ public:
                            bool cursorValid,
                            const SnapResult &currentSnap,
                            const QSize &viewportSize,
+                           const WorkPlaneFrame &workPlaneFrame,
+                           const QColor &curveColor,
                            bool drawCurve = true) const;
     void drawEllipsePreview(QPainter &painter,
                             ToolId tool,

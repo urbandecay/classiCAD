@@ -26,6 +26,7 @@ struct ToolStatus {
 struct ToolPreview {
     QVector<QPointF> points;
     WorkPlaneFrame workPlaneFrame;
+    bool hasWorkPlaneFrame = false;
     QPointF cursorPoint;
     QVector<Point3D> worldPoints;
     Point3D worldCursorPoint;
@@ -38,6 +39,8 @@ struct ToolPreview {
     bool cursorVisible = false;
     bool hasCursorPoint = false;
     QString statusText;
+    QString hudDimensionsLine;
+    QString hudInstructionsLine;
 };
 
 class InteractionTool {

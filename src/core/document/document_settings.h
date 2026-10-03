@@ -29,5 +29,8 @@ QString documentLengthUnitKey(DocumentLengthUnit unit);
 bool documentLengthUnitFromKey(const QString &key, DocumentLengthUnit *unit);
 bool isValidDocumentSettings(const DocumentSettings &settings);
 qreal documentGridSpacingInMillimeters(const DocumentSettings &settings);
+bool parseDocumentLengthInput(const QString &input,
+                              DocumentLengthUnit defaultUnit,
+                              qreal *millimeters);
 
 } // namespace classiCAD

@@ -19,7 +19,7 @@ representation and conform to Rhino/openNURBS conventions.
   Rhino/openNURBS, lift each CV to world `(x, y, z)` first, then write rational
   homogeneous form `(weight * x, weight * y, weight * z, weight)`.
 - Curves may lie on any oriented plane but remain local `NurbsCurve2D` data.
-  Do not add nonplanar spatial NURBS or mesh geometry until their modeling and
+  Do not add nonplanar spatial curves or mesh geometry until their modeling and
   interchange contracts are designed. The viewport resolves the drawing frame
   before sending input to a tool. Hovering a planar scene object inherits its
   frame. In empty space, drawing matches the add-on fallback within the
@@ -57,10 +57,45 @@ representation and conform to Rhino/openNURBS conventions.
   representation and add a factory/validation path for it instead of inventing
   a separate geometry format.
 
+## NURBS surface geometry
+
+- Store committed tensor-product surfaces as `Shape::NurbsSurface3D`, separate
+  from the planar curve representation. Store dimension, U/V degrees and
+  orders, U/V control-vertex counts, rational state, Euclidean XYZ control
+  vertices, weights, and independent U/V knot arrays. Keep each order equal to
+  its degree plus one. Flatten the control net with V varying fastest:
+  `uIndex * controlVertexCountV + vIndex`.
+- Use Rhino's reduced knot-array convention independently in both directions:
+  each knot count is `control_vertex_count + order - 2`. Require finite,
+  nondecreasing knots and positive rational weights. Preserve each parameter
+  domain when evaluating or exchanging surfaces.
+- NURBS surface control vertices are Euclidean world-space XYZ positions;
+  rational storage keeps those positions with one weight per control vertex.
+  Rhino/openNURBS import maps its surface CV net and knots into this model.
+  Native classiCAD JSON retains the exact surface. A Blender mesh, when used as
+  a display proxy, is derived from that surface and is not authoritative.
+- Extruding a selected planar NURBS curve creates an exact ruled surface:
+  the U direction copies the curve's degree, order, knots, and control-point
+  weights; the V direction is clamped degree one over `[0, 1]`; each source
+  control vertex is paired with the same vertex translated by the extrusion
+  vector, with its weight duplicated. This creates an open sheet without caps.
+  Multiple selected curves create separate surface objects in one history
+  operation; never merge their components implicitly.
+- Extrude is one selection-driven tool: selected points create edges and
+  selected curves create surfaces. Both use the existing Extrude interaction,
+  spatial cursor, XYZ axis constraints, snap engine, preview, and completion.
+  Mixed selections use one shared displacement and one history operation.
+- Evaluation, rendering, hit-testing, selection bounds, transforms,
+  serialization, and interchange use the stored surface as their source of
+  truth. Tessellation and display meshes are derived data only. Do not create
+  spatial NURBS curves or mesh modeling without a separate contract.
+
 Reference documentation:
 
 - https://developer.rhino3d.com/api/cpp/class_o_n___nurbs_curve.html
 - https://developer.rhino3d.com/samples/cpp/create-nurbs-circle/
+- https://developer.rhino3d.com/api/cpp/class_o_n___nurbs_surface.html
+- https://developer.rhino3d.com/en/samples/cpp/create-nurbs-surface/
 
 ## Project workflow
 

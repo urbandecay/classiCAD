@@ -38,6 +38,9 @@ public:
                         const Shape::NurbsCurve2D &curve,
                         const WorkPlaneFrame &frame,
                         const QSize &viewportSize) const;
+    void drawNurbsSurface(QPainter &painter,
+                          const Shape::NurbsSurface3D &surface,
+                          const QSize &viewportSize) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,

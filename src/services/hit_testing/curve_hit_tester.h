@@ -24,6 +24,10 @@ public:
                                const Shape::NurbsCurve2D &curve,
                                const ViewportTransform &transform,
                                const QSize &viewportSize) const;
+    qreal distanceToNurbsSurface(const QPointF &screenPosition,
+                                 const Shape::NurbsSurface3D &surface,
+                                 const ViewportTransform &transform,
+                                 const QSize &viewportSize) const;
 
     int hitTestShape(const Document &document,
                      const QPointF &screenPosition,

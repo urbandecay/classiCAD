@@ -7,6 +7,12 @@ The purpose of this file is twofold:
 1. It tells the coding agent what architecture to build.
 2. It makes the project understandable to a human looking at the folders and filenames.
 
+The current execution plan for completing ownership migration, sharing compiled
+modules, and measuring build/runtime improvements is
+[`MODULARITY_AND_BUILD_REFACTOR_PLAN.md`](MODULARITY_AND_BUILD_REFACTOR_PLAN.md).
+Read it after this contract before beginning that work. Its R0–R12 phases
+continue this ledger; historical completed phases remain historical records.
+
 ## Mission
 
 Refactor classiCAD into a scalable C++/Qt application that can support many more drawing, editing, document, layer, import/export, and automation features without putting all behavior in the viewport widget or the main window.
@@ -32,6 +38,8 @@ src/main.cpp                       application entry point
 src/core/tool_id.*                 active interaction vocabulary and tool metadata
 src/core/geometry/geometry_type.*  persistent geometry vocabulary and legacy mapping
 src/core/geometry/nurbs_curve.*    shared NURBS storage, knot expansion, validation
+src/core/geometry/nurbs_surface.*  tensor-product 3D NURBS surface storage, UV trim loops, validation, and evaluation
+src/core/geometry/nurbs_surface_factory.* exact ruled extrusion and planar Fill with UV trim boundaries
 src/core/geometry/arc_curve_factory.* signed direction and exact rational NURBS construction for three-point arcs
 src/core/geometry/interpolating_curve_factory.* centripetal Catmull-Rom interpolation represented as exact piecewise cubic NURBS
 src/core/geometry/work_plane.*     principal and oriented local-2D to world-3D frame mapping
@@ -75,6 +83,7 @@ src/tools/polygon_tool.*           four-mode regular polygon construction, dimen
 src/tools/arc_tool.*               arc creation lifecycle bridge
 src/tools/bezier_tool.*            Bezier creation
 src/tools/nurbs_tool.*             NURBS creation
+src/tools/point_extrude_tool.*     unified Extrude: points to edges, curves to ruled NURBS surfaces
 src/tools/circle_tangent_tool.*   circle construction tangent to selected NURBS curves
 src/tools/rotate_tool.*             rotate lifecycle bridge
 src/tools/mirror_tool.*             mirror lifecycle bridge
@@ -159,7 +168,7 @@ the same transform while the second axis point moves, so the user sees the
 copy before committing it. Its axis therefore receives the same Ortho and
 OSnap behavior as Line without introducing a second snapping model.
 
-Every shape retains local 2D geometry plus an orthonormal `WorkPlaneFrame`
+Every planar shape retains local 2D geometry plus an orthonormal `WorkPlaneFrame`
 with a world origin, X/Y axes, and normal. Legacy records still map through
 their principal XY/XZ/YZ workplane and offset. Drawing input resolves its
 plane once in the shared viewport path before a tool receives plane-local
@@ -176,9 +185,10 @@ in one history operation. Remaining tools still need explicit frame capture.
 Line's existing SnapEngine resolves candidates across scene frames and keeps
 their actual world depth; the existing markers are reused.
 Rendering, hit-testing, sampling, depth geometry, session serialization, and
-Rhino/openNURBS CV lifting consume the same frame mapping. `.3dm` import keeps
-oblique planar curve frames; mesh and nonplanar spatial NURBS geometry remain
-out of scope.
+Rhino/openNURBS curve CV lifting consume the same frame mapping. `.3dm` import
+keeps oblique planar curve frames. Tensor-product NURBS surfaces use the
+separate `NurbsSurface3D` world-XYZ model; mesh modeling and nonplanar spatial
+NURBS curves remain out of scope.
 
 Select-mode movement also supports an explicit Blender-style grab lifecycle:
 `G` starts a move for the selected editable objects, `X`/`Y` constrains the
@@ -205,7 +215,9 @@ boundaries because Curve RNA does not expose arbitrary knot arrays; the Text
 datablock keeps the exact classiCAD curve definition. Blender-side curve edits
 are not yet synchronized back into classiCAD. `.3dm` curve
 interchange remains a separate import path that preserves supported arbitrary
-planar frames; nonplanar spatial NURBS and mesh modeling remain future work.
+planar curve frames and imports supported NURBS surfaces. Blender surface
+display meshes are derived from exact Text-datablock surface data. Nonplanar
+spatial NURBS curves and mesh modeling remain future work.
 
 Do not begin by moving lines into arbitrary folders. First identify the owner of each piece of state and the direction of its dependencies.
 
@@ -280,6 +292,8 @@ src/
   core/
     geometry/
       nurbs_curve.*                     NurbsCurve2D data and invariants
+      nurbs_surface.*                   NurbsSurface3D storage, UV trim loops, validation, and evaluation
+      nurbs_surface_factory.*           exact ruled extrusion and trimmed planar Fill construction
       curve_factories.*                 line, Bezier, circle, and polycurve factories
       arc_curve_factory.*               signed winding and exact rational three-point arc construction
       curve_evaluator.*                 NURBS evaluation and parameter-domain operations
@@ -319,6 +333,7 @@ src/
     tool_context.*                      document, selection, history, services, and view access
     select_tool.*                       click, shift-click, and box selection
     point_tool.*                        point creation
+    point_extrude_tool.*                unified selection-driven point/curve extrusion
     line_tool.*                         continuous line/polyline creation
     rectangle_tool.*                    dynamic rectangle preview and creation
     circle_tool.*                       circle creation
@@ -583,6 +598,14 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 | 21. Add-on Line world-axis input | Complete | Replaced plane-projected Line constraints with closest-point mouse-ray/world-line placement for XYZ, passive global-axis inference, Shift, and N normal locking. L controls plane locking; each new pivot moves the locked-normal plane. Line uses the actual camera-facing plane in oblique ortho, and the existing SnapEngine resolves enabled OSnaps across scene planes with actual world depth and preview endpoint snapping. Preview world vertices and planar NURBS runs feed GPU and painter rendering. Committed data remains local degree-1 NURBS; a chain changing planes creates planar component objects together through the ToolContext batch commit port, with one Undo. Added actual Qt-event/save-reload regressions for side-view Z drawing, all perspective world axes, a mixed-plane chain, atomic Undo, and cross-plane OSnap. Corrected the Rhino import test to distinguish tilted planar lines from genuinely nonplanar cubic curves. Build, all four CTest suites, the XCB native GPU interaction run with inspected Z preview, diff checks, and offscreen startup passed. Core regressions also cover normal locking, Shift direction preservation, and Backspace depth restoration. Remaining tool migrations belong to phase 20. Open app processes were confirmed to still run deleted older executables; the Update action is required to load the rebuilt app while preserving their scenes. |
 
 | 22. Blender-native `.vignola`/`.blend` file foundation | Complete | Replaced the native project save/open boundary with a Blender 5.2.2 background adapter using Blender's `open_mainfile` and `save_as_mainfile` APIs. Save As keeps `.vignola` as the default and offers `.blend`; both extensions store the exact versioned classiCAD document snapshot in a Blender Text datablock and organize existing curves under Blender collections and Curve objects. Because Curve RNA has no arbitrary knot-array field, rational NURBS are split into exact single-span NURBS pieces at their stored knot boundaries; general non-clamped curves use an adaptive sampled fallback. The Text snapshot retains each exact source curve. This step creates no mesh data. Removed the old 3DM-backed project save/load implementation; Rhino `.3dm` remains a separate import path, and old 3DM-backed `.vignola` archives are rejected without migration. The CMake build passed. Blender reopened the regenerated `Test_fixed.blend`, confirmed its classiCAD data, and showed the circle as four rational quadratic NURBS spans with coincident endpoints. The CTest suite was not run. |
+
+| 23. NURBS surface model and curve extrusion | Complete | Added `NurbsSurface3D` with Rhino-style tensor-product U/V storage, validation, evaluation, exact ruled extrusion, persistence, transforms, rendering, depth sampling, hit-testing, selection bounds, Rhino surface import, and derived Blender display meshes. Extrude uses the existing controller: points create edges and curves create surfaces, with identical spatial input, XYZ constraints, snaps, preview, and completion. Removed the separate surface button, command, and controller; selection survives activation. Mixed previews retain surfaces when GPU edge previews are present, and the shared HUD covers both source types. Full CMake build passed. Actual viewport-event regressions passed in offscreen and native XCB/Mesa modes for point and curve selection, mixed previews with verified interior pixels, exact rational geometry and domains, free and edge-on constrained input, OSnap, native save/reload, and atomic Undo. Surface preview captures were inspected; offscreen app startup passed. |
+
+## Continuation progress ledger
+
+| Phase | Status | Notes |
+|---|---|---|
+| 24. Modularity, scalability, and build improvements | Planned; audit/plan complete | Source audit and R0–R12 execution sequence are in `MODULARITY_AND_BUILD_REFACTOR_PLAN.md`. Findings include repeated production compilation, viewport-owned tool state, broad model headers, and inconsistent trim/cache/proxy consumers. No refactoring implementation, fresh benchmark, or test execution was performed for this planning checkpoint. Next: R0 baseline, then R1 shared compilation. Update both ledgers as implementation proceeds. |
 
 ## Required iteration report
 

@@ -1599,7 +1599,7 @@ private:
                 selectToolButton_->setChecked(true);
             }
             statusBar()->showMessage(
-                QStringLiteral("Select one or more editable points before using Extrude"),
+                QStringLiteral("Select one or more editable points or curves before using Extrude"),
                 4000);
             return;
         }
@@ -1608,7 +1608,7 @@ private:
             pointExtrudeToolButton_->setChecked(true);
         }
         statusBar()->showMessage(
-            QStringLiteral("Point Extrude: click endpoint for first point; same offset for %1 point%2  •  X/Y/Z locks axis  •  OSnap when enabled  •  Esc cancels")
+            QStringLiteral("Extrude: click endpoint; same offset for %1 source%2  •  X/Y/Z locks axis  •  OSnap when enabled  •  Esc cancels")
                 .arg(result.count)
                 .arg(result.count == 1 ? QString() : QStringLiteral("s")));
     }
@@ -1887,10 +1887,11 @@ private:
         });
 
         QAction *pointExtrudeAction =
-            editMenu->addAction(QStringLiteral("Extrude Point"));
+            editMenu->addAction(QStringLiteral("Extrude"));
         connect(pointExtrudeAction, &QAction::triggered, this, [this]() {
             startPointExtrude();
         });
+
 
         QAction *mirrorAction = editMenu->addAction(QStringLiteral("Mirror"));
         mirrorAction->setShortcut(QKeySequence(Qt::Key_M));
@@ -2454,7 +2455,7 @@ private:
         pointExtrudeToolButton_ = addToolButton(
             layout, group, QStringLiteral("↑\nExtrude"), Tool::PointExtrude);
         pointExtrudeToolButton_->setToolTip(
-            QStringLiteral("Point Extrude — create parallel lines from selected points using one shared offset"));
+            QStringLiteral("Extrude — selected points create edges; selected curves create NURBS surfaces"));
         rotateToolButton_ = addToolButton(layout, group, QStringLiteral("↻\nRotate"), Tool::Rotate);
         mirrorToolButton_ = addToolButton(layout, group, QStringLiteral("⇄\nMirror"), Tool::Mirror);
         scaleToolButton_ = addToolButton(layout, group, QStringLiteral("⤢\nScale"), Tool::Scale);

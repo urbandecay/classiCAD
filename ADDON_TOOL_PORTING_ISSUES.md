@@ -177,6 +177,19 @@ misread or implemented incorrectly.
 
 ## Point tool port findings
 
+- Extrude is one selection-driven command: points create edges and curves
+  create exact NURBS surfaces. Capture both through the existing controller so
+  spatial mouse input, free dragging, XYZ constraints, snaps, and completion
+  behave identically. A separate curve command cleared selection before its
+  controller began and was missing preview publication/rendering hooks.
+- Mixed point/curve previews must draw surface previews even when edge
+  previews succeeded on the GPU; one global GPU-preview flag must not suppress
+  geometry that uses the painter path.
+- Keep the shared Extrude HUD valid for both source types. The old hardcoded
+  instruction referred only to selected points and overflowed the viewport.
+- [x] Verify curve-only and mixed Extrude selections, visible previews,
+  edge-on axis dragging, free displacement, native save/reload, and atomic Undo.
+
 - `PointTool_ByLine` inherits `LineTool_Poly`. Shift direction locking applies
   even when OSnap is active, the axis lock is reset after each committed
   segment, and the tool commits points without line geometry. Reset the

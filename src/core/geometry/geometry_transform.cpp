@@ -77,6 +77,18 @@ bool mirrorShapeAcrossLine(const Shape &source,
     for (Shape::NurbsCurve2D &component : mirrored->components) {
         mirrorCurve(&component, axisStart, unitNormal);
     }
+    if (validateNurbsSurface(mirrored->nurbsSurface)) {
+        const WorkPlaneFrame frame = shapeWorkPlaneFrame(*mirrored);
+        for (Point3D &point : mirrored->nurbsSurface.controlPoints) {
+            const qreal depth = signedDistanceFromWorkPlaneFrame(point, frame);
+            const QPointF local = mirrorPointAcrossLine(
+                worldPointToWorkPlaneFrame(point, frame), axisStart, unitNormal);
+            point = workPlaneFramePointToWorld(local, frame);
+            point.x += frame.normal.x * depth;
+            point.y += frame.normal.y * depth;
+            point.z += frame.normal.z * depth;
+        }
+    }
 
     // Reflection reverses the orientation of center-defined arcs. The stored
     // NURBS is already transformed above; keep the construction metadata

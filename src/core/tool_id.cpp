@@ -196,7 +196,7 @@ QString toolName(ToolId tool)
     case ToolId::PerpendicularToTwoCurves:
         return QStringLiteral("Perpendicular to Two Curves");
     case ToolId::PointExtrude:
-        return QStringLiteral("Extrude Point");
+        return QStringLiteral("Extrude");
     }
 
     return QStringLiteral("Unknown");

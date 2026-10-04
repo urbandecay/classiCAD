@@ -7,6 +7,7 @@
 #include "../core/geometry/arc_curve_factory.h"
 #include "../core/geometry/curve_evaluator.h"
 #include "../core/geometry/geometry_transform.h"
+#include "../core/geometry/nurbs_surface_factory.h"
 #include "../core/geometry/work_plane.h"
 #include "../core/history/history.h"
 #include "../core/serialization/document_serializer.h"
@@ -520,8 +521,11 @@ public:
         toolContext_.setShapesCommitter([this](ToolId, const QVector<Shape> &shapes) {
             if (shapes.isEmpty()) return false;
             for (const Shape &shape : shapes) {
-                if (!isValidWorkPlaneFrame(shape.workPlaneFrame)) return false;
-                if (shape.geometryType == GeometryType::Point) {
+                if (shape.geometryType == GeometryType::NurbsSurface) {
+                    if (!validateNurbsSurface(shape.nurbsSurface)) return false;
+                } else if (!isValidWorkPlaneFrame(shape.workPlaneFrame)) {
+                    return false;
+                } else if (shape.geometryType == GeometryType::Point) {
                     if (shape.points.size() != 1 ||
                         !std::isfinite(shape.points.first().x()) ||
                         !std::isfinite(shape.points.first().y())) return false;
@@ -947,6 +951,10 @@ public:
         case ViewportCommand::Explode: {
             const int explodedComponents = explodeSelectedShapes();
             return {explodedComponents > 0, explodedComponents};
+        }
+        case ViewportCommand::Fill: {
+            const int filledCurves = fillSelectedClosedCurves();
+            return {filledCurves > 0, filledCurves};
         }
         case ViewportCommand::BeginRotate:
             return {beginRotate(), 0};
@@ -1809,11 +1817,17 @@ public:
                 document_.isObjectVisible(sourceObjectId) &&
                 document_.isObjectEditable(sourceObjectId)) {
                 ++pointCount;
+            } else if (sourceShape != nullptr &&
+                       document_.isObjectVisible(sourceObjectId) &&
+                       document_.isObjectEditable(sourceObjectId)) {
+                for (const auto &curve : curveSampler_.curvesForShape(*sourceShape)) {
+                    if (validateNurbsCurve(curve)) ++pointCount;
+                }
             }
         }
         if (pointCount == 0) {
             DebugLog::instance().write(
-                QStringLiteral("beginPointExtrude ignored selectionCount=%1 noEditablePoints")
+                QStringLiteral("beginPointExtrude ignored selectionCount=%1 noEditablePointsOrCurves")
                     .arg(selected.size()));
             return 0;
         }
@@ -1826,6 +1840,8 @@ public:
                                        .arg(pointCount));
         return activeTool_ == Tool::PointExtrude ? pointCount : 0;
     }
+
+
 
     bool beginRotate()
     {
@@ -2692,6 +2708,208 @@ public:
                 .arg(explodeableShapeCount)
                 .arg(explodedComponentCount));
         return explodedComponentCount;
+    }
+
+    int fillSelectedClosedCurves()
+    {
+        QVector<ObjectId> selected = selectedShapeIndices_;
+        if (selectedShapeIndex_.isValid() &&
+            objectIndex(selectedShapeIndex_) >= 0 &&
+            !selected.contains(selectedShapeIndex_)) {
+            selected.append(selectedShapeIndex_);
+        }
+
+        const auto makeBoundaryCurve = [this](
+            const Shape &shape,
+            Shape::NurbsCurve2D *curve,
+            WorkPlaneFrame *frame) {
+            if (curve == nullptr || frame == nullptr) {
+                return false;
+            }
+
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                if (shape.components.isEmpty()) {
+                    return false;
+                }
+                if (shape.components.size() == 1) {
+                    *curve = shape.components.first();
+                    *frame = shapeComponentWorkPlaneFrame(shape, 0);
+                    return isValidNurbsCurve(*curve) && isValidWorkPlaneFrame(*frame);
+                }
+
+                *frame = shapeComponentWorkPlaneFrame(shape, 0);
+                if (!isValidWorkPlaneFrame(*frame)) {
+                    return false;
+                }
+                QVector<QVector<QPointF>> componentPaths;
+                componentPaths.reserve(shape.components.size());
+                for (int componentIndex = 0;
+                     componentIndex < shape.components.size();
+                     ++componentIndex) {
+                    const Shape::NurbsCurve2D &component =
+                        shape.components[componentIndex];
+                    const WorkPlaneFrame componentFrame =
+                        shapeComponentWorkPlaneFrame(shape, componentIndex);
+                    if (!isValidNurbsCurve(component) || component.degree != 1 ||
+                        component.controlPoints.size() < 2 ||
+                        !workPlaneFramesCoplanar(*frame, componentFrame)) {
+                        return false;
+                    }
+
+                    QVector<QPointF> path;
+                    path.reserve(component.controlPoints.size());
+                    for (const QPointF &point : component.controlPoints) {
+                        path.append(worldPointToWorkPlaneFrame(
+                            workPlaneFramePointToWorld(point, componentFrame),
+                            *frame));
+                    }
+                    componentPaths.append(path);
+                }
+
+                QVector<QPointF> boundary = componentPaths.takeFirst();
+                QVector<bool> consumed(componentPaths.size(), false);
+                for (int joinedCount = 0;
+                     joinedCount < componentPaths.size();
+                     ++joinedCount) {
+                    bool joined = false;
+                    for (int candidateIndex = 0;
+                         candidateIndex < componentPaths.size();
+                         ++candidateIndex) {
+                        if (consumed[candidateIndex]) {
+                            continue;
+                        }
+                        QVector<QPointF> candidate =
+                            componentPaths[candidateIndex];
+                        const QPointF &tail = boundary.last();
+                        const qreal scale = std::max<qreal>(
+                            {1.0, std::abs(tail.x()), std::abs(tail.y()),
+                             std::abs(candidate.first().x()),
+                             std::abs(candidate.first().y()),
+                             std::abs(candidate.last().x()),
+                             std::abs(candidate.last().y())});
+                        const qreal tolerance = scale * 1.0e-7;
+                        const auto endpointsMatch = [tolerance](
+                            const QPointF &first,
+                            const QPointF &second) {
+                            return std::hypot(first.x() - second.x(),
+                                              first.y() - second.y()) <= tolerance;
+                        };
+                        if (endpointsMatch(tail, candidate.last())) {
+                            std::reverse(candidate.begin(), candidate.end());
+                        } else if (!endpointsMatch(tail, candidate.first())) {
+                            continue;
+                        }
+                        for (int pointIndex = 1;
+                             pointIndex < candidate.size();
+                             ++pointIndex) {
+                            boundary.append(candidate[pointIndex]);
+                        }
+                        consumed[candidateIndex] = true;
+                        joined = true;
+                        break;
+                    }
+                    if (!joined) {
+                        return false;
+                    }
+                }
+
+                if (boundary.size() < 4) {
+                    return false;
+                }
+                const QPointF first = boundary.first();
+                const QPointF last = boundary.last();
+                const qreal closureScale = std::max<qreal>(
+                    {1.0, std::abs(first.x()), std::abs(first.y()),
+                     std::abs(last.x()), std::abs(last.y())});
+                if (std::hypot(first.x() - last.x(), first.y() - last.y()) >
+                    closureScale * 1.0e-7) {
+                    return false;
+                }
+                boundary.last() = first;
+                *curve = makeDegreeOneNurbs(boundary);
+                return isValidNurbsCurve(*curve);
+            }
+
+            *frame = shapeWorkPlaneFrame(shape);
+            if (!isValidWorkPlaneFrame(*frame)) {
+                return false;
+            }
+            if (isValidNurbsCurve(shape.nurbs)) {
+                *curve = shape.nurbs;
+                return true;
+            }
+
+            QVector<QPointF> vertices;
+            if (shape.geometryType == GeometryType::Rectangle) {
+                vertices = rectangleVertices(shape);
+            } else if (shape.geometryType == GeometryType::Polygon) {
+                vertices = polygonVerticesForShape(shape);
+            }
+            if (vertices.size() < 3) {
+                return false;
+            }
+            vertices.append(vertices.first());
+            *curve = makeDegreeOneNurbs(vertices);
+            return isValidNurbsCurve(*curve);
+        };
+
+        struct FillCandidate {
+            ObjectId objectId = ObjectId::invalid();
+            Shape::NurbsSurface3D surface;
+        };
+        QVector<FillCandidate> candidates;
+        for (const ObjectId objectId : selected) {
+            const int shapeIndex = objectIndex(objectId);
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
+                !document_.isObjectEditable(objectId)) {
+                continue;
+            }
+
+            Shape::NurbsCurve2D boundary;
+            WorkPlaneFrame frame;
+            Shape::NurbsSurface3D surface;
+            if (makeBoundaryCurve(shapes_[shapeIndex], &boundary, &frame) &&
+                makeNurbsPlanarFillSurface(boundary, frame, &surface)) {
+                candidates.append({objectId, std::move(surface)});
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            if (toolStatusUpdate_) {
+                toolStatusUpdate_(QStringLiteral(
+                    "Fill: select a closed planar curve"));
+            }
+            return 0;
+        }
+
+        recordGeometryChange();
+        for (const FillCandidate &candidate : candidates) {
+            const int shapeIndex = objectIndex(candidate.objectId);
+            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                continue;
+            }
+            Shape &shape = shapes_[shapeIndex];
+            shape.geometryType = GeometryType::NurbsSurface;
+            shape.points.clear();
+            shape.nurbs = Shape::NurbsCurve2D{};
+            shape.subdivisionParameters.clear();
+            shape.components.clear();
+            shape.componentWorkPlaneFrames.clear();
+            shape.nurbsSurface = candidate.surface;
+        }
+
+        update();
+        if (toolStatusUpdate_) {
+            toolStatusUpdate_(QStringLiteral("Filled %1 closed curve%2")
+                                  .arg(candidates.size())
+                                  .arg(candidates.size() == 1
+                                           ? QString()
+                                           : QStringLiteral("s")));
+        }
+        DebugLog::instance().write(
+            QStringLiteral("fill committed surfaces=%1")
+                .arg(candidates.size()));
+        return candidates.size();
     }
 
     bool saveUpdateSession(const QString &path) const
@@ -3629,7 +3847,8 @@ protected:
 
             const QColor previewColor(QStringLiteral("#e6b85c"));
             const QColor activeToolPreviewColor =
-                activeTool_ == Tool::Arc || isCircleConstructionTool(activeTool_) ||
+                activeTool_ == Tool::PointExtrude || activeTool_ == Tool::Arc ||
+                        isCircleConstructionTool(activeTool_) ||
                         isEllipseTool(activeTool_) || isPolygonTool(activeTool_) ||
                         isRectangleTool(activeTool_)
                     ? arcPreviewColor
@@ -4194,9 +4413,11 @@ protected:
             drawScaleToolGuide(painter,
                                !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::PointExtrude) {
-            if (!gpuActiveToolPreview || !gpuPreviewRendered) {
-                for (const Shape &previewShape : pointExtrudePreviewShapes_) {
-                    drawShape(painter, previewShape, true);
+            for (const Shape &previewShape : pointExtrudePreviewShapes_) {
+                if (previewShape.geometryType == GeometryType::NurbsSurface ||
+                    !gpuActiveToolPreview || !gpuPreviewRendered) {
+                    drawShape(painter, previewShape, true, false, false,
+                              arcPreviewColor);
                 }
             }
         } else if (controllerPreviewShapeVisible_ &&
@@ -5973,6 +6194,15 @@ protected:
             return;
         }
 
+        if (activeTool_ == Tool::Select && !grabActive_ &&
+            !draggingSelected_ && !joinActive_ && !subdivisionActive_ &&
+            !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
+            event->key() == Qt::Key_F) {
+            executeCommand(ViewportCommand::Fill);
+            event->accept();
+            return;
+        }
+
         if (activeTool_ == Tool::Select && draggingSelected_ &&
             !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
             (event->key() == Qt::Key_X || event->key() == Qt::Key_Y)) {
@@ -7345,6 +7575,26 @@ private:
                 maxX = std::max(maxX, screenPoint.x());
                 minY = std::min(minY, screenPoint.y());
                 maxY = std::max(maxY, screenPoint.y());
+            }
+        }
+
+        if (validateNurbsSurface(shape.nurbsSurface)) {
+            for (const Point3D &point : shape.nurbsSurface.controlPoints) {
+                QPointF screenPoint;
+                if (!viewportTransform_.worldPointToScreen(
+                        point, size(), &screenPoint)) {
+                    continue;
+                }
+                if (!initialized) {
+                    minX = maxX = screenPoint.x();
+                    minY = maxY = screenPoint.y();
+                    initialized = true;
+                } else {
+                    minX = std::min(minX, screenPoint.x());
+                    maxX = std::max(maxX, screenPoint.x());
+                    minY = std::min(minY, screenPoint.y());
+                    maxY = std::max(maxY, screenPoint.y());
+                }
             }
         }
 
@@ -12437,6 +12687,18 @@ private:
                 point = scaledPoint(point);
             }
         }
+        if (validateNurbsSurface(shape->nurbsSurface)) {
+            const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
+            for (Point3D &point : shape->nurbsSurface.controlPoints) {
+                const qreal depth = signedDistanceFromWorkPlaneFrame(point, frame);
+                const QPointF local = scaledPoint(
+                    worldPointToWorkPlaneFrame(point, frame));
+                point = workPlaneFramePointToWorld(local, frame);
+                point.x += frame.normal.x * depth;
+                point.y += frame.normal.y * depth;
+                point.z += frame.normal.z * depth;
+            }
+        }
     }
 
     qreal scaleFactorAtPoint(const QPointF &point) const
@@ -12769,6 +13031,15 @@ private:
             return;
         }
 
+        if (validateNurbsSurface(shape->nurbsSurface)) {
+            for (Point3D &point : shape->nurbsSurface.controlPoints) {
+                point = rotateWorldPoint(point,
+                                         rotateBaseWorldPoint_,
+                                         rotateFrame_.normal,
+                                         angle);
+            }
+            return;
+        }
         shape->workPlaneFrame = rotateWorkPlaneFrame(
             shapeWorkPlaneFrame(*shape),
             rotateBaseWorldPoint_,
@@ -13393,6 +13664,20 @@ private:
         }
 
         Shape &shape = shapes_[index];
+        if (validateNurbsSurface(shape.nurbsSurface)) {
+            const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
+            const Point3D localOrigin = workPlaneFramePointToWorld({}, inputFrame);
+            const Point3D localEnd = workPlaneFramePointToWorld(delta, inputFrame);
+            const Point3D worldDelta{localEnd.x - localOrigin.x,
+                                     localEnd.y - localOrigin.y,
+                                     localEnd.z - localOrigin.z};
+            for (Point3D &point : shape.nurbsSurface.controlPoints) {
+                point.x += worldDelta.x;
+                point.y += worldDelta.y;
+                point.z += worldDelta.z;
+            }
+            return;
+        }
         const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
         const Point3D end = workPlaneFramePointToWorld(delta, inputFrame);
         WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
@@ -13454,6 +13739,19 @@ private:
                 point += delta;
             }
         }
+        if (validateNurbsSurface(shape.nurbsSurface)) {
+            const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
+            const Point3D origin = workPlaneFramePointToWorld({}, frame);
+            const Point3D end = workPlaneFramePointToWorld(delta, frame);
+            const Point3D worldDelta{end.x - origin.x,
+                                     end.y - origin.y,
+                                     end.z - origin.z};
+            for (Point3D &point : shape.nurbsSurface.controlPoints) {
+                point.x += worldDelta.x;
+                point.y += worldDelta.y;
+                point.z += worldDelta.z;
+            }
+        }
     }
 
     void translateShapes(const QVector<ObjectId> &objectIds, const QPointF &delta)
@@ -13478,6 +13776,13 @@ private:
             frame.origin.y += snap.worldTranslation.y;
             frame.origin.z += snap.worldTranslation.z;
             shapes_[index].workPlaneFrame = frame;
+            if (validateNurbsSurface(shapes_[index].nurbsSurface)) {
+                for (Point3D &point : shapes_[index].nurbsSurface.controlPoints) {
+                    point.x += snap.worldTranslation.x;
+                    point.y += snap.worldTranslation.y;
+                    point.z += snap.worldTranslation.z;
+                }
+            }
             for (WorkPlaneFrame &componentFrame :
                  shapes_[index].componentWorkPlaneFrames) {
                 componentFrame.origin.x += snap.worldTranslation.x;

@@ -1,6 +1,7 @@
 #include "curve_hit_tester.h"
 
 #include "core/geometry/curve_evaluator.h"
+#include "core/geometry/nurbs_surface.h"
 #include "services/dimensions/dimension_layout.h"
 
 #include <QPolygonF>
@@ -306,6 +307,12 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                       const ViewportTransform &transform,
                                       const QSize &viewportSize) const
 {
+    if (shape.geometryType == GeometryType::NurbsSurface) {
+        return distanceToNurbsSurface(screenPosition,
+                                      shape.nurbsSurface,
+                                      transform,
+                                      viewportSize);
+    }
     if (isDimensionGeometryType(shape.geometryType)) {
         return distanceToDimensionLayout(
             screenPosition,
@@ -448,6 +455,157 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
     return 1.0e9;
 }
 
+qreal CurveHitTester::distanceToNurbsSurface(
+    const QPointF &screenPosition,
+    const Shape::NurbsSurface3D &surface,
+    const ViewportTransform &transform,
+    const QSize &viewportSize) const
+{
+    if (!validateNurbsSurface(surface)) {
+        return 1.0e9;
+    }
+    qreal uStart = 0.0;
+    qreal uEnd = 0.0;
+    qreal vStart = 0.0;
+    qreal vEnd = 0.0;
+    if (!nurbsSurfaceParameterDomains(surface,
+                                      &uStart,
+                                      &uEnd,
+                                      &vStart,
+                                      &vEnd)) {
+        return 1.0e9;
+    }
+
+    constexpr int gridCount = 32;
+    QVector<QVector<QPointF>> trimPolygons;
+    trimPolygons.reserve(surface.trimLoops.size());
+    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
+        trimPolygons.append(sampleNurbsSurfaceTrimLoop(loop, 256));
+    }
+    const auto insidePolygon = [](const QPointF &point,
+                                  const QVector<QPointF> &polygon) {
+        bool inside = false;
+        for (int current = 0, previous = polygon.size() - 1;
+             current < polygon.size();
+             previous = current++) {
+            const QPointF &a = polygon[current];
+            const QPointF &b = polygon[previous];
+            const bool crosses = (a.y() > point.y()) != (b.y() > point.y());
+            if (crosses && point.x() < (b.x() - a.x()) *
+                                             (point.y() - a.y()) /
+                                             (b.y() - a.y()) + a.x()) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    };
+    const auto insideTrim = [&](qreal u, qreal v) {
+        if (trimPolygons.isEmpty()) {
+            return true;
+        }
+        bool insideOuter = false;
+        for (int index = 0; index < trimPolygons.size(); ++index) {
+            const bool inside = insidePolygon(QPointF(u, v), trimPolygons[index]);
+            if (!surface.trimLoops[index].isHole && inside) {
+                insideOuter = true;
+            } else if (surface.trimLoops[index].isHole && inside) {
+                return false;
+            }
+        }
+        return insideOuter;
+    };
+    QPointF projected[gridCount + 1][gridCount + 1];
+    bool valid[gridCount + 1][gridCount + 1]{};
+    for (int uIndex = 0; uIndex <= gridCount; ++uIndex) {
+        const qreal u = uStart + (uEnd - uStart) * uIndex / gridCount;
+        for (int vIndex = 0; vIndex <= gridCount; ++vIndex) {
+            const qreal v = vStart + (vEnd - vStart) * vIndex / gridCount;
+            Point3D worldPoint;
+            valid[uIndex][vIndex] =
+                evaluateNurbsSurfacePoint(surface, u, v, &worldPoint) &&
+                transform.worldPointToScreenUnclipped(worldPoint,
+                                                      viewportSize,
+                                                      &projected[uIndex][vIndex]);
+        }
+    }
+
+    qreal distance = 1.0e9;
+    for (const QVector<QPointF> &trimPolygon : trimPolygons) {
+        if (trimPolygon.size() < 3) {
+            continue;
+        }
+        QPointF previous;
+        bool havePrevious = false;
+        for (int index = 0; index <= trimPolygon.size(); ++index) {
+            const QPointF &parameter = trimPolygon[index % trimPolygon.size()];
+            Point3D worldPoint;
+            QPointF screenPoint;
+            if (!evaluateNurbsSurfacePoint(surface,
+                                           parameter.x(),
+                                           parameter.y(),
+                                           &worldPoint) ||
+                !transform.worldPointToScreenUnclipped(worldPoint,
+                                                       viewportSize,
+                                                       &screenPoint)) {
+                havePrevious = false;
+                continue;
+            }
+            if (havePrevious) {
+                distance = std::min(
+                    distance,
+                    distanceToSegment(screenPosition, previous, screenPoint));
+            }
+            previous = screenPoint;
+            havePrevious = true;
+        }
+    }
+    for (int uIndex = 0; uIndex < gridCount; ++uIndex) {
+        for (int vIndex = 0; vIndex < gridCount; ++vIndex) {
+            const qreal cellU = uStart + (uEnd - uStart) *
+                                             (uIndex + 0.5) / gridCount;
+            const qreal cellV = vStart + (vEnd - vStart) *
+                                             (vIndex + 0.5) / gridCount;
+            if (!insideTrim(cellU, cellV)) {
+                continue;
+            }
+            const qreal uMid = uStart + (uEnd - uStart) *
+                                            (uIndex + 0.5) / gridCount;
+            const qreal vAt = vStart + (vEnd - vStart) * vIndex / gridCount;
+            if (valid[uIndex][vIndex] && valid[uIndex + 1][vIndex] &&
+                insideTrim(uMid, vAt)) {
+                distance = std::min(
+                    distance,
+                    distanceToSegment(screenPosition,
+                                      projected[uIndex][vIndex],
+                                      projected[uIndex + 1][vIndex]));
+            }
+            const qreal uAt = uStart + (uEnd - uStart) * uIndex / gridCount;
+            const qreal vMid = vStart + (vEnd - vStart) *
+                                            (vIndex + 0.5) / gridCount;
+            if (valid[uIndex][vIndex] && valid[uIndex][vIndex + 1] &&
+                insideTrim(uAt, vMid)) {
+                distance = std::min(
+                    distance,
+                    distanceToSegment(screenPosition,
+                                      projected[uIndex][vIndex],
+                                      projected[uIndex][vIndex + 1]));
+            }
+            if (valid[uIndex][vIndex] && valid[uIndex + 1][vIndex] &&
+                valid[uIndex + 1][vIndex + 1] && valid[uIndex][vIndex + 1]) {
+                QPolygonF cell;
+                cell << projected[uIndex][vIndex]
+                     << projected[uIndex + 1][vIndex]
+                     << projected[uIndex + 1][vIndex + 1]
+                     << projected[uIndex][vIndex + 1];
+                if (cell.containsPoint(screenPosition, Qt::OddEvenFill)) {
+                    distance = std::min<qreal>(distance, 8.0);
+                }
+            }
+        }
+    }
+    return distance;
+}
+
 QVector<QPointF> CurveHitTester::controlPointsForShape(const Shape &shape) const
 {
     if (shape.geometryType == GeometryType::Rectangle) return rectangleVertices(shape);
@@ -587,6 +745,11 @@ int CurveHitTester::hitTestShapeOnAnyWorkPlane(
             continue;
         }
         const Shape &shape = document[index];
+        if (shape.geometryType == GeometryType::NurbsSurface) {
+            // A spatial surface has no single drawing plane to inherit. It
+            // remains selectable in the regular hit test above.
+            continue;
+        }
         ViewportTransform shapeTransform = transform;
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
         shapeTransform.setWorkPlaneFrame(frame);

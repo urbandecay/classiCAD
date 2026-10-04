@@ -2438,6 +2438,42 @@ int main(int argc, char **argv)
                                           polygonShape.points.first()),
                     "polygon OSnap must expose every corner and side midpoint and snap to its corners");
 
+    Shape surfaceSnapShape;
+    surfaceSnapShape.geometryType = GeometryType::NurbsSurface;
+    surfaceSnapShape.nurbsSurface.degreeU = 1;
+    surfaceSnapShape.nurbsSurface.degreeV = 1;
+    surfaceSnapShape.nurbsSurface.orderU = 2;
+    surfaceSnapShape.nurbsSurface.orderV = 2;
+    surfaceSnapShape.nurbsSurface.controlVertexCountU = 2;
+    surfaceSnapShape.nurbsSurface.controlVertexCountV = 2;
+    surfaceSnapShape.nurbsSurface.controlPoints = {
+        {4.0, 3.0, 6.0}, {4.0, 3.0, 10.0},
+        {12.0, 8.0, 6.0}, {12.0, 8.0, 10.0}};
+    surfaceSnapShape.nurbsSurface.weights = {1.0, 1.0, 1.0, 1.0};
+    surfaceSnapShape.nurbsSurface.knotsU = {2.0, 5.0};
+    surfaceSnapShape.nurbsSurface.knotsV = {-1.0, 3.0};
+    SnapEngine surfaceSnapEngine;
+    surfaceSnapEngine.setSettings(
+        SnapSettings{true, true, false, false, false, false, false});
+    const QVector<SnapCandidate> surfaceCorners = surfaceSnapEngine.snapCandidatesForShape(
+        surfaceSnapShape, viewportTransform, viewportSize);
+    Document surfaceSnapDocument;
+    surfaceSnapDocument.append(surfaceSnapShape);
+    const Point3D surfaceCornerWorld = surfaceSnapShape.nurbsSurface.controlPoints.last();
+    QPointF surfaceCornerScreen;
+    const bool surfaceCornerProjects = viewportTransform.worldPointToScreen(
+        surfaceCornerWorld, viewportSize, &surfaceCornerScreen);
+    const SnapResult surfaceCornerSnap = surfaceSnapEngine.findSpatialSnapPoint(
+        surfaceSnapDocument, surfaceCornerScreen, nullptr,
+        viewportTransform, viewportSize);
+    passed &= check(surfaceCorners.size() == 4 && surfaceCornerProjects &&
+                        surfaceCornerSnap.type == SnapType::Endpoint &&
+                        surfaceCornerSnap.hasWorldPoint &&
+                        std::abs(surfaceCornerSnap.worldPoint.x - surfaceCornerWorld.x) < 1.0e-8 &&
+                        std::abs(surfaceCornerSnap.worldPoint.y - surfaceCornerWorld.y) < 1.0e-8 &&
+                        std::abs(surfaceCornerSnap.worldPoint.z - surfaceCornerWorld.z) < 1.0e-8,
+                    "spatial Endpoint OSnap must find NURBS surface corners in world XYZ");
+
     Document ellipseSnapDocument;
     ellipseSnapDocument.append(ellipse);
     SnapEngine ellipseSnapEngine;

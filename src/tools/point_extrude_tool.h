@@ -21,6 +21,7 @@ private:
         ObjectId objectId = ObjectId::invalid();
         Point3D worldPoint;
         WorkPlaneFrame workPlaneFrame;
+        Shape::NurbsCurve2D curve;
     };
 
     Point3D resolveTarget(const ToolInput &input, ToolContext &context);

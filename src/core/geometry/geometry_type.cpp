@@ -6,7 +6,7 @@ namespace classiCAD {
 
 bool isPersistentGeometryType(GeometryType type)
 {
-    return type >= GeometryType::Line && type <= GeometryType::Picture;
+    return type >= GeometryType::Line && type <= GeometryType::NurbsSurface;
 }
 
 bool isDimensionGeometryType(GeometryType type)
@@ -44,6 +44,8 @@ QString geometryTypeName(GeometryType type)
         return QStringLiteral("Angular Dimension");
     case GeometryType::Picture:
         return QStringLiteral("Picture");
+    case GeometryType::NurbsSurface:
+        return QStringLiteral("NURBS Surface");
     case GeometryType::Invalid:
         return QStringLiteral("Invalid");
     }
@@ -65,7 +67,7 @@ bool geometryTypeFromLegacyValue(int value, GeometryType *type)
 bool geometryTypeFromValue(int value, GeometryType *type)
 {
     if (type == nullptr || value < static_cast<int>(GeometryType::Line) ||
-        value > static_cast<int>(GeometryType::Picture)) {
+        value > static_cast<int>(GeometryType::NurbsSurface)) {
         return false;
     }
 

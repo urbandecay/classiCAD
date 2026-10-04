@@ -808,6 +808,7 @@ bool isCircleTangentTarget(const Shape &shape)
     case GeometryType::LinearDimension:
     case GeometryType::AngularDimension:
     case GeometryType::Picture:
+    case GeometryType::NurbsSurface:
         return false;
     }
     return false;

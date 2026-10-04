@@ -5,6 +5,7 @@
 #include "ui/viewport/line_type_style.h"
 
 #include "core/document/document.h"
+#include "core/geometry/curve_evaluator.h"
 #include "core/serialization/blender_project_file.h"
 
 #include <QApplication>
@@ -503,6 +504,153 @@ int main(int argc, char **argv)
             }
             passed &= check(valid,
                             "free, Z-constrained, and snapped extrusion must continue above the perspective horizon");
+        }
+    }
+    // The same Extrude entry point must capture curves before tool activation,
+    // publish visible surfaces, and preserve the point tool's spatial input.
+    {
+        QTemporaryDir directory;
+        Shape spline;
+        spline.geometryType = GeometryType::Nurbs;
+        spline.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        spline.nurbs = makeBezierNurbs({{-8.0, -3.0}, {-4.0, 9.0},
+                                       {4.0, -9.0}, {8.0, 3.0}});
+        spline.nurbs.rational = true;
+        spline.nurbs.weights = {1.0, 0.7, 1.3, 1.0};
+        for (double &knot : spline.nurbs.knots) knot = 2.0 + 3.0 * knot;
+        const Point3D anchor = shapePointToWorld(spline, spline.nurbs.controlPoints.first());
+        const QString path = directory.filePath(QStringLiteral("curve-extrude.vignola"));
+        for (int mode = 0; mode < 4; ++mode) {
+            const auto preset = mode == 0 || mode == 3 ? ViewportViewPreset::Front
+                              : mode == 1 ? ViewportViewPreset::Top
+                                          : ViewportViewPreset::Isometric;
+            Document source;
+            source.append(spline);
+            if (mode == 1 || mode == 2) {
+                Shape point;
+                point.geometryType = GeometryType::Point;
+                point.points = {{12.0, 0.0}};
+                point.workPlaneFrame = spline.workPlaneFrame;
+                source.append(point);
+            }
+            if (mode == 3) {
+                Shape target;
+                target.geometryType = GeometryType::Point;
+                target.points = {{anchor.x, anchor.y}};
+                target.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 20.0);
+                const auto targetId = source.append(target);
+                const auto targetLayer = source.createLayer(QStringLiteral("Snap target"));
+                source.moveObjectToLayer(targetId, targetLayer);
+                source.setLayerLocked(targetLayer, true);
+            }
+            const int sourceCount = mode == 0 || mode == 3 ? 1 : 2;
+            QString error;
+            std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+            probe->resize(interactionViewportSize);
+            probe->show();
+            passed &= check(saveVignolaDocument(path, source, &error) &&
+                                probe->loadVignolaDocument(path, &error),
+                            "curve extrusion fixture must load");
+            probe->setViewPreset(preset);
+            passed &= check(waitForViewPreset(probe.get(), preset),
+                            "curve extrusion camera transition must finish");
+            probe->setOsnapEnabled(mode == 3);
+            probe->setSnapModes(true, false, false, false, false, false, false, false);
+            probe->setTool(ToolId::Select);
+            QKeyEvent selectAll(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+            QApplication::sendEvent(probe.get(), &selectAll);
+            const auto started = probe->executeCommand(ViewportCommand::BeginPointExtrude);
+            passed &= check(started.accepted && started.count == sourceCount,
+                            "the existing Extrude command must accept curves and mixed selections");
+            ViewportTransform projection;
+            projection.setViewPreset(preset);
+            Point3D displacement{0.0, 0.0, 20.0};
+            QPointF endpoint;
+            if (mode < 2) {
+                QKeyEvent axis(QEvent::KeyPress, Qt::Key_Z, Qt::NoModifier);
+                QApplication::sendEvent(probe.get(), &axis);
+                if (mode == 0) {
+                    projection.worldPointToScreen({anchor.x, anchor.y, anchor.z + 20.0},
+                                                   interactionViewportSize, &endpoint);
+                } else {
+                    projection.worldPointToScreen(anchor, interactionViewportSize, &endpoint);
+                    endpoint += QPointF(0.0, -80.0);
+                    displacement.z = 80.0 / projection.viewScalePixelsPerWorldUnit(interactionViewportSize);
+                }
+            } else if (mode == 3) {
+                projection.worldPointToScreen({anchor.x, anchor.y, anchor.z + 20.0},
+                                               interactionViewportSize, &endpoint);
+            } else {
+                projection.worldPointToScreen(anchor, interactionViewportSize, &endpoint);
+                endpoint += QPointF(80.0, -60.0);
+                const auto dragFrame = makeWorkPlaneFrameFromNormal(
+                    anchor, projection.viewDirection(), projection.viewUp());
+                QPointF local;
+                projection.screenToWorkPlaneUnclipped(endpoint, interactionViewportSize,
+                                                       dragFrame, &local);
+                const auto target = workPlaneFramePointToWorld(local, dragFrame);
+                displacement = {target.x - anchor.x, target.y - anchor.y, target.z - anchor.z};
+            }
+            sendMouse(probe.get(), QEvent::MouseMove, endpoint,
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            application.processEvents();
+            const QImage preview = captureViewport(probe.get());
+            if (mode != 1) {
+                QPointF curveMiddle;
+                evaluateNurbsPoint(spline.nurbs, 3.5, &curveMiddle);
+                const auto base = shapePointToWorld(spline, curveMiddle);
+                QPointF surfaceMiddle;
+                projection.worldPointToScreen(
+                    {base.x + 0.5 * displacement.x, base.y + 0.5 * displacement.y,
+                     base.z + 0.5 * displacement.z}, interactionViewportSize, &surfaceMiddle);
+                const QRect surfaceRegion(surfaceMiddle.toPoint() - QPoint(5, 5), QSize(11, 11));
+                passed &= check(pixelsNearColor(preview, QColor("#d28b45"), 45) > 200,
+                                "Extrude must display the surface preview, including alongside point edges");
+                passed &= check(pixelsNearColor(preview.copy(surfaceRegion), QColor("#d28b45"), 45) > 4,
+                                "surface interior isocurves must remain visible in a mixed GPU/Qt preview");
+                saveGridCapture(QStringLiteral("extrude-surface-preview-%1").arg(mode), preview);
+            }
+            if (mode == 1) {
+                QKeyEvent confirm(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                QApplication::sendEvent(probe.get(), &confirm);
+            } else {
+                sendMouse(probe.get(), QEvent::MouseButtonPress, endpoint,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            }
+            Document result;
+            bool valid = probe->saveVignolaDocument(path, &error) &&
+                loadVignolaDocument(path, &result, &error) && result.size() == source.size() + sourceCount;
+            if (valid) {
+                const auto &surface = result[source.size()].nurbsSurface;
+                valid = validateNurbsSurface(surface) && surface.degreeU == spline.nurbs.degree &&
+                        surface.knotsU == spline.nurbs.knots && surface.degreeV == 1;
+                for (qreal u : {2.0, 3.5, 5.0}) {
+                    QPointF curvePoint;
+                    valid &= evaluateNurbsPoint(spline.nurbs, u, &curvePoint);
+                    const auto base = shapePointToWorld(spline, curvePoint);
+                    for (qreal v : {0.0, 0.5, 1.0}) {
+                        Point3D actual;
+                        valid &= evaluateNurbsSurfacePoint(surface, u, v, &actual) &&
+                            std::abs(actual.x - base.x - v * displacement.x) < 1.0e-6 &&
+                            std::abs(actual.y - base.y - v * displacement.y) < 1.0e-6 &&
+                            std::abs(actual.z - base.z - v * displacement.z) < 1.0e-6;
+                    }
+                }
+                if (mode == 1 || mode == 2) {
+                    const Shape &line = result[source.size() + 1];
+                    const auto end = shapePointToWorld(line, line.nurbs.controlPoints.last());
+                    valid &= line.geometryType == GeometryType::Line &&
+                        std::abs(end.x - 12.0 - displacement.x) < 1.0e-6 &&
+                        std::abs(end.y - displacement.y) < 1.0e-6 &&
+                        std::abs(end.z - displacement.z) < 1.0e-6;
+                }
+            }
+            passed &= check(valid,
+                            "Extrude must commit exact rational surfaces and point edges with one shared vector");
+            passed &= check(probe->executeCommand(ViewportCommand::Undo).accepted &&
+                                probe->saveVignolaDocument(path, &error) &&
+                                loadVignolaDocument(path, &result, &error) && result.size() == source.size(),
+                            "one Undo must remove the complete mixed extrusion");
         }
     }
     if (application.arguments().contains(QStringLiteral("--point-extrude-only"))) {

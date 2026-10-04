@@ -3,6 +3,7 @@
 #include "viewport_depth_geometry.h"
 
 #include "core/geometry/curve_evaluator.h"
+#include "core/geometry/nurbs_surface.h"
 #include "services/sampling/curve_sampler.h"
 
 #include <QCryptographicHash>
@@ -21,6 +22,44 @@ QVector3D asVector(const Point3D &point)
     return {static_cast<float>(point.x),
             static_cast<float>(point.y),
             static_cast<float>(point.z)};
+}
+
+bool parameterInsidePolygon(const QPointF &point,
+                            const QVector<QPointF> &polygon)
+{
+    bool inside = false;
+    for (int current = 0, previous = polygon.size() - 1;
+         current < polygon.size();
+         previous = current++) {
+        const QPointF &a = polygon[current];
+        const QPointF &b = polygon[previous];
+        const bool crosses = (a.y() > point.y()) != (b.y() > point.y());
+        if (crosses && point.x() < (b.x() - a.x()) *
+                                         (point.y() - a.y()) /
+                                         (b.y() - a.y()) + a.x()) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+bool parameterInsideSurfaceTrim(const QPointF &parameter,
+                                const Shape::NurbsSurface3D &surface,
+                                const QVector<QVector<QPointF>> &trimPolygons)
+{
+    if (trimPolygons.isEmpty()) {
+        return true;
+    }
+    bool insideOuter = false;
+    for (int index = 0; index < trimPolygons.size(); ++index) {
+        const bool inside = parameterInsidePolygon(parameter, trimPolygons[index]);
+        if (!surface.trimLoops[index].isHole && inside) {
+            insideOuter = true;
+        } else if (surface.trimLoops[index].isHole && inside) {
+            return false;
+        }
+    }
+    return insideOuter;
 }
 
 struct OpaqueImageRun {
@@ -221,6 +260,81 @@ void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
     }
 }
 
+void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
+                                 ViewportDepthGeometry *geometry)
+{
+    if (geometry == nullptr || !validateNurbsSurface(surface)) {
+        return;
+    }
+    qreal uStart = 0.0;
+    qreal uEnd = 0.0;
+    qreal vStart = 0.0;
+    qreal vEnd = 0.0;
+    if (!nurbsSurfaceParameterDomains(surface,
+                                      &uStart,
+                                      &uEnd,
+                                      &vStart,
+                                      &vEnd)) {
+        return;
+    }
+
+    constexpr int gridCount = 48;
+    QVector<QVector<QPointF>> trimPolygons;
+    trimPolygons.reserve(surface.trimLoops.size());
+    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
+        trimPolygons.append(sampleNurbsSurfaceTrimLoop(loop, 256));
+    }
+    QVector<QVector3D> grid;
+    QVector<bool> insideTrim;
+    grid.resize((gridCount + 1) * (gridCount + 1));
+    insideTrim.resize(grid.size());
+    for (int uIndex = 0; uIndex <= gridCount; ++uIndex) {
+        const qreal u = uStart + (uEnd - uStart) * uIndex / gridCount;
+        for (int vIndex = 0; vIndex <= gridCount; ++vIndex) {
+            const qreal v = vStart + (vEnd - vStart) * vIndex / gridCount;
+            const int index = uIndex * (gridCount + 1) + vIndex;
+            insideTrim[index] = parameterInsideSurfaceTrim(
+                QPointF(u, v), surface, trimPolygons);
+            Point3D point;
+            if (!evaluateNurbsSurfacePoint(surface, u, v, &point)) {
+                return;
+            }
+            grid[index] = asVector(point);
+        }
+    }
+
+    geometry->surfaceVertices.reserve(
+        geometry->surfaceVertices.size() + gridCount * gridCount * 6);
+    for (int uIndex = 0; uIndex < gridCount; ++uIndex) {
+        for (int vIndex = 0; vIndex < gridCount; ++vIndex) {
+            const int i00 = uIndex * (gridCount + 1) + vIndex;
+            const int i10 = (uIndex + 1) * (gridCount + 1) + vIndex;
+            const int i11 = (uIndex + 1) * (gridCount + 1) + vIndex + 1;
+            const int i01 = uIndex * (gridCount + 1) + vIndex + 1;
+            const QPointF parameterCenter(
+                uStart + (uEnd - uStart) * (uIndex + 0.5) / gridCount,
+                vStart + (vEnd - vStart) * (vIndex + 0.5) / gridCount);
+            if (!insideTrim[i00] || !insideTrim[i10] ||
+                !insideTrim[i11] || !insideTrim[i01] ||
+                !parameterInsideSurfaceTrim(parameterCenter,
+                                            surface,
+                                            trimPolygons)) {
+                continue;
+            }
+            const QVector3D &p00 = grid[i00];
+            const QVector3D &p10 = grid[i10];
+            const QVector3D &p11 = grid[i11];
+            const QVector3D &p01 = grid[i01];
+            geometry->surfaceVertices.append(p00);
+            geometry->surfaceVertices.append(p10);
+            geometry->surfaceVertices.append(p11);
+            geometry->surfaceVertices.append(p00);
+            geometry->surfaceVertices.append(p11);
+            geometry->surfaceVertices.append(p01);
+        }
+    }
+}
+
 void writeCurve(QDataStream &stream, const Shape::NurbsCurve2D &curve)
 {
     stream << qint32(curve.dimension) << qint32(curve.degree)
@@ -264,6 +378,10 @@ void appendShapeDepthGeometry(const Shape &shape,
             if (!shape.pictureImage.isNull() && corners.size() == 4) {
                 appendPictureDepthSurface(shape, corners, &geometry);
             }
+            return;
+        }
+        if (shape.geometryType == GeometryType::NurbsSurface) {
+            appendNurbsSurfaceDepthMesh(shape.nurbsSurface, &geometry);
             return;
         }
 
@@ -324,6 +442,27 @@ QByteArray viewportDepthGeometryCacheKey(
             stream << double(point.x()) << double(point.y());
         }
         writeCurve(stream, shape.nurbs);
+        const Shape::NurbsSurface3D &surface = shape.nurbsSurface;
+        stream << qint32(surface.dimension)
+               << qint32(surface.degreeU) << qint32(surface.degreeV)
+               << qint32(surface.orderU) << qint32(surface.orderV)
+               << qint32(surface.controlVertexCountU)
+               << qint32(surface.controlVertexCountV)
+               << quint8(surface.rational ? 1 : 0)
+               << qint32(surface.controlPoints.size());
+        for (int index = 0; index < surface.controlPoints.size(); ++index) {
+            const Point3D &point = surface.controlPoints[index];
+            stream << double(point.x) << double(point.y) << double(point.z)
+                   << double(surface.weights.value(index, 1.0));
+        }
+        stream << qint32(surface.knotsU.size());
+        for (const double knot : surface.knotsU) {
+            stream << knot;
+        }
+        stream << qint32(surface.knotsV.size());
+        for (const double knot : surface.knotsV) {
+            stream << knot;
+        }
         stream << qint32(shape.components.size());
         for (int index = 0; index < shape.components.size(); ++index) {
             const Shape::NurbsCurve2D &curve = shape.components[index];

@@ -385,6 +385,131 @@ def add_poly_spline(curve_data, points, cyclic=False):
     return True
 
 
+def prepare_nurbs_surface(surface):
+    try:
+        count_u = int(surface.get("controlVertexCountU", 0))
+        count_v = int(surface.get("controlVertexCountV", 0))
+        degree_u = int(surface.get("degreeU", 0))
+        degree_v = int(surface.get("degreeV", 0))
+        order_u = int(surface.get("orderU", 0))
+        order_v = int(surface.get("orderV", 0))
+        points = [tuple(float(value) for value in point)
+                  for point in surface.get("controlPoints", [])]
+        rational = bool(surface.get("rational", False))
+        knots_u = [float(value) for value in surface.get("knotsU", [])]
+        knots_v = [float(value) for value in surface.get("knotsV", [])]
+        raw_weights = surface.get("weights", [])
+        weights = [float(value) for value in raw_weights] if rational else [1.0] * len(points)
+    except (TypeError, ValueError):
+        return None
+
+    if (int(surface.get("dimension", 0)) != 3 or
+            order_u != degree_u + 1 or order_v != degree_v + 1 or
+            count_u <= degree_u or count_v <= degree_v or
+            count_u * count_v != len(points) or len(weights) != len(points) or
+            len(knots_u) != count_u + order_u - 2 or
+            len(knots_v) != count_v + order_v - 2):
+        return None
+    if not all(len(point) == 3 and all(math.isfinite(value) for value in point)
+               for point in points):
+        return None
+    if not all(math.isfinite(value) and value > 0.0 for value in weights):
+        return None
+    if any(not math.isfinite(value) for value in knots_u + knots_v):
+        return None
+    if (any(left > right for left, right in zip(knots_u, knots_u[1:])) or
+            any(left > right for left, right in zip(knots_v, knots_v[1:]))):
+        return None
+
+    full_u = [knots_u[0]] + knots_u + [knots_u[-1]]
+    full_v = [knots_v[0]] + knots_v + [knots_v[-1]]
+    domain_u = (full_u[degree_u], full_u[count_u])
+    domain_v = (full_v[degree_v], full_v[count_v])
+    if domain_u[1] <= domain_u[0] or domain_v[1] <= domain_v[0]:
+        return None
+    return {
+        "count_u": count_u,
+        "count_v": count_v,
+        "degree_u": degree_u,
+        "degree_v": degree_v,
+        "full_u": full_u,
+        "full_v": full_v,
+        "domain_u": domain_u,
+        "domain_v": domain_v,
+        "points": points,
+        "weights": weights,
+    }
+
+
+def surface_basis(index, degree, parameter, knots):
+    if degree == 0:
+        return 1.0 if knots[index] <= parameter < knots[index + 1] else 0.0
+    value = 0.0
+    left_denominator = knots[index + degree] - knots[index]
+    if left_denominator > 0.0:
+        value += ((parameter - knots[index]) / left_denominator) * surface_basis(
+            index, degree - 1, parameter, knots
+        )
+    right_denominator = knots[index + degree + 1] - knots[index + 1]
+    if right_denominator > 0.0:
+        value += ((knots[index + degree + 1] - parameter) / right_denominator) * surface_basis(
+            index + 1, degree - 1, parameter, knots
+        )
+    return value
+
+
+def evaluate_nurbs_surface(surface, u, v):
+    if u >= surface["domain_u"][1]:
+        u = math.nextafter(surface["domain_u"][1], surface["domain_u"][0])
+    if v >= surface["domain_v"][1]:
+        v = math.nextafter(surface["domain_v"][1], surface["domain_v"][0])
+    numerator = [0.0, 0.0, 0.0]
+    denominator = 0.0
+    for u_index in range(surface["count_u"]):
+        basis_u = surface_basis(u_index, surface["degree_u"], u, surface["full_u"])
+        if basis_u == 0.0:
+            continue
+        for v_index in range(surface["count_v"]):
+            control_index = u_index * surface["count_v"] + v_index
+            basis = basis_u * surface_basis(
+                v_index, surface["degree_v"], v, surface["full_v"]
+            ) * surface["weights"][control_index]
+            denominator += basis
+            for axis in range(3):
+                numerator[axis] += surface["points"][control_index][axis] * basis
+    if abs(denominator) <= 1.0e-15:
+        raise ValueError("NURBS surface evaluation produced a zero weight")
+    return tuple(value / denominator for value in numerator)
+
+
+def add_nurbs_surface_mesh(layer_collection, object_name, surface_data):
+    # The .blend mesh is a display proxy. The exact NURBS surface stays in the
+    # authoritative classiCAD document text and is rebuilt from that data.
+    surface = prepare_nurbs_surface(surface_data)
+    if surface is None:
+        return None
+    sample_count = 32
+    vertices = []
+    for u_index in range(sample_count + 1):
+        u = surface["domain_u"][0] + (surface["domain_u"][1] - surface["domain_u"][0]) * u_index / sample_count
+        for v_index in range(sample_count + 1):
+            v = surface["domain_v"][0] + (surface["domain_v"][1] - surface["domain_v"][0]) * v_index / sample_count
+            vertices.append(evaluate_nurbs_surface(surface, u, v))
+    faces = []
+    row_size = sample_count + 1
+    for u_index in range(sample_count):
+        for v_index in range(sample_count):
+            lower_left = u_index * row_size + v_index
+            lower_right = (u_index + 1) * row_size + v_index
+            faces.append((lower_left, lower_right, lower_right + 1, lower_left + 1))
+    mesh = bpy.data.meshes.new(object_name)
+    mesh.from_pydata(vertices, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new(object_name, mesh)
+    layer_collection.objects.link(obj)
+    return obj
+
+
 def add_scene_object(layer_collections, record):
     object_id = str(record["id"])
     layer_id = str(record["layerId"])
@@ -396,6 +521,17 @@ def add_scene_object(layer_collections, record):
 
     object_name = "classiCAD.%s.%s" % (geometry_type, object_id)
     frame = frame_matrix(shape)
+    if geometry_type == 14:
+        obj = add_nurbs_surface_mesh(
+            layer_collection, object_name, shape.get("nurbsSurface", {})
+        )
+        if obj is None:
+            raise RuntimeError("invalid NURBS surface data for object " + object_id)
+        obj["classiCAD_object_id"] = object_id
+        obj["classiCAD_layer_id"] = layer_id
+        obj["classiCAD_geometry_type"] = geometry_type
+        obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
+        return
     curve_data = bpy.data.curves.new(object_name, "CURVE")
     curve_data.dimensions = "3D"
     curve_data.resolution_u = 16

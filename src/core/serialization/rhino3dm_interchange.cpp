@@ -388,6 +388,89 @@ bool importCurve(const ON_Curve &curve,
     return true;
 }
 
+bool importNurbsSurface(const ON_Surface &source,
+                        double unitScale,
+                        double tolerance,
+                        Shape::NurbsSurface3D *destination,
+                        QString *reason)
+{
+    if (destination == nullptr) {
+        return false;
+    }
+    ON_NurbsSurface converted;
+    if (const ON_NurbsSurface *nurbs = ON_NurbsSurface::Cast(&source)) {
+        converted = *nurbs;
+    } else if (source.GetNurbForm(converted, tolerance) <= 0) {
+        if (reason != nullptr) {
+            *reason = QStringLiteral("surface has no NURBS representation");
+        }
+        return false;
+    }
+    if (!converted.IsValid() || converted.Dimension() != 3 ||
+        converted.CVCount(0) < 2 || converted.CVCount(1) < 2 ||
+        converted.Order(0) < 2 || converted.Order(1) < 2) {
+        if (reason != nullptr) {
+            *reason = QStringLiteral("surface has invalid or unsupported NURBS data");
+        }
+        return false;
+    }
+
+    Shape::NurbsSurface3D result;
+    result.degreeU = converted.Order(0) - 1;
+    result.degreeV = converted.Order(1) - 1;
+    result.orderU = converted.Order(0);
+    result.orderV = converted.Order(1);
+    result.controlVertexCountU = converted.CVCount(0);
+    result.controlVertexCountV = converted.CVCount(1);
+    result.rational = converted.IsRational();
+    const qint64 controlPointCount = qint64(result.controlVertexCountU) *
+                                     result.controlVertexCountV;
+    result.controlPoints.reserve(static_cast<int>(controlPointCount));
+    result.weights.reserve(static_cast<int>(controlPointCount));
+    for (int uIndex = 0; uIndex < result.controlVertexCountU; ++uIndex) {
+        for (int vIndex = 0; vIndex < result.controlVertexCountV; ++vIndex) {
+            ON_3dPoint point;
+            if (!converted.GetCV(uIndex, vIndex, point) ||
+                !std::isfinite(point.x) || !std::isfinite(point.y) ||
+                !std::isfinite(point.z)) {
+                if (reason != nullptr) {
+                    *reason = QStringLiteral("surface has a non-finite control vertex");
+                }
+                return false;
+            }
+            const double weight = result.rational
+                                     ? converted.Weight(uIndex, vIndex)
+                                     : 1.0;
+            if (!std::isfinite(weight) || weight <= 0.0) {
+                if (reason != nullptr) {
+                    *reason = QStringLiteral("surface has a non-positive rational weight");
+                }
+                return false;
+            }
+            result.controlPoints.append({point.x * unitScale,
+                                         point.y * unitScale,
+                                         point.z * unitScale});
+            result.weights.append(weight);
+        }
+    }
+    for (int index = 0; index < converted.KnotCount(0); ++index) {
+        result.knotsU.append(converted.Knot(0, index));
+    }
+    for (int index = 0; index < converted.KnotCount(1); ++index) {
+        result.knotsV.append(converted.Knot(1, index));
+    }
+    QString validationError;
+    if (!validateNurbsSurface(result, &validationError)) {
+        if (reason != nullptr) {
+            *reason = QStringLiteral("surface NURBS data is invalid: %1")
+                          .arg(validationError);
+        }
+        return false;
+    }
+    *destination = std::move(result);
+    return true;
+}
+
 void addImportWarning(QStringList *warnings, const QString &reason)
 {
     if (warnings != nullptr && !reason.isEmpty() && !warnings->contains(reason) &&
@@ -526,10 +609,19 @@ bool importRhino3dmDocument(const QString &path,
                              &reason)) {
                 // The helper provides a specific reason for unsupported curves.
             }
+        } else if (const ON_Surface *surface = ON_Surface::Cast(geometry)) {
+            importedShape.geometryType = GeometryType::NurbsSurface;
+            if (!importNurbsSurface(*surface,
+                                    unitScale,
+                                    planarTolerance,
+                                    &importedShape.nurbsSurface,
+                                    &reason)) {
+                // The helper reports why the source surface was rejected.
+            }
         } else if (ON_InstanceRef::Cast(geometry) != nullptr) {
             reason = QStringLiteral("block instances are not supported yet");
         } else {
-            reason = QStringLiteral("surfaces, meshes, and annotations are not supported yet");
+            reason = QStringLiteral("meshes, breps, and annotations are not supported yet");
         }
 
         if (!reason.isEmpty()) {
@@ -552,7 +644,7 @@ bool importRhino3dmDocument(const QString &path,
         setError(errorMessage,
                  completedReport.skippedObjectCount == 0
                      ? QStringLiteral("The Rhino 3DM file contains no importable geometry")
-                     : QStringLiteral("No supported 2D curves or points were found in the Rhino 3DM file"));
+                     : QStringLiteral("No supported curves, NURBS surfaces, or points were found in the Rhino 3DM file"));
         if (report != nullptr) {
             *report = completedReport;
         }

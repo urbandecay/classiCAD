@@ -759,6 +759,132 @@ bool nurbsFromJson(const QJsonValue &value, Shape::NurbsCurve2D *curve)
     return true;
 }
 
+QJsonObject nurbsSurfaceToJson(const Shape::NurbsSurface3D &surface)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("dimension"), surface.dimension);
+    object.insert(QStringLiteral("degreeU"), surface.degreeU);
+    object.insert(QStringLiteral("degreeV"), surface.degreeV);
+    object.insert(QStringLiteral("orderU"), surface.orderU);
+    object.insert(QStringLiteral("orderV"), surface.orderV);
+    object.insert(QStringLiteral("controlVertexCountU"),
+                  surface.controlVertexCountU);
+    object.insert(QStringLiteral("controlVertexCountV"),
+                  surface.controlVertexCountV);
+    object.insert(QStringLiteral("rational"), surface.rational);
+
+    QJsonArray controlPoints;
+    for (const Point3D &point : surface.controlPoints) {
+        controlPoints.append(point3DToJson(point));
+    }
+    object.insert(QStringLiteral("controlPoints"), controlPoints);
+
+    const auto numbersToJson = [](const QVector<double> &numbers) {
+        QJsonArray array;
+        for (const double number : numbers) {
+            array.append(number);
+        }
+        return array;
+    };
+    object.insert(QStringLiteral("weights"), numbersToJson(surface.weights));
+    object.insert(QStringLiteral("knotsU"), numbersToJson(surface.knotsU));
+    object.insert(QStringLiteral("knotsV"), numbersToJson(surface.knotsV));
+    QJsonArray trimLoops;
+    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
+        QJsonObject trimLoop;
+        trimLoop.insert(QStringLiteral("curve"), nurbsToJson(loop.curve));
+        trimLoop.insert(QStringLiteral("isHole"), loop.isHole);
+        trimLoops.append(trimLoop);
+    }
+    object.insert(QStringLiteral("trimLoops"), trimLoops);
+    return object;
+}
+
+bool nurbsSurfaceFromJson(const QJsonValue &value,
+                          Shape::NurbsSurface3D *surface)
+{
+    if (surface == nullptr || !value.isObject()) {
+        return false;
+    }
+    const QJsonObject object = value.toObject();
+    const QJsonValue controlPointsValue = object.value(QStringLiteral("controlPoints"));
+    const QJsonValue weightsValue = object.value(QStringLiteral("weights"));
+    const QJsonValue knotsUValue = object.value(QStringLiteral("knotsU"));
+    const QJsonValue knotsVValue = object.value(QStringLiteral("knotsV"));
+    if (!controlPointsValue.isArray() || !weightsValue.isArray() ||
+        !knotsUValue.isArray() || !knotsVValue.isArray()) {
+        return false;
+    }
+
+    Shape::NurbsSurface3D result;
+    result.dimension = object.value(QStringLiteral("dimension")).toInt(3);
+    result.degreeU = object.value(QStringLiteral("degreeU")).toInt(1);
+    result.degreeV = object.value(QStringLiteral("degreeV")).toInt(1);
+    result.orderU = object.value(QStringLiteral("orderU")).toInt(2);
+    result.orderV = object.value(QStringLiteral("orderV")).toInt(2);
+    result.controlVertexCountU =
+        object.value(QStringLiteral("controlVertexCountU")).toInt(0);
+    result.controlVertexCountV =
+        object.value(QStringLiteral("controlVertexCountV")).toInt(0);
+    result.rational = object.value(QStringLiteral("rational")).toBool(false);
+
+    if (result.controlVertexCountU == 0 && result.controlVertexCountV == 0 &&
+        controlPointsValue.toArray().isEmpty() && weightsValue.toArray().isEmpty() &&
+        knotsUValue.toArray().isEmpty() && knotsVValue.toArray().isEmpty()) {
+        *surface = std::move(result);
+        return true;
+    }
+
+    result.controlPoints.reserve(controlPointsValue.toArray().size());
+    for (const QJsonValue &pointValue : controlPointsValue.toArray()) {
+        Point3D point;
+        if (!point3DFromJson(pointValue, &point)) {
+            return false;
+        }
+        result.controlPoints.append(point);
+    }
+    const auto numbersFromJson = [](const QJsonArray &array,
+                                    QVector<double> *numbers) {
+        numbers->reserve(array.size());
+        for (const QJsonValue &numberValue : array) {
+            if (!numberValue.isDouble() || !std::isfinite(numberValue.toDouble())) {
+                return false;
+            }
+            numbers->append(numberValue.toDouble());
+        }
+        return true;
+    };
+    if (!numbersFromJson(weightsValue.toArray(), &result.weights) ||
+        !numbersFromJson(knotsUValue.toArray(), &result.knotsU) ||
+        !numbersFromJson(knotsVValue.toArray(), &result.knotsV)) {
+        return false;
+    }
+    const QJsonValue trimLoopsValue = object.value(QStringLiteral("trimLoops"));
+    if (!trimLoopsValue.isUndefined()) {
+        if (!trimLoopsValue.isArray()) {
+            return false;
+        }
+        for (const QJsonValue &trimLoopValue : trimLoopsValue.toArray()) {
+            if (!trimLoopValue.isObject()) {
+                return false;
+            }
+            const QJsonObject trimLoopObject = trimLoopValue.toObject();
+            NurbsSurfaceTrimLoop loop;
+            if (!nurbsFromJson(trimLoopObject.value(QStringLiteral("curve")),
+                               &loop.curve)) {
+                return false;
+            }
+            loop.isHole = trimLoopObject.value(QStringLiteral("isHole")).toBool(false);
+            result.trimLoops.append(std::move(loop));
+        }
+    }
+    if (!validateNurbsSurface(result)) {
+        return false;
+    }
+    *surface = std::move(result);
+    return true;
+}
+
 QJsonObject shapeToJson(const Shape &shape)
 {
     QJsonObject object;
@@ -770,6 +896,8 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("tool"), legacyGeometryTypeValue);
     object.insert(QStringLiteral("points"), pointsToJson(shape.points));
     object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
+    object.insert(QStringLiteral("nurbsSurface"),
+                  nurbsSurfaceToJson(shape.nurbsSurface));
     object.insert(QStringLiteral("workPlane"), static_cast<int>(shape.workPlane));
     object.insert(QStringLiteral("workPlaneOffset"), shape.workPlaneOffset);
     if (isValidWorkPlaneFrame(shape.workPlaneFrame)) {
@@ -904,6 +1032,16 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     }
     if (geometryType == GeometryType::Polygon &&
         !validClosedPolygonNurbs(nurbs)) {
+        return false;
+    }
+    Shape::NurbsSurface3D nurbsSurface;
+    const QJsonValue nurbsSurfaceValue = object.value(QStringLiteral("nurbsSurface"));
+    if (!nurbsSurfaceValue.isUndefined() &&
+        !nurbsSurfaceFromJson(nurbsSurfaceValue, &nurbsSurface)) {
+        return false;
+    }
+    if (geometryType == GeometryType::NurbsSurface &&
+        !validateNurbsSurface(nurbsSurface)) {
         return false;
     }
     QImage pictureImage;
@@ -1063,6 +1201,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->geometryType = geometryType;
     shape->points = points;
     shape->nurbs = nurbs;
+    shape->nurbsSurface = nurbsSurface;
     shape->arcMode = static_cast<ArcMode>(arcModeValue);
     shape->arcSweep = arcSweepValue.toDouble();
     shape->subdivisionParameters = subdivisionParameters;

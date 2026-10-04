@@ -64,6 +64,75 @@ Point3D candidateWorldPoint(const SnapCandidate &candidate,
                : workPlaneFramePointToWorld(candidate.point, fallbackFrame);
 }
 
+QVector<Point3D> nurbsSurfaceCorners(const NurbsSurface3D &surface)
+{
+    if (!surface.trimLoops.isEmpty()) {
+        const NurbsSurfaceTrimLoop &outerLoop = surface.trimLoops.first();
+        const QVector<double> knots = expandedNurbsKnotVector(outerLoop.curve);
+        QVector<Point3D> trimVertices;
+        qreal curveStart = 0.0;
+        qreal curveEnd = 0.0;
+        if (!nurbsParameterDomain(outerLoop.curve, &curveStart, &curveEnd)) {
+            return {};
+        }
+        qreal previousParameter = std::numeric_limits<qreal>::quiet_NaN();
+        for (int knotIndex = outerLoop.curve.degree;
+             knotIndex <= outerLoop.curve.controlPoints.size();
+             ++knotIndex) {
+            const qreal parameter = knots[knotIndex];
+            if (parameter < curveStart || parameter > curveEnd ||
+                (std::isfinite(previousParameter) &&
+                 std::abs(parameter - previousParameter) <= 1.0e-12)) {
+                continue;
+            }
+            previousParameter = parameter;
+            QPointF uv;
+            Point3D point;
+            if (evaluateNurbsPoint(outerLoop.curve, parameter, &uv) &&
+                evaluateNurbsSurfacePoint(surface, uv.x(), uv.y(), &point)) {
+                bool isDuplicate = false;
+                for (const Point3D &previous : trimVertices) {
+                    const qreal distance = std::hypot(
+                        point.x - previous.x,
+                        std::hypot(point.y - previous.y,
+                                   point.z - previous.z));
+                    if (distance <= 1.0e-9) {
+                        isDuplicate = true;
+                        break;
+                    }
+                }
+                if (isDuplicate) {
+                    continue;
+                }
+                trimVertices.append(point);
+            }
+        }
+        return trimVertices;
+    }
+
+    qreal uStart = 0.0;
+    qreal uEnd = 0.0;
+    qreal vStart = 0.0;
+    qreal vEnd = 0.0;
+    if (!nurbsSurfaceParameterDomains(surface, &uStart, &uEnd,
+                                      &vStart, &vEnd)) {
+        return {};
+    }
+
+    QVector<Point3D> corners;
+    corners.reserve(4);
+    for (const qreal u : {uStart, uEnd}) {
+        for (const qreal v : {vStart, vEnd}) {
+            Point3D point;
+            if (!evaluateNurbsSurfacePoint(surface, u, v, &point)) {
+                return {};
+            }
+            corners.append(point);
+        }
+    }
+    return corners;
+}
+
 void mapCurveBetweenFrames(Shape::NurbsCurve2D *curve,
                            const WorkPlaneFrame &source,
                            const WorkPlaneFrame &destination)
@@ -766,6 +835,7 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         return candidates;
     }
     if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
+        shape.geometryType != GeometryType::NurbsSurface &&
         shape.components.isEmpty()) {
         return candidates;
     }
@@ -778,6 +848,17 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
                 candidates.append({SnapType::Endpoint, point});
             }
         }
+    }
+
+    if (shape.geometryType == GeometryType::NurbsSurface) {
+        for (const Point3D &point : nurbsSurfaceCorners(shape.nurbsSurface)) {
+            SnapCandidate candidate{SnapType::Endpoint,
+                                    QPointF(point.x, point.y)};
+            candidate.worldPoint = point;
+            candidate.hasWorldPoint = true;
+            candidates.append(candidate);
+        }
+        return candidates;
     }
 
     if (shape.geometryType == GeometryType::Point) {
@@ -1117,6 +1198,7 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             continue;
         }
         if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
+            shape.geometryType != GeometryType::NurbsSurface &&
             shape.components.isEmpty()) {
             continue;
         }
@@ -1235,6 +1317,19 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                     }
                 }
             }
+        }
+
+        if (shape.geometryType == GeometryType::NurbsSurface) {
+            if (settings_.endpoint) {
+                for (const Point3D &point : nurbsSurfaceCorners(shape.nurbsSurface)) {
+                    SnapCandidate candidate{SnapType::Endpoint,
+                                            QPointF(point.x, point.y)};
+                    candidate.worldPoint = point;
+                    candidate.hasWorldPoint = true;
+                    candidates.append(candidate);
+                }
+            }
+            continue;
         }
 
         if (shape.geometryType == GeometryType::Point) {

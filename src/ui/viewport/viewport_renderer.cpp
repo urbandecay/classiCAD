@@ -2,6 +2,7 @@
 
 #include "core/geometry/arc_curve_factory.h"
 #include "core/geometry/curve_evaluator.h"
+#include "core/geometry/nurbs_surface.h"
 #include "blender_grid_scale.h"
 #include "blender_grid_frame.h"
 #include "line_type_style.h"
@@ -717,7 +718,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  qreal layerLineWeightMm) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
-        shape.components.isEmpty()) {
+        shape.components.isEmpty() &&
+        !validateNurbsSurface(shape.nurbsSurface)) {
         return;
     }
 
@@ -821,6 +823,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
             painter.drawPolyline(outline);
             painter.restore();
         }
+        return;
+    }
+
+    if (shape.geometryType == GeometryType::NurbsSurface) {
+        drawNurbsSurface(painter, shape.nurbsSurface, viewportSize);
         return;
     }
 
@@ -1290,6 +1297,141 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
 
     if (!screenPoints.isEmpty()) {
         painter.drawPath(path);
+    }
+}
+
+void ViewportRenderer::drawNurbsSurface(QPainter &painter,
+                                        const Shape::NurbsSurface3D &surface,
+                                        const QSize &viewportSize) const
+{
+    if (!validateNurbsSurface(surface)) {
+        return;
+    }
+
+    qreal uStart = 0.0;
+    qreal uEnd = 0.0;
+    qreal vStart = 0.0;
+    qreal vEnd = 0.0;
+    if (!nurbsSurfaceParameterDomains(surface,
+                                      &uStart,
+                                      &uEnd,
+                                      &vStart,
+                                      &vEnd)) {
+        return;
+    }
+
+    constexpr int isocurveCount = 8;
+    constexpr int sampleCount = 128;
+    constexpr int trimSampleCount = 256;
+    QVector<QVector<QPointF>> trimPolygons;
+    trimPolygons.reserve(surface.trimLoops.size());
+    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
+        trimPolygons.append(sampleNurbsSurfaceTrimLoop(loop, trimSampleCount));
+    }
+    const auto insidePolygon = [](const QPointF &point,
+                                  const QVector<QPointF> &polygon) {
+        bool inside = false;
+        for (int current = 0, previous = polygon.size() - 1;
+             current < polygon.size();
+             previous = current++) {
+            const QPointF &a = polygon[current];
+            const QPointF &b = polygon[previous];
+            const bool crosses = (a.y() > point.y()) != (b.y() > point.y());
+            if (crosses && point.x() < (b.x() - a.x()) *
+                                             (point.y() - a.y()) /
+                                             (b.y() - a.y()) + a.x()) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    };
+    const auto insideTrim = [&](qreal u, qreal v) {
+        if (trimPolygons.isEmpty()) {
+            return true;
+        }
+        bool insideOuter = false;
+        for (int index = 0; index < trimPolygons.size(); ++index) {
+            const bool inside = insidePolygon(QPointF(u, v), trimPolygons[index]);
+            if (!surface.trimLoops[index].isHole && inside) {
+                insideOuter = true;
+            } else if (surface.trimLoops[index].isHole && inside) {
+                return false;
+            }
+        }
+        return insideOuter;
+    };
+    const auto drawIsocurves = [&](bool varyU) {
+        for (int curveIndex = 0; curveIndex <= isocurveCount; ++curveIndex) {
+            const qreal fixedFraction = static_cast<qreal>(curveIndex) /
+                                        isocurveCount;
+            const qreal fixedParameter = varyU
+                ? vStart + (vEnd - vStart) * fixedFraction
+                : uStart + (uEnd - uStart) * fixedFraction;
+            bool havePrevious = false;
+            QPointF previous;
+            for (int sampleIndex = 0; sampleIndex <= sampleCount; ++sampleIndex) {
+                const qreal fraction = static_cast<qreal>(sampleIndex) /
+                                       sampleCount;
+                const qreal variableParameter = varyU
+                    ? uStart + (uEnd - uStart) * fraction
+                    : vStart + (vEnd - vStart) * fraction;
+                const qreal u = varyU ? variableParameter : fixedParameter;
+                const qreal v = varyU ? fixedParameter : variableParameter;
+                Point3D worldPoint;
+                QPointF screenPoint;
+                const bool evaluated = insideTrim(u, v) && (varyU
+                    ? evaluateNurbsSurfacePoint(surface,
+                                                variableParameter,
+                                                fixedParameter,
+                                                &worldPoint)
+                    : evaluateNurbsSurfacePoint(surface,
+                                                fixedParameter,
+                                                variableParameter,
+                                                &worldPoint));
+                if (!evaluated ||
+                    !transform_.worldPointToScreenUnclipped(worldPoint,
+                                                            viewportSize,
+                                                            &screenPoint)) {
+                    havePrevious = false;
+                    continue;
+                }
+                if (havePrevious) {
+                    painter.drawLine(previous, screenPoint);
+                }
+                previous = screenPoint;
+                havePrevious = true;
+            }
+        }
+    };
+    drawIsocurves(true);
+    drawIsocurves(false);
+
+    for (const QVector<QPointF> &trimPolygon : trimPolygons) {
+        if (trimPolygon.size() < 3) {
+            continue;
+        }
+        QPointF previous;
+        bool havePrevious = false;
+        for (int index = 0; index <= trimPolygon.size(); ++index) {
+            const QPointF &parameter = trimPolygon[index % trimPolygon.size()];
+            Point3D worldPoint;
+            QPointF screenPoint;
+            if (!evaluateNurbsSurfacePoint(surface,
+                                           parameter.x(),
+                                           parameter.y(),
+                                           &worldPoint) ||
+                !transform_.worldPointToScreenUnclipped(worldPoint,
+                                                        viewportSize,
+                                                        &screenPoint)) {
+                havePrevious = false;
+                continue;
+            }
+            if (havePrevious) {
+                painter.drawLine(previous, screenPoint);
+            }
+            previous = screenPoint;
+            havePrevious = true;
+        }
     }
 }
 

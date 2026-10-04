@@ -26,6 +26,7 @@ enum class ViewportCommand {
     ApplySubdivision,
     BeginJoin,
     Explode,
+    Fill,
     BeginRotate,
     BeginScale,
     BeginMirror,

@@ -1,6 +1,7 @@
 #include "point_extrude_tool.h"
 
 #include "tool_context.h"
+#include "core/geometry/nurbs_surface_factory.h"
 
 #include <cmath>
 
@@ -69,6 +70,11 @@ void PointExtrudeTool::begin(ToolContext &context)
     const QVector<ObjectId> &selectedObjects = context.selection().objectIds();
     for (const ObjectId selectedObjectId : selectedObjects) {
         const Shape *selectedShape = context.document().shape(selectedObjectId);
+        if (selectedShape == nullptr ||
+            !context.document().isObjectVisible(selectedObjectId) ||
+            !context.document().isObjectEditable(selectedObjectId)) {
+            continue;
+        }
         if (selectedShape != nullptr &&
             selectedShape->geometryType == GeometryType::Point &&
             selectedShape->points.size() == 1 &&
@@ -83,11 +89,27 @@ void PointExtrudeTool::begin(ToolContext &context)
             if (isValidWorkPlaneFrame(source.workPlaneFrame)) {
                 sourcePoints_.append(source);
             }
+        } else {
+            const auto curves = context.curveSampler().curvesForShape(*selectedShape);
+            for (int index = 0; index < curves.size(); ++index) {
+                if (!validateNurbsCurve(curves[index])) continue;
+                SourcePoint source;
+                source.objectId = selectedObjectId;
+                source.curve = curves[index];
+                source.workPlaneFrame = selectedShape->geometryType == GeometryType::PolyCurve
+                    ? shapeComponentWorkPlaneFrame(*selectedShape, index)
+                    : shapeWorkPlaneFrame(*selectedShape);
+                if (!isValidWorkPlaneFrame(source.workPlaneFrame)) continue;
+                source.worldPoint = workPlaneFramePointToWorld(
+                    source.curve.controlPoints.first(), source.workPlaneFrame);
+                sourcePoints_.append(source);
+            }
         }
     }
 
     if (!sourcePoints_.isEmpty()) {
         inputFrame_ = sourcePoints_.first().workPlaneFrame;
+        inputFrame_.origin = sourcePoints_.first().worldPoint;
         cursorPoint_ = sourcePoints_.first().worldPoint;
         context.viewportTransform().setWorkPlaneFrame(inputFrame_);
     }
@@ -173,7 +195,7 @@ void PointExtrudeTool::cancel(ToolContext &context)
     snap_ = {};
     status_.state = ToolLifecycleState::Cancelled;
     status_.canCommit = false;
-    status_.text = QStringLiteral("Extrude Point cancelled");
+    status_.text = QStringLiteral("Extrude cancelled");
     publish(context);
 }
 
@@ -185,8 +207,8 @@ void PointExtrudeTool::commit(ToolContext &context)
 
     const QVector<Shape> lines = makeLineShapes(cursorPoint_);
     if (lines.isEmpty() ||
-        !context.commitShapes(ToolId::Line, lines)) {
-        status_.text = QStringLiteral("Point Extrude failed to create lines");
+        !context.commitShapes(ToolId::PointExtrude, lines)) {
+        status_.text = QStringLiteral("Extrude failed to create geometry");
         status_.canCommit = false;
         publish(context);
         return;
@@ -194,7 +216,7 @@ void PointExtrudeTool::commit(ToolContext &context)
 
     status_.state = ToolLifecycleState::Completed;
     status_.canCommit = false;
-    status_.text = QStringLiteral("Point Extrude created %1 line%2")
+    status_.text = QStringLiteral("Extrude created %1 object%2")
                        .arg(lines.size())
                        .arg(lines.size() == 1 ? QString() : QStringLiteral("s"));
     publish(context);
@@ -370,7 +392,13 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
                                          sourcePoints_.first().worldPoint);
     for (const SourcePoint &source : sourcePoints_) {
         Shape line;
-        if (makeLineShape(source, add(source.worldPoint, displacement), &line)) {
+        if (!source.curve.controlPoints.isEmpty()) {
+            line.geometryType = GeometryType::NurbsSurface;
+            if (makeNurbsExtrusionSurface(source.curve, source.workPlaneFrame,
+                                           displacement, &line.nurbsSurface)) {
+                lines.append(line);
+            }
+        } else if (makeLineShape(source, add(source.worldPoint, displacement), &line)) {
             lines.append(line);
         }
     }
@@ -383,13 +411,13 @@ void PointExtrudeTool::updateStatus()
     status_.canCommit = !sourcePoints_.isEmpty() && hasCursorPoint_ &&
                         !makeLineShapes(cursorPoint_).isEmpty();
     if (sourcePoints_.isEmpty()) {
-        status_.text = QStringLiteral("Point Extrude: select editable points first");
+        status_.text = QStringLiteral("Extrude: select editable points or curves first");
     } else if (status_.canCommit) {
-        status_.text = QStringLiteral("Point Extrude: click endpoint for first point; same offset for %1 point%2")
+        status_.text = QStringLiteral("Extrude: click endpoint; same offset for %1 source%2")
                            .arg(sourcePoints_.size())
                            .arg(sourcePoints_.size() == 1 ? QString() : QStringLiteral("s"));
     } else {
-        status_.text = QStringLiteral("Point Extrude: move endpoint to set the shared offset");
+        status_.text = QStringLiteral("Extrude: move endpoint to set the shared offset");
     }
     if (constraintAxisKey_ != 0) {
         status_.text += QStringLiteral(" • %1 axis")

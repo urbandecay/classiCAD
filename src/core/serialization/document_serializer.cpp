@@ -261,13 +261,7 @@ bool documentFromJson(const QJsonValue &value,
         const QJsonObject serializedObject = objectValue.toObject();
         quint64 objectValueId = 0;
         quint64 objectLayerValue = 0;
-        Shape shape{GeometryType::Invalid,
-                    {},
-                    Shape::NurbsCurve2D{},
-                    ArcMode::TwoPoint,
-                    0.0,
-                    {},
-                    {}};
+        Shape shape;
         if (!idFromJson(serializedObject.value(QStringLiteral("id")), &objectValueId) ||
             objectIds.contains(objectValueId) ||
             !idFromJson(serializedObject.value(QStringLiteral("layerId")), &objectLayerValue) ||

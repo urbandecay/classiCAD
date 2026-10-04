@@ -30,6 +30,23 @@ bool nurbsParameterDomain(const NurbsCurve2D &curve,
     return true;
 }
 
+bool nurbsCurveEndpoints(const NurbsCurve2D &curve,
+                        QPointF *start,
+                        QPointF *end)
+{
+    if ((start == nullptr && end == nullptr) ||
+        !validateNurbsCurve(curve)) {
+        return false;
+    }
+    qreal domainStart = 0.0;
+    qreal domainEnd = 0.0;
+    if (!nurbsParameterDomain(curve, &domainStart, &domainEnd)) {
+        return false;
+    }
+    return (start == nullptr || evaluateNurbsPoint(curve, domainStart, start)) &&
+           (end == nullptr || evaluateNurbsPoint(curve, domainEnd, end));
+}
+
 bool evaluateNurbsPoint(const NurbsCurve2D &curve,
                         qreal parameter,
                         QPointF *point)

@@ -482,26 +482,36 @@ def evaluate_nurbs_surface(surface, u, v):
     return tuple(value / denominator for value in numerator)
 
 
-def add_nurbs_surface_mesh(layer_collection, object_name, surface_data):
+def add_nurbs_surface_mesh(layer_collection, object_name, surface_data, display_mesh):
     # The .blend mesh is a display proxy. The exact NURBS surface stays in the
     # authoritative classiCAD document text and is rebuilt from that data.
-    surface = prepare_nurbs_surface(surface_data)
-    if surface is None:
-        return None
-    sample_count = 32
-    vertices = []
-    for u_index in range(sample_count + 1):
-        u = surface["domain_u"][0] + (surface["domain_u"][1] - surface["domain_u"][0]) * u_index / sample_count
-        for v_index in range(sample_count + 1):
-            v = surface["domain_v"][0] + (surface["domain_v"][1] - surface["domain_v"][0]) * v_index / sample_count
-            vertices.append(evaluate_nurbs_surface(surface, u, v))
-    faces = []
-    row_size = sample_count + 1
-    for u_index in range(sample_count):
-        for v_index in range(sample_count):
-            lower_left = u_index * row_size + v_index
-            lower_right = (u_index + 1) * row_size + v_index
-            faces.append((lower_left, lower_right, lower_right + 1, lower_left + 1))
+    if display_mesh is not None:
+        vertices = [tuple(float(axis) for axis in point)
+                    for point in display_mesh.get("vertices", [])]
+        faces = [tuple(int(index) for index in face)
+                 for face in display_mesh.get("faces", [])]
+        if not vertices or not faces:
+            raise ValueError("derived NURBS surface display mesh is empty")
+    else:
+        if surface_data.get("trimLoops"):
+            raise ValueError("trimmed NURBS surface is missing its display mesh")
+        surface = prepare_nurbs_surface(surface_data)
+        if surface is None:
+            return None
+        sample_count = 32
+        vertices = []
+        for u_index in range(sample_count + 1):
+            u = surface["domain_u"][0] + (surface["domain_u"][1] - surface["domain_u"][0]) * u_index / sample_count
+            for v_index in range(sample_count + 1):
+                v = surface["domain_v"][0] + (surface["domain_v"][1] - surface["domain_v"][0]) * v_index / sample_count
+                vertices.append(evaluate_nurbs_surface(surface, u, v))
+        faces = []
+        row_size = sample_count + 1
+        for u_index in range(sample_count):
+            for v_index in range(sample_count):
+                lower_left = u_index * row_size + v_index
+                lower_right = (u_index + 1) * row_size + v_index
+                faces.append((lower_left, lower_right, lower_right + 1, lower_left + 1))
     mesh = bpy.data.meshes.new(object_name)
     mesh.from_pydata(vertices, [], faces)
     mesh.update()
@@ -510,7 +520,7 @@ def add_nurbs_surface_mesh(layer_collection, object_name, surface_data):
     return obj
 
 
-def add_scene_object(layer_collections, record):
+def add_scene_object(layer_collections, record, surface_display_mesh=None):
     object_id = str(record["id"])
     layer_id = str(record["layerId"])
     shape = record["geometry"]
@@ -523,7 +533,10 @@ def add_scene_object(layer_collections, record):
     frame = frame_matrix(shape)
     if geometry_type == 14:
         obj = add_nurbs_surface_mesh(
-            layer_collection, object_name, shape.get("nurbsSurface", {})
+            layer_collection,
+            object_name,
+            shape.get("nurbsSurface", {}),
+            surface_display_mesh,
         )
         if obj is None:
             raise RuntimeError("invalid NURBS surface data for object " + object_id)
@@ -589,6 +602,7 @@ def create_project(document, destination_path):
     # but create an empty scene for the classiCAD project.
     bpy.ops.wm.read_homefile(use_empty=True, use_factory_startup=False)
     scene = bpy.context.scene
+    surface_display_meshes = document.pop("_surfaceDisplayMeshes", {})
     scene.name = "Vignola"
     scene.unit_settings.system = "METRIC"
     scene.unit_settings.length_unit = "MILLIMETERS"
@@ -651,7 +665,11 @@ def create_project(document, destination_path):
         layer_collections[layer_id] = collection
 
     for record in document.get("objects", []):
-        add_scene_object(layer_collections, record)
+        add_scene_object(
+            layer_collections,
+            record,
+            surface_display_meshes.get(str(record["id"])),
+        )
 
     result = bpy.ops.wm.save_as_mainfile(
         filepath=os.path.abspath(destination_path),

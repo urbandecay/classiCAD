@@ -8,6 +8,10 @@ bool nurbsParameterDomain(const NurbsCurve2D &curve,
                           qreal *startParameter,
                           qreal *endParameter);
 
+bool nurbsCurveEndpoints(const NurbsCurve2D &curve,
+                        QPointF *start,
+                        QPointF *end);
+
 bool evaluateNurbsPoint(const NurbsCurve2D &curve,
                         qreal parameter,
                         QPointF *point);

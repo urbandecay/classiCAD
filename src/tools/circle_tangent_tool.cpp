@@ -3,8 +3,13 @@
 #include "core/geometry/circle_construction.h"
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/nurbs_curve.h"
-#include "core/model.h"
+#include "core/geometry/shape_mapping.h"
 #include "tool_context.h"
+#include "services/viewport/viewport_transform.h"
+#include "core/document/document.h"
+#include "core/document/selection_model.h"
+#include "services/hit_testing/curve_hit_tester.h"
+#include "services/sampling/curve_sampler.h"
 
 #include <algorithm>
 #include <array>

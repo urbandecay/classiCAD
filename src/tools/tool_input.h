@@ -1,6 +1,7 @@
 #pragma once
 
-#include "core/model.h"
+#include "core/geometry/work_plane.h"
+#include "services/snapping/snap_types.h"
 
 #include <QPointF>
 #include <QSize>
@@ -9,8 +10,8 @@
 
 namespace classiCAD {
 
-// ToolInput is the Qt-free event payload shared by interaction tools. The
-// viewport translates Q*Event objects into this value before dispatching.
+// ToolInput is the event payload shared by interaction tools. It contains no
+// widget or Qt event types; src/ui/input translates events into this value.
 struct ToolInput {
     QPointF screenPosition;
     QPointF rawWorldPosition;
@@ -22,6 +23,7 @@ struct ToolInput {
     Qt::KeyboardModifiers modifiers = Qt::NoModifier;
     int key = 0;
     QString text;
+    bool autoRepeat = false;
     int wheelAngleDelta = 0;
     int wheelPixelDelta = 0;
     QSize viewportSize;

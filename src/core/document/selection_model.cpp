@@ -9,17 +9,7 @@ const QVector<ObjectId> &SelectionModel::objectIds() const
     return objectIds_;
 }
 
-QVector<ObjectId> &SelectionModel::objectIds()
-{
-    return objectIds_;
-}
-
-ObjectId SelectionModel::primaryObjectId() const
-{
-    return primaryObjectId_;
-}
-
-ObjectId &SelectionModel::primaryObjectId()
+const ObjectId &SelectionModel::primaryObjectId() const
 {
     return primaryObjectId_;
 }
@@ -62,8 +52,14 @@ void SelectionModel::setObjectIds(const QVector<ObjectId> &objectIds,
 
 void SelectionModel::setPrimaryObjectId(ObjectId objectId)
 {
-    primaryObjectId_ = objectId;
-    if (!objectId.isValid() || !objectIds_.contains(objectId)) {
+    if (objectId.isValid() && objectIds_.contains(objectId)) {
+        primaryObjectId_ = objectId;
+    } else {
+        primaryObjectId_ = objectIds_.isEmpty()
+                               ? ObjectId::invalid()
+                               : objectIds_.back();
+    }
+    if (primaryObjectId_ != objectId) {
         clearActiveControlPoint();
     }
 }
@@ -102,17 +98,17 @@ void SelectionModel::toggle(ObjectId objectId)
 void SelectionModel::prune(const Document &document)
 {
     for (auto iterator = objectIds_.begin(); iterator != objectIds_.end();) {
-        if (document.indexOf(*iterator) < 0) {
+        if (!document.isObjectEditable(*iterator)) {
             iterator = objectIds_.erase(iterator);
         } else {
             ++iterator;
         }
     }
 
-    if (document.indexOf(primaryObjectId_) < 0) {
+    if (!document.isObjectEditable(primaryObjectId_)) {
         primaryObjectId_ = objectIds_.isEmpty() ? ObjectId::invalid() : objectIds_.back();
     }
-    if (document.indexOf(activeControlPoint_.objectId) < 0 ||
+    if (!document.isObjectEditable(activeControlPoint_.objectId) ||
         !objectIds_.contains(activeControlPoint_.objectId)) {
         clearActiveControlPoint();
     }
@@ -123,14 +119,9 @@ const ControlPointReference &SelectionModel::activeControlPoint() const
     return activeControlPoint_;
 }
 
-int &SelectionModel::activeControlPointIndex()
-{
-    return activeControlPoint_.index;
-}
-
 void SelectionModel::setActiveControlPoint(ObjectId objectId, int index)
 {
-    if (objectId.isValid() && index >= 0) {
+    if (objectId.isValid() && objectIds_.contains(objectId) && index >= 0) {
         activeControlPoint_ = ControlPointReference{objectId, index};
     } else {
         clearActiveControlPoint();

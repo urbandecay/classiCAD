@@ -1,5 +1,9 @@
 #include "circle_tool.h"
 
+#include "core/geometry/curve_construction.h"
+#include "services/viewport/viewport_transform.h"
+#include "core/document/document.h"
+
 #include "core/document/document_settings.h"
 #include "core/geometry/circle_construction.h"
 #include "tool_context.h"

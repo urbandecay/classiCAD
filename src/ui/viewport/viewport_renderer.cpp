@@ -1,11 +1,16 @@
 #include "viewport_renderer.h"
 
+#include "core/geometry/curve_construction.h"
+#include "core/geometry/shape_mapping.h"
+
 #include "core/geometry/arc_curve_factory.h"
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_surface_tessellator.h"
 #include "blender_grid_scale.h"
 #include "blender_grid_frame.h"
 #include "line_type_style.h"
+#include "viewport_depth_geometry.h"
 #include "services/dimensions/dimension_font.h"
 #include "services/dimensions/dimension_layout.h"
 
@@ -18,6 +23,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 namespace classiCAD {
 namespace {
@@ -298,9 +305,11 @@ void appendOrthographicGridLine(const ViewportTransform &transform,
 } // namespace
 
 ViewportRenderer::ViewportRenderer(const ViewportTransform &transform,
-                                   const CurveHitTester &curveHitTester)
+                                   const CurveHitTester &curveHitTester,
+                                   const SurfaceTessellationCache *surfaceTessellationCache)
     : transform_(transform)
     , curveHitTester_(curveHitTester)
+    , surfaceTessellationCache_(surfaceTessellationCache)
 {
 }
 
@@ -707,6 +716,128 @@ QVector<QPointF> ViewportRenderer::rectangleVertices(const Shape &shape) const
             QPointF(first.x(), second.y())};
 }
 
+bool ViewportRenderer::drawPreparedCurveSegments(
+    QPainter &painter,
+    const ViewportDepthGeometry &preparedGeometry,
+    const QSize &viewportSize) const
+{
+    const QVector<Point3D> &worldVertices =
+        preparedGeometry.preciseLineVertices;
+    if (worldVertices.isEmpty() || worldVertices.size() % 2 != 0) {
+        return false;
+    }
+
+    QPainterPath path;
+    QVector<QPointF> projectedRun;
+    const auto flushRun = [&]() {
+        if (projectedRun.size() < 2) {
+            projectedRun.clear();
+            return;
+        }
+
+        constexpr qreal flatnessTolerancePixels = 0.3;
+        const qreal toleranceSquared =
+            flatnessTolerancePixels * flatnessTolerancePixels;
+        QVector<uchar> keep(projectedRun.size(), 0);
+        std::vector<std::pair<int, int>> intervals;
+        intervals.reserve(32);
+        constexpr int maximumSimplificationChunkSegments = 16;
+        for (int chunkStart = 0;
+             chunkStart + 1 < projectedRun.size();) {
+            const int chunkEnd = std::min(
+                static_cast<int>(projectedRun.size()) - 1,
+                chunkStart + maximumSimplificationChunkSegments);
+            keep[chunkStart] = 1;
+            keep[chunkEnd] = 1;
+            intervals.clear();
+            intervals.emplace_back(chunkStart, chunkEnd);
+            while (!intervals.empty()) {
+                const auto [first, last] = intervals.back();
+                intervals.pop_back();
+                const QPointF start = projectedRun[first];
+                const QPointF end = projectedRun[last];
+                const QPointF direction = end - start;
+                const qreal lengthSquared = QPointF::dotProduct(direction, direction);
+                qreal maximumDistanceSquared = toleranceSquared;
+                int furthestIndex = -1;
+                for (int index = first + 1; index < last; ++index) {
+                    const QPointF offset = projectedRun[index] - start;
+                    const qreal fraction = lengthSquared > 1.0e-20
+                                               ? std::clamp(
+                                                     QPointF::dotProduct(offset,
+                                                                        direction) /
+                                                         lengthSquared,
+                                                     0.0,
+                                                     1.0)
+                                               : 0.0;
+                    const QPointF closest = start + direction * fraction;
+                    const QPointF difference = projectedRun[index] - closest;
+                    const qreal distanceSquared =
+                        QPointF::dotProduct(difference, difference);
+                    if (distanceSquared > maximumDistanceSquared) {
+                        maximumDistanceSquared = distanceSquared;
+                        furthestIndex = index;
+                    }
+                }
+                if (furthestIndex >= 0) {
+                    keep[furthestIndex] = 1;
+                    intervals.emplace_back(first, furthestIndex);
+                    intervals.emplace_back(furthestIndex, last);
+                }
+            }
+            chunkStart = chunkEnd;
+        }
+
+        path.moveTo(projectedRun.first());
+        for (int index = 1; index < projectedRun.size(); ++index) {
+            if (keep[index] != 0) {
+                path.lineTo(projectedRun[index]);
+            }
+        }
+        projectedRun.clear();
+    };
+
+    bool hasPreviousEnd = false;
+    Point3D previousWorldEnd;
+    QPointF previousScreenEnd;
+    for (int index = 0; index + 1 < worldVertices.size(); index += 2) {
+        QPointF start;
+        QPointF end;
+        const Point3D &worldStart = worldVertices[index];
+        const Point3D &worldEnd = worldVertices[index + 1];
+        const bool contiguous =
+            hasPreviousEnd && previousWorldEnd.x == worldStart.x &&
+            previousWorldEnd.y == worldStart.y &&
+            previousWorldEnd.z == worldStart.z;
+        if (contiguous) {
+            start = previousScreenEnd;
+        } else if (!transform_.worldPointToScreen(worldStart,
+                                                  viewportSize,
+                                                  &start)) {
+            // Keep the established adaptive path for any camera-clipped or
+            // otherwise unprojectable geometry.
+            return false;
+        }
+        if (!transform_.worldPointToScreen(worldEnd, viewportSize, &end)) {
+            return false;
+        }
+        if (!contiguous) {
+            flushRun();
+            projectedRun.append(start);
+        }
+        projectedRun.append(end);
+        previousWorldEnd = worldEnd;
+        previousScreenEnd = end;
+        hasPreviousEnd = true;
+    }
+    flushRun();
+    if (path.isEmpty()) {
+        return false;
+    }
+    painter.drawPath(path);
+    return true;
+}
+
 void ViewportRenderer::drawShape(QPainter &painter,
                                  const Shape &shape,
                                  const QSize &viewportSize,
@@ -715,7 +846,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  bool drawPreviewPoints,
                                  const QColor &layerColor,
                                  const QString &layerLineType,
-                                 qreal layerLineWeightMm) const
+                                 qreal layerLineWeightMm,
+                                 ObjectId shapeObjectId,
+                                 quint64 geometryRevision,
+                                 const ViewportDepthGeometry *preparedGeometry) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -741,6 +875,24 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     painter.setPen(layerPen);
     painter.setBrush(Qt::NoBrush);
+
+    const bool canUsePreparedCurve =
+        preparedGeometry != nullptr && smoothCurveDisplay_ &&
+        (selected || preview || layerLineType.isEmpty() ||
+         layerLineType.compare(QStringLiteral("Continuous"),
+                               Qt::CaseInsensitive) == 0);
+    const auto drawCurve = [&](const Shape::NurbsCurve2D &curve,
+                               const WorkPlaneFrame &frame) {
+        if (!isValidNurbsCurve(curve)) {
+            return;
+        }
+        if (!canUsePreparedCurve ||
+            !drawPreparedCurveSegments(painter,
+                                       *preparedGeometry,
+                                       viewportSize)) {
+            drawNurbsCurve(painter, curve, frame, viewportSize);
+        }
+    };
 
     if (isDimensionGeometryType(shape.geometryType)) {
         const DimensionScreenLayout layout =
@@ -827,18 +979,30 @@ void ViewportRenderer::drawShape(QPainter &painter,
     }
 
     if (shape.geometryType == GeometryType::NurbsSurface) {
-        drawNurbsSurface(painter, shape.nurbsSurface, viewportSize);
+        drawNurbsSurface(painter,
+                         shape.nurbsSurface,
+                         viewportSize,
+                         preview ? ObjectId::invalid() : shapeObjectId,
+                         preview ? 0 : geometryRevision,
+                         preparedGeometry);
         return;
     }
 
     if (shape.geometryType == GeometryType::PolyCurve && !shape.components.isEmpty()) {
-        for (int index = 0; index < shape.components.size(); ++index) {
-            const Shape::NurbsCurve2D &component = shape.components[index];
-            if (isValidNurbsCurve(component)) {
-                drawNurbsCurve(painter,
-                               component,
-                               shapeComponentWorkPlaneFrame(shape, index),
-                               viewportSize);
+        bool preparedCurveDrawn = false;
+        if (canUsePreparedCurve) {
+            for (const Shape::NurbsCurve2D &component : shape.components) {
+                if (isValidNurbsCurve(component)) {
+                    preparedCurveDrawn = drawPreparedCurveSegments(
+                        painter, *preparedGeometry, viewportSize);
+                    break;
+                }
+            }
+        }
+        if (!preparedCurveDrawn) {
+            for (int index = 0; index < shape.components.size(); ++index) {
+                const Shape::NurbsCurve2D &component = shape.components[index];
+                drawCurve(component, shapeComponentWorkPlaneFrame(shape, index));
             }
         }
     } else if (shape.geometryType == GeometryType::Point && !shape.points.isEmpty()) {
@@ -852,7 +1016,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             selected ? 5.0 : 4.5);
     } else if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
         if (isValidNurbsCurve(shape.nurbs)) {
-            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+            drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else {
             for (int index = 0; index + 1 < shape.points.size(); ++index) {
                 painter.drawLine(worldToScreen(shape.points[index], viewportSize),
@@ -861,7 +1025,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
         }
     } else if (shape.geometryType == GeometryType::Rectangle && shape.points.size() >= 2) {
         if (isValidNurbsCurve(shape.nurbs)) {
-            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+            drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
             return;
         }
         const QVector<QPointF> vertices = rectangleVertices(shape);
@@ -876,11 +1040,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
         }
     } else if (shape.geometryType == GeometryType::Polygon) {
         if (isValidNurbsCurve(shape.nurbs)) {
-            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+            drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         }
     } else if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
         if (isValidNurbsCurve(shape.nurbs)) {
-            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+            drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else {
             const QPointF center = worldToScreen(shape.points[0], viewportSize);
             const QPointF edge = worldToScreen(shape.points[1], viewportSize);
@@ -890,11 +1054,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
         }
     } else if (shape.geometryType == GeometryType::Ellipse) {
         if (isValidNurbsCurve(shape.nurbs)) {
-            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+            drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         }
     } else if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
         if (isValidNurbsCurve(shape.nurbs)) {
-            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+            drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else if (shape.arcMode == ArcMode::OnePoint) {
             if (std::abs(shape.arcSweep) > 1e-9) {
                 drawCenterArcWithSweep(painter,
@@ -932,7 +1096,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
         painter.setPen(layerPen);
         if (hasStoredCurve) {
-            drawNurbsCurve(painter, shape.nurbs, viewportSize);
+            drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else if (shape.geometryType == GeometryType::Bezier && shape.points.size() >= 4) {
             QPainterPath curve;
             curve.moveTo(worldToScreen(shape.points[0], viewportSize));
@@ -1302,136 +1466,65 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
 
 void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         const Shape::NurbsSurface3D &surface,
-                                        const QSize &viewportSize) const
+                                        const QSize &viewportSize,
+                                        ObjectId objectId,
+                                        quint64 geometryRevision,
+                                        const ViewportDepthGeometry *preparedGeometry) const
 {
-    if (!validateNurbsSurface(surface)) {
-        return;
-    }
-
-    qreal uStart = 0.0;
-    qreal uEnd = 0.0;
-    qreal vStart = 0.0;
-    qreal vEnd = 0.0;
-    if (!nurbsSurfaceParameterDomains(surface,
-                                      &uStart,
-                                      &uEnd,
-                                      &vStart,
-                                      &vEnd)) {
-        return;
-    }
-
-    constexpr int isocurveCount = 8;
-    constexpr int sampleCount = 128;
-    constexpr int trimSampleCount = 256;
-    QVector<QVector<QPointF>> trimPolygons;
-    trimPolygons.reserve(surface.trimLoops.size());
-    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
-        trimPolygons.append(sampleNurbsSurfaceTrimLoop(loop, trimSampleCount));
-    }
-    const auto insidePolygon = [](const QPointF &point,
-                                  const QVector<QPointF> &polygon) {
-        bool inside = false;
-        for (int current = 0, previous = polygon.size() - 1;
-             current < polygon.size();
-             previous = current++) {
-            const QPointF &a = polygon[current];
-            const QPointF &b = polygon[previous];
-            const bool crosses = (a.y() > point.y()) != (b.y() > point.y());
-            if (crosses && point.x() < (b.x() - a.x()) *
-                                             (point.y() - a.y()) /
-                                             (b.y() - a.y()) + a.x()) {
-                inside = !inside;
-            }
-        }
-        return inside;
-    };
-    const auto insideTrim = [&](qreal u, qreal v) {
-        if (trimPolygons.isEmpty()) {
-            return true;
-        }
-        bool insideOuter = false;
-        for (int index = 0; index < trimPolygons.size(); ++index) {
-            const bool inside = insidePolygon(QPointF(u, v), trimPolygons[index]);
-            if (!surface.trimLoops[index].isHole && inside) {
-                insideOuter = true;
-            } else if (surface.trimLoops[index].isHole && inside) {
-                return false;
-            }
-        }
-        return insideOuter;
-    };
-    const auto drawIsocurves = [&](bool varyU) {
-        for (int curveIndex = 0; curveIndex <= isocurveCount; ++curveIndex) {
-            const qreal fixedFraction = static_cast<qreal>(curveIndex) /
-                                        isocurveCount;
-            const qreal fixedParameter = varyU
-                ? vStart + (vEnd - vStart) * fixedFraction
-                : uStart + (uEnd - uStart) * fixedFraction;
-            bool havePrevious = false;
-            QPointF previous;
-            for (int sampleIndex = 0; sampleIndex <= sampleCount; ++sampleIndex) {
-                const qreal fraction = static_cast<qreal>(sampleIndex) /
-                                       sampleCount;
-                const qreal variableParameter = varyU
-                    ? uStart + (uEnd - uStart) * fraction
-                    : vStart + (vEnd - vStart) * fraction;
-                const qreal u = varyU ? variableParameter : fixedParameter;
-                const qreal v = varyU ? fixedParameter : variableParameter;
-                Point3D worldPoint;
-                QPointF screenPoint;
-                const bool evaluated = insideTrim(u, v) && (varyU
-                    ? evaluateNurbsSurfacePoint(surface,
-                                                variableParameter,
-                                                fixedParameter,
-                                                &worldPoint)
-                    : evaluateNurbsSurfacePoint(surface,
-                                                fixedParameter,
-                                                variableParameter,
-                                                &worldPoint));
-                if (!evaluated ||
-                    !transform_.worldPointToScreenUnclipped(worldPoint,
-                                                            viewportSize,
-                                                            &screenPoint)) {
-                    havePrevious = false;
-                    continue;
-                }
-                if (havePrevious) {
-                    painter.drawLine(previous, screenPoint);
-                }
-                previous = screenPoint;
-                havePrevious = true;
-            }
+    QVector<QLineF> screenLines;
+    const auto appendScreenLine = [&](const Point3D &start,
+                                      const Point3D &end) {
+        QPointF screenStart;
+        QPointF screenEnd;
+        if (transform_.worldPointToScreenUnclipped(start,
+                                                   viewportSize,
+                                                   &screenStart) &&
+            transform_.worldPointToScreenUnclipped(end,
+                                                   viewportSize,
+                                                   &screenEnd)) {
+            screenLines.append(QLineF(screenStart, screenEnd));
         }
     };
-    drawIsocurves(true);
-    drawIsocurves(false);
 
-    for (const QVector<QPointF> &trimPolygon : trimPolygons) {
-        if (trimPolygon.size() < 3) {
-            continue;
+    if (preparedGeometry != nullptr &&
+        !preparedGeometry->preciseLineVertices.isEmpty()) {
+        const QVector<Point3D> &worldLines =
+            preparedGeometry->preciseLineVertices;
+        screenLines.reserve(worldLines.size() / 2);
+        for (int index = 0; index + 1 < worldLines.size(); index += 2) {
+            appendScreenLine(worldLines[index], worldLines[index + 1]);
         }
-        QPointF previous;
-        bool havePrevious = false;
-        for (int index = 0; index <= trimPolygon.size(); ++index) {
-            const QPointF &parameter = trimPolygon[index % trimPolygon.size()];
-            Point3D worldPoint;
-            QPointF screenPoint;
-            if (!evaluateNurbsSurfacePoint(surface,
-                                           parameter.x(),
-                                           parameter.y(),
-                                           &worldPoint) ||
-                !transform_.worldPointToScreenUnclipped(worldPoint,
-                                                        viewportSize,
-                                                        &screenPoint)) {
-                havePrevious = false;
-                continue;
-            }
-            if (havePrevious) {
-                painter.drawLine(previous, screenPoint);
-            }
-            previous = screenPoint;
-            havePrevious = true;
+    } else {
+        PreparedNurbsSurfaceTessellation localTessellation;
+        QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
+        const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+        if (surfaceTessellationCache_ != nullptr && objectId.isValid()) {
+            cachedTessellation = surfaceTessellationCache_->acquire(
+                objectId, geometryRevision, surface);
+            tessellation = cachedTessellation.data();
+        } else if (localTessellation.prepare(surface)) {
+            tessellation = &localTessellation;
         }
+        if (tessellation == nullptr) {
+            return;
+        }
+        int segmentCount = 0;
+        for (const PreparedNurbsSurfaceTessellation::Polyline &polyline :
+             tessellation->wireframe()) {
+            segmentCount += std::max(
+                0, static_cast<int>(polyline.points.size()) - 1);
+        }
+        screenLines.reserve(segmentCount);
+        for (const PreparedNurbsSurfaceTessellation::Polyline &polyline :
+             tessellation->wireframe()) {
+            for (int index = 1; index < polyline.points.size(); ++index) {
+                appendScreenLine(polyline.points[index - 1],
+                                 polyline.points[index]);
+            }
+        }
+    }
+    if (!screenLines.isEmpty()) {
+        painter.drawLines(screenLines.constData(), screenLines.size());
     }
 }
 

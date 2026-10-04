@@ -2,6 +2,7 @@
 
 #include "core/geometry/interpolating_curve_factory.h"
 #include "tool_context.h"
+#include "services/viewport/viewport_transform.h"
 
 #include <cmath>
 

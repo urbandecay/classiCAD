@@ -1,7 +1,14 @@
 #include "snap_engine.h"
 
+#include "core/document/document.h"
 #include "core/geometry/arc_curve_factory.h"
+#include "core/geometry/curve_construction.h"
 #include "core/geometry/curve_evaluator.h"
+#include "core/geometry/curve_geometry_data.h"
+#include "core/geometry/planar_geometry.h"
+#include "core/geometry/shape_mapping.h"
+#include "services/hit_testing/projected_curve_bounds.h"
+#include "services/viewport/viewport_transform.h"
 #include <QDataStream>
 #include <QHash>
 #include <QIODevice>
@@ -2034,6 +2041,21 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
     }
 
     const QPointF cursorScreen = transform.worldToScreen(cursor, viewportSize);
+    const auto curveMayBeNearCursor = [&](const Shape::NurbsCurve2D &curve,
+                                          const WorkPlaneFrame &frame) {
+        QRectF controlHullBounds;
+        if (!projectedNurbsControlHullBounds(curve,
+                                             frame,
+                                             transform,
+                                             viewportSize,
+                                             &controlHullBounds)) {
+            return true;
+        }
+        const QRectF cursorBounds(
+            cursorScreen - QPointF(snapRadiusPixels, snapRadiusPixels),
+            QSizeF(snapRadiusPixels * 2.0, snapRadiusPixels * 2.0));
+        return screenBoundsOverlap(controlHullBounds, cursorBounds);
+    };
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
         if ((targetShapeIndex >= 0 && shapeIndex != targetShapeIndex) ||
             excludedShapeIndices.contains(shapeIndex) ||
@@ -2108,6 +2130,9 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
                 ViewportTransform componentTransform = transform;
                 const WorkPlaneFrame componentFrame =
                     shapeComponentWorkPlaneFrame(shape, componentIndex);
+                if (!curveMayBeNearCursor(component, componentFrame)) {
+                    continue;
+                }
                 componentTransform.setWorkPlaneFrame(componentFrame);
                 QPointF componentNearestPoint;
                 qreal componentDistanceSquared = 0.0;
@@ -2129,12 +2154,14 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         } else {
             Shape::NurbsCurve2D curve;
             if (subdivisionCurve(shape, &curve)) {
-                nearestPointOnNurbsCurve(curve,
-                                         cursorScreen,
-                                         transform,
-                                         viewportSize,
-                                         &nearestPoint,
-                                         &nearestDistanceSquared);
+                if (curveMayBeNearCursor(curve, shapeWorkPlaneFrame(shape))) {
+                    nearestPointOnNurbsCurve(curve,
+                                             cursorScreen,
+                                             transform,
+                                             viewportSize,
+                                             &nearestPoint,
+                                             &nearestDistanceSquared);
+                }
             } else if (shape.geometryType == GeometryType::Arc) {
                 constexpr int arcSegments = 96;
                 QPointF previousPoint;

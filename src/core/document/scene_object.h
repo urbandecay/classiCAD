@@ -2,7 +2,7 @@
 
 #include "layer_id.h"
 #include "object_id.h"
-#include "../model.h"
+#include "shape.h"
 
 namespace classiCAD {
 

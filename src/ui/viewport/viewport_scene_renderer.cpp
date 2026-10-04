@@ -4,12 +4,19 @@
 
 #include "blender_grid_renderer.h"
 #include "core/geometry/arc_curve_factory.h"
+#include "core/geometry/nurbs_curve.h"
+#include "core/geometry/nurbs_surface.h"
+#include "core/geometry/shape_mapping.h"
+#include "line_type_style.h"
 #include "viewport_depth_geometry.h"
+#include "viewport_render_frame.h"
 
 #include <QImage>
 #include <QDebug>
+#include <QDataStream>
 #include <QFont>
 #include <QFontMetricsF>
+#include <QIODevice>
 #include <QOpenGLContext>
 #include <QPainter>
 #include <QVector4D>
@@ -309,6 +316,116 @@ float projectedStrokeSegmentLength(const QVector3D &first,
 
 } // namespace
 
+bool makeViewportSceneStrokes(const ViewportRenderObject &object,
+                              bool rendererAvailable,
+                              ViewportSceneStroke *sceneStroke,
+                              ViewportSceneStroke *controlGuide)
+{
+    if (!rendererAvailable || sceneStroke == nullptr) {
+        return false;
+    }
+    if (controlGuide != nullptr) {
+        *controlGuide = {};
+    }
+
+    const Shape &shape = object.shape;
+    const GeometryType geometryType = shape.geometryType;
+    const bool strokeType =
+        geometryType == GeometryType::Point ||
+        geometryType == GeometryType::Line ||
+        geometryType == GeometryType::Rectangle ||
+        geometryType == GeometryType::Polygon ||
+        geometryType == GeometryType::Circle ||
+        geometryType == GeometryType::Ellipse ||
+        geometryType == GeometryType::Arc ||
+        geometryType == GeometryType::PolyCurve ||
+        geometryType == GeometryType::Bezier ||
+        geometryType == GeometryType::Nurbs ||
+        geometryType == GeometryType::NurbsSurface;
+    const LayerGpuLinePattern layerPattern =
+        layerGpuLinePattern(object.layerLineType);
+    const bool nativeStroke =
+        strokeType &&
+        (geometryType == GeometryType::Point || object.selected ||
+         object.scalePreview || object.rotatePreview ||
+         layerPattern.kind != LayerGpuLinePatternKind::Unsupported) &&
+        (geometryType != GeometryType::Arc || validateNurbsCurve(shape.nurbs)) &&
+        (geometryType != GeometryType::Circle ||
+         validateNurbsCurve(shape.nurbs)) &&
+        (geometryType != GeometryType::Ellipse ||
+         validateNurbsCurve(shape.nurbs)) &&
+        ((geometryType != GeometryType::Bezier &&
+          geometryType != GeometryType::Nurbs) ||
+         validateNurbsCurve(shape.nurbs)) &&
+        (geometryType != GeometryType::NurbsSurface ||
+         validateNurbsSurface(shape.nurbsSurface)) &&
+        (geometryType != GeometryType::PolyCurve ||
+         !shape.components.isEmpty());
+    if (!nativeStroke) {
+        return false;
+    }
+
+    const bool highlighted =
+        object.selected || object.scalePreview || object.rotatePreview;
+    const qreal storedWidth = object.layerLineWeightMm > 0.0
+                                  ? std::clamp(object.layerLineWeightMm * 6.0,
+                                               1.0, 10.0)
+                                  : 2.0;
+    if (controlGuide != nullptr &&
+        (geometryType == GeometryType::Bezier ||
+         geometryType == GeometryType::Nurbs)) {
+        *controlGuide = {&shape, QColor(QStringLiteral("#8aa7c7")), 1.0f, true};
+        controlGuide->objectId = object.objectId;
+        controlGuide->geometryRevision = object.geometryRevision;
+        controlGuide->cacheableGeometry = object.cacheable;
+    }
+
+    *sceneStroke = {
+        &shape,
+        highlighted ? QColor(QStringLiteral("#5da9e9"))
+                    : object.layerColor.isValid()
+                          ? object.layerColor
+                          : QColor(QStringLiteral("#d28b45")),
+        static_cast<float>(highlighted ? 3.5 : storedWidth),
+        false,
+        geometryType == GeometryType::Point
+            ? (highlighted ? 10.0f : 9.0f)
+            : 0.0f};
+    sceneStroke->objectId = object.objectId;
+    sceneStroke->geometryRevision = object.geometryRevision;
+    sceneStroke->cacheableGeometry = object.cacheable;
+    sceneStroke->preparedDepthGeometry = object.preparedDepthGeometry;
+
+    if (!highlighted) {
+        switch (layerPattern.kind) {
+        case LayerGpuLinePatternKind::Dashed:
+            sceneStroke->lineStyle = ViewportSceneLineStyle::Dashed;
+            break;
+        case LayerGpuLinePatternKind::Dotted:
+            sceneStroke->lineStyle = ViewportSceneLineStyle::Dotted;
+            break;
+        case LayerGpuLinePatternKind::Pattern:
+            sceneStroke->lineStyle = ViewportSceneLineStyle::Pattern;
+            break;
+        case LayerGpuLinePatternKind::Solid:
+        case LayerGpuLinePatternKind::Unsupported:
+        default:
+            sceneStroke->lineStyle = ViewportSceneLineStyle::Solid;
+            break;
+        }
+        sceneStroke->linePatternScale = static_cast<float>(layerPattern.scale);
+        sceneStroke->linePatternSegmentCount = std::min(
+            static_cast<int>(layerPattern.segments.size()),
+            static_cast<int>(sceneStroke->linePatternSegmentsWidthUnits.size()));
+        for (int index = 0; index < sceneStroke->linePatternSegmentCount; ++index) {
+            sceneStroke->linePatternSegmentsWidthUnits[
+                static_cast<std::size_t>(index)] =
+                static_cast<float>(layerPattern.segments[index]);
+        }
+    }
+    return true;
+}
+
 ViewportSceneRenderer::~ViewportSceneRenderer()
 {
     if (QOpenGLContext::currentContext() != nullptr) {
@@ -482,6 +599,10 @@ bool ViewportSceneRenderer::draw(
     qreal devicePixelRatio)
 {
     if (strokes.isEmpty()) {
+        strokeGeometryKeys_.clear();
+        strokeRanges_.clear();
+        cachedVertices_.clear();
+        cachedPatternOffsets_.clear();
         return true;
     }
     if (QOpenGLContext::currentContext() == nullptr || !initialize()) {
@@ -491,34 +612,56 @@ bool ViewportSceneRenderer::draw(
     QVector<QByteArray> geometryKeys;
     geometryKeys.reserve(strokes.size());
     for (const ViewportSceneStroke &stroke : strokes) {
-        QByteArray key = stroke.shape == nullptr
-                             ? QByteArray()
-                             : viewportDepthGeometryCacheKey(
-                                   QVector<Shape>{*stroke.shape});
-        key.append(stroke.controlGuide ? '\1' : '\0');
+        QByteArray key;
+        QDataStream keyStream(&key, QIODevice::WriteOnly);
+        if (stroke.cacheableGeometry && stroke.objectId.isValid() &&
+            stroke.geometryRevision != 0) {
+            keyStream << quint8(1) << quint64(stroke.objectId.value())
+                      << stroke.geometryRevision;
+        } else if (stroke.shape != nullptr) {
+            keyStream << quint8(0)
+                      << viewportDepthGeometryCacheKey(
+                             QVector<Shape>{*stroke.shape});
+        } else {
+            keyStream << quint8(0);
+        }
+        keyStream << quint8(stroke.controlGuide ? 1 : 0);
         geometryKeys.append(std::move(key));
     }
     const bool geometryChanged = geometryKeys != strokeGeometryKeys_;
     if (geometryChanged) {
-        strokeGeometryKeys_ = std::move(geometryKeys);
+        strokeGeometryKeys_ = geometryKeys;
         strokeRanges_.clear();
         cachedVertices_.clear();
         cachedPatternOffsets_.clear();
         strokeRanges_.reserve(strokes.size());
-        for (const ViewportSceneStroke &stroke : strokes) {
-            const int first = cachedVertices_.size();
-            if (stroke.shape != nullptr) {
-                if (stroke.controlGuide) {
-                    cachedVertices_ += controlGuideVertices(*stroke.shape);
-                } else {
-                    const ViewportDepthGeometry geometry =
-                        buildViewportDepthGeometry(*stroke.shape);
-                    cachedVertices_ += stroke.pointDiameter > 0.0f
-                                           ? geometry.pointVertices
-                                           : geometry.lineVertices;
-                }
+        for (int strokeIndex = 0; strokeIndex < strokes.size(); ++strokeIndex) {
+            const ViewportSceneStroke &stroke = strokes[strokeIndex];
+            QVector<QVector3D> generatedVertices;
+            const QVector<QVector3D> *vertices = nullptr;
+            if (stroke.controlGuide && stroke.shape != nullptr) {
+                generatedVertices = controlGuideVertices(*stroke.shape);
+                vertices = &generatedVertices;
+            } else if (stroke.preparedDepthGeometry) {
+                const ViewportDepthGeometry &geometry =
+                    *stroke.preparedDepthGeometry;
+                vertices = stroke.pointDiameter > 0.0f
+                               ? &geometry.pointVertices
+                               : &geometry.lineVertices;
+            } else if (stroke.shape != nullptr) {
+                const ViewportDepthGeometry geometry =
+                    buildViewportDepthGeometry(*stroke.shape);
+                generatedVertices = stroke.pointDiameter > 0.0f
+                                       ? geometry.pointVertices
+                                       : geometry.lineVertices;
+                vertices = &generatedVertices;
             }
-            strokeRanges_.append({first, cachedVertices_.size() - first});
+            const int first = cachedVertices_.size();
+            if (vertices != nullptr) {
+                cachedVertices_ += *vertices;
+            }
+            strokeRanges_.append(
+                {first, cachedVertices_.size() - first});
         }
         cachedPatternOffsets_.fill(0.0f, cachedVertices_.size());
     }

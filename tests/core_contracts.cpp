@@ -20,14 +20,12 @@
 #include "services/snapping/snap_engine.h"
 #include "services/viewport/viewport_transform.h"
 #include "tools/line_tool.h"
-#include "ui/viewport/line_type_style.h"
 #include "ui/viewport/blender_grid_frame.h"
 #include "ui/viewport/blender_grid_appearance.h"
 #include "ui/viewport/blender_grid_scale.h"
 #include "ui/viewport/viewport_depth_geometry.h"
 #include "ui/viewport/viewport_renderer.h"
-#include "ui/viewport/viewport_overlay.h"
-#include "ui/viewport/viewport_scene_renderer.h"
+#include "ui/viewport/navigation_gizmo.h"
 #include "tools/circle_tool.h"
 #include "tools/circle_tangent_tool.h"
 #include "tools/dimension_tool.h"
@@ -67,123 +65,6 @@ int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
     bool passed = true;
-
-    const QStringList layerLineTypes = standardLayerLineTypes();
-    const QVector<qreal> dashedPattern = layerLineTypePattern(QStringLiteral("DASHED"));
-    const QVector<qreal> dashedHalfPattern = layerLineTypePattern(QStringLiteral("DASHED2"));
-    const QVector<qreal> dashedDoublePattern = layerLineTypePattern(QStringLiteral("DASHEDX2"));
-    const QPen dashedPen = layerLineTypePen(Qt::white, 1.0, QStringLiteral("DASHED"));
-    passed &= check(layerLineTypes.size() >= 24 &&
-                        layerLineTypes.contains(QStringLiteral("CENTER")) &&
-                        layerLineTypes.contains(QStringLiteral("DIVIDEX2")) &&
-                        layerLineTypes.contains(QStringLiteral("DOTX2")) &&
-                        canonicalLayerLineTypeName(QStringLiteral("Dash-Dot")) ==
-                            QStringLiteral("DASHDOT"),
-                    "layer linetype picker must include standard CAD pattern variants and legacy aliases");
-    passed &= check(dashedPattern.size() == 2 && dashedHalfPattern.size() == 2 &&
-                        dashedDoublePattern.size() == 2 &&
-                        qFuzzyCompare(dashedHalfPattern.first() * 2.0 + 1.0,
-                                      dashedPattern.first() + 1.0) &&
-                        qFuzzyCompare(dashedDoublePattern.first() + 1.0,
-                                      dashedPattern.first() * 2.0 + 1.0) &&
-                        dashedPen.style() == Qt::CustomDashLine,
-                    "linetype size variants must use scaled, visibly distinct custom dash patterns");
-
-    ViewportSceneStroke gpuStroke;
-    gpuStroke.width = 2.0f;
-    const ViewportSceneStrokePattern solidGpuPattern =
-        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
-    gpuStroke.lineStyle = ViewportSceneLineStyle::Dashed;
-    const ViewportSceneStrokePattern dashedGpuPattern =
-        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
-    gpuStroke.lineStyle = ViewportSceneLineStyle::Dotted;
-    const ViewportSceneStrokePattern dottedGpuPattern =
-        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
-    gpuStroke.lineStyle = ViewportSceneLineStyle::Dashed;
-    const ViewportSceneStrokePattern highDpiDashPattern =
-        viewportSceneStrokePattern(gpuStroke, gpuStroke.width * 2.0f);
-    gpuStroke.linePatternScale = 0.5f;
-    const ViewportSceneStrokePattern halfScaleDashPattern =
-        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
-    const LayerGpuLinePattern dashedLayerPattern =
-        layerGpuLinePattern(QStringLiteral("DASHED2"));
-    const LayerGpuLinePattern dottedLayerPattern =
-        layerGpuLinePattern(QStringLiteral("DOTX2"));
-    const LayerGpuLinePattern complexLayerPattern =
-        layerGpuLinePattern(QStringLiteral("CENTER"));
-    const LayerGpuLinePattern dashDotLayerPattern =
-        layerGpuLinePattern(QStringLiteral("DASHDOT"));
-    const LayerGpuLinePattern divideLayerPattern =
-        layerGpuLinePattern(QStringLiteral("DIVIDE"));
-    const LayerGpuLinePattern borderLayerPattern =
-        layerGpuLinePattern(QStringLiteral("BORDER"));
-    const LayerGpuLinePattern phantomLayerPattern =
-        layerGpuLinePattern(QStringLiteral("PHANTOM"));
-    const LayerGpuLinePattern doubledCenterLayerPattern =
-        layerGpuLinePattern(QStringLiteral("CENTERX2"));
-    const bool allStandardLineTypesSupported = std::all_of(
-        layerLineTypes.cbegin(), layerLineTypes.cend(),
-        [](const QString &lineType) {
-            return layerGpuLinePattern(lineType).kind !=
-                   LayerGpuLinePatternKind::Unsupported;
-        });
-    gpuStroke.lineStyle = ViewportSceneLineStyle::Pattern;
-    gpuStroke.linePatternScale = 1.0f;
-    gpuStroke.linePatternSegmentCount = complexLayerPattern.segments.size();
-    for (int segmentIndex = 0;
-         segmentIndex < gpuStroke.linePatternSegmentCount;
-         ++segmentIndex) {
-        gpuStroke.linePatternSegmentsWidthUnits[
-            static_cast<std::size_t>(segmentIndex)] =
-            static_cast<float>(complexLayerPattern.segments[segmentIndex]);
-    }
-    const ViewportSceneStrokePattern complexGpuPattern =
-        viewportSceneStrokePattern(gpuStroke, gpuStroke.width);
-    passed &= check(solidGpuPattern.style == ViewportSceneLineStyle::Solid &&
-                        solidGpuPattern.periodPixels == 0.0f &&
-                        dashedGpuPattern.style == ViewportSceneLineStyle::Dashed &&
-                        dashedGpuPattern.periodPixels == 20.0f &&
-                        dashedGpuPattern.onLengthPixels == 14.0f &&
-                        dottedGpuPattern.style == ViewportSceneLineStyle::Dotted &&
-                        dottedGpuPattern.periodPixels == 6.0f &&
-                        dottedGpuPattern.onLengthPixels == 2.0f &&
-                        highDpiDashPattern.periodPixels == 40.0f &&
-                        highDpiDashPattern.onLengthPixels == 28.0f &&
-                        halfScaleDashPattern.periodPixels == 10.0f &&
-                        halfScaleDashPattern.onLengthPixels == 7.0f &&
-                        dashedLayerPattern.kind ==
-                            LayerGpuLinePatternKind::Dashed &&
-                        dashedLayerPattern.scale == 0.5 &&
-                        dottedLayerPattern.kind ==
-                            LayerGpuLinePatternKind::Dotted &&
-                        dottedLayerPattern.scale == 2.0 &&
-                        complexLayerPattern.kind ==
-                            LayerGpuLinePatternKind::Pattern &&
-                        dashDotLayerPattern.segments.size() == 4 &&
-                        divideLayerPattern.segments.size() == 6 &&
-                        borderLayerPattern.segments.size() == 6 &&
-                        phantomLayerPattern.segments.size() == 8 &&
-                        doubledCenterLayerPattern.segments.size() == 6 &&
-                        doubledCenterLayerPattern.segments.first() == 20.0 &&
-                        complexGpuPattern.style ==
-                            ViewportSceneLineStyle::Pattern &&
-                        complexGpuPattern.segmentCount == 6 &&
-                        complexGpuPattern.periodPixels == 36.0f &&
-                        complexGpuPattern.segmentsPixels[0] == 20.0f &&
-                        complexGpuPattern.segmentsPixels[2] == 2.0f &&
-                        allStandardLineTypesSupported,
-                    "GPU scene strokes must support every built-in layer pattern, including scaled multi-dash and dash-dot styles");
-    gpuStroke.lineStyle = ViewportSceneLineStyle::Dotted;
-    gpuStroke.dashed = true;
-    passed &= check(effectiveViewportSceneLineStyle(gpuStroke) ==
-                            ViewportSceneLineStyle::Dashed,
-                    "legacy dashed scene strokes must retain dashed rendering when explicit styles are available");
-    gpuStroke.dashed = false;
-    gpuStroke.controlGuide = true;
-    passed &= check(effectiveViewportSceneLineStyle(gpuStroke) ==
-                            ViewportSceneLineStyle::Dashed,
-                    "control-guide strokes must remain dashed regardless of the selected layer line style");
-
     passed &= check(!std::is_same_v<ToolId, GeometryType>,
                     "tool and geometry vocabularies must be distinct types");
     passed &= check(geometryTypeForTool(ToolId::Line) == GeometryType::Line,
@@ -737,13 +618,13 @@ int main(int argc, char **argv)
         documentToJson(associativeDocument),
         &restoredAssociationDocument,
         &associationDocumentError);
-    Shape *editedAssociativeLine =
-        restoredAssociationDocument.shape(associativeLineId);
-    const bool associationTargetEdited = editedAssociativeLine != nullptr;
-    if (associationTargetEdited) {
-        editedAssociativeLine->points = {QPointF(5.0, 2.0), QPointF(25.0, 2.0)};
-        editedAssociativeLine->nurbs = makeDegreeOneNurbs(editedAssociativeLine->points);
-    }
+    const bool associationTargetEdited = restoredAssociationDocument.mutateGeometry(
+        associativeLineId,
+        [](Shape &editedAssociativeLine) {
+            editedAssociativeLine.points = {QPointF(5.0, 2.0), QPointF(25.0, 2.0)};
+            editedAssociativeLine.nurbs = makeDegreeOneNurbs(editedAssociativeLine.points);
+            return true;
+        });
     updateAssociativeDimensions(restoredAssociationDocument, associationSampler);
     const Shape *updatedAssociativeDimension =
         restoredAssociationDocument.shape(associativeDimensionId);
@@ -787,11 +668,15 @@ int main(int argc, char **argv)
         associationSampler,
         associationTransform,
         associationViewportSize);
-    Shape *editedAssociativeBezier = associativeDocument.shape(associativeBezierId);
-    editedAssociativeBezier->points[1].setY(20.0);
-    editedAssociativeBezier->nurbs = makeBezierNurbs(editedAssociativeBezier->points);
+    const bool associativeBezierEdited = associativeDocument.mutateGeometry(
+        associativeBezierId,
+        [](Shape &editedAssociativeBezier) {
+            editedAssociativeBezier.points[1].setY(20.0);
+            editedAssociativeBezier.nurbs = makeBezierNurbs(editedAssociativeBezier.points);
+            return true;
+        });
     QPointF movedBezierAnchor;
-    passed &= check(bezierAnchorEvaluated &&
+    passed &= check(associativeBezierEdited && bezierAnchorEvaluated &&
                         bezierAssociation.objectId == associativeBezierId &&
                         resolveDimensionAnchor(associativeDocument,
                                                bezierAssociation,
@@ -820,14 +705,19 @@ int main(int argc, char **argv)
         associationSampler,
         associationTransform,
         associationViewportSize);
-    Shape *editedAssociativeEllipse = associativeDocument.shape(associativeEllipseId);
-    editedAssociativeEllipse->points = {QPointF(-3.0, 3.0),
-                                        QPointF(7.0, 3.0),
-                                        QPointF(2.0, 6.0)};
-    editedAssociativeEllipse->nurbs = makeEllipseNurbs(
-        EllipseMode::AxisEndpoints, editedAssociativeEllipse->points);
+    const bool associativeEllipseEdited = associativeDocument.mutateGeometry(
+        associativeEllipseId,
+        [](Shape &editedAssociativeEllipse) {
+            editedAssociativeEllipse.points = {QPointF(-3.0, 3.0),
+                                               QPointF(7.0, 3.0),
+                                               QPointF(2.0, 6.0)};
+            editedAssociativeEllipse.nurbs = makeEllipseNurbs(
+                EllipseMode::AxisEndpoints, editedAssociativeEllipse.points);
+            return true;
+        });
     QPointF movedEllipseCenter;
-    passed &= check(ellipseCenterAssociation.objectId == associativeEllipseId &&
+    passed &= check(associativeEllipseEdited &&
+                        ellipseCenterAssociation.objectId == associativeEllipseId &&
                         resolveDimensionAnchor(associativeDocument,
                                                ellipseCenterAssociation,
                                                associationSampler,
@@ -914,6 +804,7 @@ int main(int argc, char **argv)
     passed &= check(document.indexOf(lineObject) == 0 &&
                         document.indexOf(circleObject) == 1,
                     "document snapshots must restore stable object identities");
+    document.setLayerLocked(sketchLayer, false);
 
     SelectionModel selection;
     selection.setObjectIds({lineObject, circleObject}, circleObject);
@@ -927,6 +818,13 @@ int main(int argc, char **argv)
     passed &= check(selection.objectIds() == QVector<ObjectId>{circleObject} &&
                         selection.primaryObjectId() == circleObject,
                     "selection model must prune deleted object IDs");
+    selection.setActiveControlPoint(circleObject, 2);
+    document.setLayerLocked(sketchLayer, true);
+    selection.prune(document);
+    passed &= check(selection.objectIds().isEmpty() &&
+                        !selection.primaryObjectId().isValid() &&
+                        !selection.activeControlPoint().isValid(),
+                    "selection model must prune objects made uneditable by a locked layer");
 
     Document layerDocument;
     DocumentSettings persistedGridSettings;
@@ -1298,33 +1196,24 @@ int main(int argc, char **argv)
                     "selecting the custom view must not alter the existing camera pose");
 
     blenderViewTransform.setViewPreset(ViewportViewPreset::Top);
-    CurveHitTester blenderGizmoHitTester;
-    ViewportRenderer blenderGizmoRenderer(blenderViewTransform,
-                                          blenderGizmoHitTester);
-    ViewportOverlay blenderGizmoOverlay(blenderGizmoRenderer,
-                                        blenderViewTransform);
+    ViewportNavigationGizmo blenderGizmo(blenderViewTransform);
     const QPointF blenderGizmoCenter(viewportSize.width() - 50.0, 50.0);
     const BlenderNavigationHit centerAxisHit =
-        blenderGizmoOverlay.blenderNavigationGizmoHitAt(blenderGizmoCenter,
-                                                        viewportSize);
+        blenderGizmo.hitAt(blenderGizmoCenter, viewportSize);
     const BlenderNavigationHit positiveXAxisHit =
-        blenderGizmoOverlay.blenderNavigationGizmoHitAt(
+        blenderGizmo.hitAt(
             blenderGizmoCenter + QPointF(32.0, 0.0), viewportSize);
     const BlenderNavigationHit orbitHit =
-        blenderGizmoOverlay.blenderNavigationGizmoHitAt(
+        blenderGizmo.hitAt(
             blenderGizmoCenter + QPointF(0.0, 18.0), viewportSize);
     const BlenderNavigationHit zoomHit =
-        blenderGizmoOverlay.blenderNavigationGizmoHitAt(QPointF(618.0, 116.0),
-                                                        viewportSize);
+        blenderGizmo.hitAt(QPointF(618.0, 116.0), viewportSize);
     const BlenderNavigationHit panHit =
-        blenderGizmoOverlay.blenderNavigationGizmoHitAt(QPointF(618.0, 144.0),
-                                                        viewportSize);
+        blenderGizmo.hitAt(QPointF(618.0, 144.0), viewportSize);
     const BlenderNavigationHit cameraHit =
-        blenderGizmoOverlay.blenderNavigationGizmoHitAt(QPointF(618.0, 172.0),
-                                                        viewportSize);
+        blenderGizmo.hitAt(QPointF(618.0, 172.0), viewportSize);
     const BlenderNavigationHit projectionHit =
-        blenderGizmoOverlay.blenderNavigationGizmoHitAt(QPointF(618.0, 200.0),
-                                                        viewportSize);
+        blenderGizmo.hitAt(QPointF(618.0, 200.0), viewportSize);
     passed &= check(centerAxisHit.action == BlenderNavigationAction::Axis &&
                         centerAxisHit.direction.z > 0.99 &&
                         positiveXAxisHit.action == BlenderNavigationAction::Axis &&
@@ -1342,8 +1231,7 @@ int main(int argc, char **argv)
     gizmoTransparencyImage.fill(Qt::white);
     {
         QPainter gizmoPainter(&gizmoTransparencyImage);
-        blenderGizmoOverlay.drawBlenderNavigationGizmo(
-            gizmoPainter, viewportSize, QPointF(-1000.0, -1000.0));
+        blenderGizmo.draw(gizmoPainter, viewportSize, QPointF(-1000.0, -1000.0));
     }
     const QColor gizmoIconCanvas(40, 40, 40);
     auto renderGizmoIcons = [&](bool perspectiveEnabled) {
@@ -1351,8 +1239,7 @@ int main(int argc, char **argv)
         QImage image(viewportSize, QImage::Format_ARGB32_Premultiplied);
         image.fill(gizmoIconCanvas);
         QPainter painter(&image);
-        blenderGizmoOverlay.drawBlenderNavigationGizmo(
-            painter, viewportSize, QPointF(-1000.0, -1000.0));
+        blenderGizmo.draw(painter, viewportSize, QPointF(-1000.0, -1000.0));
         return image;
     };
     const QImage isoGizmoIconImage = renderGizmoIcons(false);

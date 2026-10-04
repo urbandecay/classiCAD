@@ -1,7 +1,10 @@
 #include "rectangle_tool.h"
 
 #include "tool_context.h"
+#include "services/viewport/viewport_transform.h"
 #include "core/document/document_settings.h"
+#include "core/document/document.h"
+#include "core/geometry/curve_construction.h"
 
 #include <algorithm>
 #include <cmath>

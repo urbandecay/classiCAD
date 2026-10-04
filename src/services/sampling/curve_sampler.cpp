@@ -1,6 +1,12 @@
 #include "curve_sampler.h"
 
+#include "core/geometry/curve_construction.h"
+#include "core/geometry/shape_mapping.h"
+
+#include "core/document/document.h"
+
 #include "core/geometry/curve_evaluator.h"
+#include "services/viewport/viewport_transform.h"
 
 #include <algorithm>
 

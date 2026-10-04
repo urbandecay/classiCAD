@@ -2,6 +2,7 @@
 
 #include "services/dimensions/dimension_association.h"
 #include "tool_context.h"
+#include "services/viewport/viewport_transform.h"
 
 #include <algorithm>
 #include <cmath>

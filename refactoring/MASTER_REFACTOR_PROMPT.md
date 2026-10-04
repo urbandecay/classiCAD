@@ -34,41 +34,86 @@ The end state should make these questions answerable by looking at a path:
 The first structural split has already been made:
 
 ```text
-src/main.cpp                       application entry point
+src/main.cpp                       application entry point, the only source compiled directly into the executable
+src/app/application_session.*      shared document, selection, history, tool-registry ownership, and change notifications
+src/app/command_router.*           stable application command IDs mapped onto typed operation handlers
+src/app/project_controller.*       candidate-based project open/save, document replacement, and Rhino import transactions
+src/app/session_serializer.*        versioned update-session JSON and viewport camera/workplane codecs
+src/app/update_controller.*         rebuild/relaunch process and window-state handoff orchestration
 src/core/tool_id.*                 active interaction vocabulary and tool metadata
 src/core/geometry/geometry_type.*  persistent geometry vocabulary and legacy mapping
+src/core/geometry/arc_mode.*      arc construction mode and display name
+src/core/geometry/construction_modes.h ellipse, rectangle, and polygon factory modes
+src/core/geometry/curve_geometry_data.* shared rational curve-operation values
+src/core/geometry/curve_construction.* exact curve and planar primitive factories
+src/core/geometry/planar_geometry.* planar vector and segment-intersection helpers
+src/core/geometry/point_text.*    formatted local point coordinates
+src/core/geometry/shape_mapping.* Shape/component workplane mapping, boundary helpers, and NURBS component extraction
 src/core/geometry/nurbs_curve.*    shared NURBS storage, knot expansion, validation
 src/core/geometry/nurbs_surface.*  tensor-product 3D NURBS surface storage, UV trim loops, validation, and evaluation
+src/core/geometry/nurbs_surface_evaluator.* validated prepared surface state for repeated evaluation
 src/core/geometry/nurbs_surface_factory.* exact ruled extrusion and planar Fill with UV trim boundaries
 src/core/geometry/arc_curve_factory.* signed direction and exact rational NURBS construction for three-point arcs
 src/core/geometry/interpolating_curve_factory.* centripetal Catmull-Rom interpolation represented as exact piecewise cubic NURBS
 src/core/geometry/work_plane.*     principal and oriented local-2D to world-3D frame mapping
-src/core/geometry/curve_evaluator.* NURBS evaluation and parameter-domain operations
-src/core/geometry/geometry_transform.* reflected geometry transforms
+src/core/geometry/curve_evaluator.* NURBS evaluation, endpoint evaluation, and parameter-domain operations
+src/core/geometry/curve_editing.* exact rational Bezier span splitting, reversal, and parameter-domain-preserving NURBS trims
+src/core/geometry/curve_erase_intervals.* intersection-bounded intervals, exact complement splitting, and frame-preserving fragment rebuilds
+src/core/geometry/curve_intersections.* planar NURBS curve/curve intersection parameters and closest curve-to-point search
+src/services/erase/curve_erase_query.* reusable visible-scene intersection candidates, NURBS point/curve contacts, screen-space proximity, box intervals, and eraser stroke intervals
+src/services/erase/trim_erase_query.* Trim/Erase replacement calculation from screen input, intersection results, and exact curve-fragment geometry
+src/core/geometry/curve_join.* connected-curve grouping, planar and world-frame NURBS ordering, overlap fusion, and continuity/gap handling
+src/core/geometry/curve_subdivision.* equal arc-length NURBS parameter selection for subdivision markers
+src/core/geometry/surface_trim_region.* prepared sampled UV trim loops and shared outer/hole containment
+src/core/geometry/nurbs_surface_tessellator.* shared trimmed wireframe, visible triangles, and Blender display proxy data
+benchmarks/nurbs_surface_benchmark.cpp opt-in evaluator, tessellation, and cache microbenchmark
+benchmarks/viewport_query_benchmark.cpp opt-in whole-scene curve hit-test and selection-box microbenchmark
+benchmarks/viewport_runtime_benchmark.cpp opt-in snap/pick, redraw, per-object cache-invalidation, and snapshot-history benchmark
+src/core/geometry/geometry_transform.* world-plane-aware translation, reflection, uniform/one-axis scaling, and world-axis rotation transforms
 src/core/document/object_id.h      stable scene-object identity value type
 src/core/document/layer_id.h       stable layer identity value type
 src/core/document/layer.h          layer record, visibility, locking, and object membership
-src/core/document/scene_object.h   persistent object identity, layer, and geometry payload
+src/core/document/dimension_anchor.h persistent dimension-to-geometry references
+src/core/document/shape.h          persistent shape data, curves, surfaces, and workplane placement
+src/core/document/scene_object.h   persistent object identity, layer, and Shape payload
 src/core/document/document.*       document-owned scene objects, layers, IDs, and snapshots
 src/core/document/document_settings.* persistent document display units and grid spacing
+src/core/document/document_change_set.h changed object/layer IDs and invalidation categories for one edit
 src/core/document/selection_model.* selected object and control-point references
 src/core/history/history.*          document-level snapshot undo/redo ownership
+src/core/history/document_transaction.* atomic snapshot-backed edits and change reporting
+src/core/commands/delete_command.*   transactional deletion of editable objects
+src/core/commands/duplicate_command.* source-copy planning and anchor remapping
+src/core/commands/explode_command.* PolyCurve component extraction
+src/core/commands/fill_command.*    planar Fill plan and transactional surface insertion
+src/core/commands/join_command.*    joined-object plan construction and atomic source replacement
+src/core/commands/layer_command.*   transactional layer and membership edits
+src/core/commands/mirror_command.*  mirrored copy creation through shared geometry transforms
+src/core/commands/subdivision_command.* subdivision-marker document edits
+src/core/commands/trim_erase_command.* atomic replacement, removal, and fragment insertion for Trim/Erase commits
+src/core/commands/transform_command.* shared transform edit routing for editable objects
 src/core/serialization/document_serializer.* versioned classiCAD document/layer/object snapshot
+src/core/serialization/shape_json_codec.* Shape, curve, surface, and point JSON codec
 src/core/serialization/blender_project_file.* `.vignola`/`.blend` save/open through the pinned Blender 5.2.2 runtime
 src/core/serialization/blender_project_adapter.py Blender-native collections, Curve datablocks, and document Text datablock
 src/core/serialization/rhino3dm_interchange.* separate Rhino/openNURBS `.3dm` import with oriented-plane lifting
-src/core/model.*                   compatibility model, shape-plane frames, factories, serialization, helpers
+src/core/model.h                   forwarding compatibility umbrella; production callers use owning contracts
 src/core/debug_log.*               application logging
 src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/frame picking, presets, zoom, pan, and Blender-style turntable/trackball orbit math
 src/services/sampling/curve_sampler.* NURBS display/erase sampling and scene cache generation
+src/services/sampling/curve_sample_data.h sampled NURBS and erase-cache values
+src/services/sampling/surface_tessellation_cache.* bounded ObjectId/revision cache for prepared surface display data
 src/services/hit_testing/curve_hit_tester.* curve/control-point hit-testing, drawing-plane inheritance, and cross-workplane orbit-depth picking
-src/services/snapping/snap_engine.* endpoint, midpoint, center, intersection, perpendicular, and tangent snapping
-src/tools/tool.*                  non-Qt interaction lifecycle contract and preview/status values
+src/services/hit_testing/projected_curve_bounds.* conservative perspective-aware projection of positive-weight NURBS control hulls
+src/services/hit_testing/selection_box_query.* sampled NURBS/point box queries, projected fallback bounds, and camera clipping
+src/services/snapping/snap_engine.* endpoint, midpoint, center, intersection, perpendicular, tangent, and projected-hull-filtered near snapping
+src/services/snapping/snap_types.* snap result, candidate, drag-result contracts, and labels
+src/tools/tool.*                  non-Qt interaction lifecycle, typed handled/unhandled dispatch results, and preview/status values
 src/tools/tool_input.h            translated mouse, wheel, and keyboard input payload with the active workplane frame
-src/tools/tool_context.*          document, history, services, factory, commit, and preview ports
+src/tools/tool_context.*          document, history, services, factory, transaction, selection/layer notification, and preview ports
 src/tools/tool_registry.*         active tool module lookup and ownership
 src/tools/shape_creation_tool.*   shared pending-point creation lifecycle
-src/tools/select_tool.*            selection lifecycle bridge
+src/tools/select_tool.*            click/Shift-click selection transitions, Select All, box and drag state
 src/tools/point_tool.*             point creation
 src/tools/point_construction_tool.* point chains, circular-arc intersection points, curve centers, and curve-span centers
 src/tools/line_tool.*              world-space connected line input and planar NURBS run creation
@@ -80,21 +125,43 @@ src/tools/rectangle_tool.*         rectangle creation
 src/tools/circle_tool.*            rational circle creation
 src/tools/ellipse_tool.*           four-mode rational ellipse creation and staged preview
 src/tools/polygon_tool.*           four-mode regular polygon construction, dimension entry, and closed degree-1 NURBS preview/commit
-src/tools/arc_tool.*               arc creation lifecycle bridge
+src/tools/arc_tool.*               Arc mode/state reset, frame capture, canonical staged points, click/key/axis stage decisions, unit-aware numeric input, preview math, chord solving, endpoint axis inference/projection, chord-length completion, vertical hysteresis, chord-plane construction, commit construction, and planar endpoint constraints; screen coordinates and final cursor/snap presentation remain in the viewport
 src/tools/bezier_tool.*            Bezier creation
 src/tools/nurbs_tool.*             NURBS creation
 src/tools/point_extrude_tool.*     unified Extrude: points to edges, curves to ruled NURBS surfaces
 src/tools/circle_tangent_tool.*   circle construction tangent to selected NURBS curves
-src/tools/rotate_tool.*             rotate lifecycle bridge
-src/tools/mirror_tool.*             mirror lifecycle bridge
-src/tools/trim_tool.*               trim lifecycle bridge
-src/tools/erase_tool.*              erase lifecycle bridge
+src/tools/grab_tool.*              base-point move state and rollback snapshot lifecycle
+src/tools/duplicate_tool.*         interactive duplicate source/base/destination and preview state
+src/tools/join_tool.*              interactive Join input, curve planning, command transaction, selection result, and prompt
+src/tools/subdivision_tool.*       section/wheel/preview state, translated wheel/key/click decisions, and command transaction
+src/tools/rotate_tool.*             rotate pivot/reference/final-point transitions, axis/perpendicular-plane changes, keyboard input, angular preview/snap, typed-angle calculations, and transform commit
+src/tools/mirror_tool.*             source selection, two-point mirror-axis lifecycle, typed second-click commit, and mirror command transaction
+src/tools/scale_tool.*              scale stages, typed mouse/key dispatch and commit, preview/factor calculations, and transform commit
+src/tools/trim_tool.*               Trim box lifecycle, hover/component choice, box candidates, and click/box commit intent values
+src/tools/erase_tool.*              Erase stroke/cursor lifecycle and sampled screen-path candidate accumulation
 src/ui/input_helpers.*             Qt event-position and icon helpers
+src/ui/input/tool_input_translator.* Qt mouse/key/wheel fields and resolved cursor values translated into ToolInput
 src/ui/viewport_widget_api.h       typed viewport settings, command, status, and callback boundary
-src/ui/viewport_widget.cpp         current viewport state, shared drawing-frame inference, tools, editing, snapping, and Qt paint orchestration
+src/ui/viewport_widget.cpp         Qt event routing, camera-dependent cursor/snap acquisition, render-frame assembly, and viewport presentation adapters; borrows ApplicationSession
+src/ui/panels/document_grid_dialog.* document length-unit and base-grid-spacing dialog values
+src/ui/panels/layer_style_widgets.* shared layer-linetype combo, icons, and descriptions
+src/ui/panels/layers_panel.*         layer table, filtering, stable-ID selection, and typed edit callbacks
+src/ui/panels/preferences_dialog.* preference pages and typed values returned to MainWindow
+src/ui/panels/preferences_store.*   typed application preference loading, migration, and QSettings persistence
+src/ui/panels/tool_shelf.*          tool-button layout, exclusive tool selection, and local scroll/help presentation
+src/ui/theme/classicad_theme.*      application-wide Qt stylesheet
+src/ui/viewport/navigation_controller.* Qt navigation gestures, preset animation, and navigation gizmo routing
+src/ui/viewport/navigation_gizmo.*     navigation gizmo drawing, action hit-testing, and navigation action values
+src/ui/viewport/viewport_arc_compass_renderer.* workplane-projected Arc/Rotate compass presentation
+src/ui/viewport/viewport_hud_renderer.* typed tool-status and instruction HUD presentation
+src/ui/viewport/viewport_snap_marker_renderer.* snap marker glyphs and label visibility
+src/ui/viewport/viewport_erase_overlay_renderer.* erase cursor and candidate preview drawing
+src/ui/viewport/viewport_tool_preview_renderer.* geometry, guide, and transform previews for drawing tools
 src/ui/viewport/blender_grid_renderer.* 3D grid shader setup, offscreen/on-screen contexts, camera uniforms, and procedural GPU drawing
 src/ui/viewport/viewport_gpu_surface.* native QOpenGLWidget presentation surface and renderer lifetime
-src/ui/viewport/viewport_scene_renderer.* GPU committed-curve strokes and dashed control guides
+src/ui/viewport/viewport_scene_renderer.* GPU committed-curve strokes, linetype/style resolution, and dashed control guides
+src/ui/viewport/viewport_render_frame.* immutable camera, visible scene geometry, layer styling, selection, transform previews, revisions, and active ToolPreview snapshot
+src/ui/viewport/viewport_geometry_cache.* revision-keyed immutable double-precision world geometry reused by GPU strokes, depth, and CPU fallback
 src/ui/viewport/blender_grid_scale.*     Blender-compatible viewport grid step ladder and view-dependent LOD selection
 src/ui/viewport/blender_grid_frame.*     Blender-compatible visual grid plane, camera-relative origin, orthographic distance, and global-axis mapping
 src/ui/viewport/blender_grid_appearance.* shared theme colors, opacity, stipple, and camera-fade settings for GPU/Qt grid paths
@@ -104,28 +171,59 @@ src/ui/viewport/shaders/scene_depth.*     depth-only scene geometry shader pair
 src/ui/viewport/shaders/scene_stroke.*    antialiased GPU scene stroke shader set
 src/ui/viewport/shaders/scene_point.*     antialiased GPU point marker shader pair
 src/ui/viewport/viewport_renderer.* committed-geometry projection, CPU grid fallback, axes, control-point, and subdivision drawing
-src/ui/viewport/viewport_overlay.*  snap markers, tool previews, selection boxes, labels, and erase/trim overlays
-src/ui/main_window.*               menus, tool shelf, preferences, and window wiring
-tests/trim_seam.cpp                current geometry/editing regression coverage
+src/ui/viewport/viewport_overlay.*  snap-marker/tool-preview coordination, generic selection box, and control-point/subdivision delegation
+src/ui/main_window.*               menus, panel composition, setting application, and window wiring
+cmake/ClassicadTargets.cmake       shared target configuration, unused Qt codegen exclusion, and object-module assembly
+cmake/check_dependencies.py        downward-include and implementation-include audit
+CMakePresets.json                  isolated app-only, full-test, and benchmark build configurations
+tests/trim_seam.cpp                geometry, query, tool, command, selection-box, and update-session contract coverage without implementation includes
 tests/core_contracts.cpp            vocabulary, ID, NURBS, session, camera, and orbit-math compatibility coverage
+tests/viewport_render_contracts.cpp layer-line patterns and committed GPU stroke-style contract coverage
 tests/viewport_interaction.cpp      viewport mouse/wheel and GPU/fallback interaction coverage
 ```
 
 The current split is useful, and phases 1 through 10 now give the remaining
 modules explicit vocabulary, validation, document-ownership, history,
 selection, reusable-service, tool-lifecycle, and viewport-rendering contracts.
-`src/ui/viewport_widget.cpp` is still a large implementation module. It
-currently owns event routing, tool state, trim, erase, rotate, join, explode,
-subdivision, geometry creation, persistence, and Qt paint orchestration.
+`src/ui/viewport_widget.cpp` is still a large implementation module. It owns
+Qt event routing, screen/camera-dependent cursor and snap acquisition, frame
+assembly, viewport-setting application, presentation adaptation, and several
+temporary compatibility helpers; tool state, document transactions,
+persistence, and shared geometry algorithms have named owners.
 3D grid rendering now delegates to `BlenderGridRenderer`; the CPU grid remains
 a context/shader fallback. Geometry drawing delegates to `ViewportRenderer`,
-while snap markers, transient tool
-previews, selection boxes, control points, labels, and erase/trim overlays
-delegate to `ViewportOverlay`. World/screen
+while `ViewportToolPreviewRenderer` paints geometry, guide, and Rotate previews;
+`ViewportOverlay` coordinates snap-marker/tool-preview renderers and delegates
+control-point/subdivision drawing. Select and Trim share the same generic
+selection-rectangle drawing, so Trim has no separate box-painting responsibility
+to extract. `ViewportEraseOverlayRenderer` paints erase cursor and candidate
+previews. Snap markers use `ViewportSnapMarkerRenderer`. Tool-status and instruction HUD text delegates to
+`ViewportHudRenderer`. The workplane-projected Arc/Rotate compass delegates to
+`ViewportArcCompassRenderer`. World/screen
 conversion, NURBS evaluation and sampling, scene erase-cache generation,
 snapping, hit-testing, and the point/line/rectangle/circle/polygon/Bezier/NURBS
-creation paths now delegate to named core/service/tool modules. The four
-ellipse construction modes use a dedicated interaction tool with oriented
+creation paths now delegate to named core/service/tool modules. The
+`ViewportRenderFrame` value snapshots camera and viewport size, visible scene
+geometry, object IDs/revisions, layer style, selection/highlight state, and the
+active `ToolPreview`. GPU drawing, depth picking, and control-point display use
+the same frame entries; Scale/Rotate preview geometry is prepared once. The
+`ViewportGeometryCache` prepares camera-independent double-precision
+world-space geometry once per visible object revision. GPU strokes, the depth
+pass, and the CPU fallback reuse that frame-owned value. CPU projection applies
+bounded screen-space simplification and retains the adaptive renderer for
+clipped or unsupported paths. The 1,024-curve synthetic fallback remains much
+slower than native GL, as recorded in the runtime baseline.
+Transformed preview geometry remains transient. The
+viewport now stores one active preview value instead of per-tool copies for
+Line, point construction, Extrude, creation geometry, guides, and HUD text.
+`ViewportHudRenderer` owns tool-status and instruction text/panel painting from
+a typed state snapshot. `ViewportNavigationGizmo` owns navigation-gizmo drawing
+and hit-testing. `ViewportArcCompassRenderer` owns the projected Arc/Rotate
+compass. `ViewportToolPreviewRenderer` owns line, Arc, circle, ellipse,
+rectangle, polygon, point, and Rotate preview drawing from inputs supplied by
+the widget. `ViewportEraseOverlayRenderer` owns erase cursor and candidate
+previews; trim overlay and scene-query work remain for R10 follow-up.
+The four ellipse construction modes use a dedicated interaction tool with oriented
 plane capture, add-on-style numeric controls, and exact rational NURBS
 previews. The four polygon modes now use a dedicated staged controller with
 the add-on's center/corner, center/tangent, corner/corner, and edge
@@ -137,20 +235,112 @@ frame. Connected Line remains the spatial exception and splits its world-space
 chain into planar NURBS runs. The
 `ViewportWidgetApi` exposes typed edit commands and callback registration so
 `MainWindow` routes menu/tool actions without reaching into viewport mutation
-methods or callback storage. `MainWindow` remains responsible for menus,
-controls, preferences, status presentation, and update-session orchestration;
-it contains no geometry algorithms. Committed
-scene storage, snapshot history, and selection storage are owned by core
-modules; the viewport's compatibility references, history coordinator, and
-thin delegate methods remain migration bridges. The duplicate pre-delegation
+methods or callback storage. `ToolShelf` owns the tool-button layout, selection
+group, scroll behavior, and help display; the main window supplies action and
+popup-menu callbacks. `LayersPanel` owns the layer table, filtering, row
+selection, and local enablement; its stable-ID callbacks return layer edits to
+MainWindow, which retains dialogs, command/status handling, and the top layer
+properties toolbar. Shared linetype controls are in `layer_style_widgets.*`.
+`ApplicationSession` owns the active Document,
+SelectionModel, History, and ToolRegistry and publishes document/history/layer
+change notifications. `ProjectController` validates project candidates before
+replacement and records Rhino imports as one history operation.
+`CommandRouter` maps typed application command IDs to registered operation
+handlers. `SelectTool` owns click/Shift-click selection transitions, Select All,
+selection box state, drag targets, and control-point drag state. SelectionModel
+exposes read-only object and primary-ID access; edits use its mutation methods.
+The viewport still supplies ordinary selection hit testing, geometry updates,
+and selection-box presentation; `selection_box_query.*` owns curve/point box
+intersections and the projected-bounds fallback for other shapes. Generic tool
+routing uses explicit handled/unhandled results and reuses one translated event
+payload. The public event-precedence suite covers modal Join/Duplicate priority,
+Select All, Fill/Delete shortcuts, and Arc Escape; screen/camera-dependent
+acquisition and presentation adaptation remain in the widget. `NavigationController` owns Qt camera gestures,
+gizmo action routing, and preset animation; `ViewportNavigationGizmo` owns
+gizmo drawing and hit-testing, while `ViewportTransform` keeps camera math.
+`tests/core_contracts.cpp` now targets the navigation-gizmo module directly;
+`ViewportOverlay` has no navigation-gizmo compatibility methods. `GrabTool` and
+`DuplicateTool` own gesture state and cancellation
+snapshots, while the viewport supplies scene picking and duplicate preview
+geometry. `DuplicateCommand` validates and inserts copies atomically through
+`DocumentTransaction`.
+`SessionSerializer` owns update-session JSON and camera/workplane codecs while
+the viewport applies validated view state. `UpdateController` writes the window
+handoff, builds, and relaunches; `MainWindow` presents status and applies window
+geometry. MainWindow owns menus, action wiring, application-level dialogs,
+file workflow settings, and applying accepted preferences. `preferences_store.*`
+owns preference key persistence and saved-palette migration;
+`PreferencesDialog` owns preference-page construction and returns typed values,
+while `classicad_theme.*` owns the application-wide stylesheet and LayersPanel and ToolShelf own their
+presentation state. MainWindow contains no geometry algorithms. The viewport keeps temporary read-only views while
+borrowing authoritative document and selection state. Generic tool events use
+one translated payload per route and explicit handling results; modal event
+precedence is covered by `viewport_event_precedence` and the public interaction
+suite.
+`Document` now provides O(1) ObjectId lookup, per-object geometry revisions, and
+document runtime revision epochs. `DocumentTransaction` wraps snapshot History
+with affected IDs/categories and rollback. Tool commits, settings, duplicate,
+Join, Explode, Fill, Delete, Mirror, Scale, Rotate, and multi-object Trim/Erase
+use that transaction boundary. Object, shape, and layer accessors are read-only;
+live drag and associative-dimension edits go through a revision-reporting
+geometry callback. Geometry edits advance revisions used by the current
+revision-keyed caches. R5a extracts exact rational curve editing and common UV trim
+containment into `curve_editing.*` and `surface_trim_region.*`; viewport
+rotation and scaling use shared geometry transforms. `nurbs_surface_tessellator.*`
+supplies the clipped wireframe and visible triangles consumed by viewport
+display, depth, hit testing, and Blender proxy generation. Proxy mesh data is
+transient; the exact surface and UV trim curves remain authoritative.
+The duplicate pre-delegation
 rendering, hit-testing, and NURBS-evaluation helper bodies have been removed
 after the extracted modules were verified as the only live implementations.
-Select, Arc, Rotate, Mirror, Trim, and
-Erase have named lifecycle modules registered, while their mature event-state
-implementations remain in the viewport until they can move behind narrower
-ToolContext ports without changing behavior. Erase target interval selection
-still combines viewport interaction state with the service-owned sample cache
-and is a later tool/command extraction concern. Phase 8 now provides a
+NURBS endpoint evaluation now has one implementation in `curve_evaluator.*`,
+and exact curve reversal has one implementation in `curve_editing.*`; Join uses
+these shared operations instead of maintaining private copies.
+Connected planar and world-frame component ordering, degree-1 overlap fusion,
+continuity checks, and tolerance-based gap adjustment now live in
+`curve_join.*`. The viewport supplies its view-derived tolerance and retains
+Join selection, command orchestration, and status presentation.
+Arc, Rotate, Mirror, Scale, Trim, and Erase have named lifecycle modules registered.
+ArcTool owns the Arc mode and interaction-state record, canonical staged input
+points, input reset and initial workplane capture, numeric-input buffer,
+radius/angle/sagitta preview math, chord-length endpoint solving and stage
+completion, angle-snap and plane-lock toggles, one-point sweep unwrapping,
+numeric key/stage decisions, unit-aware radius/angle/chord/sagitta input,
+one/two-point planar endpoint constraints, projected world-axis inference and
+projection through the shared input constraint service, staged click
+transitions, right-click completion/cancellation, XYZ constraint state,
+perpendicular-plane transitions, vertical hysteresis, chord workplane
+construction, and commit construction through ToolContext. ViewportTransform
+supplies the camera projection and view direction. The viewport mirrors Arc
+points for shared preview presentation, supplies screen coordinates and snap
+results, applies returned cursor/snap presentation state, and refreshes the
+cursor after frame changes. RotateTool owns pivot/reference/final-point stage
+acceptance, typed key and right-click decisions, axis/perpendicular-plane
+changes, angular preview/snap, typed-angle calculations, transform commit, and
+state reset; the viewport applies returned cursor/frame updates and configures
+the transaction commit port. MirrorTool owns source IDs, its two-point axis,
+typed axis commit, Escape/right-click cancellation, and the MirrorCommand transaction.
+ScaleTool owns staged point/factor transitions, typed mouse/key dispatch,
+selection-center acceptance, Escape/right-click reset, preview calculations,
+commit decisions, and prompt text; the viewport still resolves the
+view-dependent selection-center geometry. JoinTool owns target validation,
+selection, curve planning, JoinCommand execution, transaction, and selection
+replacement; the viewport supplies scene picking and view-derived endpoint
+tolerance. SubdivisionTool owns section/wheel state, cached equal-arc-length
+marker parameters, key/click decisions, and the SubdivisionCommand
+transaction; the viewport draws those markers. The parameter solver lives in
+`curve_subdivision.*`, while curve ordering, fusion, continuity, and gap
+algorithms live in `curve_join.*`. Qt event handling remains in the adapter.
+`TrimTool` owns box/hover candidate decisions and preview state; `EraseTool`
+owns stroke state and candidate accumulation. Geometry rebuilding, scene
+intersection candidates, and screen-interval calculations live in
+`curve_erase_intervals.*`, `curve_erase_query.*`, and `trim_erase_query.*`;
+`TrimEraseCommand` applies atomic document edits. The widget still supplies
+camera-dependent cursor/scene query inputs and presentation callbacks.
+SelectTool owns selection transitions and drag/box state, while viewport hit
+testing, geometry callbacks, and drawing remain in the view adapter. Erase
+interval selection is delegated to the query service and tool; viewport camera
+projection, candidate visibility, and rendering remain adapters. Phase 8 now provides a
 stable-ID Layers panel through the same typed viewport command boundary:
 visibility and locking filter rendering, sampling, snapping, and editable
 selection; active-layer selection, rename, reorder, and selected-object moves
@@ -163,10 +353,11 @@ the intentional compatibility boundaries in the README and this map.
 Mirror is a copy command implemented through `geometry_transform.*` and the
 viewport's existing two-point constrained-input path: it preserves the source
 objects, reflects their stored points and NURBS control vertices, and selects
-the new copies after commit. The transient reflected geometry is drawn from
-the same transform while the second axis point moves, so the user sees the
-copy before committing it. Its axis therefore receives the same Ortho and
-OSnap behavior as Line without introducing a second snapping model.
+the new copies after commit. `MirrorTool` now owns source IDs and axis points;
+`MirrorCommand` owns copy creation. Transient reflected geometry is still
+presented by the viewport while the second axis point moves. Its axis therefore
+receives the same Ortho and OSnap behavior as Line without introducing a
+second snapping model.
 
 Every planar shape retains local 2D geometry plus an orthonormal `WorkPlaneFrame`
 with a world origin, X/Y axes, and normal. Legacy records still map through
@@ -297,6 +488,9 @@ src/
       curve_factories.*                 line, Bezier, circle, and polycurve factories
       arc_curve_factory.*               signed winding and exact rational three-point arc construction
       curve_evaluator.*                 NURBS evaluation and parameter-domain operations
+      curve_editing.*                   knot insertion, Bezier span extraction/splitting, exact trims
+      curve_join.*                      connected planar/world ordering, line fusion, and gap decisions
+      surface_trim_region.*              prepared UV loops and shared trimmed-region containment
       curve_intersections.*             curve/line intersection calculations
       curve_validation.*                NURBS and geometry validation
       geometry_transform.*               translation, rotation, and control-point transforms
@@ -605,7 +799,154 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 
 | Phase | Status | Notes |
 |---|---|---|
-| 24. Modularity, scalability, and build improvements | Planned; audit/plan complete | Source audit and R0–R12 execution sequence are in `MODULARITY_AND_BUILD_REFACTOR_PLAN.md`. Findings include repeated production compilation, viewport-owned tool state, broad model headers, and inconsistent trim/cache/proxy consumers. No refactoring implementation, fresh benchmark, or test execution was performed for this planning checkpoint. Next: R0 baseline, then R1 shared compilation. Update both ledgers as implementation proceeds. |
+| 24. Modularity, scalability, and build improvements | Complete | CPU fallback and GPU/depth share revision-keyed world samples; projected positive-weight hulls conservatively filter hit, box, and near-snap queries. Runtime snap/pick, CPU/native-GL redraw, one-object invalidation, and snapshot-history latency/RSS measurements are recorded. Matched warm R0/current build scenarios, all ten tests, dependency audit, preset configuration, and offscreen startup are recorded in the companion plan and baseline files. App-only clean/header/one-tool/link timings are not consistently faster; the measured all-target clean improvement and its conditions are stated without a blanket speed claim. |
+
+R12 follow-up checkpoint: added isolated `app-dev` and `full-test` CMake
+configure/build presets and documented them in the README. `cmake --list-presets`
+recognized both; neither ccache nor Ninja is available in this environment.
+The generic selection rectangle is shared by Select and Trim, so no second
+Trim overlay module was introduced. Three no-op and three timestamp-only
+one-tool builds passed; their medians are 3.53 seconds / 85,556 KB and
+4.97 seconds / 201,920 KB respectively. `git diff --check` passed; no tests or
+startup were run. The clean-build and runtime comparisons remain open.
+
+R9 query cleanup: `curve_erase_query.*` now builds visible curve/point
+intersection candidates once and `prepareEraseGeometryCache` reuses that set
+for every selected component. The full build passed with the 268-source audit;
+tests were not run.
+
+R12 app-only clean build: rebuilt the 144 project objects referenced by the
+current application link in 103.01 seconds / 580,984 KB with dependencies warm.
+R1's 104.05-second / 726,188-KB result removed generated autogen files too,
+so this comparison is directional. A following all-target build passed and
+restored test/benchmark links; executables were not run.
+
+R8 Mirror routing correction: generic mouse dispatch now leaves Mirror clicks
+to the adapter that commits on the second axis point. The full build passed;
+public interaction behavior remains unverified because tests were not run.
+
+R8 Subdivision wheel routing: the viewport now passes translated wheel input
+to `SubdivisionTool::handleWheel`, which updates section state and its preview;
+the widget retains event consumption, status, and diagnostics. Full build and
+268-source dependency audit passed. Tests were not run.
+
+R12 latest repeated timing update: after adding the second benchmark executable,
+three no-op builds measured a 3.61-second / 86,640-KB median; three
+timestamp-only one-tool all-target builds measured 5.75 seconds / 201,748 KB.
+The source remained unchanged by those timing cycles. The benchmark preset is
+included in the CMake preset map. All six builds passed; tests and startup were
+not run. See `BUILD_BASELINE.md` for ranges and the target-graph caveat.
+
+R8 Mirror commit ownership: `MirrorTool::dispatchMousePress` now commits the
+existing mirror transaction on the second accepted axis click. The widget
+routes Mirror through typed dispatch and retains only log/presentation
+adaptation; its `handleMirrorPoint` decision adapter was removed. Full build
+and the 268-source dependency audit passed; no tests or startup were run, so
+public click behavior remains pending verification.
+
+R8 Scale click ownership: `ScaleTool::dispatchMousePress` now accepts scale
+click stages and commits direct-click completion; `ScaleDispatchResult`
+provides prompt/log/redraw facts for the viewport adapter. The dedicated Scale
+left-click event branch was removed, while keyboard Enter and factor entry
+remain in the viewport. Full build and the 268-source dependency audit passed;
+tests and startup were not run, so click behavior remains unverified.
+
+R8 Scale factor-key ownership: the typed key dispatch is now virtual, and
+`ScaleTool::dispatchKey` owns Backspace, factor-character normalization and
+entry, factor acceptance, 1D preview activation, and stage-two Enter commit.
+The viewport supplies the resolved preview cursor and retains selection-center
+Enter/Escape plus prompt, logging, snap-reset, and redraw adaptation. Full
+build and the 268-source dependency audit passed; tests and startup were not
+run, so the interaction remains unverified.
+
+R6–R11 contract validation and transform correction: the full CTest run passed
+four of six suites; `viewport_interaction` passed after Mirror and Scale moved
+to typed dispatch. The first `core_contracts` failure was fixture contamination:
+it restored a locked layer before asserting deleted-ID-only pruning. The fixture
+now tests deleted IDs while the layer is editable, then separately asserts
+pruning after the layer becomes locked. The targeted core suite passes.
+`EraseTool::finishStroke()` now preserves its completed screen path and
+candidate IDs until reset, matching the viewport query and presentation
+lifecycle.
+
+Mixed-workplane Join now passes component continuity, world-space hit testing,
+JSON round-trip, and translation checks. The translation contract revealed that
+the extracted `translateShapeGeometry` ignored its input frame for a PolyCurve;
+it now derives world displacement from that frame and moves the parent and each
+component frame origin while preserving local NURBS CVs. Direct Rotate, Scale,
+and Mirror contracts pass. The targeted Trim/Erase suite now fails only the two
+tangent-contact and endpoint-gap Erase assertions recorded in the R0 baseline.
+The full build and 268-source dependency audit passed; `git diff --check` passed;
+offscreen startup reached viewport construction. Remaining: finish Scale's
+selection-center/Escape adapter and Rotate input ownership, complete R7 event
+precedence and R9–R11 review, rerun full CTest after the next behavior
+checkpoint, and collect matched clean-build and representative runtime
+measurements.
+
+R8 typed Scale and Rotate key dispatch: Scale's selection-center Enter and
+Escape decisions now run through `ScaleTool::dispatchKey`. The viewport
+supplies the view-derived bounds center and adapts cancellation, prompt, snap,
+log, and redraw effects; the old widget `handleScalePoint` and `commitScale`
+decision helpers were removed. Right-click cancellation remains in the
+viewport adapter.
+
+`RotateTool` now overrides typed key dispatch and owns Escape reset, typed
+angle/snap decisions, axis/perpendicular-plane decisions, and commit requests.
+The viewport supplies resolved cursor/frame and current snap preferences, then
+applies returned cursor/frame and presentation/commit effects. The widget's
+special `handleRotateKey` route was removed. Added direct Scale center-Enter/
+Escape and Rotate typed 45-degree commit/Escape contracts; these pass. Full
+build and 268-source dependency audit passed. Latest full CTest passed 5/6:
+`box_selection`, `core_contracts`, `viewport_render_contracts`,
+`viewport_interaction` (248.01 s), and `vignola_file`; `trim_seam` still reports
+the two R0 baseline Erase tolerance failures. `git diff --check` passed.
+Remaining: offscreen startup for this checkpoint, R7 event precedence, R8
+right-click cancellation adapters, R9–R11 review, and matched R12 measurements.
+
+R8 transform-tool right-click cancellation: ScaleTool, RotateTool, and
+MirrorTool now consume right-click through typed mouse dispatch and reset their
+own interaction state before finishing the command through ToolContext. The
+viewport's per-tool `cancelScale`, `cancelRotate`, and `cancelMirror` right-click
+branches are removed; shared snap clearing, debug logging, and redraw remain in
+the adapter. Empty source lists still cancel the active tool.
+
+Direct cancellation contracts for all three tools pass. The full build and
+268-source dependency audit pass; `git diff --check` passes. Full CTest passed
+5/6 after this routing change, with `viewport_interaction` passing in 249.02
+seconds; only `trim_seam` reports the same two R0 baseline Erase tolerance
+failures. The subsequent guard cleanup built, targeted contracts passed, and
+the offscreen startup reached viewport construction. Remaining: close R7 event
+precedence and R9–R11 ownership/test review, then collect matched clean-build
+and representative runtime measurements.
+
+R8 Mirror Escape dispatch: Mirror cancellation on Escape now runs through
+`MirrorTool::dispatchKey`; the dedicated widget Escape branch and
+`cancelMirror` helper were removed. The viewport consumes the result and clears
+snap presentation, logs, and redraws. The direct Escape contract passes. Full
+build and the 268-source dependency audit passed; `git diff --check` passed;
+offscreen startup reached viewport construction. The latest full CTest passed
+5/6, with `viewport_interaction` passing in 248.93 seconds; `trim_seam` still
+reports only the two R0 baseline Erase tolerance failures. Remaining: R7 event
+precedence/public cancellation coverage, R9–R11 ownership and test review, and
+matched R12 measurements.
+
+R9 Erase intersection-tolerance checkpoint: `curve_intersections.cpp` now
+deduplicates seed solutions by evaluated contact position, so tangent-only
+contacts no longer produce several near-identical cut parameters.
+`curve_erase_query.*` accepts a view-scaled endpoint proximity value; when exact
+intersections are absent, nearby endpoints on candidate curves project onto
+the source curve and retain the intended erase bounds. The viewport supplies a
+three-pixel world-space threshold; the core intersection routine remains exact.
+Removed incomplete aggregate initialization in `viewport_widget.cpp`, which
+also clears the missing-field warnings for Shape's new geometry members.
+
+The focused Trim/Erase fixture passes both former R0 failures. Full CTest
+passed all six suites in 254.67 seconds (`viewport_interaction`: 248.40 s;
+`vignola_file`: 5.67 s). Full build and the 268-source dependency audit passed;
+`git diff --check` passed; offscreen startup reached viewport construction.
+R9 is complete. Remaining: R6–R8 event/tool review, R10 scene-query/render
+profiling, R11 focused suite organization, and matched R12 build/runtime
+measurements.
 
 ## Required iteration report
 
@@ -619,3 +960,62 @@ At the end of each iteration, report:
 6. the updated progress ledger in this file.
 
 Do not commit or push unless the user explicitly requests it. Do not add unrelated features during the refactor. Keep the architecture understandable enough that a future contributor can continue from this document without reconstructing the design from a giant source file.
+
+#### R7/R8/R10/R11 and R12 measurement checkpoint (2026-10-04)
+
+R7 modal event precedence now preserves Join/Duplicate input across Select All,
+Fill, and Delete; idle Select All remains available. Arc Escape cancellation is
+owned by `ArcTool`, with direct tool and public viewport coverage. New
+`services/hit_testing/projected_curve_bounds.*` safely rejects disjoint
+positive-weight NURBS control hulls in scene hit and box queries and fails open
+when projection is clipped. Synthetic 1,024-curve medians changed from 15.117
+to 0.687 ms for hit testing and 14.671 to 0.524 ms for box selection; these do
+not measure full-frame latency. R11 now has separate command, tool, scene-query,
+render, event, Trim/Erase, serialization, and viewport suites, with no
+production `.cpp` inclusion or private-access macros in tests.
+
+The full CTest run passed 10/10 in 266.52 seconds; the final focused Arc,
+scene-query, and event checks passed 3/3. Full builds passed with the 274-source
+dependency audit. Offscreen startup reached viewport construction before its
+expected five-second timeout. Three-run medians are 3.79 s / 89,588 KB for
+no-op builds, 5.47 s / 201,752 KB for a timestamp-only one-tool rebuild, and
+126.55 s / 580,000 KB for warm clean all-target builds (individual clean times:
+130.64, 126.55, and 125.16 s). Historical clean results use smaller graphs and
+are not a matched comparison. `PERFORMANCE_BASELINE.md` records the scene-query
+comparison and limits it to service timing; no whole-frame CPU/GL improvement
+is claimed.
+
+#### Phase 24 completion audit (2026-10-04)
+
+The previous `Complete` status was reopened after checking the plan's explicit
+R0/R10/R12 requirements against current files. `PERFORMANCE_BASELINE.md` still
+marks snap/pick, CPU/native-GL redraw, single-object invalidation, and undo
+memory/latency as unmeasured, and the current build timings do not match all R0
+scenarios. Source inspection also shows CPU `ViewportRenderer::drawShape`
+resamples committed curves while `ViewportGeometryCache` is used by GPU/depth
+paths. Added `benchmarks/viewport_runtime_benchmark.cpp` to measure those
+service/render/cache/history paths; it is registered only in the opt-in
+benchmark preset. The benchmark and CPU cache integration still need to build,
+run, and pass the applicable rendering/interaction checks. Phase 24 remains in
+progress until those gates and matched build scenarios are evidenced.
+
+#### Final phase 24 completion checkpoint (2026-10-04)
+
+This checkpoint supersedes the historical in-progress audit above. The CPU
+fallback now consumes prepared double-precision world samples from
+`ViewportGeometryCache`; bounded screen-space simplification preserves the
+existing tolerance and clipped/unsupported cases retain the adaptive fallback.
+The existing projected positive-weight control-hull bounds are also used to
+skip disjoint near-snap curve searches. Runtime measurements for snap/pick,
+CPU/native-GL redraw, per-object cache invalidation, and snapshot-history
+latency/RSS are recorded in `PERFORMANCE_BASELINE.md`.
+
+The matched warm R0/current build scenarios, build tradeoffs, and temporary
+baseline harness conditions are recorded in `BUILD_BASELINE.md`. The
+`app-dev`, `full-test`, and `benchmarks` presets configure independently. The
+full clean build and 274-source dependency audit passed; CTest passed 10/10 in
+257.01 seconds; focused render/query tests passed; offscreen startup reached
+viewport construction; and `git diff --check` passed. App-only clean and
+several incremental builds did not consistently improve, while the warm
+all-target clean source build improved substantially. No blanket performance
+claim is made. Phase 24 is complete; nothing was committed or pushed.

@@ -292,7 +292,7 @@ bool BlenderGridRenderer::renderGridLayer(
     const ViewportTransform &transform,
     const QSize &viewportSize,
     qreal devicePixelRatio,
-    const QVector<Shape> &visibleSceneShapes,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
     qreal baseGridStep,
     const BlenderGridAppearance &appearance)
 {
@@ -320,7 +320,7 @@ bool BlenderGridRenderer::renderGridLayer(
 QImage BlenderGridRenderer::render(const ViewportTransform &transform,
                                    const QSize &viewportSize,
                                    qreal devicePixelRatio,
-                                   const QVector<Shape> &visibleSceneShapes,
+                                   const QVector<ViewportRenderObject> &visibleSceneShapes,
                                    qreal baseGridStep,
                                    const BlenderGridAppearance &appearance)
 {
@@ -349,7 +349,7 @@ bool BlenderGridRenderer::renderToCurrentFramebuffer(
     const ViewportTransform &transform,
     const QSize &viewportSize,
     qreal devicePixelRatio,
-    const QVector<Shape> &visibleSceneShapes,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
     qreal baseGridStep,
     const BlenderGridAppearance &appearance)
 {
@@ -500,7 +500,7 @@ bool BlenderGridRenderer::pickScenePoint(
     const ViewportTransform &transform,
     const QSize &viewportSize,
     qreal devicePixelRatio,
-    const QVector<Shape> &visibleSceneShapes,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
     Point3D *worldPoint)
 {
     if (worldPoint == nullptr || viewportSize.isEmpty() ||
@@ -646,17 +646,28 @@ bool BlenderGridRenderer::pickScenePoint(
 }
 
 void BlenderGridRenderer::updateSceneDepthGeometry(
-    const QVector<Shape> &visibleSceneShapes)
+    const QVector<ViewportRenderObject> &visibleSceneShapes)
 {
     const QByteArray depthGeometryKey =
         viewportDepthGeometryCacheKey(visibleSceneShapes);
     if (depthGeometryCacheValid_ && depthGeometryCacheKey_ == depthGeometryKey) {
         return;
     }
-    cachedDepthGeometry_ = buildViewportDepthGeometry(visibleSceneShapes);
+    cachedDepthGeometry_ = buildViewportDepthGeometry(
+        visibleSceneShapes, surfaceTessellationCache_);
     depthGeometryCacheKey_ = depthGeometryKey;
     depthGeometryCacheValid_ = true;
     uploadSceneDepthGeometry(cachedDepthGeometry_);
+}
+
+void BlenderGridRenderer::setSurfaceTessellationCache(
+    const SurfaceTessellationCache *surfaceTessellationCache)
+{
+    if (surfaceTessellationCache_ == surfaceTessellationCache) {
+        return;
+    }
+    surfaceTessellationCache_ = surfaceTessellationCache;
+    depthGeometryCacheValid_ = false;
 }
 
 void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,

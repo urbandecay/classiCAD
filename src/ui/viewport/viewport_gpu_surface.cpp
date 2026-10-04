@@ -84,11 +84,17 @@ void ViewportGpuSurface::setAntiAliasingSamples(int samples)
     update();
 }
 
+void ViewportGpuSurface::setSurfaceTessellationCache(
+    const SurfaceTessellationCache *surfaceTessellationCache)
+{
+    gridRenderer_->setSurfaceTessellationCache(surfaceTessellationCache);
+}
+
 bool ViewportGpuSurface::pickScenePoint(
     const QPointF &screenPosition,
     const ViewportTransform &transform,
     const QSize &viewportSize,
-    const QVector<Shape> &visibleSceneShapes,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
     Point3D *worldPoint)
 {
     if (!isValid() || worldPoint == nullptr) {
@@ -100,6 +106,28 @@ bool ViewportGpuSurface::pickScenePoint(
         visibleSceneShapes, worldPoint);
     doneCurrent();
     return picked;
+}
+
+bool ViewportGpuSurface::pickScenePoint(
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    const QVector<Shape> &visibleSceneShapes,
+    Point3D *worldPoint)
+{
+    QVector<ViewportRenderObject> depthShapes;
+    depthShapes.reserve(visibleSceneShapes.size());
+    for (const Shape &shape : visibleSceneShapes) {
+        ViewportRenderObject entry;
+        entry.shape = shape;
+        entry.cacheable = false;
+        depthShapes.append(std::move(entry));
+    }
+    return pickScenePoint(screenPosition,
+                          transform,
+                          viewportSize,
+                          depthShapes,
+                          worldPoint);
 }
 
 void ViewportGpuSurface::paintGL()

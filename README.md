@@ -45,6 +45,36 @@ cmake --build build
 
 The CMake file accepts either Qt 6 or Qt 5 Widgets, preferring Qt 6 when both are available.
 
+For an application-only build, use the isolated `app-dev` preset. To configure
+and build the registered regression-test executables, use `full-test`; run its
+CTest preset when you want to execute them. The `benchmarks` preset builds the
+surface, erase-query, viewport query, and viewport runtime benchmarks. Each preset
+writes under a separate `build/` subdirectory and leaves an existing `build/`
+configuration untouched.
+
+```sh
+cmake --preset app-dev
+cmake --build --preset app-dev
+
+cmake --preset full-test
+cmake --build --preset full-test
+ctest --preset full-test
+
+cmake --preset benchmarks
+cmake --build --preset benchmarks
+./build/benchmarks/classicad_erase_scene_query_benchmark
+./build/benchmarks/classicad_viewport_query_benchmark
+QT_QPA_PLATFORM=xcb ./build/benchmarks/classicad_viewport_runtime_benchmark
+QT_QPA_PLATFORM=offscreen ./build/benchmarks/classicad_viewport_runtime_benchmark --history-only 1024
+```
+
+The runtime benchmark reports snap/pick and screen-sampling costs, CPU fallback
+and cached native-GL scene redraw, per-object prepared-geometry invalidation,
+and snapshot-history timing/RSS. Run it with the XCB platform for native OpenGL;
+the offscreen platform measures the CPU path. GPU timings include the committed
+scene renderer but exclude the grid and Qt overlays. `--history-only N` runs one
+history scene size in a fresh process so its peak-RSS delta is interpretable.
+
 ## Blender-inspired architecture
 
 Blender’s source separates the screen into areas and regions, builds controls through layout objects, and routes actions through operators. classiCAD will use the same broad separation while keeping the implementation smaller:
@@ -58,21 +88,31 @@ The current source layout follows that boundary:
 
 ```text
 src/main.cpp                 application entry point
-src/core/geometry/*          shared NurbsCurve2D and NurbsSurface3D storage, factories, evaluation, validation, and transforms
-src/core/model.*             compatibility shape records, factories, and legacy helpers
-src/core/document/*          document, layers, scene objects, and stable selection IDs
-src/core/history/*            document-level undo/redo snapshots
-src/core/serialization/*     versioned document, layer, and object save/restore
-src/services/*                viewport transforms, sampling, hit-testing, and snapping
+src/app/*                     application session, commands, project, and update controllers
+src/core/geometry/*           shared NURBS storage, factories, evaluation, validation, editing, and transforms
+src/core/model.h              temporary compatibility umbrella; implementations live with their owning modules
+src/core/document/*           document, layers, scene objects, settings, and stable selection IDs
+src/core/history/*            document-level undo/redo and edit transactions
+src/core/commands/*           transactional document operations
+src/core/serialization/*      versioned document, project, session, and Rhino interchange
+src/services/*                viewport transforms, sampling, hit-testing, query bounds, and snapping
 src/tools/*                   named non-Qt interaction tool contracts and modules
 src/core/debug_log.*         application logging
 src/ui/input_helpers.*       Qt event and icon helpers
 src/ui/viewport_widget_api.h typed viewport settings, command, status, and callback boundary
 src/ui/viewport_widget.cpp   viewport event routing, selection, editing, and lifecycle state
-src/ui/viewport/*             OpenGL 3D grid, geometry renderer, and transient overlays
-src/ui/main_window.*         menus, tool shelf, preferences, and window wiring
-tests/trim_seam.cpp          focused geometry/editing regression coverage
-tests/core_contracts.cpp     core, service, tool, and session-contract coverage
+src/ui/viewport/*             camera controller, OpenGL grid/scene, and typed transient renderers
+src/ui/panels/*               tool shelf, layers, preferences, and document-grid panels
+src/ui/main_window.*          menus, app composition, and window wiring
+tests/arc_tool_contracts.cpp direct Arc tool input and cancellation contracts
+tests/command_contracts.cpp  direct transactional document-command contracts
+tests/scene_query_contracts.cpp projected control-hull and scene-query coverage
+tests/trim_seam.cpp          focused Trim/Erase and seam regression coverage
+tests/core_contracts.cpp     core, geometry, service, tool, and session contracts
+tests/viewport_render_contracts.cpp layer line-style and GPU stroke contracts
+tests/viewport_event_precedence.cpp public Qt event-routing regressions
+tests/viewport_interaction.cpp Qt viewport input, rendering, and round-trip coverage
+tests/vignola_file.cpp       Blender-native save/open and Rhino import coverage
 ```
 
 The window talks to the viewport through `ViewportWidgetApi`: menu/edit actions

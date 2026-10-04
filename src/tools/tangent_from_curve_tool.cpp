@@ -1,6 +1,13 @@
 #include "tangent_from_curve_tool.h"
 
+#include "core/geometry/shape_mapping.h"
+#include "core/document/document.h"
+#include "core/document/selection_model.h"
+#include "services/hit_testing/curve_hit_tester.h"
+#include "services/snapping/snap_engine.h"
+
 #include "tool_context.h"
+#include "services/viewport/viewport_transform.h"
 
 #include <cmath>
 #include <limits>

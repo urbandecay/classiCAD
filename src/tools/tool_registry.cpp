@@ -19,6 +19,7 @@
 #include "rectangle_tool.h"
 #include "rotate_tool.h"
 #include "select_tool.h"
+#include "scale_tool.h"
 #include "tangent_from_curve_tool.h"
 #include "trim_tool.h"
 #include "two_curve_line_tool.h"
@@ -65,6 +66,7 @@ ToolRegistry::ToolRegistry()
     add(std::make_unique<CurveDrawingTool>(ToolId::CurveInterpolate));
     add(std::make_unique<CurveDrawingTool>(ToolId::CurveFreehand));
     add(std::make_unique<RotateTool>());
+    add(std::make_unique<ScaleTool>());
     add(std::make_unique<MirrorTool>());
     add(std::make_unique<TrimTool>());
     add(std::make_unique<EraseTool>());

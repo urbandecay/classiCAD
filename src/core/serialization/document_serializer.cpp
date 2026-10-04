@@ -1,6 +1,6 @@
 #include "document_serializer.h"
 
-#include "core/model.h"
+#include "core/serialization/shape_json_codec.h"
 
 #include <QJsonArray>
 #include <QJsonObject>

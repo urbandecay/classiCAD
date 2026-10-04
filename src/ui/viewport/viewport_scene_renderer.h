@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #pragma once
 
-#include "core/model.h"
+#include "core/document/object_id.h"
+#include "core/document/shape.h"
+#include "services/snapping/snap_types.h"
 #include "services/viewport/viewport_transform.h"
 
 #include <QColor>
@@ -13,6 +15,7 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
+#include <QSharedPointer>
 #include <QSize>
 #include <QVector>
 #include <QVector3D>
@@ -23,6 +26,9 @@
 
 namespace classiCAD {
 
+struct ViewportDepthGeometry;
+struct ViewportRenderObject;
+
 enum class ViewportSceneLineStyle : int {
     Solid = 0,
     Dashed = 1,
@@ -31,6 +37,24 @@ enum class ViewportSceneLineStyle : int {
 };
 
 struct ViewportSceneStroke {
+    ViewportSceneStroke() = default;
+    ViewportSceneStroke(const Shape *strokeShape,
+                        const QColor &strokeColor,
+                        float strokeWidth,
+                        bool isControlGuide,
+                        float markerDiameter = 0.0f,
+                        bool isDashed = false,
+                        bool outlinesPoint = false)
+        : shape(strokeShape)
+        , color(strokeColor)
+        , width(strokeWidth)
+        , controlGuide(isControlGuide)
+        , pointDiameter(markerDiameter)
+        , dashed(isDashed)
+        , pointOutline(outlinesPoint)
+    {
+    }
+
     const Shape *shape = nullptr;
     QColor color;
     float width = 2.0f;
@@ -42,6 +66,10 @@ struct ViewportSceneStroke {
     float linePatternScale = 1.0f;
     std::array<float, 8> linePatternSegmentsWidthUnits{};
     int linePatternSegmentCount = 0;
+    ObjectId objectId = ObjectId::invalid();
+    quint64 geometryRevision = 0;
+    bool cacheableGeometry = false;
+    QSharedPointer<const ViewportDepthGeometry> preparedDepthGeometry;
 };
 
 struct ViewportSceneStrokePattern {
@@ -51,6 +79,13 @@ struct ViewportSceneStrokePattern {
     std::array<float, 8> segmentsPixels{};
     int segmentCount = 0;
 };
+
+// Resolve whether an object can use the native scene stroke renderer and
+// populate its committed stroke/control-guide values when it can.
+bool makeViewportSceneStrokes(const ViewportRenderObject &object,
+                              bool rendererAvailable,
+                              ViewportSceneStroke *sceneStroke,
+                              ViewportSceneStroke *controlGuide = nullptr);
 
 // Keep the legacy dashed flag and control-guide strokes dashed while allowing
 // scene callers to select the explicit solid/dashed/dotted line style.

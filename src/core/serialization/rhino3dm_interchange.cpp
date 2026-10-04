@@ -1,5 +1,7 @@
 #include "rhino3dm_interchange.h"
 
+#include "core/geometry/shape_mapping.h"
+
 #include "core/document/document.h"
 
 #include <opennurbs.h>

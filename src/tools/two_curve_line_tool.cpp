@@ -1,8 +1,14 @@
 #include "two_curve_line_tool.h"
 
 #include "core/geometry/curve_evaluator.h"
-#include "core/model.h"
+#include "core/geometry/curve_construction.h"
+#include "core/geometry/shape_mapping.h"
+#include "core/document/document.h"
+#include "core/document/selection_model.h"
+#include "services/hit_testing/curve_hit_tester.h"
+#include "services/snapping/snap_engine.h"
 #include "tool_context.h"
+#include "services/viewport/viewport_transform.h"
 
 #include <algorithm>
 #include <array>

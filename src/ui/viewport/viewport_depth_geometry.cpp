@@ -2,8 +2,11 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "viewport_depth_geometry.h"
 
+#include "core/geometry/shape_mapping.h"
+
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_surface_tessellator.h"
 #include "services/sampling/curve_sampler.h"
 
 #include <QCryptographicHash>
@@ -22,44 +25,6 @@ QVector3D asVector(const Point3D &point)
     return {static_cast<float>(point.x),
             static_cast<float>(point.y),
             static_cast<float>(point.z)};
-}
-
-bool parameterInsidePolygon(const QPointF &point,
-                            const QVector<QPointF> &polygon)
-{
-    bool inside = false;
-    for (int current = 0, previous = polygon.size() - 1;
-         current < polygon.size();
-         previous = current++) {
-        const QPointF &a = polygon[current];
-        const QPointF &b = polygon[previous];
-        const bool crosses = (a.y() > point.y()) != (b.y() > point.y());
-        if (crosses && point.x() < (b.x() - a.x()) *
-                                         (point.y() - a.y()) /
-                                         (b.y() - a.y()) + a.x()) {
-            inside = !inside;
-        }
-    }
-    return inside;
-}
-
-bool parameterInsideSurfaceTrim(const QPointF &parameter,
-                                const Shape::NurbsSurface3D &surface,
-                                const QVector<QVector<QPointF>> &trimPolygons)
-{
-    if (trimPolygons.isEmpty()) {
-        return true;
-    }
-    bool insideOuter = false;
-    for (int index = 0; index < trimPolygons.size(); ++index) {
-        const bool inside = parameterInsidePolygon(parameter, trimPolygons[index]);
-        if (!surface.trimLoops[index].isHole && inside) {
-            insideOuter = true;
-        } else if (surface.trimLoops[index].isHole && inside) {
-            return false;
-        }
-    }
-    return insideOuter;
 }
 
 struct OpaqueImageRun {
@@ -205,9 +170,9 @@ void appendPictureDepthSurface(const Shape &shape,
 
 void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
                               const WorkPlaneFrame &frame,
-                              QVector<QVector3D> *vertices)
+                              ViewportDepthGeometry *geometry)
 {
-    if (!validateNurbsCurve(curve)) {
+    if (geometry == nullptr || !validateNurbsCurve(curve)) {
         return;
     }
 
@@ -237,7 +202,7 @@ void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
         if (spanEnd <= spanStart) {
             continue;
         }
-        QVector3D previousPoint;
+        Point3D previousWorldPoint;
         bool hasPreviousPoint = false;
         for (int sample = 0; sample <= samplesForEachSpan; ++sample) {
             const qreal fraction = static_cast<qreal>(sample) /
@@ -249,88 +214,67 @@ void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
                 return;
             }
             const Point3D world = workPlaneFramePointToWorld(localPoint, frame);
-            const QVector3D worldPoint = asVector(world);
             if (hasPreviousPoint) {
-                vertices->append(previousPoint);
-                vertices->append(worldPoint);
+                geometry->lineVertices.append(asVector(previousWorldPoint));
+                geometry->lineVertices.append(asVector(world));
+                geometry->preciseLineVertices.append(previousWorldPoint);
+                geometry->preciseLineVertices.append(world);
             }
-            previousPoint = worldPoint;
+            previousWorldPoint = world;
             hasPreviousPoint = true;
         }
     }
 }
 
 void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
-                                 ViewportDepthGeometry *geometry)
+                                 ViewportDepthGeometry *geometry,
+                                 const SurfaceTessellationCache *cache = nullptr,
+                                 ObjectId objectId = ObjectId::invalid(),
+                                 quint64 geometryRevision = 0)
 {
-    if (geometry == nullptr || !validateNurbsSurface(surface)) {
+    if (geometry == nullptr) {
         return;
     }
-    qreal uStart = 0.0;
-    qreal uEnd = 0.0;
-    qreal vStart = 0.0;
-    qreal vEnd = 0.0;
-    if (!nurbsSurfaceParameterDomains(surface,
-                                      &uStart,
-                                      &uEnd,
-                                      &vStart,
-                                      &vEnd)) {
+    PreparedNurbsSurfaceTessellation localTessellation;
+    QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
+    const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+    if (cache != nullptr && objectId.isValid()) {
+        cachedTessellation = cache->acquire(objectId, geometryRevision, surface);
+        tessellation = cachedTessellation.data();
+    } else if (localTessellation.prepare(surface)) {
+        tessellation = &localTessellation;
+    }
+    if (tessellation == nullptr) {
         return;
     }
-
-    constexpr int gridCount = 48;
-    QVector<QVector<QPointF>> trimPolygons;
-    trimPolygons.reserve(surface.trimLoops.size());
-    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
-        trimPolygons.append(sampleNurbsSurfaceTrimLoop(loop, 256));
+    int wireSegmentCount = 0;
+    for (const PreparedNurbsSurfaceTessellation::Polyline &polyline :
+         tessellation->wireframe()) {
+        wireSegmentCount += std::max(
+            0, static_cast<int>(polyline.points.size()) - 1);
     }
-    QVector<QVector3D> grid;
-    QVector<bool> insideTrim;
-    grid.resize((gridCount + 1) * (gridCount + 1));
-    insideTrim.resize(grid.size());
-    for (int uIndex = 0; uIndex <= gridCount; ++uIndex) {
-        const qreal u = uStart + (uEnd - uStart) * uIndex / gridCount;
-        for (int vIndex = 0; vIndex <= gridCount; ++vIndex) {
-            const qreal v = vStart + (vEnd - vStart) * vIndex / gridCount;
-            const int index = uIndex * (gridCount + 1) + vIndex;
-            insideTrim[index] = parameterInsideSurfaceTrim(
-                QPointF(u, v), surface, trimPolygons);
-            Point3D point;
-            if (!evaluateNurbsSurfacePoint(surface, u, v, &point)) {
-                return;
-            }
-            grid[index] = asVector(point);
+    geometry->lineVertices.reserve(geometry->lineVertices.size() +
+                                   wireSegmentCount * 2);
+    geometry->preciseLineVertices.reserve(
+        geometry->preciseLineVertices.size() + wireSegmentCount * 2);
+    for (const PreparedNurbsSurfaceTessellation::Polyline &polyline :
+         tessellation->wireframe()) {
+        for (int index = 1; index < polyline.points.size(); ++index) {
+            const Point3D &start = polyline.points[index - 1];
+            const Point3D &end = polyline.points[index];
+            geometry->lineVertices.append(asVector(start));
+            geometry->lineVertices.append(asVector(end));
+            geometry->preciseLineVertices.append(start);
+            geometry->preciseLineVertices.append(end);
         }
     }
-
     geometry->surfaceVertices.reserve(
-        geometry->surfaceVertices.size() + gridCount * gridCount * 6);
-    for (int uIndex = 0; uIndex < gridCount; ++uIndex) {
-        for (int vIndex = 0; vIndex < gridCount; ++vIndex) {
-            const int i00 = uIndex * (gridCount + 1) + vIndex;
-            const int i10 = (uIndex + 1) * (gridCount + 1) + vIndex;
-            const int i11 = (uIndex + 1) * (gridCount + 1) + vIndex + 1;
-            const int i01 = uIndex * (gridCount + 1) + vIndex + 1;
-            const QPointF parameterCenter(
-                uStart + (uEnd - uStart) * (uIndex + 0.5) / gridCount,
-                vStart + (vEnd - vStart) * (vIndex + 0.5) / gridCount);
-            if (!insideTrim[i00] || !insideTrim[i10] ||
-                !insideTrim[i11] || !insideTrim[i01] ||
-                !parameterInsideSurfaceTrim(parameterCenter,
-                                            surface,
-                                            trimPolygons)) {
-                continue;
-            }
-            const QVector3D &p00 = grid[i00];
-            const QVector3D &p10 = grid[i10];
-            const QVector3D &p11 = grid[i11];
-            const QVector3D &p01 = grid[i01];
-            geometry->surfaceVertices.append(p00);
-            geometry->surfaceVertices.append(p10);
-            geometry->surfaceVertices.append(p11);
-            geometry->surfaceVertices.append(p00);
-            geometry->surfaceVertices.append(p11);
-            geometry->surfaceVertices.append(p01);
+        geometry->surfaceVertices.size() + tessellation->triangles().size() * 3);
+    for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
+         tessellation->triangles()) {
+        for (const int vertexIndex : triangle) {
+            geometry->surfaceVertices.append(
+                asVector(tessellation->vertices()[vertexIndex]));
         }
     }
 }
@@ -359,7 +303,10 @@ namespace {
 
 void appendShapeDepthGeometry(const Shape &shape,
                               CurveSampler &sampler,
-                              ViewportDepthGeometry &geometry)
+                              ViewportDepthGeometry &geometry,
+                              const SurfaceTessellationCache *surfaceCache = nullptr,
+                              ObjectId objectId = ObjectId::invalid(),
+                              quint64 geometryRevision = 0)
 {
         if (isDimensionGeometryType(shape.geometryType)) {
             // Dimension text and leaders are viewport annotations, not scene
@@ -381,7 +328,11 @@ void appendShapeDepthGeometry(const Shape &shape,
             return;
         }
         if (shape.geometryType == GeometryType::NurbsSurface) {
-            appendNurbsSurfaceDepthMesh(shape.nurbsSurface, &geometry);
+            appendNurbsSurfaceDepthMesh(shape.nurbsSurface,
+                                        &geometry,
+                                        surfaceCache,
+                                        objectId,
+                                        geometryRevision);
             return;
         }
 
@@ -391,7 +342,7 @@ void appendShapeDepthGeometry(const Shape &shape,
                 shape.geometryType == GeometryType::PolyCurve
                     ? shapeComponentWorkPlaneFrame(shape, index)
                     : shapeWorkPlaneFrame(shape);
-            appendCurveDepthVertices(curves[index], frame, &geometry.lineVertices);
+            appendCurveDepthVertices(curves[index], frame, &geometry);
         }
 }
 
@@ -414,6 +365,50 @@ ViewportDepthGeometry buildViewportDepthGeometry(
         appendShapeDepthGeometry(shape, sampler, geometry);
     }
 
+    return geometry;
+}
+
+ViewportDepthGeometry buildViewportDepthGeometry(
+    const ViewportRenderObject &sceneObject,
+    const SurfaceTessellationCache *surfaceTessellationCache)
+{
+    ViewportDepthGeometry geometry;
+    CurveSampler sampler;
+    const bool useCache = sceneObject.cacheable &&
+                          sceneObject.objectId.isValid() &&
+                          sceneObject.geometryRevision != 0 &&
+                          surfaceTessellationCache != nullptr;
+    appendShapeDepthGeometry(sceneObject.shape,
+                             sampler,
+                             geometry,
+                             useCache ? surfaceTessellationCache : nullptr,
+                             useCache ? sceneObject.objectId : ObjectId::invalid(),
+                             useCache ? sceneObject.geometryRevision : 0);
+    return geometry;
+}
+
+ViewportDepthGeometry buildViewportDepthGeometry(
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
+    const SurfaceTessellationCache *surfaceTessellationCache)
+{
+    ViewportDepthGeometry geometry;
+    for (const ViewportRenderObject &entry : visibleSceneShapes) {
+        if (entry.preparedDepthGeometry) {
+            const ViewportDepthGeometry &prepared = *entry.preparedDepthGeometry;
+            geometry.lineVertices += prepared.lineVertices;
+            geometry.preciseLineVertices += prepared.preciseLineVertices;
+            geometry.pointVertices += prepared.pointVertices;
+            geometry.surfaceVertices += prepared.surfaceVertices;
+            continue;
+        }
+
+        const ViewportDepthGeometry prepared =
+            buildViewportDepthGeometry(entry, surfaceTessellationCache);
+        geometry.lineVertices += prepared.lineVertices;
+        geometry.preciseLineVertices += prepared.preciseLineVertices;
+        geometry.pointVertices += prepared.pointVertices;
+        geometry.surfaceVertices += prepared.surfaceVertices;
+    }
     return geometry;
 }
 
@@ -463,6 +458,11 @@ QByteArray viewportDepthGeometryCacheKey(
         for (const double knot : surface.knotsV) {
             stream << knot;
         }
+        stream << qint32(surface.trimLoops.size());
+        for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
+            stream << quint8(loop.isHole ? 1 : 0);
+            writeCurve(stream, loop.curve);
+        }
         stream << qint32(shape.components.size());
         for (int index = 0; index < shape.components.size(); ++index) {
             const Shape::NurbsCurve2D &curve = shape.components[index];
@@ -490,6 +490,33 @@ QByteArray viewportDepthGeometryCacheKey(
                << qint64(shape.pictureImage.cacheKey());
     }
     return QCryptographicHash::hash(payload, QCryptographicHash::Sha256);
+}
+
+QByteArray viewportDepthGeometryCacheKey(
+    const QVector<ViewportRenderObject> &visibleSceneShapes)
+{
+    bool allCacheable = true;
+    QByteArray payload;
+    QDataStream stream(&payload, QIODevice::WriteOnly);
+    stream << qint32(visibleSceneShapes.size());
+    for (const ViewportRenderObject &entry : visibleSceneShapes) {
+        if (!entry.cacheable || !entry.objectId.isValid() ||
+            entry.geometryRevision == 0) {
+            allCacheable = false;
+            break;
+        }
+        stream << quint64(entry.objectId.value()) << entry.geometryRevision;
+    }
+    if (allCacheable) {
+        return QCryptographicHash::hash(payload, QCryptographicHash::Sha256);
+    }
+
+    QVector<Shape> shapes;
+    shapes.reserve(visibleSceneShapes.size());
+    for (const ViewportRenderObject &entry : visibleSceneShapes) {
+        shapes.append(entry.shape);
+    }
+    return viewportDepthGeometryCacheKey(shapes);
 }
 
 } // namespace classiCAD

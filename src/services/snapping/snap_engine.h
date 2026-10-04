@@ -1,11 +1,14 @@
 #pragma once
 
-#include "services/viewport/viewport_transform.h"
+#include "core/document/shape.h"
+#include "snap_types.h"
 
-#include "core/document/document.h"
-#include "core/model.h"
+#include <QSize>
 
 namespace classiCAD {
+
+class Document;
+class ViewportTransform;
 
 struct SnapSettings {
     bool enabled = false;

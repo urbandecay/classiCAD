@@ -1,11 +1,14 @@
 #pragma once
 
-#include "services/viewport/viewport_transform.h"
+#include "core/document/shape.h"
+#include "curve_sample_data.h"
 
-#include "core/document/document.h"
-#include "core/model.h"
+#include <QSize>
 
 namespace classiCAD {
+
+class Document;
+class ViewportTransform;
 
 class CurveSampler final {
 public:

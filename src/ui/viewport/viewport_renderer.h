@@ -1,8 +1,9 @@
 #pragma once
 
 #include "core/document/object_id.h"
-#include "core/model.h"
+#include "core/document/shape.h"
 #include "services/hit_testing/curve_hit_tester.h"
+#include "services/sampling/surface_tessellation_cache.h"
 #include "services/viewport/viewport_transform.h"
 #include "blender_grid_appearance.h"
 
@@ -12,10 +13,13 @@
 
 namespace classiCAD {
 
+struct ViewportDepthGeometry;
+
 class ViewportRenderer {
 public:
     ViewportRenderer(const ViewportTransform &transform,
-                     const CurveHitTester &curveHitTester);
+                     const CurveHitTester &curveHitTester,
+                     const SurfaceTessellationCache *surfaceTessellationCache = nullptr);
 
     void drawGrid(QPainter &painter, const QSize &viewportSize) const;
     void drawOrigin(QPainter &painter, const QSize &viewportSize) const;
@@ -29,7 +33,10 @@ public:
                    bool drawPreviewPoints = true,
                    const QColor &layerColor = QColor(),
                    const QString &layerLineType = QString(),
-                   qreal layerLineWeightMm = 0.0) const;
+                   qreal layerLineWeightMm = 0.0,
+                   ObjectId shapeObjectId = ObjectId::invalid(),
+                   quint64 geometryRevision = 0,
+                   const ViewportDepthGeometry *preparedGeometry = nullptr) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
@@ -40,7 +47,10 @@ public:
                         const QSize &viewportSize) const;
     void drawNurbsSurface(QPainter &painter,
                           const Shape::NurbsSurface3D &surface,
-                          const QSize &viewportSize) const;
+                          const QSize &viewportSize,
+                          ObjectId objectId = ObjectId::invalid(),
+                          quint64 geometryRevision = 0,
+                          const ViewportDepthGeometry *preparedGeometry = nullptr) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,
@@ -76,6 +86,10 @@ private:
     bool evaluateNurbsPoint(const Shape::NurbsCurve2D &curve,
                             qreal parameter,
                             QPointF *point) const;
+    bool drawPreparedCurveSegments(
+        QPainter &painter,
+        const ViewportDepthGeometry &preparedGeometry,
+        const QSize &viewportSize) const;
     bool subdivisionCurve(const Shape &shape,
                           Shape::NurbsCurve2D *curve) const;
     QVector<QPointF> rectangleVertices(const Shape &shape) const;
@@ -87,6 +101,7 @@ private:
 
     const ViewportTransform &transform_;
     const CurveHitTester &curveHitTester_;
+    const SurfaceTessellationCache *surfaceTessellationCache_ = nullptr;
     bool smoothCurveDisplay_ = true;
     bool architecturalDimensionFont_ = false;
     BlenderGridAppearance gridAppearance_;

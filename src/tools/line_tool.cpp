@@ -1,5 +1,11 @@
 #include "line_tool.h"
+
+#include "core/geometry/curve_construction.h"
+#include "core/document/document.h"
+#include "services/input/input_constraint_service.h"
+#include "services/snapping/snap_engine.h"
 #include "tool_context.h"
+#include "services/viewport/viewport_transform.h"
 #include <algorithm>
 #include <cmath>
 
@@ -19,15 +25,6 @@ Point3D normalized(const Point3D &v)
     const qreal magnitude = length(v);
     return magnitude > 1.0e-12
         ? Point3D{v.x / magnitude, v.y / magnitude, v.z / magnitude} : Point3D{};
-}
-Point3D axisDirection(int key)
-{
-    switch (key) {
-    case Qt::Key_X: return {1.0, 0.0, 0.0};
-    case Qt::Key_Y: return {0.0, 1.0, 0.0};
-    case Qt::Key_Z: return {0.0, 0.0, 1.0};
-    default: return {};
-    }
 }
 bool isLengthCharacter(const QChar character)
 {
@@ -389,32 +386,11 @@ ToolStatus LineTool::status() const { return status_; }
 Point3D LineTool::inferredAxisDirection(const ToolInput &input,
                                        const ToolContext &context) const
 {
-    QPointF referenceScreen;
-    const Point3D &reference = points_.back();
-    if (!context.viewportTransform().worldPointToScreen(reference, input.viewportSize,
-                                                        &referenceScreen)) return {};
-    const QPointF delta = input.screenPosition - referenceScreen;
-    const qreal screenLength = std::hypot(delta.x(), delta.y());
-    if (screenLength <= 1.0) return {};
-    qreal best = std::cos(6.0 * 3.14159265358979323846 / 180.0);
-    Point3D direction;
-    for (const int key : {Qt::Key_X, Qt::Key_Y, Qt::Key_Z}) {
-        const Point3D axis = axisDirection(key);
-        QPointF projected;
-        if (!context.viewportTransform().worldPointToScreen(
-                {reference.x + axis.x, reference.y + axis.y, reference.z + axis.z},
-                input.viewportSize, &projected)) continue;
-        const QPointF screenAxis = projected - referenceScreen;
-        const qreal magnitude = std::hypot(screenAxis.x(), screenAxis.y());
-        if (magnitude <= 1.0e-8) continue;
-        const qreal alignment = std::abs(QPointF::dotProduct(delta, screenAxis) /
-                                         (screenLength * magnitude));
-        if (alignment >= best) {
-            best = alignment;
-            direction = axis;
-        }
-    }
-    return direction;
+    return InputConstraintService::inferProjectedWorldAxis(
+        points_.back(),
+        input.screenPosition,
+        context.viewportTransform(),
+        input.viewportSize);
 }
 Point3D LineTool::resolveCursorPoint(const ToolInput &input, const ToolContext &context)
 {
@@ -436,7 +412,10 @@ Point3D LineTool::resolveCursorPoint(const ToolInput &input, const ToolContext &
             input.screenPosition, input.viewportSize, drawingFrame_, &point)
             ? workPlaneFramePointToWorld(point, drawingFrame_) : reference;
     }
-    Point3D direction = normalLock_ ? drawingFrame_.normal : axisDirection(constraintAxisKey_);
+    Point3D direction = normalLock_
+                            ? drawingFrame_.normal
+                            : InputConstraintService::worldAxisDirection(
+                                  constraintAxisKey_);
     if (input.modifiers.testFlag(Qt::ShiftModifier)) {
         if (!shiftLockActive_) {
             if (length(direction) <= 1.0e-12) direction = inferredAxisDirection(input, context);
@@ -455,14 +434,18 @@ Point3D LineTool::resolveCursorPoint(const ToolInput &input, const ToolContext &
     direction = normalized(direction);
     Point3D axisPoint;
     if (!geometrySnap &&
-        context.viewportTransform().screenToWorldAxis(input.screenPosition, input.viewportSize,
-                                                       reference, direction, &axisPoint)) {
+        InputConstraintService::worldPointOnScreenAxis(
+            input.screenPosition,
+            input.viewportSize,
+            reference,
+            direction,
+            context.viewportTransform(),
+            &axisPoint)) {
         return axisPoint;
     }
-    const qreal distance = dot(subtract(source, reference), direction);
-    return {reference.x + direction.x * distance,
-            reference.y + direction.y * distance,
-            reference.z + direction.z * distance};
+    return InputConstraintService::projectOntoWorldAxis(source,
+                                                        reference,
+                                                        direction);
 }
 void LineTool::applyTypedLengthToCursor(ToolContext &context)
 {
@@ -477,7 +460,8 @@ void LineTool::applyTypedLengthToCursor(ToolContext &context)
     const Point3D reference = points_.back();
     Point3D direction = normalized(subtract(cursorPoint_, reference));
     if (length(direction) <= 1.0e-12) {
-        direction = axisDirection(constraintAxisKey_);
+        direction = InputConstraintService::worldAxisDirection(
+            constraintAxisKey_);
         if (length(direction) <= 1.0e-12 && normalLock_) {
             direction = drawingFrame_.normal;
         }

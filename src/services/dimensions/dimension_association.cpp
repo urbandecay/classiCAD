@@ -1,6 +1,11 @@
 #include "dimension_association.h"
 
+#include "core/document/document.h"
+#include "core/geometry/shape_mapping.h"
+
 #include "core/geometry/curve_evaluator.h"
+#include "services/sampling/curve_sampler.h"
+#include "services/viewport/viewport_transform.h"
 
 #include <algorithm>
 #include <cmath>
@@ -388,34 +393,40 @@ void updateAssociativeDimensions(Document &document,
                                  const CurveSampler &curveSampler)
 {
     for (int index = 0; index < document.size(); ++index) {
-        Shape &dimension = document[index];
-        if (!isDimensionGeometryType(dimension.geometryType) ||
-            dimension.dimensionAnchors.isEmpty()) {
-            continue;
-        }
-        for (int anchorIndex = 0;
-             anchorIndex < dimension.dimensionAnchors.size() &&
-             anchorIndex < dimension.points.size();
-             ++anchorIndex) {
-            QPointF resolvedPoint;
-            if (resolveDimensionAnchor(document,
-                                       dimension.dimensionAnchors[anchorIndex],
-                                       curveSampler,
-                                       &resolvedPoint)) {
-                dimension.points[anchorIndex] = resolvedPoint;
-            }
-        }
-        if (dimension.geometryType == GeometryType::LinearDimension &&
-            dimension.dimensionOffsetValid && dimension.points.size() >= 3) {
-            const QPointF delta = dimension.points[1] - dimension.points[0];
-            const qreal length = std::hypot(delta.x(), delta.y());
-            if (length > kGeometryEpsilon) {
-                const QPointF normal(-delta.y() / length, delta.x() / length);
-                const QPointF midpoint =
-                    (dimension.points[0] + dimension.points[1]) * 0.5;
-                dimension.points[2] = midpoint + normal * dimension.dimensionOffset;
-            }
-        }
+        const ObjectId objectId = document.objectIdAt(index);
+        document.mutateGeometry(
+            objectId,
+            [&](Shape &dimension) {
+                if (!isDimensionGeometryType(dimension.geometryType) ||
+                    dimension.dimensionAnchors.isEmpty()) {
+                    return false;
+                }
+                const QVector<QPointF> previousPoints = dimension.points;
+                for (int anchorIndex = 0;
+                     anchorIndex < dimension.dimensionAnchors.size() &&
+                     anchorIndex < dimension.points.size();
+                     ++anchorIndex) {
+                    QPointF resolvedPoint;
+                    if (resolveDimensionAnchor(document,
+                                               dimension.dimensionAnchors[anchorIndex],
+                                               curveSampler,
+                                               &resolvedPoint)) {
+                        dimension.points[anchorIndex] = resolvedPoint;
+                    }
+                }
+                if (dimension.geometryType == GeometryType::LinearDimension &&
+                    dimension.dimensionOffsetValid && dimension.points.size() >= 3) {
+                    const QPointF delta = dimension.points[1] - dimension.points[0];
+                    const qreal length = std::hypot(delta.x(), delta.y());
+                    if (length > kGeometryEpsilon) {
+                        const QPointF normal(-delta.y() / length, delta.x() / length);
+                        const QPointF midpoint =
+                            (dimension.points[0] + dimension.points[1]) * 0.5;
+                        dimension.points[2] = midpoint + normal * dimension.dimensionOffset;
+                    }
+                }
+                return dimension.points != previousPoints;
+            });
     }
 }
 

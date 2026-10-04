@@ -21,10 +21,8 @@ struct ControlPointReference {
 class SelectionModel final {
 public:
     const QVector<ObjectId> &objectIds() const;
-    QVector<ObjectId> &objectIds();
 
-    ObjectId primaryObjectId() const;
-    ObjectId &primaryObjectId();
+    const ObjectId &primaryObjectId() const;
 
     bool contains(ObjectId objectId) const;
     void clear();
@@ -37,7 +35,6 @@ public:
     void prune(const Document &document);
 
     const ControlPointReference &activeControlPoint() const;
-    int &activeControlPointIndex();
     void setActiveControlPoint(ObjectId objectId, int index);
     void clearActiveControlPoint();
 

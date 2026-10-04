@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/geometry/construction_modes.h"
+
 #include <QString>
 
 namespace classiCAD {
@@ -51,26 +53,6 @@ enum class ToolId : int {
     TangentToTwoCurves = 40,
     PerpendicularToTwoCurves = 41,
     PointExtrude = 42,
-};
-
-enum class EllipseMode {
-    CenterAxisRadius,
-    AxisEndpoints,
-    Corners,
-    FociPoint,
-};
-
-enum class RectangleMode {
-    CornerCorner,
-    CenterCorner,
-    ThreePoint,
-};
-
-enum class PolygonMode {
-    CenterCorner,
-    CenterTangent,
-    CornerCorner,
-    Edge,
 };
 
 enum class ScaleMode {

@@ -30,6 +30,13 @@ public:
     static bool isSupported();
     void setDrawCallback(DrawCallback callback);
     void setAntiAliasingSamples(int samples);
+    void setSurfaceTessellationCache(
+        const SurfaceTessellationCache *surfaceTessellationCache);
+    bool pickScenePoint(const QPointF &screenPosition,
+                        const ViewportTransform &transform,
+                        const QSize &viewportSize,
+                        const QVector<ViewportRenderObject> &visibleSceneShapes,
+                        Point3D *worldPoint);
     bool pickScenePoint(const QPointF &screenPosition,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,

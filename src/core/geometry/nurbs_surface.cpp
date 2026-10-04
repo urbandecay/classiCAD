@@ -1,61 +1,14 @@
 #include "nurbs_surface.h"
 
 #include "curve_evaluator.h"
+#include "nurbs_surface_evaluator.h"
+#include "surface_trim_region.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace classiCAD {
-namespace {
-
-bool pointInsidePolygon(const QPointF &point, const QVector<QPointF> &polygon)
-{
-    bool inside = false;
-    for (int current = 0, previous = polygon.size() - 1;
-         current < polygon.size();
-         previous = current++) {
-        const QPointF &a = polygon[current];
-        const QPointF &b = polygon[previous];
-        const bool crosses = (a.y() > point.y()) != (b.y() > point.y());
-        if (crosses && point.x() < (b.x() - a.x()) *
-                                         (point.y() - a.y()) /
-                                         (b.y() - a.y()) + a.x()) {
-            inside = !inside;
-        }
-    }
-    return inside;
-}
-
-qreal basisValue(const QVector<double> &knots,
-                 int index,
-                 int degree,
-                 qreal parameter)
-{
-    if (degree == 0) {
-        return knots[index] <= parameter && parameter < knots[index + 1]
-                   ? 1.0
-                   : 0.0;
-    }
-
-    qreal value = 0.0;
-    const qreal leftDenominator = knots[index + degree] - knots[index];
-    if (std::abs(leftDenominator) > 1.0e-12) {
-        value += (parameter - knots[index]) / leftDenominator *
-                 basisValue(knots, index, degree - 1, parameter);
-    }
-
-    const qreal rightDenominator = knots[index + degree + 1] - knots[index + 1];
-    if (std::abs(rightDenominator) > 1.0e-12) {
-        value += (knots[index + degree + 1] - parameter) /
-                 rightDenominator *
-                 basisValue(knots, index + 1, degree - 1, parameter);
-    }
-    return value;
-}
-
-} // namespace
-
 QVector<double> expandedNurbsSurfaceKnotVector(const QVector<double> &knots)
 {
     QVector<double> expanded;
@@ -180,25 +133,9 @@ bool nurbsSurfaceParameterDomains(const NurbsSurface3D &surface,
                                   qreal *vStart,
                                   qreal *vEnd)
 {
-    if (!validateNurbsSurface(surface) ||
-        (uStart == nullptr && uEnd == nullptr && vStart == nullptr && vEnd == nullptr)) {
-        return false;
-    }
-    const QVector<double> uKnots = expandedNurbsSurfaceKnotVector(surface.knotsU);
-    const QVector<double> vKnots = expandedNurbsSurfaceKnotVector(surface.knotsV);
-    if (uStart != nullptr) {
-        *uStart = uKnots[surface.degreeU];
-    }
-    if (uEnd != nullptr) {
-        *uEnd = uKnots[surface.controlVertexCountU];
-    }
-    if (vStart != nullptr) {
-        *vStart = vKnots[surface.degreeV];
-    }
-    if (vEnd != nullptr) {
-        *vEnd = vKnots[surface.controlVertexCountV];
-    }
-    return true;
+    PreparedNurbsSurfaceEvaluator evaluator;
+    return evaluator.prepare(surface) &&
+           evaluator.parameterDomains(uStart, uEnd, vStart, vEnd);
 }
 
 bool evaluateNurbsSurfacePoint(const NurbsSurface3D &surface,
@@ -206,52 +143,8 @@ bool evaluateNurbsSurfacePoint(const NurbsSurface3D &surface,
                                qreal v,
                                Point3D *point)
 {
-    if (!validateNurbsSurface(surface) || point == nullptr ||
-        !std::isfinite(u) || !std::isfinite(v)) {
-        return false;
-    }
-
-    const QVector<double> uKnots = expandedNurbsSurfaceKnotVector(surface.knotsU);
-    const QVector<double> vKnots = expandedNurbsSurfaceKnotVector(surface.knotsV);
-    const qreal domainUStart = uKnots[surface.degreeU];
-    const qreal domainUEnd = uKnots[surface.controlVertexCountU];
-    const qreal domainVStart = vKnots[surface.degreeV];
-    const qreal domainVEnd = vKnots[surface.controlVertexCountV];
-    u = std::clamp(u, domainUStart, domainUEnd);
-    v = std::clamp(v, domainVStart, domainVEnd);
-    if (u >= domainUEnd) {
-        u = std::nextafter(domainUEnd, domainUStart);
-    }
-    if (v >= domainVEnd) {
-        v = std::nextafter(domainVEnd, domainVStart);
-    }
-
-    Point3D numerator{};
-    qreal denominator = 0.0;
-    for (int uIndex = 0; uIndex < surface.controlVertexCountU; ++uIndex) {
-        const qreal uBasis = basisValue(uKnots, uIndex, surface.degreeU, u);
-        if (uBasis == 0.0) {
-            continue;
-        }
-        for (int vIndex = 0; vIndex < surface.controlVertexCountV; ++vIndex) {
-            const int controlIndex = uIndex * surface.controlVertexCountV + vIndex;
-            const qreal basis = uBasis *
-                basisValue(vKnots, vIndex, surface.degreeV, v) *
-                (surface.rational ? surface.weights[controlIndex] : 1.0);
-            const Point3D &controlPoint = surface.controlPoints[controlIndex];
-            numerator.x += controlPoint.x * basis;
-            numerator.y += controlPoint.y * basis;
-            numerator.z += controlPoint.z * basis;
-            denominator += basis;
-        }
-    }
-    if (std::abs(denominator) <= 1.0e-12) {
-        return false;
-    }
-    point->x = numerator.x / denominator;
-    point->y = numerator.y / denominator;
-    point->z = numerator.z / denominator;
-    return true;
+    PreparedNurbsSurfaceEvaluator evaluator;
+    return evaluator.prepare(surface) && evaluator.evaluate(u, v, point);
 }
 
 QVector<QPointF> sampleNurbsSurfaceTrimLoop(const NurbsSurfaceTrimLoop &loop,
@@ -285,24 +178,8 @@ bool nurbsSurfaceParameterInsideTrim(const NurbsSurface3D &surface,
     if (!validateNurbsSurface(surface) || !std::isfinite(u) || !std::isfinite(v)) {
         return false;
     }
-    if (surface.trimLoops.isEmpty()) {
-        return true;
-    }
-
-    bool insideOuterLoop = false;
-    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
-        const QVector<QPointF> polygon = sampleNurbsSurfaceTrimLoop(loop);
-        if (polygon.size() < 3) {
-            return false;
-        }
-        const bool inside = pointInsidePolygon(QPointF(u, v), polygon);
-        if (!loop.isHole && inside) {
-            insideOuterLoop = true;
-        } else if (loop.isHole && inside) {
-            return false;
-        }
-    }
-    return insideOuterLoop;
+    PreparedNurbsSurfaceTrimRegion region;
+    return region.prepare(surface, 128) && region.contains(u, v);
 }
 
 } // namespace classiCAD

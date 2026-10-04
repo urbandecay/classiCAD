@@ -1,10 +1,14 @@
 #pragma once
 
 #include "document_settings.h"
+#include "document_change_set.h"
 #include "layer.h"
 #include "scene_object.h"
 
+#include <QHash>
 #include <QVector>
+
+#include <functional>
 
 namespace classiCAD {
 
@@ -13,6 +17,15 @@ namespace classiCAD {
 // viewport; the storage and identity remain owned by this class.
 class Document final {
 public:
+    struct RuntimeRevisions {
+        quint64 epoch = 1;
+        quint64 geometry = 1;
+        quint64 structure = 1;
+        quint64 layer = 1;
+        quint64 visibility = 1;
+        quint64 settings = 1;
+    };
+
     struct Snapshot {
         QVector<Layer> layers;
         QVector<SceneObject> objects;
@@ -27,19 +40,24 @@ public:
     int size() const;
     bool isEmpty() const;
     const QVector<SceneObject> &objects() const;
-    QVector<SceneObject> &objects();
     const QVector<Layer> &layers() const;
     const DocumentSettings &settings() const;
     bool setSettings(const DocumentSettings &settings);
 
     const SceneObject *object(ObjectId id) const;
-    SceneObject *object(ObjectId id);
     const Shape *shape(ObjectId id) const;
-    Shape *shape(ObjectId id);
     ObjectId objectIdAt(int index) const;
     int indexOf(ObjectId id) const;
-    Shape &operator[](int index);
+    quint64 objectGeometryRevision(ObjectId id) const;
+    const RuntimeRevisions &runtimeRevisions() const;
+    void invalidateAllGeometry();
+    void applyChanges(const DocumentChangeSet &changes);
+    void replaceWith(const Document &document);
     const Shape &operator[](int index) const;
+    // The callback returns true only when it changes geometry. Document then
+    // advances the document and per-object geometry revisions automatically.
+    bool mutateGeometry(ObjectId id,
+                        const std::function<bool(Shape &)> &edit);
 
     ObjectId append(const Shape &shape);
     ObjectId insert(int index, const Shape &shape);
@@ -60,7 +78,6 @@ public:
     bool removeLayer(LayerId id);
     bool renameLayer(LayerId id, const QString &name);
     bool moveLayer(LayerId id, int targetIndex);
-    Layer *layer(LayerId id);
     const Layer *layer(LayerId id) const;
     bool setLayerVisible(LayerId id, bool visible);
     bool setLayerFrozen(LayerId id, bool frozen);
@@ -116,18 +133,30 @@ public:
     ConstShapeIterator end() const;
 
 private:
+    friend class DocumentTransaction;
+
     ObjectId allocateObjectId();
     LayerId allocateLayerId();
     LayerId normalizedLayerId(LayerId requested) const;
     void rebuildLayerObjectIds();
+    void rebuildObjectIndex();
+    void bumpRevision(quint64 *revision);
+    void noteGeometryChange(ObjectId id);
+    SceneObject *mutableObject(ObjectId id);
+    Shape *mutableShape(ObjectId id);
+    Layer *mutableLayer(LayerId id);
     void ensureDefaultLayer();
 
     QVector<Layer> layers_;
     QVector<SceneObject> objects_;
+    QHash<quint64, int> objectIndices_;
+    QHash<quint64, quint64> objectGeometryRevisions_;
     LayerId activeLayerId_ = LayerId::invalid();
     quint64 nextObjectValue_ = 1;
     quint64 nextLayerValue_ = 1;
     DocumentSettings settings_;
+    RuntimeRevisions revisions_;
+    quint64 revisionClock_ = 1;
 };
 
 } // namespace classiCAD

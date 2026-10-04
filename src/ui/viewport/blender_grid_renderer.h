@@ -5,6 +5,7 @@
 #pragma once
 
 #include "blender_grid_appearance.h"
+#include "services/sampling/surface_tessellation_cache.h"
 #include "services/viewport/viewport_transform.h"
 #include "viewport_depth_geometry.h"
 
@@ -35,7 +36,7 @@ public:
     QImage render(const ViewportTransform &transform,
                   const QSize &viewportSize,
                   qreal devicePixelRatio,
-                  const QVector<Shape> &visibleSceneShapes,
+                  const QVector<ViewportRenderObject> &visibleSceneShapes,
                   qreal baseGridStep,
                   const BlenderGridAppearance &appearance);
     // Called while a QOpenGLWidget framebuffer is current. The grid remains
@@ -43,7 +44,7 @@ public:
     bool renderToCurrentFramebuffer(const ViewportTransform &transform,
                                     const QSize &viewportSize,
                                     qreal devicePixelRatio,
-                                    const QVector<Shape> &visibleSceneShapes,
+                                    const QVector<ViewportRenderObject> &visibleSceneShapes,
                                     qreal baseGridStep,
                                     const BlenderGridAppearance &appearance);
     bool renderBackgroundToCurrentFramebuffer(const QSize &viewportSize,
@@ -52,8 +53,10 @@ public:
                         const ViewportTransform &transform,
                         const QSize &viewportSize,
                         qreal devicePixelRatio,
-                        const QVector<Shape> &visibleSceneShapes,
+                        const QVector<ViewportRenderObject> &visibleSceneShapes,
                         Point3D *worldPoint);
+    void setSurfaceTessellationCache(
+        const SurfaceTessellationCache *surfaceTessellationCache);
     void setAntiAliasingSamples(int samples);
     int antiAliasingSamples() const;
 
@@ -64,7 +67,7 @@ private:
     bool renderGridLayer(const ViewportTransform &transform,
                          const QSize &viewportSize,
                          qreal devicePixelRatio,
-                         const QVector<Shape> &visibleSceneShapes,
+                         const QVector<ViewportRenderObject> &visibleSceneShapes,
                          qreal baseGridStep,
                          const BlenderGridAppearance &appearance);
     void drawSceneDepth(const ViewportDepthGeometry &geometry,
@@ -72,7 +75,8 @@ private:
                         const QSize &viewportSize,
                         qreal devicePixelRatio);
     void uploadSceneDepthGeometry(const ViewportDepthGeometry &geometry);
-    void updateSceneDepthGeometry(const QVector<Shape> &visibleSceneShapes);
+    void updateSceneDepthGeometry(
+        const QVector<ViewportRenderObject> &visibleSceneShapes);
     bool drawGrid(const ViewportTransform &transform,
                   const QSize &viewportSize,
                   qreal devicePixelRatio,
@@ -92,6 +96,7 @@ private:
     QOpenGLVertexArrayObject sceneDepthVertexArray_;
     QOpenGLBuffer sceneDepthVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     ViewportDepthGeometry cachedDepthGeometry_;
+    const SurfaceTessellationCache *surfaceTessellationCache_ = nullptr;
     QByteArray depthGeometryCacheKey_;
     int sceneDepthLineVertexCount_ = 0;
     int sceneDepthSurfaceVertexCount_ = 0;

@@ -1,15 +1,24 @@
 #pragma once
 
-#include "services/viewport/viewport_transform.h"
+#include "core/document/object_id.h"
+#include "core/document/shape.h"
+#include "services/sampling/surface_tessellation_cache.h"
 
-#include "core/document/document.h"
-#include "core/model.h"
+#include <QSize>
 
 namespace classiCAD {
 
+class Document;
+class ViewportTransform;
+
 class CurveHitTester final {
 public:
+    explicit CurveHitTester(
+        const SurfaceTessellationCache *surfaceTessellationCache = nullptr);
+
     void setArchitecturalDimensionFont(bool enabled);
+    void setSurfaceTessellationCache(
+        const SurfaceTessellationCache *surfaceTessellationCache);
 
     qreal distanceToSegment(const QPointF &point,
                             const QPointF &start,
@@ -18,7 +27,9 @@ public:
     qreal distanceToShape(const QPointF &screenPosition,
                           const Shape &shape,
                           const ViewportTransform &transform,
-                          const QSize &viewportSize) const;
+                          const QSize &viewportSize,
+                          ObjectId objectId = ObjectId::invalid(),
+                          quint64 geometryRevision = 0) const;
 
     qreal distanceToNurbsCurve(const QPointF &screenPosition,
                                const Shape::NurbsCurve2D &curve,
@@ -27,7 +38,9 @@ public:
     qreal distanceToNurbsSurface(const QPointF &screenPosition,
                                  const Shape::NurbsSurface3D &surface,
                                  const ViewportTransform &transform,
-                                 const QSize &viewportSize) const;
+                                 const QSize &viewportSize,
+                                 ObjectId objectId = ObjectId::invalid(),
+                                 quint64 geometryRevision = 0) const;
 
     int hitTestShape(const Document &document,
                      const QPointF &screenPosition,
@@ -82,6 +95,7 @@ private:
                            qreal sweepAngle,
                            qreal angle) const;
 
+    const SurfaceTessellationCache *surfaceTessellationCache_ = nullptr;
     bool architecturalDimensionFont_ = false;
 };
 

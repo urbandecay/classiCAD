@@ -1,0 +1,75 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "app-dev",
+      "displayName": "App development",
+      "description": "Configure only the Release application target in an isolated build directory.",
+      "binaryDir": "${sourceDir}/build/app-dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CLASSICAD_BUILD_TESTS": "OFF",
+        "CLASSICAD_BUILD_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "full-test",
+      "displayName": "Full test build",
+      "description": "Configure the Release application and all registered regression-test targets.",
+      "binaryDir": "${sourceDir}/build/full-test",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CLASSICAD_BUILD_TESTS": "ON",
+        "CLASSICAD_BUILD_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "benchmarks",
+      "displayName": "Geometry benchmarks",
+      "description": "Configure standalone surface, erase-query, viewport-query, and viewport-runtime benchmarks.",
+      "binaryDir": "${sourceDir}/build/benchmarks",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CLASSICAD_BUILD_TESTS": "OFF",
+        "CLASSICAD_BUILD_BENCHMARKS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "app-dev",
+      "configurePreset": "app-dev",
+      "targets": [
+        "classiCAD"
+      ]
+    },
+    {
+      "name": "full-test",
+      "configurePreset": "full-test"
+    },
+    {
+      "name": "benchmarks",
+      "configurePreset": "benchmarks",
+      "targets": [
+        "classicad_nurbs_surface_benchmark",
+        "classicad_erase_scene_query_benchmark",
+        "classicad_viewport_query_benchmark",
+        "classicad_viewport_runtime_benchmark"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "full-test",
+      "configurePreset": "full-test",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

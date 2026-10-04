@@ -1,5 +1,8 @@
 #include "shape_creation_tool.h"
 
+#include "core/tool_id.h"
+#include "services/viewport/viewport_transform.h"
+
 #include "tool_context.h"
 
 #include <cmath>

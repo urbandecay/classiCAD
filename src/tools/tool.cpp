@@ -31,6 +31,34 @@ bool InteractionTool::handleKey(const ToolInput &, ToolContext &)
     return false;
 }
 
+InteractionTool::EventResult InteractionTool::dispatchMousePress(
+    const ToolInput &input, ToolContext &context)
+{
+    return handleMousePress(input, context) ? EventResult::Handled
+                                           : EventResult::Unhandled;
+}
+
+InteractionTool::EventResult InteractionTool::dispatchMouseMove(
+    const ToolInput &input, ToolContext &context)
+{
+    return handleMouseMove(input, context) ? EventResult::Handled
+                                           : EventResult::Unhandled;
+}
+
+InteractionTool::EventResult InteractionTool::dispatchWheel(
+    const ToolInput &input, ToolContext &context)
+{
+    return handleWheel(input, context) ? EventResult::Handled
+                                       : EventResult::Unhandled;
+}
+
+InteractionTool::EventResult InteractionTool::dispatchKey(
+    const ToolInput &input, ToolContext &context)
+{
+    return handleKey(input, context) ? EventResult::Handled
+                                     : EventResult::Unhandled;
+}
+
 void InteractionTool::cancel(ToolContext &)
 {
 }

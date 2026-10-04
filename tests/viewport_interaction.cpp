@@ -5,7 +5,9 @@
 #include "ui/viewport/line_type_style.h"
 
 #include "core/document/document.h"
+#include "core/geometry/curve_construction.h"
 #include "core/geometry/curve_evaluator.h"
+#include "core/geometry/shape_mapping.h"
 #include "core/serialization/blender_project_file.h"
 
 #include <QApplication>
@@ -656,6 +658,217 @@ int main(int argc, char **argv)
     if (application.arguments().contains(QStringLiteral("--point-extrude-only"))) {
         return passed ? 0 : 1;
     }
+    // Trim's public Qt event path must show the hovered intersection-bounded
+    // section, commit the cut, and preserve the original object for Undo.
+    {
+        QTemporaryDir directory;
+        Document source;
+        Shape circle;
+        circle.geometryType = GeometryType::Circle;
+        circle.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        circle.points = {{0.0, 0.0}, {50.0, 0.0}};
+        circle.nurbs = makeCircleNurbs(circle.points);
+        Shape line;
+        line.geometryType = GeometryType::Line;
+        line.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        line.points = {{-100.0, 0.0}, {100.0, 0.0}};
+        line.nurbs = makeDegreeOneNurbs(line.points);
+        source.append(circle);
+        source.append(line);
+        const QString path = directory.filePath(QStringLiteral("trim-events.vignola"));
+        QString error;
+        std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+        probe->resize(interactionViewportSize);
+        probe->show();
+        passed &= check(saveVignolaDocument(path, source, &error) &&
+                            probe->loadVignolaDocument(path, &error),
+                        "Trim event fixture must load its intersecting curves");
+        probe->setViewPreset(ViewportViewPreset::Top);
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Top),
+                        "Trim top view must settle before hover input");
+        ViewportTransform projection;
+        projection.setViewPreset(ViewportViewPreset::Top);
+        const QPointF selectionPoint = projection.workPlaneToScreen(
+            {-75.0, 0.0}, interactionViewportSize,
+            makeWorkPlaneFrame(WorkPlane::XY));
+        sendMouse(probe.get(), QEvent::MouseButtonPress, selectionPoint,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonRelease, selectionPoint,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        probe->setTool(ToolId::Trim);
+        const QPointF center = projection.workPlaneToScreen(
+            {0.0, 0.0}, interactionViewportSize,
+            makeWorkPlaneFrame(WorkPlane::XY));
+        sendMouse(probe.get(), QEvent::MouseMove, center,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        application.processEvents();
+        const QImage trimPreview = captureViewport(probe.get());
+        passed &= check(pixelsNearColor(trimPreview, QColor("#d28b45"), 45) > 0,
+                        "Trim hover must draw the selected intersection-bounded preview");
+        sendMouse(probe.get(), QEvent::MouseButtonPress, center,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonRelease, center,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        Document trimmed;
+        bool split = probe->saveVignolaDocument(path, &error) &&
+                     loadVignolaDocument(path, &trimmed, &error) &&
+                     trimmed.size() == 3;
+        int keptTails = 0;
+        if (split) {
+            for (const SceneObject &object : trimmed.objects()) {
+                const Shape &shape = object.geometry;
+                if (shape.geometryType != GeometryType::Line ||
+                    !validateNurbsCurve(shape.nurbs)) {
+                    continue;
+                }
+                QPointF start;
+                QPointF end;
+                if (!nurbsCurveEndpoints(shape.nurbs, &start, &end)) {
+                    continue;
+                }
+                const qreal low = std::min(start.x(), end.x());
+                const qreal high = std::max(start.x(), end.x());
+                keptTails += (high < -49.0 || low > 49.0) &&
+                             std::abs(start.y()) < 1.0e-6 &&
+                             std::abs(end.y()) < 1.0e-6;
+            }
+        }
+        passed &= check(split && keptTails == 2,
+                        "Trim click must remove the circle-bounded middle and keep two line tails");
+        const bool undone = probe->executeCommand(ViewportCommand::Undo).accepted &&
+            probe->saveVignolaDocument(path, &error) &&
+            loadVignolaDocument(path, &trimmed, &error) && trimmed.size() == 2;
+        passed &= check(undone,
+                        "one Undo must restore the original Trim target and cutter");
+
+        // A camera change invalidates the old screen preview. Moving the
+        // pointer back over the same world-space section must rebuild it.
+        probe->setViewPreset(ViewportViewPreset::Isometric);
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Isometric),
+                        "Trim preview camera change must finish before the next hover");
+        projection.setViewPreset(ViewportViewPreset::Isometric);
+        const QPointF movedHover = projection.workPlaneToScreen(
+            {0.0, 0.0}, interactionViewportSize,
+            makeWorkPlaneFrame(WorkPlane::XY));
+        sendMouse(probe.get(), QEvent::MouseMove, movedHover,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        application.processEvents();
+        const QImage refreshedPreview = captureViewport(probe.get());
+        passed &= check(pixelsNearColor(refreshedPreview, QColor("#d28b45"), 45) > 0,
+                        "Trim preview must be regenerated in the navigated camera");
+        probe->hide();
+    }
+
+    // Joined and directly drawn curves must both be body-pickable and move
+    // by one shared world-space delta through the public viewport event path.
+    {
+        QTemporaryDir directory;
+        Document source;
+        const auto appendLine = [&source](const QVector<QPointF> &points) {
+            Shape line;
+            line.geometryType = GeometryType::Line;
+            line.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+            line.points = points;
+            line.nurbs = makeDegreeOneNurbs(points);
+            source.append(line);
+        };
+        appendLine({{-40.0, 0.0}, {0.0, 0.0}});
+        appendLine({{0.0, 0.0}, {60.0, 0.0}});
+        appendLine({{-40.0, -30.0}, {60.0, -30.0}});
+        const QString path = directory.filePath(QStringLiteral("join-drag.vignola"));
+        QString error;
+        std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+        probe->resize(interactionViewportSize);
+        probe->show();
+        passed &= check(saveVignolaDocument(path, source, &error) &&
+                            probe->loadVignolaDocument(path, &error),
+                        "Join drag fixture must load its curves");
+        probe->setViewPreset(ViewportViewPreset::Top);
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Top),
+                        "Join drag top view must settle before picking");
+        ViewportTransform projection;
+        projection.setViewPreset(ViewportViewPreset::Top);
+        passed &= check(probe->executeCommand(ViewportCommand::BeginJoin).accepted,
+                        "Join mode must activate through the public command API");
+        const auto click = [&probe](const QPointF &position) {
+            sendMouse(probe.get(), QEvent::MouseButtonPress, position,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            sendMouse(probe.get(), QEvent::MouseButtonRelease, position,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        };
+        click(projection.workPlaneToScreen(
+            {-20.0, 0.0}, interactionViewportSize, WorkPlane::XY));
+        click(projection.workPlaneToScreen(
+            {30.0, 0.0}, interactionViewportSize, WorkPlane::XY));
+        Document joinedDocument;
+        bool joined = probe->saveVignolaDocument(path, &error) &&
+                      loadVignolaDocument(path, &joinedDocument, &error) &&
+                      joinedDocument.size() == 2;
+        if (!joined) {
+            passed &= check(false, "Join must commit the two selected source curves");
+        } else {
+            probe->setControlPointsVisible(true);
+            const QVector<QPointF> dragDeltaPixels{QPointF(35.0, 20.0)};
+            const auto worldDelta = [&projection, &interactionViewportSize](
+                                        const QPointF &screenDelta) {
+                const QPointF origin = projection.screenToWorld(
+                    QPointF(320.0, 240.0), interactionViewportSize);
+                return projection.screenToWorld(
+                           QPointF(320.0, 240.0) + screenDelta,
+                           interactionViewportSize) - origin;
+            };
+            const QPointF expectedDelta = worldDelta(dragDeltaPixels.first());
+            for (const qreal y : {0.0, -30.0}) {
+                const QPointF body = projection.workPlaneToScreen(
+                    {20.0, y}, interactionViewportSize, WorkPlane::XY);
+                sendMouse(probe.get(), QEvent::MouseButtonPress, body,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                sendMouse(probe.get(), QEvent::MouseMove,
+                          body + dragDeltaPixels.first(), Qt::NoButton,
+                          Qt::LeftButton, Qt::NoModifier);
+                sendMouse(probe.get(), QEvent::MouseButtonRelease,
+                          body + dragDeltaPixels.first(), Qt::LeftButton,
+                          Qt::NoButton, Qt::NoModifier);
+                Document moved;
+                const bool saved = probe->saveVignolaDocument(path, &error) &&
+                                   loadVignolaDocument(path, &moved, &error) &&
+                                   moved.size() == 2;
+                bool translatedCurveFound = false;
+                if (saved) {
+                    for (const SceneObject &object : moved.objects()) {
+                        const QVector<ShapeNurbsCurveComponent> components =
+                            nurbsCurveComponentsForShape(object.geometry);
+                        if (components.isEmpty()) {
+                            continue;
+                        }
+                        bool allAtExpectedY = true;
+                        for (const ShapeNurbsCurveComponent &component : components) {
+                            for (const QPointF &control : component.curve.controlPoints) {
+                                const Point3D world = workPlaneFramePointToWorld(
+                                    control, component.workPlaneFrame);
+                                allAtExpectedY &= std::abs(world.y - (y + expectedDelta.y())) < 1.0e-5;
+                            }
+                        }
+                        if (allAtExpectedY) {
+                            translatedCurveFound = true;
+                            for (const ShapeNurbsCurveComponent &component : components) {
+                                for (const QPointF &control : component.curve.controlPoints) {
+                                    const Point3D world = workPlaneFramePointToWorld(
+                                        control, component.workPlaneFrame);
+                                    translatedCurveFound &= std::abs(world.x -
+                                        (20.0 + expectedDelta.x())) < 80.0;
+                                }
+                            }
+                        }
+                    }
+                }
+                passed &= check(saved && translatedCurveFound,
+                                "Joined and drawn curve bodies must move when dragged with control points visible");
+            }
+        }
+        probe->hide();
+    }
+
     // A side-view click over an edge-on XY curve must use the visible YZ
     // plane, rather than discarding input on an unpickable inherited plane.
     {

@@ -1,5 +1,8 @@
 #include "geometry_transform.h"
 
+#include "core/geometry/shape_mapping.h"
+
+#include <algorithm>
 #include <cmath>
 
 namespace classiCAD {
@@ -44,7 +47,105 @@ void mirrorCurve(Shape::NurbsCurve2D *curve,
     }
 }
 
+Point3D rotateVector(const Point3D &vector, const Point3D &axis, qreal angle)
+{
+    const qreal axisLength = std::hypot(std::hypot(axis.x, axis.y), axis.z);
+    if (axisLength <= 1.0e-12 || std::abs(angle) <= 1.0e-15) {
+        return vector;
+    }
+    const Point3D unitAxis{axis.x / axisLength,
+                           axis.y / axisLength,
+                           axis.z / axisLength};
+    const qreal cosine = std::cos(angle);
+    const qreal sine = std::sin(angle);
+    const Point3D cross{unitAxis.y * vector.z - unitAxis.z * vector.y,
+                        unitAxis.z * vector.x - unitAxis.x * vector.z,
+                        unitAxis.x * vector.y - unitAxis.y * vector.x};
+    const qreal dot = unitAxis.x * vector.x + unitAxis.y * vector.y +
+                      unitAxis.z * vector.z;
+    return {vector.x * cosine + cross.x * sine + unitAxis.x * dot * (1.0 - cosine),
+            vector.y * cosine + cross.y * sine + unitAxis.y * dot * (1.0 - cosine),
+            vector.z * cosine + cross.z * sine + unitAxis.z * dot * (1.0 - cosine)};
+}
+
+Point3D rotatePoint(const Point3D &point,
+                    const Point3D &pivot,
+                    const Point3D &axis,
+                    qreal angle)
+{
+    const Point3D offset{point.x - pivot.x,
+                         point.y - pivot.y,
+                         point.z - pivot.z};
+    const Point3D rotated = rotateVector(offset, axis, angle);
+    return {pivot.x + rotated.x, pivot.y + rotated.y, pivot.z + rotated.z};
+}
+
+WorkPlaneFrame rotateFrame(const WorkPlaneFrame &frame,
+                           const Point3D &pivot,
+                           const Point3D &axis,
+                           qreal angle)
+{
+    WorkPlaneFrame result = frame;
+    result.origin = rotatePoint(frame.origin, pivot, axis, angle);
+    result.xAxis = rotateVector(frame.xAxis, axis, angle);
+    result.yAxis = rotateVector(frame.yAxis, axis, angle);
+    result.normal = rotateVector(frame.normal, axis, angle);
+    result.valid = isValidWorkPlaneFrame(result);
+    return result;
+}
+
 } // namespace
+
+bool translateShapeGeometry(Shape *shape,
+                            const QPointF &delta,
+                            const WorkPlaneFrame &inputFrame)
+{
+    if (shape == nullptr || !isValidWorkPlaneFrame(inputFrame)) {
+        return false;
+    }
+
+    if (shape->geometryType == GeometryType::PolyCurve &&
+        shape->componentWorkPlaneFrames.size() == shape->components.size()) {
+        const Point3D worldDelta{
+            inputFrame.xAxis.x * delta.x() + inputFrame.yAxis.x * delta.y(),
+            inputFrame.xAxis.y * delta.x() + inputFrame.yAxis.y * delta.y(),
+            inputFrame.xAxis.z * delta.x() + inputFrame.yAxis.z * delta.y()};
+        shape->workPlaneFrame.origin.x += worldDelta.x;
+        shape->workPlaneFrame.origin.y += worldDelta.y;
+        shape->workPlaneFrame.origin.z += worldDelta.z;
+        for (WorkPlaneFrame &componentFrame : shape->componentWorkPlaneFrames) {
+            componentFrame.origin.x += worldDelta.x;
+            componentFrame.origin.y += worldDelta.y;
+            componentFrame.origin.z += worldDelta.z;
+        }
+        return true;
+    }
+
+    for (QPointF &point : shape->points) {
+        point += delta;
+    }
+    for (QPointF &point : shape->nurbs.controlPoints) {
+        point += delta;
+    }
+    for (NurbsCurve2D &component : shape->components) {
+        for (QPointF &point : component.controlPoints) {
+            point += delta;
+        }
+    }
+    if (validateNurbsSurface(shape->nurbsSurface)) {
+        const Point3D origin = workPlaneFramePointToWorld({}, inputFrame);
+        const Point3D end = workPlaneFramePointToWorld(delta, inputFrame);
+        const Point3D worldDelta{end.x - origin.x,
+                                 end.y - origin.y,
+                                 end.z - origin.z};
+        for (Point3D &point : shape->nurbsSurface.controlPoints) {
+            point.x += worldDelta.x;
+            point.y += worldDelta.y;
+            point.z += worldDelta.z;
+        }
+    }
+    return true;
+}
 
 bool mirrorShapeAcrossLine(const Shape &source,
                            const QPointF &axisStart,
@@ -123,6 +224,78 @@ bool setClosedNurbsSeamControlPoint(Shape *shape,
 
     shape->nurbs.controlPoints[0] = position;
     shape->nurbs.controlPoints[lastIndex] = position;
+    return true;
+}
+
+bool scaleShapeGeometry(Shape *shape,
+                        const QPointF &base,
+                        const QPointF &axisDirection,
+                        qreal factor,
+                        bool oneDimensional,
+                        const WorkPlaneFrame &surfaceFrame)
+{
+    if (shape == nullptr) {
+        return false;
+    }
+    if (oneDimensional && shape->geometryType == GeometryType::Rectangle &&
+        shape->points.size() == 2) {
+        shape->points = rectangleVertices(*shape);
+    }
+
+    const auto scaledPoint = [base, axisDirection, factor, oneDimensional](
+                                 const QPointF &point) {
+        const QPointF offset = point - base;
+        if (!oneDimensional) {
+            return base + offset * factor;
+        }
+        const qreal alongAxis = QPointF::dotProduct(offset, axisDirection);
+        return base + offset + axisDirection * (alongAxis * (factor - 1.0));
+    };
+    for (QPointF &point : shape->points) {
+        point = scaledPoint(point);
+    }
+    for (QPointF &point : shape->nurbs.controlPoints) {
+        point = scaledPoint(point);
+    }
+    for (Shape::NurbsCurve2D &component : shape->components) {
+        for (QPointF &point : component.controlPoints) {
+            point = scaledPoint(point);
+        }
+    }
+    if (validateNurbsSurface(shape->nurbsSurface)) {
+        for (Point3D &point : shape->nurbsSurface.controlPoints) {
+            const qreal depth = signedDistanceFromWorkPlaneFrame(point, surfaceFrame);
+            const QPointF local = scaledPoint(
+                worldPointToWorkPlaneFrame(point, surfaceFrame));
+            point = workPlaneFramePointToWorld(local, surfaceFrame);
+            point.x += surfaceFrame.normal.x * depth;
+            point.y += surfaceFrame.normal.y * depth;
+            point.z += surfaceFrame.normal.z * depth;
+        }
+    }
+    return true;
+}
+
+bool rotateShapeGeometry(Shape *shape,
+                         const Point3D &pivot,
+                         const Point3D &axis,
+                         qreal angle)
+{
+    if (shape == nullptr) {
+        return false;
+    }
+    if (validateNurbsSurface(shape->nurbsSurface)) {
+        for (Point3D &point : shape->nurbsSurface.controlPoints) {
+            point = rotatePoint(point, pivot, axis, angle);
+        }
+        return true;
+    }
+    WorkPlaneFrame frame = shapeWorkPlaneFrame(*shape);
+    frame = rotateFrame(frame, pivot, axis, angle);
+    if (!isValidWorkPlaneFrame(frame)) {
+        return false;
+    }
+    shape->workPlaneFrame = frame;
     return true;
 }
 

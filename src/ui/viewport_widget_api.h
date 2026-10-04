@@ -1,9 +1,13 @@
 #pragma once
 
+#include "app/command_router.h"
 #include "core/document/layer_id.h"
 #include "core/document/object_id.h"
 #include "core/document/document_settings.h"
-#include "core/model.h"
+#include "core/commands/layer_command.h"
+#include "core/geometry/arc_mode.h"
+#include "core/geometry/work_plane.h"
+#include "core/tool_id.h"
 #include "services/viewport/viewport_transform.h"
 #include "viewport/blender_grid_appearance.h"
 
@@ -17,61 +21,15 @@
 namespace classiCAD {
 
 struct Rhino3dmImportReport;
+struct ProjectViewportCameraSettings;
+class ApplicationSession;
 
-enum class ViewportCommand {
-    Undo,
-    Redo,
-    BeginSubdivision,
-    CancelSubdivision,
-    ApplySubdivision,
-    BeginJoin,
-    Explode,
-    Fill,
-    BeginRotate,
-    BeginScale,
-    BeginMirror,
-    BeginDuplicate,
-    DuplicateInPlace,
-    BeginPointExtrude,
-};
+using ViewportCommand = ApplicationCommand;
+using ViewportCommandResult = ApplicationCommandResult;
 
-struct ViewportCommandResult {
-    bool accepted = false;
-    int count = 0;
-};
-
-enum class ViewportLayerCommand {
-    Create,
-    Remove,
-    Activate,
-    SetVisible,
-    SetLocked,
-    Rename,
-    Move,
-    MoveSelectedObjects,
-    SetColor,
-    SetFrozen,
-    SetLineType,
-    SetLineWeight,
-    SetPlotted,
-    SetDescription,
-};
-
-struct ViewportLayerCommandRequest {
-    ViewportLayerCommand command = ViewportLayerCommand::Create;
-    LayerId layerId = LayerId::invalid();
-    int index = -1;
-    bool enabled = false;
-    QString name;
-    QColor color;
-    qreal lineWeightMm = 0.0;
-};
-
-struct ViewportLayerCommandResult {
-    bool accepted = false;
-    LayerId layerId = LayerId::invalid();
-    int count = 0;
-};
+using ViewportLayerCommand = LayerCommandOperation;
+using ViewportLayerCommandRequest = LayerCommandRequest;
+using ViewportLayerCommandResult = LayerCommandResult;
 
 struct ViewportLayerInfo {
     LayerId id = LayerId::invalid();
@@ -130,6 +88,7 @@ public:
     virtual void setArcMode(ArcMode mode) = 0;
     virtual ArcMode arcMode() const = 0;
     virtual void setControlPointsVisible(bool visible) = 0;
+    virtual bool controlPointsVisible() const = 0;
     virtual void setSnapLabelsVisible(bool visible) = 0;
     virtual void setSmoothCurveDisplay(bool enabled) = 0;
     virtual RotateToolPreferences rotateToolPreferences() const = 0;
@@ -168,6 +127,14 @@ public:
     virtual bool saveUpdateSession(const QString &path) const = 0;
     virtual bool restoreUpdateSession(const QString &path) = 0;
 
+    virtual ProjectViewportCameraSettings projectCameraSettings() const = 0;
+    virtual void prepareForDocumentReplacement() = 0;
+    virtual void applyProjectCameraSettings(
+        const ProjectViewportCameraSettings &settings) = 0;
+    virtual void refreshAfterProjectImport() = 0;
+    virtual void refreshAfterNewDocument() = 0;
+    // Compatibility adapters retained for interaction regressions and older
+    // callers. The document workflows are implemented by ProjectController.
     virtual bool saveVignolaDocument(const QString &path,
                                      QString *errorMessage = nullptr) const = 0;
     virtual bool loadVignolaDocument(const QString &path,
@@ -208,5 +175,7 @@ protected:
 };
 
 ViewportWidgetApi *createViewportWidget(QWidget *parent = nullptr);
+ViewportWidgetApi *createViewportWidget(ApplicationSession &session,
+                                        QWidget *parent = nullptr);
 
 } // namespace classiCAD

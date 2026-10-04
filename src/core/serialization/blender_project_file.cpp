@@ -1,11 +1,14 @@
 #include "blender_project_file.h"
 
 #include "core/document/document.h"
+#include "core/geometry/geometry_type.h"
+#include "core/geometry/nurbs_surface_tessellator.h"
 #include "core/serialization/document_serializer.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QProcess>
@@ -28,6 +31,55 @@ void setError(QString *errorMessage, const QString &message)
     if (errorMessage != nullptr) {
         *errorMessage = message;
     }
+}
+
+bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
+                             QJsonObject *serializedDocument,
+                             QString *errorMessage)
+{
+    if (serializedDocument == nullptr) {
+        setError(errorMessage,
+                 QStringLiteral("Could not attach derived surface display meshes"));
+        return false;
+    }
+    QJsonObject displayMeshes;
+    for (const classiCAD::SceneObject &sceneObject : document.objects()) {
+        if (sceneObject.geometry.geometryType !=
+            classiCAD::GeometryType::NurbsSurface) {
+            continue;
+        }
+        classiCAD::PreparedNurbsSurfaceTessellation tessellation;
+        if (!tessellation.prepare(sceneObject.geometry.nurbsSurface)) {
+            setError(errorMessage,
+                     QStringLiteral("Could not tessellate NURBS surface object %1 for display")
+                         .arg(sceneObject.id.value()));
+            return false;
+        }
+        QJsonArray vertices;
+        for (const classiCAD::Point3D &point : tessellation.vertices()) {
+            QJsonArray vertex;
+            vertex.append(point.x);
+            vertex.append(point.y);
+            vertex.append(point.z);
+            vertices.append(vertex);
+        }
+        QJsonArray faces;
+        for (const classiCAD::PreparedNurbsSurfaceTessellation::Triangle &triangle :
+             tessellation.triangles()) {
+            QJsonArray face;
+            face.append(triangle[0]);
+            face.append(triangle[1]);
+            face.append(triangle[2]);
+            faces.append(face);
+        }
+        QJsonObject mesh;
+        mesh.insert(QStringLiteral("vertices"), vertices);
+        mesh.insert(QStringLiteral("faces"), faces);
+        displayMeshes.insert(QString::number(sceneObject.id.value()), mesh);
+    }
+    serializedDocument->insert(QStringLiteral("_surfaceDisplayMeshes"),
+                               displayMeshes);
+    return true;
 }
 
 bool isValidProjectViewportCameraSettings(
@@ -407,6 +459,11 @@ bool saveVignolaDocument(const QString &path,
     }
     const QString documentPath = temporaryDirectory.filePath(QStringLiteral("document.json"));
     QJsonObject serializedDocument = documentToJson(document);
+    if (!addSurfaceDisplayMeshes(document,
+                                &serializedDocument,
+                                errorMessage)) {
+        return false;
+    }
     serializedDocument.insert(QStringLiteral("viewportCamera"),
                               projectViewportCameraSettingsToJson(cameraSettings));
     const QByteArray documentBytes =

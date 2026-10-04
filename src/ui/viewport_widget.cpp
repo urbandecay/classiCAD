@@ -1,34 +1,71 @@
 #include "viewport_widget_api.h"
+#include "../app/application_session.h"
+#include "../app/command_router.h"
+#include "../app/project_controller.h"
+#include "../app/session_serializer.h"
+#include "../core/model.h" // Transitional declarations used by this legacy adapter.
 #include "../core/document/document.h"
 #include "../core/document/document_settings.h"
 #include "../core/document/selection_model.h"
+#include "../core/commands/delete_command.h"
+#include "../core/commands/duplicate_command.h"
+#include "../core/commands/explode_command.h"
+#include "../core/commands/fill_command.h"
+#include "../core/commands/trim_erase_command.h"
 #include "../core/debug_log.h"
 #include "../core/geometry/circle_construction.h"
 #include "../core/geometry/arc_curve_factory.h"
 #include "../core/geometry/curve_evaluator.h"
+#include "../core/geometry/curve_erase_intervals.h"
+#include "../core/geometry/curve_editing.h"
+#include "../core/geometry/curve_join.h"
+#include "../core/geometry/curve_subdivision.h"
 #include "../core/geometry/geometry_transform.h"
 #include "../core/geometry/nurbs_surface_factory.h"
+#include "../core/geometry/shape_mapping.h"
 #include "../core/geometry/work_plane.h"
 #include "../core/history/history.h"
 #include "../core/serialization/document_serializer.h"
 #include "../core/serialization/blender_project_file.h"
 #include "../core/serialization/rhino3dm_interchange.h"
 #include "../services/hit_testing/curve_hit_tester.h"
+#include "../services/hit_testing/selection_box_query.h"
+#include "../services/input/drawing_plane_resolver.h"
+#include "../services/input/input_constraint_service.h"
 #include "../services/dimensions/dimension_association.h"
+#include "../services/erase/curve_erase_query.h"
+#include "../services/erase/trim_erase_query.h"
 #include "../services/sampling/curve_sampler.h"
+#include "../services/sampling/surface_tessellation_cache.h"
 #include "../services/snapping/snap_engine.h"
 #include "../services/viewport/viewport_transform.h"
 #include "../tools/tool_context.h"
 #include "../tools/tool_input.h"
 #include "../tools/tool_registry.h"
+#include "../tools/select_tool.h"
+#include "../tools/arc_tool.h"
+#include "../tools/rotate_tool.h"
+#include "../tools/mirror_tool.h"
+#include "../tools/scale_tool.h"
+#include "../tools/join_tool.h"
+#include "../tools/subdivision_tool.h"
+#include "../tools/grab_tool.h"
+#include "../tools/duplicate_tool.h"
+#include "../tools/erase_tool.h"
+#include "../tools/trim_tool.h"
 #include "input_helpers.h"
+#include "input/tool_input_translator.h"
 #include "viewport/blender_grid_renderer.h"
+#include "viewport/navigation_controller.h"
 #include "viewport/viewport_control_point_renderer.h"
 #include "viewport/viewport_gpu_surface.h"
-#include "viewport/line_type_style.h"
+#include "viewport/viewport_hud_renderer.h"
 #include "viewport/viewport_scene_renderer.h"
 #include "viewport/viewport_overlay.h"
+#include "viewport/viewport_erase_overlay_renderer.h"
 #include "viewport/viewport_renderer.h"
+#include "viewport/viewport_render_frame.h"
+#include "viewport/viewport_geometry_cache.h"
 
 #include <QAction>
 #include <QApplication>
@@ -36,7 +73,6 @@
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
-#include <QEasingCurve>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QHash>
@@ -56,8 +92,6 @@
 #include <QStringList>
 #include <QTextStream>
 #include <QTimer>
-#include <QToolTip>
-#include <QVariantAnimation>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -97,23 +131,6 @@ void fillViewportBackground(QPainter &painter, const QRect &bounds)
     painter.fillRect(bounds, gradient);
 }
 
-ViewportSceneLineStyle viewportSceneLineStyleForLayerPattern(
-    LayerGpuLinePatternKind kind)
-{
-    switch (kind) {
-    case LayerGpuLinePatternKind::Dashed:
-        return ViewportSceneLineStyle::Dashed;
-    case LayerGpuLinePatternKind::Dotted:
-        return ViewportSceneLineStyle::Dotted;
-    case LayerGpuLinePatternKind::Pattern:
-        return ViewportSceneLineStyle::Pattern;
-    case LayerGpuLinePatternKind::Solid:
-    case LayerGpuLinePatternKind::Unsupported:
-    default:
-        return ViewportSceneLineStyle::Solid;
-    }
-}
-
 Shape pictureFrameOutline(const Shape &picture)
 {
     Shape frame = picture;
@@ -127,263 +144,6 @@ Shape pictureFrameOutline(const Shape &picture)
         frame.nurbs = makeDegreeOneNurbs(closedCorners);
     }
     return frame;
-}
-
-Point3D arcAxisDirection(int key)
-{
-    switch (key) {
-    case Qt::Key_X:
-        return {1.0, 0.0, 0.0};
-    case Qt::Key_Y:
-        return {0.0, 1.0, 0.0};
-    case Qt::Key_Z:
-        return {0.0, 0.0, 1.0};
-    default:
-        return {};
-    }
-}
-
-qreal arcVectorDot(const Point3D &first, const Point3D &second)
-{
-    return first.x * second.x + first.y * second.y + first.z * second.z;
-}
-
-qreal arcVectorLength(const Point3D &vector)
-{
-    return std::sqrt(arcVectorDot(vector, vector));
-}
-
-QJsonObject point3DToJson(const Point3D &point)
-{
-    return {{QStringLiteral("x"), point.x},
-            {QStringLiteral("y"), point.y},
-            {QStringLiteral("z"), point.z}};
-}
-
-bool point3DFromJson(const QJsonValue &value, Point3D *point)
-{
-    if (point == nullptr || !value.isObject()) {
-        return false;
-    }
-
-    const QJsonObject object = value.toObject();
-    const QJsonValue xValue = object.value(QStringLiteral("x"));
-    const QJsonValue yValue = object.value(QStringLiteral("y"));
-    const QJsonValue zValue = object.value(QStringLiteral("z"));
-    if (!xValue.isDouble() || !yValue.isDouble() || !zValue.isDouble()) {
-        return false;
-    }
-
-    const Point3D restored{xValue.toDouble(), yValue.toDouble(), zValue.toDouble()};
-    if (!std::isfinite(restored.x) || !std::isfinite(restored.y) ||
-        !std::isfinite(restored.z)) {
-        return false;
-    }
-
-    *point = restored;
-    return true;
-}
-
-QJsonObject workPlaneFrameToJson(const WorkPlaneFrame &frame)
-{
-    return {{QStringLiteral("origin"), point3DToJson(frame.origin)},
-            {QStringLiteral("xAxis"), point3DToJson(frame.xAxis)},
-            {QStringLiteral("yAxis"), point3DToJson(frame.yAxis)},
-            {QStringLiteral("normal"), point3DToJson(frame.normal)},
-            {QStringLiteral("valid"), frame.valid}};
-}
-
-bool workPlaneFrameFromJson(const QJsonValue &value, WorkPlaneFrame *frame)
-{
-    if (frame == nullptr || !value.isObject()) {
-        return false;
-    }
-
-    const QJsonObject object = value.toObject();
-    WorkPlaneFrame restored;
-    if (!point3DFromJson(object.value(QStringLiteral("origin")), &restored.origin) ||
-        !point3DFromJson(object.value(QStringLiteral("xAxis")), &restored.xAxis) ||
-        !point3DFromJson(object.value(QStringLiteral("yAxis")), &restored.yAxis) ||
-        !point3DFromJson(object.value(QStringLiteral("normal")), &restored.normal) ||
-        !object.value(QStringLiteral("valid")).toBool(false)) {
-        return false;
-    }
-    restored.valid = true;
-    if (!isValidWorkPlaneFrame(restored)) {
-        return false;
-    }
-
-    *frame = restored;
-    return true;
-}
-
-QJsonObject viewportCameraStateToJson(const ViewportCameraState &state)
-{
-    QJsonObject orientation;
-    orientation.insert(QStringLiteral("w"), state.orientation.w);
-    orientation.insert(QStringLiteral("x"), state.orientation.x);
-    orientation.insert(QStringLiteral("y"), state.orientation.y);
-    orientation.insert(QStringLiteral("z"), state.orientation.z);
-
-    QJsonObject object;
-    object.insert(QStringLiteral("zoom"), state.zoom);
-    object.insert(QStringLiteral("pan"), pointToJson(state.pan));
-    object.insert(QStringLiteral("orbitPivot"), point3DToJson(state.orbitPivot));
-    object.insert(QStringLiteral("yawRadians"), state.yawRadians);
-    object.insert(QStringLiteral("pitchRadians"), state.pitchRadians);
-    object.insert(QStringLiteral("perspective"), state.perspective);
-    object.insert(QStringLiteral("preset"), static_cast<int>(state.preset));
-    object.insert(QStringLiteral("gridViewDistance"), state.gridViewDistance);
-    object.insert(QStringLiteral("orientation"), orientation);
-    object.insert(QStringLiteral("hasOrientation"), state.hasOrientation);
-    return object;
-}
-
-bool viewportCameraStateFromJson(const QJsonValue &value,
-                                 ViewportCameraState *state)
-{
-    if (state == nullptr || !value.isObject()) {
-        return false;
-    }
-
-    const QJsonObject object = value.toObject();
-    const auto finiteNumber = [&object](const QString &key, qreal *number) {
-        const QJsonValue value = object.value(key);
-        if (number == nullptr || !value.isDouble()) {
-            return false;
-        }
-        const qreal restored = value.toDouble();
-        if (!std::isfinite(restored)) {
-            return false;
-        }
-        *number = restored;
-        return true;
-    };
-
-    ViewportCameraState restored;
-    int preset = -1;
-    if (!finiteNumber(QStringLiteral("zoom"), &restored.zoom) ||
-        restored.zoom <= 0.0 ||
-        !pointFromJson(object.value(QStringLiteral("pan")), &restored.pan) ||
-        !point3DFromJson(object.value(QStringLiteral("orbitPivot")),
-                         &restored.orbitPivot) ||
-        !finiteNumber(QStringLiteral("yawRadians"), &restored.yawRadians) ||
-        !finiteNumber(QStringLiteral("pitchRadians"), &restored.pitchRadians) ||
-        !finiteNumber(QStringLiteral("gridViewDistance"),
-                      &restored.gridViewDistance) ||
-        restored.gridViewDistance <= 0.0 ||
-        !object.value(QStringLiteral("preset")).isDouble() ||
-        !object.value(QStringLiteral("perspective")).isBool() ||
-        !object.value(QStringLiteral("hasOrientation")).isBool()) {
-        return false;
-    }
-    preset = object.value(QStringLiteral("preset")).toInt(-1);
-    if (preset < static_cast<int>(ViewportViewPreset::Top) ||
-        preset > static_cast<int>(ViewportViewPreset::Left)) {
-        return false;
-    }
-    restored.preset = static_cast<ViewportViewPreset>(preset);
-    restored.perspective = object.value(QStringLiteral("perspective")).toBool();
-    restored.hasOrientation = object.value(QStringLiteral("hasOrientation")).toBool();
-
-    const QJsonObject orientation = object.value(QStringLiteral("orientation")).toObject();
-    const QJsonValue orientationW = orientation.value(QStringLiteral("w"));
-    const QJsonValue orientationX = orientation.value(QStringLiteral("x"));
-    const QJsonValue orientationY = orientation.value(QStringLiteral("y"));
-    const QJsonValue orientationZ = orientation.value(QStringLiteral("z"));
-    if (!orientationW.isDouble() || !orientationX.isDouble() ||
-        !orientationY.isDouble() || !orientationZ.isDouble()) {
-        return false;
-    }
-    restored.orientation = {orientationW.toDouble(),
-                            orientationX.toDouble(),
-                            orientationY.toDouble(),
-                            orientationZ.toDouble()};
-    const qreal orientationLengthSquared = restored.orientation.dot(restored.orientation);
-    if (!std::isfinite(orientationLengthSquared) ||
-        (restored.hasOrientation && orientationLengthSquared <= 1.0e-12)) {
-        return false;
-    }
-
-    *state = restored;
-    return true;
-}
-
-Point3D arcVectorAdd(const Point3D &first, const Point3D &second)
-{
-    return {first.x + second.x, first.y + second.y, first.z + second.z};
-}
-
-Point3D arcVectorSubtract(const Point3D &first, const Point3D &second)
-{
-    return {first.x - second.x, first.y - second.y, first.z - second.z};
-}
-
-Point3D arcVectorScale(const Point3D &vector, qreal scale)
-{
-    return {vector.x * scale, vector.y * scale, vector.z * scale};
-}
-
-Point3D arcVectorCross(const Point3D &first, const Point3D &second)
-{
-    return {first.y * second.z - first.z * second.y,
-            first.z * second.x - first.x * second.z,
-            first.x * second.y - first.y * second.x};
-}
-
-Point3D rotateWorldVector(const Point3D &vector,
-                          const Point3D &axis,
-                          qreal angle)
-{
-    const qreal axisLength = arcVectorLength(axis);
-    if (axisLength <= 1.0e-12 || std::abs(angle) <= 1.0e-15) {
-        return vector;
-    }
-    const Point3D unitAxis = arcVectorScale(axis, 1.0 / axisLength);
-    const qreal cosine = std::cos(angle);
-    const qreal sine = std::sin(angle);
-    return arcVectorAdd(
-        arcVectorAdd(arcVectorScale(vector, cosine),
-                     arcVectorScale(arcVectorCross(unitAxis, vector), sine)),
-        arcVectorScale(unitAxis,
-                       arcVectorDot(unitAxis, vector) * (1.0 - cosine)));
-}
-
-Point3D rotateWorldPoint(const Point3D &point,
-                         const Point3D &pivot,
-                         const Point3D &axis,
-                         qreal angle)
-{
-    return arcVectorAdd(pivot,
-                        rotateWorldVector(arcVectorSubtract(point, pivot),
-                                          axis,
-                                          angle));
-}
-
-WorkPlaneFrame rotateWorkPlaneFrame(const WorkPlaneFrame &frame,
-                                    const Point3D &pivot,
-                                    const Point3D &axis,
-                                    qreal angle)
-{
-    WorkPlaneFrame result = frame;
-    result.origin = rotateWorldPoint(frame.origin, pivot, axis, angle);
-    result.xAxis = rotateWorldVector(frame.xAxis, axis, angle);
-    result.yAxis = rotateWorldVector(frame.yAxis, axis, angle);
-    result.normal = rotateWorldVector(frame.normal, axis, angle);
-    result.valid = isValidWorkPlaneFrame(result);
-    return result;
-}
-
-qreal snapOnePointArcAngle(qreal angle)
-{
-    constexpr qreal pi = 3.14159265358979323846;
-    constexpr qreal twoPi = 2.0 * pi;
-    constexpr qreal angleIncrement = pi / 12.0;
-    constexpr qreal snapTolerance = 6.0 * pi / 180.0;
-    const qreal nearest = std::round(angle / angleIncrement) * angleIncrement;
-    return std::abs(std::remainder(angle - nearest, twoPi)) <= snapTolerance
-               ? nearest
-               : angle;
 }
 
 QString arcLengthUnitSuffix(DocumentLengthUnit unit)
@@ -468,11 +228,35 @@ struct ArcHudDisplay {
 
 class ViewportWidget final : public ViewportWidgetApi {
 public:
-    explicit ViewportWidget(QWidget *parent = nullptr)
+    explicit ViewportWidget(ApplicationSession *session = nullptr,
+                            QWidget *parent = nullptr)
         : ViewportWidgetApi(parent)
-        , history_(document_)
-        , viewportRenderer_(viewportTransform_, curveHitTester_)
+        , ownedSession_(session == nullptr
+                            ? std::make_unique<ApplicationSession>()
+                            : nullptr)
+        , session_(session == nullptr ? *ownedSession_ : *session)
+        , document_(session_.document())
+        , selection_(session_.selection())
+        , history_(session_.history())
+        , curveHitTester_(&surfaceTessellationCache_)
+        , viewportRenderer_(viewportTransform_,
+                            curveHitTester_,
+                            &surfaceTessellationCache_)
         , viewportOverlay_(viewportRenderer_, viewportTransform_)
+        , navigationGizmo_(viewportTransform_)
+        , navigationController_(
+              *this,
+              viewportTransform_,
+              navigationGizmo_,
+              NavigationControllerCallbacks{
+                  [this](const QPointF &position) { beginOrbitAt(position); },
+                  [this] {
+                      return activeTool_ == Tool::Select ? Qt::ArrowCursor
+                                                         : Qt::CrossCursor;
+                  },
+                  [this] { update(); },
+                  [this] { emitCoordinateUpdate(); },
+                  [this] { notifyViewStateChanged(); }})
         , toolContext_(document_,
                        selection_,
                        history_,
@@ -480,14 +264,21 @@ public:
                        curveSampler_,
                        curveHitTester_,
                        snapEngine_)
-        , toolRegistry_()
+        , toolRegistry_(session_.toolRegistry())
+        , arcTool_(static_cast<ArcTool &>(*toolRegistry_.find(Tool::Arc)))
+        , rotateTool_(static_cast<RotateTool &>(*toolRegistry_.find(Tool::Rotate)))
+        , mirrorTool_(static_cast<MirrorTool &>(*toolRegistry_.find(Tool::Mirror)))
+        , scaleTool_(static_cast<ScaleTool &>(*toolRegistry_.find(Tool::Scale)))
+        , trimTool_(static_cast<TrimTool &>(*toolRegistry_.find(Tool::Trim)))
+        , eraseTool_(static_cast<EraseTool &>(*toolRegistry_.find(Tool::Erase)))
         , shapes_(document_)
         , pan_(viewportTransform_.pan())
         , selectedShapeIndices_(selection_.objectIds())
         , selectedShapeIndex_(selection_.primaryObjectId())
-        , controlPointIndex_(selection_.activeControlPointIndex())
+        , controlPointIndex_(selection_.activeControlPoint().index)
         , zoom_(viewportTransform_.zoom())
     {
+        configureCommandRouter();
         viewportTransform_.setGridSpacing(
             documentGridSpacingInMillimeters(document_.settings()));
         toolContext_.setShapeFactory(
@@ -499,14 +290,17 @@ public:
                 return makeToolShape(tool, points, arcMode, arcSweep, shape);
         });
         toolContext_.setShapeCommitter([this](ToolId tool, const Shape &shape) {
-            recordGeometryChange();
             Shape committedShape = shape;
             if (!isValidWorkPlaneFrame(committedShape.workPlaneFrame)) {
                 committedShape.workPlane = viewportTransform_.workPlane();
                 committedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
                 committedShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
             }
-            shapes_.append(committedShape);
+            DocumentTransaction transaction = session_.beginTransaction();
+            if (!transaction.addShape(committedShape).isValid() ||
+                !session_.commitTransaction(transaction)) {
+                return false;
+            }
             DebugLog::instance().write(QStringLiteral("tool commit tool=%1 shapes=%2")
                                            .arg(toolName(tool))
                                            .arg(shapes_.size()));
@@ -518,6 +312,14 @@ public:
                 commandFinished_(tool);
             }
         });
+        toolContext_.setTransactionCommitter(
+            [this](DocumentTransaction &transaction) {
+                return session_.commitTransaction(transaction);
+            });
+        toolContext_.setLayersChangedNotifier(
+            [this]() { notifyLayersChanged(); });
+        toolContext_.setSelectionChangedNotifier(
+            [this]() { session_.notifySelectionChanged(); });
         toolContext_.setShapesCommitter([this](ToolId, const QVector<Shape> &shapes) {
             if (shapes.isEmpty()) return false;
             for (const Shape &shape : shapes) {
@@ -533,18 +335,23 @@ public:
                     return false;
                 }
             }
-            recordGeometryChange();
-            for (const Shape &shape : shapes) shapes_.append(shape);
-            return true;
+            DocumentTransaction transaction = session_.beginTransaction();
+            for (const Shape &shape : shapes) {
+                if (!transaction.addShape(shape).isValid()) {
+                    transaction.rollback();
+                    return false;
+                }
+            }
+            return session_.commitTransaction(transaction);
         });
         toolContext_.setPreviewPublisher([this](const ToolPreview &preview) {
+            toolPreview_ = preview;
             // Rendering remains in the viewport for now, but the pending
-            // points themselves are owned by the active tool.
-            // Arc is still driven by the viewport's established multi-stage
-            // interaction below. Its registered ShapeCreationTool is only a
-            // lifecycle bridge and has no Arc click state, so accepting that
-            // controller's empty preview would erase the Arc's input points.
-            if (activeTool_ != Tool::Arc) {
+            // points themselves are owned by the active tool. Arc stores its
+            // staged points in ArcTool's interaction record.
+            if (activeTool_ == Tool::Arc) {
+                pendingPoints_ = arcTool_.inputPoints();
+            } else {
                 pendingPoints_ = preview.points;
             }
             if (preview.hasWorkPlaneFrame && activeTool_ != Tool::Line) {
@@ -555,11 +362,6 @@ public:
                 }
             }
             if (activeTool_ == Tool::Line) {
-                linePreviewFrame_ = preview.workPlaneFrame;
-                linePreviewWorldPoints_ = preview.worldPoints;
-                linePreviewWorldCursor_ = preview.worldCursorPoint;
-                linePreviewShapes_ = preview.shapes;
-                linePreviewPlaneLocked_ = preview.planeLocked;
                 if (preview.overridesSnap) currentSnap_ = preview.snap;
                 if (preview.hasCursorPoint) {
                     cursorWorld_ = preview.cursorPoint;
@@ -567,7 +369,6 @@ public:
                 }
             }
             if (activeTool_ == Tool::PointExtrude && preview.overridesSnap) {
-                pointExtrudePreviewShapes_ = preview.shapes;
                 currentSnap_ = preview.snap;
                 if (preview.hasCursorPoint &&
                     isValidWorkPlaneFrame(viewportTransform_.workPlaneFrame())) {
@@ -577,43 +378,31 @@ public:
                     cursorValid_ = true;
                 }
             }
-            controllerPreviewShape_ = preview.shape;
             if (preview.hasShape &&
-                !isValidWorkPlaneFrame(controllerPreviewShape_.workPlaneFrame)) {
-                controllerPreviewShape_.workPlane = viewportTransform_.workPlane();
-                controllerPreviewShape_.workPlaneOffset =
+                !isValidWorkPlaneFrame(toolPreview_.shape.workPlaneFrame)) {
+                toolPreview_.shape.workPlane = viewportTransform_.workPlane();
+                toolPreview_.shape.workPlaneOffset =
                     viewportTransform_.workPlaneOffset();
-                controllerPreviewShape_.workPlaneFrame =
+                toolPreview_.shape.workPlaneFrame =
                     viewportTransform_.workPlaneFrame();
             }
-            controllerPreviewShapeVisible_ = preview.hasShape;
             if (isCircleConstructionTool(activeTool_)) {
-                circleHudDimensionsLine_ = preview.hudDimensionsLine;
-                circleHudInstructionsLine_ = preview.hudInstructionsLine;
                 if (preview.hasCursorPoint) {
                     cursorWorld_ = preview.cursorPoint;
                     cursorValid_ = true;
                 }
             }
             if (isEllipseTool(activeTool_)) {
-                ellipsePreviewGuides_ = preview.guides;
-                ellipseHudDimensionsLine_ = preview.hudDimensionsLine;
-                ellipseHudInstructionsLine_ = preview.hudInstructionsLine;
                 cursorValid_ = preview.hasCursorPoint;
                 if (preview.hasCursorPoint) {
                     cursorWorld_ = preview.cursorPoint;
                 }
             }
             if (isRectangleTool(activeTool_)) {
-                rectangleHudDimensionsLine_ = preview.hudDimensionsLine;
-                rectangleHudInstructionsLine_ = preview.hudInstructionsLine;
-                rectanglePreviewGuides_ = preview.guides;
                 cursorValid_ = preview.hasCursorPoint;
                 if (preview.hasCursorPoint) cursorWorld_ = preview.cursorPoint;
             }
             if (isPolygonTool(activeTool_)) {
-                polygonHudDimensionsLine_ = preview.hudDimensionsLine;
-                polygonHudInstructionsLine_ = preview.hudInstructionsLine;
                 cursorValid_ = preview.hasCursorPoint;
                 if (preview.hasCursorPoint) {
                     cursorWorld_ = preview.cursorPoint;
@@ -623,12 +412,6 @@ public:
                 if (activeTool_ == Tool::PointByLine && preview.overridesSnap) {
                     currentSnap_ = preview.snap;
                 }
-                pointPreviewShapes_ = preview.shapes;
-                pointPreviewGuides_ = preview.guides;
-                pointPreviewFrame_ = preview.workPlaneFrame;
-                pointPreviewWorldPoints_ = preview.worldPoints;
-                pointHudInstructionsLine_ = preview.hudInstructionsLine;
-                pointPreviewStage_ = preview.activeStage;
                 if (preview.hasCursorPoint && activeTool_ == Tool::PointByLine) {
                     cursorWorld_ = preview.cursorPoint;
                     cursorValid_ = true;
@@ -647,70 +430,80 @@ public:
                 return constrainLinePoint(rawPoint);
             });
         toolContext_.setArcModeProvider([this] {
-            return arcMode_;
+            return arcState().mode;
         });
         toolContext_.setArcSweepProvider([this] {
-            return arcPreviewSweepAngle_;
+            return arcState().previewSweepAngle;
         });
         toolContext_.setPolygonSideCountCallbacks(
             [this] { return polygonSideCount_; },
             [this](int sideCount) {
                 polygonSideCount_ = std::clamp(sideCount, 3, 1001);
             });
+        toolContext_.setSelectionInteractionCallbacks(
+            [this](const QPointF &screenPosition, bool includeControlPoint) {
+                if (includeControlPoint && controlPointsVisible_) {
+                    int shapeIndex = -1;
+                    int controlPointIndex = -1;
+                    if (hitTestSelectedControlPoint(screenPosition,
+                                                    &shapeIndex,
+                                                    &controlPointIndex)) {
+                        return SelectionHit{shapes_.objectIdAt(shapeIndex),
+                                            controlPointIndex};
+                    }
+                }
+                const int shapeIndex = hitTestShape(screenPosition);
+                return SelectionHit{shapes_.objectIdAt(shapeIndex), -1};
+            },
+            [this](SelectionGestureKind gesture,
+                   const ToolInput &input,
+                   const SelectionHit &hit,
+                   bool additive) {
+                rawCursorWorld_ = input.rawWorldPosition;
+                cursorWorld_ = input.rawWorldPosition;
+                lastWorldPosition_ = input.rawWorldPosition;
+                cursorValid_ = true;
+
+                if (gesture == SelectionGestureKind::BeginSelectionBox) {
+                    beginSelectionBox(input.screenPosition, additive);
+                    return;
+                }
+
+                dragHistoryRecorded_ = false;
+                currentDragSnap_ = DragSnapResult{};
+                dragSnapLocked_ = false;
+                dragAxisLock_ = DragAxisLock::None;
+                if (gesture == SelectionGestureKind::BeginControlPointDrag) {
+                    setCursor(Qt::SizeAllCursor);
+                    DebugLog::instance().write(
+                        QStringLiteral("control point drag start shape=%1 index=%2 world=%3")
+                            .arg(objectIndex(hit.objectId))
+                            .arg(hit.controlPointIndex)
+                            .arg(pointText(selectionLastControlPointWorldPosition())));
+                    return;
+                }
+
+                setFocus(Qt::MouseFocusReason);
+                setCursor(Qt::SizeAllCursor);
+                const int shapeIndex = objectIndex(selection_.primaryObjectId());
+                const QString geometryName = shapeIndex >= 0 && shapeIndex < shapes_.size()
+                    ? geometryTypeName(shapes_[shapeIndex].geometryType)
+                    : QStringLiteral("unknown");
+                DebugLog::instance().write(
+                        QStringLiteral("selection hit shape=%1 tool=%2 dragStart=%3")
+                        .arg(shapeIndex)
+                        .arg(geometryName)
+                        .arg(pointText(selectionLastDragWorldPosition())));
+            });
         setMinimumSize(480, 320);
         setMouseTracking(true);
         setFocusPolicy(Qt::StrongFocus);
         qApp->installEventFilter(this);
         setCursor(Qt::CrossCursor);
-        navigationAnimation_ = new QVariantAnimation(this);
-        navigationAnimation_->setDuration(200);
-        navigationAnimation_->setStartValue(0.0);
-        navigationAnimation_->setEndValue(1.0);
-        navigationAnimation_->setEasingCurve(QEasingCurve::Linear);
-        connect(navigationAnimation_, &QVariantAnimation::valueChanged,
-                this, [this](const QVariant &value) {
-                    const qreal time = value.toReal();
-                    // Blender's smooth view uses 3*t*t - 2*t*t*t.
-                    const qreal progress = time * time * (3.0 - 2.0 * time);
-                    ViewportCameraState state;
-                    const qreal startDistance = 1.0 / navigationAnimationStart_.zoom;
-                    const qreal endDistance = 1.0 / navigationAnimationEnd_.zoom;
-                    state.zoom = 1.0 / (startDistance * (1.0 - progress) +
-                                        endDistance * progress);
-                    state.gridViewDistance =
-                        navigationAnimationStart_.gridViewDistance * (1.0 - progress) +
-                        navigationAnimationEnd_.gridViewDistance * progress;
-                    state.pan = navigationAnimationStart_.pan * (1.0 - progress) +
-                                navigationAnimationEnd_.pan * progress;
-                    state.orbitPivot = {
-                        navigationAnimationStart_.orbitPivot.x * (1.0 - progress) +
-                            navigationAnimationEnd_.orbitPivot.x * progress,
-                        navigationAnimationStart_.orbitPivot.y * (1.0 - progress) +
-                            navigationAnimationEnd_.orbitPivot.y * progress,
-                        navigationAnimationStart_.orbitPivot.z * (1.0 - progress) +
-                            navigationAnimationEnd_.orbitPivot.z * progress};
-                    state.orientation = ViewportOrientation::slerp(
-                        navigationAnimationStart_.orientation,
-                        navigationAnimationEnd_.orientation,
-                        progress);
-                    state.hasOrientation = true;
-                    state.perspective = navigationAnimationStart_.perspective;
-                    state.preset = progress >= 1.0
-                                       ? navigationAnimationEnd_.preset
-                                       : ViewportViewPreset::Custom;
-                    viewportTransform_.setCameraState(state);
-                    update();
-                    emitCoordinateUpdate();
-                });
-        connect(navigationAnimation_, &QVariantAnimation::finished,
-                this, [this]() {
-                    viewportTransform_.setCameraState(navigationAnimationEnd_);
-                    notifyViewStateChanged();
-                    update();
-                    emitCoordinateUpdate();
-                });
         if (ViewportGpuSurface::isSupported()) {
             gpuSurface_ = new ViewportGpuSurface(this);
+            gpuSurface_->setSurfaceTessellationCache(
+                &surfaceTessellationCache_);
             gpuSurface_->setGeometry(rect());
             gpuSurface_->setAntiAliasingSamples(
                 blenderGridRenderer_.antiAliasingSamples());
@@ -747,10 +540,10 @@ public:
     {
         DebugLog::instance().write(QStringLiteral("setTool requested=%1 previous=%2")
                                        .arg(toolName(tool), toolName(activeTool_)));
-        if (duplicateActive_) {
+        if (duplicateTool_.isActive()) {
             cancelDuplicate();
         }
-        if (grabActive_ && tool != Tool::Select) {
+        if (grabTool_.isActive() && tool != Tool::Select) {
             cancelGrab();
         }
         const Tool previousTool = activeTool_;
@@ -763,10 +556,10 @@ public:
         if (activeToolController_ != nullptr && activeToolController_->id() != tool) {
             activeToolController_->cancel(toolContext_);
         }
-        if (subdivisionActive_ && tool != Tool::Select) {
+        if (subdivisionTool_.isActive() && tool != Tool::Select) {
             cancelSubdivisionPreview();
         }
-        if (joinActive_ && tool != Tool::Select) {
+        if (joinTool_.isActive() && tool != Tool::Select) {
             cancelJoinMode();
         }
         if (tool != Tool::Rotate) {
@@ -781,45 +574,21 @@ public:
         activeTool_ = tool;
         activeToolController_ = toolRegistry_.find(tool);
         pendingPoints_.clear();
+        toolPreview_ = ToolPreview{};
         toolDrawingFrame_ = {};
         toolDrawingPlaneLocked_ = false;
-        linePreviewFrame_ = {};
-        linePreviewWorldPoints_.clear();
-        linePreviewShapes_.clear();
-        linePreviewPlaneLocked_ = false;
-        controllerPreviewShape_ = Shape{};
-        controllerPreviewShapeVisible_ = false;
-        circleHudDimensionsLine_.clear();
-        circleHudInstructionsLine_.clear();
-        ellipseHudDimensionsLine_.clear();
-        ellipseHudInstructionsLine_.clear();
-        ellipsePreviewGuides_.clear();
-        pointPreviewShapes_.clear();
-        pointExtrudePreviewShapes_.clear();
-        pointPreviewGuides_.clear();
-        pointPreviewWorldPoints_.clear();
-        pointHudInstructionsLine_.clear();
-        pointPreviewStage_ = -1;
-        pointPreviewFrame_ = {};
-        polygonHudDimensionsLine_.clear();
-        polygonHudInstructionsLine_.clear();
-        rectangleHudDimensionsLine_.clear();
-        rectangleHudInstructionsLine_.clear();
-        rectanglePreviewGuides_.clear();
         resetArcPreviewTracking();
         resetArcInputState();
         lineCommandActive_ = tool == Tool::Line;
         if (!isEraseLikeTool(tool) || previousTool != tool) {
-            eraseStrokeActive_ = false;
-            eraseCursorPressed_ = false;
-            eraseCandidateShapeIndices_.clear();
-            eraseStrokeScreenPath_.clear();
+            eraseTool_.resetInteraction();
+            trimTool_.clearCandidates();
+            eraseTool_.clearCandidates();
             eraseTargetShapeIndices_.clear();
             eraseSceneCurveCaches_.clear();
             eraseTargetCurveCaches_.clear();
             eraseGeometryCachePrepared_ = false;
-            trimHoverPositionValid_ = false;
-            trimHoverComponentIndex_ = -1;
+            trimTool_.resetInteraction();
         }
 
         if (tool != Tool::Select) {
@@ -827,19 +596,12 @@ public:
             if (!isEraseLikeTool(tool) && tool != Tool::Rotate &&
                 tool != Tool::Scale && tool != Tool::Mirror) {
                 if (tool != Tool::PointCenter && tool != Tool::PointExtrude) {
-                    selectedShapeIndices_.clear();
-                    selectedShapeIndex_ = ObjectId::invalid();
+                    selection_.clear();
                 }
             }
-            selectionBoxActive_ = false;
-            selectionBoxMoved_ = false;
-            selectionBoxAdditive_ = false;
-            trimBoxSelectionActive_ = false;
-            draggingSelected_ = false;
-            dragGestureStarted_ = false;
-            draggingShapeIndices_.clear();
-            draggingControlPoint_ = false;
-            controlPointIndex_ = -1;
+            resetSelectionBoxState();
+            clearSelectionDragState();
+            selection_.clearActiveControlPoint();
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
@@ -922,62 +684,7 @@ public:
     ViewportCommandResult executeCommand(ViewportCommand command,
                                          int argument = 0) override
     {
-        switch (command) {
-        case ViewportCommand::Undo: {
-            if (duplicateActive_) {
-                cancelDuplicate();
-            }
-            const bool accepted = history_.canUndo();
-            undo();
-            return {accepted, 0};
-        }
-        case ViewportCommand::Redo: {
-            if (duplicateActive_) {
-                cancelDuplicate();
-            }
-            const bool accepted = history_.canRedo();
-            redo();
-            return {accepted, 0};
-        }
-        case ViewportCommand::BeginSubdivision:
-            return {beginSubdivisionWheelMode(), 0};
-        case ViewportCommand::CancelSubdivision:
-            cancelSubdivisionWheelMode();
-            return {true, 0};
-        case ViewportCommand::ApplySubdivision:
-            return {applySubdivision(argument), 0};
-        case ViewportCommand::BeginJoin:
-            return {beginJoinMode(), 0};
-        case ViewportCommand::Explode: {
-            const int explodedComponents = explodeSelectedShapes();
-            return {explodedComponents > 0, explodedComponents};
-        }
-        case ViewportCommand::Fill: {
-            const int filledCurves = fillSelectedClosedCurves();
-            return {filledCurves > 0, filledCurves};
-        }
-        case ViewportCommand::BeginRotate:
-            return {beginRotate(), 0};
-        case ViewportCommand::BeginScale:
-            if (argument < static_cast<int>(ScaleMode::OneD) ||
-                argument > static_cast<int>(ScaleMode::TwoD)) {
-                return {};
-            }
-            return {beginScale(static_cast<ScaleMode>(argument)), 0};
-        case ViewportCommand::BeginMirror:
-            return {beginMirror(), 0};
-        case ViewportCommand::BeginDuplicate:
-            return {beginDuplicate(), 0};
-        case ViewportCommand::DuplicateInPlace:
-            return {duplicateInPlace(), 0};
-        case ViewportCommand::BeginPointExtrude:
-        {
-            const int pointCount = beginPointExtrude();
-            return {pointCount > 0, pointCount};
-        }
-        }
-
-        return {};
+        return commandRouter_.execute(command, argument);
     }
 
     QVector<ViewportLayerInfo> layerInfos() const override
@@ -1006,255 +713,22 @@ public:
     ViewportLayerCommandResult executeLayerCommand(
         const ViewportLayerCommandRequest &request) override
     {
-        const auto hasEditableAlternative = [this](LayerId excludedLayer) {
-            for (const Layer &layer : document_.layers()) {
-                if (layer.id != excludedLayer && layer.visible && !layer.frozen &&
-                    !layer.locked) {
-                    return true;
-                }
-            }
-            return false;
-        };
-
-        switch (request.command) {
-        case ViewportLayerCommand::Create: {
-            recordLayerChange();
-            const LayerId layerId = document_.createLayer(request.name);
-            if (!document_.setActiveLayer(layerId)) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, layerId, 0};
+        const LayerCommandResult result = LayerCommand::execute(
+            document_, history_, request, selectedShapeIndices_);
+        if (!result.accepted) {
+            return {};
         }
-        case ViewportLayerCommand::Remove: {
-            const Layer *layer = document_.layer(request.layerId);
-            if (layer == nullptr || document_.layers().size() <= 1 ||
-                !layer->objectIds.isEmpty() ||
-                (document_.activeLayerId() == request.layerId &&
-                 !hasEditableAlternative(request.layerId))) {
-                return {};
-            }
-            recordLayerChange();
-            if (!document_.removeLayer(request.layerId)) {
-                return {};
-            }
+        if (result.changed) {
+            notifyHistoryChanged();
+            notifyLayersChanged();
+        }
+        if (result.pruneSelection) {
             pruneSelectionToEditableLayers();
-            notifyLayersChanged();
+        }
+        if (result.redraw) {
             update();
-            return {true, document_.activeLayerId(), 0};
         }
-        case ViewportLayerCommand::Activate: {
-            if (document_.activeLayerId() == request.layerId) {
-                return {true, request.layerId, 0};
-            }
-            if (!document_.isLayerEditable(request.layerId)) {
-                return {};
-            }
-            recordLayerChange();
-            if (!document_.setActiveLayer(request.layerId)) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::SetVisible: {
-            const Layer *layer = document_.layer(request.layerId);
-            if (layer == nullptr || layer->visible == request.enabled) {
-                return layer == nullptr ? ViewportLayerCommandResult{}
-                                        : ViewportLayerCommandResult{true, request.layerId, 0};
-            }
-            if (!request.enabled && document_.activeLayerId() == request.layerId &&
-                !hasEditableAlternative(request.layerId)) {
-                return {};
-            }
-            recordLayerChange();
-            if (!document_.setLayerVisible(request.layerId, request.enabled)) {
-                return {};
-            }
-            pruneSelectionToEditableLayers();
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::SetLocked: {
-            const Layer *layer = document_.layer(request.layerId);
-            if (layer == nullptr || layer->locked == request.enabled) {
-                return layer == nullptr ? ViewportLayerCommandResult{}
-                                        : ViewportLayerCommandResult{true, request.layerId, 0};
-            }
-            if (request.enabled && document_.activeLayerId() == request.layerId &&
-                !hasEditableAlternative(request.layerId)) {
-                return {};
-            }
-            recordLayerChange();
-            if (!document_.setLayerLocked(request.layerId, request.enabled)) {
-                return {};
-            }
-            pruneSelectionToEditableLayers();
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::SetFrozen: {
-            const Layer *layer = document_.layer(request.layerId);
-            if (layer == nullptr || layer->frozen == request.enabled) {
-                return layer == nullptr ? ViewportLayerCommandResult{}
-                                        : ViewportLayerCommandResult{true, request.layerId, 0};
-            }
-            if (request.enabled && document_.activeLayerId() == request.layerId &&
-                !hasEditableAlternative(request.layerId)) {
-                return {};
-            }
-            recordLayerChange();
-            if (!document_.setLayerFrozen(request.layerId, request.enabled)) {
-                return {};
-            }
-            pruneSelectionToEditableLayers();
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::SetColor: {
-            const Layer *layer = document_.layer(request.layerId);
-            if (layer == nullptr || !request.color.isValid()) {
-                return {};
-            }
-            if (layer->color == request.color) {
-                return {true, request.layerId, 0};
-            }
-            recordLayerChange();
-            if (!document_.setLayerColor(request.layerId, request.color)) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::SetLineType: {
-            const Layer *layer = document_.layer(request.layerId);
-            const QString lineType = request.name.trimmed();
-            if (layer == nullptr || lineType.isEmpty()) {
-                return {};
-            }
-            if (layer->lineType == lineType) {
-                return {true, request.layerId, 0};
-            }
-            recordLayerChange();
-            if (!document_.setLayerLineType(request.layerId, lineType)) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::SetLineWeight: {
-            const Layer *layer = document_.layer(request.layerId);
-            if (layer == nullptr || layer->lineWeightMm == request.lineWeightMm) {
-                return layer == nullptr ? ViewportLayerCommandResult{}
-                                        : ViewportLayerCommandResult{true, request.layerId, 0};
-            }
-            recordLayerChange();
-            if (!document_.setLayerLineWeight(request.layerId, request.lineWeightMm)) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::SetPlotted: {
-            const Layer *layer = document_.layer(request.layerId);
-            if (layer == nullptr || layer->plotted == request.enabled) {
-                return layer == nullptr ? ViewportLayerCommandResult{}
-                                        : ViewportLayerCommandResult{true, request.layerId, 0};
-            }
-            recordLayerChange();
-            if (!document_.setLayerPlotted(request.layerId, request.enabled)) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::SetDescription: {
-            const Layer *layer = document_.layer(request.layerId);
-            if (layer == nullptr) {
-                return {};
-            }
-            if (layer->description == request.name) {
-                return {true, request.layerId, 0};
-            }
-            recordLayerChange();
-            if (!document_.setLayerDescription(request.layerId, request.name)) {
-                return {};
-            }
-            notifyLayersChanged();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::Rename: {
-            const Layer *layer = document_.layer(request.layerId);
-            const QString trimmedName = request.name.trimmed();
-            if (layer == nullptr || trimmedName.isEmpty()) {
-                return {};
-            }
-            if (layer->name == trimmedName) {
-                return {true, request.layerId, 0};
-            }
-            recordLayerChange();
-            if (!document_.renameLayer(request.layerId, trimmedName)) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::Move: {
-            if (document_.layer(request.layerId) == nullptr || request.index < 0 ||
-                request.index >= document_.layers().size()) {
-                return {};
-            }
-            recordLayerChange();
-            if (!document_.moveLayer(request.layerId, request.index)) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, 0};
-        }
-        case ViewportLayerCommand::MoveSelectedObjects: {
-            if (!document_.isLayerEditable(request.layerId)) {
-                return {};
-            }
-
-            QVector<ObjectId> movableObjects;
-            for (const ObjectId objectId : selectedShapeIndices_) {
-                if (document_.isObjectEditable(objectId) &&
-                    document_.object(objectId)->layerId != request.layerId) {
-                    movableObjects.append(objectId);
-                }
-            }
-            if (movableObjects.isEmpty()) {
-                return {};
-            }
-
-            recordLayerChange();
-            int movedCount = 0;
-            for (const ObjectId objectId : movableObjects) {
-                if (document_.moveObjectToLayer(objectId, request.layerId)) {
-                    ++movedCount;
-                }
-            }
-            if (movedCount == 0) {
-                return {};
-            }
-            notifyLayersChanged();
-            update();
-            return {true, request.layerId, movedCount};
-        }
-        }
-
-        return {};
+        return result;
     }
 
     bool canUndo() const
@@ -1326,7 +800,7 @@ public:
             return;
         }
         if (tool == Tool::Scale) {
-            if (beginScale(scaleMode_) && toolRepeated_) {
+            if (beginScale(scaleState().mode) && toolRepeated_) {
                 toolRepeated_(tool);
             }
             return;
@@ -1350,24 +824,24 @@ public:
 
     void setArcMode(ArcMode mode)
     {
-        arcMode_ = mode;
+        arcTool_.setMode(mode);
         pendingPoints_.clear();
         resetArcPreviewTracking();
         resetArcInputState();
         currentSnap_ = SnapResult{};
         DebugLog::instance().write(QStringLiteral("setArcMode mode=%1")
-                                       .arg(arcModeName(arcMode_)));
+                                       .arg(arcModeName(arcState().mode)));
         update();
     }
 
     ArcMode arcMode() const
     {
-        return arcMode_;
+        return arcTool_.mode();
     }
 
     void setWorkPlane(WorkPlane plane, qreal offset = 0.0) override
     {
-        stopNavigationAnimation();
+        navigationController_.stopAnimation();
         if (!std::isfinite(offset)) {
             return;
         }
@@ -1384,7 +858,7 @@ public:
 
         setTool(Tool::Select);
         selection_.clear();
-        controlPointIndex_ = -1;
+        selection_.clearActiveControlPoint();
         currentSnap_ = SnapResult{};
         currentDragSnap_ = DragSnapResult{};
         viewportTransform_.setWorkPlane(plane, offset);
@@ -1425,7 +899,7 @@ public:
 
     void setViewPreset(ViewportViewPreset preset) override
     {
-        animateCameraChange([this, preset]() {
+        navigationController_.animateCameraChange([this, preset]() {
             viewportTransform_.setViewPreset(preset);
         });
     }
@@ -1439,8 +913,8 @@ public:
     {
         controlPointsVisible_ = visible;
         if (!visible) {
-            draggingControlPoint_ = false;
-            controlPointIndex_ = -1;
+            clearSelectionDragState();
+            selection_.clearActiveControlPoint();
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
@@ -1451,7 +925,7 @@ public:
         update();
     }
 
-    bool controlPointsVisible() const
+    bool controlPointsVisible() const override
     {
         return controlPointsVisible_;
     }
@@ -1504,7 +978,12 @@ public:
             return false;
         }
         rotateToolPreferences_ = preferences;
-        rotateAngleSnapEnabled_ = preferences.angleSnapEnabled;
+        rotateTool_.setAngleSnapEnabled(preferences.angleSnapEnabled);
+        rotateTool_.setAngleSnapParameters(
+            preferences.useRadians
+                ? preferences.angleSnapIncrementRadiansDegrees
+                : preferences.angleSnapIncrementDegrees,
+            preferences.angleSnapStrengthDegrees);
         update();
         return true;
     }
@@ -1522,14 +1001,14 @@ public:
         if (document_.settings() == settings) {
             return true;
         }
-        const Document::Snapshot previous = document_.snapshot();
-        if (!document_.setSettings(settings)) {
+        DocumentTransaction transaction = session_.beginTransaction();
+        if (!transaction.setSettings(settings) ||
+            !session_.commitTransaction(transaction)) {
             return false;
         }
         const qreal gridSpacing = documentGridSpacingInMillimeters(settings);
         viewportTransform_.setGridSpacing(gridSpacing);
         viewportRenderer_.setGridBaseStep(gridSpacing);
-        recordGeometrySnapshot(previous);
         update();
         return true;
     }
@@ -1608,7 +1087,7 @@ public:
             return;
         }
 
-        panButton_ = button;
+        navigationController_.setPanButton(button);
         DebugLog::instance().write(QStringLiteral("setPanButton applied=%1")
                                        .arg(inputButtonName(button)));
         update();
@@ -1616,7 +1095,7 @@ public:
 
     Qt::MouseButton panButton() const
     {
-        return panButton_;
+        return navigationController_.panButton();
     }
 
     void setOrthoEnabled(bool enabled)
@@ -1624,7 +1103,7 @@ public:
         orthoEnabled_ = enabled;
         refreshCursorConstraint();
 
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+        if (activeTool_ == Tool::Arc && arcState().mode == ArcMode::OnePoint &&
             pendingPoints_.size() >= 2 && cursorValid_) {
             // Reconcile the live sweep immediately when Ortho changes while
             // the endpoint is being positioned. Otherwise the cursor marker
@@ -1714,25 +1193,27 @@ public:
     bool beginSubdivisionWheelMode()
     {
         const int selectedIndex = objectIndex(selectedShapeIndex_);
-        if (selectedIndex < 0 || !isSubdividableShape(shapes_[selectedIndex])) {
+        if (selectedIndex < 0 ||
+            !isSubdividableCurveShape(shapes_[selectedIndex])) {
             DebugLog::instance().write(QStringLiteral("beginSubdivisionWheelMode ignored selectedShape=%1")
                                            .arg(selectedIndex));
             return false;
         }
 
-        subdivisionShapeIndex_ = selectedShapeIndex_;
-        subdivisionSections_ = std::clamp(
+        const int initialSections = std::clamp(
             static_cast<int>(shapes_[selectedIndex].subdivisionParameters.size()) + 1,
             2,
             maxSubdivisionSections);
-        resetSubdivisionWheelTracking();
-        subdivisionActive_ = true;
+        subdivisionTool_.begin(selectedShapeIndex_,
+                               initialSections,
+                               maxSubdivisionSections);
+        subdivisionTool_.refreshPreview(shapes_[selectedIndex]);
         setFocus(Qt::OtherFocusReason);
         notifySubdivisionStatus();
         update();
         DebugLog::instance().write(QStringLiteral("beginSubdivisionWheelMode shape=%1 sections=%2")
                                        .arg(selectedIndex)
-                                       .arg(subdivisionSections_));
+                                       .arg(subdivisionTool_.sections()));
         return true;
     }
 
@@ -1749,16 +1230,18 @@ public:
             return false;
         }
 
-        const ObjectId shapeId = subdivisionActive_ ? subdivisionShapeIndex_ : selectedShapeIndex_;
+        const ObjectId shapeId = subdivisionTool_.isActive()
+                                     ? subdivisionTool_.targetObjectId()
+                                     : selectedShapeIndex_;
         const int shapeIndex = objectIndex(shapeId);
         if (shapeIndex < 0 ||
-            !isSubdividableShape(shapes_[shapeIndex])) {
+            !isSubdividableCurveShape(shapes_[shapeIndex])) {
             DebugLog::instance().write(QStringLiteral("applySubdivision ignored selectedShape=%1")
                                            .arg(shapeIndex));
             return false;
         }
 
-        const QVector<double> parameters = subdivisionParametersForSections(
+        const QVector<double> parameters = equalArcLengthSubdivisionParameters(
             shapes_[shapeIndex], sections);
         if (parameters.size() != sections - 1) {
             DebugLog::instance().write(QStringLiteral("applySubdivision failed shape=%1 sections=%2 generated=%3")
@@ -1768,15 +1251,12 @@ public:
             return false;
         }
 
-        if (shapes_[shapeIndex].subdivisionParameters != parameters) {
-            recordGeometryChange();
-            shapes_[shapeIndex].subdivisionParameters = parameters;
+        const SubdivisionCommitResult result = subdivisionTool_.commit(
+            shapeId, sections, parameters, toolContext_);
+        if (!result.committed) {
+            return false;
         }
 
-        subdivisionActive_ = false;
-        subdivisionShapeIndex_ = ObjectId::invalid();
-        subdivisionSections_ = 2;
-        resetSubdivisionWheelTracking();
         notifySubdivisionStatus();
         update();
         DebugLog::instance().write(QStringLiteral("applySubdivision shape=%1 sections=%2 points=%3")
@@ -1788,17 +1268,12 @@ public:
 
     bool subdivisionActive() const
     {
-        return subdivisionActive_;
+        return subdivisionTool_.isActive();
     }
 
     QString subdivisionStatusText() const
     {
-        if (!subdivisionActive_) {
-            return QString();
-        }
-
-        return QStringLiteral("Subdivide: %1 sections  •  Scroll to change  •  Click/Enter to apply  •  Esc to cancel")
-            .arg(subdivisionSections_);
+        return subdivisionTool_.prompt();
     }
 
     int beginPointExtrude()
@@ -1846,8 +1321,8 @@ public:
     bool beginRotate()
     {
         QVector<ObjectId> selected = selectedShapeIndices_;
-        if (joinActive_) {
-            selected = joinShapeIndices_;
+        if (joinTool_.isActive()) {
+            selected = joinTool_.selectedObjectIds();
         }
         if (selectedShapeIndex_.isValid() && objectIndex(selectedShapeIndex_) >= 0 &&
             !selected.contains(selectedShapeIndex_)) {
@@ -1867,14 +1342,17 @@ public:
             return false;
         }
 
-        resetRotateInteraction();
         setTool(Tool::Rotate);
-        rotateShapeIndices_ = validSelection;
+        rotateTool_.setAngleSnapParameters(
+            rotateSnapIncrementDegrees(),
+            rotateToolPreferences_.angleSnapStrengthDegrees);
+        rotateTool_.beginSelection(validSelection,
+                                   rotateToolPreferences_.angleSnapEnabled);
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
         update();
         DebugLog::instance().write(QStringLiteral("beginRotate shapes=%1")
-                                       .arg(rotateShapeIndices_.size()));
+                                       .arg(rotateState().sourceObjectIds.size()));
         return true;
     }
 
@@ -1896,18 +1374,15 @@ public:
             return false;
         }
 
-        resetScaleInteraction();
         setTool(Tool::Scale);
-        scaleMode_ = mode;
-        scaleShapeIds_ = validSelection;
-        scaleStep_ = 0;
+        scaleTool_.beginSelection(validSelection, mode);
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
         publishScalePrompt();
         update();
         DebugLog::instance().write(QStringLiteral("beginScale mode=%1 shapes=%2")
-                                       .arg(scaleModeName(scaleMode_))
-                                       .arg(scaleShapeIds_.size()));
+                                       .arg(scaleModeName(scaleState().mode))
+                                       .arg(scaleState().sourceObjectIds.size()));
         return true;
     }
 
@@ -1930,19 +1405,19 @@ public:
         }
 
         setTool(Tool::Mirror);
-        mirrorShapeIndices_ = validSelection;
+        mirrorTool_.setSourceObjectIds(validSelection);
         pendingPoints_.clear();
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
         update();
         DebugLog::instance().write(QStringLiteral("beginMirror shapes=%1")
-                                       .arg(mirrorShapeIndices_.size()));
+                                       .arg(mirrorTool_.sourceObjectIds().size()));
         return true;
     }
 
     bool beginGrab()
     {
-        if (activeTool_ != Tool::Select || grabActive_ || draggingSelected_) {
+        if (!selectionShortcutsAvailable()) {
             return false;
         }
 
@@ -1962,54 +1437,44 @@ public:
             return false;
         }
 
-        grabStartSnapshot_ = document_.snapshot();
-        grabActive_ = true;
-        grabMoved_ = false;
-        grabPickingBasePoint_ = false;
-        grabHasBasePoint_ = false;
-        draggingSelected_ = true;
-        dragGestureStarted_ = true;
-        draggingShapeIndices_ = validSelection;
-        if (!selectedShapeIndex_.isValid() || !validSelection.contains(selectedShapeIndex_)) {
-            selectedShapeIndex_ = validSelection.back();
-        }
-        dragHistoryRecorded_ = false;
-        currentDragSnap_ = DragSnapResult{};
-        dragSnapLocked_ = false;
-        dragAxisLock_ = DragAxisLock::None;
-        currentSnap_ = SnapResult{};
-
         const QPoint localCursor = mapFromGlobal(QCursor::pos());
         if (rect().contains(localCursor)) {
             rawCursorWorld_ = screenToWorld(localCursor);
             cursorWorld_ = rawCursorWorld_;
             cursorValid_ = true;
         }
-        dragStartScreen_ = localCursor;
-        grabStartWorld_ = rawCursorWorld_;
-        lastDragWorld_ = grabStartWorld_;
+        if (!grabTool_.begin(document_, validSelection, rawCursorWorld_)) {
+            return false;
+        }
+        if (!selectedShapeIndex_.isValid() || !validSelection.contains(selectedShapeIndex_)) {
+            selection_.setPrimaryObjectId(validSelection.back());
+        }
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        dragAxisLock_ = DragAxisLock::None;
+        currentSnap_ = SnapResult{};
+        beginSelectionObjectDrag(validSelection,
+                                 localCursor,
+                                 rawCursorWorld_,
+                                 true);
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::SizeAllCursor);
         update();
         DebugLog::instance().write(QStringLiteral("beginGrab shapes=%1")
-                                       .arg(draggingShapeIndices_.size()));
+                                       .arg(grabTool_.objectIds().size()));
         return true;
     }
 
     void beginGrabBasePointMode()
     {
-        if (!grabActive_) {
+        if (!grabTool_.isActive()) {
             return;
         }
 
-        if (grabMoved_) {
-            document_.restoreSnapshot(grabStartSnapshot_);
+        if (grabTool_.enterBasePointMode(document_)) {
             notifyLayersChanged();
         }
-        grabMoved_ = false;
-        grabPickingBasePoint_ = true;
-        grabHasBasePoint_ = false;
-        grabCursorOffset_ = QPointF();
         currentSnap_ = SnapResult{};
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
@@ -2020,17 +1485,16 @@ public:
 
     void finishGrab()
     {
-        if (!grabActive_) {
+        if (!grabTool_.isActive()) {
             return;
         }
 
-        if (grabMoved_) {
-            recordGeometrySnapshot(grabStartSnapshot_);
+        if (grabTool_.moved()) {
+            recordGeometrySnapshot(grabTool_.startSnapshot());
         }
-        const bool moved = grabMoved_;
+        const bool moved = grabTool_.moved();
         resetGrabInteraction();
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
+        clearSelectionDragState();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         currentSnap_ = SnapResult{};
@@ -2043,18 +1507,17 @@ public:
 
     void cancelGrab()
     {
-        if (!grabActive_) {
+        if (!grabTool_.isActive()) {
             return;
         }
 
-        const bool moved = grabMoved_;
+        const bool moved = grabTool_.moved();
         if (moved) {
-            document_.restoreSnapshot(grabStartSnapshot_);
+            document_.restoreSnapshot(grabTool_.startSnapshot());
             notifyLayersChanged();
         }
         resetGrabInteraction();
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
+        clearSelectionDragState();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         currentSnap_ = SnapResult{};
@@ -2067,8 +1530,7 @@ public:
 
     bool beginDuplicate()
     {
-        if (activeTool_ != Tool::Select || duplicateActive_ || grabActive_ ||
-            draggingSelected_ || joinActive_ || subdivisionActive_) {
+        if (!selectionShortcutsAvailable()) {
             return false;
         }
 
@@ -2077,32 +1539,16 @@ public:
             selected.append(selectedShapeIndex_);
         }
 
-        duplicateSourceObjects_.clear();
-        duplicateSourceObjects_.reserve(selected.size());
-        for (const ObjectId objectId : selected) {
-            const SceneObject *sceneObject = document_.object(objectId);
-            if (sceneObject != nullptr && document_.isObjectEditable(objectId)) {
-                duplicateSourceObjects_.append(*sceneObject);
-            }
-        }
-        if (duplicateSourceObjects_.isEmpty()) {
+        if (!duplicateTool_.begin(document_, selected)) {
             return false;
         }
-
-        duplicateActive_ = true;
-        duplicatePickingBasePoint_ = true;
-        duplicateHasBasePoint_ = false;
-        duplicateBasePoint_ = QPointF();
-        duplicateCursorOffset_ = QPointF();
-        duplicateDestination_ = QPointF();
-        duplicatePreviewShapes_.clear();
         currentSnap_ = SnapResult{};
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
         update();
         DebugLog::instance().write(
             QStringLiteral("beginDuplicate objects=%1")
-                .arg(duplicateSourceObjects_.size()));
+                .arg(duplicateTool_.sourceObjects().size()));
         return true;
     }
 
@@ -2112,94 +1558,62 @@ public:
             return false;
         }
 
-        duplicatePickingBasePoint_ = false;
-        duplicateHasBasePoint_ = true;
-        duplicateBasePoint_ = QPointF();
-        duplicateCursorOffset_ = QPointF();
-        duplicateDestination_ = QPointF();
-        duplicatePreviewShapes_.reserve(duplicateSourceObjects_.size());
-        for (const SceneObject &source : duplicateSourceObjects_) {
-            duplicatePreviewShapes_.append(source.geometry);
-        }
+        duplicateTool_.beginInPlace();
         finishDuplicate();
         return true;
     }
 
     void updateDuplicatePreview(const QPointF &rawPoint)
     {
-        if (!duplicateActive_ || !duplicateHasBasePoint_) {
+        if (!duplicateTool_.isActive() || !duplicateTool_.hasBasePoint()) {
             return;
         }
 
-        const QPointF destinationCursor = rawPoint - duplicateCursorOffset_;
+        const QPointF destinationCursor = rawPoint - duplicateTool_.cursorOffset();
         currentSnap_ = findDuplicateDestinationSnap(destinationCursor);
-        duplicateDestination_ = currentSnap_.isValid()
-                                    ? currentSnap_.point
-                                    : destinationCursor;
-        cursorWorld_ = duplicateDestination_;
-        lastWorldPosition_ = duplicateDestination_;
-
-        const QPointF delta = duplicateDestination_ - duplicateBasePoint_;
-        duplicatePreviewShapes_.clear();
-        duplicatePreviewShapes_.reserve(duplicateSourceObjects_.size());
-        for (const SceneObject &source : duplicateSourceObjects_) {
-            Shape preview = source.geometry;
-            translateShapeGeometry(preview, delta);
-            duplicatePreviewShapes_.append(preview);
-        }
+        duplicateTool_.updatePlacement(
+            destinationCursor,
+            currentSnap_,
+            [this](Shape &shape, const QPointF &delta) {
+                translateShapeGeometry(shape, delta);
+            });
+        cursorWorld_ = duplicateTool_.destination();
+        lastWorldPosition_ = duplicateTool_.destination();
         update();
     }
 
     void finishDuplicate()
     {
-        if (!duplicateActive_ || !duplicateHasBasePoint_ ||
-            duplicatePreviewShapes_.isEmpty()) {
+        if (!duplicateTool_.isActive() || !duplicateTool_.hasBasePoint() ||
+            duplicateTool_.previewShapes().isEmpty()) {
             return;
         }
 
-        const Document::Snapshot before = document_.snapshot();
+        const QVector<ObjectId> sourceObjectIds = duplicateTool_.sourceObjectIds();
+        DuplicateCommandPlan plan;
+        if (!buildDuplicateCommandPlan(document_,
+                                      sourceObjectIds,
+                                      duplicateTool_.previewShapes(),
+                                      &plan)) {
+            return;
+        }
+
+        DocumentTransaction transaction = session_.beginTransaction();
         QVector<ObjectId> duplicateIds;
-        duplicateIds.reserve(duplicatePreviewShapes_.size());
-        for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
-            SceneObject duplicate = duplicateSourceObjects_[index];
-            duplicate.id = ObjectId::invalid();
-            duplicate.geometry = duplicatePreviewShapes_[index];
-            duplicateIds.append(shapes_.insertObject(shapes_.size(), duplicate));
+        if (!applyDuplicateCommand(document_, transaction, plan, &duplicateIds)) {
+            transaction.rollback();
+            return;
         }
 
-        for (int duplicateIndex = 0; duplicateIndex < duplicateIds.size(); ++duplicateIndex) {
-            Shape *duplicateGeometry = document_.shape(duplicateIds[duplicateIndex]);
-            if (duplicateGeometry == nullptr ||
-                !isDimensionGeometryType(duplicateGeometry->geometryType)) {
-                continue;
-            }
-            for (DimensionAnchorReference &anchor : duplicateGeometry->dimensionAnchors) {
-                bool remapped = false;
-                for (int sourceIndex = 0;
-                     sourceIndex < duplicateSourceObjects_.size();
-                     ++sourceIndex) {
-                    if (anchor.objectId == duplicateSourceObjects_[sourceIndex].id) {
-                        anchor.objectId = duplicateIds[sourceIndex];
-                        remapped = true;
-                        break;
-                    }
-                }
-                if (!remapped) {
-                    // A copied dimension without its referenced geometry is a
-                    // positioned copy, not a second annotation tied to the
-                    // original objects.
-                    anchor = DimensionAnchorReference{};
-                }
-            }
+        if (!session_.commitTransaction(transaction)) {
+            return;
         }
-
-        recordGeometrySnapshot(before);
         selection_.setObjectIds(duplicateIds,
                                 duplicateIds.isEmpty() ? ObjectId::invalid()
                                                        : duplicateIds.back());
-        selectedShapeIndex_ = selection_.primaryObjectId();
         const int duplicateCount = duplicateIds.size();
-        const QPointF committedDelta = duplicateDestination_ - duplicateBasePoint_;
+        const QPointF committedDelta = duplicateTool_.destination() -
+                                       duplicateTool_.basePoint();
         resetDuplicateInteraction();
         currentSnap_ = SnapResult{};
         setCursor(Qt::ArrowCursor);
@@ -2217,7 +1631,7 @@ public:
 
     void cancelDuplicate()
     {
-        if (!duplicateActive_) {
+        if (!duplicateTool_.isActive()) {
             return;
         }
         resetDuplicateInteraction();
@@ -2229,35 +1643,28 @@ public:
 
     bool beginJoinMode()
     {
-        if (subdivisionActive_) {
+        if (subdivisionTool_.isActive()) {
             cancelSubdivisionPreview();
         }
 
         const QVector<ObjectId> preselectedShapes = selectedShapeIndices_;
         setTool(Tool::Select);
-        joinActive_ = true;
-        joinShapeIndices_ = preselectedShapes;
-        if (joinShapeIndices_.isEmpty()) {
-            selectedShapeIndices_.clear();
-            selectedShapeIndex_ = ObjectId::invalid();
+        joinTool_.begin(preselectedShapes);
+        if (joinTool_.selectedObjectIds().isEmpty()) {
+            selection_.clear();
         } else {
-            selectedShapeIndex_ = joinShapeIndices_.back();
+            selection_.setPrimaryObjectId(joinTool_.selectedObjectIds().back());
         }
-        selectionBoxActive_ = false;
-        selectionBoxMoved_ = false;
-        selectionBoxAdditive_ = false;
-        trimBoxSelectionActive_ = false;
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
-        draggingControlPoint_ = false;
-        controlPointIndex_ = -1;
+        resetSelectionBoxState();
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
         update();
         DebugLog::instance().write(
             QStringLiteral("beginJoinMode preselected=%1")
-                .arg(joinShapeIndices_.size()));
-        if (!joinShapeIndices_.isEmpty()) {
+                .arg(joinTool_.selectedCount()));
+        if (!joinTool_.selectedObjectIds().isEmpty()) {
             if (!applyJoin()) {
                 cancelJoinMode(false);
             }
@@ -2270,17 +1677,16 @@ public:
 
     void cancelJoinMode(bool notifyStatus = true)
     {
-        if (!joinActive_) {
+        if (!joinTool_.isActive()) {
             return;
         }
 
-        const QVector<ObjectId> joinedSelection = joinShapeIndices_;
-        joinActive_ = false;
-        joinShapeIndices_.clear();
-        selectedShapeIndices_ = joinedSelection;
-        selectedShapeIndex_ = selectedShapeIndices_.isEmpty()
-                                  ? ObjectId::invalid()
-                                  : selectedShapeIndices_.back();
+        const QVector<ObjectId> joinedSelection = joinTool_.selectedObjectIds();
+        joinTool_.cancel();
+        selection_.setObjectIds(joinedSelection,
+                                joinedSelection.isEmpty()
+                                    ? ObjectId::invalid()
+                                    : joinedSelection.back());
         setCursor(Qt::ArrowCursor);
         if (notifyStatus) {
             notifyJoinStatus();
@@ -2291,266 +1697,60 @@ public:
 
     QString joinStatusText() const
     {
-        if (!joinActive_) {
-            return QString();
-        }
-
-        return QStringLiteral("Join: %1 curves selected  •  Click connected curves to join  •  Esc to cancel")
-            .arg(joinShapeIndices_.size());
+        return joinTool_.prompt();
     }
 
     bool applyJoin()
     {
-        if (!joinActive_) {
-            return false;
-        }
-
-        if (joinShapeIndices_.isEmpty()) {
-            notifyJoinStatus(QStringLiteral("Join needs at least two curves"));
-            return false;
-        }
-
-        const int referenceShapeIndex = objectIndex(joinShapeIndices_.first());
-        if (referenceShapeIndex < 0 || referenceShapeIndex >= shapes_.size()) {
-            notifyJoinStatus(QStringLiteral("Join failed — selected curves are unavailable"));
-            return false;
-        }
-        const Shape &referenceShape = shapes_[referenceShapeIndex];
-        const SceneObject *referenceObject =
-            document_.object(joinShapeIndices_.first());
-        if (referenceObject == nullptr) {
-            notifyJoinStatus(QStringLiteral("Join failed — selected curves are unavailable"));
-            return false;
-        }
-        const LayerId joinedLayerId = referenceObject->layerId;
-        const WorkPlaneFrame joinFrame = shapeWorkPlaneFrame(referenceShape);
-        const WorkPlane joinWorkPlane = referenceShape.workPlane;
-        const qreal joinWorkPlaneOffset = referenceShape.workPlaneOffset;
-        QVector<Shape::NurbsCurve2D> components;
-        QVector<WorkPlaneFrame> componentFrames;
-        bool mixedPlanes = false;
-        for (const ObjectId objectId : joinShapeIndices_) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+        const JoinExecutionResult result = joinTool_.executeJoin(
+            selectedJoinEndpointTolerance(), toolContext_);
+        if (!result.committed) {
+            switch (result.failure) {
+            case JoinExecutionFailure::NeedTwoCurves:
+                notifyJoinStatus(result.sourceObjectCount == 0
+                                     ? QStringLiteral("Join needs at least two curves")
+                                     : QStringLiteral("Join failed — select at least two curves"));
+                break;
+            case JoinExecutionFailure::CurvesUnavailable:
+                notifyJoinStatus(QStringLiteral("Join failed — selected curves are unavailable"));
+                break;
+            case JoinExecutionFailure::InvalidCurveSelection:
                 notifyJoinStatus(QStringLiteral("Join failed — select lines or curves only"));
-                return false;
+                break;
+            case JoinExecutionFailure::DisconnectedCurves:
+                notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
+                if (result.nearestEndpointGap >= 0.0) {
+                    const qreal viewScale = viewportTransform_.viewScalePixelsPerWorldUnit(size());
+                    DebugLog::instance().write(
+                        QStringLiteral("applyJoin rejected disconnected components=%1 tolerance=%2 nearestEndpointGap=%3 nearestGapPixels=%4")
+                            .arg(result.componentCount)
+                            .arg(selectedJoinEndpointTolerance(), 0, 'f', 6)
+                            .arg(result.nearestEndpointGap, 0, 'f', 6)
+                            .arg(result.nearestEndpointGap * viewScale, 0, 'f', 2));
+                }
+                break;
+            case JoinExecutionFailure::CommandFailed:
+            case JoinExecutionFailure::Inactive:
+            case JoinExecutionFailure::None:
+                break;
             }
-            const Shape &sourceShape = shapes_[shapeIndex];
-            const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(sourceShape);
-            const int firstComponent = components.size();
-            if (!appendJoinComponents(sourceShape, &components)) {
-                notifyJoinStatus(QStringLiteral("Join failed — select lines or curves only"));
-                return false;
-            }
-            for (int componentIndex = firstComponent;
-                 componentIndex < components.size();
-                 ++componentIndex) {
-                const int sourceComponentIndex = componentIndex - firstComponent;
-                const WorkPlaneFrame componentFrame =
-                    sourceShape.geometryType == GeometryType::PolyCurve
-                        ? shapeComponentWorkPlaneFrame(sourceShape,
-                                                       sourceComponentIndex)
-                        : sourceFrame;
-                componentFrames.append(componentFrame);
-                mixedPlanes = mixedPlanes ||
-                              !workPlaneFramesCoplanar(joinFrame, componentFrame);
-            }
-        }
-
-        if (components.size() < 2) {
-            notifyJoinStatus(QStringLiteral("Join failed — select at least two curves"));
             return false;
         }
 
-        const qreal selectedJoinTolerance = selectedJoinEndpointTolerance();
-        if (mixedPlanes) {
-            fuseOverlappingLineComponentsInWorld(&components,
-                                                  &componentFrames,
-                                                  selectedJoinTolerance);
-            QVector<Shape::NurbsCurve2D> orderedComponents;
-            QVector<WorkPlaneFrame> orderedFrames;
-            if (!orderJoinComponentsInWorld(components,
-                                            componentFrames,
-                                            &orderedComponents,
-                                            &orderedFrames,
-                                            selectedJoinTolerance)) {
-                notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
-                DebugLog::instance().write(
-                    QStringLiteral("applyJoin rejected mixed-plane components=%1 tolerance=%2")
-                        .arg(components.size())
-                        .arg(selectedJoinTolerance, 0, 'f', 6));
-                return false;
-            }
-            components = std::move(orderedComponents);
-            componentFrames = std::move(orderedFrames);
-            if (!closeJoinGapsInWorld(&components,
-                                      &componentFrames,
-                                      selectedJoinTolerance) ||
-                !joinComponentsAreContinuousInWorld(components,
-                                                    componentFrames,
-                                                    selectedJoinTolerance)) {
-                notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
-                return false;
-            }
-        } else {
-            for (int componentIndex = 0;
-                 componentIndex < components.size();
-                 ++componentIndex) {
-                for (QPointF &controlPoint :
-                     components[componentIndex].controlPoints) {
-                    controlPoint = worldPointToWorkPlaneFrame(
-                        workPlaneFramePointToWorld(
-                            controlPoint, componentFrames[componentIndex]),
-                        joinFrame);
-                }
-            }
-            componentFrames.clear();
-            fuseOverlappingLineComponents(&components, selectedJoinTolerance);
-        }
-        if (!mixedPlanes &&
-            !joinComponentsAreContinuous(components, selectedJoinTolerance)) {
-            QVector<Shape::NurbsCurve2D> orderedComponents;
-            if (!orderJoinComponents(components,
-                                     &orderedComponents,
-                                     selectedJoinTolerance)) {
-                notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
-                qreal nearestEndpointGap =
-                    std::numeric_limits<qreal>::infinity();
-                for (int first = 0; first < components.size(); ++first) {
-                    QPointF firstStart;
-                    QPointF firstEnd;
-                    if (!nurbsCurveEndpoints(components[first],
-                                             &firstStart,
-                                             &firstEnd)) {
-                        continue;
-                    }
-                    for (int second = first + 1;
-                         second < components.size();
-                         ++second) {
-                        QPointF secondStart;
-                        QPointF secondEnd;
-                        if (!nurbsCurveEndpoints(components[second],
-                                                 &secondStart,
-                                                 &secondEnd)) {
-                            continue;
-                        }
-                        for (const QPointF &firstEndPoint : {firstStart, firstEnd}) {
-                            for (const QPointF &secondEndPoint : {secondStart,
-                                                                  secondEnd}) {
-                                nearestEndpointGap = std::min(
-                                    nearestEndpointGap,
-                                    std::hypot(firstEndPoint.x() -
-                                                   secondEndPoint.x(),
-                                               firstEndPoint.y() -
-                                                   secondEndPoint.y()));
-                            }
-                        }
-                    }
-                }
-                const qreal viewScale =
-                    viewportTransform_.viewScalePixelsPerWorldUnit(size());
-                DebugLog::instance().write(
-                    QStringLiteral("applyJoin rejected disconnected components=%1 tolerance=%2 nearestEndpointGap=%3 nearestGapPixels=%4")
-                        .arg(components.size())
-                        .arg(selectedJoinTolerance, 0, 'f', 6)
-                        .arg(nearestEndpointGap, 0, 'f', 6)
-                        .arg(nearestEndpointGap * viewScale, 0, 'f', 2));
-                return false;
-            }
-            components = orderedComponents;
-            DebugLog::instance().write(QStringLiteral("applyJoin reordered/reversed connected components=%1")
-                                           .arg(components.size()));
-        }
-
-        if (!mixedPlanes &&
-            (!closeJoinGaps(&components, selectedJoinTolerance) ||
-             !joinComponentsAreContinuous(components, selectedJoinTolerance))) {
-            notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
-            DebugLog::instance().write(QStringLiteral("applyJoin rejected reordered components=%1")
-                                           .arg(components.size()));
-            return false;
-        }
-
-        int insertIndex = shapes_.size();
-        for (const ObjectId objectId : joinShapeIndices_) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex >= 0) {
-                insertIndex = std::min(insertIndex, shapeIndex);
-            }
-        }
-        const int sourceShapeCount = joinShapeIndices_.size();
-        recordGeometryChange();
-
-        QVector<int> indicesToRemove;
-        for (const ObjectId objectId : joinShapeIndices_) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex >= 0) {
-                indicesToRemove.append(shapeIndex);
-            }
-        }
-        std::sort(indicesToRemove.begin(), indicesToRemove.end());
-        for (auto index = indicesToRemove.crbegin(); index != indicesToRemove.crend(); ++index) {
-            shapes_.removeAt(*index);
-        }
-
-        Shape joined;
-        const WorkPlaneFrame resultFrame = mixedPlanes && components.size() == 1
-                                               ? componentFrames.first()
-                                               : joinFrame;
-        if (components.size() == 1) {
-            joined.geometryType = GeometryType::Nurbs;
-            joined.nurbs = components.first();
-            joined.points = joined.nurbs.controlPoints;
-        } else {
-            joined.geometryType = GeometryType::PolyCurve;
-            if (mixedPlanes) {
-                for (int index = 0; index < components.size(); ++index) {
-                    QPointF start;
-                    QPointF end;
-                    if (!nurbsCurveEndpoints(components[index], &start, &end)) {
-                        continue;
-                    }
-                    if (index == 0) {
-                        joined.points.append(worldPointToWorkPlaneFrame(
-                            workPlaneFramePointToWorld(start, componentFrames[index]),
-                            joinFrame));
-                    }
-                    joined.points.append(worldPointToWorkPlaneFrame(
-                        workPlaneFramePointToWorld(end, componentFrames[index]),
-                        joinFrame));
-                }
-                joined.componentWorkPlaneFrames = componentFrames;
-            } else {
-                joined.points = polyCurvePoints(components);
-            }
-            joined.components = components;
-        }
-        joined.workPlane = joinWorkPlane;
-        joined.workPlaneOffset = joinWorkPlaneOffset;
-        joined.workPlaneFrame = resultFrame;
-        SceneObject joinedObject;
-        joinedObject.layerId = joinedLayerId;
-        joinedObject.geometry = joined;
-        const ObjectId joinedObjectId =
-            shapes_.insertObject(insertIndex, joinedObject);
-
-        joinActive_ = false;
-        joinShapeIndices_.clear();
-        selectedShapeIndices_ = {joinedObjectId};
-        selectedShapeIndex_ = joinedObjectId;
         setCursor(Qt::ArrowCursor);
         notifyJoinStatus(QStringLiteral("Joined %1 curves into one PolyCurve")
-                             .arg(sourceShapeCount));
+                             .arg(result.sourceObjectCount));
         update();
-        DebugLog::instance().write(QStringLiteral("applyJoin committed components=%1 shapes=%2")
-                                       .arg(components.size())
-                                       .arg(shapes_.size()));
+        DebugLog::instance().write(QStringLiteral("applyJoin committed components=%1 shapes=%2 lineMerges=%3")
+                                       .arg(result.componentCount)
+                                       .arg(shapes_.size())
+                                       .arg(result.lineMergeCount));
         return true;
     }
 
     int explodeSelectedShapes()
     {
-        if (joinActive_) {
+        if (joinTool_.isActive()) {
             cancelJoinMode();
         }
 
@@ -2560,154 +1760,46 @@ public:
             !selected.contains(selectedShapeIndex_)) {
             selected.append(selectedShapeIndex_);
         }
-
         if (selected.isEmpty()) {
             DebugLog::instance().write(QStringLiteral("explode ignored no selection"));
             return 0;
         }
 
-        const auto selectedContains = [&selected](ObjectId objectId) {
-            return selected.contains(objectId);
-        };
-
-        const auto componentsForExplode = [this](
-            const Shape &shape,
-            QVector<Shape::NurbsCurve2D> *components) {
-            if (components == nullptr) {
-                return false;
-            }
-            components->clear();
-            if (shape.geometryType == GeometryType::PolyCurve) {
-                if (shape.components.isEmpty()) {
-                    return false;
-                }
-                *components = shape.components;
-            } else if (shape.geometryType == GeometryType::Rectangle) {
-                const QVector<QPointF> vertices = rectangleVertices(shape);
-                if (vertices.size() < 4) {
-                    return false;
-                }
-                components->reserve(4);
-                for (int index = 0; index < 4; ++index) {
-                    components->append(makeDegreeOneNurbs(
-                        {vertices[index], vertices[(index + 1) % 4]}));
-                }
-            } else {
-                return false;
-            }
-
-            for (const Shape::NurbsCurve2D &component : *components) {
-                if (!isValidNurbsCurve(component)) {
-                    components->clear();
-                    return false;
-                }
-            }
-            return !components->isEmpty();
-        };
-
-        int explodeableShapeCount = 0;
-        int explodedComponentCount = 0;
-        for (const ObjectId objectId : selected) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
-                continue;
-            }
-
-            const Shape &shape = shapes_[shapeIndex];
-            QVector<Shape::NurbsCurve2D> components;
-            if (componentsForExplode(shape, &components)) {
-                ++explodeableShapeCount;
-                explodedComponentCount += components.size();
-            }
-        }
-
-        if (explodeableShapeCount == 0) {
+        ExplodeCommandPlan plan;
+        if (!buildExplodeCommandPlan(document_, selected, &plan) ||
+            plan.sourceObjectCount == 0) {
             DebugLog::instance().write(
                 QStringLiteral("explode ignored no rectangle or PolyCurve selection"));
             return 0;
         }
 
-        recordGeometryChange();
-
-        QVector<SceneObject> explodedObjects;
-        QVector<int> explodedSelectionIndices;
-        explodedObjects.reserve(shapes_.size() + explodedComponentCount - explodeableShapeCount);
-
-        for (int sourceIndex = 0; sourceIndex < shapes_.size(); ++sourceIndex) {
-            const SceneObject sourceObject = document_.objects()[sourceIndex];
-            const Shape &source = sourceObject.geometry;
-            const bool selectedSource = selectedContains(sourceObject.id);
-            QVector<Shape::NurbsCurve2D> components;
-            const bool validComponents = selectedSource &&
-                                         componentsForExplode(source, &components);
-
-            if (!validComponents) {
-                const int newIndex = explodedObjects.size();
-                explodedObjects.append(sourceObject);
-                if (selectedSource) {
-                    explodedSelectionIndices.append(newIndex);
-                }
-                continue;
-            }
-
-            for (int componentIndex = 0;
-                 componentIndex < components.size();
-                 ++componentIndex) {
-                const Shape::NurbsCurve2D &component =
-                    components[componentIndex];
-                const WorkPlaneFrame componentFrame =
-                    source.geometryType == GeometryType::PolyCurve
-                        ? shapeComponentWorkPlaneFrame(source, componentIndex)
-                        : shapeWorkPlaneFrame(source);
-                const int newIndex = explodedObjects.size();
-                SceneObject componentObject;
-                componentObject.layerId = sourceObject.layerId;
-                if (source.geometryType == GeometryType::Rectangle) {
-                    componentObject.geometry.geometryType = GeometryType::Line;
-                    componentObject.geometry.points = component.controlPoints;
-                    componentObject.geometry.nurbs = component;
-                } else {
-                    componentObject.geometry = Shape{
-                        GeometryType::PolyCurve,
-                        polyCurvePoints({component}),
-                        Shape::NurbsCurve2D{},
-                        ArcMode::TwoPoint,
-                        0.0,
-                        {},
-                        {component}};
-                }
-                componentObject.geometry.workPlane = source.workPlane;
-                componentObject.geometry.workPlaneOffset = source.workPlaneOffset;
-                componentObject.geometry.workPlaneFrame = componentFrame;
-                explodedObjects.append(componentObject);
-                explodedSelectionIndices.append(newIndex);
-            }
+        DocumentTransaction transaction = session_.beginTransaction();
+        if (!applyExplodeCommand(transaction, plan)) {
+            return 0;
         }
-
-        document_.replaceObjects(explodedObjects);
-        selectedShapeIndices_.clear();
-        for (const int selectedIndex : explodedSelectionIndices) {
+        if (!session_.commitTransaction(transaction)) {
+            return 0;
+        }
+        QVector<ObjectId> explodedSelection;
+        explodedSelection.reserve(plan.selectedObjectIndices.size());
+        for (const int selectedIndex : plan.selectedObjectIndices) {
             const ObjectId objectId = document_.objectIdAt(selectedIndex);
             if (objectId.isValid()) {
-                selectedShapeIndices_.append(objectId);
+                explodedSelection.append(objectId);
             }
         }
-        selectedShapeIndex_ = selectedShapeIndices_.isEmpty()
-                                  ? ObjectId::invalid()
-                                  : selectedShapeIndices_.back();
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
-        draggingControlPoint_ = false;
-        controlPointIndex_ = -1;
+        selection_.setObjectIds(explodedSelection);
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
         update();
         DebugLog::instance().write(
             QStringLiteral("explode committed shapes=%1 components=%2")
-                .arg(explodeableShapeCount)
-                .arg(explodedComponentCount));
-        return explodedComponentCount;
+                .arg(plan.sourceObjectCount)
+                .arg(plan.outputComponentCount));
+        return plan.outputComponentCount;
     }
 
     int fillSelectedClosedCurves()
@@ -2719,162 +1811,9 @@ public:
             selected.append(selectedShapeIndex_);
         }
 
-        const auto makeBoundaryCurve = [this](
-            const Shape &shape,
-            Shape::NurbsCurve2D *curve,
-            WorkPlaneFrame *frame) {
-            if (curve == nullptr || frame == nullptr) {
-                return false;
-            }
-
-            if (shape.geometryType == GeometryType::PolyCurve) {
-                if (shape.components.isEmpty()) {
-                    return false;
-                }
-                if (shape.components.size() == 1) {
-                    *curve = shape.components.first();
-                    *frame = shapeComponentWorkPlaneFrame(shape, 0);
-                    return isValidNurbsCurve(*curve) && isValidWorkPlaneFrame(*frame);
-                }
-
-                *frame = shapeComponentWorkPlaneFrame(shape, 0);
-                if (!isValidWorkPlaneFrame(*frame)) {
-                    return false;
-                }
-                QVector<QVector<QPointF>> componentPaths;
-                componentPaths.reserve(shape.components.size());
-                for (int componentIndex = 0;
-                     componentIndex < shape.components.size();
-                     ++componentIndex) {
-                    const Shape::NurbsCurve2D &component =
-                        shape.components[componentIndex];
-                    const WorkPlaneFrame componentFrame =
-                        shapeComponentWorkPlaneFrame(shape, componentIndex);
-                    if (!isValidNurbsCurve(component) || component.degree != 1 ||
-                        component.controlPoints.size() < 2 ||
-                        !workPlaneFramesCoplanar(*frame, componentFrame)) {
-                        return false;
-                    }
-
-                    QVector<QPointF> path;
-                    path.reserve(component.controlPoints.size());
-                    for (const QPointF &point : component.controlPoints) {
-                        path.append(worldPointToWorkPlaneFrame(
-                            workPlaneFramePointToWorld(point, componentFrame),
-                            *frame));
-                    }
-                    componentPaths.append(path);
-                }
-
-                QVector<QPointF> boundary = componentPaths.takeFirst();
-                QVector<bool> consumed(componentPaths.size(), false);
-                for (int joinedCount = 0;
-                     joinedCount < componentPaths.size();
-                     ++joinedCount) {
-                    bool joined = false;
-                    for (int candidateIndex = 0;
-                         candidateIndex < componentPaths.size();
-                         ++candidateIndex) {
-                        if (consumed[candidateIndex]) {
-                            continue;
-                        }
-                        QVector<QPointF> candidate =
-                            componentPaths[candidateIndex];
-                        const QPointF &tail = boundary.last();
-                        const qreal scale = std::max<qreal>(
-                            {1.0, std::abs(tail.x()), std::abs(tail.y()),
-                             std::abs(candidate.first().x()),
-                             std::abs(candidate.first().y()),
-                             std::abs(candidate.last().x()),
-                             std::abs(candidate.last().y())});
-                        const qreal tolerance = scale * 1.0e-7;
-                        const auto endpointsMatch = [tolerance](
-                            const QPointF &first,
-                            const QPointF &second) {
-                            return std::hypot(first.x() - second.x(),
-                                              first.y() - second.y()) <= tolerance;
-                        };
-                        if (endpointsMatch(tail, candidate.last())) {
-                            std::reverse(candidate.begin(), candidate.end());
-                        } else if (!endpointsMatch(tail, candidate.first())) {
-                            continue;
-                        }
-                        for (int pointIndex = 1;
-                             pointIndex < candidate.size();
-                             ++pointIndex) {
-                            boundary.append(candidate[pointIndex]);
-                        }
-                        consumed[candidateIndex] = true;
-                        joined = true;
-                        break;
-                    }
-                    if (!joined) {
-                        return false;
-                    }
-                }
-
-                if (boundary.size() < 4) {
-                    return false;
-                }
-                const QPointF first = boundary.first();
-                const QPointF last = boundary.last();
-                const qreal closureScale = std::max<qreal>(
-                    {1.0, std::abs(first.x()), std::abs(first.y()),
-                     std::abs(last.x()), std::abs(last.y())});
-                if (std::hypot(first.x() - last.x(), first.y() - last.y()) >
-                    closureScale * 1.0e-7) {
-                    return false;
-                }
-                boundary.last() = first;
-                *curve = makeDegreeOneNurbs(boundary);
-                return isValidNurbsCurve(*curve);
-            }
-
-            *frame = shapeWorkPlaneFrame(shape);
-            if (!isValidWorkPlaneFrame(*frame)) {
-                return false;
-            }
-            if (isValidNurbsCurve(shape.nurbs)) {
-                *curve = shape.nurbs;
-                return true;
-            }
-
-            QVector<QPointF> vertices;
-            if (shape.geometryType == GeometryType::Rectangle) {
-                vertices = rectangleVertices(shape);
-            } else if (shape.geometryType == GeometryType::Polygon) {
-                vertices = polygonVerticesForShape(shape);
-            }
-            if (vertices.size() < 3) {
-                return false;
-            }
-            vertices.append(vertices.first());
-            *curve = makeDegreeOneNurbs(vertices);
-            return isValidNurbsCurve(*curve);
-        };
-
-        struct FillCandidate {
-            ObjectId objectId = ObjectId::invalid();
-            Shape::NurbsSurface3D surface;
-        };
-        QVector<FillCandidate> candidates;
-        for (const ObjectId objectId : selected) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
-                !document_.isObjectEditable(objectId)) {
-                continue;
-            }
-
-            Shape::NurbsCurve2D boundary;
-            WorkPlaneFrame frame;
-            Shape::NurbsSurface3D surface;
-            if (makeBoundaryCurve(shapes_[shapeIndex], &boundary, &frame) &&
-                makeNurbsPlanarFillSurface(boundary, frame, &surface)) {
-                candidates.append({objectId, std::move(surface)});
-            }
-        }
-
-        if (candidates.isEmpty()) {
+        FillCommandPlan plan;
+        if (!buildFillCommandPlan(document_, selected, &plan) ||
+            plan.candidates.isEmpty()) {
             if (toolStatusUpdate_) {
                 toolStatusUpdate_(QStringLiteral(
                     "Fill: select a closed planar curve"));
@@ -2882,383 +1821,104 @@ public:
             return 0;
         }
 
-        recordGeometryChange();
-        for (const FillCandidate &candidate : candidates) {
-            const int shapeIndex = objectIndex(candidate.objectId);
-            if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
-                continue;
-            }
-            Shape &shape = shapes_[shapeIndex];
-            shape.geometryType = GeometryType::NurbsSurface;
-            shape.points.clear();
-            shape.nurbs = Shape::NurbsCurve2D{};
-            shape.subdivisionParameters.clear();
-            shape.components.clear();
-            shape.componentWorkPlaneFrames.clear();
-            shape.nurbsSurface = candidate.surface;
+        DocumentTransaction transaction = session_.beginTransaction();
+        int filledCount = 0;
+        if (!applyFillCommand(transaction, plan, &filledCount)) {
+            return 0;
+        }
+        if (!session_.commitTransaction(transaction)) {
+            return 0;
         }
 
         update();
         if (toolStatusUpdate_) {
             toolStatusUpdate_(QStringLiteral("Filled %1 closed curve%2")
-                                  .arg(candidates.size())
-                                  .arg(candidates.size() == 1
+                                  .arg(filledCount)
+                                  .arg(filledCount == 1
                                            ? QString()
                                            : QStringLiteral("s")));
         }
         DebugLog::instance().write(
-            QStringLiteral("fill committed surfaces=%1")
-                .arg(candidates.size()));
-        return candidates.size();
+            QStringLiteral("fill committed surfaces=%1").arg(filledCount));
+        return filledCount;
     }
 
     bool saveUpdateSession(const QString &path) const
     {
-        QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-            DebugLog::instance().write(QStringLiteral("saveUpdateSession failed path=%1 error=%2")
-                                           .arg(path, file.errorString()));
+        UpdateSessionViewState view;
+        view.zoom = zoom_;
+        view.pan = pan_;
+        view.camera = viewportTransform_.cameraState();
+        view.workPlane = viewportTransform_.workPlane();
+        view.workPlaneOffset = viewportTransform_.workPlaneOffset();
+        view.workPlaneFrame = viewportTransform_.workPlaneFrame();
+        view.cameraPreferences = viewportTransform_.cameraPreferences();
+        view.selectedObjectIds = selectedShapeIndices_;
+        view.primaryObjectId = selectedShapeIndex_;
+        view.activeControlPoint = selection_.activeControlPoint();
+        view.controlPointsVisible = controlPointsVisible_;
+
+        QString errorMessage;
+        if (!SessionSerializer::write(path, document_, view, &errorMessage)) {
+            DebugLog::instance().write(
+                QStringLiteral("saveUpdateSession failed path=%1 error=%2")
+                    .arg(path, errorMessage));
             return false;
         }
 
-        QJsonObject root;
-        // Version 4 also carries the complete camera/workplane state so an
-        // update restart reopens the same viewport, not just the same scene.
-        // The version 1/2 restore path below still reads legacy shape-only
-        // sessions, and version 3 keeps its original scene-only behavior.
-        root.insert(QStringLiteral("version"), 4);
-        root.insert(QStringLiteral("zoom"), zoom_);
-        root.insert(QStringLiteral("pan"), pointToJson(pan_));
-        root.insert(QStringLiteral("document"), documentToJson(document_));
-
-        root.insert(QStringLiteral("viewportCamera"),
-                    viewportCameraStateToJson(viewportTransform_.cameraState()));
-        root.insert(QStringLiteral("workPlane"),
-                    static_cast<int>(viewportTransform_.workPlane()));
-        root.insert(QStringLiteral("workPlaneOffset"),
-                    viewportTransform_.workPlaneOffset());
-        root.insert(QStringLiteral("workPlaneFrame"),
-                    workPlaneFrameToJson(viewportTransform_.workPlaneFrame()));
-
-        const ViewportCameraPreferences cameraPreferences =
-            viewportTransform_.cameraPreferences();
-        QJsonObject cameraPreferencesJson;
-        cameraPreferencesJson.insert(QStringLiteral("focalLengthMillimeters"),
-                                     cameraPreferences.focalLengthMillimeters);
-        cameraPreferencesJson.insert(QStringLiteral("clipStart"),
-                                     cameraPreferences.clipStart);
-        cameraPreferencesJson.insert(QStringLiteral("clipEnd"),
-                                     cameraPreferences.clipEnd);
-        root.insert(QStringLiteral("cameraPreferences"), cameraPreferencesJson);
-
-        QJsonArray selectedObjectIds;
-        for (const ObjectId objectId : selectedShapeIndices_) {
-            selectedObjectIds.append(QString::number(objectId.value()));
-        }
-        root.insert(QStringLiteral("selectedObjectIds"), selectedObjectIds);
-        root.insert(QStringLiteral("primaryObjectId"),
-                    QString::number(selectedShapeIndex_.value()));
-        const ControlPointReference activeControlPoint =
-            selection_.activeControlPoint();
-        if (activeControlPoint.isValid()) {
-            QJsonObject controlPoint;
-            controlPoint.insert(QStringLiteral("objectId"),
-                                QString::number(activeControlPoint.objectId.value()));
-            controlPoint.insert(QStringLiteral("index"), activeControlPoint.index);
-            root.insert(QStringLiteral("activeControlPoint"), controlPoint);
-        }
-        root.insert(QStringLiteral("controlPointsVisible"), controlPointsVisible_);
-
-        const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Compact);
-        if (file.write(data) != data.size()) {
-            DebugLog::instance().write(QStringLiteral("saveUpdateSession write failed path=%1 error=%2")
-                                           .arg(path, file.errorString()));
-            return false;
-        }
-
-        DebugLog::instance().write(QStringLiteral("saveUpdateSession path=%1 shapes=%2 layers=%3 version=4 preset=%4 perspective=%5 zoom=%6 pan=%7")
-                                       .arg(path)
-                                       .arg(shapes_.size())
-                                       .arg(document_.layers().size())
-                                       .arg(static_cast<int>(viewportTransform_.viewPreset()))
-                                       .arg(viewportTransform_.isPerspectiveEnabled())
-                                       .arg(zoom_, 0, 'g', 17)
-                                       .arg(precisePointText(pan_)));
+        DebugLog::instance().write(
+            QStringLiteral("saveUpdateSession path=%1 shapes=%2 layers=%3 version=4 preset=%4 perspective=%5 zoom=%6 pan=%7")
+                .arg(path)
+                .arg(shapes_.size())
+                .arg(document_.layers().size())
+                .arg(static_cast<int>(viewportTransform_.viewPreset()))
+                .arg(viewportTransform_.isPerspectiveEnabled())
+                .arg(zoom_, 0, 'g', 17)
+                .arg(precisePointText(pan_)));
         return true;
     }
 
     bool restoreUpdateSession(const QString &path)
     {
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) {
-            DebugLog::instance().write(QStringLiteral("restoreUpdateSession failed path=%1 error=%2")
-                                           .arg(path, file.errorString()));
+        RestoredUpdateSession restored;
+        QString errorMessage;
+        if (!SessionSerializer::read(path,
+                                     viewportTransform_.cameraPreferences(),
+                                     controlPointsVisible_,
+                                     &restored,
+                                     &errorMessage)) {
+            DebugLog::instance().write(
+                QStringLiteral("restoreUpdateSession failed path=%1 error=%2")
+                    .arg(path, errorMessage));
             return false;
         }
 
-        QJsonParseError parseError;
-        const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
-        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-            DebugLog::instance().write(QStringLiteral("restoreUpdateSession parse failed path=%1 error=%2")
-                                           .arg(path, parseError.errorString()));
-            return false;
-        }
-
-        const QJsonObject root = document.object();
-        const int version = root.value(QStringLiteral("version")).toInt(-1);
-        if (version < 1 || version > 4) {
-            DebugLog::instance().write(QStringLiteral("restoreUpdateSession unsupported version=%1 path=%2")
-                                           .arg(version)
-                                           .arg(path));
-            return false;
-        }
-
-        QPointF restoredPan;
-        if (!pointFromJson(root.value(QStringLiteral("pan")), &restoredPan)) {
-            DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid pan path=%1")
-                                           .arg(path));
-            return false;
-        }
-
-        const QJsonValue zoomValue = root.value(QStringLiteral("zoom"));
-        const qreal restoredZoom = zoomValue.toDouble(1.0);
-        if (!zoomValue.isDouble() || !std::isfinite(restoredZoom) || restoredZoom <= 1e-9) {
-            DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid zoom path=%1")
-                                           .arg(path));
-            return false;
-        }
-
-        ViewportCameraState restoredCameraState;
-        WorkPlane restoredWorkPlane = WorkPlane::XY;
-        qreal restoredWorkPlaneOffset = 0.0;
-        WorkPlaneFrame restoredWorkPlaneFrame;
-        ViewportCameraPreferences restoredCameraPreferences =
-            viewportTransform_.cameraPreferences();
-        QVector<ObjectId> restoredSelectedObjectIds;
-        ObjectId restoredPrimaryObjectId = ObjectId::invalid();
-        ControlPointReference restoredActiveControlPoint;
-        bool restoredControlPointsVisible = controlPointsVisible_;
-        if (version >= 4) {
-            if (!viewportCameraStateFromJson(
-                    root.value(QStringLiteral("viewportCamera")),
-                    &restoredCameraState)) {
-                DebugLog::instance().write(
-                    QStringLiteral("restoreUpdateSession invalid viewport camera path=%1")
-                        .arg(path));
-                return false;
-            }
-
-            WorkPlane parsedWorkPlane;
-            const QJsonValue workPlaneValue = root.value(QStringLiteral("workPlane"));
-            const QJsonValue workPlaneOffsetValue =
-                root.value(QStringLiteral("workPlaneOffset"));
-            restoredWorkPlaneOffset = workPlaneOffsetValue.toDouble(
-                std::numeric_limits<qreal>::quiet_NaN());
-            if (!workPlaneValue.isDouble() ||
-                !workPlaneFromValue(workPlaneValue.toInt(-1), &parsedWorkPlane) ||
-                !std::isfinite(restoredWorkPlaneOffset) ||
-                !workPlaneFrameFromJson(root.value(QStringLiteral("workPlaneFrame")),
-                                        &restoredWorkPlaneFrame)) {
-                DebugLog::instance().write(
-                    QStringLiteral("restoreUpdateSession invalid workplane path=%1")
-                        .arg(path));
-                return false;
-            }
-            restoredWorkPlane = parsedWorkPlane;
-
-            const QJsonObject cameraPreferences =
-                root.value(QStringLiteral("cameraPreferences")).toObject();
-            const QJsonValue focalLengthValue =
-                cameraPreferences.value(QStringLiteral("focalLengthMillimeters"));
-            const QJsonValue clipStartValue =
-                cameraPreferences.value(QStringLiteral("clipStart"));
-            const QJsonValue clipEndValue =
-                cameraPreferences.value(QStringLiteral("clipEnd"));
-            restoredCameraPreferences = {focalLengthValue.toDouble(
-                                             std::numeric_limits<qreal>::quiet_NaN()),
-                                         clipStartValue.toDouble(
-                                             std::numeric_limits<qreal>::quiet_NaN()),
-                                         clipEndValue.toDouble(
-                                             std::numeric_limits<qreal>::quiet_NaN())};
-            if (!focalLengthValue.isDouble() || !clipStartValue.isDouble() ||
-                !clipEndValue.isDouble() ||
-                !std::isfinite(restoredCameraPreferences.focalLengthMillimeters) ||
-                restoredCameraPreferences.focalLengthMillimeters < 1.0 ||
-                restoredCameraPreferences.focalLengthMillimeters > 2000.0 ||
-                !std::isfinite(restoredCameraPreferences.clipStart) ||
-                restoredCameraPreferences.clipStart < 0.000001 ||
-                !std::isfinite(restoredCameraPreferences.clipEnd) ||
-                restoredCameraPreferences.clipEnd <= restoredCameraPreferences.clipStart ||
-                restoredCameraPreferences.clipEnd > 1.0e9) {
-                DebugLog::instance().write(
-                    QStringLiteral("restoreUpdateSession invalid camera preferences path=%1")
-                        .arg(path));
-                return false;
-            }
-
-            const QJsonValue selectedIdsValue =
-                root.value(QStringLiteral("selectedObjectIds"));
-            if (!selectedIdsValue.isArray()) {
-                DebugLog::instance().write(
-                    QStringLiteral("restoreUpdateSession invalid selection path=%1")
-                        .arg(path));
-                return false;
-            }
-            for (const QJsonValue &idValue : selectedIdsValue.toArray()) {
-                bool idOk = false;
-                const quint64 id = idValue.toString().toULongLong(&idOk);
-                if (!idValue.isString() || !idOk || id == 0) {
-                    DebugLog::instance().write(
-                        QStringLiteral("restoreUpdateSession invalid selection id path=%1")
-                            .arg(path));
-                    return false;
-                }
-                restoredSelectedObjectIds.append(ObjectId::fromValue(id));
-            }
-
-            bool primaryIdOk = false;
-            const quint64 primaryId =
-                root.value(QStringLiteral("primaryObjectId")).toString()
-                    .toULongLong(&primaryIdOk);
-            if (!primaryIdOk) {
-                DebugLog::instance().write(
-                    QStringLiteral("restoreUpdateSession invalid primary selection path=%1")
-                        .arg(path));
-                return false;
-            }
-            restoredPrimaryObjectId = ObjectId::fromValue(primaryId);
-
-            const QJsonValue activeControlPointValue =
-                root.value(QStringLiteral("activeControlPoint"));
-            if (!activeControlPointValue.isUndefined()) {
-                const QJsonObject activeControlPoint =
-                    activeControlPointValue.toObject();
-                bool objectIdOk = false;
-                const quint64 objectId =
-                    activeControlPoint.value(QStringLiteral("objectId"))
-                        .toString()
-                        .toULongLong(&objectIdOk);
-                const QJsonValue indexValue =
-                    activeControlPoint.value(QStringLiteral("index"));
-                const int index = indexValue.toInt(-1);
-                if (!activeControlPointValue.isObject() || !objectIdOk ||
-                    objectId == 0 || !indexValue.isDouble() || index < 0) {
-                    DebugLog::instance().write(
-                        QStringLiteral("restoreUpdateSession invalid active control point path=%1")
-                            .arg(path));
-                    return false;
-                }
-                restoredActiveControlPoint = {
-                    ObjectId::fromValue(objectId), index};
-            }
-
-            const QJsonValue controlPointsValue =
-                root.value(QStringLiteral("controlPointsVisible"));
-            if (!controlPointsValue.isBool()) {
-                DebugLog::instance().write(
-                    QStringLiteral("restoreUpdateSession invalid control-point visibility path=%1")
-                        .arg(path));
-                return false;
-            }
-            restoredControlPointsVisible = controlPointsValue.toBool();
-        }
-
-        if (version >= 3) {
-            QString documentError;
-            if (!documentFromJson(root.value(QStringLiteral("document")),
-                                  &document_,
-                                  &documentError)) {
-                DebugLog::instance().write(
-                    QStringLiteral("restoreUpdateSession invalid document path=%1 error=%2")
-                        .arg(path, documentError));
-                return false;
-            }
-        } else {
-            const QJsonValue shapesValue = root.value(QStringLiteral("shapes"));
-            if (!shapesValue.isArray()) {
-                DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid shapes path=%1")
-                                               .arg(path));
-                return false;
-            }
-
-            QVector<Shape> restoredShapes;
-            const QJsonArray shapes = shapesValue.toArray();
-            restoredShapes.reserve(shapes.size());
-            for (const QJsonValue &shapeValue : shapes) {
-                Shape shape{GeometryType::Invalid,
-                            {},
-                            Shape::NurbsCurve2D{},
-                            ArcMode::TwoPoint,
-                            0.0,
-                            {},
-                            {}};
-                if (!shapeFromJson(shapeValue, &shape)) {
-                    DebugLog::instance().write(QStringLiteral("restoreUpdateSession invalid shape path=%1")
-                                                   .arg(path));
-                    return false;
-                }
-                restoredShapes.append(shape);
-            }
-            shapes_ = restoredShapes;
-        }
+        const int version = restored.version;
+        prepareForDocumentReplacement();
+        session_.replaceDocument(std::move(restored.document));
         normalizeDisconnectedPolyCurveObjects();
-        history_.clear();
-        pendingPoints_.clear();
-        resetArcPreviewTracking();
-        selectedShapeIndices_.clear();
-        selectedShapeIndex_ = ObjectId::invalid();
-        selectionBoxActive_ = false;
-        selectionBoxMoved_ = false;
-        selectionBoxAdditive_ = false;
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
-        draggingControlPoint_ = false;
-        controlPointIndex_ = -1;
-        dragHistoryRecorded_ = false;
-        currentDragSnap_ = DragSnapResult{};
-        dragSnapLocked_ = false;
-        eraseStrokeActive_ = false;
-        eraseCursorPressed_ = false;
-        eraseCandidateShapeIndices_.clear();
-        eraseStrokeScreenPath_.clear();
-        eraseTargetShapeIndices_.clear();
-        eraseSceneCurveCaches_.clear();
-        eraseTargetCurveCaches_.clear();
-        eraseGeometryCachePrepared_ = false;
-        trimHoverPositionValid_ = false;
-        currentSnap_ = SnapResult{};
-        joinActive_ = false;
-        joinShapeIndices_.clear();
-        resetScaleInteraction();
-        resetRotateInteraction();
-        resetMirrorInteraction();
-        subdivisionActive_ = false;
-        subdivisionShapeIndex_ = ObjectId::invalid();
-        subdivisionSections_ = 2;
-        resetSubdivisionWheelTracking();
-        lineCommandActive_ = false;
-        activeTool_ = Tool::Select;
-        repeatTool_ = Tool::Select;
-        pan_ = restoredPan;
-        zoom_ = restoredZoom;
+        resetForDocumentReplacement();
+
+        pan_ = restored.view.pan;
+        zoom_ = restored.view.zoom;
         if (version >= 4) {
             viewportTransform_.setGridSpacing(
                 documentGridSpacingInMillimeters(document_.settings()));
-            viewportTransform_.setCameraPreferences(restoredCameraPreferences);
-            viewportTransform_.setWorkPlane(restoredWorkPlane,
-                                             restoredWorkPlaneOffset);
-            viewportTransform_.setWorkPlaneFrame(restoredWorkPlaneFrame);
-            viewportTransform_.setCameraState(restoredCameraState);
-            selection_.setObjectIds(restoredSelectedObjectIds,
-                                    restoredPrimaryObjectId);
+            viewportTransform_.setCameraPreferences(restored.view.cameraPreferences);
+            viewportTransform_.setWorkPlane(restored.view.workPlane,
+                                             restored.view.workPlaneOffset);
+            viewportTransform_.setWorkPlaneFrame(restored.view.workPlaneFrame);
+            viewportTransform_.setCameraState(restored.view.camera);
+            selection_.setObjectIds(restored.view.selectedObjectIds,
+                                    restored.view.primaryObjectId);
             selection_.prune(document_);
-            if (restoredActiveControlPoint.isValid() &&
-                selection_.contains(restoredActiveControlPoint.objectId)) {
+            if (restored.view.activeControlPoint.isValid() &&
+                selection_.contains(restored.view.activeControlPoint.objectId)) {
                 selection_.setActiveControlPoint(
-                    restoredActiveControlPoint.objectId,
-                    restoredActiveControlPoint.index);
+                    restored.view.activeControlPoint.objectId,
+                    restored.view.activeControlPoint.index);
             }
-            controlPointsVisible_ = restoredControlPointsVisible;
+            controlPointsVisible_ = restored.view.controlPointsVisible;
             notifyViewStateChanged();
         }
         setCursor(Qt::ArrowCursor);
@@ -3267,19 +1927,20 @@ public:
         notifyHistoryChanged();
         notifyLayersChanged();
 
-        DebugLog::instance().write(QStringLiteral("restoreUpdateSession path=%1 shapes=%2 layers=%3 version=%4 preset=%5 perspective=%6 zoom=%7 pan=%8")
-                                       .arg(path)
-                                       .arg(shapes_.size())
-                                       .arg(document_.layers().size())
-                                       .arg(version)
-                                       .arg(static_cast<int>(viewportTransform_.viewPreset()))
-                                       .arg(viewportTransform_.isPerspectiveEnabled())
-                                       .arg(zoom_, 0, 'g', 17)
-                                       .arg(precisePointText(pan_)));
+        DebugLog::instance().write(
+            QStringLiteral("restoreUpdateSession path=%1 shapes=%2 layers=%3 version=%4 preset=%5 perspective=%6 zoom=%7 pan=%8")
+                .arg(path)
+                .arg(shapes_.size())
+                .arg(document_.layers().size())
+                .arg(version)
+                .arg(static_cast<int>(viewportTransform_.viewPreset()))
+                .arg(viewportTransform_.isPerspectiveEnabled())
+                .arg(zoom_, 0, 'g', 17)
+                .arg(precisePointText(pan_)));
         return true;
     }
 
-    bool saveVignolaDocument(const QString &path, QString *errorMessage) const override
+    ProjectViewportCameraSettings projectCameraSettings() const override
     {
         const ViewportCameraPreferences preferences = viewportTransform_.cameraPreferences();
         ProjectViewportCameraSettings cameraSettings;
@@ -3309,41 +1970,36 @@ public:
         storedView.targetY = target.y;
         storedView.targetZ = target.z;
         storedView.storedInProject = true;
-        return classiCAD::saveVignolaDocument(path,
-                                              document_,
-                                              cameraSettings,
-                                              errorMessage);
+        cameraSettings.storedInProject = true;
+        return cameraSettings;
     }
 
-    bool loadVignolaDocument(const QString &path, QString *errorMessage) override
+    void prepareForDocumentReplacement() override
     {
-        Document restoredDocument;
-        ProjectViewportCameraSettings cameraSettings;
-        if (!classiCAD::loadVignolaDocument(path,
-                                            &restoredDocument,
-                                            &cameraSettings,
-                                            errorMessage)) {
-            return false;
+        if (grabTool_.isActive()) {
+            cancelGrab();
         }
+        if (duplicateTool_.isActive()) {
+            cancelDuplicate();
+        }
+        setTool(Tool::Select);
+    }
 
+    void applyProjectCameraSettings(
+        const ProjectViewportCameraSettings &cameraSettings) override
+    {
+        normalizeDisconnectedPolyCurveObjects();
+        resetForDocumentReplacement();
+        viewportTransform_.setGridSpacing(
+            documentGridSpacingInMillimeters(document_.settings()));
+        viewportTransform_.resetView();
         if (cameraSettings.storedInProject) {
             const ViewportCameraPreferences preferences{
                 cameraSettings.focalLengthMillimeters,
                 cameraSettings.clipStart,
                 cameraSettings.clipEnd};
-            if (!viewportTransform_.setCameraPreferences(preferences)) {
-                if (errorMessage != nullptr) {
-                    *errorMessage = QStringLiteral(
-                        "The project contains invalid viewport camera settings.");
-                }
-                return false;
-            }
+            viewportTransform_.setCameraPreferences(preferences);
         }
-
-        document_ = std::move(restoredDocument);
-        normalizeDisconnectedPolyCurveObjects();
-        resetForDocumentReplacement();
-        viewportTransform_.resetView();
         if (cameraSettings.view.storedInProject) {
             const ProjectViewportViewState &storedView = cameraSettings.view;
             ViewportCameraState viewState;
@@ -3368,8 +2024,43 @@ public:
         setCursor(Qt::ArrowCursor);
         update();
         emitCoordinateUpdate();
-        notifyHistoryChanged();
-        notifyLayersChanged();
+    }
+
+    void refreshAfterProjectImport() override
+    {
+        normalizeDisconnectedPolyCurveObjects();
+        update();
+    }
+
+    void refreshAfterNewDocument() override
+    {
+        resetForDocumentReplacement();
+        viewportTransform_.setGridSpacing(
+            documentGridSpacingInMillimeters(document_.settings()));
+        viewportTransform_.resetView();
+        notifyViewStateChanged();
+        setCursor(Qt::ArrowCursor);
+        update();
+        emitCoordinateUpdate();
+    }
+
+    bool saveVignolaDocument(const QString &path,
+                             QString *errorMessage) const override
+    {
+        const ProjectController controller(session_);
+        return controller.save(path, projectCameraSettings(), errorMessage);
+    }
+
+    bool loadVignolaDocument(const QString &path,
+                             QString *errorMessage) override
+    {
+        ProjectController controller(session_);
+        ProjectViewportCameraSettings cameraSettings;
+        prepareForDocumentReplacement();
+        if (!controller.open(path, &cameraSettings, errorMessage)) {
+            return false;
+        }
+        applyProjectCameraSettings(cameraSettings);
         return true;
     }
 
@@ -3377,31 +2068,20 @@ public:
                                 Rhino3dmImportReport *report,
                                 QString *errorMessage) override
     {
-        const Document::Snapshot beforeImport = document_.snapshot();
-        if (!classiCAD::importRhino3dmDocument(path,
-                                              &document_,
-                                              report,
-                                              errorMessage)) {
+        ProjectController controller(session_);
+        if (!controller.importRhino3dm(path, report, errorMessage)) {
             return false;
         }
-
-        normalizeDisconnectedPolyCurveObjects();
-        recordGeometrySnapshot(beforeImport);
-        update();
+        refreshAfterProjectImport();
         return true;
     }
 
     void createNewDocument() override
     {
-        document_ = Document{};
-        resetForDocumentReplacement();
-        viewportTransform_.resetView();
-        notifyViewStateChanged();
-        setCursor(Qt::ArrowCursor);
-        update();
-        emitCoordinateUpdate();
-        notifyHistoryChanged();
-        notifyLayersChanged();
+        ProjectController controller(session_);
+        prepareForDocumentReplacement();
+        controller.createNewDocument();
+        refreshAfterNewDocument();
     }
 
 protected:
@@ -3423,30 +2103,34 @@ protected:
         QWidget::resizeEvent(event);
     }
 
-    QVector<Shape> visibleDepthShapes() const
+    ViewportRenderFrame viewportRenderFrame()
     {
-        QVector<Shape> visibleShapes;
-        visibleShapes.reserve(shapes_.size());
-        for (int index = 0; index < shapes_.size(); ++index) {
-            const ObjectId objectId = shapes_.objectIdAt(index);
-            if (!document_.isObjectVisible(objectId)) {
-                continue;
-            }
-            Shape depthShape = shapes_[index];
-            if (activeTool_ == Tool::Scale && scalePreviewValid_ &&
-                scaleShapeIds_.contains(objectId)) {
-                scaleShapeGeometry(&depthShape,
-                                   scaleBaseWorld_,
-                                   scalePreviewAxis_,
-                                   scalePreviewFactor_,
-                                   scaleMode_);
-            } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
-                       rotateShapeIndices_.contains(objectId)) {
-                rotateShapeGeometry(&depthShape, rotatePreviewAngle_);
-            }
-            visibleShapes.append(std::move(depthShape));
+        ViewportRenderFrameInput input;
+        input.selectedObjectIds = selectedShapeIndices_;
+        input.primarySelectedObjectId = selectedShapeIndex_;
+        input.highlightedObjectIds = joinTool_.selectedObjectIds();
+        input.activeToolPreview = toolPreview_;
+
+        if (activeTool_ == Tool::Scale && scaleState().previewValid) {
+            input.transformPreview.kind = ViewportRenderTransformKind::Scale;
+            input.transformPreview.objectIds = scaleState().sourceObjectIds;
+            input.transformPreview.scaleBasePoint = scaleState().basePoint;
+            input.transformPreview.scaleAxis = scaleState().previewAxis;
+            input.transformPreview.scaleFactor = scaleState().previewFactor;
+            input.transformPreview.scaleMode = scaleState().mode;
+            input.transformPreview.scaleSurfaceFrame =
+                viewportTransform_.workPlaneFrame();
+        } else if (activeTool_ == Tool::Rotate && rotateState().stage == 2) {
+            input.transformPreview.kind = ViewportRenderTransformKind::Rotate;
+            input.transformPreview.objectIds = rotateState().sourceObjectIds;
+            input.transformPreview.rotatePivot = rotateState().baseWorldPoint;
+            input.transformPreview.rotateAxis = rotateState().frame.normal;
+            input.transformPreview.rotateAngle = rotateState().previewAngle;
         }
-        return visibleShapes;
+        ViewportRenderFrame frame =
+            buildViewportRenderFrame(document_, viewportTransform_, size(), input);
+        viewportGeometryCache_.prepareFrame(&frame, &surfaceTessellationCache_);
+        return frame;
     }
 
     void paintViewport(QPainter &painter,
@@ -3456,11 +2140,20 @@ protected:
                        ViewportControlPointRenderer *controlPointRenderer)
     {
         invalidateEraseGeometryCacheForView();
+        if (nativeRenderer != nullptr) {
+            nativeRenderer->setSurfaceTessellationCache(
+                &surfaceTessellationCache_);
+        } else {
+            blenderGridRenderer_.setSurfaceTessellationCache(
+                &surfaceTessellationCache_);
+        }
         updateAssociativeDimensions(document_, curveSampler_);
         const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
         viewportRenderer_.setGridBaseStep(baseGridStep);
         viewportRenderer_.setGridAppearance(gridAppearance_);
-        const QVector<Shape> visibleShapes = visibleDepthShapes();
+        const ViewportRenderFrame renderFrame = viewportRenderFrame();
+        const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
+        const ToolPreview &activeToolPreview = renderFrame.activeToolPreview;
         QVector<ViewportControlPointHandle> gpuControlPointHandles;
         if (controlPointsVisible_ && controlPointRenderer != nullptr) {
             const QColor handleOutline(QStringLiteral("#77b7e6"));
@@ -3471,27 +2164,19 @@ protected:
                     continue;
                 }
 
-                Shape handleShape = shapes_[shapeIndex];
                 const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
-                if (activeTool_ == Tool::Scale && scalePreviewValid_ &&
-                    scaleShapeIds_.contains(objectId)) {
-                    scaleShapeGeometry(&handleShape,
-                                       scaleBaseWorld_,
-                                       scalePreviewAxis_,
-                                       scalePreviewFactor_,
-                                       scaleMode_);
-                } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
-                           rotateShapeIndices_.contains(objectId)) {
-                    rotateShapeGeometry(&handleShape, rotatePreviewAngle_);
+                const ViewportRenderObject *renderObject = renderFrame.find(objectId);
+                if (renderObject == nullptr) {
+                    continue;
                 }
 
                 const QVector<QPointF> controlPoints =
-                    controlPointsForShape(handleShape);
+                    controlPointsForShape(renderObject->shape);
                 for (int pointIndex = 0; pointIndex < controlPoints.size();
                      ++pointIndex) {
                     const Point3D world = shapePointToWorld(
-                        handleShape, controlPoints[pointIndex]);
-                    const bool active = draggingControlPoint_ &&
+                        renderObject->shape, controlPoints[pointIndex]);
+                    const bool active = controlPointSelectionDragActive() &&
                                         objectId == selectedShapeIndex_ &&
                                         pointIndex == controlPointIndex_;
                     ViewportControlPointHandle handle;
@@ -3516,12 +2201,14 @@ protected:
         QPainter rasterScenePainter;
         if (nativeRenderer == nullptr) {
             gpuViewportBackground = blenderGridRenderer_.render(
-                viewportTransform_, size(), devicePixelRatioF(), visibleShapes,
+                renderFrame.camera, renderFrame.viewportSize,
+                devicePixelRatioF(), visibleShapes,
                 baseGridStep, gridAppearance_);
             const qreal devicePixelRatio =
                 std::max<qreal>(devicePixelRatioF(), 1.0);
-            const QSize scenePixelSize(qRound(size().width() * devicePixelRatio),
-                                       qRound(size().height() * devicePixelRatio));
+            const QSize scenePixelSize(
+                qRound(renderFrame.viewportSize.width() * devicePixelRatio),
+                qRound(renderFrame.viewportSize.height() * devicePixelRatio));
             committedSceneLayer = QImage(scenePixelSize,
                                          QImage::Format_ARGB32_Premultiplied);
             committedSceneLayer.setDevicePixelRatio(devicePixelRatio);
@@ -3532,7 +2219,7 @@ protected:
             painter.beginNativePainting();
             const bool backgroundDrawn =
                 nativeRenderer->renderBackgroundToCurrentFramebuffer(
-                    size(), devicePixelRatioF());
+                    renderFrame.viewportSize, devicePixelRatioF());
             painter.endNativePainting();
             if (!backgroundDrawn) {
                 fillViewportBackground(painter, rect());
@@ -3544,78 +2231,30 @@ protected:
         QVector<ViewportSceneStroke> gpuStrokes;
         QVector<TransientPreviewStroke> gpuPreviewGeometry;
         QVector<TransientPreviewPicture> gpuPreviewPictures;
-        gpuPreviewGeometry.reserve(duplicatePreviewShapes_.size() +
-                                   mirrorShapeIndices_.size() + 16);
+        gpuPreviewGeometry.reserve(duplicateTool_.previewShapes().size() +
+                                   mirrorTool_.sourceObjectIds().size() + 16);
         gpuPreviewPictures.reserve(shapes_.size() +
-                                   duplicatePreviewShapes_.size() +
-                                   mirrorShapeIndices_.size() + 1);
-        QVector<bool> gpuDuplicatePreviewHandled(duplicatePreviewShapes_.size(), false);
+                                   duplicateTool_.previewShapes().size() +
+                                   mirrorTool_.sourceObjectIds().size() + 1);
+        QVector<bool> gpuDuplicatePreviewHandled(
+            duplicateTool_.previewShapes().size(), false);
         QVector<ObjectId> gpuMirrorPreviewHandled;
         bool gpuActiveToolPreview = false;
         bool gpuActivePicturePreviewRendered = false;
-        int visibleShapeIndex = 0;
-
-        for (int index = 0; index < shapes_.size(); ++index) {
-            const ObjectId objectId = shapes_.objectIdAt(index);
-            if (!document_.isObjectVisible(objectId)) {
+        for (const ViewportRenderObject &renderObject : visibleShapes) {
+            const int index = renderObject.objectIndex;
+            const ObjectId objectId = renderObject.objectId;
+            const Shape &visibleShape = renderObject.shape;
+            if (isDimensionGeometryType(visibleShape.geometryType)) {
                 continue;
             }
-            const Shape &visibleShape = visibleShapes[visibleShapeIndex++];
-            if (isDimensionGeometryType(shapes_[index].geometryType)) {
-                continue;
-            }
-            QColor layerColor;
-            QString layerLineType;
-            qreal layerLineWeightMm = 0.0;
-            const SceneObject *sceneObject = document_.object(objectId);
-            const Layer *objectLayer = sceneObject == nullptr
-                                           ? nullptr
-                                           : document_.layer(sceneObject->layerId);
-            if (objectLayer != nullptr) {
-                layerColor = objectLayer->color;
-                layerLineType = objectLayer->lineType;
-                layerLineWeightMm = objectLayer->lineWeightMm;
-            }
-            const LayerGpuLinePattern gpuLayerPattern =
-                layerGpuLinePattern(layerLineType);
-            const bool selected = selectedShapeIndices_.contains(objectId) ||
-                                  objectId == selectedShapeIndex_ ||
-                                  joinShapeIndices_.contains(objectId);
-            const bool scalePreview = activeTool_ == Tool::Scale &&
-                                      scalePreviewValid_ &&
-                                      scaleShapeIds_.contains(objectId);
-            const bool rotatePreview = activeTool_ == Tool::Rotate &&
-                                        rotateStep_ == 2 &&
-                                        rotateShapeIndices_.contains(objectId);
+            const QColor &layerColor = renderObject.layerColor;
+            const QString &layerLineType = renderObject.layerLineType;
+            const qreal layerLineWeightMm = renderObject.layerLineWeightMm;
+            const bool selected = renderObject.selected;
+            const bool scalePreview = renderObject.scalePreview;
+            const bool rotatePreview = renderObject.rotatePreview;
             const GeometryType geometryType = visibleShape.geometryType;
-            const bool gpuStrokeType =
-                geometryType == GeometryType::Point ||
-                geometryType == GeometryType::Line ||
-                geometryType == GeometryType::Rectangle ||
-                geometryType == GeometryType::Polygon ||
-                geometryType == GeometryType::Circle ||
-                geometryType == GeometryType::Ellipse ||
-                geometryType == GeometryType::Arc ||
-                geometryType == GeometryType::PolyCurve ||
-                geometryType == GeometryType::Bezier ||
-                geometryType == GeometryType::Nurbs;
-            const bool nativeCurve = sceneRenderer != nullptr &&
-                                     gpuStrokeType &&
-                                     (geometryType == GeometryType::Point ||
-                                      selected || scalePreview || rotatePreview ||
-                                      gpuLayerPattern.kind !=
-                                          LayerGpuLinePatternKind::Unsupported) &&
-                                     (geometryType != GeometryType::Arc ||
-                                      validateNurbsCurve(visibleShape.nurbs)) &&
-                                     (geometryType != GeometryType::Circle ||
-                                      validateNurbsCurve(visibleShape.nurbs)) &&
-                                     (geometryType != GeometryType::Ellipse ||
-                                      validateNurbsCurve(visibleShape.nurbs)) &&
-                                     ((geometryType != GeometryType::Bezier &&
-                                       geometryType != GeometryType::Nurbs) ||
-                                      validateNurbsCurve(visibleShape.nurbs)) &&
-                                     (geometryType != GeometryType::PolyCurve ||
-                                      !visibleShape.components.isEmpty());
             if (sceneRenderer != nullptr && previewRenderer != nullptr &&
                 geometryType == GeometryType::Picture &&
                 !scalePreview && !rotatePreview &&
@@ -3631,10 +2270,16 @@ protected:
                      1.0f,
                      QColor(QStringLiteral("#5da9e9"))});
                 if (selected) {
-                    gpuStrokes.append({&gpuPreviewPictures.back().frame,
-                                       QColor(QStringLiteral("#5da9e9")),
-                                       1.5f,
-                                       false});
+                    ViewportSceneStroke outlineStroke{
+                        &gpuPreviewPictures.back().frame,
+                        QColor(QStringLiteral("#5da9e9")),
+                        1.5f,
+                        false};
+                    outlineStroke.objectId = objectId;
+                    outlineStroke.geometryRevision =
+                        renderObject.geometryRevision;
+                    outlineStroke.cacheableGeometry = renderObject.cacheable;
+                    gpuStrokes.append(outlineStroke);
                 }
                 continue;
             }
@@ -3652,89 +2297,53 @@ protected:
                      false,
                      1.0f,
                      QColor(QStringLiteral("#5da9e9"))});
-                gpuStrokes.append({&gpuPreviewPictures.back().frame,
-                                   QColor(QStringLiteral("#5da9e9")),
-                                   1.5f,
-                                   false});
+                ViewportSceneStroke outlineStroke{
+                    &gpuPreviewPictures.back().frame,
+                    QColor(QStringLiteral("#5da9e9")),
+                    1.5f,
+                    false};
+                outlineStroke.objectId = objectId;
+                outlineStroke.geometryRevision = renderObject.geometryRevision;
+                outlineStroke.cacheableGeometry = renderObject.cacheable;
+                gpuStrokes.append(outlineStroke);
                 continue;
             }
-            if (nativeCurve) {
-                const bool highlighted = selected || scalePreview || rotatePreview;
-                const qreal storedWidth = layerLineWeightMm > 0.0
-                                              ? std::clamp(layerLineWeightMm * 6.0,
-                                                           1.0, 10.0)
-                                              : 2.0;
-                if (geometryType == GeometryType::Bezier ||
-                    geometryType == GeometryType::Nurbs) {
-                    gpuStrokes.append({&visibleShape,
-                                       QColor(QStringLiteral("#8aa7c7")),
-                                       1.0f, true});
-                }
-                ViewportSceneStroke sceneStroke{
-                    &visibleShape,
-                    highlighted ? QColor(QStringLiteral("#5da9e9"))
-                                : layerColor.isValid()
-                                      ? layerColor
-                                      : QColor(QStringLiteral("#d28b45")),
-                    static_cast<float>(highlighted ? 3.5 : storedWidth),
-                    false,
-                    geometryType == GeometryType::Point
-                        ? (highlighted ? 10.0f : 9.0f)
-                        : 0.0f};
-                if (!highlighted) {
-                    sceneStroke.lineStyle = viewportSceneLineStyleForLayerPattern(
-                        gpuLayerPattern.kind);
-                    sceneStroke.linePatternScale =
-                        static_cast<float>(gpuLayerPattern.scale);
-                    sceneStroke.linePatternSegmentCount = std::min(
-                        static_cast<int>(gpuLayerPattern.segments.size()),
-                        static_cast<int>(sceneStroke.linePatternSegmentsWidthUnits.size()));
-                    for (int segmentIndex = 0;
-                         segmentIndex < sceneStroke.linePatternSegmentCount;
-                         ++segmentIndex) {
-                        sceneStroke.linePatternSegmentsWidthUnits[
-                            static_cast<std::size_t>(segmentIndex)] =
-                            static_cast<float>(gpuLayerPattern.segments[segmentIndex]);
-                    }
+            ViewportSceneStroke sceneStroke;
+            ViewportSceneStroke controlGuide;
+            if (makeViewportSceneStrokes(renderObject,
+                                         sceneRenderer != nullptr,
+                                         &sceneStroke,
+                                         &controlGuide)) {
+                if (controlGuide.shape != nullptr) {
+                    gpuStrokes.append(std::move(controlGuide));
                 }
                 gpuStrokes.append(sceneStroke);
                 continue;
             }
-            if (scalePreview) {
-                Shape previewShape = shapes_[index];
-                scaleShapeGeometry(&previewShape,
-                                   scaleBaseWorld_,
-                                   scalePreviewAxis_,
-                                   scalePreviewFactor_,
-                                   scaleMode_);
+            if (scalePreview || rotatePreview) {
                 drawShape(scenePainter,
-                          previewShape,
+                          visibleShape,
                           false,
                           true,
                           true,
                           layerColor,
                           layerLineType,
-                          layerLineWeightMm);
-            } else if (rotatePreview) {
-                Shape previewShape = shapes_[index];
-                rotateShapeGeometry(&previewShape, rotatePreviewAngle_);
-                drawShape(scenePainter,
-                          previewShape,
-                          false,
-                          true,
-                          true,
-                          layerColor,
-                          layerLineType,
-                          layerLineWeightMm);
+                          layerLineWeightMm,
+                          ObjectId::invalid(),
+                          0,
+                          renderObject.preparedDepthGeometry.data());
             } else {
                 drawShape(scenePainter,
-                          shapes_[index],
+                          visibleShape,
                           false,
                           selected,
                           true,
                           layerColor,
                           layerLineType,
-                          layerLineWeightMm);
+                          layerLineWeightMm,
+                          objectId,
+                          renderObject.geometryRevision,
+                          renderObject.preparedDepthGeometry.data());
             }
         }
 
@@ -3853,8 +2462,10 @@ protected:
                         isRectangleTool(activeTool_)
                     ? arcPreviewColor
                     : previewColor;
-            for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
-                const Shape &preview = duplicatePreviewShapes_[index];
+            for (int index = 0;
+                 index < duplicateTool_.previewShapes().size();
+                 ++index) {
+                const Shape &preview = duplicateTool_.previewShapes()[index];
                 if (preview.geometryType == GeometryType::Picture) {
                     addPicturePreview(preview, index, false,
                                       ObjectId::invalid());
@@ -3864,9 +2475,9 @@ protected:
                 }
             }
 
-            if (activeTool_ == Tool::Mirror && !pendingPoints_.isEmpty() &&
+            if (activeTool_ == Tool::Mirror && mirrorTool_.hasAxisStart() &&
                 cursorValid_) {
-                for (const ObjectId objectId : mirrorShapeIndices_) {
+                for (const ObjectId objectId : mirrorTool_.sourceObjectIds()) {
                     const int shapeIndex = objectIndex(objectId);
                     if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
                         !document_.isObjectVisible(objectId)) {
@@ -3874,7 +2485,7 @@ protected:
                     }
                     Shape mirroredShape;
                     if (mirrorShapeAcrossLine(shapes_[shapeIndex],
-                                              pendingPoints_.first(),
+                                              mirrorTool_.axisStart(),
                                               cursorWorld_,
                                               &mirroredShape)) {
                         if (mirroredShape.geometryType == GeometryType::Picture) {
@@ -3892,15 +2503,15 @@ protected:
                 }
             }
 
-            if (controllerPreviewShapeVisible_ &&
-                !isDimensionGeometryType(controllerPreviewShape_.geometryType)) {
+            if (activeToolPreview.hasShape &&
+                !isDimensionGeometryType(activeToolPreview.shape.geometryType)) {
                 gpuActiveToolPreview |= addPreviewShape(
-                    controllerPreviewShape_, activeToolPreviewColor,
+                    activeToolPreview.shape, activeToolPreviewColor,
                     1.5f, false, 0.0f,
                     false, false);
             }
             if (activeTool_ == Tool::PointExtrude) {
-                for (const Shape &previewShape : pointExtrudePreviewShapes_) {
+                for (const Shape &previewShape : activeToolPreview.shapes) {
                     gpuActiveToolPreview |= addPreviewShape(
                         previewShape, activeToolPreviewColor,
                         1.5f, false, 0.0f, false, false);
@@ -3909,7 +2520,7 @@ protected:
 
             if (isRectangleTool(activeTool_)) {
                 const QColor markerColor(QStringLiteral("#101010"));
-                for (const ToolPreviewGuide &guide : rectanglePreviewGuides_) {
+                for (const ToolPreviewGuide &guide : activeToolPreview.guides) {
                     gpuActiveToolPreview |= addSolidPreviewLine(
                         guide.line.p1(), guide.line.p2(), guide.color, 1.5f);
                 }
@@ -3919,9 +2530,9 @@ protected:
                 if (cursorValid_) {
                     gpuActiveToolPreview |= addPreviewPoint(cursorWorld_, markerColor, 5.0f, false);
                 }
-                if (controllerPreviewShapeVisible_ &&
-                    controllerPreviewShape_.geometryType == GeometryType::Rectangle) {
-                    for (const QPointF &point : rectangleVertices(controllerPreviewShape_)) {
+                if (activeToolPreview.hasShape &&
+                    activeToolPreview.shape.geometryType == GeometryType::Rectangle) {
+                    for (const QPointF &point : rectangleVertices(activeToolPreview.shape)) {
                         gpuActiveToolPreview |= addPreviewPoint(point, markerColor, 5.0f, false);
                     }
                 }
@@ -3986,7 +2597,7 @@ protected:
                        activeTool_ != Tool::Point) {
                 const QColor pointColor(QStringLiteral("#101010"));
                 const QColor arcColor(QStringLiteral("#33cc33"));
-                for (const Shape &preview : pointPreviewShapes_) {
+                for (const Shape &preview : activeToolPreview.shapes) {
                     if (preview.geometryType == GeometryType::Point) continue;
                     const bool isArc = preview.geometryType == GeometryType::Arc ||
                                        preview.geometryType == GeometryType::Circle;
@@ -3995,16 +2606,16 @@ protected:
                         isArc ? 2.0f : 1.5f, false,
                         0.0f, false, false);
                 }
-                for (const ToolPreviewGuide &guide : pointPreviewGuides_) {
+                for (const ToolPreviewGuide &guide : activeToolPreview.guides) {
                     Shape line;
                     line.geometryType = GeometryType::Line;
                     line.points = {guide.line.p1(), guide.line.p2()};
                     line.workPlane = WorkPlane::XY;
                     line.workPlaneOffset = guide.hasWorkPlaneFrame
                         ? guide.workPlaneFrame.origin.z
-                        : pointPreviewFrame_.origin.z;
+                        : activeToolPreview.workPlaneFrame.origin.z;
                     line.workPlaneFrame = guide.hasWorkPlaneFrame
-                        ? guide.workPlaneFrame : pointPreviewFrame_;
+                        ? guide.workPlaneFrame : activeToolPreview.workPlaneFrame;
                     gpuActiveToolPreview |= addPreviewShape(
                         line, guide.color, 1.25f, false, 0.0f,
                         guide.dashed, false);
@@ -4015,15 +2626,15 @@ protected:
                 Shape pointPreview;
                 if (makeToolShape(Tool::Point,
                                   {cursorWorld_},
-                                  arcMode_,
-                                  arcPreviewSweepAngle_,
+                                  arcState().mode,
+                                  arcState().previewSweepAngle,
                                   &pointPreview)) {
                     gpuActiveToolPreview |= addPreviewShape(
                         pointPreview, previewColor, 1.5f, false, 9.0f,
                         false, false);
                 }
             } else if (activeTool_ == Tool::Line) {
-                for (const Shape &preview : linePreviewShapes_) {
+                for (const Shape &preview : activeToolPreview.shapes) {
                     gpuActiveToolPreview |= addPreviewShape(
                         preview, QColor(QStringLiteral("#000000")),
                         1.0f, false, 0.0f, false, false);
@@ -4045,8 +2656,8 @@ protected:
                 Shape toolPreview;
                 if (makeToolShape(activeTool_,
                                   candidatePoints,
-                                  arcMode_,
-                                  arcPreviewSweepAngle_,
+                                  arcState().mode,
+                                  arcState().previewSweepAngle,
                                   &toolPreview)) {
                     gpuActiveToolPreview |= addPreviewShape(
                         toolPreview,
@@ -4069,19 +2680,19 @@ protected:
                 const QColor rotateColor(QStringLiteral("#e6b85c"));
                 const QColor guideColor(QStringLiteral("#8aa7c7"));
                 const QColor pointColor(QStringLiteral("#f0a45a"));
-                if (rotateStep_ == 0) {
+                if (rotateState().stage == 0) {
                     gpuActiveToolPreview |= addPreviewPoint(
                         cursorWorld_, pointColor, 12.0f, true);
                 } else {
                     gpuActiveToolPreview |= addPreviewPoint(
-                        rotateBaseWorld_, pointColor, 12.0f, true);
-                    if (rotateStep_ >= 1) {
+                        rotateState().basePoint, pointColor, 12.0f, true);
+                    if (rotateState().stage >= 1) {
                         gpuActiveToolPreview |= addPreviewLine(
-                            rotateBaseWorld_, cursorWorld_, guideColor, 1.0f);
+                            rotateState().basePoint, cursorWorld_, guideColor, 1.0f);
                     }
-                    if (rotateStep_ >= 2) {
+                    if (rotateState().stage >= 2) {
                         gpuActiveToolPreview |= addPreviewLine(
-                            rotateBaseWorld_, rotateReferenceWorld_, rotateColor,
+                            rotateState().basePoint, rotateState().referencePoint, rotateColor,
                             1.0f);
                     }
                 }
@@ -4089,20 +2700,20 @@ protected:
                     cursorWorld_, pointColor, 8.0f, false);
             }
 
-            if (activeTool_ == Tool::Scale && scaleStep_ == 2 && cursorValid_) {
+            if (activeTool_ == Tool::Scale && scaleState().stage == 2 && cursorValid_) {
                 QPointF guideEnd = cursorWorld_;
-                if (scaleMode_ == ScaleMode::OneD && !scaleUsingTypedFactor_) {
-                    const QPointF offset = cursorWorld_ - scaleBaseWorld_;
-                    guideEnd = scaleBaseWorld_ +
-                               scaleAxisDirection_ *
+                if (scaleState().mode == ScaleMode::OneD && !scaleState().usingTypedFactor) {
+                    const QPointF offset = cursorWorld_ - scaleState().basePoint;
+                    guideEnd = scaleState().basePoint +
+                               scaleState().axisDirection *
                                    QPointF::dotProduct(offset,
-                                                       scaleAxisDirection_);
+                                                       scaleState().axisDirection);
                 }
                 const QColor guideColor(QStringLiteral("#8aa7c7"));
                 gpuActiveToolPreview |= addPreviewLine(
-                    scaleBaseWorld_, guideEnd, guideColor, 1.0f);
+                    scaleState().basePoint, guideEnd, guideColor, 1.0f);
                 gpuActiveToolPreview |= addPreviewPoint(
-                    scaleBaseWorld_, previewColor, 8.0f, true);
+                    scaleState().basePoint, previewColor, 8.0f, true);
             }
         }
 
@@ -4122,15 +2733,15 @@ protected:
 
         const bool gpuArcToolPreview =
             activeTool_ == Tool::Arc &&
-            (arcMode_ == ArcMode::OnePoint || arcMode_ == ArcMode::TwoPoint ||
-             arcMode_ == ArcMode::ThreePoint);
-        const qreal arcHudPanelWidth = arcMode_ != ArcMode::OnePoint
+            (arcState().mode == ArcMode::OnePoint || arcState().mode == ArcMode::TwoPoint ||
+             arcState().mode == ArcMode::ThreePoint);
+        const qreal arcHudPanelWidth = arcState().mode != ArcMode::OnePoint
                                            ? 750.0
                                            : 570.0;
         const ArcHudDisplay arcHudDisplay =
-            arcMode_ == ArcMode::OnePoint
+            arcState().mode == ArcMode::OnePoint
                 ? onePointArcHudDisplay()
-                : arcMode_ == ArcMode::TwoPoint
+                : arcState().mode == ArcMode::TwoPoint
                       ? twoPointArcHudDisplay()
                       : threePointArcHudDisplay();
         const QImage arcHudText = nativeRenderer != nullptr &&
@@ -4148,7 +2759,8 @@ protected:
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
                     if (preview.sceneShapeIndex >= 0 &&
                         !sceneRenderer->drawPicture(preview.image,
-                                                    viewportTransform_, size(),
+                                                    renderFrame.camera,
+                                                    renderFrame.viewportSize,
                                                     devicePixelRatioF(),
                                                     preview.opacity)) {
                         failedScenePicturePreviews.append(&preview.image);
@@ -4157,10 +2769,12 @@ protected:
             }
             const bool sceneDrawn = sceneRenderer == nullptr ||
                                     sceneRenderer->draw(gpuStrokes,
-                                                        viewportTransform_, size(),
+                                                        renderFrame.camera,
+                                                        renderFrame.viewportSize,
                                                         devicePixelRatioF());
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
-                viewportTransform_, size(), devicePixelRatioF(),
+                renderFrame.camera, renderFrame.viewportSize,
+                devicePixelRatioF(),
                 visibleShapes, baseGridStep, gridAppearance_);
             if (previewRenderer != nullptr) {
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
@@ -4168,7 +2782,8 @@ protected:
                         continue;
                     }
                     if (!previewRenderer->drawPicture(preview.image,
-                                                      viewportTransform_, size(),
+                                                      renderFrame.camera,
+                                                      renderFrame.viewportSize,
                                                       devicePixelRatioF(),
                                                       preview.opacity)) {
                         continue;
@@ -4193,25 +2808,27 @@ protected:
             }
             gpuPreviewRendered = previewRenderer != nullptr &&
                                  previewRenderer->draw(gpuPreviewStrokes,
-                                                       viewportTransform_, size(),
+                                                       renderFrame.camera,
+                                                       renderFrame.viewportSize,
                                                        devicePixelRatioF());
             if (controlPointsVisible_ && controlPointRenderer != nullptr) {
                 gpuControlPointsDrawn = controlPointRenderer->draw(
-                    gpuControlPointHandles, viewportTransform_, size(),
+                    gpuControlPointHandles, renderFrame.camera,
+                    renderFrame.viewportSize,
                     devicePixelRatioF());
             }
             if (gpuArcToolPreview && previewRenderer != nullptr) {
                 gpuArcOverlayRendered =
                     previewRenderer->drawArcToolOverlay(
-                        viewportTransform_,
-                        size(),
+                        renderFrame.camera,
+                        renderFrame.viewportSize,
                         devicePixelRatioF(),
                         viewportTransform_.workPlaneFrame(),
                         pendingPoints_,
                         cursorWorld_,
                         cursorValid_,
-                        arcMode_,
-                        arcPreviewSweepAngle_,
+                        arcState().mode,
+                        arcState().previewSweepAngle,
                         arcPreviewColor,
                         currentSnap_,
                         arcCompassRotation(),
@@ -4252,38 +2869,22 @@ protected:
             }
         }
 
-        for (int index = 0; index < shapes_.size(); ++index) {
-            const ObjectId objectId = shapes_.objectIdAt(index);
-            if (!document_.isObjectVisible(objectId)) {
-                continue;
-            }
+        for (const ViewportRenderObject &renderObject : visibleShapes) {
+            const ObjectId objectId = renderObject.objectId;
+            const int index = renderObject.objectIndex;
             const Shape &shape = shapes_[index];
             if (isDimensionGeometryType(shape.geometryType)) {
-                QColor layerColor;
-                QString layerLineType;
-                qreal layerLineWeightMm = 0.0;
-                const SceneObject *sceneObject = document_.object(objectId);
-                const Layer *objectLayer = sceneObject == nullptr
-                                               ? nullptr
-                                               : document_.layer(sceneObject->layerId);
-                if (objectLayer != nullptr) {
-                    layerColor = objectLayer->color;
-                    layerLineType = objectLayer->lineType;
-                    layerLineWeightMm = objectLayer->lineWeightMm;
-                }
-                const bool selected = selectedShapeIndices_.contains(objectId) ||
-                                      objectId == selectedShapeIndex_ ||
-                                      joinShapeIndices_.contains(objectId);
+                const bool selected = renderObject.selected;
                 drawShape(painter,
                           shape,
                           false,
                           selected,
                           true,
-                          layerColor,
-                          layerLineType,
-                          layerLineWeightMm);
+                          renderObject.layerColor,
+                          renderObject.layerLineType,
+                          renderObject.layerLineWeightMm);
             }
-            if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
+            if (!subdivisionTool_.isActive() || objectId != subdivisionTool_.targetObjectId()) {
                 drawSubdivisionPoints(painter,
                                       shape,
                                       shape.subdivisionParameters,
@@ -4291,17 +2892,21 @@ protected:
             }
         }
 
-        if (duplicateActive_) {
-            for (int index = 0; index < duplicatePreviewShapes_.size(); ++index) {
+        if (duplicateTool_.isActive()) {
+            for (int index = 0;
+                 index < duplicateTool_.previewShapes().size();
+                 ++index) {
                 if (!gpuPreviewRendered || !gpuDuplicatePreviewHandled.value(index)) {
-                    drawShape(painter, duplicatePreviewShapes_[index], true);
+                    drawShape(painter,
+                              duplicateTool_.previewShapes()[index],
+                              true);
                 }
             }
         }
 
         if (isEraseLikeTool(activeTool_) &&
-            (!eraseStrokeScreenPath_.isEmpty() || eraseStrokeActive_)) {
-            for (const ObjectId objectId : eraseCandidateShapeIndices_) {
+            (!eraseLikeScreenPath().isEmpty() || eraseTool_.strokeActive())) {
+            for (const ObjectId objectId : eraseCandidates()) {
                 const int shapeIndex = objectIndex(objectId);
                 if (shapeIndex >= 0) {
                     drawEraseCandidatePreview(painter, shapeIndex);
@@ -4309,38 +2914,24 @@ protected:
             }
         }
 
-        const int subdivisionIndex = objectIndex(subdivisionShapeIndex_);
-        if (subdivisionActive_ && subdivisionIndex >= 0) {
-            const QVector<double> previewParameters = subdivisionParametersForSections(
-                shapes_[subdivisionIndex], subdivisionSections_);
+        const int subdivisionIndex = objectIndex(subdivisionTool_.targetObjectId());
+        if (subdivisionTool_.isActive() && subdivisionIndex >= 0) {
             drawSubdivisionPoints(painter,
                                   shapes_[subdivisionIndex],
-                                  previewParameters,
+                                  subdivisionTool_.previewParameters(),
                                   true);
         }
 
         if (controlPointsVisible_) {
             for (const int shapeIndex : controlPointShapeIndices()) {
                 if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
-                    if (activeTool_ == Tool::Scale && scalePreviewValid_ &&
-                        scaleShapeIds_.contains(shapes_.objectIdAt(shapeIndex))) {
-                        Shape previewShape = shapes_[shapeIndex];
-                        scaleShapeGeometry(&previewShape,
-                                           scaleBaseWorld_,
-                                           scalePreviewAxis_,
-                                           scalePreviewFactor_,
-                                           scaleMode_);
-                        drawControlPoints(painter, previewShape, shapeIndex,
-                                          !gpuControlPointsDrawn);
-                    } else if (activeTool_ == Tool::Rotate && rotateStep_ == 2 &&
-                        rotateShapeIndices_.contains(shapes_.objectIdAt(shapeIndex))) {
-                        Shape previewShape = shapes_[shapeIndex];
-                        rotateShapeGeometry(&previewShape,
-                                            rotatePreviewAngle_);
-                        drawControlPoints(painter, previewShape, shapeIndex,
-                                          !gpuControlPointsDrawn);
-                    } else {
-                        drawControlPoints(painter, shapes_[shapeIndex], shapeIndex,
+                    const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+                    const ViewportRenderObject *renderObject =
+                        renderFrame.find(objectId);
+                    if (renderObject != nullptr) {
+                        drawControlPoints(painter,
+                                          renderObject->shape,
+                                          shapeIndex,
                                           !gpuControlPointsDrawn);
                     }
                 }
@@ -4409,27 +3000,27 @@ protected:
         } else if (activeTool_ == Tool::Rotate) {
             drawRotateToolPreview(painter,
                                   !gpuActiveToolPreview || !gpuPreviewRendered);
-        } else if (activeTool_ == Tool::Scale && scaleStep_ == 2) {
+        } else if (activeTool_ == Tool::Scale && scaleState().stage == 2) {
             drawScaleToolGuide(painter,
                                !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::PointExtrude) {
-            for (const Shape &previewShape : pointExtrudePreviewShapes_) {
+            for (const Shape &previewShape : activeToolPreview.shapes) {
                 if (previewShape.geometryType == GeometryType::NurbsSurface ||
                     !gpuActiveToolPreview || !gpuPreviewRendered) {
                     drawShape(painter, previewShape, true, false, false,
                               arcPreviewColor);
                 }
             }
-        } else if (controllerPreviewShapeVisible_ &&
+        } else if (activeToolPreview.hasShape &&
                    (isPointCreationTool(activeTool_) ||
                     isCurveCreationTool(activeTool_) ||
                     isTwoCurveLineTool(activeTool_))) {
             if (!gpuActiveToolPreview || !gpuPreviewRendered) {
-                drawShape(painter, controllerPreviewShape_, true);
+                drawShape(painter, activeToolPreview.shape, true);
             }
         } else if (isDimensionTool(activeTool_)) {
-            if (controllerPreviewShapeVisible_) {
-                drawShape(painter, controllerPreviewShape_, true);
+            if (activeToolPreview.hasShape) {
+                drawShape(painter, activeToolPreview.shape, true);
             }
             if (currentSnap_.isValid()) {
                 drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
@@ -4437,13 +3028,9 @@ protected:
         } else if (isEraseLikeTool(activeTool_)) {
             drawErasePreview(painter);
         } else if (!pendingPoints_.isEmpty()) {
-            Shape previewShape{geometryTypeForTool(activeTool_),
-                               pendingPoints_,
-                               Shape::NurbsCurve2D{},
-                               ArcMode::TwoPoint,
-                               0.0,
-                               {},
-                               {}};
+            Shape previewShape;
+            previewShape.geometryType = geometryTypeForTool(activeTool_);
+            previewShape.points = pendingPoints_;
             previewShape.workPlane = viewportTransform_.workPlane();
             previewShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
             previewShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
@@ -4452,91 +3039,71 @@ protected:
             }
         }
 
-        if ((grabActive_ || duplicateActive_ || activeTool_ == Tool::Scale ||
+        if ((grabTool_.isActive() || duplicateTool_.isActive() ||
+             activeTool_ == Tool::Scale ||
              activeTool_ == Tool::PointExtrude ||
              activeTool_ == Tool::Picture) &&
             currentSnap_.isValid()) {
             drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
         }
-        if ((draggingSelected_ || draggingControlPoint_) && currentDragSnap_.isValid()) {
+        if ((objectSelectionDragActive() || controlPointSelectionDragActive()) &&
+            currentDragSnap_.isValid()) {
             drawSnapMarker(painter,
                            currentDragSnap_.type,
                            currentDragSnap_.targetPoint);
         }
 
-        if (selectionBoxActive_) {
+        if (selectionBoxOverlayActive()) {
             viewportOverlay_.drawSelectionBox(painter,
-                                               selectionBoxStartScreen_,
-                                               selectionBoxCurrentScreen_);
+                                              selectionBoxStartPosition(),
+                                              selectionBoxCurrentPosition());
         }
-        viewportOverlay_.drawToolStatus(painter,
-                                         size(),
-                                         activeTool_,
-                                         arcMode_,
-                                         subdivisionActive_,
-                                         subdivisionSections_,
-                                         joinActive_,
-                                         joinShapeIndices_.size(),
-                                         lineCommandActive_,
-                                         toolStatus_.text,
-                                         pointHudInstructionsLine_,
-                                         rotateStep_,
-                                         rotateAngleSnapEnabled_,
-                                         rotateAngleInputActive_,
-                                         rotateSnapIncrementDegrees(),
-                                         rotateToolPreferences_.useRadians,
-                                         grabActive_,
-                                         grabPickingBasePoint_,
-                                         grabHasBasePoint_,
-                                         duplicateActive_,
-                                         duplicatePickingBasePoint_,
-                                         duplicateHasBasePoint_);
-        viewportOverlay_.drawBlenderNavigationGizmo(
-            painter, size(), navigationHoverPosition_);
+        ViewportHudState hudState;
+        hudState.activeTool = activeTool_;
+        hudState.arcMode = arcState().mode;
+        hudState.subdivisionActive = subdivisionTool_.isActive();
+        hudState.subdivisionSections = subdivisionTool_.sections();
+        hudState.joinActive = joinTool_.isActive();
+        hudState.joinCount = joinTool_.selectedCount();
+        hudState.lineCommandActive = lineCommandActive_;
+        hudState.lineCommandStatus = toolStatus_.text;
+        hudState.pointToolInstructions = activeToolPreview.hudInstructionsLine;
+        hudState.rotateStep = rotateState().stage;
+        hudState.rotateAngleSnapEnabled = rotateState().angleSnapEnabled;
+        hudState.rotateAngleInputActive = rotateState().angleInputActive;
+        hudState.rotateAngleSnapIncrementDegrees =
+            rotateSnapIncrementDegrees();
+        hudState.rotateAngleInputInRadians = rotateToolPreferences_.useRadians;
+        hudState.grabActive = grabTool_.isActive();
+        hudState.grabPickingBasePoint = grabTool_.isPickingBasePoint();
+        hudState.grabHasBasePoint = grabTool_.hasBasePoint();
+        hudState.duplicateActive = duplicateTool_.isActive();
+        hudState.duplicatePickingBasePoint = duplicateTool_.isPickingBasePoint();
+        hudState.duplicateHasBasePoint = duplicateTool_.hasBasePoint();
+        viewportHudRenderer_.draw(painter, size(), hudState);
+        navigationGizmo_.draw(
+            painter, size(), navigationController_.hoverPosition());
     }
 
     void mousePressEvent(QMouseEvent *event) override
     {
-        stopNavigationAnimation();
+        navigationController_.stopAnimation();
         const QPointF screenPosition = eventPosition(event);
-        if (event->button() == Qt::LeftButton) {
-            const BlenderNavigationHit hit =
-                viewportOverlay_.blenderNavigationGizmoHitAt(screenPosition, size());
-            if (hit.action != BlenderNavigationAction::None) {
-                navigationPressedAction_ = hit.action;
-                navigationPressHit_ = hit;
-                navigationPressPosition_ = screenPosition;
-                navigationLastPosition_ = screenPosition;
-                navigationMoved_ = false;
-                if (hit.action == BlenderNavigationAction::Orbit ||
-                    hit.action == BlenderNavigationAction::Axis) {
-                    beginOrbitAt(screenPosition);
-                    if (viewportTransform_.navigationPreferences().orbitMethod ==
-                        ViewportOrbitMethod::Trackball) {
-                        viewportTransform_.beginOrbitGesture(screenPosition, size());
-                    }
-                }
-                setCursor(hit.action == BlenderNavigationAction::Camera ||
-                                  hit.action == BlenderNavigationAction::Projection
-                              ? Qt::PointingHandCursor
-                              : Qt::OpenHandCursor);
-                update();
-                event->accept();
-                return;
-            }
+        if (event->button() == Qt::LeftButton &&
+            navigationController_.handleGizmoPress(screenPosition, size())) {
+            event->accept();
+            return;
         }
         updateDrawingWorkPlaneFromHover(screenPosition);
         if (activeTool_ == Tool::Arc &&
-            (arcMode_ == ArcMode::TwoPoint ||
-             arcMode_ == ArcMode::ThreePoint) &&
-            pendingPoints_.size() >= 2) {
+            arcTool_.inputStage() == ArcInputStage::Complete &&
+            arcState().mode != ArcMode::OnePoint) {
             updateArcTwoPointWorkPlaneForView();
         } else if (activeTool_ == Tool::Arc &&
-                   (arcMode_ == ArcMode::TwoPoint ||
-                    arcMode_ == ArcMode::ThreePoint) &&
-                   pendingPoints_.size() == 1 &&
-                   !(arcMode_ == ArcMode::TwoPoint &&
-                     arcPerpendicularPlaneActive_)) {
+                   arcTool_.inputStage() == ArcInputStage::SecondPoint &&
+                   arcState().mode != ArcMode::OnePoint &&
+                   !(arcState().mode == ArcMode::TwoPoint &&
+                     arcState().perpendicularPlaneActive)) {
             restoreArcChordReferencePlaneForEndpointPick();
         }
         QPointF rawWorldPosition;
@@ -4564,32 +3131,34 @@ protected:
                 .arg(toolName(activeTool_))
                 .arg(lineCommandActive_)
                 .arg(orthoEnabled_)
-                .arg(inputButtonName(panButton_))
+                .arg(inputButtonName(navigationController_.panButton()))
                 .arg(static_cast<int>(event->modifiers()), 0, 16)
                 .arg(snapTypeName(currentSnap_.type)));
 
         if (!worldPositionValid && event->button() == Qt::LeftButton &&
-            event->button() != panButton_ &&
+            event->button() != navigationController_.panButton() &&
             !(activeTool_ == Tool::Line && !pendingPoints_.isEmpty()) &&
             activeTool_ != Tool::PointExtrude) {
             event->ignore();
             return;
         }
 
-        if (duplicateActive_) {
+        const ToolInput translatedInput = ToolInputTranslator::fromMouseEvent(
+            *event, activeTool_, screenPosition, rawWorldPosition,
+            worldPosition, viewportTransform_.workPlaneFrame(),
+            orthoEnabled_, size(), currentSnap_);
+
+        if (duplicateTool_.isActive()) {
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
             if (event->button() == Qt::LeftButton) {
-                if (duplicatePickingBasePoint_) {
+                if (duplicateTool_.isPickingBasePoint()) {
                     const SnapResult baseSnap = findDuplicateBasePointSnap(rawWorldPosition);
-                    duplicateBasePoint_ = baseSnap.isValid()
-                                              ? baseSnap.point
-                                              : rawWorldPosition;
-                    duplicateCursorOffset_ = rawWorldPosition - duplicateBasePoint_;
-                    duplicateHasBasePoint_ = true;
-                    duplicatePickingBasePoint_ = false;
+                    duplicateTool_.chooseBasePoint(
+                        rawWorldPosition,
+                        baseSnap.isValid() ? baseSnap.point : rawWorldPosition);
                     currentSnap_ = baseSnap;
                     setCursor(Qt::SizeAllCursor);
                     updateDuplicatePreview(rawWorldPosition);
@@ -4605,26 +3174,24 @@ protected:
             return;
         }
 
-        if (grabActive_) {
+        if (grabTool_.isActive()) {
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
             if (event->button() == Qt::LeftButton) {
-                if (grabPickingBasePoint_) {
+                if (grabTool_.isPickingBasePoint()) {
                     const SnapResult baseSnap = findGrabBasePointSnap(rawWorldPosition);
                     if (baseSnap.isValid()) {
-                        grabBasePoint_ = baseSnap.point;
-                        grabCursorOffset_ = rawWorldPosition - grabBasePoint_;
-                        grabHasBasePoint_ = true;
-                        grabPickingBasePoint_ = false;
+                        const QPointF cursorOffset = rawWorldPosition - baseSnap.point;
+                        grabTool_.acceptBasePoint(baseSnap.point, cursorOffset);
                         currentSnap_ = baseSnap;
                         setCursor(Qt::SizeAllCursor);
                         DebugLog::instance().write(
                             QStringLiteral("grab base-point selected type=%1 point=%2 offset=%3")
                                 .arg(snapTypeName(baseSnap.type))
-                                .arg(pointText(grabBasePoint_))
-                                .arg(pointText(grabCursorOffset_)));
+                                .arg(pointText(grabTool_.basePoint()))
+                                .arg(pointText(cursorOffset)));
                     } else {
                         DebugLog::instance().write(
                             QStringLiteral("grab base-point click ignored no snap candidate"));
@@ -4632,8 +3199,8 @@ protected:
                     update();
                     emitCoordinateUpdate();
                 } else {
-                    if (grabHasBasePoint_) {
-                        updateGrabPosition(draggingShapeIndices_);
+                    if (grabTool_.hasBasePoint()) {
+                        updateGrabPosition(selectionDraggedObjectIds());
                     }
                     finishGrab();
                 }
@@ -4643,11 +3210,16 @@ protected:
             return;
         }
 
-        if (subdivisionActive_) {
-            if (event->button() == Qt::LeftButton) {
-                applySubdivision(subdivisionSections_);
-            } else if (event->button() == Qt::RightButton) {
+        if (subdivisionTool_.isActive()) {
+            switch (subdivisionTool_.handleMousePress(translatedInput)) {
+            case SubdivisionInputAction::Apply:
+                applySubdivision(subdivisionTool_.sections());
+                break;
+            case SubdivisionInputAction::Cancel:
                 cancelSubdivisionPreview();
+                break;
+            case SubdivisionInputAction::Unhandled:
+                break;
             }
             return;
         }
@@ -4658,12 +3230,10 @@ protected:
             lineCommandActive_) {
             DebugLog::instance().write(QStringLiteral("mousePress branch=finish-line points=%1")
                                            .arg(pendingPoints_.size()));
-            const ToolInput input = makeToolInput(event,
-                                                  screenPosition,
-                                                  rawWorldPosition,
-                                                  worldPosition);
             if (activeToolController_ == nullptr ||
-                !activeToolController_->handleMousePress(input, toolContext_)) {
+                activeToolController_->dispatchMousePress(translatedInput,
+                                                          toolContext_) ==
+                    InteractionTool::EventResult::Unhandled) {
                 finishLineCommand();
             }
             return;
@@ -4678,9 +3248,8 @@ protected:
              isTwoCurveLineTool(activeTool_) ||
              activeTool_ == Tool::PointExtrude) &&
             activeToolController_ != nullptr) {
-            const ToolInput input = makeToolInput(event, screenPosition,
-                                                  rawWorldPosition, worldPosition);
-            activeToolController_->handleMousePress(input, toolContext_);
+            activeToolController_->dispatchMousePress(translatedInput,
+                                                      toolContext_);
             return;
         }
 
@@ -4689,18 +3258,25 @@ protected:
             return;
         }
 
-        if (event->button() == Qt::RightButton && activeTool_ == Tool::Rotate) {
-            cancelRotate();
-            return;
-        }
-
-        if (event->button() == Qt::RightButton && activeTool_ == Tool::Scale) {
-            cancelScale();
-            return;
-        }
-
-        if (event->button() == Qt::RightButton && activeTool_ == Tool::Mirror) {
-            cancelMirror();
+        if (event->button() == Qt::RightButton &&
+            (activeTool_ == Tool::Rotate || activeTool_ == Tool::Scale ||
+             activeTool_ == Tool::Mirror) &&
+            activeToolController_ != nullptr) {
+            const Tool dispatchedTool = activeTool_;
+            if (activeToolController_->dispatchMousePress(translatedInput,
+                                                          toolContext_) ==
+                InteractionTool::EventResult::Handled) {
+                if (dispatchedTool == Tool::Scale) {
+                    scaleTool_.takeLastDispatchResult();
+                } else if (dispatchedTool == Tool::Mirror) {
+                    mirrorTool_.takeLastCommitResult();
+                }
+                currentSnap_ = SnapResult{};
+                DebugLog::instance().write(
+                    QStringLiteral("%1 canceled")
+                        .arg(toolName(dispatchedTool).toLower()));
+                update();
+            }
             return;
         }
 
@@ -4709,94 +3285,82 @@ protected:
             return;
         }
 
-        if (event->button() == Qt::RightButton && activeTool_ == Tool::Arc &&
-            (arcMode_ == ArcMode::TwoPoint ||
-             arcMode_ == ArcMode::ThreePoint)) {
-            if (worldPositionValid && pendingPoints_.size() >= 2) {
+        if (event->button() == Qt::RightButton && activeTool_ == Tool::Arc) {
+            if (worldPositionValid) {
                 cursorWorld_ = worldPosition;
                 lastWorldPosition_ = worldPosition;
                 cursorValid_ = true;
-                if (arcMode_ == ArcMode::TwoPoint) {
-                    finishTwoPointArcAt(worldPosition);
-                } else {
-                    finishThreePointArcAt(worldPosition);
-                }
             }
-            if (activeTool_ == Tool::Arc) {
-                pendingPoints_.clear();
-                setTool(Tool::Select);
-                if (commandFinished_) {
-                    commandFinished_(Tool::Select);
-                }
-            }
+            dispatchArcClick(translatedInput, worldPositionValid);
             update();
             emitCoordinateUpdate();
             return;
         }
 
-        if (event->button() == Qt::RightButton && activeTool_ == Tool::Arc &&
-            arcMode_ == ArcMode::OnePoint) {
-            if (worldPositionValid && pendingPoints_.size() >= 2) {
-                cursorWorld_ = worldPosition;
-                lastWorldPosition_ = worldPosition;
-                cursorValid_ = true;
-                finishOnePointArcAt(worldPosition);
-            }
-            if (activeTool_ == Tool::Arc) {
-                pendingPoints_.clear();
-                setTool(Tool::Select);
-                if (commandFinished_) {
-                    commandFinished_(Tool::Select);
-                }
-            }
-            update();
-            emitCoordinateUpdate();
-            return;
-        }
-
-        const bool middleMouseNavigation = event->button() == Qt::MiddleButton;
-        const bool configuredPanButton = event->button() == panButton_;
-        const bool altLeftNavigation =
-            event->button() == Qt::LeftButton &&
-            event->modifiers().testFlag(Qt::AltModifier);
-        if (middleMouseNavigation || configuredPanButton || altLeftNavigation) {
-            panning_ = true;
-            if (middleMouseNavigation) {
-                // Blender-style navigation: MMB orbits; Shift+MMB pans.
-                orbiting_ = !event->modifiers().testFlag(Qt::ShiftModifier);
-            } else {
-                orbiting_ = configuredPanButton &&
-                            event->modifiers().testFlag(Qt::ShiftModifier);
-            }
-            if (orbiting_) {
-                beginOrbitAt(screenPosition);
-                if (viewportTransform_.navigationPreferences().orbitMethod ==
-                    ViewportOrbitMethod::Trackball) {
-                    viewportTransform_.beginOrbitGesture(screenPosition, size());
-                }
-            }
-            panMoved_ = false;
-            panStartPosition_ = screenPosition.toPoint();
+        if (navigationController_.handlePanPress(event->button(),
+                                                 event->modifiers(),
+                                                 screenPosition,
+                                                 size())) {
             lastMousePosition_ = screenPosition.toPoint();
             DebugLog::instance().write(
                 QStringLiteral("mousePress branch=start-%1 at=%2")
-                    .arg(orbiting_ ? QStringLiteral("orbit") : QStringLiteral("pan"))
+                    .arg(event->button() == Qt::MiddleButton &&
+                                 !event->modifiers().testFlag(Qt::ShiftModifier)
+                             ? QStringLiteral("orbit")
+                             : QStringLiteral("pan"))
                     .arg(pointText(screenPosition)));
-            setCursor(Qt::ClosedHandCursor);
             return;
         }
 
         if (event->button() == Qt::LeftButton && activeToolController_ != nullptr &&
             activeTool_ != Tool::Select && activeTool_ != Tool::Arc) {
+            const Tool dispatchedTool = activeTool_;
             rawCursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = worldPosition;
             cursorWorld_ = worldPosition;
             cursorValid_ = true;
-            const ToolInput input = makeToolInput(event,
-                                                  screenPosition,
-                                                  rawWorldPosition,
-                                                  worldPosition);
-            if (activeToolController_->handleMousePress(input, toolContext_)) {
+            if (activeToolController_->dispatchMousePress(translatedInput,
+                                                          toolContext_) ==
+                InteractionTool::EventResult::Handled) {
+                if (dispatchedTool == Tool::Mirror) {
+                    const MirrorCommitResult result =
+                        mirrorTool_.takeLastCommitResult();
+                    if (result.sourceCount > 0) {
+                        const QString message = result.committed
+                                                    ? QStringLiteral("mirror committed sourceCount=%1 copyCount=%2 axis=%3->%4")
+                                                          .arg(result.sourceCount)
+                                                          .arg(result.createdObjectIds.size())
+                                                          .arg(pointText(result.axisStart),
+                                                               pointText(result.axisEnd))
+                                                    : QStringLiteral("mirror rejected axis=%1->%2 objects=%3")
+                                                          .arg(pointText(result.axisStart),
+                                                               pointText(result.axisEnd))
+                                                          .arg(result.sourceCount);
+                        DebugLog::instance().write(message);
+                    }
+                } else if (dispatchedTool == Tool::Scale) {
+                    const ScaleDispatchResult result =
+                        scaleTool_.takeLastDispatchResult();
+                    if (result.point.action ==
+                        ScalePointAction::BasePointCaptured) {
+                        pendingPoints_ = {result.point.point};
+                        publishScalePrompt();
+                    } else if (result.point.action ==
+                               ScalePointAction::ReferenceCaptured) {
+                        publishScalePrompt();
+                    } else if (result.commitAttempted && result.committed) {
+                        currentSnap_ = SnapResult{};
+                        const bool changed =
+                            std::abs(result.point.factor - 1.0) > 1.0e-12;
+                        DebugLog::instance().write(
+                            QStringLiteral("scale committed mode=%1 factor=%2 base=%3 objects=%4 changed=%5")
+                                .arg(scaleModeName(result.mode))
+                                .arg(result.point.factor, 0, 'g', 10)
+                                .arg(pointText(result.basePoint))
+                                .arg(result.sourceCount)
+                                .arg(changed));
+                    }
+                }
                 update();
                 emitCoordinateUpdate();
                 return;
@@ -4808,56 +3372,42 @@ protected:
             cursorWorld_ = worldPosition;
             lastWorldPosition_ = worldPosition;
             cursorValid_ = true;
-            handleRotatePoint(worldPosition);
+            handleRotatePoint(translatedInput);
             emitCoordinateUpdate();
             return;
         }
 
-        if (event->button() == Qt::LeftButton && activeTool_ == Tool::Scale) {
-            rawCursorWorld_ = rawWorldPosition;
-            cursorWorld_ = worldPosition;
-            lastWorldPosition_ = worldPosition;
-            cursorValid_ = true;
-            handleScalePoint(worldPosition);
-            emitCoordinateUpdate();
-            return;
-        }
-
-        if (event->button() == Qt::LeftButton && activeTool_ == Tool::Mirror) {
-            rawCursorWorld_ = rawWorldPosition;
-            cursorWorld_ = worldPosition;
-            lastWorldPosition_ = worldPosition;
-            cursorValid_ = true;
-            handleMirrorPoint(worldPosition);
-            emitCoordinateUpdate();
-            return;
-        }
-
-        if (joinActive_ && event->button() == Qt::LeftButton) {
+        if (joinTool_.isActive() && event->button() == Qt::LeftButton) {
             const int shapeIndex = hitTestShape(screenPosition);
             const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
-            if (shapeIndex < 0 || !objectId.isValid() || !isJoinableShape(shapes_[shapeIndex])) {
+            const bool joinable = shapeIndex >= 0 &&
+                                  shapeIndex < shapes_.size() &&
+                                  isJoinableShape(shapes_[shapeIndex]);
+            const JoinClickAction action = joinTool_.handleObjectClick(
+                objectId, joinable);
+            if (action == JoinClickAction::InvalidTarget) {
                 notifyJoinStatus(QStringLiteral("Join: click a line or curve"));
                 DebugLog::instance().write(QStringLiteral("join click ignored shape=%1")
                                                .arg(shapeIndex));
                 return;
             }
-
-            if (joinShapeIndices_.contains(objectId)) {
+            if (action == JoinClickAction::AlreadySelected) {
                 notifyJoinStatus(QStringLiteral("Join: curve already selected"));
                 return;
             }
-
-            joinShapeIndices_.append(objectId);
-            if (!selectedShapeIndices_.contains(objectId)) {
-                selectedShapeIndices_.append(objectId);
+            if (action != JoinClickAction::Added &&
+                action != JoinClickAction::ReadyToJoin) {
+                return;
             }
-            selectedShapeIndex_ = objectId;
+            if (!selectedShapeIndices_.contains(objectId)) {
+                selection_.add(objectId);
+            }
+            selection_.setPrimaryObjectId(objectId);
             DebugLog::instance().write(QStringLiteral("join selected shape=%1 total=%2")
                                            .arg(shapeIndex)
-                                           .arg(joinShapeIndices_.size()));
+                                           .arg(joinTool_.selectedCount()));
             update();
-            if (joinShapeIndices_.size() >= 2) {
+            if (action == JoinClickAction::ReadyToJoin) {
                 applyJoin();
             } else {
                 notifyJoinStatus();
@@ -4874,17 +3424,12 @@ protected:
                 return;
             }
 
-            eraseCursorPressed_ = true;
+            eraseTool_.beginStroke(screenPosition);
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
-            eraseCursorScreen_ = screenPosition;
-            lastEraseScreen_ = screenPosition;
-            eraseStrokeScreenPath_.clear();
-            eraseStrokeScreenPath_.append(screenPosition);
-            eraseCandidateShapeIndices_.clear();
-            eraseStrokeActive_ = true;
+            eraseTool_.clearCandidates();
             eraseAlongScreenSegment(screenPosition, screenPosition);
             updateErasePreviewIntervals(false);
             setCursor(Qt::CrossCursor);
@@ -4896,18 +3441,15 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton && activeTool_ == Tool::Trim) {
-            eraseCursorPressed_ = false;
+            eraseTool_.setCursorPressed(false);
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
-            eraseCursorScreen_ = screenPosition;
-            eraseCandidateShapeIndices_.clear();
-            eraseStrokeScreenPath_.clear();
-            trimHoverPositionValid_ = false;
-            trimHoverComponentIndex_ = -1;
+            trimTool_.clearCandidates();
+            trimTool_.clearScreenPath();
+            trimTool_.invalidateHover();
             beginSelectionBox(screenPosition, false);
-            trimBoxSelectionActive_ = true;
             return;
         }
 
@@ -4916,89 +3458,16 @@ protected:
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
-            dragGestureStarted_ = false;
-            dragStartScreen_ = screenPosition;
-            const bool shiftPressed = event->modifiers().testFlag(Qt::ShiftModifier);
-
-            if (!shiftPressed && controlPointsVisible_) {
-                int grabbedShapeIndex = -1;
-                int grabbedControlPoint = -1;
-                if (hitTestSelectedControlPoint(screenPosition,
-                                                &grabbedShapeIndex,
-                                                &grabbedControlPoint)) {
-                    selectedShapeIndex_ = shapes_.objectIdAt(grabbedShapeIndex);
-                    draggingControlPoint_ = true;
-                    draggingSelected_ = false;
-                    selection_.setActiveControlPoint(selectedShapeIndex_, grabbedControlPoint);
-                    lastControlPointWorld_ = rawWorldPosition;
-                    dragHistoryRecorded_ = false;
-                    currentDragSnap_ = DragSnapResult{};
-                    dragSnapLocked_ = false;
-                    dragAxisLock_ = DragAxisLock::None;
-                    setCursor(Qt::SizeAllCursor);
-                    DebugLog::instance().write(
-                        QStringLiteral("control point drag start shape=%1 index=%2 world=%3")
-                            .arg(objectIndex(selectedShapeIndex_))
-                            .arg(controlPointIndex_)
-                            .arg(pointText(lastControlPointWorld_)));
-                    update();
-                    emitCoordinateUpdate();
-                    return;
-                }
+            InteractionTool *selectionTool = activeToolController_ != nullptr
+                                                 ? activeToolController_
+                                                 : toolRegistry_.find(Tool::Select);
+            if (selectionTool != nullptr &&
+                selectionTool->dispatchMousePress(translatedInput,
+                                                  toolContext_) ==
+                    InteractionTool::EventResult::Handled) {
+                update();
+                emitCoordinateUpdate();
             }
-
-            const int clickedShapeIndex = hitTestShape(screenPosition);
-            draggingControlPoint_ = false;
-            controlPointIndex_ = -1;
-            dragHistoryRecorded_ = false;
-            currentDragSnap_ = DragSnapResult{};
-            dragSnapLocked_ = false;
-            dragAxisLock_ = DragAxisLock::None;
-            draggingSelected_ = false;
-
-            if (shiftPressed) {
-                if (clickedShapeIndex >= 0) {
-                    toggleShapeSelection(clickedShapeIndex);
-                    DebugLog::instance().write(
-                        QStringLiteral("shift selection toggle shape=%1 selected=%2")
-                            .arg(clickedShapeIndex)
-                            .arg(selectedShapeIndices_.size()));
-                    update();
-                    emitCoordinateUpdate();
-                } else {
-                    beginSelectionBox(screenPosition, true);
-                }
-                return;
-            }
-
-            if (clickedShapeIndex >= 0) {
-                const ObjectId clickedObjectId = shapes_.objectIdAt(clickedShapeIndex);
-                if (!selectedShapeIndices_.contains(clickedObjectId)) {
-                    setSingleSelection(clickedShapeIndex);
-                } else {
-                    // Clicking an already-selected shape starts a group drag
-                    // without collapsing the current multi-selection.
-                    selectedShapeIndex_ = clickedObjectId;
-                }
-                draggingShapeIndices_ = selectedShapeIndices_;
-                draggingSelected_ = true;
-                setFocus(Qt::MouseFocusReason);
-                lastDragWorld_ = rawWorldPosition;
-                setCursor(Qt::SizeAllCursor);
-                DebugLog::instance().write(
-                    QStringLiteral("selection hit shape=%1 tool=%2 dragStart=%3")
-                        .arg(objectIndex(selectedShapeIndex_))
-                        .arg(geometryTypeName(shapes_[objectIndex(selectedShapeIndex_)].geometryType))
-                        .arg(pointText(lastDragWorld_)));
-            } else {
-                draggingSelected_ = false;
-                DebugLog::instance().write(QStringLiteral("selection miss at=%1")
-                                               .arg(pointText(screenPosition)));
-                beginSelectionBox(screenPosition, false);
-            }
-
-            update();
-            emitCoordinateUpdate();
             return;
         }
 
@@ -5019,6 +3488,13 @@ protected:
         cursorWorld_ = worldPosition;
         cursorValid_ = true;
 
+        if (activeTool_ == Tool::Arc) {
+            dispatchArcClick(translatedInput, worldPositionValid);
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
         if (activeTool_ == Tool::Picture) {
             if (pendingPictureImage_.isNull()) {
                 cancelPicturePlacement();
@@ -5038,8 +3514,9 @@ protected:
                                picture.points[1].y() - picture.points[0].y()) > 1.0e-9 &&
                     std::hypot(picture.points[2].x() - picture.points[1].x(),
                                picture.points[2].y() - picture.points[1].y()) > 1.0e-9) {
-                    recordGeometryChange();
-                    shapes_.append(picture);
+                    if (!commitShape(picture)) {
+                        return;
+                    }
                     DebugLog::instance().write(
                         QStringLiteral("picture committed image=%1 frameCorners=%2")
                             .arg(pendingPicturePath_)
@@ -5065,71 +3542,10 @@ protected:
             return;
         }
 
-        if (activeTool_ == Tool::Arc &&
-            (arcMode_ == ArcMode::TwoPoint ||
-             arcMode_ == ArcMode::ThreePoint) &&
-            pendingPoints_.size() >= 2) {
-            if (arcMode_ == ArcMode::TwoPoint) {
-                finishTwoPointArcAt(worldPosition);
-            } else {
-                finishThreePointArcAt(worldPosition);
-            }
-            update();
-            emitCoordinateUpdate();
-            return;
-        }
-
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
-            pendingPoints_.size() == 2) {
-            // A click can arrive without a final mouse-move event. Include
-            // that last position before saving the arc's unwrapped sweep.
-            updateArcPreviewTracking(lastWorldPosition_);
-        }
-
-        if (activeTool_ == Tool::Arc && pendingPoints_.isEmpty()) {
-            captureArcReferenceForFirstPoint(lastWorldPosition_);
-            pendingPoints_.append(lastWorldPosition_);
-        } else if (activeTool_ == Tool::Arc &&
-                   (arcMode_ == ArcMode::TwoPoint ||
-                    arcMode_ == ArcMode::ThreePoint) &&
-                   pendingPoints_.size() == 1) {
-            arcSecondPointWorld_ = arcResolvedChordPointValid_
-                                       ? arcResolvedChordPointWorld_
-                                       : workPlaneFramePointToWorld(
-                                             lastWorldPosition_,
-                                             viewportTransform_.workPlaneFrame());
-            arcChordWorldPointsValid_ = arcReferenceFrameValid_;
-            if (arcChordWorldPointsValid_) {
-                updateArcTwoPointWorkPlaneForView();
-                pendingPoints_[0] = worldPointToWorkPlaneFrame(
-                    arcFirstPointWorld_, viewportTransform_.workPlaneFrame());
-                pendingPoints_.append(worldPointToWorkPlaneFrame(
-                    arcSecondPointWorld_, viewportTransform_.workPlaneFrame()));
-            } else {
-                pendingPoints_.append(lastWorldPosition_);
-            }
-            arcAxisConstraintKey_ = 0;
-            arcResolvedChordPointValid_ = false;
-        } else {
-            pendingPoints_.append(lastWorldPosition_);
-        }
-
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
-            pendingPoints_.size() == 2) {
-            initializeArcPreviewTracking();
-        }
-
         if (pendingPoints_.size() == requiredPoints(activeTool_)) {
-            const ArcMode completedArcMode = activeTool_ == Tool::Arc
-                                                 ? arcMode_
-                                                 : ArcMode::TwoPoint;
-            Shape completedShape{geometryTypeForTool(activeTool_),
-                                 pendingPoints_,
-                                 Shape::NurbsCurve2D{},
-                                 completedArcMode,
-                                 0.0,
-                                 {},
-                                 {}};
+            Shape completedShape;
+            completedShape.geometryType = geometryTypeForTool(activeTool_);
+            completedShape.points = pendingPoints_;
             completedShape.workPlane = viewportTransform_.workPlane();
             completedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
             completedShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
@@ -5145,61 +3561,20 @@ protected:
                     completedShape.nurbs = makeDegreeOneNurbs(closedPoints);
                 }
             }
-            if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint) {
-                constexpr qreal twoPi = 6.28318530717958647692;
-                completedShape.arcSweep = std::clamp(arcPreviewSweepAngle_,
-                                                     -twoPi + 1.0e-6,
-                                                     twoPi - 1.0e-6);
-                if (completedShape.points.size() >= 3) {
-                    const QPointF radiusVector = completedShape.points[1] -
-                                                 completedShape.points[0];
-                    const qreal radius = std::hypot(radiusVector.x(),
-                                                    radiusVector.y());
-                    const qreal startAngle = std::atan2(radiusVector.y(),
-                                                        radiusVector.x());
-                    const qreal endAngle = startAngle + completedShape.arcSweep;
-                    completedShape.points[2] = completedShape.points[0] +
-                        QPointF(radius * std::cos(endAngle),
-                                radius * std::sin(endAngle));
-                }
-            }
-            if (activeTool_ == Tool::Arc) {
-                completedShape.nurbs = makeArcNurbsCurve(completedShape);
-                if (!isValidNurbsCurve(completedShape.nurbs)) {
-                    pendingPoints_.clear();
-                    resetArcPreviewTracking();
-                    DebugLog::instance().write(
-                        QStringLiteral("arc creation rejected: points do not define a valid circular arc"));
-                    update();
-                    return;
-                }
-            } else if (activeTool_ == Tool::Bezier || activeTool_ == Tool::Nurbs) {
+            if (activeTool_ == Tool::Bezier || activeTool_ == Tool::Nurbs) {
                 completedShape.nurbs = makeBezierNurbs(completedShape.points);
             } else if (activeTool_ == Tool::Circle) {
                 completedShape.nurbs = makeCircleNurbs(completedShape.points);
             }
-            recordGeometryChange();
-            shapes_.append(completedShape);
+            if (!commitShape(completedShape)) {
+                pendingPoints_.clear();
+                return;
+            }
             QString commitMessage = QStringLiteral("placeholder shape committed tool=%1 points=%2")
                                         .arg(toolName(activeTool_))
                                         .arg(pendingPoints_.size());
-            if (activeTool_ == Tool::Arc) {
-                commitMessage += QStringLiteral(" mode=%1 p0=%2 p1=%3 p2=%4 sweep=%5")
-                                     .arg(arcModeName(completedShape.arcMode))
-                                     .arg(pointText(completedShape.points[0]))
-                                     .arg(pointText(completedShape.points[1]))
-                                     .arg(pointText(completedShape.points[2]))
-                                     .arg(completedShape.arcSweep, 0, 'f', 4);
-                commitMessage += QStringLiteral(" nurbsDimension=%1 nurbsDegree=%2 nurbsOrder=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7")
-                                     .arg(completedShape.nurbs.dimension)
-                                     .arg(completedShape.nurbs.degree)
-                                     .arg(completedShape.nurbs.order)
-                                     .arg(completedShape.nurbs.rational)
-                                     .arg(completedShape.nurbs.controlPoints.size())
-                                     .arg(completedShape.nurbs.weights.size())
-                                     .arg(completedShape.nurbs.knots.size());
-            } else if (activeTool_ == Tool::Bezier || activeTool_ == Tool::Nurbs ||
-                       activeTool_ == Tool::Circle) {
+            if (activeTool_ == Tool::Bezier || activeTool_ == Tool::Nurbs ||
+                activeTool_ == Tool::Circle) {
                 commitMessage += QStringLiteral(" nurbsDimension=%1 nurbsDegree=%2 nurbsOrder=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7")
                                      .arg(completedShape.nurbs.dimension)
                                      .arg(completedShape.nurbs.degree)
@@ -5225,123 +3600,33 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
-        navigationHoverPosition_ = screenPosition;
-        if (navigationPressedAction_ != BlenderNavigationAction::None &&
-            (event->buttons() & Qt::LeftButton) != 0) {
-            const QPointF delta = screenPosition - navigationLastPosition_;
-            if (QLineF(navigationPressPosition_, screenPosition).length() >= 3.0) {
-                navigationMoved_ = true;
-            }
-            if (navigationMoved_) {
-                setCursor(Qt::ClosedHandCursor);
-                const ViewportViewPreset previousPreset = viewportTransform_.viewPreset();
-                const bool previousPerspective =
-                    viewportTransform_.isPerspectiveEnabled();
-                switch (navigationPressedAction_) {
-                case BlenderNavigationAction::Orbit:
-                case BlenderNavigationAction::Axis:
-                    if (viewportTransform_.navigationPreferences().orbitMethod ==
-                        ViewportOrbitMethod::Trackball) {
-                        viewportTransform_.orbitToPosition(screenPosition, size());
-                    } else {
-                        viewportTransform_.orbitByPixels(delta);
-                    }
-                    break;
-                case BlenderNavigationAction::Zoom: {
-                    const ViewportNavigationPreferences preferences =
-                        viewportTransform_.navigationPreferences();
-                    qreal zoomDelta = preferences.zoomAxis == ViewportZoomAxis::Vertical
-                                          ? delta.y()
-                                          : delta.x();
-                    if (preferences.invertMouseZoom) {
-                        zoomDelta = -zoomDelta;
-                    }
-                    const qreal factor = std::exp(-zoomDelta * 0.012);
-                    viewportTransform_.zoomAt(QPointF(width() * 0.5,
-                                                      height() * 0.5),
-                                              factor,
-                                              size());
-                    break;
-                }
-                case BlenderNavigationAction::Pan:
-                    viewportTransform_.panByPixels(delta, size());
-                    break;
-                case BlenderNavigationAction::Camera:
-                case BlenderNavigationAction::Projection:
-                case BlenderNavigationAction::None:
-                    break;
-                }
-                if (previousPreset != viewportTransform_.viewPreset() ||
-                    previousPerspective !=
-                        viewportTransform_.isPerspectiveEnabled()) {
-                    notifyViewStateChanged();
-                }
-                update();
-                emitCoordinateUpdate();
-            }
-            navigationLastPosition_ = screenPosition;
-            update();
+        if (navigationController_.handleGizmoMove(screenPosition,
+                                                  event->buttons(),
+                                                  size())) {
             event->accept();
             return;
         }
-        if (panning_) {
-            const QPoint current = screenPosition.toPoint();
-            const QPoint delta = current - lastMousePosition_;
-            const QPoint totalDelta = current - panStartPosition_;
-            if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
-                panMoved_ = true;
-            }
-            if (orbiting_) {
-                const ViewportViewPreset previousPreset = viewportTransform_.viewPreset();
-                const bool previousPerspective =
-                    viewportTransform_.isPerspectiveEnabled();
-                if (viewportTransform_.navigationPreferences().orbitMethod ==
-                    ViewportOrbitMethod::Trackball) {
-                    viewportTransform_.orbitToPosition(screenPosition, size());
-                } else {
-                    viewportTransform_.orbitByPixels(QPointF(delta));
-                }
-                if (previousPreset != viewportTransform_.viewPreset() ||
-                    previousPerspective !=
-                        viewportTransform_.isPerspectiveEnabled()) {
-                    notifyViewStateChanged();
-                }
-            } else {
-                viewportTransform_.panByPixels(QPointF(delta), size());
-            }
-            lastMousePosition_ = current;
-            update();
-            emitCoordinateUpdate();
+        if (navigationController_.handlePanMove(screenPosition, size())) {
+            lastMousePosition_ = screenPosition.toPoint();
             return;
         }
-        const BlenderNavigationHit navigationHit =
-            viewportOverlay_.blenderNavigationGizmoHitAt(screenPosition, size());
-        if (navigationHit.action != BlenderNavigationAction::None) {
-            setToolTip(navigationTooltip(navigationHit));
-            setCursor(navigationHit.action == BlenderNavigationAction::Camera ||
-                              navigationHit.action == BlenderNavigationAction::Projection
-                          ? Qt::PointingHandCursor
-                          : Qt::OpenHandCursor);
-            update();
+        if (navigationController_.updateGizmoHover(
+                screenPosition,
+                size(),
+                !grabTool_.isActive() && !duplicateTool_.isActive())) {
             return;
         }
-        setToolTip(QString());
-        if (!grabActive_ && !duplicateActive_) {
-            setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
-        }
-        eraseCursorScreen_ = screenPosition;
+        eraseTool_.setCursorScreenPosition(screenPosition);
         updateDrawingWorkPlaneFromHover(screenPosition);
         if (activeTool_ == Tool::Arc &&
-            (arcMode_ == ArcMode::TwoPoint ||
-             arcMode_ == ArcMode::ThreePoint) &&
-            pendingPoints_.size() >= 2) {
+            arcTool_.inputStage() == ArcInputStage::Complete &&
+            arcState().mode != ArcMode::OnePoint) {
             updateArcTwoPointWorkPlaneForView();
         } else if (activeTool_ == Tool::Arc &&
-                   (arcMode_ == ArcMode::TwoPoint ||
-                    arcMode_ == ArcMode::ThreePoint) &&
-                   pendingPoints_.size() == 1 &&
-                   !(arcMode_ == ArcMode::TwoPoint &&
-                     arcPerpendicularPlaneActive_)) {
+                   arcTool_.inputStage() == ArcInputStage::SecondPoint &&
+                   arcState().mode != ArcMode::OnePoint &&
+                   !(arcState().mode == ArcMode::TwoPoint &&
+                     arcState().perpendicularPlaneActive)) {
             restoreArcChordReferencePlaneForEndpointPick();
         }
         if (!viewportTransform_.screenToWorkPlane(screenPosition,
@@ -5353,9 +3638,14 @@ protected:
             if (activeToolController_ != nullptr &&
                 ((activeTool_ == Tool::Line && !pendingPoints_.isEmpty()) ||
                  activeTool_ == Tool::PointExtrude)) {
-                const ToolInput input = makeToolInput(event, screenPosition,
-                                                      lastWorldPosition_, lastWorldPosition_);
-                activeToolController_->handleMouseMove(input, toolContext_);
+                const ToolInput translatedInput =
+                    ToolInputTranslator::fromMouseEvent(
+                        *event, activeTool_, screenPosition,
+                        lastWorldPosition_, lastWorldPosition_,
+                        viewportTransform_.workPlaneFrame(), orthoEnabled_,
+                        size(), currentSnap_);
+                activeToolController_->dispatchMouseMove(translatedInput,
+                                                         toolContext_);
             }
             update();
             emitCoordinateUpdate();
@@ -5368,11 +3658,13 @@ protected:
         lastWorldPosition_ = cursorWorld_;
         cursorValid_ = true;
         if (activeToolController_ != nullptr && activeTool_ != Tool::Arc) {
-            const ToolInput input = makeToolInput(event,
-                                                  screenPosition,
-                                                  rawCursorWorld_,
-                                                  cursorWorld_);
-            activeToolController_->handleMouseMove(input, toolContext_);
+            const ToolInput translatedInput =
+                ToolInputTranslator::fromMouseEvent(
+                    *event, activeTool_, screenPosition, rawCursorWorld_,
+                    cursorWorld_, viewportTransform_.workPlaneFrame(),
+                    orthoEnabled_, size(), currentSnap_);
+            activeToolController_->dispatchMouseMove(translatedInput,
+                                                     toolContext_);
         }
         const bool pointPreviewActive = activeTool_ == Tool::Point;
         const bool picturePreviewActive = activeTool_ == Tool::Picture &&
@@ -5386,18 +3678,14 @@ protected:
         const bool arcPreviewActive = activeTool_ == Tool::Arc;
         const bool mirrorPreviewActive = activeTool_ == Tool::Mirror;
 
-        if (!panning_ && activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+        if (!navigationController_.isPanning() && activeTool_ == Tool::Arc && arcState().mode == ArcMode::OnePoint &&
             pendingPoints_.size() >= 2) {
             updateArcPreviewTracking(cursorWorld_);
         }
 
-        if (selectionBoxActive_) {
-            selectionBoxCurrentScreen_ = screenPosition;
-            const QPointF totalDelta = screenPosition - selectionBoxStartScreen_;
-            if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
-                selectionBoxMoved_ = true;
-            }
-            if (trimBoxSelectionActive_) {
+        if (selectionBoxOverlayActive()) {
+            updateSelectionBoxPosition(screenPosition);
+            if (trimTool_.boxSelectionActive()) {
                 updateTrimBoxPreview();
             }
             update();
@@ -5405,20 +3693,17 @@ protected:
             return;
         }
 
-        if (eraseStrokeActive_) {
-            eraseAlongScreenSegment(lastEraseScreen_, screenPosition);
-            lastEraseScreen_ = screenPosition;
-            if (eraseStrokeScreenPath_.isEmpty() ||
-                eraseStrokeScreenPath_.back() != screenPosition) {
-                eraseStrokeScreenPath_.append(screenPosition);
-            }
+        if (eraseTool_.strokeActive()) {
+            eraseAlongScreenSegment(eraseTool_.lastScreenPosition(),
+                                    screenPosition);
+            eraseTool_.appendStrokeScreenPosition(screenPosition);
             updateErasePreviewIntervals(false);
             update();
             emitCoordinateUpdate();
             return;
         }
 
-        if (activeTool_ == Tool::Trim && !panning_) {
+        if (activeTool_ == Tool::Trim && !navigationController_.isPanning()) {
             updateTrimHover(screenPosition);
             update();
             emitCoordinateUpdate();
@@ -5433,9 +3718,9 @@ protected:
         }
 
         if (activeTool_ == Tool::Rotate) {
-            if (!panning_ && rotateStep_ == 1) {
+            if (!navigationController_.isPanning() && rotateState().stage == 1) {
                 updateRotateReferencePreview(cursorWorld_);
-            } else if (!panning_ && rotateStep_ == 2) {
+            } else if (!navigationController_.isPanning() && rotateState().stage == 2) {
                 updateRotatePreview(cursorWorld_);
             }
             update();
@@ -5449,8 +3734,8 @@ protected:
             return;
         }
 
-        if (duplicateActive_) {
-            if (duplicatePickingBasePoint_) {
+        if (duplicateTool_.isActive()) {
+            if (duplicateTool_.isPickingBasePoint()) {
                 currentSnap_ = findDuplicateBasePointSnap(rawCursorWorld_);
                 cursorWorld_ = currentSnap_.isValid()
                                    ? currentSnap_.point
@@ -5465,7 +3750,7 @@ protected:
             return;
         }
 
-        if (grabActive_ && grabPickingBasePoint_) {
+        if (grabTool_.isActive() && grabTool_.isPickingBasePoint()) {
             currentSnap_ = findGrabBasePointSnap(rawCursorWorld_);
             cursorWorld_ = currentSnap_.isValid() ? currentSnap_.point : rawCursorWorld_;
             lastWorldPosition_ = cursorWorld_;
@@ -5474,21 +3759,26 @@ protected:
             return;
         }
 
-        if ((draggingSelected_ || draggingControlPoint_) && !dragGestureStarted_) {
+        if ((objectSelectionDragActive() || controlPointSelectionDragActive()) &&
+            !selectionDragStarted()) {
             constexpr qreal dragStartThresholdPixels = 4.0;
-            const QPointF screenDelta = screenPosition - dragStartScreen_;
+            const QPointF screenDelta =
+                screenPosition - selectionDragStartScreenPosition();
             if (std::hypot(screenDelta.x(), screenDelta.y()) >= dragStartThresholdPixels) {
-                dragGestureStarted_ = true;
+                setSelectionDragStarted(true);
             }
         }
 
         const int selectedIndex = objectIndex(selectedShapeIndex_);
-        if (draggingControlPoint_ && dragGestureStarted_ && selectedIndex >= 0 &&
+        if (controlPointSelectionDragActive() && selectionDragStarted() &&
+            selectedIndex >= 0 &&
             controlPointIndex_ >= 0) {
-            const QPointF previousControlPointCursorWorld = lastControlPointWorld_;
+            const QPointF previousControlPointCursorWorld =
+                selectionLastControlPointWorldPosition();
             const QPointF cursorStepScreen =
                 screenPosition - worldToScreen(previousControlPointCursorWorld);
-            const QPointF delta = rawCursorWorld_ - lastControlPointWorld_;
+            const QPointF delta = rawCursorWorld_ -
+                                  selectionLastControlPointWorldPosition();
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
                 qint64 snapEvaluationMicroseconds = -1;
                 const qreal cursorDistanceFromSnap =
@@ -5544,7 +3834,7 @@ protected:
                     }
                 }
 
-                lastControlPointWorld_ = rawCursorWorld_;
+                setSelectionLastControlPointWorldPosition(rawCursorWorld_);
                 qreal snapCorrectionPixels = -1.0;
                 if (currentDragSnap_.isValid()) {
                     const QPointF sourceScreen =
@@ -5573,18 +3863,21 @@ protected:
                         .arg(precisePointText(currentDragSnap_.translation))
                         .arg(snapCorrectionPixels, 0, 'f', 4));
             }
-        } else if (draggingSelected_ && dragGestureStarted_ && selectedIndex >= 0) {
-            const QVector<ObjectId> dragIndices = draggingShapeIndices_.isEmpty()
+        } else if (objectSelectionDragActive() && selectionDragStarted() &&
+                   selectedIndex >= 0) {
+            const QVector<ObjectId> dragIndices = selectionDraggedObjectIds().isEmpty()
                                                      ? QVector<ObjectId>{selectedShapeIndex_}
-                                                     : draggingShapeIndices_;
-            if (grabActive_) {
+                                                     : selectionDraggedObjectIds();
+            if (grabTool_.isActive()) {
                 updateGrabPosition(dragIndices);
             } else {
                 const bool groupDrag = dragIndices.size() > 1;
-                const QPointF previousDragCursorWorld = lastDragWorld_;
+                const QPointF previousDragCursorWorld =
+                    selectionLastDragWorldPosition();
                 const QPointF cursorStepScreen =
                     screenPosition - worldToScreen(previousDragCursorWorld);
-                const QPointF rawDelta = rawCursorWorld_ - lastDragWorld_;
+                const QPointF rawDelta = rawCursorWorld_ -
+                                         selectionLastDragWorldPosition();
                 const QPointF delta = constrainDragDelta(rawDelta);
                 if (!qFuzzyIsNull(rawDelta.x()) || !qFuzzyIsNull(rawDelta.y())) {
                     qint64 snapEvaluationMicroseconds = -1;
@@ -5723,7 +4016,7 @@ protected:
                         }
                     }
 
-                    lastDragWorld_ = rawCursorWorld_;
+                    setSelectionLastDragWorldPosition(rawCursorWorld_);
 
                     qreal snapCorrectionPixels = -1.0;
                     if (currentDragSnap_.isValid()) {
@@ -5766,9 +4059,9 @@ protected:
         if (pointPreviewActive || picturePreviewActive || lineCommandActive_ ||
             arcPreviewActive || circlePreviewActive ||
             tangentCirclePreviewActive || ellipsePreviewActive ||
-            rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive || panning_ ||
-            draggingSelected_ ||
-            draggingControlPoint_) {
+            rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive || navigationController_.isPanning() ||
+            objectSelectionDragActive() ||
+            controlPointSelectionDragActive()) {
             update();
         }
 
@@ -5776,8 +4069,8 @@ protected:
             arcPreviewActive || circlePreviewActive ||
             tangentCirclePreviewActive || ellipsePreviewActive ||
             rectanglePreviewActive || polygonPreviewActive || mirrorPreviewActive ||
-            activeTool_ == Tool::Erase || panning_ ||
-            draggingSelected_ || draggingControlPoint_) {
+            activeTool_ == Tool::Erase || navigationController_.isPanning() ||
+            objectSelectionDragActive() || controlPointSelectionDragActive()) {
             DebugLog::instance().write(
                 QStringLiteral("mouseMove screen=%1 worldRaw=%2 worldUsed=%3 lineActive=%4 points=%5 panning=%6 dragging=%7 ortho=%8 pan=%9 zoom=%10 buttons=0x%11 arcMode=%12 arcSweep=%13 snap=%14")
                     .arg(pointText(screenPosition))
@@ -5785,14 +4078,14 @@ protected:
                     .arg(pointText(cursorWorld_))
                     .arg(lineCommandActive_)
                     .arg(pendingPoints_.size())
-                    .arg(panning_)
-                    .arg(draggingSelected_)
+                    .arg(navigationController_.isPanning())
+                    .arg(objectSelectionDragActive())
                     .arg(orthoEnabled_)
                     .arg(pointText(pan_))
                     .arg(zoom_, 0, 'f', 4)
                     .arg(static_cast<int>(event->buttons()), 0, 16)
-                    .arg(activeTool_ == Tool::Arc ? arcModeName(arcMode_) : QStringLiteral("None"))
-                    .arg(arcPreviewSweepAngle_, 0, 'f', 4)
+                    .arg(activeTool_ == Tool::Arc ? arcModeName(arcState().mode) : QStringLiteral("None"))
+                    .arg(arcState().previewSweepAngle, 0, 'f', 4)
                     .arg(snapTypeName(currentSnap_.type)));
         }
 
@@ -5801,116 +4094,55 @@ protected:
 
     void leaveEvent(QEvent *event) override
     {
-        navigationHoverPosition_ = QPointF(-1000.0, -1000.0);
-        if (navigationPressedAction_ == BlenderNavigationAction::None) {
-            setToolTip(QString());
-        }
-        update();
+        navigationController_.pointerLeave();
         QWidget::leaveEvent(event);
     }
 
     void mouseReleaseEvent(QMouseEvent *event) override
     {
-        if (event->button() == Qt::LeftButton &&
-            navigationPressedAction_ != BlenderNavigationAction::None) {
-            const BlenderNavigationAction action = navigationPressedAction_;
-            const BlenderNavigationHit hit = navigationPressHit_;
-            const QPointF releasePosition = eventPosition(event);
-            viewportTransform_.endOrbitGesture();
-            if (!navigationMoved_) {
-                switch (action) {
-                case BlenderNavigationAction::Axis: {
-                    Point3D targetDirection = hit.direction;
-                    if (directionDot(viewportTransform_.viewDirection(),
-                                     targetDirection) > 0.999) {
-                        targetDirection.x = -targetDirection.x;
-                        targetDirection.y = -targetDirection.y;
-                        targetDirection.z = -targetDirection.z;
-                    }
-                    animateCameraChange([this, targetDirection]() {
-                        viewportTransform_.setViewDirection(targetDirection);
-                    });
-                    break;
-                }
-                case BlenderNavigationAction::Projection:
-                    viewportTransform_.setPerspectiveEnabled(
-                        !viewportTransform_.isPerspectiveEnabled());
-                    notifyViewStateChanged();
-                    update();
-                    emitCoordinateUpdate();
-                    break;
-                case BlenderNavigationAction::Camera:
-                    QToolTip::showText(
-                        mapToGlobal(releasePosition.toPoint()),
-                        QStringLiteral("No active scene camera is available."),
-                        this);
-                    break;
-                case BlenderNavigationAction::Orbit:
-                case BlenderNavigationAction::Zoom:
-                case BlenderNavigationAction::Pan:
-                case BlenderNavigationAction::None:
-                    break;
-                }
-            }
-            navigationPressedAction_ = BlenderNavigationAction::None;
-            navigationPressHit_ = {};
-            navigationMoved_ = false;
-            const BlenderNavigationHit hoverHit =
-                viewportOverlay_.blenderNavigationGizmoHitAt(releasePosition, size());
-            if (hoverHit.action == BlenderNavigationAction::None) {
-                setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor
-                                                      : Qt::CrossCursor);
-                setToolTip(QString());
-            }
-            update();
+        if (navigationController_.handleGizmoRelease(event->button(),
+                                                     eventPosition(event),
+                                                     size())) {
             event->accept();
             return;
         }
 
         const bool repeatToolOnRelease =
-            panning_ && event->button() == panButton_ &&
-            event->button() != Qt::MiddleButton && !panMoved_ &&
+            navigationController_.isPanning() &&
+            event->button() == navigationController_.panButton() &&
+            event->button() != Qt::MiddleButton &&
+            !navigationController_.panMoved() &&
             activeTool_ == Tool::Select && repeatTool_ != Tool::Select;
 
         DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 panMoved=%4 draggingBefore=%5 repeat=%6")
                                        .arg(inputButtonName(event->button()))
                                        .arg(pointText(eventPosition(event)))
-                                       .arg(panning_)
-                                       .arg(panMoved_)
-                                       .arg(draggingSelected_)
+                                       .arg(navigationController_.isPanning())
+                                       .arg(navigationController_.panMoved())
+                                       .arg(objectSelectionDragActive())
                                        .arg(repeatToolOnRelease));
-        if (grabActive_) {
+        if (grabTool_.isActive()) {
             return;
         }
 
         const bool releaseEraseCursor =
             isEraseLikeTool(activeTool_) && event->button() == Qt::LeftButton;
         if (releaseEraseCursor) {
-            eraseCursorPressed_ = false;
+            eraseTool_.setCursorPressed(false);
         }
-        if (panning_ && (event->button() == panButton_ ||
-                         event->button() == Qt::MiddleButton ||
-                         event->button() == Qt::LeftButton)) {
-            if (orbiting_) {
-                viewportTransform_.endOrbitGesture();
-            }
-            panning_ = false;
-            orbiting_ = false;
-            setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
+        if (navigationController_.finishPointerRelease(event->button())) {
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-pan-orbit"));
         }
-        panMoved_ = false;
 
         if (repeatToolOnRelease) {
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=repeat-tool"));
             repeatLastTool();
         }
 
-        if (eraseStrokeActive_ && event->button() == Qt::LeftButton) {
+        if (eraseTool_.strokeActive() && event->button() == Qt::LeftButton) {
             applyEraseCandidates();
-            eraseStrokeActive_ = false;
-            eraseCandidateShapeIndices_.clear();
-            eraseStrokeScreenPath_.clear();
+            eraseTool_.finishStroke();
+            eraseTool_.clearCandidates();
             eraseTargetShapeIndices_.clear();
             eraseSceneCurveCaches_.clear();
             eraseTargetCurveCaches_.clear();
@@ -5921,25 +4153,21 @@ protected:
             return;
         }
 
-        if (selectionBoxActive_ && event->button() == Qt::LeftButton) {
-            if (trimBoxSelectionActive_) {
-                selectionBoxCurrentScreen_ = eventPosition(event);
-                const QPointF totalDelta =
-                    selectionBoxCurrentScreen_ - selectionBoxStartScreen_;
-                if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
-                    selectionBoxMoved_ = true;
-                }
+        if (selectionBoxOverlayActive() && event->button() == Qt::LeftButton) {
+            if (trimTool_.boxSelectionActive()) {
+                updateSelectionBoxPosition(eventPosition(event));
                 finishTrimBoxSelection();
             } else {
+                updateSelectionBoxPosition(eventPosition(event));
                 finishSelectionBox();
             }
             return;
         }
 
-        if (draggingControlPoint_ && event->button() == Qt::LeftButton) {
-            draggingControlPoint_ = false;
-            dragGestureStarted_ = false;
-            controlPointIndex_ = -1;
+        if (controlPointSelectionDragActive() &&
+            event->button() == Qt::LeftButton) {
+            clearSelectionDragState();
+            selection_.clearActiveControlPoint();
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
@@ -5948,10 +4176,9 @@ protected:
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-control-point-drag shape=%1")
                                            .arg(objectIndex(selectedShapeIndex_)));
             update();
-        } else if (draggingSelected_ && event->button() == Qt::LeftButton) {
-            draggingSelected_ = false;
-            dragGestureStarted_ = false;
-            draggingShapeIndices_.clear();
+        } else if (objectSelectionDragActive() &&
+                   event->button() == Qt::LeftButton) {
+            clearSelectionDragState();
             dragHistoryRecorded_ = false;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
@@ -5969,35 +4196,43 @@ protected:
 
     void wheelEvent(QWheelEvent *event) override
     {
-        stopNavigationAnimation();
-        if (subdivisionActive_) {
-            const int angleDelta = event->angleDelta().y();
-            const int pixelDelta = event->pixelDelta().y();
-            const int logicalSteps = subdivisionWheelStepsFromEvent(angleDelta, pixelDelta);
-            applySubdivisionWheelSteps(logicalSteps);
+        navigationController_.stopAnimation();
+        if (subdivisionTool_.isActive()) {
+            const ToolInput input = ToolInputTranslator::fromWheelEvent(
+                *event,
+                eventPosition(event),
+                viewportTransform_.workPlaneFrame(),
+                size());
+            const SubdivisionWheelResult result = subdivisionTool_.handleWheel(
+                input, maxSubdivisionSections, toolContext_);
+            if (result.sectionsChanged) {
+                notifySubdivisionStatus();
+                update();
+                DebugLog::instance().write(
+                    QStringLiteral("subdivision wheel sections=%1 points=%2")
+                        .arg(subdivisionTool_.sections())
+                        .arg(subdivisionTool_.sections() - 1));
+            }
 
             DebugLog::instance().write(
                 QStringLiteral("subdivision wheel angleDelta=%1 pixelDelta=%2 phase=%3 logicalSteps=%4 angleRemainder=%5 pixelRemainder=%6 sections=%7")
-                    .arg(angleDelta)
-                    .arg(pixelDelta)
+                    .arg(input.wheelAngleDelta)
+                    .arg(input.wheelPixelDelta)
                     .arg(static_cast<int>(event->phase()))
-                    .arg(logicalSteps)
-                    .arg(subdivisionWheelAccumulator_)
-                    .arg(subdivisionPixelAccumulator_, 0, 'f', 2)
-                    .arg(subdivisionSections_));
+                    .arg(result.logicalSteps)
+                    .arg(subdivisionTool_.wheelAngleAccumulator())
+                    .arg(subdivisionTool_.wheelPixelAccumulator(), 0, 'f', 2)
+                    .arg(subdivisionTool_.sections()));
             event->accept();
             return;
         }
 
         if (isPolygonTool(activeTool_) && activeToolController_ != nullptr) {
-            ToolInput input;
-            input.workPlaneFrame = viewportTransform_.workPlaneFrame();
-            input.screenPosition = eventPosition(event);
-            input.viewportSize = size();
-            input.modifiers = event->modifiers();
-            input.wheelAngleDelta = event->angleDelta().y();
-            input.wheelPixelDelta = event->pixelDelta().y();
-            if (activeToolController_->handleWheel(input, toolContext_)) {
+            const ToolInput input = ToolInputTranslator::fromWheelEvent(
+                *event, eventPosition(event),
+                viewportTransform_.workPlaneFrame(), size());
+            if (activeToolController_->dispatchWheel(input, toolContext_) ==
+                InteractionTool::EventResult::Handled) {
                 update();
                 emitCoordinateUpdate();
             }
@@ -6006,38 +4241,26 @@ protected:
         }
 
         const QPointF screenPosition = eventPosition(event);
-        const QPointF beforeZoom = screenToWorld(screenPosition);
-        const qreal oldZoom = zoom_;
         const int pixelDelta = event->pixelDelta().y();
         const int angleDelta = event->angleDelta().y();
-        qreal wheelSteps = viewportWheelStepsFromDeltas(angleDelta,
-                                                        pixelDelta);
-        if (wheelSteps == 0.0) {
+        const WheelZoomResult zoomResult = navigationController_.zoomFromWheel(
+            screenPosition, angleDelta, pixelDelta, size());
+        if (!zoomResult.changed) {
             event->accept();
             return;
         }
-        if (viewportTransform_.navigationPreferences().invertZoomWheel) {
-            wheelSteps = -wheelSteps;
-        }
-        wheelSteps = std::clamp(wheelSteps, -24.0, 24.0);
-        // Blender's view_zoom_apply_step uses a 1.2 distance ratio per notch.
-        const qreal factor = std::exp(std::log(1.2) * wheelSteps);
-        viewportTransform_.zoomAt(screenPosition, factor, size());
-
-        const QPointF afterZoom = screenToWorld(screenPosition);
 
         DebugLog::instance().write(QStringLiteral("wheel screen=%1 angleDeltaY=%2 pixelDeltaY=%3 zoom=%4->%5 worldBefore=%6 worldAfter=%7 pan=%8")
                                        .arg(pointText(screenPosition))
                                        .arg(angleDelta)
                                        .arg(pixelDelta)
-                                       .arg(oldZoom, 0, 'f', 4)
+                                       .arg(zoomResult.oldZoom, 0, 'f', 4)
                                        .arg(zoom_, 0, 'f', 4)
-                                       .arg(pointText(beforeZoom))
-                                       .arg(pointText(afterZoom))
+                                       .arg(pointText(zoomResult.worldBefore))
+                                       .arg(pointText(zoomResult.worldAfter))
                                        .arg(pointText(pan_)));
 
-        update();
-        emitCoordinateUpdate();
+        event->accept();
     }
 
     bool event(QEvent *event) override
@@ -6056,14 +4279,32 @@ protected:
 
     void keyPressEvent(QKeyEvent *event) override
     {
-        stopNavigationAnimation();
+        navigationController_.stopAnimation();
         DebugLog::instance().write(QStringLiteral("keyPress key=%1 text=%2 tool=%3 lineActive=%4 points=%5")
                                        .arg(event->key())
                                        .arg(event->text())
                                        .arg(toolName(activeTool_))
                                        .arg(lineCommandActive_)
                                        .arg(pendingPoints_.size()));
-        if (selectionBoxActive_ && event->key() == Qt::Key_Escape) {
+        ToolInput keyInput = makeKeyToolInput(*event);
+        if (activeTool_ == Tool::Rotate) {
+            keyInput = makeRotateToolInput();
+            keyInput.key = event->key();
+            keyInput.text = event->text();
+            keyInput.modifiers = event->modifiers();
+            keyInput.autoRepeat = event->isAutoRepeat();
+        }
+        if (activeTool_ == Tool::Scale) {
+            // Scale's numeric Enter uses the same resolved cursor point as its
+            // preview, including any snap or point constraint already applied.
+            keyInput.worldPosition = cursorWorld_;
+            if (scaleState().stage == 0 &&
+                (event->key() == Qt::Key_Return ||
+                 event->key() == Qt::Key_Enter)) {
+                keyInput.worldPosition = scaleSelectionBoundsCenter();
+            }
+        }
+        if (selectionBoxOverlayActive() && event->key() == Qt::Key_Escape) {
             cancelSelectionBox();
             return;
         }
@@ -6073,129 +4314,51 @@ protected:
             return;
         }
 
-        if (joinActive_ &&
-            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+        const JoinKeyAction joinKeyAction = joinTool_.handleKey(event->key());
+        if (joinKeyAction == JoinKeyAction::Complete) {
             applyJoin();
             return;
         }
-
-        if (joinActive_ && event->key() == Qt::Key_Escape) {
+        if (joinKeyAction == JoinKeyAction::Cancel) {
             cancelJoinMode();
             return;
         }
 
-        if (subdivisionActive_ &&
-            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
-            applySubdivision(subdivisionSections_);
+        const SubdivisionInputAction subdivisionAction =
+            subdivisionTool_.handleKey(event->key());
+        if (subdivisionAction == SubdivisionInputAction::Apply) {
+            applySubdivision(subdivisionTool_.sections());
             return;
         }
-
-        if (subdivisionActive_ && event->key() == Qt::Key_Escape) {
+        if (subdivisionAction == SubdivisionInputAction::Cancel) {
             cancelSubdivisionPreview();
             return;
         }
 
-        if (activeTool_ == Tool::Rotate && event->key() == Qt::Key_Escape) {
-            cancelRotate();
-            return;
-        }
-
-        if (activeTool_ == Tool::Rotate && handleRotateKey(event)) {
-            return;
-        }
-
-        if (activeTool_ == Tool::Scale && event->key() == Qt::Key_Escape) {
-            cancelScale();
-            return;
-        }
-
-        if (activeTool_ == Tool::Scale &&
-            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
-            if (scaleStep_ == 0) {
-                handleScalePoint(scaleSelectionBoundsCenter());
-            } else if (scaleStep_ == 1 && !scaleFactorText_.isEmpty()) {
-                bool validFactor = false;
-                const qreal factor = scaleFactorText_.toDouble(&validFactor);
-                if (validFactor && std::isfinite(factor)) {
-                    scaleFactorText_.clear();
-                    if (scaleMode_ == ScaleMode::OneD) {
-                        scaleUsingTypedFactor_ = true;
-                        scaleTypedFactor_ = factor;
-                        scaleStep_ = 2;
-                        updateScalePreview(cursorWorld_);
-                        publishScalePrompt();
-                        update();
-                    } else {
-                        commitScale(factor, QPointF());
-                    }
-                }
-            } else if (scaleStep_ == 2) {
-                updateScalePreview(cursorWorld_);
-                if (scalePreviewValid_) {
-                    commitScale(scalePreviewFactor_, scalePreviewAxis_);
-                }
-            }
-            event->accept();
-            return;
-        }
-
-        if (activeTool_ == Tool::Scale && scaleStep_ == 1) {
-            if (event->key() == Qt::Key_Backspace) {
-                scaleFactorText_.chop(1);
-                publishScalePrompt();
-                event->accept();
-                return;
-            }
-            QString typedText = event->text();
-            if (typedText == QStringLiteral(",")) {
-                typedText = QStringLiteral(".");
-            }
-            if (typedText.size() == 1) {
-                const QChar character = typedText.front();
-                const bool digit = character.isDigit();
-                const bool decimal = character == QLatin1Char('.') &&
-                                     !scaleFactorText_.contains(QLatin1Char('.'));
-                const bool sign = character == QLatin1Char('-') &&
-                                  scaleFactorText_.isEmpty();
-                if (digit || decimal || sign) {
-                    scaleFactorText_.append(character);
-                    publishScalePrompt();
-                    event->accept();
-                    return;
-                }
-            }
-        }
-
-        if (activeTool_ == Tool::Mirror && event->key() == Qt::Key_Escape) {
-            cancelMirror();
-            return;
-        }
-
-        if (grabActive_ && event->key() == Qt::Key_Escape) {
+        if (grabTool_.isActive() && event->key() == Qt::Key_Escape) {
             cancelGrab();
             return;
         }
 
-        if (duplicateActive_ && event->key() == Qt::Key_Escape) {
+        if (duplicateTool_.isActive() && event->key() == Qt::Key_Escape) {
             cancelDuplicate();
             return;
         }
 
-        if (grabActive_ && !event->isAutoRepeat() &&
+        if (grabTool_.isActive() && !event->isAutoRepeat() &&
             event->modifiers() == Qt::NoModifier && event->key() == Qt::Key_B) {
             beginGrabBasePointMode();
             return;
         }
 
-        if (activeTool_ == Tool::Select && !grabActive_ &&
+        if (selectionShortcutsAvailable() &&
             !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
             event->key() == Qt::Key_G) {
             beginGrab();
             return;
         }
 
-        if (activeTool_ == Tool::Select && !grabActive_ &&
-            !draggingSelected_ && !joinActive_ && !subdivisionActive_ &&
+        if (selectionShortcutsAvailable() &&
             !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
             event->key() == Qt::Key_F) {
             executeCommand(ViewportCommand::Fill);
@@ -6203,7 +4366,7 @@ protected:
             return;
         }
 
-        if (activeTool_ == Tool::Select && draggingSelected_ &&
+        if (activeTool_ == Tool::Select && objectSelectionDragActive() &&
             !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
             (event->key() == Qt::Key_X || event->key() == Qt::Key_Y)) {
             const DragAxisLock requestedLock = event->key() == Qt::Key_X
@@ -6214,10 +4377,10 @@ protected:
                                 : requestedLock;
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
-            if (grabActive_) {
-                updateGrabPosition(draggingShapeIndices_.isEmpty()
+            if (grabTool_.isActive()) {
+                updateGrabPosition(selectionDraggedObjectIds().isEmpty()
                                        ? QVector<ObjectId>{selectedShapeIndex_}
-                                       : draggingShapeIndices_);
+                                       : selectionDraggedObjectIds());
             }
             DebugLog::instance().write(
                 QStringLiteral("selection drag axis lock=%1")
@@ -6232,28 +4395,7 @@ protected:
             return;
         }
 
-        if (activeTool_ == Tool::Arc && event->key() == Qt::Key_Escape) {
-            setTool(Tool::Select);
-            if (commandFinished_) {
-                commandFinished_(Tool::Select);
-            }
-            update();
-            event->accept();
-            return;
-        }
-
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint &&
-            handleTwoPointArcKey(event)) {
-            return;
-        }
-
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::ThreePoint &&
-            handleThreePointArcKey(event)) {
-            return;
-        }
-
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
-            handleOnePointArcKey(event)) {
+        if (activeTool_ == Tool::Arc && handleArcKeyInput(keyInput, event)) {
             return;
         }
 
@@ -6261,21 +4403,83 @@ protected:
             event->modifiers() == Qt::NoModifier &&
             (event->key() == Qt::Key_X || event->key() == Qt::Key_Y ||
              event->key() == Qt::Key_Z)) {
-            handleArcAxisKey(event->key());
+            handleArcAxisKey(keyInput);
             event->accept();
             update();
             emitCoordinateUpdate();
             return;
         }
 
-        if (activeToolController_ != nullptr) {
+        const bool selectAllKeyBlocked =
+            activeTool_ == Tool::Select && event->key() == Qt::Key_A &&
+            event->modifiers() == Qt::NoModifier &&
+            !selectionShortcutsAvailable();
+        if (activeToolController_ != nullptr && !selectAllKeyBlocked) {
             if (activeTool_ == Tool::Arc && !pendingPoints_.isEmpty() &&
                 event->key() == Qt::Key_L) {
                 event->accept();
                 return;
             }
-            const ToolInput input = makeKeyToolInput(event);
-            if (activeToolController_->handleKey(input, toolContext_)) {
+            const Tool dispatchedTool = activeTool_;
+            if (activeToolController_->dispatchKey(keyInput, toolContext_) ==
+                InteractionTool::EventResult::Handled) {
+                if (dispatchedTool == Tool::Scale) {
+                    const ScaleKeyDispatchResult result =
+                        scaleTool_.takeLastKeyDispatchResult();
+                    if (result.cancelled) {
+                        currentSnap_ = SnapResult{};
+                        DebugLog::instance().write(
+                            QStringLiteral("scale canceled"));
+                        update();
+                    }
+                    if (result.point.action ==
+                        ScalePointAction::BasePointCaptured) {
+                        pendingPoints_ = {result.point.point};
+                    }
+                    if (result.promptChanged) {
+                        publishScalePrompt();
+                    }
+                    if (result.commitAttempted && result.committed) {
+                        currentSnap_ = SnapResult{};
+                        logScaleCommit(result.mode, result.factor,
+                                       result.basePoint, result.sourceCount);
+                    }
+                    if (result.redrawRequested) {
+                        update();
+                    }
+                    event->accept();
+                    return;
+                }
+                if (dispatchedTool == Tool::Rotate) {
+                    const RotateKeyResult result =
+                        rotateTool_.takeLastKeyDispatchResult();
+                    applyRotateFrameResult(result.frame);
+                    if (result.updateCursor) {
+                        cursorWorld_ = result.cursorPoint;
+                    }
+                    if (result.updateRawCursor) {
+                        rawCursorWorld_ = result.cursorPoint;
+                        lastWorldPosition_ = result.cursorPoint;
+                    }
+                    if (result.cancelled) {
+                        currentSnap_ = SnapResult{};
+                        DebugLog::instance().write(
+                            QStringLiteral("rotate canceled"));
+                    } else if (result.commitRequested) {
+                        commitRotate(result.commitAngle);
+                    }
+                    update();
+                    event->accept();
+                    return;
+                }
+                if (dispatchedTool == Tool::Mirror) {
+                    currentSnap_ = SnapResult{};
+                    DebugLog::instance().write(
+                        QStringLiteral("mirror canceled"));
+                    update();
+                    event->accept();
+                    return;
+                }
                 update();
                 emitCoordinateUpdate();
                 return;
@@ -6284,38 +4488,33 @@ protected:
 
         if (activeTool_ == Tool::Select &&
             event->key() == Qt::Key_A &&
-            event->modifiers() == Qt::NoModifier) {
-            selectedShapeIndices_.clear();
-            selectedShapeIndices_.reserve(shapes_.size());
-            for (int index = 0; index < shapes_.size(); ++index) {
-                const ObjectId objectId = shapes_.objectIdAt(index);
-                if (document_.isObjectEditable(objectId)) {
-                    selectedShapeIndices_.append(objectId);
-                }
+            event->modifiers() == Qt::NoModifier &&
+            selectionShortcutsAvailable()) {
+            InteractionTool *selectionTool = toolRegistry_.find(Tool::Select);
+            if (selectionTool != nullptr &&
+                selectionTool->dispatchKey(keyInput, toolContext_) ==
+                    InteractionTool::EventResult::Handled) {
+                update();
+                emitCoordinateUpdate();
+                DebugLog::instance().write(
+                    QStringLiteral("select all count=%1")
+                        .arg(selectedShapeIndices_.size()));
             }
-            selectedShapeIndex_ = selectedShapeIndices_.isEmpty()
-                                      ? ObjectId::invalid()
-                                      : selectedShapeIndices_.back();
-            draggingSelected_ = false;
-            draggingShapeIndices_.clear();
-            draggingControlPoint_ = false;
-            controlPointIndex_ = -1;
-            update();
-            emitCoordinateUpdate();
-            DebugLog::instance().write(
-                QStringLiteral("select all count=%1")
-                    .arg(selectedShapeIndices_.size()));
             return;
         }
 
         if (activeTool_ == Tool::Select &&
             (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) &&
+            selectionShortcutsAvailable() &&
             !selectedShapeIndices_.isEmpty()) {
             deleteSelectedShapes();
             return;
         }
 
         if (event->key() == Qt::Key_Escape) {
+            if (activeTool_ == Tool::Arc) {
+                arcTool_.clearInputPoints();
+            }
             pendingPoints_.clear();
             resetArcPreviewTracking();
             DebugLog::instance().write(QStringLiteral("keyPress branch=cancel-input"));
@@ -6326,7 +4525,7 @@ protected:
                     commandFinished_(Tool::Select);
                 }
             } else if (activeTool_ == Tool::Arc &&
-                       arcMode_ == ArcMode::OnePoint) {
+                       arcState().mode == ArcMode::OnePoint) {
                 setTool(Tool::Select);
                 if (commandFinished_) {
                     commandFinished_(Tool::Select);
@@ -6359,9 +4558,10 @@ protected:
             return false;
         }
 
-        const ToolInput input = makeKeyToolInput(keyEvent);
+        const ToolInput input = makeKeyToolInput(*keyEvent);
         if (activeToolController_ != nullptr &&
-            activeToolController_->handleKey(input, toolContext_)) {
+            activeToolController_->dispatchKey(input, toolContext_) ==
+                InteractionTool::EventResult::Handled) {
             keyEvent->accept();
             update();
             emitCoordinateUpdate();
@@ -6371,13 +4571,97 @@ protected:
     }
 
 private:
-    enum class ArcTextInputMode {
-        None,
-        Radius,
-        Angle,
-        ChordLength,
-        Sagitta,
-    };
+    void configureCommandRouter()
+    {
+        CommandRouter::Handlers handlers;
+        handlers.undo = [this](int) {
+            if (duplicateTool_.isActive()) {
+                cancelDuplicate();
+            }
+            const bool accepted = history_.canUndo();
+            undo();
+            return ApplicationCommandResult{accepted, 0};
+        };
+        handlers.redo = [this](int) {
+            if (duplicateTool_.isActive()) {
+                cancelDuplicate();
+            }
+            const bool accepted = history_.canRedo();
+            redo();
+            return ApplicationCommandResult{accepted, 0};
+        };
+        handlers.beginSubdivision = [this](int) {
+            return ApplicationCommandResult{beginSubdivisionWheelMode(), 0};
+        };
+        handlers.cancelSubdivision = [this](int) {
+            cancelSubdivisionWheelMode();
+            return ApplicationCommandResult{true, 0};
+        };
+        handlers.applySubdivision = [this](int sections) {
+            return ApplicationCommandResult{applySubdivision(sections), 0};
+        };
+        handlers.beginJoin = [this](int) {
+            return ApplicationCommandResult{beginJoinMode(), 0};
+        };
+        handlers.explode = [this](int) {
+            const int count = explodeSelectedShapes();
+            return ApplicationCommandResult{count > 0, count};
+        };
+        handlers.fill = [this](int) {
+            const int count = fillSelectedClosedCurves();
+            return ApplicationCommandResult{count > 0, count};
+        };
+        handlers.beginRotate = [this](int) {
+            return ApplicationCommandResult{beginRotate(), 0};
+        };
+        handlers.beginScale = [this](int mode) {
+            if (mode < static_cast<int>(ScaleMode::OneD) ||
+                mode > static_cast<int>(ScaleMode::TwoD)) {
+                return ApplicationCommandResult{};
+            }
+            return ApplicationCommandResult{
+                beginScale(static_cast<ScaleMode>(mode)), 0};
+        };
+        handlers.beginMirror = [this](int) {
+            return ApplicationCommandResult{beginMirror(), 0};
+        };
+        handlers.beginDuplicate = [this](int) {
+            return ApplicationCommandResult{beginDuplicate(), 0};
+        };
+        handlers.duplicateInPlace = [this](int) {
+            return ApplicationCommandResult{duplicateInPlace(), 0};
+        };
+        handlers.beginPointExtrude = [this](int) {
+            const int count = beginPointExtrude();
+            return ApplicationCommandResult{count > 0, count};
+        };
+        commandRouter_.setHandlers(std::move(handlers));
+    }
+
+    ArcTool::InteractionState &arcState()
+    {
+        return arcTool_.interactionState();
+    }
+
+    const ArcTool::InteractionState &arcState() const
+    {
+        return arcTool_.interactionState();
+    }
+
+    RotateTool::InteractionState &rotateState()
+    {
+        return rotateTool_.interactionState();
+    }
+
+    const RotateTool::InteractionState &rotateState() const
+    {
+        return rotateTool_.interactionState();
+    }
+
+    const ScaleTool::InteractionState &scaleState() const
+    {
+        return scaleTool_.interactionState();
+    }
 
     void beginOrbitAt(const QPointF &screenPosition)
     {
@@ -6385,13 +4669,13 @@ private:
             viewportTransform_.navigationPreferences();
         Point3D depthPoint;
         if (preferences.useMouseDepthNavigate) {
-            const QVector<Shape> depthShapes = visibleDepthShapes();
+            const ViewportRenderFrame renderFrame = viewportRenderFrame();
             const bool gpuDepthHit =
                 gpuSurface_ != nullptr &&
                 gpuSurface_->pickScenePoint(screenPosition,
-                                            viewportTransform_,
-                                            size(),
-                                            depthShapes,
+                                            renderFrame.camera,
+                                            renderFrame.viewportSize,
+                                            renderFrame.objects,
                                             &depthPoint);
             const bool cpuDepthHit = !gpuDepthHit &&
                 curveHitTester_.hitTestVisibleDepth(document_,
@@ -6449,87 +4733,6 @@ private:
             shapePointToWorld(shape, center));
     }
 
-    static qreal directionDot(const Point3D &first, const Point3D &second)
-    {
-        return first.x * second.x + first.y * second.y + first.z * second.z;
-    }
-
-    void stopNavigationAnimation()
-    {
-        if (navigationAnimation_ != nullptr) {
-            navigationAnimation_->stop();
-        }
-    }
-
-    void animateCameraChange(const std::function<void()> &setTarget)
-    {
-        stopNavigationAnimation();
-        const ViewportCameraState original = viewportTransform_.cameraState();
-        setTarget();
-        const ViewportCameraState target = viewportTransform_.cameraState();
-        constexpr qreal angleTolerance = 1.0e-7;
-        const bool poseChanged =
-            std::abs(original.zoom - target.zoom) > 1.0e-8 ||
-            std::abs(original.gridViewDistance - target.gridViewDistance) > 1.0e-8 ||
-            std::hypot(original.pan.x() - target.pan.x(),
-                       original.pan.y() - target.pan.y()) > 1.0e-8 ||
-            std::abs(original.orbitPivot.x - target.orbitPivot.x) > 1.0e-8 ||
-            std::abs(original.orbitPivot.y - target.orbitPivot.y) > 1.0e-8 ||
-            std::abs(original.orbitPivot.z - target.orbitPivot.z) > 1.0e-8 ||
-            1.0 - std::abs(original.orientation.dot(target.orientation)) >
-                angleTolerance;
-
-        ViewportCameraState start = original;
-        start.perspective = target.perspective;
-        if (!poseChanged || navigationAnimation_ == nullptr) {
-            viewportTransform_.setCameraState(target);
-            notifyViewStateChanged();
-            update();
-            emitCoordinateUpdate();
-            return;
-        }
-        navigationAnimationStart_ = start;
-        navigationAnimationEnd_ = target;
-        viewportTransform_.setCameraState(start);
-        navigationAnimation_->start();
-    }
-
-    QString navigationTooltip(const BlenderNavigationHit &hit) const
-    {
-        switch (hit.action) {
-        case BlenderNavigationAction::Axis: {
-            const qreal component = std::abs(hit.direction.x) > 0.5
-                                        ? hit.direction.x
-                                        : std::abs(hit.direction.y) > 0.5
-                                              ? hit.direction.y
-                                              : hit.direction.z;
-            const QString axis = std::abs(hit.direction.x) > 0.5
-                                     ? QStringLiteral("X")
-                                     : std::abs(hit.direction.y) > 0.5
-                                           ? QStringLiteral("Y")
-                                           : QStringLiteral("Z");
-            return QStringLiteral("Align to %1%2 view; drag to orbit")
-                .arg(component >= 0.0 ? QStringLiteral("+") : QStringLiteral("-"),
-                     axis);
-        }
-        case BlenderNavigationAction::Orbit:
-            return QStringLiteral("Drag to orbit the view");
-        case BlenderNavigationAction::Zoom:
-            return QStringLiteral("Drag to zoom the view");
-        case BlenderNavigationAction::Pan:
-            return QStringLiteral("Drag to pan the view");
-        case BlenderNavigationAction::Camera:
-            return QStringLiteral("Camera view (no active scene camera)");
-        case BlenderNavigationAction::Projection:
-            return viewportTransform_.isPerspectiveEnabled()
-                       ? QStringLiteral("Switch to orthographic projection")
-                       : QStringLiteral("Switch to perspective projection");
-        case BlenderNavigationAction::None:
-            break;
-        }
-        return {};
-    }
-
     void resetForDocumentReplacement()
     {
         history_.clear();
@@ -6537,43 +4740,28 @@ private:
         pendingPictureImage_ = QImage();
         pendingPictureImageData_.clear();
         pendingPicturePath_.clear();
-        controllerPreviewShape_ = Shape{};
-        controllerPreviewShapeVisible_ = false;
-        pointExtrudePreviewShapes_.clear();
+        toolPreview_ = ToolPreview{};
         resetArcPreviewTracking();
-        selectedShapeIndices_.clear();
-        selectedShapeIndex_ = ObjectId::invalid();
-        controlPointIndex_ = -1;
-        selectionBoxActive_ = false;
-        selectionBoxMoved_ = false;
-        selectionBoxAdditive_ = false;
-        trimBoxSelectionActive_ = false;
-        draggingSelected_ = false;
-        dragGestureStarted_ = false;
-        draggingShapeIndices_.clear();
-        draggingControlPoint_ = false;
+        selection_.clear();
+        resetSelectionBoxState();
+        clearSelectionDragState();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
-        eraseStrokeActive_ = false;
-        eraseCursorPressed_ = false;
-        eraseCandidateShapeIndices_.clear();
-        eraseStrokeScreenPath_.clear();
+        eraseTool_.resetInteraction();
+        trimTool_.clearCandidates();
+        eraseTool_.clearCandidates();
         eraseTargetShapeIndices_.clear();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = false;
-        trimHoverPositionValid_ = false;
+        trimTool_.invalidateHover();
         currentSnap_ = SnapResult{};
-        joinActive_ = false;
-        joinShapeIndices_.clear();
+        joinTool_.cancel();
         resetScaleInteraction();
         resetRotateInteraction();
         resetMirrorInteraction();
-        subdivisionActive_ = false;
-        subdivisionShapeIndex_ = ObjectId::invalid();
-        subdivisionSections_ = 2;
-        resetSubdivisionWheelTracking();
+        subdivisionTool_.finish();
         lineCommandActive_ = false;
         activeTool_ = Tool::Select;
         repeatTool_ = Tool::Select;
@@ -6618,261 +4806,11 @@ private:
                shape.geometryType == GeometryType::Ellipse;
     }
 
-    bool appendJoinComponents(const Shape &shape,
-                              QVector<Shape::NurbsCurve2D> *components) const
-    {
-        if (components == nullptr || !isJoinableShape(shape)) {
-            return false;
-        }
-
-        if (shape.geometryType == GeometryType::PolyCurve) {
-            *components += shape.components;
-            return true;
-        }
-
-        if (isValidNurbsCurve(shape.nurbs)) {
-            components->append(shape.nurbs);
-            return true;
-        }
-
-        if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
-            const Shape::NurbsCurve2D line = makeDegreeOneNurbs(shape.points);
-            if (isValidNurbsCurve(line)) {
-                components->append(line);
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    void fuseOverlappingLineComponents(
-        QVector<Shape::NurbsCurve2D> *components,
-        qreal tolerance) const
-    {
-        if (components == nullptr || components->isEmpty()) {
-            return;
-        }
-
-        // Compare each straight span of a degree-1 spline, including bent
-        // polylines. Keep the original knot domains and rational data when
-        // splitting; only a fused union receives a new line representation.
-        QVector<Shape::NurbsCurve2D> spans;
-        for (const Shape::NurbsCurve2D &curve : *components) {
-            if (curve.degree != 1 || curve.controlPoints.size() <= 2) {
-                spans.append(curve);
-                continue;
-            }
-            const QVector<double> knots = expandedKnotVector(curve);
-            QVector<Shape::NurbsCurve2D> curveSpans;
-            bool splitValid = true;
-            for (int knotIndex = curve.degree;
-                 knotIndex < curve.controlPoints.size();
-                 ++knotIndex) {
-                if (knots[knotIndex + 1] <= knots[knotIndex]) {
-                    continue;
-                }
-                Shape::NurbsCurve2D span;
-                if (!trimNurbsCurve(curve,
-                                    knots[knotIndex],
-                                    knots[knotIndex + 1],
-                                    &span)) {
-                    splitValid = false;
-                    break;
-                }
-                curveSpans.append(span);
-            }
-            if (splitValid && !curveSpans.isEmpty()) {
-                spans += curveSpans;
-            } else {
-                spans.append(curve);
-            }
-        }
-        *components = spans;
-
-        bool merged = true;
-        while (merged) {
-            merged = false;
-            for (int firstIndex = 0;
-                 firstIndex < components->size() && !merged;
-                 ++firstIndex) {
-                const Shape::NurbsCurve2D &firstCurve =
-                    components->at(firstIndex);
-                if (firstCurve.degree != 1 ||
-                    firstCurve.controlPoints.size() != 2) {
-                    continue;
-                }
-
-                QPointF firstStart;
-                QPointF firstEnd;
-                if (!nurbsCurveEndpoints(firstCurve, &firstStart, &firstEnd)) {
-                    continue;
-                }
-                const QPointF firstDirection = firstEnd - firstStart;
-                const qreal firstLength = std::hypot(firstDirection.x(),
-                                                     firstDirection.y());
-                if (firstLength <= tolerance) {
-                    continue;
-                }
-                const QPointF axis = firstDirection / firstLength;
-
-                for (int secondIndex = firstIndex + 1;
-                     secondIndex < components->size();
-                     ++secondIndex) {
-                    const Shape::NurbsCurve2D &secondCurve =
-                        components->at(secondIndex);
-                    if (secondCurve.degree != 1 ||
-                        secondCurve.controlPoints.size() != 2) {
-                        continue;
-                    }
-
-                    QPointF secondStart;
-                    QPointF secondEnd;
-                    if (!nurbsCurveEndpoints(secondCurve,
-                                             &secondStart,
-                                             &secondEnd)) {
-                        continue;
-                    }
-                    const QPointF secondDirection = secondEnd - secondStart;
-                    const qreal secondLength = std::hypot(secondDirection.x(),
-                                                          secondDirection.y());
-                    if (secondLength <= tolerance) {
-                        continue;
-                    }
-                    const QPointF secondAxis = secondDirection / secondLength;
-                    const qreal directionCross =
-                        axis.x() * secondAxis.y() - axis.y() * secondAxis.x();
-                    if (std::abs(directionCross) > 1.0e-6) {
-                        continue;
-                    }
-
-                    const auto perpendicularDistance =
-                        [&](const QPointF &point) {
-                            const QPointF delta = point - firstStart;
-                            return std::abs(axis.x() * delta.y() -
-                                            axis.y() * delta.x());
-                        };
-                    if (perpendicularDistance(secondStart) > tolerance ||
-                        perpendicularDistance(secondEnd) > tolerance) {
-                        continue;
-                    }
-
-                    const qreal firstProjection =
-                        QPointF::dotProduct(firstEnd - firstStart, axis);
-                    const qreal secondStartProjection =
-                        QPointF::dotProduct(secondStart - firstStart, axis);
-                    const qreal secondEndProjection =
-                        QPointF::dotProduct(secondEnd - firstStart, axis);
-                    const qreal firstLow = std::min<qreal>(0.0, firstProjection);
-                    const qreal firstHigh = std::max<qreal>(0.0, firstProjection);
-                    const qreal secondLow = std::min(secondStartProjection,
-                                                     secondEndProjection);
-                    const qreal secondHigh = std::max(secondStartProjection,
-                                                      secondEndProjection);
-                    if (secondLow > firstHigh + tolerance ||
-                        firstLow > secondHigh + tolerance) {
-                        continue;
-                    }
-
-                    const qreal unionLow = std::min(firstLow, secondLow);
-                    const qreal unionHigh = std::max(firstHigh, secondHigh);
-                    const QPointF fusedStart = firstStart + axis * unionLow;
-                    const QPointF fusedEnd = firstStart + axis * unionHigh;
-                    (*components)[firstIndex] =
-                        makeDegreeOneNurbs({fusedStart, fusedEnd});
-                    components->removeAt(secondIndex);
-                    merged = true;
-                    DebugLog::instance().write(
-                        QStringLiteral("applyJoin fused overlapping line components=%1,%2 gapOrOverlapTolerance=%3")
-                            .arg(firstIndex)
-                            .arg(secondIndex)
-                            .arg(tolerance, 0, 'f', 6));
-                    break;
-                }
-            }
-        }
-    }
-
-    void fuseOverlappingLineComponentsInWorld(
-        QVector<Shape::NurbsCurve2D> *components,
-        QVector<WorkPlaneFrame> *frames,
-        qreal tolerance) const
-    {
-        // Split bent degree-1 curves in their own planes before comparing
-        // spans. A straight span can belong to several different planes.
-        QVector<Shape::NurbsCurve2D> spans;
-        QVector<WorkPlaneFrame> spanFrames;
-        for (int index = 0; index < components->size(); ++index) {
-            QVector<Shape::NurbsCurve2D> pieces{components->at(index)};
-            // The planar helper also performs the domain-preserving split.
-            fuseOverlappingLineComponents(&pieces, tolerance);
-            for (const auto &piece : pieces) {
-                spans.append(piece);
-                spanFrames.append(frames->at(index));
-            }
-        }
-        *components = spans;
-        *frames = spanFrames;
-        bool merged = true;
-        while (merged) {
-            merged = false;
-            for (int first = 0; first < components->size() && !merged; ++first) {
-                if (components->at(first).degree != 1 ||
-                    components->at(first).controlPoints.size() != 2) {
-                    continue;
-                }
-                for (int second = first + 1; second < components->size(); ++second) {
-                    if (components->at(second).degree != 1 ||
-                        components->at(second).controlPoints.size() != 2) {
-                        continue;
-                    }
-                    auto mapped = components->at(second);
-                    bool inPlane = true;
-                    for (QPointF &point : mapped.controlPoints) {
-                        const Point3D world = workPlaneFramePointToWorld(point, frames->at(second));
-                        point = worldPointToWorkPlaneFrame(world, frames->at(first));
-                        const Point3D projected = workPlaneFramePointToWorld(point, frames->at(first));
-                        inPlane = inPlane && std::hypot(
-                            std::hypot(world.x - projected.x, world.y - projected.y),
-                            world.z - projected.z) <= 1.0e-7;
-                    }
-                    if (!inPlane) {
-                        continue;
-                    }
-                    QVector<Shape::NurbsCurve2D> pair{components->at(first), mapped};
-                    fuseOverlappingLineComponents(&pair, tolerance);
-                    if (pair.size() == 1) {
-                        (*components)[first] = pair.first();
-                        components->removeAt(second);
-                        frames->removeAt(second);
-                        merged = true;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
     bool nurbsCurveEndpoints(const Shape::NurbsCurve2D &curve,
                              QPointF *start,
                              QPointF *end) const
     {
-        if (!isValidNurbsCurve(curve) || (start == nullptr && end == nullptr)) {
-            return false;
-        }
-
-        const QVector<double> fullKnots = expandedKnotVector(curve);
-        if (fullKnots.size() <= curve.controlPoints.size()) {
-            return false;
-        }
-
-        const bool startValid = start == nullptr ||
-                                evaluateNurbsPoint(curve, fullKnots[curve.degree], start);
-        const bool endValid = end == nullptr ||
-                              evaluateNurbsPoint(curve,
-                                                 fullKnots[curve.controlPoints.size()],
-                                                 end);
-        return startValid && endValid;
+        return classiCAD::nurbsCurveEndpoints(curve, start, end);
     }
 
     qreal joinEndpointTolerance() const
@@ -6894,266 +4832,22 @@ private:
                         screenTolerancePixels /
                             std::max(viewportTransform_.viewScalePixelsPerWorldUnit(
                                          size()),
-                                     1.0e-9));
+                            1.0e-9));
     }
 
     Shape::NurbsCurve2D reversedNurbsCurve(const Shape::NurbsCurve2D &curve) const
     {
-        if (!isValidNurbsCurve(curve)) {
-            return {};
-        }
-
-        Shape::NurbsCurve2D reversed = curve;
-        std::reverse(reversed.controlPoints.begin(), reversed.controlPoints.end());
-        if (!reversed.weights.isEmpty()) {
-            std::reverse(reversed.weights.begin(), reversed.weights.end());
-        }
-
-        const QVector<double> fullKnots = expandedKnotVector(curve);
-        const qreal domainStart = fullKnots[curve.degree];
-        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
-        reversed.knots.clear();
-        reversed.knots.reserve(curve.knots.size());
-        for (int index = 1; index + 1 < fullKnots.size(); ++index) {
-            reversed.knots.append(domainStart + domainEnd -
-                                  fullKnots[fullKnots.size() - 1 - index]);
-        }
-        return reversed;
+        Shape::NurbsCurve2D reversed;
+        return classiCAD::reverseNurbsCurve(curve, &reversed)
+                   ? reversed
+                   : Shape::NurbsCurve2D{};
     }
 
     bool orderJoinComponents(const QVector<Shape::NurbsCurve2D> &input,
                              QVector<Shape::NurbsCurve2D> *ordered,
                              qreal tolerance) const
     {
-        if (ordered == nullptr || input.isEmpty()) {
-            return false;
-        }
-
-        QVector<QPointF> starts;
-        QVector<QPointF> ends;
-        starts.reserve(input.size());
-        ends.reserve(input.size());
-        for (const Shape::NurbsCurve2D &curve : input) {
-            QPointF start;
-            QPointF end;
-            if (!nurbsCurveEndpoints(curve, &start, &end)) {
-                return false;
-            }
-            starts.append(start);
-            ends.append(end);
-        }
-
-        const auto endpointsMatch = [tolerance](const QPointF &first,
-                                                  const QPointF &second) {
-            return std::hypot(first.x() - second.x(), first.y() - second.y()) <= tolerance;
-        };
-
-        QVector<int> componentOrder;
-        QVector<bool> componentReversed;
-        QVector<char> used(input.size(), false);
-
-        const auto makeResult = [&]() {
-            ordered->clear();
-            ordered->reserve(componentOrder.size());
-            for (int position = 0; position < componentOrder.size(); ++position) {
-                const int componentIndex = componentOrder[position];
-                ordered->append(componentReversed[position]
-                                    ? reversedNurbsCurve(input[componentIndex])
-                                    : input[componentIndex]);
-            }
-        };
-
-        std::function<bool(const QPointF &)> extendChain;
-        extendChain = [&](const QPointF &currentEnd) {
-            if (componentOrder.size() == input.size()) {
-                return true;
-            }
-
-            for (int candidate = 0; candidate < input.size(); ++candidate) {
-                if (used[candidate]) {
-                    continue;
-                }
-
-                if (endpointsMatch(currentEnd, starts[candidate])) {
-                    used[candidate] = true;
-                    componentOrder.append(candidate);
-                    componentReversed.append(false);
-                    if (extendChain(ends[candidate])) {
-                        return true;
-                    }
-                    componentReversed.removeLast();
-                    componentOrder.removeLast();
-                    used[candidate] = false;
-                }
-
-                if (endpointsMatch(currentEnd, ends[candidate])) {
-                    used[candidate] = true;
-                    componentOrder.append(candidate);
-                    componentReversed.append(true);
-                    if (extendChain(starts[candidate])) {
-                        return true;
-                    }
-                    componentReversed.removeLast();
-                    componentOrder.removeLast();
-                    used[candidate] = false;
-                }
-            }
-
-            return false;
-        };
-
-        for (int first = 0; first < input.size(); ++first) {
-            for (const bool reverseFirst : {false, true}) {
-                std::fill(used.begin(), used.end(), false);
-                componentOrder.clear();
-                componentReversed.clear();
-                used[first] = true;
-                componentOrder.append(first);
-                componentReversed.append(reverseFirst);
-                const QPointF firstEnd = reverseFirst ? starts[first] : ends[first];
-                if (extendChain(firstEnd)) {
-                    makeResult();
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    bool orderJoinComponentsInWorld(
-        const QVector<Shape::NurbsCurve2D> &input,
-        const QVector<WorkPlaneFrame> &frames,
-        QVector<Shape::NurbsCurve2D> *ordered,
-        QVector<WorkPlaneFrame> *orderedFrames,
-        qreal tolerance) const
-    {
-        if (ordered == nullptr || orderedFrames == nullptr || input.isEmpty() ||
-            input.size() != frames.size()) {
-            return false;
-        }
-
-        const auto distance = [](const Point3D &first, const Point3D &second) {
-            return std::hypot(std::hypot(first.x - second.x,
-                                         first.y - second.y),
-                              first.z - second.z);
-        };
-        QVector<Point3D> starts;
-        QVector<Point3D> ends;
-        starts.reserve(input.size());
-        ends.reserve(input.size());
-        for (int index = 0; index < input.size(); ++index) {
-            QPointF start;
-            QPointF end;
-            if (!isValidWorkPlaneFrame(frames[index]) ||
-                !nurbsCurveEndpoints(input[index], &start, &end)) {
-                return false;
-            }
-            starts.append(workPlaneFramePointToWorld(start, frames[index]));
-            ends.append(workPlaneFramePointToWorld(end, frames[index]));
-        }
-
-        QVector<int> componentOrder;
-        QVector<bool> componentReversed;
-        QVector<bool> used(input.size(), false);
-        const auto makeResult = [&]() {
-            ordered->clear();
-            orderedFrames->clear();
-            ordered->reserve(componentOrder.size());
-            orderedFrames->reserve(componentOrder.size());
-            for (int position = 0; position < componentOrder.size(); ++position) {
-                const int componentIndex = componentOrder[position];
-                ordered->append(componentReversed[position]
-                                    ? reversedNurbsCurve(input[componentIndex])
-                                    : input[componentIndex]);
-                orderedFrames->append(frames[componentIndex]);
-            }
-        };
-
-        std::function<bool(const Point3D &)> extendChain;
-        extendChain = [&](const Point3D &currentEnd) {
-            if (componentOrder.size() == input.size()) {
-                return true;
-            }
-            for (int candidate = 0; candidate < input.size(); ++candidate) {
-                if (used[candidate]) {
-                    continue;
-                }
-                for (const bool reverseCandidate : {false, true}) {
-                    const Point3D &candidateStart = reverseCandidate
-                                                        ? ends[candidate]
-                                                        : starts[candidate];
-                    const Point3D &candidateEnd = reverseCandidate
-                                                      ? starts[candidate]
-                                                      : ends[candidate];
-                    if (distance(currentEnd, candidateStart) > tolerance) {
-                        continue;
-                    }
-                    used[candidate] = true;
-                    componentOrder.append(candidate);
-                    componentReversed.append(reverseCandidate);
-                    if (extendChain(candidateEnd)) {
-                        return true;
-                    }
-                    componentReversed.removeLast();
-                    componentOrder.removeLast();
-                    used[candidate] = false;
-                }
-            }
-            return false;
-        };
-
-        for (int first = 0; first < input.size(); ++first) {
-            for (const bool reverseFirst : {false, true}) {
-                std::fill(used.begin(), used.end(), false);
-                componentOrder.clear();
-                componentReversed.clear();
-                used[first] = true;
-                componentOrder.append(first);
-                componentReversed.append(reverseFirst);
-                const Point3D &firstEnd = reverseFirst ? starts[first]
-                                                       : ends[first];
-                if (extendChain(firstEnd)) {
-                    makeResult();
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    bool closeJoinGapsInWorld(QVector<Shape::NurbsCurve2D> *components,
-                              QVector<WorkPlaneFrame> *frames,
-                              qreal tolerance) const
-    {
-        if (components == nullptr || frames == nullptr || components->isEmpty() ||
-            components->size() != frames->size()) {
-            return false;
-        }
-        for (int index = 0; index + 1 < components->size(); ++index) {
-            QPointF previousEnd;
-            QPointF nextStart;
-            if (!nurbsCurveEndpoints(components->at(index), nullptr, &previousEnd) ||
-                !nurbsCurveEndpoints(components->at(index + 1), &nextStart, nullptr)) {
-                return false;
-            }
-            const Point3D previousWorld = workPlaneFramePointToWorld(
-                previousEnd, frames->at(index));
-            const Point3D nextWorld = workPlaneFramePointToWorld(
-                nextStart, frames->at(index + 1));
-            const Point3D delta{previousWorld.x - nextWorld.x,
-                                previousWorld.y - nextWorld.y,
-                                previousWorld.z - nextWorld.z};
-            const qreal gap = std::hypot(std::hypot(delta.x, delta.y), delta.z);
-            if (gap > tolerance) {
-                return false;
-            }
-            WorkPlaneFrame &nextFrame = (*frames)[index + 1];
-            nextFrame.origin.x += delta.x;
-            nextFrame.origin.y += delta.y;
-            nextFrame.origin.z += delta.z;
-        }
-        return true;
+        return orderConnectedNurbsCurves(input, ordered, tolerance);
     }
 
     bool joinComponentsAreContinuousInWorld(
@@ -7161,60 +4855,9 @@ private:
         const QVector<WorkPlaneFrame> &frames,
         qreal tolerance) const
     {
-        if (components.size() != frames.size()) {
-            return false;
-        }
-        for (int index = 0; index + 1 < components.size(); ++index) {
-            QPointF previousEnd;
-            QPointF nextStart;
-            if (!nurbsCurveEndpoints(components[index], nullptr, &previousEnd) ||
-                !nurbsCurveEndpoints(components[index + 1], &nextStart, nullptr)) {
-                return false;
-            }
-            const Point3D first = workPlaneFramePointToWorld(previousEnd,
-                                                              frames[index]);
-            const Point3D second = workPlaneFramePointToWorld(nextStart,
-                                                               frames[index + 1]);
-            const qreal gap = std::hypot(
-                std::hypot(first.x - second.x, first.y - second.y),
-                first.z - second.z);
-            if (gap > tolerance) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    bool closeJoinGaps(QVector<Shape::NurbsCurve2D> *components,
-                       qreal tolerance) const
-    {
-        if (components == nullptr || components->isEmpty()) {
-            return false;
-        }
-
-        for (int index = 0; index + 1 < components->size(); ++index) {
-            QPointF previousEnd;
-            QPointF nextStart;
-            if (!nurbsCurveEndpoints(components->at(index), nullptr, &previousEnd) ||
-                !nurbsCurveEndpoints(components->at(index + 1), &nextStart, nullptr)) {
-                return false;
-            }
-
-            const QPointF delta = previousEnd - nextStart;
-            if (std::hypot(delta.x(), delta.y()) > tolerance) {
-                return false;
-            }
-
-            // Move only the next component. That closes this seam without
-            // disturbing a seam that was already closed earlier in the chain.
-            // The component's degree, weights, knots, and parameter domain
-            // remain unchanged.
-            for (QPointF &controlPoint : (*components)[index + 1].controlPoints) {
-                controlPoint += delta;
-            }
-        }
-
-        return true;
+        return connectedNurbsCurvesAreContinuousInWorld(components,
+                                                         frames,
+                                                         tolerance);
     }
 
     bool nurbsCurvePointAtFraction(const Shape::NurbsCurve2D &curve,
@@ -7239,26 +4882,6 @@ private:
                                   point);
     }
 
-    bool joinComponentsAreContinuous(const QVector<Shape::NurbsCurve2D> &components,
-                                     qreal joinTolerance) const
-    {
-        for (int index = 0; index + 1 < components.size(); ++index) {
-            QPointF firstEnd;
-            QPointF nextStart;
-            if (!nurbsCurveEndpoints(components[index], nullptr, &firstEnd) ||
-                !nurbsCurveEndpoints(components[index + 1], &nextStart, nullptr)) {
-                return false;
-            }
-
-            if (std::hypot(firstEnd.x() - nextStart.x(),
-                           firstEnd.y() - nextStart.y()) > joinTolerance) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     QVector<QPointF> polyCurvePoints(
         const QVector<Shape::NurbsCurve2D> &components) const
     {
@@ -7277,81 +4900,6 @@ private:
         return points;
     }
 
-    QVector<QVector<Shape::NurbsCurve2D>> connectedCurveGroups(
-        const QVector<Shape::NurbsCurve2D> &curves) const
-    {
-        QVector<QPointF> starts;
-        QVector<QPointF> ends;
-        starts.reserve(curves.size());
-        ends.reserve(curves.size());
-        qreal coordinateScale = 1.0;
-        for (const Shape::NurbsCurve2D &curve : curves) {
-            QPointF start;
-            QPointF end;
-            if (!nurbsCurveEndpoints(curve, &start, &end)) {
-                starts.append(QPointF());
-                ends.append(QPointF());
-                continue;
-            }
-            starts.append(start);
-            ends.append(end);
-            coordinateScale = std::max({coordinateScale,
-                                        std::abs(start.x()),
-                                        std::abs(start.y()),
-                                        std::abs(end.x()),
-                                        std::abs(end.y())});
-        }
-
-        const qreal endpointTolerance = std::max<qreal>(1.0e-8,
-                                                        coordinateScale * 1.0e-12);
-        const auto endpointsMatch = [endpointTolerance](const QPointF &first,
-                                                        const QPointF &second) {
-            return std::hypot(first.x() - second.x(),
-                              first.y() - second.y()) <= endpointTolerance;
-        };
-        QVector<QVector<Shape::NurbsCurve2D>> groups;
-        QVector<bool> grouped(curves.size(), false);
-        for (int seed = 0; seed < curves.size(); ++seed) {
-            if (grouped[seed]) {
-                continue;
-            }
-
-            QVector<int> connectedIndices{seed};
-            grouped[seed] = true;
-            for (int cursor = 0; cursor < connectedIndices.size(); ++cursor) {
-                const int current = connectedIndices[cursor];
-                if (!isValidNurbsCurve(curves[current])) {
-                    continue;
-                }
-                for (int candidate = 0; candidate < curves.size(); ++candidate) {
-                    if (grouped[candidate] || !isValidNurbsCurve(curves[candidate])) {
-                        continue;
-                    }
-                    if (endpointsMatch(starts[current], starts[candidate]) ||
-                        endpointsMatch(starts[current], ends[candidate]) ||
-                        endpointsMatch(ends[current], starts[candidate]) ||
-                        endpointsMatch(ends[current], ends[candidate])) {
-                        grouped[candidate] = true;
-                        connectedIndices.append(candidate);
-                    }
-                }
-            }
-
-            std::sort(connectedIndices.begin(), connectedIndices.end());
-            QVector<Shape::NurbsCurve2D> group;
-            group.reserve(connectedIndices.size());
-            for (const int index : connectedIndices) {
-                group.append(curves[index]);
-            }
-            QVector<Shape::NurbsCurve2D> ordered;
-            if (group.size() > 1 &&
-                orderJoinComponents(group, &ordered, joinEndpointTolerance())) {
-                group = ordered;
-            }
-            groups.append(group);
-        }
-        return groups;
-    }
 
     Shape polyCurveShapeForComponents(
         const Shape &source,
@@ -7389,7 +4937,8 @@ private:
                 continue;
             }
 
-            const auto connectedGroups = connectedCurveGroups(source.components);
+            const auto connectedGroups = connectedNurbsCurveGroups(
+                source.components, joinEndpointTolerance());
             QVector<QVector<Shape::NurbsCurve2D>> validGroups;
             for (const auto &group : connectedGroups) {
                 QVector<Shape::NurbsCurve2D> ordered;
@@ -7447,34 +4996,214 @@ private:
         return objectId.isValid() && selectedShapeIndices_.contains(objectId);
     }
 
+    SelectTool *selectionToolController() const
+    {
+        return dynamic_cast<SelectTool *>(toolRegistry_.find(Tool::Select));
+    }
+
+    bool objectSelectionDragActive() const
+    {
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr && selectTool->isObjectDragActive();
+    }
+
+    bool controlPointSelectionDragActive() const
+    {
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr && selectTool->isControlPointDragActive();
+    }
+
+    bool selectionDragStarted() const
+    {
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr && selectTool->dragGestureStarted();
+    }
+
+    void setSelectionDragStarted(bool started)
+    {
+        if (SelectTool *selectTool = selectionToolController()) {
+            selectTool->setDragGestureStarted(started);
+        }
+    }
+
+    const QVector<ObjectId> &selectionDraggedObjectIds() const
+    {
+        static const QVector<ObjectId> empty;
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr ? selectTool->draggedObjectIds() : empty;
+    }
+
+    QPointF selectionDragStartScreenPosition() const
+    {
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr ? selectTool->dragStartScreenPosition()
+                                    : QPointF{};
+    }
+
+    QPointF selectionLastDragWorldPosition() const
+    {
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr ? selectTool->lastDragWorldPosition()
+                                    : QPointF{};
+    }
+
+    void setSelectionLastDragWorldPosition(const QPointF &position)
+    {
+        if (SelectTool *selectTool = selectionToolController()) {
+            selectTool->setLastDragWorldPosition(position);
+        }
+    }
+
+    QPointF selectionLastControlPointWorldPosition() const
+    {
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr ? selectTool->lastControlPointWorldPosition()
+                                    : QPointF{};
+    }
+
+    void setSelectionLastControlPointWorldPosition(const QPointF &position)
+    {
+        if (SelectTool *selectTool = selectionToolController()) {
+            selectTool->setLastControlPointWorldPosition(position);
+        }
+    }
+
+    void beginSelectionObjectDrag(const QVector<ObjectId> &objectIds,
+                                  const QPointF &screenPosition,
+                                  const QPointF &worldPosition,
+                                  bool gestureStarted = false)
+    {
+        if (SelectTool *selectTool = selectionToolController()) {
+            selectTool->beginObjectDrag(objectIds,
+                                        screenPosition,
+                                        worldPosition,
+                                        gestureStarted);
+        }
+    }
+
+    void clearSelectionDragState()
+    {
+        if (SelectTool *selectTool = selectionToolController()) {
+            selectTool->clearDragState();
+        }
+    }
+
+    void resetTrimSelectionBox()
+    {
+        trimTool_.clearBoxSelection();
+    }
+
+    QVector<ObjectId> &eraseCandidates()
+    {
+        return activeTool_ == Tool::Trim
+                   ? trimTool_.candidateObjectIds()
+                   : eraseTool_.candidateObjectIds();
+    }
+
+    const QVector<ObjectId> &eraseCandidates() const
+    {
+        return activeTool_ == Tool::Trim
+                   ? trimTool_.candidateObjectIds()
+                   : eraseTool_.candidateObjectIds();
+    }
+
+    QVector<QPointF> &eraseLikeScreenPath()
+    {
+        return activeTool_ == Tool::Trim
+                   ? trimTool_.screenPath()
+                   : eraseTool_.screenPath();
+    }
+
+    const QVector<QPointF> &eraseLikeScreenPath() const
+    {
+        return activeTool_ == Tool::Trim
+                   ? trimTool_.screenPath()
+                   : eraseTool_.screenPath();
+    }
+
+    void resetSelectionBoxState()
+    {
+        if (SelectTool *selectTool = selectionToolController()) {
+            selectTool->cancelSelectionBox();
+        }
+        resetTrimSelectionBox();
+    }
+
+    bool selectionShortcutsAvailable() const
+    {
+        return activeTool_ == Tool::Select &&
+               !selectionBoxOverlayActive() &&
+               !objectSelectionDragActive() &&
+               !controlPointSelectionDragActive() &&
+               !grabTool_.isActive() && !duplicateTool_.isActive() &&
+               !joinTool_.isActive() && !subdivisionTool_.isActive();
+    }
+
+    bool selectionBoxOverlayActive() const
+    {
+        const SelectTool *selectTool = selectionToolController();
+        return trimTool_.boxSelectionActive() ||
+               (selectTool != nullptr && selectTool->hasSelectionBox());
+    }
+
+    QPointF selectionBoxStartPosition() const
+    {
+        if (trimTool_.boxSelectionActive()) {
+            return trimTool_.boxStartPosition();
+        }
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr ? selectTool->selectionBoxStart() : QPointF{};
+    }
+
+    QPointF selectionBoxCurrentPosition() const
+    {
+        if (trimTool_.boxSelectionActive()) {
+            return trimTool_.boxCurrentPosition();
+        }
+        const SelectTool *selectTool = selectionToolController();
+        return selectTool != nullptr ? selectTool->selectionBoxCurrent() : QPointF{};
+    }
+
+    void updateSelectionBoxPosition(const QPointF &screenPosition)
+    {
+        if (trimTool_.boxSelectionActive()) {
+            trimTool_.updateBoxSelection(screenPosition);
+            return;
+        }
+        if (SelectTool *selectTool = selectionToolController()) {
+            selectTool->updateSelectionBox(screenPosition);
+        }
+    }
+
     bool deleteSelectedShapes()
     {
-        QVector<int> indices;
+        QVector<ObjectId> liveObjectIds;
+        liveObjectIds.reserve(selectedShapeIndices_.size());
         for (const ObjectId objectId : selectedShapeIndices_) {
-            const int index = objectIndex(objectId);
-            if (index >= 0 && index < shapes_.size() && !indices.contains(index)) {
-                indices.append(index);
+            if (objectIndex(objectId) >= 0 && !liveObjectIds.contains(objectId)) {
+                liveObjectIds.append(objectId);
             }
         }
-
-        if (indices.isEmpty()) {
+        if (liveObjectIds.isEmpty()) {
             clearSelection();
             return false;
         }
 
-        std::sort(indices.begin(), indices.end());
-        const int deletedCount = indices.size();
-        recordGeometryChange();
-
-        for (auto iterator = indices.crbegin(); iterator != indices.crend(); ++iterator) {
-            shapes_.removeAt(*iterator);
+        DocumentTransaction transaction = session_.beginTransaction();
+        int deletedCount = 0;
+        if (!DeleteCommand::apply(document_,
+                                  transaction,
+                                  liveObjectIds,
+                                  &deletedCount)) {
+            return false;
+        }
+        if (!session_.commitTransaction(transaction)) {
+            return false;
         }
 
         clearSelection();
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
-        draggingControlPoint_ = false;
-        controlPointIndex_ = -1;
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
@@ -7492,123 +5221,23 @@ private:
 
     void pruneSelectionToEditableLayers()
     {
-        QVector<ObjectId> editableSelection;
-        editableSelection.reserve(selectedShapeIndices_.size());
-        for (const ObjectId objectId : selectedShapeIndices_) {
-            if (document_.isObjectEditable(objectId)) {
-                editableSelection.append(objectId);
-            }
-        }
-
-        const ObjectId primaryObject = editableSelection.contains(selectedShapeIndex_)
-                                           ? selectedShapeIndex_
-                                           : ObjectId::invalid();
-        selection_.setObjectIds(editableSelection, primaryObject);
-        selectedShapeIndex_ = selection_.primaryObjectId();
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
-        draggingControlPoint_ = false;
-        controlPointIndex_ = -1;
+        selection_.prune(document_);
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
     }
 
-    void setSingleSelection(int shapeIndex)
-    {
-        selection_.clear();
-        if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
-            const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
-            selection_.add(objectId);
-        }
-    }
-
-    void toggleShapeSelection(int shapeIndex)
-    {
-        if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
-            return;
-        }
-
-        const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
-        selection_.toggle(objectId);
-    }
-
     QRectF selectionBoundsForShape(const Shape &shape,
                                    bool *hasProjectedPoints = nullptr) const
     {
+        const ProjectedShapeBoundsResult result = queryProjectedShapeBounds(
+            shape, curveHitTester_, viewportTransform_, size());
         if (hasProjectedPoints != nullptr) {
-            *hasProjectedPoints = false;
+            *hasProjectedPoints = result.hasProjectedPoints;
         }
-        QVector<QPointF> points = controlPointsForShape(shape);
-        // Keep the source points in the selection bounds as well as the
-        // stored NURBS CVs. This covers endpoints that are represented by
-        // the shape record but are not present in a malformed/legacy CV
-        // array, while the NURBS data remains the rendering source of truth.
-        for (const QPointF &point : shape.points) {
-            if (!points.contains(point)) {
-                points.append(point);
-            }
-        }
-
-        qreal minX = 0.0;
-        qreal maxX = 0.0;
-        qreal minY = 0.0;
-        qreal maxY = 0.0;
-        bool initialized = false;
-        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-        for (const QPointF &point : points) {
-            if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
-                continue;
-            }
-
-            QPointF screenPoint;
-            if (!viewportTransform_.worldPointToScreen(
-                    workPlaneFramePointToWorld(point, frame), size(), &screenPoint)) {
-                continue;
-            }
-            if (!initialized) {
-                minX = maxX = screenPoint.x();
-                minY = maxY = screenPoint.y();
-                initialized = true;
-            } else {
-                minX = std::min(minX, screenPoint.x());
-                maxX = std::max(maxX, screenPoint.x());
-                minY = std::min(minY, screenPoint.y());
-                maxY = std::max(maxY, screenPoint.y());
-            }
-        }
-
-        if (validateNurbsSurface(shape.nurbsSurface)) {
-            for (const Point3D &point : shape.nurbsSurface.controlPoints) {
-                QPointF screenPoint;
-                if (!viewportTransform_.worldPointToScreen(
-                        point, size(), &screenPoint)) {
-                    continue;
-                }
-                if (!initialized) {
-                    minX = maxX = screenPoint.x();
-                    minY = maxY = screenPoint.y();
-                    initialized = true;
-                } else {
-                    minX = std::min(minX, screenPoint.x());
-                    maxX = std::max(maxX, screenPoint.x());
-                    minY = std::min(minY, screenPoint.y());
-                    maxY = std::max(maxY, screenPoint.y());
-                }
-            }
-        }
-
-        if (!initialized) {
-            return {};
-        }
-        if (hasProjectedPoints != nullptr) {
-            *hasProjectedPoints = true;
-        }
-
-        // Window selection uses the geometry's true projected bounds. Padding
-        // these bounds makes a fully enclosed object fail when it lies close
-        // to the selection rectangle's edge.
-        return QRectF(QPointF(minX, minY), QPointF(maxX, maxY));
+        return result.bounds;
     }
 
     bool shapeMatchesSelectionBox(const Shape &shape,
@@ -7624,106 +5253,15 @@ private:
                                                             crossingTolerancePixels)
                                    : selectionRect;
 
-        const auto pointInside = [&hitRect](const QPointF &point) {
-            return hitRect.left() <= point.x() && point.x() <= hitRect.right() &&
-                   hitRect.top() <= point.y() && point.y() <= hitRect.bottom();
-        };
-        const auto segmentIntersectsRect = [&hitRect](const QPointF &start,
-                                                       const QPointF &end) {
-            // Clipped samples have NaN coordinates. Comparisons in the
-            // clipping algorithm otherwise fall through and report a hit.
-            if (!std::isfinite(start.x()) || !std::isfinite(start.y()) ||
-                !std::isfinite(end.x()) || !std::isfinite(end.y())) {
-                return false;
-            }
-            // Liang-Barsky clipping checks the actual projected segment. This
-            // avoids selecting a distant diagonal curve just because its
-            // axis-aligned bounding box overlaps the crossing window.
-            const qreal dx = end.x() - start.x();
-            const qreal dy = end.y() - start.y();
-            const qreal p[] = {-dx, dx, -dy, dy};
-            const qreal q[] = {start.x() - hitRect.left(),
-                               hitRect.right() - start.x(),
-                               start.y() - hitRect.top(),
-                               hitRect.bottom() - start.y()};
-            qreal firstFraction = 0.0;
-            qreal lastFraction = 1.0;
-            for (int edge = 0; edge < 4; ++edge) {
-                if (std::abs(p[edge]) <= 1.0e-12) {
-                    if (q[edge] < 0.0) {
-                        return false;
-                    }
-                    continue;
-                }
-                const qreal fraction = q[edge] / p[edge];
-                if (p[edge] < 0.0) {
-                    firstFraction = std::max(firstFraction, fraction);
-                } else {
-                    lastFraction = std::min(lastFraction, fraction);
-                }
-                if (firstFraction > lastFraction) {
-                    return false;
-                }
-            }
-            return true;
-        };
-
-        const QVector<Shape::NurbsCurve2D> curves =
-            curveSampler_.curvesForShape(shape);
-        if (!curves.isEmpty()) {
-            bool sampledGeometry = false;
-            bool intersects = false;
-            for (int componentIndex = 0; componentIndex < curves.size(); ++componentIndex) {
-                const Shape::NurbsCurve2D &curve = curves[componentIndex];
-                const WorkPlaneFrame frame =
-                    shape.geometryType == GeometryType::PolyCurve
-                        ? shapeComponentWorkPlaneFrame(shape, componentIndex)
-                        : shapeWorkPlaneFrame(shape);
-                SampledNurbsCurve2D sampled;
-                if (!curveSampler_.sampleNurbsCurve(curve,
-                                                     frame,
-                                                     viewportTransform_,
-                                                     size(),
-                                                     &sampled)) {
-                    return false;
-                }
-                sampledGeometry = true;
-                for (const QPointF &point : sampled.screenPoints) {
-                    if (!crossingSelection && !pointInside(point)) {
-                        return false;
-                    }
-                    if (crossingSelection && pointInside(point)) {
-                        intersects = true;
-                    }
-                }
-                if (crossingSelection) {
-                    for (int index = 1;
-                         index < sampled.screenPoints.size();
-                         ++index) {
-                        if (segmentIntersectsRect(sampled.screenPoints[index - 1],
-                                                  sampled.screenPoints[index])) {
-                            intersects = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!sampledGeometry) {
-                return false;
-            }
-            return crossingSelection ? intersects : true;
-        }
-
-        if (shape.geometryType == GeometryType::Point && !shape.points.isEmpty()) {
-            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-            QPointF screenPoint;
-            if (!viewportTransform_.worldPointToScreen(
-                    workPlaneFramePointToWorld(shape.points.first(), frame),
-                    size(),
-                    &screenPoint)) {
-                return false;
-            }
-            return pointInside(screenPoint);
+        const SelectionBoxGeometryResult geometryHit =
+            queryCurveOrPointSelectionBox(shape,
+                                          selectionRect,
+                                          crossingSelection,
+                                          curveSampler_,
+                                          viewportTransform_,
+                                          size());
+        if (geometryHit.applies) {
+            return geometryHit.matches;
         }
 
         // Non-curve geometry such as pictures and dimensions has no NURBS
@@ -7753,16 +5291,14 @@ private:
 
     void beginSelectionBox(const QPointF &screenPosition, bool additive)
     {
-        selectionBoxActive_ = true;
-        selectionBoxMoved_ = false;
-        selectionBoxAdditive_ = additive;
-        trimBoxSelectionActive_ = false;
-        selectionBoxStartScreen_ = screenPosition;
-        selectionBoxCurrentScreen_ = screenPosition;
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
-        draggingControlPoint_ = false;
-        controlPointIndex_ = -1;
+        if (activeTool_ == Tool::Trim) {
+            trimTool_.beginBoxSelection(screenPosition);
+        } else if (SelectTool *selectTool = selectionToolController()) {
+            resetTrimSelectionBox();
+            selectTool->beginSelectionBox(screenPosition, additive);
+        }
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
         dragHistoryRecorded_ = false;
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
@@ -7776,17 +5312,20 @@ private:
 
     void finishSelectionBox()
     {
-        if (!selectionBoxActive_) {
+        SelectTool *selectTool = selectionToolController();
+        if (selectTool == nullptr || !selectTool->hasSelectionBox()) {
             return;
         }
 
-        const QRectF selectionBox =
-            QRectF(selectionBoxStartScreen_, selectionBoxCurrentScreen_).normalized();
+        const QPointF boxStart = selectTool->selectionBoxStart();
+        const QPointF boxCurrent = selectTool->selectionBoxCurrent();
+        const QRectF selectionBox = QRectF(boxStart, boxCurrent).normalized();
         const bool crossingSelection =
-            selectionBoxCurrentScreen_.x() < selectionBoxStartScreen_.x();
-        const bool moved = selectionBoxMoved_ ||
+            boxCurrent.x() < boxStart.x();
+        const bool moved = selectTool->selectionBoxMoved() ||
                            selectionBox.width() >= 3.0 ||
                            selectionBox.height() >= 3.0;
+        const bool additive = selectTool->selectionBoxAdditive();
         QVector<ObjectId> boxSelection;
         if (moved) {
             for (int index = 0; index < shapes_.size(); ++index) {
@@ -7802,263 +5341,41 @@ private:
             }
         }
 
-        if (moved) {
-            if (selectionBoxAdditive_) {
-                for (const ObjectId objectId : boxSelection) {
-                    if (!selectedShapeIndices_.contains(objectId)) {
-                        selectedShapeIndices_.append(objectId);
-                    }
-                }
-                if (!boxSelection.isEmpty()) {
-                    selectedShapeIndex_ = boxSelection.back();
-                }
-            } else {
-                selectedShapeIndices_ = boxSelection;
-                selectedShapeIndex_ = boxSelection.isEmpty()
-                                          ? ObjectId::invalid()
-                                          : boxSelection.back();
-            }
-        } else if (!selectionBoxAdditive_) {
-            clearSelection();
-        }
+        selectTool->finishBoxSelection(boxSelection, toolContext_);
 
         DebugLog::instance().write(QStringLiteral("selection box finish moved=%1 crossing=%2 additive=%3 selected=%4")
                                        .arg(moved)
                                        .arg(crossingSelection)
-                                       .arg(selectionBoxAdditive_)
+                                       .arg(additive)
                                        .arg(selectedShapeIndices_.size()));
-        selectionBoxActive_ = false;
-        selectionBoxMoved_ = false;
-        selectionBoxAdditive_ = false;
-        trimBoxSelectionActive_ = false;
-        setCursor(joinActive_ ? Qt::CrossCursor : Qt::ArrowCursor);
+        resetTrimSelectionBox();
+        setCursor(joinTool_.isActive() ? Qt::CrossCursor : Qt::ArrowCursor);
         update();
         emitCoordinateUpdate();
     }
 
     void cancelSelectionBox()
     {
-        if (!selectionBoxActive_) {
+        if (!selectionBoxOverlayActive()) {
             return;
         }
 
-        const bool cancelingTrimBox = trimBoxSelectionActive_;
-        selectionBoxActive_ = false;
-        selectionBoxMoved_ = false;
-        selectionBoxAdditive_ = false;
-        trimBoxSelectionActive_ = false;
+        const bool cancelingTrimBox = trimTool_.boxSelectionActive();
+        resetSelectionBoxState();
         if (cancelingTrimBox) {
-            eraseCandidateShapeIndices_.clear();
-            eraseStrokeScreenPath_.clear();
+            trimTool_.clearCandidates();
+            trimTool_.clearScreenPath();
             eraseTargetShapeIndices_.clear();
             eraseSceneCurveCaches_.clear();
             eraseTargetCurveCaches_.clear();
             eraseGeometryCachePrepared_ = false;
-            trimHoverPositionValid_ = false;
+            trimTool_.invalidateHover();
         }
-        setCursor(joinActive_ || activeTool_ == Tool::Trim
+        setCursor(joinTool_.isActive() || activeTool_ == Tool::Trim
                       ? Qt::CrossCursor
                       : Qt::ArrowCursor);
         update();
         DebugLog::instance().write(QStringLiteral("selection box canceled"));
-    }
-
-    bool isSubdividableShape(const Shape &shape) const
-    {
-        if (shape.geometryType == GeometryType::Line) {
-            return shape.points.size() >= 2 &&
-                   (isValidNurbsCurve(shape.nurbs) || !shape.points.isEmpty());
-        }
-
-        return (shape.geometryType == GeometryType::Arc ||
-                shape.geometryType == GeometryType::Bezier ||
-                shape.geometryType == GeometryType::Nurbs ||
-                shape.geometryType == GeometryType::Circle ||
-                shape.geometryType == GeometryType::Ellipse) &&
-               isValidNurbsCurve(shape.nurbs);
-    }
-
-    bool subdivisionCurve(const Shape &shape, Shape::NurbsCurve2D *curve) const
-    {
-        if (curve == nullptr || !isSubdividableShape(shape)) {
-            return false;
-        }
-
-        if (isValidNurbsCurve(shape.nurbs)) {
-            *curve = shape.nurbs;
-            return true;
-        }
-
-        if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
-            *curve = makeDegreeOneNurbs(shape.points);
-            return isValidNurbsCurve(*curve);
-        }
-
-        return false;
-    }
-
-    QVector<double> subdivisionParametersForSections(const Shape &shape,
-                                                      int sections) const
-    {
-        QVector<double> parameters;
-        if (sections < 2) {
-            return parameters;
-        }
-
-        Shape::NurbsCurve2D curve;
-        if (!subdivisionCurve(shape, &curve)) {
-            return parameters;
-        }
-
-        const QVector<double> fullKnots = expandedKnotVector(curve);
-        if (fullKnots.size() <= curve.degree + 1 ||
-            curve.controlPoints.isEmpty()) {
-            return parameters;
-        }
-
-        const qreal firstParameter = fullKnots[curve.degree];
-        const qreal lastParameter = fullKnots[curve.controlPoints.size()];
-        if (!std::isfinite(firstParameter) || !std::isfinite(lastParameter) ||
-            lastParameter <= firstParameter) {
-            return parameters;
-        }
-
-        int nonZeroSpans = 0;
-        for (int index = curve.degree; index < curve.controlPoints.size(); ++index) {
-            if (fullKnots[index + 1] > fullKnots[index]) {
-                ++nonZeroSpans;
-            }
-        }
-
-        const int sampleCount = std::clamp(std::max(128, nonZeroSpans * 64), 128, 4096);
-        QVector<qreal> sampleParameters;
-        QVector<qreal> cumulativeLengths;
-        sampleParameters.reserve(sampleCount + 1);
-        cumulativeLengths.reserve(sampleCount + 1);
-
-        QPointF previousPoint;
-        if (!evaluateNurbsPoint(curve, firstParameter, &previousPoint)) {
-            return parameters;
-        }
-
-        sampleParameters.append(firstParameter);
-        cumulativeLengths.append(0.0);
-        qreal totalLength = 0.0;
-        for (int sample = 1; sample <= sampleCount; ++sample) {
-            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
-            const qreal parameter = firstParameter +
-                                    (lastParameter - firstParameter) * fraction;
-            QPointF currentPoint;
-            if (!evaluateNurbsPoint(curve, parameter, &currentPoint)) {
-                return QVector<double>();
-            }
-
-            totalLength += std::hypot(currentPoint.x() - previousPoint.x(),
-                                      currentPoint.y() - previousPoint.y());
-            sampleParameters.append(parameter);
-            cumulativeLengths.append(totalLength);
-            previousPoint = currentPoint;
-        }
-
-        if (totalLength <= 1e-9) {
-            return parameters;
-        }
-
-        parameters.reserve(sections - 1);
-        for (int division = 1; division < sections; ++division) {
-            const qreal targetLength = totalLength * division / sections;
-            const auto upper = std::lower_bound(cumulativeLengths.cbegin(),
-                                                cumulativeLengths.cend(),
-                                                targetLength);
-            const int upperIndex = static_cast<int>(upper - cumulativeLengths.cbegin());
-            if (upperIndex <= 0) {
-                parameters.append(sampleParameters.first());
-                continue;
-            }
-            if (upperIndex >= cumulativeLengths.size()) {
-                parameters.append(sampleParameters.last());
-                continue;
-            }
-
-            const qreal lowerLength = cumulativeLengths[upperIndex - 1];
-            const qreal upperLength = cumulativeLengths[upperIndex];
-            const qreal span = upperLength - lowerLength;
-            const qreal localFraction = span > 1e-12
-                                            ? (targetLength - lowerLength) / span
-                                            : 0.0;
-            parameters.append(sampleParameters[upperIndex - 1] +
-                               (sampleParameters[upperIndex] -
-                                sampleParameters[upperIndex - 1]) * localFraction);
-        }
-
-        return parameters;
-    }
-
-    void resetSubdivisionWheelTracking()
-    {
-        subdivisionWheelAccumulator_ = 0;
-        subdivisionPixelAccumulator_ = 0.0;
-    }
-
-    int subdivisionWheelStepsFromEvent(int angleDelta, int pixelDelta)
-    {
-        if (angleDelta != 0) {
-            // Qt can split one physical wheel detent into several smooth
-            // angle deltas. Blender's modal tools receive normalized wheel
-            // events, so retain only the incomplete part here and emit one
-            // logical step for each complete 120-unit detent.
-            subdivisionPixelAccumulator_ = 0.0;
-            if (subdivisionWheelAccumulator_ != 0 &&
-                ((subdivisionWheelAccumulator_ > 0) != (angleDelta > 0))) {
-                subdivisionWheelAccumulator_ = 0;
-            }
-
-            subdivisionWheelAccumulator_ += angleDelta;
-            const int steps = subdivisionWheelAccumulator_ / 120;
-            subdivisionWheelAccumulator_ -= steps * 120;
-            return steps;
-        }
-
-        if (pixelDelta != 0) {
-            // A pure pixel-delta stream has no platform-independent detent
-            // size. Keep the same discrete behavior with a conservative
-            // screen-pixel threshold for touch/high-resolution devices.
-            subdivisionWheelAccumulator_ = 0;
-            if (subdivisionPixelAccumulator_ != 0.0 &&
-                ((subdivisionPixelAccumulator_ > 0.0) != (pixelDelta > 0))) {
-                subdivisionPixelAccumulator_ = 0.0;
-            }
-
-            subdivisionPixelAccumulator_ += pixelDelta;
-            constexpr qreal pixelsPerWheelStep = 40.0;
-            const int magnitude = static_cast<int>(std::floor(
-                std::abs(subdivisionPixelAccumulator_) / pixelsPerWheelStep));
-            const int steps = subdivisionPixelAccumulator_ > 0.0 ? magnitude : -magnitude;
-            subdivisionPixelAccumulator_ -= steps * pixelsPerWheelStep;
-            return steps;
-        }
-
-        return 0;
-    }
-
-    void applySubdivisionWheelSteps(int steps)
-    {
-        if (!subdivisionActive_ || steps == 0) {
-            return;
-        }
-
-        const int previousSections = subdivisionSections_;
-        subdivisionSections_ = std::clamp(subdivisionSections_ + steps,
-                                          2,
-                                          maxSubdivisionSections);
-        if (subdivisionSections_ != previousSections) {
-            notifySubdivisionStatus();
-            update();
-            DebugLog::instance().write(
-                QStringLiteral("subdivision wheel sections=%1 points=%2")
-                    .arg(subdivisionSections_)
-                    .arg(subdivisionSections_ - 1));
-        }
     }
 
     void notifySubdivisionStatus()
@@ -8070,14 +5387,11 @@ private:
 
     void cancelSubdivisionPreview()
     {
-        if (!subdivisionActive_) {
+        if (!subdivisionTool_.isActive()) {
             return;
         }
 
-        subdivisionActive_ = false;
-        subdivisionShapeIndex_ = ObjectId::invalid();
-        subdivisionSections_ = 2;
-        resetSubdivisionWheelTracking();
+        subdivisionTool_.finish();
         notifySubdivisionStatus();
         update();
         DebugLog::instance().write(QStringLiteral("cancelSubdivisionPreview"));
@@ -8085,6 +5399,7 @@ private:
 
     void notifyHistoryChanged()
     {
+        session_.notifyHistoryChanged();
         if (historyChanged_) {
             historyChanged_();
         }
@@ -8092,15 +5407,10 @@ private:
 
     void notifyLayersChanged()
     {
+        session_.notifyLayersChanged();
         if (layersChanged_) {
             layersChanged_();
         }
-    }
-
-    void recordLayerChange()
-    {
-        history_.record();
-        notifyHistoryChanged();
     }
 
     void recordGeometryChange()
@@ -8108,9 +5418,19 @@ private:
         recordGeometrySnapshot(document_.snapshot());
     }
 
+    bool commitShape(const Shape &shape)
+    {
+        DocumentTransaction transaction = session_.beginTransaction();
+        if (!transaction.addShape(shape).isValid()) {
+            return false;
+        }
+        return session_.commitTransaction(transaction);
+    }
+
     void recordGeometrySnapshot(const Document::Snapshot &snapshot)
     {
         history_.record(snapshot);
+        document_.invalidateAllGeometry();
         notifyHistoryChanged();
         QTimer::singleShot(0, this, [this]() {
             notifyLayersChanged();
@@ -8122,7 +5442,7 @@ private:
 
     void beginDragHistory()
     {
-        if (grabActive_) {
+        if (grabTool_.isActive()) {
             return;
         }
         if (!dragHistoryRecorded_) {
@@ -8133,63 +5453,40 @@ private:
 
     void resetGrabInteraction()
     {
-        grabActive_ = false;
-        grabMoved_ = false;
-        grabPickingBasePoint_ = false;
-        grabHasBasePoint_ = false;
-        grabBasePoint_ = QPointF();
-        grabCursorOffset_ = QPointF();
+        grabTool_.reset();
     }
 
     void resetDuplicateInteraction()
     {
-        duplicateActive_ = false;
-        duplicatePickingBasePoint_ = false;
-        duplicateHasBasePoint_ = false;
-        duplicateSourceObjects_.clear();
-        duplicatePreviewShapes_.clear();
-        duplicateBasePoint_ = QPointF();
-        duplicateCursorOffset_ = QPointF();
-        duplicateDestination_ = QPointF();
+        duplicateTool_.reset();
     }
 
     void resetInteractionAfterHistory()
     {
         pendingPoints_.clear();
-        selectedShapeIndices_.clear();
-        selectedShapeIndex_ = ObjectId::invalid();
-        selectionBoxActive_ = false;
-        selectionBoxMoved_ = false;
-        selectionBoxAdditive_ = false;
-        trimBoxSelectionActive_ = false;
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
+        selection_.clear();
+        resetSelectionBoxState();
+        clearSelectionDragState();
         dragHistoryRecorded_ = false;
         currentSnap_ = SnapResult{};
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
         dragAxisLock_ = DragAxisLock::None;
         resetGrabInteraction();
-        draggingControlPoint_ = false;
-        controlPointIndex_ = -1;
-        eraseStrokeActive_ = false;
-        eraseCursorPressed_ = false;
-        eraseCandidateShapeIndices_.clear();
-        eraseStrokeScreenPath_.clear();
+        selection_.clearActiveControlPoint();
+        eraseTool_.resetInteraction();
+        trimTool_.clearCandidates();
+        eraseTool_.clearCandidates();
         eraseTargetShapeIndices_.clear();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = false;
-        trimHoverPositionValid_ = false;
-        joinActive_ = false;
-        joinShapeIndices_.clear();
+        trimTool_.invalidateHover();
+        joinTool_.cancel();
         resetScaleInteraction();
         resetRotateInteraction();
         resetMirrorInteraction();
-        subdivisionActive_ = false;
-        subdivisionShapeIndex_ = ObjectId::invalid();
-        subdivisionSections_ = 2;
-        resetSubdivisionWheelTracking();
+        subdivisionTool_.finish();
         lineCommandActive_ = false;
         setTool(Tool::Select);
         if (commandFinished_) {
@@ -8204,18 +5501,16 @@ private:
                                        .arg(pendingPoints_.size()));
         if (pendingPoints_.size() >= 2) {
             const Shape::NurbsCurve2D curve = makeDegreeOneNurbs(pendingPoints_);
-            recordGeometryChange();
-            Shape line{GeometryType::Line,
-                       pendingPoints_,
-                       curve,
-                       ArcMode::TwoPoint,
-                       0.0,
-                       {},
-                       {}};
+            Shape line;
+            line.geometryType = GeometryType::Line;
+            line.points = pendingPoints_;
+            line.nurbs = curve;
             line.workPlane = viewportTransform_.workPlane();
             line.workPlaneOffset = viewportTransform_.workPlaneOffset();
             line.workPlaneFrame = viewportTransform_.workPlaneFrame();
-            shapes_.append(line);
+            if (!commitShape(line)) {
+                return;
+            }
             DebugLog::instance().write(
                 QStringLiteral("finishLineCommand committed dimension=%1 degree=%2 order=%3 rational=%4 controlPoints=%5 weights=%6 knots=%7 shapes=%8")
                     .arg(curve.dimension)
@@ -8530,7 +5825,7 @@ private:
         }
 
         Shape::NurbsCurve2D subdivisionCurveData;
-        if (subdivisionCurve(shape, &subdivisionCurveData)) {
+        if (subdivisionCurveForShape(shape, &subdivisionCurveData)) {
             for (const double parameter : shape.subdivisionParameters) {
                 QPointF point;
                 if (evaluateNurbsPoint(subdivisionCurveData, parameter, &point)) {
@@ -8679,7 +5974,7 @@ private:
 
             if (endpointSnapEnabled_) {
                 Shape::NurbsCurve2D subdivisionCurveData;
-                if (subdivisionCurve(shape, &subdivisionCurveData)) {
+                if (subdivisionCurveForShape(shape, &subdivisionCurveData)) {
                     for (const double parameter : shape.subdivisionParameters) {
                         QPointF point;
                         if (evaluateNurbsPoint(subdivisionCurveData, parameter, &point)) {
@@ -9249,10 +6544,10 @@ private:
 
         if (activeTool_ == Tool::Rotate) {
             const Point3D *anchor = nullptr;
-            if (rotateStep_ == 1) {
-                anchor = &rotateBaseWorldPoint_;
-            } else if (rotateStep_ == 2) {
-                anchor = &rotateReferenceWorldPoint_;
+            if (rotateState().stage == 1) {
+                anchor = &rotateState().baseWorldPoint;
+            } else if (rotateState().stage == 2) {
+                anchor = &rotateState().referenceWorldPoint;
             }
             const SnapResult result = snapEngine_.findSpatialSnapPoint(
                 document_, worldToScreen(rawPoint), anchor,
@@ -9263,8 +6558,8 @@ private:
 
         const bool arcPlaneConstraintActive =
             activeTool_ == Tool::Arc &&
-            (arcPlaneNormalLockKey_ != 0 || arcAxisConstraintKey_ != 0 ||
-             arcVerticalOverrideAxis_ != 0 || arcPerpendicularPlaneActive_);
+            (arcState().planeNormalLockKey != 0 || arcState().axisConstraintKey != 0 ||
+             arcState().verticalOverrideAxis != 0 || arcState().perpendicularPlaneActive);
         if (arcPlaneConstraintActive) {
             Point3D anchorWorld;
             const Point3D *anchor = nullptr;
@@ -9282,11 +6577,11 @@ private:
         }
 
         if (activeTool_ == Tool::Line && lineCommandActive_) {
-            const Point3D *anchor = linePreviewWorldPoints_.isEmpty()
-                ? nullptr : &linePreviewWorldPoints_.back();
+            const Point3D *anchor = toolPreview_.worldPoints.isEmpty()
+                ? nullptr : &toolPreview_.worldPoints.back();
             const SnapResult result = snapEngine_.findSpatialSnapPoint(
                 document_, worldToScreen(rawPoint), anchor,
-                viewportTransform_, size(), linePreviewWorldPoints_);
+                viewportTransform_, size(), toolPreview_.worldPoints);
             traceSnapResult(result, true);
             return result;
         }
@@ -9304,12 +6599,12 @@ private:
         if (activeTool_ == Tool::PointByLine ||
             activeTool_ == Tool::PointByArcs) {
             const Point3D *anchor = activeTool_ == Tool::PointByLine &&
-                                            !pointPreviewWorldPoints_.isEmpty()
-                                        ? &pointPreviewWorldPoints_.back()
+                                            !toolPreview_.worldPoints.isEmpty()
+                                        ? &toolPreview_.worldPoints.back()
                                         : nullptr;
             const SnapResult result = snapEngine_.findSpatialSnapPoint(
                 document_, worldToScreen(rawPoint), anchor,
-                viewportTransform_, size(), pointPreviewWorldPoints_);
+                viewportTransform_, size(), toolPreview_.worldPoints);
             traceSnapResult(result, true);
             return result;
         }
@@ -9400,8 +6695,9 @@ private:
     QVector<int> grabSelectedShapeIndices() const
     {
         QVector<int> selectedIndices;
-        selectedIndices.reserve(draggingShapeIndices_.size());
-        for (const ObjectId objectId : draggingShapeIndices_) {
+        const QVector<ObjectId> &draggedObjectIds = selectionDraggedObjectIds();
+        selectedIndices.reserve(draggedObjectIds.size());
+        for (const ObjectId objectId : draggedObjectIds) {
             const int shapeIndex = objectIndex(objectId);
             if (shapeIndex >= 0) {
                 selectedIndices.append(shapeIndex);
@@ -9430,8 +6726,8 @@ private:
     QVector<int> duplicateSourceShapeIndices() const
     {
         QVector<int> selectedIndices;
-        selectedIndices.reserve(duplicateSourceObjects_.size());
-        for (const SceneObject &source : duplicateSourceObjects_) {
+        selectedIndices.reserve(duplicateTool_.sourceObjects().size());
+        for (const SceneObject &source : duplicateTool_.sourceObjects()) {
             const int shapeIndex = objectIndex(source.id);
             if (shapeIndex >= 0) {
                 selectedIndices.append(shapeIndex);
@@ -9471,7 +6767,7 @@ private:
         return snapEngine_.findSnapPoint(document_,
                                          rawPoint,
                                          true,
-                                         QVector<QPointF>{duplicateBasePoint_},
+                                         QVector<QPointF>{duplicateTool_.basePoint()},
                                          viewportTransform_,
                                          size(),
                                          selectedIndices,
@@ -9493,7 +6789,7 @@ private:
         return snapEngine_.findSnapPoint(document_,
                                          rawPoint,
                                          true,
-                                         QVector<QPointF>{grabBasePoint_},
+                                         QVector<QPointF>{grabTool_.basePoint()},
                                          viewportTransform_,
                                          size(),
                                          selectedIndices,
@@ -9573,29 +6869,33 @@ private:
                                               : rawPoint;
 
         if (activeTool_ == Tool::Arc &&
-            (arcMode_ == ArcMode::TwoPoint ||
-             arcMode_ == ArcMode::ThreePoint) &&
-            pendingPoints_.size() == 1 && !panning_) {
+            (arcState().mode == ArcMode::TwoPoint ||
+             arcState().mode == ArcMode::ThreePoint) &&
+            arcTool_.inputStage() == ArcInputStage::SecondPoint &&
+            !navigationController_.isPanning()) {
             return constrainArcChordEndpoint(
                 rawPoint,
                 altModifier,
                 currentArcScreenPosition(screenPosition));
         }
 
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint &&
-            pendingPoints_.size() >= 2 && !panning_) {
-            return constrainTwoPointArcThroughPoint(snappedOrRawPoint,
-                                                    currentSnap_.isValid(),
-                                                    altModifier);
+        if (activeTool_ == Tool::Arc && arcState().mode == ArcMode::TwoPoint &&
+            arcTool_.inputStage() == ArcInputStage::Complete &&
+            !navigationController_.isPanning()) {
+            return arcTool_.constrainTwoPointThroughPoint(
+                snappedOrRawPoint,
+                currentSnap_.isValid(), altModifier);
         }
 
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::ThreePoint &&
-            pendingPoints_.size() >= 2 && !panning_) {
+        if (activeTool_ == Tool::Arc && arcState().mode == ArcMode::ThreePoint &&
+            arcTool_.inputStage() == ArcInputStage::Complete &&
+            !navigationController_.isPanning()) {
             return snappedOrRawPoint;
         }
 
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
-            pendingPoints_.size() >= 2 && arcAngleValueLocked_ && !panning_) {
+        if (activeTool_ == Tool::Arc && arcState().mode == ArcMode::OnePoint &&
+            arcTool_.inputStage() == ArcInputStage::Complete &&
+            arcState().angleValueLocked && !navigationController_.isPanning()) {
             const QPointF center = pendingPoints_[0];
             const QPointF radiusVector = pendingPoints_[1] - center;
             const qreal radius = std::hypot(radiusVector.x(), radiusVector.y());
@@ -9603,7 +6903,7 @@ private:
                 currentSnap_ = SnapResult{};
                 const qreal startAngle = std::atan2(radiusVector.y(),
                                                     radiusVector.x());
-                const qreal endAngle = startAngle + arcPreviewSweepAngle_;
+                const qreal endAngle = startAngle + arcState().previewSweepAngle;
                 return center + QPointF(radius * std::cos(endAngle),
                                         radius * std::sin(endAngle));
             }
@@ -9646,8 +6946,9 @@ private:
             }
         }
 
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
-            pendingPoints_.size() == 1 && !panning_) {
+        if (activeTool_ == Tool::Arc && arcState().mode == ArcMode::OnePoint &&
+            arcTool_.inputStage() == ArcInputStage::SecondPoint &&
+            !navigationController_.isPanning()) {
             const QPointF center = pendingPoints_.first();
             const QPointF target = currentSnap_.isValid()
                                        ? currentSnap_.point
@@ -9673,8 +6974,8 @@ private:
                 } else {
                     angle = vector.y() < 0.0 ? -halfPi : halfPi;
                 }
-            } else if (arcAngleSnapEnabled_) {
-                angle = snapOnePointArcAngle(angle);
+            } else if (arcState().angleSnapEnabled) {
+                angle = ArcTool::snapPreviewAngle(angle);
             }
             return center + QPointF(radius * std::cos(angle),
                                     radius * std::sin(angle));
@@ -9700,100 +7001,20 @@ private:
             isTwoCurveLineTool(activeTool_) ||
             activeTool_ == Tool::PointByLine ||
             activeTool_ == Tool::CurveInterpolate;
-        if (!orthoEnabled_ || panning_ || !drawingConstraintActive || pendingPoints_.isEmpty()) {
+        if (!orthoEnabled_ || navigationController_.isPanning() ||
+            !drawingConstraintActive || pendingPoints_.isEmpty()) {
             return rawPoint;
         }
 
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::OnePoint &&
+        if (activeTool_ == Tool::Arc && arcState().mode == ArcMode::OnePoint &&
             pendingPoints_.size() >= 2) {
-            return constrainOnePointArcEndpoint(rawPoint);
+            return arcTool_.constrainOnePointEndpoint(rawPoint);
         }
 
         const QPointF origin = activeTool_ == Tool::AngularDimension
                                    ? pendingPoints_.first()
                                    : pendingPoints_.back();
-        const qreal deltaX = rawPoint.x() - origin.x();
-        const qreal deltaY = rawPoint.y() - origin.y();
-
-        if (std::abs(deltaX) >= std::abs(deltaY)) {
-            return QPointF(rawPoint.x(), origin.y());
-        }
-
-        return QPointF(origin.x(), rawPoint.y());
-    }
-
-    QPointF constrainOnePointArcEndpoint(const QPointF &rawPoint) const
-    {
-        const QPointF center = pendingPoints_[0];
-        const QPointF startVector = pendingPoints_[1] - center;
-        const qreal radius = std::hypot(startVector.x(), startVector.y());
-        if (radius <= 1e-9) {
-            return rawPoint;
-        }
-
-        constexpr qreal pi = 3.14159265358979323846;
-        constexpr qreal halfPi = pi / 2.0;
-        constexpr qreal twoPi = 2.0 * pi;
-        const qreal startAngle = std::atan2(startVector.y(), startVector.x());
-        const QPointF rawVector = rawPoint - center;
-        const qreal rawAngle = std::atan2(rawVector.y(), rawVector.x());
-
-        // Use the previous constrained angle as the reference for the next
-        // cursor sample. This keeps the sweep unwrapped while the cursor
-        // crosses +/-180 degrees, so 270 and 360 degree quarter-turns remain
-        // reachable instead of jumping back to the principal angle.
-        qreal candidateSweep = rawAngle - startAngle;
-        if (arcPreviewInitialized_) {
-            qreal delta = rawAngle - arcPreviewPreviousAngle_;
-            if (delta > pi) {
-                delta -= twoPi;
-            } else if (delta < -pi) {
-                delta += twoPi;
-            }
-            candidateSweep = arcPreviewSweepAngle_ + delta;
-        } else {
-            if (candidateSweep > pi) {
-                candidateSweep -= twoPi;
-            } else if (candidateSweep < -pi) {
-                candidateSweep += twoPi;
-            }
-        }
-
-        const qreal snappedSweep = std::round(candidateSweep / halfPi) * halfPi;
-        const qreal snappedAngle = startAngle + snappedSweep;
-        return center + QPointF(radius * std::cos(snappedAngle),
-                                radius * std::sin(snappedAngle));
-    }
-
-    QPointF constrainTwoPointArcThroughPoint(const QPointF &cursorPoint,
-                                             bool geometrySnap,
-                                             bool altModifier) const
-    {
-        // radCAD's 2-point mode treats the final pick as the arc's height:
-        // only its distance perpendicular to the endpoint chord matters.
-        // Keep this calculation in the captured workplane coordinates so a
-        // perspective or orthographic view cannot skew the committed circle.
-        const QPointF chord = pendingPoints_[1] - pendingPoints_[0];
-        const qreal chordLength = std::hypot(chord.x(), chord.y());
-        if (!std::isfinite(chordLength) || chordLength <= 1e-9) {
-            return cursorPoint;
-        }
-
-        const QPointF midpoint = (pendingPoints_[0] + pendingPoints_[1]) / 2.0;
-        const QPointF perpendicular(-chord.y() / chordLength,
-                                    chord.x() / chordLength);
-        qreal height = QPointF::dotProduct(cursorPoint - midpoint, perpendicular);
-        const qreal halfChord = chordLength / 2.0;
-        if (!geometrySnap && !altModifier) {
-            constexpr qreal defaultSnapStrengthPercent = 6.0;
-            const qreal heightSnapTolerance =
-                chordLength * defaultSnapStrengthPercent / 100.0;
-            if (std::abs(std::abs(height) - halfChord) < heightSnapTolerance) {
-                height = std::copysign(halfChord, height);
-            }
-        }
-
-        return midpoint + perpendicular * height;
+        return InputConstraintService::nearestPlanarAxis(rawPoint, origin);
     }
 
     void refreshCursorConstraint()
@@ -9805,11 +7026,10 @@ private:
 
         const QPointF screenPosition = currentArcScreenPosition();
         if (activeTool_ == Tool::Arc &&
-            (arcMode_ == ArcMode::TwoPoint ||
-             arcMode_ == ArcMode::ThreePoint) &&
-            pendingPoints_.size() == 1 &&
-            !(arcMode_ == ArcMode::TwoPoint &&
-              arcPerpendicularPlaneActive_)) {
+            arcTool_.inputStage() == ArcInputStage::SecondPoint &&
+            arcState().mode != ArcMode::OnePoint &&
+            !(arcState().mode == ArcMode::TwoPoint &&
+              arcState().perpendicularPlaneActive)) {
             restoreArcChordReferencePlaneForEndpointPick();
             QPointF rawAtScreen;
             if (viewportTransform_.screenToWorkPlane(
@@ -9937,1002 +7157,58 @@ private:
         return hitShapeIndex;
     }
 
-    bool insertNurbsKnot(QVector<HomogeneousControlPoint2D> *controlPoints,
-                         QVector<double> *knots,
-                         int degree,
-                         qreal parameter) const
-    {
-        if (controlPoints == nullptr || knots == nullptr ||
-            controlPoints->isEmpty() || knots->isEmpty() || degree < 1) {
-            return false;
-        }
-
-        const auto sameKnot = [](qreal first, qreal second) {
-            const qreal tolerance = 1.0e-9 *
-                                     std::max<qreal>(1.0,
-                                                     std::max(std::abs(first),
-                                                              std::abs(second)));
-            return std::abs(first - second) <= tolerance;
-        };
-
-        const int n = controlPoints->size() - 1;
-        const int m = knots->size() - 1;
-        if (m != n + degree + 1) {
-            return false;
-        }
-
-        int span = degree;
-        if (parameter >= knots->at(n + 1)) {
-            span = n;
-        } else {
-            int low = degree;
-            int high = n + 1;
-            int middle = (low + high) / 2;
-            while (parameter < knots->at(middle) || parameter >= knots->at(middle + 1)) {
-                if (parameter < knots->at(middle)) {
-                    high = middle;
-                } else {
-                    low = middle;
-                }
-                middle = (low + high) / 2;
-            }
-            span = middle;
-        }
-
-        int multiplicity = 0;
-        for (const double knot : *knots) {
-            if (sameKnot(knot, parameter)) {
-                ++multiplicity;
-            }
-        }
-        if (multiplicity >= degree) {
-            return false;
-        }
-
-        QVector<HomogeneousControlPoint2D> insertedControlPoints(n + 2);
-        for (int index = 0; index <= span - degree; ++index) {
-            insertedControlPoints[index] = controlPoints->at(index);
-        }
-        for (int index = span - multiplicity; index <= n; ++index) {
-            insertedControlPoints[index + 1] = controlPoints->at(index);
-        }
-        for (int index = span - degree + 1; index <= span - multiplicity; ++index) {
-            const qreal denominator = knots->at(index + degree) - knots->at(index);
-            if (std::abs(denominator) <= 1.0e-12) {
-                return false;
-            }
-            const qreal alpha = (parameter - knots->at(index)) / denominator;
-            insertedControlPoints[index] = blendHomogeneousControlPoints(
-                controlPoints->at(index - 1),
-                controlPoints->at(index),
-                alpha);
-        }
-
-        QVector<double> insertedKnots(m + 2);
-        for (int index = 0; index <= span; ++index) {
-            insertedKnots[index] = knots->at(index);
-        }
-        insertedKnots[span + 1] = parameter;
-        for (int index = span + 1; index <= m; ++index) {
-            insertedKnots[index + 1] = knots->at(index);
-        }
-
-        *controlPoints = insertedControlPoints;
-        *knots = insertedKnots;
-        return true;
-    }
-
-    bool rationalBezierSpansForCurve(
-        const Shape::NurbsCurve2D &curve,
-        QVector<RationalBezierSpan2D> *spans) const
-    {
-        if (spans == nullptr || !isValidNurbsCurve(curve)) {
-            return false;
-        }
-
-        spans->clear();
-        QVector<HomogeneousControlPoint2D> controlPoints;
-        controlPoints.reserve(curve.controlPoints.size());
-        for (int index = 0; index < curve.controlPoints.size(); ++index) {
-            const qreal weight = curve.rational ? curve.weights[index] : 1.0;
-            controlPoints.append(HomogeneousControlPoint2D{
-                curve.controlPoints[index] * weight,
-                weight});
-        }
-
-        QVector<double> knots = expandedKnotVector(curve);
-        const qreal domainStart = knots[curve.degree];
-        const qreal domainEnd = knots[curve.controlPoints.size()];
-        const auto sameKnot = [](qreal first, qreal second) {
-            const qreal tolerance = 1.0e-9 *
-                                     std::max<qreal>(1.0,
-                                                     std::max(std::abs(first),
-                                                              std::abs(second)));
-            return std::abs(first - second) <= tolerance;
-        };
-
-        QVector<double> internalKnots;
-        for (const double knot : knots) {
-            if (knot <= domainStart || knot >= domainEnd) {
-                continue;
-            }
-            if (internalKnots.isEmpty() || !sameKnot(internalKnots.back(), knot)) {
-                internalKnots.append(knot);
-            }
-        }
-
-        for (const double internalKnot : internalKnots) {
-            int multiplicity = 0;
-            for (const double knot : knots) {
-                if (sameKnot(knot, internalKnot)) {
-                    ++multiplicity;
-                }
-            }
-            while (multiplicity < curve.degree) {
-                if (!insertNurbsKnot(&controlPoints,
-                                     &knots,
-                                     curve.degree,
-                                     internalKnot)) {
-                    return false;
-                }
-                ++multiplicity;
-            }
-        }
-
-        const qreal knotTolerance = 1.0e-10;
-        for (int spanIndex = curve.degree;
-             spanIndex < controlPoints.size();
-             ++spanIndex) {
-            if (knots[spanIndex + 1] - knots[spanIndex] <= knotTolerance) {
-                continue;
-            }
-
-            RationalBezierSpan2D span;
-            span.startParameter = knots[spanIndex];
-            span.endParameter = knots[spanIndex + 1];
-            span.controlPoints.reserve(curve.degree + 1);
-            for (int controlIndex = spanIndex - curve.degree;
-                 controlIndex <= spanIndex;
-                 ++controlIndex) {
-                span.controlPoints.append(controlPoints[controlIndex]);
-            }
-            spans->append(span);
-        }
-
-        return !spans->isEmpty();
-    }
-
-    bool splitRationalBezierSpan(
-        const QVector<HomogeneousControlPoint2D> &source,
-        qreal fraction,
-        QVector<HomogeneousControlPoint2D> *left,
-        QVector<HomogeneousControlPoint2D> *right) const
-    {
-        if (source.size() < 2 || left == nullptr || right == nullptr ||
-            fraction <= 0.0 || fraction >= 1.0) {
-            return false;
-        }
-
-        QVector<HomogeneousControlPoint2D> working = source;
-        left->resize(source.size());
-        right->resize(source.size());
-        (*left)[0] = working.first();
-        (*right)[source.size() - 1] = working.last();
-
-        for (int level = 1; level < source.size(); ++level) {
-            for (int index = 0; index + 1 < working.size(); ++index) {
-                working[index] = blendHomogeneousControlPoints(
-                    working[index],
-                    working[index + 1],
-                    fraction);
-            }
-            (*left)[level] = working.first();
-            (*right)[source.size() - 1 - level] = working[source.size() - 1 - level];
-        }
-        return true;
-    }
-
-    bool trimNurbsCurve(const Shape::NurbsCurve2D &source,
-                        qreal startParameter,
-                        qreal endParameter,
-                        Shape::NurbsCurve2D *trimmed) const
-    {
-        if (trimmed == nullptr || !isValidNurbsCurve(source)) {
-            return false;
-        }
-
-        const QVector<double> fullKnots = expandedKnotVector(source);
-        const qreal domainStart = fullKnots[source.degree];
-        const qreal domainEnd = fullKnots[source.controlPoints.size()];
-        const qreal domainTolerance =
-            std::max<qreal>(1.0e-9, std::abs(domainEnd - domainStart) * 1.0e-9);
-        const qreal start = std::clamp(startParameter, domainStart, domainEnd);
-        const qreal end = std::clamp(endParameter, domainStart, domainEnd);
-        if (end - start <= domainTolerance) {
-            return false;
-        }
-
-        QVector<RationalBezierSpan2D> spans;
-        if (!rationalBezierSpansForCurve(source, &spans)) {
-            return false;
-        }
-
-        QVector<RationalBezierSpan2D> trimmedSpans;
-        for (const RationalBezierSpan2D &span : spans) {
-            const qreal overlapStart = std::max(start, span.startParameter);
-            const qreal overlapEnd = std::min(end, span.endParameter);
-            if (overlapEnd - overlapStart <= domainTolerance) {
-                continue;
-            }
-
-            const qreal spanLength = span.endParameter - span.startParameter;
-            qreal localStart = (overlapStart - span.startParameter) / spanLength;
-            qreal localEnd = (overlapEnd - span.startParameter) / spanLength;
-            QVector<HomogeneousControlPoint2D> working = span.controlPoints;
-
-            if (localStart > 1.0e-10) {
-                QVector<HomogeneousControlPoint2D> discarded;
-                QVector<HomogeneousControlPoint2D> remaining;
-                if (!splitRationalBezierSpan(working,
-                                              localStart,
-                                              &discarded,
-                                              &remaining)) {
-                    return false;
-                }
-                working = remaining;
-                localEnd = (localEnd - localStart) / (1.0 - localStart);
-            }
-
-            if (localEnd < 1.0 - 1.0e-10) {
-                QVector<HomogeneousControlPoint2D> remaining;
-                QVector<HomogeneousControlPoint2D> discarded;
-                if (!splitRationalBezierSpan(working,
-                                              localEnd,
-                                              &remaining,
-                                              &discarded)) {
-                    return false;
-                }
-                working = remaining;
-            }
-
-            RationalBezierSpan2D trimmedSpan;
-            trimmedSpan.startParameter = overlapStart;
-            trimmedSpan.endParameter = overlapEnd;
-            trimmedSpan.controlPoints = working;
-            trimmedSpans.append(trimmedSpan);
-        }
-
-        if (trimmedSpans.isEmpty()) {
-            return false;
-        }
-
-        Shape::NurbsCurve2D result;
-        result.dimension = source.dimension;
-        result.degree = source.degree;
-        result.order = source.order;
-        result.rational = source.rational;
-
-        for (int spanIndex = 0; spanIndex < trimmedSpans.size(); ++spanIndex) {
-            const QVector<HomogeneousControlPoint2D> &spanPoints =
-                trimmedSpans[spanIndex].controlPoints;
-            const int firstPoint = spanIndex == 0 ? 0 : 1;
-            for (int pointIndex = firstPoint; pointIndex < spanPoints.size(); ++pointIndex) {
-                const HomogeneousControlPoint2D &point = spanPoints[pointIndex];
-                if (std::abs(point.weight) <= 1.0e-12) {
-                    return false;
-                }
-                result.controlPoints.append(point.weightedPosition / point.weight);
-                result.weights.append(source.rational ? point.weight : 1.0);
-            }
-        }
-
-        QVector<double> resultFullKnots;
-        const auto appendRepeated = [&resultFullKnots](qreal value, int count) {
-            for (int index = 0; index < count; ++index) {
-                resultFullKnots.append(value);
-            }
-        };
-        appendRepeated(trimmedSpans.first().startParameter, source.degree + 1);
-        for (int spanIndex = 0; spanIndex + 1 < trimmedSpans.size(); ++spanIndex) {
-            appendRepeated(trimmedSpans[spanIndex].endParameter, source.degree);
-        }
-        appendRepeated(trimmedSpans.last().endParameter, source.degree + 1);
-
-        if (resultFullKnots.size() < 2) {
-            return false;
-        }
-        result.knots = resultFullKnots;
-        result.knots.removeFirst();
-        result.knots.removeLast();
-        if (!isValidNurbsCurve(result)) {
-            return false;
-        }
-
-        *trimmed = result;
-        return true;
-    }
-
-    qreal distanceToEraserStroke(const QPointF &screenPoint,
-                                 const QVector<QPointF> &stroke) const
-    {
-        if (stroke.isEmpty()) {
-            return 1.0e9;
-        }
-        if (stroke.size() == 1) {
-            return distanceToSegment(screenPoint, stroke.first(), stroke.first());
-        }
-
-        qreal distance = 1.0e9;
-        for (int index = 1; index < stroke.size(); ++index) {
-            distance = std::min(distance,
-                                distanceToSegment(screenPoint,
-                                                  stroke[index - 1],
-                                                  stroke[index]));
-        }
-        return distance;
-    }
-
-    bool sampleNurbsCurveForErase(const Shape::NurbsCurve2D &curve,
-                                  const WorkPlaneFrame &workPlaneFrame,
-                                  SampledNurbsCurve2D *sampled) const
-    {
-        return curveSampler_.sampleNurbsCurve(curve,
-                                              workPlaneFrame,
-                                              viewportTransform_,
-                                              size(),
-                                              sampled);
-    }
-
-    QVector<Shape::NurbsCurve2D> eraseIntersectionCurvesForShape(
-        const Shape &shape) const
-    {
-        if (shape.geometryType == GeometryType::PolyCurve) {
-            return shape.components;
-        }
-
-        if (isValidNurbsCurve(shape.nurbs)) {
-            return {shape.nurbs};
-        }
-
-        if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
-            return {makeDegreeOneNurbs(shape.points)};
-        }
-
-        if ((shape.geometryType == GeometryType::Bezier || shape.geometryType == GeometryType::Nurbs) &&
-            shape.points.size() >= 2) {
-            return {makeBezierNurbs(shape.points)};
-        }
-
-        if (shape.geometryType == GeometryType::Polygon ||
-            (shape.geometryType == GeometryType::Rectangle &&
-             shape.points.size() >= 2)) {
-            const QVector<QPointF> vertices = shape.geometryType == GeometryType::Polygon
-                                                  ? polygonVerticesForShape(shape)
-                                                  : rectangleVertices(shape);
-            const int minimumVertices = shape.geometryType == GeometryType::Polygon ? 3 : 4;
-            if (vertices.size() < minimumVertices) {
-                return {};
-            }
-
-            QVector<Shape::NurbsCurve2D> curves;
-            curves.reserve(vertices.size());
-            for (int index = 0; index < vertices.size(); ++index) {
-                curves.append(makeDegreeOneNurbs(
-                    {vertices[index], vertices[(index + 1) % vertices.size()]}));
-            }
-            return curves;
-        }
-
-        return {};
-    }
 
     QVector<qreal> eraseIntersectionParameters(
         int sourceShapeIndex,
         int sourceComponentIndex,
         const Shape::NurbsCurve2D &sourceCurve,
         const QVector<EraseCurveSampleCache> *sceneCache = nullptr,
-        QVector<quint64> *intersectionObjectIds = nullptr,
+        QVector<ObjectId> *intersectionObjectIds = nullptr,
         int *nurbsSeedSolves = nullptr,
         int *visiblePointChecks = nullptr) const
     {
-        QVector<qreal> parameters;
         if (sourceShapeIndex < 0 || sourceShapeIndex >= shapes_.size() ||
             !isValidNurbsCurve(sourceCurve)) {
-            return parameters;
+            return {};
         }
 
+        const ObjectId sourceObjectId =
+            shapes_.objectIdAt(sourceShapeIndex);
         const WorkPlaneFrame sourceFrame =
-            shapeWorkPlaneFrame(shapes_[sourceShapeIndex]);
+            shapeComponentWorkPlaneFrame(shapes_[sourceShapeIndex],
+                                         sourceComponentIndex);
         if (!isValidWorkPlaneFrame(sourceFrame)) {
-            return parameters;
+            return {};
         }
 
-        qreal sourceDomainStart = 0.0;
-        qreal sourceDomainEnd = 0.0;
-        if (!nurbsParameterDomain(sourceCurve,
-                                  &sourceDomainStart,
-                                  &sourceDomainEnd)) {
-            return parameters;
-        }
-        const qreal sourceDomainLength = sourceDomainEnd - sourceDomainStart;
-        if (sourceDomainLength <= 0.0) {
-            return parameters;
-        }
+        const EraseIntersectionCandidates candidates =
+            makeEraseIntersectionCandidates(document_, sceneCache);
 
-        const auto appendUniqueParameter = [&](qreal parameter) {
-            const qreal parameterTolerance =
-                std::max<qreal>(1.0e-12, sourceDomainLength * 1.0e-9);
-            for (const qreal existingParameter : parameters) {
-                if (std::abs(existingParameter - parameter) <=
-                    parameterTolerance) {
-                    return;
-                }
-            }
-            parameters.append(std::clamp(parameter,
-                                         sourceDomainStart,
-                                         sourceDomainEnd));
-        };
-
-        struct ParameterSpan {
-            qreal start = 0.0;
-            qreal end = 0.0;
-            qreal minimumX = 0.0;
-            qreal minimumY = 0.0;
-            qreal maximumX = 0.0;
-            qreal maximumY = 0.0;
-        };
-        struct CurveCandidate {
-            int shapeIndex = -1;
-            int componentIndex = -1;
-            WorkPlaneFrame frame;
-            Shape::NurbsCurve2D curve;
-        };
-
-        const auto curvePointInSourceFrame =
-            [&](const Shape::NurbsCurve2D &curve,
-                const WorkPlaneFrame &frame,
-                qreal parameter,
-                QPointF *point) {
-                QPointF localPoint;
-                if (point == nullptr ||
-                    !evaluateNurbsPoint(curve, parameter, &localPoint)) {
-                    return false;
-                }
-                *point = worldPointToWorkPlaneFrame(
-                    workPlaneFramePointToWorld(localPoint, frame), sourceFrame);
-                return std::isfinite(point->x()) && std::isfinite(point->y());
-            };
-        const auto curveDerivativeInSourceFrame =
-            [&](const Shape::NurbsCurve2D &curve,
-                const WorkPlaneFrame &frame,
-                qreal parameter,
-                QPointF *derivative) {
-                QPointF localDerivative;
-                if (derivative == nullptr ||
-                    !evaluateNurbsDerivative(curve,
-                                             parameter,
-                                             &localDerivative)) {
-                    return false;
-                }
-                const Point3D worldDerivative{
-                    frame.xAxis.x * localDerivative.x() +
-                        frame.yAxis.x * localDerivative.y(),
-                    frame.xAxis.y * localDerivative.x() +
-                        frame.yAxis.y * localDerivative.y(),
-                    frame.xAxis.z * localDerivative.x() +
-                        frame.yAxis.z * localDerivative.y()};
-                *derivative = QPointF(
-                    worldDerivative.x * sourceFrame.xAxis.x +
-                        worldDerivative.y * sourceFrame.xAxis.y +
-                        worldDerivative.z * sourceFrame.xAxis.z,
-                    worldDerivative.x * sourceFrame.yAxis.x +
-                        worldDerivative.y * sourceFrame.yAxis.y +
-                        worldDerivative.z * sourceFrame.yAxis.z);
-                return std::isfinite(derivative->x()) &&
-                       std::isfinite(derivative->y());
-            };
-        const auto parameterSpans =
-            [&](const Shape::NurbsCurve2D &curve,
-                const WorkPlaneFrame &frame) {
-                QVector<ParameterSpan> spans;
-                if (!isValidNurbsCurve(curve) ||
-                    !isValidWorkPlaneFrame(frame)) {
-                    return spans;
-                }
-                const QVector<double> fullKnots =
-                    expandedNurbsKnotVector(curve);
-                for (int knotIndex = curve.degree;
-                     knotIndex < curve.controlPoints.size();
-                     ++knotIndex) {
-                    const qreal spanStart = fullKnots[knotIndex];
-                    const qreal spanEnd = fullKnots[knotIndex + 1];
-                    if (spanEnd - spanStart <= 1.0e-12) {
-                        continue;
-                    }
-
-                    ParameterSpan span;
-                    span.start = spanStart;
-                    span.end = spanEnd;
-                    span.minimumX = std::numeric_limits<qreal>::infinity();
-                    span.minimumY = std::numeric_limits<qreal>::infinity();
-                    span.maximumX = -std::numeric_limits<qreal>::infinity();
-                    span.maximumY = -std::numeric_limits<qreal>::infinity();
-                    for (int controlPointIndex =
-                             knotIndex - curve.degree;
-                         controlPointIndex <= knotIndex;
-                         ++controlPointIndex) {
-                        const QPointF point = worldPointToWorkPlaneFrame(
-                            workPlaneFramePointToWorld(
-                                curve.controlPoints[controlPointIndex], frame),
-                            sourceFrame);
-                        span.minimumX = std::min(span.minimumX, point.x());
-                        span.minimumY = std::min(span.minimumY, point.y());
-                        span.maximumX = std::max(span.maximumX, point.x());
-                        span.maximumY = std::max(span.maximumY, point.y());
-                    }
-                    spans.append(span);
-                }
-                return spans;
-            };
-        const auto hullsOverlap = [](const ParameterSpan &first,
-                                     const ParameterSpan &second,
-                                     qreal tolerance) {
-            return first.maximumX + tolerance >= second.minimumX &&
-                   second.maximumX + tolerance >= first.minimumX &&
-                   first.maximumY + tolerance >= second.minimumY &&
-                   second.maximumY + tolerance >= first.minimumY;
-        };
-
-        QVector<CurveCandidate> otherCurves;
-        if (sceneCache != nullptr) {
-            otherCurves.reserve(sceneCache->size());
-            for (const EraseCurveSampleCache &cachedCurve : *sceneCache) {
-                if (cachedCurve.shapeIndex < 0 ||
-                    cachedCurve.shapeIndex >= shapes_.size()) {
-                    continue;
-                }
-                CurveCandidate candidate;
-                candidate.shapeIndex = cachedCurve.shapeIndex;
-                candidate.componentIndex = cachedCurve.componentIndex;
-                candidate.frame = isValidWorkPlaneFrame(
-                                      cachedCurve.workPlaneFrame)
-                                      ? cachedCurve.workPlaneFrame
-                                      : shapeWorkPlaneFrame(
-                                            shapes_[cachedCurve.shapeIndex]);
-                candidate.curve = cachedCurve.curve;
-                otherCurves.append(candidate);
-            }
-        } else {
-            for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
-                if (!document_.isObjectVisible(shapes_.objectIdAt(shapeIndex))) {
-                    continue;
-                }
-                const QVector<Shape::NurbsCurve2D> curves =
-                    eraseIntersectionCurvesForShape(shapes_[shapeIndex]);
-                const WorkPlaneFrame frame =
-                    shapeWorkPlaneFrame(shapes_[shapeIndex]);
-                for (int componentIndex = 0;
-                     componentIndex < curves.size();
-                     ++componentIndex) {
-                    CurveCandidate candidate;
-                    candidate.shapeIndex = shapeIndex;
-                    candidate.componentIndex = componentIndex;
-                    candidate.frame = frame;
-                    candidate.curve = curves[componentIndex];
-                    otherCurves.append(candidate);
+        const EraseIntersectionParameterResult query =
+            findEraseIntersectionParameters(sourceCurve,
+                                            sourceFrame,
+                                            sourceObjectId,
+                                            sourceComponentIndex,
+                                            candidates.curves,
+                                            candidates.points,
+                                            3.0 / std::max<qreal>(
+                                                viewportTransform_.viewScalePixelsPerWorldUnit(size()),
+                                                1.0e-9));
+        if (intersectionObjectIds != nullptr) {
+            for (const ObjectId objectId : query.intersectingObjectIds) {
+                if (!intersectionObjectIds->contains(objectId)) {
+                    intersectionObjectIds->append(objectId);
                 }
             }
         }
-
-        constexpr qreal seedFractions[] = {0.0, 0.25, 0.5, 0.75, 1.0};
-        const auto refineNurbsIntersection =
-            [&](const Shape::NurbsCurve2D &otherCurve,
-                const WorkPlaneFrame &otherFrame,
-                const ParameterSpan &sourceSpan,
-                const ParameterSpan &otherSpan,
-                qreal sourceSeed,
-                qreal otherSeed,
-                qreal geometryTolerance,
-                qreal *sourceParameter) {
-                qreal sourceFraction = sourceSeed;
-                qreal otherFraction = otherSeed;
-                qreal damping = 1.0e-4;
-                const qreal sourceSpanLength =
-                    sourceSpan.end - sourceSpan.start;
-                const qreal otherSpanLength =
-                    otherSpan.end - otherSpan.start;
-                const auto evaluatePair =
-                    [&](qreal sourceFractionValue,
-                        qreal otherFractionValue,
-                        QPointF *sourcePoint,
-                        QPointF *otherPoint) {
-                        return curvePointInSourceFrame(
-                                   sourceCurve,
-                                   sourceFrame,
-                                   sourceSpan.start +
-                                       sourceSpanLength * sourceFractionValue,
-                                   sourcePoint) &&
-                               curvePointInSourceFrame(
-                                   otherCurve,
-                                   otherFrame,
-                                   otherSpan.start +
-                                       otherSpanLength * otherFractionValue,
-                                   otherPoint);
-                    };
-
-                for (int iteration = 0; iteration < 40; ++iteration) {
-                    const qreal currentSourceParameter =
-                        sourceSpan.start + sourceSpanLength * sourceFraction;
-                    const qreal currentOtherParameter =
-                        otherSpan.start + otherSpanLength * otherFraction;
-                    QPointF sourcePoint;
-                    QPointF otherPoint;
-                    QPointF sourceDerivative;
-                    QPointF otherDerivative;
-                    if (!evaluatePair(sourceFraction,
-                                      otherFraction,
-                                      &sourcePoint,
-                                      &otherPoint)) {
-                        return false;
-                    }
-                    const QPointF residual = sourcePoint - otherPoint;
-                    const qreal currentDistanceSquared =
-                        QPointF::dotProduct(residual, residual);
-                    if (currentDistanceSquared <=
-                        geometryTolerance * geometryTolerance) {
-                        *sourceParameter = currentSourceParameter;
-                        return true;
-                    }
-                    if (!curveDerivativeInSourceFrame(sourceCurve,
-                                                      sourceFrame,
-                                                      currentSourceParameter,
-                                                      &sourceDerivative) ||
-                        !curveDerivativeInSourceFrame(otherCurve,
-                                                      otherFrame,
-                                                      currentOtherParameter,
-                                                      &otherDerivative)) {
-                        return false;
-                    }
-
-                    const QPointF sourceJacobian =
-                        sourceDerivative * sourceSpanLength;
-                    const QPointF otherJacobian =
-                        otherDerivative * -otherSpanLength;
-                    const qreal h00 =
-                        QPointF::dotProduct(sourceJacobian,
-                                            sourceJacobian);
-                    const qreal h01 =
-                        QPointF::dotProduct(sourceJacobian,
-                                            otherJacobian);
-                    const qreal h11 =
-                        QPointF::dotProduct(otherJacobian,
-                                            otherJacobian);
-                    const qreal g0 =
-                        QPointF::dotProduct(sourceJacobian, residual);
-                    const qreal g1 =
-                        QPointF::dotProduct(otherJacobian, residual);
-                    const qreal hessianScale =
-                        std::max<qreal>({h00, h11, 1.0e-24});
-
-                    bool acceptedStep = false;
-                    for (int dampingAttempt = 0;
-                         dampingAttempt < 8 && !acceptedStep;
-                         ++dampingAttempt) {
-                        const qreal diagonal00 =
-                            h00 + damping * hessianScale;
-                        const qreal diagonal11 =
-                            h11 + damping * hessianScale;
-                        const qreal determinant =
-                            diagonal00 * diagonal11 - h01 * h01;
-                        if (std::abs(determinant) <= 1.0e-30) {
-                            damping *= 10.0;
-                            continue;
-                        }
-                        const qreal sourceStep =
-                            (-g0 * diagonal11 + h01 * g1) / determinant;
-                        const qreal otherStep =
-                            (h01 * g0 - diagonal00 * g1) / determinant;
-                        if (!std::isfinite(sourceStep) ||
-                            !std::isfinite(otherStep)) {
-                            damping *= 10.0;
-                            continue;
-                        }
-
-                        for (int lineSearch = 0;
-                             lineSearch < 9;
-                             ++lineSearch) {
-                            const qreal fraction =
-                                std::ldexp(1.0, -lineSearch);
-                            const qreal candidateSourceFraction =
-                                std::clamp(sourceFraction +
-                                               sourceStep * fraction,
-                                           0.0,
-                                           1.0);
-                            const qreal candidateOtherFraction =
-                                std::clamp(otherFraction +
-                                               otherStep * fraction,
-                                           0.0,
-                                           1.0);
-                            if (candidateSourceFraction == sourceFraction &&
-                                candidateOtherFraction == otherFraction) {
-                                continue;
-                            }
-                            QPointF candidateSourcePoint;
-                            QPointF candidateOtherPoint;
-                            if (!evaluatePair(candidateSourceFraction,
-                                              candidateOtherFraction,
-                                              &candidateSourcePoint,
-                                              &candidateOtherPoint)) {
-                                continue;
-                            }
-                            const QPointF candidateResidual =
-                                candidateSourcePoint - candidateOtherPoint;
-                            const qreal candidateDistanceSquared =
-                                QPointF::dotProduct(candidateResidual,
-                                                    candidateResidual);
-                            if (candidateDistanceSquared <
-                                    currentDistanceSquared ||
-                                candidateDistanceSquared <=
-                                    geometryTolerance * geometryTolerance) {
-                                sourceFraction =
-                                    candidateSourceFraction;
-                                otherFraction =
-                                    candidateOtherFraction;
-                                damping = std::max<qreal>(
-                                    1.0e-12, damping * 0.25);
-                                acceptedStep = true;
-                                break;
-                            }
-                        }
-                        if (!acceptedStep) {
-                            damping *= 10.0;
-                        }
-                    }
-                    if (!acceptedStep) {
-                        return false;
-                    }
-                }
-
-                QPointF sourcePoint;
-                QPointF otherPoint;
-                if (!evaluatePair(sourceFraction,
-                                  otherFraction,
-                                  &sourcePoint,
-                                  &otherPoint) ||
-                    std::hypot(sourcePoint.x() - otherPoint.x(),
-                               sourcePoint.y() - otherPoint.y()) >
-                        geometryTolerance) {
-                    return false;
-                }
-                *sourceParameter =
-                    sourceSpan.start + sourceSpanLength * sourceFraction;
-                return true;
-            };
-
-        const QVector<ParameterSpan> sourceSpans =
-            parameterSpans(sourceCurve, sourceFrame);
-        for (const CurveCandidate &other : otherCurves) {
-            if (other.shapeIndex == sourceShapeIndex &&
-                other.componentIndex == sourceComponentIndex) {
-                continue;
-            }
-            if (!workPlaneFramesCoplanar(sourceFrame, other.frame)) {
-                continue;
-            }
-            const QVector<ParameterSpan> otherSpans =
-                parameterSpans(other.curve, other.frame);
-            for (const ParameterSpan &sourceSpan : sourceSpans) {
-                for (const ParameterSpan &otherSpan : otherSpans) {
-                    qreal coordinateScale = 1.0;
-                    for (const qreal value : {
-                             sourceSpan.minimumX,
-                             sourceSpan.minimumY,
-                             sourceSpan.maximumX,
-                             sourceSpan.maximumY,
-                             otherSpan.minimumX,
-                             otherSpan.minimumY,
-                             otherSpan.maximumX,
-                             otherSpan.maximumY}) {
-                        coordinateScale =
-                            std::max(coordinateScale, std::abs(value));
-                    }
-                    const qreal geometryTolerance =
-                        std::max<qreal>(1.0e-7,
-                                        coordinateScale * 1.0e-10);
-                    if (!hullsOverlap(sourceSpan,
-                                      otherSpan,
-                                      geometryTolerance)) {
-                        continue;
-                    }
-
-                    for (const qreal sourceSeed : seedFractions) {
-                        for (const qreal otherSeed : seedFractions) {
-                            if (nurbsSeedSolves != nullptr) {
-                                ++*nurbsSeedSolves;
-                            }
-                            qreal intersectionParameter = 0.0;
-                            if (refineNurbsIntersection(
-                                    other.curve,
-                                    other.frame,
-                                    sourceSpan,
-                                    otherSpan,
-                                    sourceSeed,
-                                    otherSeed,
-                                    geometryTolerance,
-                                    &intersectionParameter)) {
-                                appendUniqueParameter(intersectionParameter);
-                                if (intersectionObjectIds != nullptr &&
-                                    other.shapeIndex != sourceShapeIndex) {
-                                    const quint64 objectId =
-                                        shapes_.objectIdAt(other.shapeIndex).value();
-                                    if (!intersectionObjectIds->contains(objectId)) {
-                                        intersectionObjectIds->append(objectId);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if (nurbsSeedSolves != nullptr) {
+            *nurbsSeedSolves += query.nurbsSeedSolves;
         }
-
-        const auto squaredDistanceAtParameter =
-            [&](qreal parameter, const QPointF &point) {
-                QPointF curvePoint;
-                if (!evaluateNurbsPoint(sourceCurve,
-                                        parameter,
-                                        &curvePoint)) {
-                    return std::numeric_limits<qreal>::infinity();
-                }
-                const QPointF delta = curvePoint - point;
-                return QPointF::dotProduct(delta, delta);
-            };
-        const auto goldenMinimum =
-            [&](qreal low, qreal high, const QPointF &point) {
-                constexpr qreal ratio = 0.6180339887498948482;
-                qreal first = high - (high - low) * ratio;
-                qreal second = low + (high - low) * ratio;
-                qreal firstValue =
-                    squaredDistanceAtParameter(first, point);
-                qreal secondValue =
-                    squaredDistanceAtParameter(second, point);
-                for (int iteration = 0; iteration < 36; ++iteration) {
-                    if (firstValue <= secondValue) {
-                        high = second;
-                        second = first;
-                        secondValue = firstValue;
-                        first = high - (high - low) * ratio;
-                        firstValue =
-                            squaredDistanceAtParameter(first, point);
-                    } else {
-                        low = first;
-                        first = second;
-                        firstValue = secondValue;
-                        second = low + (high - low) * ratio;
-                        secondValue =
-                            squaredDistanceAtParameter(second, point);
-                    }
-                }
-                return (low + high) * 0.5;
-            };
-
-        for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
-            if (shapeIndex == sourceShapeIndex ||
-                !document_.isObjectVisible(shapes_.objectIdAt(shapeIndex))) {
-                continue;
-            }
-            const Shape &pointShape = shapes_[shapeIndex];
-            if (pointShape.geometryType != GeometryType::Point ||
-                pointShape.points.isEmpty()) {
-                continue;
-            }
-            if (visiblePointChecks != nullptr) {
-                ++*visiblePointChecks;
-            }
-
-            const Point3D pointWorld =
-                shapePointToWorld(pointShape, pointShape.points.first());
-            const qreal worldCoordinateScale = std::max<qreal>(
-                {1.0, std::abs(pointWorld.x), std::abs(pointWorld.y),
-                 std::abs(pointWorld.z), std::abs(sourceFrame.origin.x),
-                 std::abs(sourceFrame.origin.y),
-                 std::abs(sourceFrame.origin.z)});
-            const qreal planeTolerance =
-                std::max<qreal>(1.0e-7,
-                                worldCoordinateScale * 1.0e-12);
-            const qreal planeDistance =
-                signedDistanceFromWorkPlaneFrame(pointWorld, sourceFrame);
-            if (!std::isfinite(planeDistance) ||
-                std::abs(planeDistance) > planeTolerance) {
-                continue;
-            }
-            const QPointF pointLocal =
-                worldPointToWorkPlaneFrame(pointWorld, sourceFrame);
-            qreal localCoordinateScale =
-                std::max<qreal>({1.0, std::abs(pointLocal.x()),
-                                 std::abs(pointLocal.y())});
-            for (const QPointF &controlPoint : sourceCurve.controlPoints) {
-                localCoordinateScale =
-                    std::max<qreal>({localCoordinateScale,
-                                     std::abs(controlPoint.x()),
-                                     std::abs(controlPoint.y())});
-            }
-            const qreal geometryTolerance =
-                std::max<qreal>(1.0e-7,
-                                localCoordinateScale * 1.0e-9);
-
-            qreal closestDistanceSquared =
-                std::numeric_limits<qreal>::infinity();
-            qreal closestParameter = sourceDomainStart;
-            constexpr int pointSearchSubdivisions = 8;
-            for (const ParameterSpan &span : sourceSpans) {
-                qreal sampleParameters[pointSearchSubdivisions + 1];
-                qreal sampleDistances[pointSearchSubdivisions + 1];
-                for (int sample = 0;
-                     sample <= pointSearchSubdivisions;
-                     ++sample) {
-                    const qreal fraction =
-                        static_cast<qreal>(sample) /
-                        pointSearchSubdivisions;
-                    sampleParameters[sample] =
-                        span.start + (span.end - span.start) * fraction;
-                    sampleDistances[sample] = squaredDistanceAtParameter(
-                        sampleParameters[sample], pointLocal);
-                    if (sampleDistances[sample] < closestDistanceSquared) {
-                        closestDistanceSquared = sampleDistances[sample];
-                        closestParameter = sampleParameters[sample];
-                    }
-                }
-                for (int sample = 0;
-                     sample <= pointSearchSubdivisions;
-                     ++sample) {
-                    const qreal previousDistance =
-                        sample > 0 ? sampleDistances[sample - 1]
-                                   : std::numeric_limits<qreal>::infinity();
-                    const qreal nextDistance =
-                        sample < pointSearchSubdivisions
-                            ? sampleDistances[sample + 1]
-                            : std::numeric_limits<qreal>::infinity();
-                    if (sampleDistances[sample] > previousDistance ||
-                        sampleDistances[sample] > nextDistance) {
-                        continue;
-                    }
-                    const qreal low =
-                        sampleParameters[std::max(0, sample - 1)];
-                    const qreal high =
-                        sampleParameters[std::min(pointSearchSubdivisions,
-                                                  sample + 1)];
-                    if (high - low <= 1.0e-14) {
-                        continue;
-                    }
-                    const qreal candidateParameter =
-                        goldenMinimum(low, high, pointLocal);
-                    const qreal candidateDistanceSquared =
-                        squaredDistanceAtParameter(candidateParameter,
-                                                   pointLocal);
-                    if (candidateDistanceSquared < closestDistanceSquared) {
-                        closestDistanceSquared = candidateDistanceSquared;
-                        closestParameter = candidateParameter;
-                    }
-                }
-            }
-
-            if (closestDistanceSquared <=
-                geometryTolerance * geometryTolerance) {
-                appendUniqueParameter(closestParameter);
-                if (intersectionObjectIds != nullptr) {
-                    const quint64 objectId =
-                        shapes_.objectIdAt(shapeIndex).value();
-                    if (!intersectionObjectIds->contains(objectId)) {
-                        intersectionObjectIds->append(objectId);
-                    }
-                }
-            }
+        if (visiblePointChecks != nullptr) {
+            *visiblePointChecks += query.pointChecks;
         }
-
-        return parameters;
+        return query.parameters;
     }
-
     QVector<int> eraseSelectionTargets() const
     {
         QVector<int> targets;
@@ -10975,14 +7251,13 @@ private:
         }
 
         eraseGeometryCachePrepared_ = false;
-        trimHoverPositionValid_ = false;
-        trimHoverComponentIndex_ = -1;
-        eraseCandidateShapeIndices_.clear();
+        trimTool_.invalidateHover();
+        trimTool_.clearCandidates();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseTargetShapeIndices_.clear();
-        if (!eraseStrokeActive_ && !trimBoxSelectionActive_) {
-            eraseStrokeScreenPath_.clear();
+        if (!eraseTool_.strokeActive() && !trimTool_.boxSelectionActive()) {
+            eraseLikeScreenPath().clear();
         }
         DebugLog::instance().write(QStringLiteral("trim/erase projection cache invalidated by camera or viewport change"));
     }
@@ -11028,6 +7303,9 @@ private:
                                                               viewportTransform_,
                                                               size());
         const qint64 samplingUs = samplingTimer.nsecsElapsed() / 1000;
+        const EraseIntersectionCandidates sceneIntersectionCandidates =
+            makeEraseIntersectionCandidates(document_,
+                                            &eraseSceneCurveCaches_);
 
         qint64 boundaryUs = 0;
         int nurbsSeedSolves = 0;
@@ -11042,26 +7320,29 @@ private:
                 EraseCurveSampleCache targetCurve = sceneCurve;
                 QElapsedTimer boundaryTimer;
                 boundaryTimer.start();
-                QVector<quint64> intersectionObjectIds;
-                int targetSeedSolves = 0;
-                int targetPointChecks = 0;
-                targetCurve.intersectionParameters = eraseIntersectionParameters(
-                    shapeIndex,
-                    sceneCurve.componentIndex,
-                    sceneCurve.curve,
-                    &eraseSceneCurveCaches_,
-                    &intersectionObjectIds,
-                    &targetSeedSolves,
-                    &targetPointChecks);
-                targetCurve.intersectionObjectIds = intersectionObjectIds;
+                const EraseIntersectionParameterResult intersections =
+                    findEraseIntersectionParameters(
+                        sceneCurve.curve,
+                        shapeComponentWorkPlaneFrame(
+                            shapes_[shapeIndex], sceneCurve.componentIndex),
+                        shapes_.objectIdAt(shapeIndex),
+                        sceneCurve.componentIndex,
+                        sceneIntersectionCandidates.curves,
+                        sceneIntersectionCandidates.points,
+                        3.0 / std::max<qreal>(
+                            viewportTransform_.viewScalePixelsPerWorldUnit(size()),
+                            1.0e-9));
+                targetCurve.intersectionParameters = intersections.parameters;
+                targetCurve.intersectionObjectIds =
+                    intersections.intersectingObjectIds;
                 const qint64 targetBoundaryUs = boundaryTimer.nsecsElapsed() / 1000;
                 boundaryUs += targetBoundaryUs;
-                nurbsSeedSolves += targetSeedSolves;
-                visiblePointChecks += targetPointChecks;
+                nurbsSeedSolves += intersections.nurbsSeedSolves;
+                visiblePointChecks += intersections.pointChecks;
 
                 QStringList intersectionIds;
-                for (const quint64 objectId : intersectionObjectIds) {
-                    intersectionIds.append(QString::number(objectId));
+                for (const ObjectId objectId : intersections.intersectingObjectIds) {
+                    intersectionIds.append(QString::number(objectId.value()));
                 }
                 QStringList boundaryParameters;
                 for (const qreal parameter : targetCurve.intersectionParameters) {
@@ -11077,8 +7358,8 @@ private:
                         .arg(sceneCurve.sampled.parameters.size())
                         .arg(boundaryParameters.join(','))
                         .arg(intersectionIds.join(','))
-                        .arg(targetSeedSolves)
-                        .arg(targetPointChecks)
+                        .arg(intersections.nurbsSeedSolves)
+                        .arg(intersections.pointChecks)
                         .arg(targetBoundaryUs));
                 eraseTargetCurveCaches_.append(targetCurve);
                 hasTargetCurve = true;
@@ -11126,10 +7407,12 @@ private:
                 continue;
             }
 
-            const qreal componentDistance = closestNurbsScreenDistance(
+            const qreal componentDistance = distanceToNurbsCurveOnScreen(
                 targetCurve.curve,
                 targetCurve.workPlaneFrame,
-                screenPosition);
+                screenPosition,
+                viewportTransform_,
+                size());
             if (componentDistance < distance) {
                 distance = componentDistance;
                 if (closestComponentIndex != nullptr) {
@@ -11145,49 +7428,38 @@ private:
         QElapsedTimer hoverTimer;
         hoverTimer.start();
         invalidateEraseGeometryCacheForView();
-        if (trimHoverPositionValid_ && eraseGeometryCachePrepared_ &&
-            trimHoverScreenPosition_ == screenPosition) {
+        if (trimTool_.hoverPositionMatches(screenPosition) &&
+            eraseGeometryCachePrepared_) {
             return;
         }
-        trimHoverScreenPosition_ = screenPosition;
-        trimHoverPositionValid_ = true;
+        trimTool_.setHoverPosition(screenPosition, -1);
 
         if (!eraseGeometryCachePrepared_) {
             prepareEraseGeometryCache();
         }
 
-        eraseStrokeScreenPath_.clear();
-        eraseStrokeScreenPath_.append(screenPosition);
-        eraseCandidateShapeIndices_.clear();
+        trimTool_.setSinglePointScreenPath(screenPosition);
+        trimTool_.clearCandidates();
 
-        constexpr qreal trimHitRadiusPixels = 10.0;
-        qreal closestDistance = trimHitRadiusPixels;
-        int closestShapeIndex = -1;
-        int closestComponentIndex = -1;
-        for (const ObjectId objectId : eraseTargetShapeIndices_) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex < 0) {
-                continue;
-            }
-            int componentIndex = -1;
-            const qreal distance = distanceToCachedEraseShape(screenPosition,
-                                                              shapeIndex,
-                                                              &componentIndex);
-            const bool closer = distance < closestDistance - 1.0e-6;
-            const bool tieOnActiveSelection =
-                std::abs(distance - closestDistance) <= 1.0e-6 &&
-                objectId == selectedShapeIndex_;
-            if (closer || tieOnActiveSelection) {
-                closestDistance = distance;
-                closestShapeIndex = shapeIndex;
-                closestComponentIndex = componentIndex;
-            }
-        }
-
-        if (closestShapeIndex >= 0) {
-            eraseCandidateShapeIndices_.append(shapes_.objectIdAt(closestShapeIndex));
-        }
-        trimHoverComponentIndex_ = closestComponentIndex;
+        const TrimTool::HoverTarget target = trimTool_.updateHover(
+            screenPosition,
+            eraseTargetShapeIndices_,
+            selectedShapeIndex_,
+            10.0,
+            [this, &screenPosition](ObjectId objectId, int *componentIndex) {
+                const int shapeIndex = objectIndex(objectId);
+                if (shapeIndex < 0) {
+                    if (componentIndex != nullptr) {
+                        *componentIndex = -1;
+                    }
+                    return std::numeric_limits<qreal>::infinity();
+                }
+                return distanceToCachedEraseShape(screenPosition,
+                                                  shapeIndex,
+                                                  componentIndex);
+            });
+        const int closestShapeIndex = objectIndex(target.objectId);
+        const int closestComponentIndex = target.componentIndex;
         updateErasePreviewIntervals(true, closestShapeIndex, closestComponentIndex);
 
         const qint64 elapsedUs = hoverTimer.nsecsElapsed() / 1000;
@@ -11239,7 +7511,7 @@ private:
         QElapsedTimer clickTimer;
         clickTimer.start();
         updateTrimHover(screenPosition);
-        if (eraseCandidateShapeIndices_.isEmpty()) {
+        if (trimTool_.candidateObjectIds().isEmpty()) {
             DebugLog::instance().write(
                 QStringLiteral("trim click ignored target=none at=%1 selectedTargets=%2 sampledTargets=%3 elapsedUs=%4")
                     .arg(pointText(screenPosition))
@@ -11249,7 +7521,7 @@ private:
             return;
         }
 
-        const ObjectId targetId = eraseCandidateShapeIndices_.first();
+        const ObjectId targetId = trimTool_.primaryCandidate();
         const int targetIndex = objectIndex(targetId);
         DebugLog::instance().write(
             QStringLiteral("trim click target shape=%1 object=%2 type=%3 component=%4 at=%5")
@@ -11258,28 +7530,27 @@ private:
                 .arg(targetIndex >= 0 && targetIndex < shapes_.size()
                          ? geometryTypeName(shapes_[targetIndex].geometryType)
                          : QStringLiteral("unknown"))
-                .arg(trimHoverComponentIndex_)
+                .arg(trimTool_.hoverComponentIndex())
                 .arg(pointText(screenPosition)));
-        applyEraseCandidates(nullptr, trimHoverComponentIndex_);
+        applyEraseCandidates(nullptr, trimTool_.hoverComponentIndex());
         DebugLog::instance().write(
             QStringLiteral("trim click complete object=%1 elapsedUs=%2")
                 .arg(targetId.value())
                 .arg(clickTimer.nsecsElapsed() / 1000));
-        eraseStrokeActive_ = false;
-        eraseCandidateShapeIndices_.clear();
-        eraseStrokeScreenPath_.clear();
+        eraseTool_.cancelStroke();
+        trimTool_.clearCandidates();
+        trimTool_.clearScreenPath();
         eraseTargetShapeIndices_.clear();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = false;
-        trimHoverPositionValid_ = false;
-        trimHoverComponentIndex_ = -1;
+        trimTool_.invalidateHover();
         update();
     }
 
     void updateTrimBoxPreview()
     {
-        if (!trimBoxSelectionActive_) {
+        if (!trimTool_.boxSelectionActive()) {
             return;
         }
         invalidateEraseGeometryCacheForView();
@@ -11288,38 +7559,42 @@ private:
         }
 
         const QRectF box =
-            QRectF(selectionBoxStartScreen_, selectionBoxCurrentScreen_).normalized();
-        const QPointF drag = selectionBoxCurrentScreen_ - selectionBoxStartScreen_;
+            QRectF(trimTool_.boxStartPosition(),
+                   trimTool_.boxCurrentPosition()).normalized();
+        const QPointF drag = trimTool_.boxCurrentPosition() -
+                             trimTool_.boxStartPosition();
         // Trim's window/crossing gesture follows the diagonal the user draws:
         // top-left to bottom-right contains; bottom-left to top-right crosses.
         const bool crossingSelection = drag.x() * drag.y() < 0.0;
-        eraseCandidateShapeIndices_.clear();
-        for (const ObjectId objectId : eraseTargetShapeIndices_) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex >= 0 && shapeIndex < shapes_.size() &&
-                shapeMatchesSelectionBox(shapes_[shapeIndex], box, crossingSelection)) {
-                eraseCandidateShapeIndices_.append(objectId);
-            }
-        }
+        trimTool_.selectBoxCandidates(
+            eraseTargetShapeIndices_,
+            [this, &box, crossingSelection](ObjectId objectId) {
+                const int shapeIndex = objectIndex(objectId);
+                return shapeIndex >= 0 && shapeIndex < shapes_.size() &&
+                       shapeMatchesSelectionBox(shapes_[shapeIndex],
+                                                box,
+                                                crossingSelection);
+            });
 
         // A non-empty marker enables the existing orange trim preview; the
         // actual interval calculation and commit use the box region below.
-        eraseStrokeScreenPath_.clear();
-        eraseStrokeScreenPath_.append(selectionBoxStartScreen_);
+        trimTool_.setSinglePointScreenPath(trimTool_.boxStartPosition());
         for (EraseCurveSampleCache &targetCurve : eraseTargetCurveCaches_) {
             targetCurve.previewStrokePointCount = 0;
             const ObjectId objectId = shapes_.objectIdAt(targetCurve.shapeIndex);
-            if (!eraseCandidateShapeIndices_.contains(objectId)) {
+            if (!trimTool_.candidateObjectIds().contains(objectId)) {
                 targetCurve.previewIntervals.clear();
                 continue;
             }
 
             const QVector<ParameterInterval> hitIntervals =
-                curveIntervalsInsideScreenBox(targetCurve.curve,
-                                              targetCurve.sampled,
-                                              targetCurve.workPlaneFrame,
-                                              box);
-            targetCurve.previewIntervals = boundEraseIntervals(
+                nurbsCurveIntervalsInsideScreenBox(targetCurve.curve,
+                                                   targetCurve.sampled,
+                                                   targetCurve.workPlaneFrame,
+                                                   box,
+                                                   viewportTransform_,
+                                                   size());
+            targetCurve.previewIntervals = boundCurveEraseIntervals(
                 targetCurve.curve,
                 hitIntervals,
                 targetCurve.intersectionParameters);
@@ -11328,26 +7603,24 @@ private:
 
     void finishTrimBoxSelection()
     {
-        if (!selectionBoxActive_ || !trimBoxSelectionActive_) {
+        if (!trimTool_.boxSelectionActive()) {
             return;
         }
 
         const QRectF box =
-            QRectF(selectionBoxStartScreen_, selectionBoxCurrentScreen_).normalized();
-        const QPointF drag = selectionBoxCurrentScreen_ - selectionBoxStartScreen_;
+            QRectF(trimTool_.boxStartPosition(),
+                   trimTool_.boxCurrentPosition()).normalized();
+        const QPointF drag = trimTool_.boxCurrentPosition() -
+                             trimTool_.boxStartPosition();
         const bool crossingSelection = drag.x() * drag.y() < 0.0;
-        const bool moved = selectionBoxMoved_ || box.width() >= 3.0 ||
+        const bool moved = trimTool_.boxSelectionMoved() || box.width() >= 3.0 ||
                            box.height() >= 3.0;
-        const QPointF clickPosition = selectionBoxCurrentScreen_;
+        const QPointF clickPosition = trimTool_.boxCurrentPosition();
         if (!moved) {
-            selectionBoxActive_ = false;
-            selectionBoxMoved_ = false;
-            selectionBoxAdditive_ = false;
-            trimBoxSelectionActive_ = false;
-            trimHoverComponentIndex_ = -1;
-            eraseCandidateShapeIndices_.clear();
-            eraseStrokeScreenPath_.clear();
-            trimHoverPositionValid_ = false;
+            resetTrimSelectionBox();
+            trimTool_.invalidateHover();
+            trimTool_.clearCandidates();
+            trimTool_.clearScreenPath();
             trimAtScreenPosition(clickPosition);
             setCursor(Qt::CrossCursor);
             update();
@@ -11356,25 +7629,20 @@ private:
         }
 
         updateTrimBoxPreview();
-        const int candidateCount = eraseCandidateShapeIndices_.size();
-        selectionBoxActive_ = false;
-        selectionBoxMoved_ = false;
-        selectionBoxAdditive_ = false;
-        trimBoxSelectionActive_ = false;
-        trimHoverComponentIndex_ = -1;
-        if (!eraseCandidateShapeIndices_.isEmpty()) {
+        const int candidateCount = trimTool_.candidateObjectIds().size();
+        resetTrimSelectionBox();
+        trimTool_.invalidateHover();
+        if (!trimTool_.candidateObjectIds().isEmpty()) {
             applyEraseCandidates(&box);
         }
 
-        eraseStrokeActive_ = false;
-        eraseCursorPressed_ = false;
-        eraseCandidateShapeIndices_.clear();
-        eraseStrokeScreenPath_.clear();
+        eraseTool_.cancelStroke();
+        trimTool_.clearCandidates();
         eraseTargetShapeIndices_.clear();
         eraseSceneCurveCaches_.clear();
         eraseTargetCurveCaches_.clear();
         eraseGeometryCachePrepared_ = false;
-        trimHoverPositionValid_ = false;
+        trimTool_.invalidateHover();
         setCursor(Qt::CrossCursor);
         update();
         emitCoordinateUpdate();
@@ -11384,562 +7652,10 @@ private:
                 .arg(candidateCount));
     }
 
-    qreal closestNurbsScreenDistance(
-        const Shape::NurbsCurve2D &curve,
-        const WorkPlaneFrame &workPlaneFrame,
-        const QPointF &screenPosition) const
-    {
-        if (!isValidNurbsCurve(curve) ||
-            !isValidWorkPlaneFrame(workPlaneFrame)) {
-            return std::numeric_limits<qreal>::infinity();
-        }
 
-        const QVector<double> fullKnots = expandedKnotVector(curve);
-        const auto squaredDistanceAt = [&](qreal parameter) {
-            QPointF localPoint;
-            if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
-                return std::numeric_limits<qreal>::infinity();
-            }
-            const QPointF curveScreen =
-                viewportTransform_.workPlaneToScreen(localPoint,
-                                                     size(),
-                                                     workPlaneFrame);
-            const QPointF delta = curveScreen - screenPosition;
-            return QPointF::dotProduct(delta, delta);
-        };
-        const auto goldenMinimum = [&](qreal low, qreal high) {
-            constexpr qreal ratio = 0.6180339887498948482;
-            qreal first = high - (high - low) * ratio;
-            qreal second = low + (high - low) * ratio;
-            qreal firstValue = squaredDistanceAt(first);
-            qreal secondValue = squaredDistanceAt(second);
-            for (int iteration = 0; iteration < 32; ++iteration) {
-                if (firstValue <= secondValue) {
-                    high = second;
-                    second = first;
-                    secondValue = firstValue;
-                    first = high - (high - low) * ratio;
-                    firstValue = squaredDistanceAt(first);
-                } else {
-                    low = first;
-                    first = second;
-                    firstValue = secondValue;
-                    second = low + (high - low) * ratio;
-                    secondValue = squaredDistanceAt(second);
-                }
-            }
-            return (low + high) * 0.5;
-        };
 
-        qreal closestDistanceSquared =
-            std::numeric_limits<qreal>::infinity();
-        for (int knotIndex = curve.degree;
-             knotIndex < curve.controlPoints.size();
-             ++knotIndex) {
-            const qreal spanStart = fullKnots[knotIndex];
-            const qreal spanEnd = fullKnots[knotIndex + 1];
-            if (spanEnd - spanStart <= 1.0e-12) {
-                continue;
-            }
 
-            const int subdivisions = std::max(24, curve.degree * 16);
-            QVector<qreal> sampleParameters;
-            QVector<qreal> sampleDistances;
-            sampleParameters.reserve(subdivisions + 1);
-            sampleDistances.reserve(subdivisions + 1);
-            for (int sample = 0; sample <= subdivisions; ++sample) {
-                const qreal fraction =
-                    static_cast<qreal>(sample) / subdivisions;
-                const qreal parameter =
-                    spanStart + (spanEnd - spanStart) * fraction;
-                const qreal distanceSquared =
-                    squaredDistanceAt(parameter);
-                sampleParameters.append(parameter);
-                sampleDistances.append(distanceSquared);
-                closestDistanceSquared =
-                    std::min(closestDistanceSquared, distanceSquared);
-            }
 
-            for (int sample = 0; sample <= subdivisions; ++sample) {
-                const qreal previousDistance =
-                    sample > 0 ? sampleDistances[sample - 1]
-                               : std::numeric_limits<qreal>::infinity();
-                const qreal nextDistance =
-                    sample < subdivisions
-                        ? sampleDistances[sample + 1]
-                        : std::numeric_limits<qreal>::infinity();
-                if (sampleDistances[sample] > previousDistance ||
-                    sampleDistances[sample] > nextDistance) {
-                    continue;
-                }
-
-                const qreal low =
-                    sampleParameters[std::max(0, sample - 1)];
-                const qreal high =
-                    sampleParameters[std::min(subdivisions, sample + 1)];
-                if (high - low <= 1.0e-14) {
-                    continue;
-                }
-                const qreal candidate =
-                    goldenMinimum(low, high);
-                closestDistanceSquared =
-                    std::min(closestDistanceSquared,
-                             squaredDistanceAt(candidate));
-            }
-        }
-        return std::sqrt(closestDistanceSquared);
-    }
-
-    QVector<ParameterInterval> eraserIntervalsForNurbsStrokeSegment(
-        const Shape::NurbsCurve2D &curve,
-        const WorkPlaneFrame &workPlaneFrame,
-        const QPointF &strokeStart,
-        const QPointF &strokeEnd) const
-    {
-        QVector<ParameterInterval> intervals;
-        if (!isValidNurbsCurve(curve) ||
-            !isValidWorkPlaneFrame(workPlaneFrame)) {
-            return intervals;
-        }
-
-        const QVector<double> fullKnots = expandedKnotVector(curve);
-        const qreal domainStart = fullKnots[curve.degree];
-        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
-        const qreal domainLength = domainEnd - domainStart;
-        if (domainLength <= 1.0e-12) {
-            return intervals;
-        }
-
-        constexpr qreal eraserRadiusPixels = 10.0;
-        const qreal eraserRadiusSquared =
-            eraserRadiusPixels * eraserRadiusPixels;
-        const auto squaredDistanceAt = [&](qreal parameter) {
-            QPointF localPoint;
-            if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
-                return std::numeric_limits<qreal>::infinity();
-            }
-            const QPointF curveScreen =
-                viewportTransform_.workPlaneToScreen(localPoint,
-                                                     size(),
-                                                     workPlaneFrame);
-            const qreal distance = distanceToSegment(curveScreen,
-                                                     strokeStart,
-                                                     strokeEnd);
-            return distance * distance;
-        };
-        const auto goldenMinimum = [&](qreal low, qreal high) {
-            constexpr qreal ratio = 0.6180339887498948482;
-            qreal first = high - (high - low) * ratio;
-            qreal second = low + (high - low) * ratio;
-            qreal firstValue = squaredDistanceAt(first);
-            qreal secondValue = squaredDistanceAt(second);
-            for (int iteration = 0; iteration < 32; ++iteration) {
-                if (firstValue <= secondValue) {
-                    high = second;
-                    second = first;
-                    secondValue = firstValue;
-                    first = high - (high - low) * ratio;
-                    firstValue = squaredDistanceAt(first);
-                } else {
-                    low = first;
-                    first = second;
-                    firstValue = secondValue;
-                    second = low + (high - low) * ratio;
-                    secondValue = squaredDistanceAt(second);
-                }
-            }
-            return (low + high) * 0.5;
-        };
-        const auto refineBoundary = [&](qreal outsideParameter,
-                                        qreal insideParameter,
-                                        bool outsideIsFirst) {
-            qreal low = outsideIsFirst ? outsideParameter : insideParameter;
-            qreal high = outsideIsFirst ? insideParameter : outsideParameter;
-            for (int iteration = 0; iteration < 36; ++iteration) {
-                const qreal middle = (low + high) * 0.5;
-                const bool middleInside =
-                    squaredDistanceAt(middle) <= eraserRadiusSquared;
-                if (middleInside) {
-                    if (outsideIsFirst) {
-                        high = middle;
-                    } else {
-                        low = middle;
-                    }
-                } else {
-                    if (outsideIsFirst) {
-                        low = middle;
-                    } else {
-                        high = middle;
-                    }
-                }
-            }
-            return (low + high) * 0.5;
-        };
-
-        for (int knotIndex = curve.degree;
-             knotIndex < curve.controlPoints.size();
-             ++knotIndex) {
-            const qreal spanStart = fullKnots[knotIndex];
-            const qreal spanEnd = fullKnots[knotIndex + 1];
-            if (spanEnd - spanStart <= 1.0e-12) {
-                continue;
-            }
-
-            const int subdivisions = std::max(24, curve.degree * 16);
-            QVector<qreal> sampleParameters;
-            QVector<qreal> sampleDistances;
-            sampleParameters.reserve(subdivisions + 1);
-            sampleDistances.reserve(subdivisions + 1);
-            for (int sample = 0; sample <= subdivisions; ++sample) {
-                const qreal fraction =
-                    static_cast<qreal>(sample) / subdivisions;
-                const qreal parameter =
-                    spanStart + (spanEnd - spanStart) * fraction;
-                sampleParameters.append(parameter);
-                sampleDistances.append(squaredDistanceAt(parameter));
-            }
-
-            for (int sample = 0; sample <= subdivisions; ++sample) {
-                const qreal previousDistance =
-                    sample > 0 ? sampleDistances[sample - 1]
-                               : std::numeric_limits<qreal>::infinity();
-                const qreal nextDistance =
-                    sample < subdivisions
-                        ? sampleDistances[sample + 1]
-                        : std::numeric_limits<qreal>::infinity();
-                if (sampleDistances[sample] > previousDistance ||
-                    sampleDistances[sample] > nextDistance) {
-                    continue;
-                }
-
-                const qreal low =
-                    sampleParameters[std::max(0, sample - 1)];
-                const qreal high =
-                    sampleParameters[std::min(subdivisions, sample + 1)];
-                qreal minimumParameter = sampleParameters[sample];
-                if (high - low > 1.0e-14) {
-                    minimumParameter = goldenMinimum(low, high);
-                }
-                if (squaredDistanceAt(minimumParameter) >
-                    eraserRadiusSquared) {
-                    continue;
-                }
-
-                qreal leftBoundary = spanStart;
-                int previous = sample;
-                while (previous >= 0 &&
-                       sampleParameters[previous] >= minimumParameter) {
-                    --previous;
-                }
-                while (previous >= 0 &&
-                       sampleDistances[previous] <= eraserRadiusSquared) {
-                    --previous;
-                }
-                if (previous >= 0) {
-                    leftBoundary = refineBoundary(sampleParameters[previous],
-                                                  minimumParameter,
-                                                  true);
-                }
-
-                qreal rightBoundary = spanEnd;
-                int next = sample;
-                while (next <= subdivisions &&
-                       sampleParameters[next] <= minimumParameter) {
-                    ++next;
-                }
-                while (next <= subdivisions &&
-                       sampleDistances[next] <= eraserRadiusSquared) {
-                    ++next;
-                }
-                if (next <= subdivisions) {
-                    rightBoundary = refineBoundary(sampleParameters[next],
-                                                   minimumParameter,
-                                                   false);
-                }
-
-                if (rightBoundary - leftBoundary > 0.0) {
-                    intervals.append({leftBoundary, rightBoundary});
-                }
-            }
-        }
-
-        std::sort(intervals.begin(),
-                  intervals.end(),
-                  [](const ParameterInterval &first,
-                     const ParameterInterval &second) {
-                      return first.start < second.start;
-                  });
-        const qreal mergeTolerance =
-            std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
-        QVector<ParameterInterval> merged;
-        for (const ParameterInterval &interval : intervals) {
-            if (interval.end - interval.start <= mergeTolerance) {
-                continue;
-            }
-            if (!merged.isEmpty() &&
-                interval.start <= merged.last().end + mergeTolerance) {
-                merged.last().end =
-                    std::max(merged.last().end, interval.end);
-            } else {
-                merged.append(interval);
-            }
-        }
-        return merged;
-    }
-
-    QVector<ParameterInterval> eraserIntervalsForCurve(
-        const Shape::NurbsCurve2D &curve,
-        const QVector<QPointF> &stroke,
-        const WorkPlaneFrame &workPlaneFrame) const
-    {
-        QVector<ParameterInterval> intervals;
-        if (!isValidNurbsCurve(curve) || stroke.isEmpty()) {
-            return intervals;
-        }
-        if (stroke.size() == 1) {
-            intervals = eraserIntervalsForNurbsStrokeSegment(
-                curve, workPlaneFrame, stroke.first(), stroke.first());
-        } else {
-            for (int index = 1; index < stroke.size(); ++index) {
-                const QVector<ParameterInterval> segmentIntervals =
-                    eraserIntervalsForNurbsStrokeSegment(
-                        curve,
-                        workPlaneFrame,
-                        stroke[index - 1],
-                        stroke[index]);
-                intervals += segmentIntervals;
-            }
-        }
-
-        const QVector<double> fullKnots = expandedKnotVector(curve);
-        const qreal domainStart = fullKnots[curve.degree];
-        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
-        const qreal domainLength = domainEnd - domainStart;
-        const qreal mergeTolerance =
-            std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
-        std::sort(intervals.begin(),
-                  intervals.end(),
-                  [](const ParameterInterval &first,
-                     const ParameterInterval &second) {
-                      return first.start < second.start;
-                  });
-        QVector<ParameterInterval> merged;
-        for (const ParameterInterval &interval : intervals) {
-            if (interval.end - interval.start <= mergeTolerance) {
-                continue;
-            }
-            if (!merged.isEmpty() &&
-                interval.start <= merged.last().end + mergeTolerance) {
-                merged.last().end =
-                    std::max(merged.last().end, interval.end);
-            } else {
-                merged.append(interval);
-            }
-        }
-        return merged;
-    }
-
-    QVector<ParameterInterval> eraserIntervalsForCurve(
-        const Shape::NurbsCurve2D &curve,
-        const QVector<QPointF> &stroke) const
-    {
-        return eraserIntervalsForCurve(curve,
-                                       stroke,
-                                       viewportTransform_.workPlaneFrame());
-    }
-
-    QVector<ParameterInterval> boundEraseIntervals(
-        const Shape::NurbsCurve2D &curve,
-        const QVector<ParameterInterval> &hitIntervals,
-        const QVector<qreal> &intersectionParameters) const
-    {
-        if (hitIntervals.isEmpty() || !isValidNurbsCurve(curve)) {
-            return {};
-        }
-
-        const QVector<double> fullKnots = expandedKnotVector(curve);
-        const qreal domainStart = fullKnots[curve.degree];
-        const qreal domainEnd = fullKnots[curve.controlPoints.size()];
-        const qreal domainLength = domainEnd - domainStart;
-        const qreal tolerance = std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
-
-        QVector<qreal> boundaries{domainStart, domainEnd};
-        boundaries += intersectionParameters;
-        std::sort(boundaries.begin(), boundaries.end());
-
-        QVector<qreal> uniqueBoundaries;
-        for (const qreal boundary : boundaries) {
-            const qreal clampedBoundary = std::clamp(boundary,
-                                                     domainStart,
-                                                     domainEnd);
-            if (uniqueBoundaries.isEmpty() ||
-                clampedBoundary > uniqueBoundaries.back() + tolerance) {
-                uniqueBoundaries.append(clampedBoundary);
-            } else {
-                uniqueBoundaries.back() =
-                    std::max(uniqueBoundaries.back(), clampedBoundary);
-            }
-        }
-
-        QVector<ParameterInterval> removedIntervals;
-        for (const ParameterInterval &hit : hitIntervals) {
-            const qreal hitMidpoint = (hit.start + hit.end) * 0.5;
-            for (int boundaryIndex = 0;
-                 boundaryIndex + 1 < uniqueBoundaries.size();
-                 ++boundaryIndex) {
-                const qreal pieceStart = uniqueBoundaries[boundaryIndex];
-                const qreal pieceEnd = uniqueBoundaries[boundaryIndex + 1];
-                if (pieceEnd - pieceStart <= tolerance ||
-                    hit.end <= pieceStart + tolerance ||
-                    hit.start >= pieceEnd - tolerance) {
-                    continue;
-                }
-
-                // The eraser has a visible radius. Near a real intersection,
-                // that radius can overlap both neighboring pieces even when
-                // the stroke is centered on only one of them. Use the stroke
-                // interval's center to choose the directly erased piece, and
-                // also retain pieces whose center is fully covered by a long
-                // stroke. This prevents a small brush overlap from deleting
-                // past the intersection while still allowing a long drag to
-                // remove several complete pieces.
-                const qreal pieceMidpoint = (pieceStart + pieceEnd) * 0.5;
-                const bool hitCenterIsInPiece =
-                    hitMidpoint > pieceStart + tolerance &&
-                    hitMidpoint < pieceEnd - tolerance;
-                const bool pieceCenterIsInHit =
-                    pieceMidpoint >= hit.start - tolerance &&
-                    pieceMidpoint <= hit.end + tolerance;
-                if (hitCenterIsInPiece || pieceCenterIsInHit) {
-                    removedIntervals.append(ParameterInterval{pieceStart, pieceEnd});
-                }
-            }
-        }
-
-        if (removedIntervals.isEmpty()) {
-            return removedIntervals;
-        }
-
-        // A closed curve's domain ends are the same geometric point, not
-        // cutting boundaries. The first and last parameter pieces therefore
-        // belong to one section unless another curve intersects the seam.
-        QPointF firstPoint;
-        QPointF lastPoint;
-        const bool closed = evaluateNurbsPoint(curve, domainStart, &firstPoint) &&
-                            evaluateNurbsPoint(curve, domainEnd, &lastPoint) &&
-                            std::hypot(firstPoint.x() - lastPoint.x(),
-                                       firstPoint.y() - lastPoint.y()) <= 1.0e-8;
-        const bool seamIsIntersection = std::any_of(
-            intersectionParameters.begin(), intersectionParameters.end(),
-            [&](qreal parameter) {
-                return std::abs(parameter - domainStart) <= tolerance ||
-                       std::abs(parameter - domainEnd) <= tolerance;
-            });
-        if (closed && !seamIsIntersection && uniqueBoundaries.size() > 2) {
-            const bool removesFirstPiece = std::any_of(
-                removedIntervals.begin(), removedIntervals.end(),
-                [&](const ParameterInterval &interval) {
-                    return interval.start <= domainStart + tolerance &&
-                           interval.end > domainStart + tolerance;
-                });
-            const bool removesLastPiece = std::any_of(
-                removedIntervals.begin(), removedIntervals.end(),
-                [&](const ParameterInterval &interval) {
-                    return interval.end >= domainEnd - tolerance &&
-                           interval.start < domainEnd - tolerance;
-                });
-            if (removesFirstPiece || removesLastPiece) {
-                removedIntervals.append({domainStart, uniqueBoundaries[1]});
-                removedIntervals.append({uniqueBoundaries[uniqueBoundaries.size() - 2],
-                                         domainEnd});
-            }
-        }
-
-        std::sort(removedIntervals.begin(),
-                  removedIntervals.end(),
-                  [](const ParameterInterval &first, const ParameterInterval &second) {
-                      return first.start < second.start;
-                  });
-        QVector<ParameterInterval> merged;
-        for (const ParameterInterval &interval : removedIntervals) {
-            if (!merged.isEmpty() &&
-                interval.start <= merged.last().end + tolerance) {
-                merged.last().end = std::max(merged.last().end, interval.end);
-            } else {
-                merged.append(interval);
-            }
-        }
-        return merged;
-    }
-
-    QVector<ParameterInterval> curveIntervalsInsideScreenBox(
-        const Shape::NurbsCurve2D &curve,
-        const SampledNurbsCurve2D &sampled,
-        const WorkPlaneFrame &workPlaneFrame,
-        const QRectF &box) const
-    {
-        QVector<ParameterInterval> intervals;
-        if (!isValidNurbsCurve(curve) || sampled.parameters.size() < 2 ||
-            sampled.parameters.size() != sampled.screenPoints.size()) {
-            return intervals;
-        }
-
-        const QRectF region = box.normalized();
-        const auto isInside = [&](qreal parameter) {
-            QPointF worldPoint;
-            return evaluateNurbsPoint(curve, parameter, &worldPoint) &&
-                   region.contains(viewportTransform_.workPlaneToScreen(
-                       worldPoint, size(), workPlaneFrame));
-        };
-        const auto refineBoundary = [&](qreal first,
-                                        qreal second,
-                                        bool firstInside) {
-            qreal low = first;
-            qreal high = second;
-            for (int iteration = 0; iteration < 32; ++iteration) {
-                const qreal middle = (low + high) * 0.5;
-                if (isInside(middle) == firstInside) {
-                    low = middle;
-                } else {
-                    high = middle;
-                }
-            }
-            return (low + high) * 0.5;
-        };
-
-        qreal intervalStart = sampled.parameters.first();
-        bool previousInside = region.contains(sampled.screenPoints.first());
-        bool insideInterval = previousInside;
-        for (int sample = 1; sample < sampled.parameters.size(); ++sample) {
-            const bool currentInside = region.contains(sampled.screenPoints[sample]);
-            if (currentInside != previousInside) {
-                const qreal boundary = refineBoundary(sampled.parameters[sample - 1],
-                                                       sampled.parameters[sample],
-                                                       previousInside);
-                if (currentInside) {
-                    intervalStart = boundary;
-                    insideInterval = true;
-                } else if (insideInterval) {
-                    intervals.append({intervalStart, boundary});
-                    insideInterval = false;
-                }
-            }
-            previousInside = currentInside;
-        }
-        if (insideInterval) {
-            intervals.append({intervalStart, sampled.parameters.last()});
-        }
-
-        const qreal domainLength = sampled.parameters.last() -
-                                   sampled.parameters.first();
-        const qreal tolerance = std::max<qreal>(1.0e-9, domainLength * 1.0e-8);
-        intervals.erase(std::remove_if(intervals.begin(), intervals.end(),
-                                       [tolerance](const ParameterInterval &interval) {
-                                           return interval.end - interval.start <= tolerance;
-                                       }),
-                        intervals.end());
-        return intervals;
-    }
 
     void updateErasePreviewIntervals(bool reset,
                                      int onlyShapeIndex = -1,
@@ -11948,26 +7664,26 @@ private:
         invalidateEraseGeometryCacheForView();
         if (!eraseGeometryCachePrepared_) {
             prepareEraseGeometryCache();
-            if (eraseStrokeActive_ && !eraseStrokeScreenPath_.isEmpty()) {
-                eraseAlongScreenSegment(eraseStrokeScreenPath_.first(),
-                                        eraseStrokeScreenPath_.first());
-                for (int point = 1; point < eraseStrokeScreenPath_.size(); ++point) {
-                    eraseAlongScreenSegment(eraseStrokeScreenPath_[point - 1],
-                                            eraseStrokeScreenPath_[point]);
+            if (eraseTool_.strokeActive() && !eraseLikeScreenPath().isEmpty()) {
+                eraseAlongScreenSegment(eraseLikeScreenPath().first(),
+                                        eraseLikeScreenPath().first());
+                for (int point = 1; point < eraseLikeScreenPath().size(); ++point) {
+                    eraseAlongScreenSegment(eraseLikeScreenPath()[point - 1],
+                                            eraseLikeScreenPath()[point]);
                 }
             }
         }
-        if (eraseStrokeScreenPath_.isEmpty()) {
+        if (eraseLikeScreenPath().isEmpty()) {
             return;
         }
 
-        const int strokePointCount = eraseStrokeScreenPath_.size();
+        const int strokePointCount = eraseLikeScreenPath().size();
         for (EraseCurveSampleCache &targetCurve : eraseTargetCurveCaches_) {
             if (reset || targetCurve.previewStrokePointCount > strokePointCount) {
                 targetCurve.previewIntervals.clear();
                 targetCurve.previewStrokePointCount = 0;
             }
-            if (!eraseCandidateShapeIndices_.contains(
+            if (!eraseCandidates().contains(
                     shapes_.objectIdAt(targetCurve.shapeIndex))) {
                 continue;
             }
@@ -11982,11 +7698,13 @@ private:
             QVector<ParameterInterval> newHitIntervals;
             int firstStrokeSegment = targetCurve.previewStrokePointCount;
             if (targetCurve.previewStrokePointCount == 0) {
-                newHitIntervals = eraserIntervalsForNurbsStrokeSegment(
+                newHitIntervals = nurbsEraseIntervalsForStrokeSegment(
                     targetCurve.curve,
                     targetCurve.workPlaneFrame,
-                    eraseStrokeScreenPath_.first(),
-                    eraseStrokeScreenPath_.first());
+                    eraseLikeScreenPath().first(),
+                    eraseLikeScreenPath().first(),
+                    viewportTransform_,
+                    size());
                 firstStrokeSegment = 1;
             }
 
@@ -11994,11 +7712,13 @@ private:
                  strokeSegment < strokePointCount;
                  ++strokeSegment) {
                 const QVector<ParameterInterval> segmentIntervals =
-                    eraserIntervalsForNurbsStrokeSegment(
+                    nurbsEraseIntervalsForStrokeSegment(
                         targetCurve.curve,
                         targetCurve.workPlaneFrame,
-                        eraseStrokeScreenPath_[strokeSegment - 1],
-                        eraseStrokeScreenPath_[strokeSegment]);
+                        eraseLikeScreenPath()[strokeSegment - 1],
+                        eraseLikeScreenPath()[strokeSegment],
+                        viewportTransform_,
+                        size());
                 for (const ParameterInterval &interval : segmentIntervals) {
                     newHitIntervals.append(interval);
                 }
@@ -12008,39 +7728,13 @@ private:
                 for (const ParameterInterval &interval : newHitIntervals) {
                     targetCurve.previewIntervals.append(interval);
                 }
-                targetCurve.previewIntervals = boundEraseIntervals(
+                targetCurve.previewIntervals = boundCurveEraseIntervals(
                     targetCurve.curve,
                     targetCurve.previewIntervals,
                     targetCurve.intersectionParameters);
             }
             targetCurve.previewStrokePointCount = strokePointCount;
         }
-    }
-
-    QVector<ParameterInterval> eraseIntervalsBoundedByIntersections(
-        int sourceShapeIndex,
-        int sourceComponentIndex,
-        const Shape::NurbsCurve2D &curve,
-        const QVector<QPointF> &stroke,
-        const QVector<qreal> *cachedIntersectionParameters = nullptr) const
-    {
-        const WorkPlaneFrame workPlaneFrame =
-            sourceShapeIndex >= 0 && sourceShapeIndex < shapes_.size()
-                ? shapeWorkPlaneFrame(shapes_[sourceShapeIndex])
-                : viewportTransform_.workPlaneFrame();
-        const QVector<ParameterInterval> hitIntervals =
-            eraserIntervalsForCurve(curve, stroke, workPlaneFrame);
-        if (hitIntervals.isEmpty()) {
-            return {};
-        }
-
-        const QVector<qreal> intersectionParameters =
-            cachedIntersectionParameters != nullptr
-                ? *cachedIntersectionParameters
-                : eraseIntersectionParameters(sourceShapeIndex,
-                                              sourceComponentIndex,
-                                              curve);
-        return boundEraseIntervals(curve, hitIntervals, intersectionParameters);
     }
 
     bool trimShapeAtEraserStroke(const Shape &shape,
@@ -12055,364 +7749,124 @@ private:
             return false;
         }
         replacement->clear();
-
-        if (shape.geometryType == GeometryType::Point) {
+        TrimEraseShapeQueryResult queryResult;
+        const EraseIntersectionResolver intersectionResolver =
+            [this, sourceShapeIndex](int componentIndex,
+                                     const NurbsCurve2D &curve,
+                                     const WorkPlaneFrame &) {
+                EraseIntersectionParameterResult intersections;
+                intersections.parameters = eraseIntersectionParameters(
+                    sourceShapeIndex,
+                    componentIndex,
+                    curve,
+                    nullptr,
+                    &intersections.intersectingObjectIds);
+                return intersections;
+            };
+        if (!calculateTrimEraseReplacement(
+                shape,
+                sourceShapeIndex,
+                stroke,
+                trimBox,
+                activeTool_ == Tool::Erase && trimBox == nullptr,
+                onlyComponentIndex,
+                cachedTargets,
+                joinEndpointTolerance(),
+                curveSampler_,
+                viewportTransform_,
+                size(),
+                intersectionResolver,
+                &queryResult)) {
             return false;
         }
 
-        QVector<Shape::NurbsCurve2D> sourceCurves;
-        if (shape.geometryType == GeometryType::PolyCurve) {
-            sourceCurves = shape.components;
-        } else if (isValidNurbsCurve(shape.nurbs)) {
-            sourceCurves.append(shape.nurbs);
-        } else if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
-            sourceCurves.append(makeDegreeOneNurbs(shape.points));
-        } else if (shape.geometryType == GeometryType::Rectangle ||
-                   shape.geometryType == GeometryType::Polygon) {
-            const QVector<QPointF> vertices =
-                shape.geometryType == GeometryType::Rectangle
-                    ? rectangleVertices(shape)
-                    : polygonVerticesForShape(shape);
-            const int minimumVertices = shape.geometryType == GeometryType::Rectangle
-                                            ? 4
-                                            : 3;
-            if (vertices.size() < minimumVertices) {
-                return false;
-            }
-            sourceCurves.reserve(vertices.size());
-            for (int index = 0; index < vertices.size(); ++index) {
-                sourceCurves.append(makeDegreeOneNurbs(
-                    {vertices[index], vertices[(index + 1) % vertices.size()]}));
-            }
-        } else {
-            return false;
+        if (queryResult.erasedWholeObject) {
+            const ObjectId objectId = sourceShapeIndex >= 0 &&
+                                              sourceShapeIndex < shapes_.size()
+                                          ? shapes_.objectIdAt(sourceShapeIndex)
+                                          : ObjectId::invalid();
+            DebugLog::instance().write(
+                QStringLiteral("erase whole-object object=%1 shape=%2 type=%3 components=%4 reason=no-intersections")
+                    .arg(objectId.value())
+                    .arg(sourceShapeIndex)
+                    .arg(geometryTypeName(shape.geometryType))
+                    .arg(queryResult.components.size()));
         }
-
-        const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(shape);
-        const bool wholeObjectOnIntersectionFreeErase =
-            activeTool_ == Tool::Erase && trimBox == nullptr;
-        QVector<QVector<ParameterInterval>> eraseHitIntervals;
-        QVector<QVector<qreal>> eraseBoundaryParameters;
-        QVector<QVector<quint64>> eraseIntersectionObjectIds;
-        if (wholeObjectOnIntersectionFreeErase) {
-            eraseHitIntervals.resize(sourceCurves.size());
-            eraseBoundaryParameters.resize(sourceCurves.size());
-            eraseIntersectionObjectIds.resize(sourceCurves.size());
-            bool strokeHitsObject = false;
-            bool objectHasIntersection = false;
-            for (int componentIndex = 0;
-                 componentIndex < sourceCurves.size();
-                 ++componentIndex) {
-                const Shape::NurbsCurve2D &sourceCurve =
-                    sourceCurves[componentIndex];
-                const EraseCurveSampleCache *cachedTargetCurve = nullptr;
-                if (cachedTargets != nullptr) {
-                    for (const EraseCurveSampleCache &cachedTarget : *cachedTargets) {
-                        if (cachedTarget.shapeIndex == sourceShapeIndex &&
-                            cachedTarget.componentIndex == componentIndex) {
-                            cachedTargetCurve = &cachedTarget;
-                            break;
-                        }
-                    }
-                }
-
-                if (cachedTargetCurve != nullptr) {
-                    eraseBoundaryParameters[componentIndex] =
-                        cachedTargetCurve->intersectionParameters;
-                    eraseIntersectionObjectIds[componentIndex] =
-                        cachedTargetCurve->intersectionObjectIds;
-                } else {
-                    eraseBoundaryParameters[componentIndex] =
-                        eraseIntersectionParameters(sourceShapeIndex,
-                                                    componentIndex,
-                                                    sourceCurve,
-                                                    nullptr,
-                                                    &eraseIntersectionObjectIds[componentIndex]);
-                }
-                qreal componentDomainStart = 0.0;
-                qreal componentDomainEnd = 0.0;
-                const qreal componentDomainLength =
-                    nurbsParameterDomain(sourceCurve,
-                                         &componentDomainStart,
-                                         &componentDomainEnd)
-                        ? componentDomainEnd - componentDomainStart
-                        : 0.0;
-                const qreal boundaryTolerance = std::max<qreal>(
-                    1.0e-12, componentDomainLength * 1.0e-9);
-                const bool hasInteriorIntersection = std::any_of(
-                    eraseBoundaryParameters[componentIndex].begin(),
-                    eraseBoundaryParameters[componentIndex].end(),
-                    [&](qreal parameter) {
-                        return parameter > componentDomainStart + boundaryTolerance &&
-                               parameter < componentDomainEnd - boundaryTolerance;
-                    });
-                eraseHitIntervals[componentIndex] = eraserIntervalsForCurve(
-                    sourceCurve, stroke, sourceFrame);
-                strokeHitsObject = strokeHitsObject ||
-                                   !eraseHitIntervals[componentIndex].isEmpty();
-                objectHasIntersection = objectHasIntersection ||
-                                        hasInteriorIntersection ||
-                                        !eraseIntersectionObjectIds[componentIndex].isEmpty();
-            }
-
-            if (strokeHitsObject && !objectHasIntersection) {
-                const ObjectId objectId = sourceShapeIndex >= 0 &&
-                                                  sourceShapeIndex < shapes_.size()
-                                              ? shapes_.objectIdAt(sourceShapeIndex)
-                                              : ObjectId::invalid();
-                DebugLog::instance().write(
-                    QStringLiteral("erase whole-object object=%1 shape=%2 type=%3 components=%4 reason=no-intersections")
-                        .arg(objectId.value())
-                        .arg(sourceShapeIndex)
-                        .arg(geometryTypeName(shape.geometryType))
-                        .arg(sourceCurves.size()));
-                return true;
-            }
-        }
-
-        QVector<Shape::NurbsCurve2D> remainingCurves;
-        bool changed = false;
-        for (int sourceComponentIndex = 0;
-             sourceComponentIndex < sourceCurves.size();
-             ++sourceComponentIndex) {
-            const Shape::NurbsCurve2D &sourceCurve = sourceCurves[sourceComponentIndex];
-            if (onlyComponentIndex >= 0 &&
-                sourceComponentIndex != onlyComponentIndex) {
-                remainingCurves.append(sourceCurve);
-                continue;
-            }
-            const QVector<qreal> *cachedIntersectionParameters = nullptr;
-            const EraseCurveSampleCache *cachedTargetCurve = nullptr;
-            if (cachedTargets != nullptr) {
-                for (const EraseCurveSampleCache &cachedTarget : *cachedTargets) {
-                    if (cachedTarget.shapeIndex == sourceShapeIndex &&
-                        cachedTarget.componentIndex == sourceComponentIndex) {
-                        cachedTargetCurve = &cachedTarget;
-                        cachedIntersectionParameters =
-                            &cachedTarget.intersectionParameters;
-                        break;
-                    }
-                }
-            }
-            QVector<ParameterInterval> removedIntervals;
-            if (trimBox != nullptr) {
-                SampledNurbsCurve2D fallbackSamples;
-                const SampledNurbsCurve2D *samples =
-                    cachedTargetCurve != nullptr ? &cachedTargetCurve->sampled
-                                                 : &fallbackSamples;
-                if (cachedTargetCurve == nullptr &&
-                    !sampleNurbsCurveForErase(sourceCurve,
-                                              sourceFrame,
-                                              &fallbackSamples)) {
-                    remainingCurves.append(sourceCurve);
+        if (activeTool_ == Tool::Trim &&
+            (trimBox != nullptr || onlyComponentIndex >= 0)) {
+            QStringList componentText;
+            for (const TrimEraseComponentQueryResult &component :
+                 queryResult.components) {
+                if (trimBox == nullptr &&
+                    component.componentIndex != onlyComponentIndex) {
                     continue;
                 }
-                const QVector<ParameterInterval> hitIntervals =
-                    curveIntervalsInsideScreenBox(sourceCurve,
-                                                  *samples,
-                                                  sourceFrame,
-                                                  *trimBox);
-                QVector<qreal> fallbackIntersections;
-                const QVector<qreal> *intersections = cachedIntersectionParameters;
-                if (intersections == nullptr) {
-                    fallbackIntersections = eraseIntersectionParameters(
-                        sourceShapeIndex, sourceComponentIndex, sourceCurve);
-                    intersections = &fallbackIntersections;
+                QStringList intervalText;
+                for (const ParameterInterval &interval : component.removedIntervals) {
+                    intervalText.append(
+                        QStringLiteral("%1..%2")
+                            .arg(interval.start, 0, 'g', 10)
+                            .arg(interval.end, 0, 'g', 10));
                 }
-                removedIntervals = boundEraseIntervals(sourceCurve,
-                                                       hitIntervals,
-                                                       *intersections);
-            } else if (wholeObjectOnIntersectionFreeErase) {
-                removedIntervals = boundEraseIntervals(
-                    sourceCurve,
-                    eraseHitIntervals[sourceComponentIndex],
-                    eraseBoundaryParameters[sourceComponentIndex]);
-            } else {
-                removedIntervals = eraseIntervalsBoundedByIntersections(
-                    sourceShapeIndex,
-                    sourceComponentIndex,
-                    sourceCurve,
-                    stroke,
-                    cachedIntersectionParameters);
+                componentText.append(
+                    QStringLiteral("component=%1 intervals=[%2] boundaries=%3 frameValid=%4")
+                        .arg(component.componentIndex)
+                        .arg(intervalText.join(','))
+                        .arg(component.intersectionParameters.size())
+                        .arg(isValidWorkPlaneFrame(component.workPlaneFrame)));
             }
-            if (removedIntervals.isEmpty()) {
-                if (activeTool_ == Tool::Trim &&
-                    (trimBox != nullptr ||
-                     sourceComponentIndex == onlyComponentIndex)) {
-                    const ObjectId objectId = sourceShapeIndex >= 0 &&
-                                                      sourceShapeIndex < shapes_.size()
-                                                  ? shapes_.objectIdAt(sourceShapeIndex)
-                                                  : ObjectId::invalid();
-                    DebugLog::instance().write(
-                        QStringLiteral("trim section empty object=%1 shape=%2 type=%3 component=%4 mode=%5 boundaries=%6 frameValid=%7")
-                            .arg(objectId.value())
-                            .arg(sourceShapeIndex)
-                            .arg(geometryTypeName(shape.geometryType))
-                            .arg(sourceComponentIndex)
-                            .arg(trimBox != nullptr ? QStringLiteral("box")
-                                                    : QStringLiteral("click"))
-                            .arg(cachedIntersectionParameters == nullptr
-                                     ? 0
-                                     : cachedIntersectionParameters->size())
-                            .arg(isValidWorkPlaneFrame(sourceFrame)));
-                }
-                remainingCurves.append(sourceCurve);
-                continue;
-            }
-
-            if (activeTool_ == Tool::Trim &&
-                (trimBox != nullptr ||
-                 sourceComponentIndex == onlyComponentIndex)) {
+            if (!componentText.isEmpty()) {
                 const ObjectId objectId = sourceShapeIndex >= 0 &&
                                                   sourceShapeIndex < shapes_.size()
                                               ? shapes_.objectIdAt(sourceShapeIndex)
                                               : ObjectId::invalid();
-                QStringList removedParameterText;
-                for (const ParameterInterval &interval : removedIntervals) {
-                    QPointF startLocal;
-                    QPointF endLocal;
-                    QString segmentWorldText = QStringLiteral("world=unavailable");
-                    if (evaluateNurbsPoint(sourceCurve, interval.start, &startLocal) &&
-                        evaluateNurbsPoint(sourceCurve, interval.end, &endLocal)) {
-                        const Point3D startWorld = workPlaneFramePointToWorld(
-                            startLocal, sourceFrame);
-                        const Point3D endWorld = workPlaneFramePointToWorld(
-                            endLocal, sourceFrame);
-                        segmentWorldText =
-                            QStringLiteral("world=(%1,%2,%3)->(%4,%5,%6)")
-                                .arg(startWorld.x, 0, 'g', 8)
-                                .arg(startWorld.y, 0, 'g', 8)
-                                .arg(startWorld.z, 0, 'g', 8)
-                                .arg(endWorld.x, 0, 'g', 8)
-                                .arg(endWorld.y, 0, 'g', 8)
-                                .arg(endWorld.z, 0, 'g', 8);
-                    }
-                    removedParameterText.append(
-                        QStringLiteral("u%1..%2 %3")
-                            .arg(interval.start, 0, 'g', 10)
-                            .arg(interval.end, 0, 'g', 10)
-                            .arg(segmentWorldText));
-                }
-                QStringList boundaryParameterText;
-                if (cachedIntersectionParameters != nullptr) {
-                    for (const qreal parameter : *cachedIntersectionParameters) {
-                        boundaryParameterText.append(
-                            QString::number(parameter, 'g', 10));
-                    }
-                }
                 DebugLog::instance().write(
-                    QStringLiteral("trim section remove object=%1 shape=%2 type=%3 component=%4 mode=%5 intervals=[%6] boundaries=[%7] frameValid=%8")
+                    QStringLiteral("trim query object=%1 shape=%2 type=%3 mode=%4 %5")
                         .arg(objectId.value())
                         .arg(sourceShapeIndex)
                         .arg(geometryTypeName(shape.geometryType))
-                        .arg(sourceComponentIndex)
                         .arg(trimBox != nullptr ? QStringLiteral("box")
                                                 : QStringLiteral("click"))
-                        .arg(removedParameterText.join(','))
-                        .arg(boundaryParameterText.join(','))
-                        .arg(isValidWorkPlaneFrame(sourceFrame)));
-            }
-
-            changed = true;
-            const QVector<double> fullKnots = expandedKnotVector(sourceCurve);
-            const qreal domainStart = fullKnots[sourceCurve.degree];
-            const qreal domainEnd = fullKnots[sourceCurve.controlPoints.size()];
-            qreal keepStart = domainStart;
-            const qreal tolerance =
-                std::max<qreal>(1.0e-9, std::abs(domainEnd - domainStart) * 1.0e-9);
-            for (const ParameterInterval &removed : removedIntervals) {
-                if (removed.start - keepStart > tolerance) {
-                    Shape::NurbsCurve2D kept;
-                    if (!trimNurbsCurve(sourceCurve, keepStart, removed.start, &kept)) {
-                        return false;
-                    }
-                    remainingCurves.append(kept);
-                }
-                keepStart = std::max(keepStart, removed.end);
-            }
-            if (domainEnd - keepStart > tolerance) {
-                Shape::NurbsCurve2D kept;
-                if (!trimNurbsCurve(sourceCurve, keepStart, domainEnd, &kept)) {
-                    return false;
-                }
-                remainingCurves.append(kept);
+                        .arg(componentText.join(QStringLiteral("; "))));
             }
         }
 
-        if (!changed) {
-            return false;
-        }
-        if (remainingCurves.isEmpty()) {
-            return true;
-        }
-
-        for (const QVector<Shape::NurbsCurve2D> &connectedCurves :
-             connectedCurveGroups(remainingCurves)) {
-            // Keep fragments that still meet at a closed curve's seam in one
-            // selectable object, but separate disconnected trim remainders.
-            Shape updated = shape;
-            if (shape.geometryType == GeometryType::Line && connectedCurves.size() == 1) {
-                updated.geometryType = GeometryType::Line;
-                updated.nurbs = connectedCurves.first();
-                updated.points = updated.nurbs.controlPoints;
-                updated.subdivisionParameters.clear();
-                updated.components.clear();
-            } else {
-                updated = polyCurveShapeForComponents(shape, connectedCurves);
-            }
-            replacement->append(updated);
-        }
-        return true;
+        *replacement = std::move(queryResult.replacementShapes);
+        return queryResult.changed;
     }
 
     void eraseAlongScreenSegment(const QPointF &start, const QPointF &end)
     {
-        constexpr qreal eraserRadiusPixels = 10.0;
-        constexpr qreal sampleSpacingPixels = 5.0;
-        const qreal length = std::hypot(end.x() - start.x(), end.y() - start.y());
-        const int sampleCount = std::max(
-            1,
-            static_cast<int>(std::ceil(length / sampleSpacingPixels)));
-
-        int addedCandidates = 0;
-        for (int sample = 0; sample <= sampleCount; ++sample) {
-            const qreal fraction = static_cast<qreal>(sample) / sampleCount;
-            const QPointF cursor = start + (end - start) * fraction;
-            for (const ObjectId objectId : eraseTargetShapeIndices_) {
+        const int addedCandidates = eraseTool_.collectCandidatesAlongSegment(
+            start,
+            end,
+            eraseTargetShapeIndices_,
+            [this](const QPointF &cursor, ObjectId objectId) {
                 const int shapeIndex = objectIndex(objectId);
-                if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
-                    continue;
-                }
-                if (eraseCandidateShapeIndices_.contains(objectId)) {
-                    continue;
-                }
-
-                if (distanceToCachedEraseShape(cursor, shapeIndex) <= eraserRadiusPixels) {
-                    eraseCandidateShapeIndices_.append(objectId);
-                    ++addedCandidates;
-                }
-            }
-        }
+                return shapeIndex >= 0 && shapeIndex < shapes_.size()
+                           ? distanceToCachedEraseShape(cursor, shapeIndex)
+                           : std::numeric_limits<qreal>::infinity();
+            });
 
         if (addedCandidates > 0) {
             DebugLog::instance().write(
                 QStringLiteral("erase candidates added=%1 total=%2")
                     .arg(addedCandidates)
-                    .arg(eraseCandidateShapeIndices_.size()));
+                    .arg(eraseTool_.candidateObjectIds().size()));
         }
     }
 
     void applyEraseCandidates(const QRectF *trimBox = nullptr,
                               int onlyComponentIndex = -1)
     {
-        if (eraseCandidateShapeIndices_.isEmpty()) {
+        if (eraseCandidates().isEmpty()) {
             return;
         }
         QElapsedTimer operationTimer;
         operationTimer.start();
 
         QVector<int> indices;
-        for (const ObjectId objectId : eraseCandidateShapeIndices_) {
+        for (const ObjectId objectId : eraseCandidates()) {
             const int index = objectIndex(objectId);
             if (index >= 0) {
                 indices.append(index);
@@ -12421,7 +7875,7 @@ private:
         std::sort(indices.begin(), indices.end());
         indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
 
-        QVector<QPair<int, QVector<Shape>>> changes;
+        QVector<TrimEraseReplacement> changes;
         qint64 geometryEvaluationUs = 0;
         for (auto iterator = indices.crbegin(); iterator != indices.crend(); ++iterator) {
             if (*iterator < 0 || *iterator >= shapes_.size()) {
@@ -12432,7 +7886,7 @@ private:
             QElapsedTimer evaluationTimer;
             evaluationTimer.start();
             const bool changed = trimShapeAtEraserStroke(shapes_[*iterator],
-                                                         eraseStrokeScreenPath_,
+                                                         eraseLikeScreenPath(),
                                                          &replacement,
                                                          *iterator,
                                                          &eraseTargetCurveCaches_,
@@ -12452,7 +7906,8 @@ private:
                         .arg(evaluationUs));
             }
             if (changed) {
-                changes.append(qMakePair(*iterator, replacement));
+                changes.append(TrimEraseReplacement{
+                    shapes_.objectIdAt(*iterator), *iterator, replacement});
             }
         }
 
@@ -12482,69 +7937,56 @@ private:
 
         QElapsedTimer commitTimer;
         commitTimer.start();
-        recordGeometryChange();
-        int removedCount = 0;
-        int generatedPieceCount = 0;
-        QVector<ObjectId> removedObjectIds;
+        DocumentTransaction transaction = session_.beginTransaction();
         QStringList changedObjectDescriptions;
-        for (const QPair<int, QVector<Shape>> &change : changes) {
-            const int shapeIndex = change.first;
+        for (const TrimEraseReplacement &change : changes) {
+            const int shapeIndex = change.sourceIndex;
             if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
                 continue;
             }
 
-            const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
-            generatedPieceCount += change.second.size();
+            const ObjectId objectId = change.sourceObjectId;
             changedObjectDescriptions.append(
                 QStringLiteral("%1:%2:%3->%4")
                     .arg(shapeIndex)
                     .arg(objectId.value())
                     .arg(geometryTypeName(shapes_[shapeIndex].geometryType))
-                    .arg(change.second.size()));
-            if (change.second.isEmpty()) {
-                shapes_.removeAt(shapeIndex);
-                removedObjectIds.append(objectId);
-                ++removedCount;
-            } else {
-                const SceneObject *sourceObject = document_.object(objectId);
-                const SceneObject sourceObjectCopy = sourceObject != nullptr
-                                                         ? *sourceObject
-                                                         : SceneObject{};
-                shapes_.replace(objectId, change.second.first());
-                for (int pieceIndex = 1; pieceIndex < change.second.size(); ++pieceIndex) {
-                    SceneObject piece = sourceObjectCopy;
-                    piece.id = ObjectId::invalid();
-                    piece.geometry = change.second[pieceIndex];
-                    shapes_.insertObject(shapeIndex + pieceIndex, piece);
-                }
-            }
+                    .arg(change.pieces.size()));
+        }
+
+        TrimEraseCommandResult commandResult;
+        if (!TrimEraseCommand::apply(document_,
+                                     transaction,
+                                     changes,
+                                     &commandResult) ||
+            !session_.commitTransaction(transaction)) {
+            return;
         }
 
         const QVector<ObjectId> oldSelectedShapeIndices = selectedShapeIndices_;
         const ObjectId oldSelectedShapeIndex = selectedShapeIndex_;
-        selectedShapeIndices_.clear();
+        QVector<ObjectId> remainingSelection;
+        remainingSelection.reserve(oldSelectedShapeIndices.size());
         for (const ObjectId objectId : oldSelectedShapeIndices) {
-            if (objectIndex(objectId) >= 0 && !removedObjectIds.contains(objectId)) {
-                selectedShapeIndices_.append(objectId);
+            if (objectIndex(objectId) >= 0 &&
+                !commandResult.removedObjectIds.contains(objectId)) {
+                remainingSelection.append(objectId);
             }
         }
-        selectedShapeIndex_ = objectIndex(oldSelectedShapeIndex) >= 0 &&
-                                      !removedObjectIds.contains(oldSelectedShapeIndex)
-                                  ? oldSelectedShapeIndex
-                                  : ObjectId::invalid();
-        if (!selectedShapeIndex_.isValid() && !selectedShapeIndices_.isEmpty()) {
-            selectedShapeIndex_ = selectedShapeIndices_.back();
-        }
-        draggingSelected_ = false;
-        draggingShapeIndices_.clear();
-        draggingControlPoint_ = false;
-        controlPointIndex_ = -1;
+        const ObjectId remainingPrimary =
+            objectIndex(oldSelectedShapeIndex) >= 0 &&
+                    !commandResult.removedObjectIds.contains(oldSelectedShapeIndex)
+                ? oldSelectedShapeIndex
+                : ObjectId::invalid();
+        selection_.setObjectIds(remainingSelection, remainingPrimary);
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
         currentDragSnap_ = DragSnapResult{};
         dragSnapLocked_ = false;
         dragHistoryRecorded_ = false;
         if (activeTool_ == Tool::Trim) {
             QStringList removedIds;
-            for (const ObjectId objectId : removedObjectIds) {
+            for (const ObjectId objectId : commandResult.removedObjectIds) {
                 removedIds.append(QString::number(objectId.value()));
             }
             DebugLog::instance().write(
@@ -12553,7 +7995,7 @@ private:
                                             : QStringLiteral("click"))
                     .arg(indices.size())
                     .arg(changedObjectDescriptions.join(','))
-                    .arg(generatedPieceCount)
+                    .arg(commandResult.generatedPieceCount)
                     .arg(removedIds.join(','))
                     .arg(geometryEvaluationUs)
                     .arg(commitTimer.nsecsElapsed() / 1000)
@@ -12562,17 +8004,15 @@ private:
         DebugLog::instance().write(QStringLiteral("erase segment applied candidates=%1 changed=%2 removed=%3 shapes=%4")
                                        .arg(indices.size())
                                        .arg(changes.size())
-                                       .arg(removedCount)
+                                       .arg(commandResult.removedCount)
                                        .arg(shapes_.size()));
         update();
     }
 
     void cancelEraseStroke()
     {
-        eraseStrokeActive_ = false;
-        eraseCursorPressed_ = false;
-        eraseCandidateShapeIndices_.clear();
-        eraseStrokeScreenPath_.clear();
+        eraseTool_.cancelStroke();
+        eraseTool_.clearCandidates();
         update();
         DebugLog::instance().write(QStringLiteral("erase stroke canceled"));
     }
@@ -12589,41 +8029,12 @@ private:
 
     void resetScaleInteraction()
     {
-        scaleShapeIds_.clear();
-        scaleStep_ = 0;
-        scaleBaseWorld_ = QPointF();
-        scaleReferenceWorld_ = QPointF();
-        scaleAxisDirection_ = QPointF();
-        scaleReferenceLength_ = 0.0;
-        scaleUsingTypedFactor_ = false;
-        scaleTypedFactor_ = 1.0;
-        scaleFactorText_.clear();
-        scalePreviewFactor_ = 1.0;
-        scalePreviewAxis_ = QPointF();
-        scalePreviewValid_ = false;
+        scaleTool_.resetInteraction();
     }
 
     QString scalePrompt() const
     {
-        if (scaleStep_ == 0) {
-            return QStringLiteral("%1: click a base point, or press Enter for the selection center")
-                .arg(scaleModeName(scaleMode_));
-        }
-        if (scaleStep_ == 1) {
-            const QString numeric = scaleFactorText_.isEmpty()
-                                        ? QString()
-                                        : QStringLiteral("  Factor: %1").arg(scaleFactorText_);
-            return QStringLiteral("%1: type a factor + Enter, or click the first reference point%2")
-                .arg(scaleModeName(scaleMode_), numeric);
-        }
-        if (scaleUsingTypedFactor_) {
-            return QStringLiteral("Scale 1D: click the scale direction  •  Factor %1")
-                .arg(scaleTypedFactor_, 0, 'g', 8);
-        }
-        return scaleMode_ == ScaleMode::OneD
-                   ? QStringLiteral("Scale 1D: click the second reference point along the first-point axis")
-                   : QStringLiteral("%1: click the second reference point")
-                         .arg(scaleModeName(scaleMode_));
+        return scaleTool_.prompt();
     }
 
     void publishScalePrompt()
@@ -12637,7 +8048,7 @@ private:
     {
         QRectF combinedBounds;
         bool hasBounds = false;
-        for (const ObjectId objectId : scaleShapeIds_) {
+        for (const ObjectId objectId : scaleState().sourceObjectIds) {
             const int shapeIndex = objectIndex(objectId);
             if (shapeIndex < 0) {
                 continue;
@@ -12658,231 +8069,46 @@ private:
                             qreal factor,
                             ScaleMode mode) const
     {
-        if (shape == nullptr) {
-            return;
-        }
-
-        if (mode == ScaleMode::OneD &&
-            shape->geometryType == GeometryType::Rectangle && shape->points.size() == 2) {
-            shape->points = rectangleVertices(*shape);
-        }
-
-        const auto scaledPoint = [base, axisDirection, factor, mode](const QPointF &point) {
-            const QPointF offset = point - base;
-            if (mode != ScaleMode::OneD) {
-                return base + offset * factor;
-            }
-            const qreal alongAxis = QPointF::dotProduct(offset, axisDirection);
-            return base + offset + axisDirection * (alongAxis * (factor - 1.0));
-        };
-
-        for (QPointF &point : shape->points) {
-            point = scaledPoint(point);
-        }
-        for (QPointF &point : shape->nurbs.controlPoints) {
-            point = scaledPoint(point);
-        }
-        for (Shape::NurbsCurve2D &component : shape->components) {
-            for (QPointF &point : component.controlPoints) {
-                point = scaledPoint(point);
-            }
-        }
-        if (validateNurbsSurface(shape->nurbsSurface)) {
-            const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
-            for (Point3D &point : shape->nurbsSurface.controlPoints) {
-                const qreal depth = signedDistanceFromWorkPlaneFrame(point, frame);
-                const QPointF local = scaledPoint(
-                    worldPointToWorkPlaneFrame(point, frame));
-                point = workPlaneFramePointToWorld(local, frame);
-                point.x += frame.normal.x * depth;
-                point.y += frame.normal.y * depth;
-                point.z += frame.normal.z * depth;
-            }
-        }
-    }
-
-    qreal scaleFactorAtPoint(const QPointF &point) const
-    {
-        if (scaleReferenceLength_ <= 1.0e-12) {
-            return 1.0;
-        }
-        const QPointF offset = point - scaleBaseWorld_;
-        if (scaleMode_ == ScaleMode::OneD) {
-            return QPointF::dotProduct(offset, scaleAxisDirection_) /
-                   scaleReferenceLength_;
-        }
-        return std::hypot(offset.x(), offset.y()) / scaleReferenceLength_;
+        classiCAD::scaleShapeGeometry(shape,
+                                      base,
+                                      axisDirection,
+                                      factor,
+                                      mode == ScaleMode::OneD,
+                                      viewportTransform_.workPlaneFrame());
     }
 
     void updateScalePreview(const QPointF &point)
     {
-        scalePreviewValid_ = false;
-        if (activeTool_ != Tool::Scale || scaleStep_ != 2) {
+        if (activeTool_ != Tool::Scale || scaleState().stage != 2) {
             return;
         }
-
-        if (scaleUsingTypedFactor_) {
-            const QPointF direction = point - scaleBaseWorld_;
-            const qreal length = std::hypot(direction.x(), direction.y());
-            if (length <= 1.0e-12) {
-                return;
-            }
-            scalePreviewAxis_ = direction / length;
-            scalePreviewFactor_ = scaleTypedFactor_;
-        } else {
-            scalePreviewAxis_ = scaleAxisDirection_;
-            scalePreviewFactor_ = scaleFactorAtPoint(point);
-        }
-
-        scalePreviewValid_ = std::isfinite(scalePreviewFactor_) &&
-                             (scaleMode_ != ScaleMode::OneD ||
-                              std::hypot(scalePreviewAxis_.x(),
-                                         scalePreviewAxis_.y()) > 1.0e-12);
+        scaleTool_.updatePreview(point);
     }
 
-    void finishScale()
+    void logScaleCommit(ScaleMode mode,
+                        qreal factor,
+                        const QPointF &basePoint,
+                        int sourceCount) const
     {
-        resetScaleInteraction();
-        currentSnap_ = SnapResult{};
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
-        update();
-    }
-
-    void commitScale(qreal factor, const QPointF &axisDirection)
-    {
-        if (!std::isfinite(factor)) {
-            return;
-        }
-
         const bool changed = std::abs(factor - 1.0) > 1.0e-12;
-        if (changed) {
-            recordGeometryChange();
-            for (const ObjectId objectId : scaleShapeIds_) {
-                const int shapeIndex = objectIndex(objectId);
-                if (shapeIndex >= 0 && document_.isObjectEditable(objectId)) {
-                    scaleShapeGeometry(&shapes_[shapeIndex],
-                                       scaleBaseWorld_,
-                                       axisDirection,
-                                       factor,
-                                       scaleMode_);
-                }
-            }
-            updateAssociativeDimensions(document_, curveSampler_);
-            notifyLayersChanged();
-        }
-
-        DebugLog::instance().write(QStringLiteral("scale committed mode=%1 factor=%2 base=%3 objects=%4 changed=%5")
-                                       .arg(scaleModeName(scaleMode_))
-                                       .arg(factor, 0, 'g', 10)
-                                       .arg(pointText(scaleBaseWorld_))
-                                       .arg(scaleShapeIds_.size())
-                                       .arg(changed));
-        finishScale();
-    }
-
-    bool handleScalePoint(const QPointF &worldPoint)
-    {
-        if (activeTool_ != Tool::Scale || scaleShapeIds_.isEmpty()) {
-            return false;
-        }
-
-        if (scaleStep_ == 0) {
-            scaleBaseWorld_ = worldPoint;
-            scaleStep_ = 1;
-            pendingPoints_ = {scaleBaseWorld_};
-            publishScalePrompt();
-            update();
-            return true;
-        }
-
-        if (scaleStep_ == 1) {
-            const QPointF reference = worldPoint - scaleBaseWorld_;
-            scaleReferenceLength_ = std::hypot(reference.x(), reference.y());
-            if (scaleReferenceLength_ <= 1.0e-12) {
-                return false;
-            }
-            scaleReferenceWorld_ = worldPoint;
-            scaleAxisDirection_ = reference / scaleReferenceLength_;
-            scaleUsingTypedFactor_ = false;
-            scaleStep_ = 2;
-            updateScalePreview(worldPoint);
-            publishScalePrompt();
-            update();
-            return true;
-        }
-
-        updateScalePreview(worldPoint);
-        if (!scalePreviewValid_) {
-            return false;
-        }
-        commitScale(scalePreviewFactor_, scalePreviewAxis_);
-        return true;
-    }
-
-    void cancelScale()
-    {
-        if (activeTool_ != Tool::Scale && scaleShapeIds_.isEmpty()) {
-            return;
-        }
-        resetScaleInteraction();
-        pendingPoints_.clear();
-        currentSnap_ = SnapResult{};
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
-        update();
-        DebugLog::instance().write(QStringLiteral("scale canceled"));
+        DebugLog::instance().write(
+            QStringLiteral("scale committed mode=%1 factor=%2 base=%3 objects=%4 changed=%5")
+                .arg(scaleModeName(mode))
+                .arg(factor, 0, 'g', 10)
+                .arg(pointText(basePoint))
+                .arg(sourceCount)
+                .arg(changed));
     }
 
     void resetRotateInteraction()
     {
-        rotateShapeIndices_.clear();
-        rotateStep_ = 0;
-        rotateFrame_ = {};
-        rotatePrimaryFrame_ = {};
-        rotatePrePivotPlaneFrame_ = {};
-        rotatePrePivotFloorFrame_ = {};
-        rotatePrePivotFloorNormal_ = {};
-        rotateBaseWorldPoint_ = {};
-        rotateReferenceWorldPoint_ = {};
-        rotateReferenceNormal_ = {};
-        rotateBaseWorld_ = QPointF();
-        rotateReferenceWorld_ = QPointF();
-        rotatePreviewAngle_ = 0.0;
-        rotateAccumulatedAngle_ = 0.0;
-        rotateLastRawAngle_ = 0.0;
-        rotateReferenceAngle_ = 0.0;
-        rotateHasPreviousAngle_ = false;
-        rotateAngleSnapEnabled_ = rotateToolPreferences_.angleSnapEnabled;
-        rotateAngleInputActive_ = false;
-        rotateAngleInputManual_ = false;
-        rotateAngleInput_.clear();
-        rotateAngleInputDirection_ = 1.0;
-        rotateAngleInputDirectionCaptured_ = false;
-        rotateLastPointerPoint_ = QPointF();
-        rotatePerpendicularActive_ = false;
-        rotatePrePivotPerpendicularActive_ = false;
-        rotateAxisLockKey_ = 0;
+        rotateTool_.resetInteraction(rotateToolPreferences_.angleSnapEnabled);
         currentSnap_ = SnapResult{};
     }
 
     qreal rotationAngleForPoint(const QPointF &worldPoint) const
     {
-        const QPointF startVector = rotateReferenceWorld_ - rotateBaseWorld_;
-        const QPointF endVector = worldPoint - rotateBaseWorld_;
-        if (std::hypot(startVector.x(), startVector.y()) <= 1.0e-12 ||
-            std::hypot(endVector.x(), endVector.y()) <= 1.0e-12) {
-            return 0.0;
-        }
-
-        constexpr qreal pi = 3.14159265358979323846;
-        qreal angle = std::atan2(endVector.y(), endVector.x()) -
-                      std::atan2(startVector.y(), startVector.x());
-        return std::remainder(angle, 2.0 * pi);
+        return rotateTool_.angleForPoint(worldPoint);
     }
 
     qreal rotateSnapIncrementDegrees() const
@@ -12892,866 +8118,312 @@ private:
                    : rotateToolPreferences_.angleSnapIncrementDegrees;
     }
 
-    qreal snapRotateAngle(qreal angle) const
-    {
-        constexpr qreal pi = 3.14159265358979323846;
-        const qreal increment = rotateSnapIncrementDegrees() * pi / 180.0;
-        const qreal strength =
-            rotateToolPreferences_.angleSnapStrengthDegrees * pi / 180.0;
-        const qreal nearest = std::round(angle / increment) * increment;
-        return std::abs(angle - nearest) <= strength ? nearest : angle;
-    }
-
     void updateRotateReferencePreview(const QPointF &point)
     {
-        if (rotateStep_ != 1) {
-            return;
+        QPointF cursorPoint = cursorWorld_;
+        if (rotateTool_.updateReferencePreview(
+                point, currentSnap_, rotateSnapIncrementDegrees(),
+                rotateToolPreferences_.angleSnapStrengthDegrees,
+                &cursorPoint)) {
+            cursorWorld_ = cursorPoint;
         }
-        const QPointF planePoint = rotateSnappedPoint(point);
-        const QPointF offset = planePoint - rotateBaseWorld_;
-        const qreal radius = std::hypot(offset.x(), offset.y());
-        if (radius <= 1.0e-12) {
-            return;
-        }
-
-        qreal angle = std::atan2(offset.y(), offset.x());
-        if (rotateAngleSnapEnabled_ && !currentSnap_.isValid()) {
-            angle = snapRotateAngle(angle);
-        }
-        cursorWorld_ = rotateBaseWorld_ +
-                       QPointF(radius * std::cos(angle),
-                               radius * std::sin(angle));
     }
 
     void updateRotatePreview(const QPointF &point)
     {
-        if (rotateStep_ != 2) {
-            return;
-        }
-
-        rotateLastPointerPoint_ = rotateSnappedPoint(point);
-        if (rotateAngleInputManual_) {
-            updateRotateCursorForPreviewAngle();
-            return;
-        }
-
-        const QPointF offset = rotateLastPointerPoint_ - rotateBaseWorld_;
-        if (std::hypot(offset.x(), offset.y()) <= 1.0e-12) {
-            return;
-        }
-
-        const qreal radius = std::hypot(offset.x(), offset.y());
-        qreal rawAngle = std::atan2(offset.y(), offset.x());
-        if (currentSnap_.isValid()) {
-            cursorWorld_ = rotateLastPointerPoint_;
-        } else if (rotateAngleSnapEnabled_) {
-            rawAngle = snapRotateAngle(rawAngle);
-            cursorWorld_ = rotateBaseWorld_ +
-                           QPointF(radius * std::cos(rawAngle),
-                                   radius * std::sin(rawAngle));
-        }
-
-        constexpr qreal pi = 3.14159265358979323846;
-        constexpr qreal twoPi = 2.0 * pi;
-        if (!rotateHasPreviousAngle_) {
-            rotateLastRawAngle_ = rawAngle;
-            rotateHasPreviousAngle_ = true;
-        } else {
-            qreal delta = rawAngle - rotateLastRawAngle_;
-            if (delta > pi) {
-                delta -= twoPi;
-            } else if (delta < -pi) {
-                delta += twoPi;
+        const bool manualAngle = rotateState().angleInputManual;
+        QPointF cursorPoint = cursorWorld_;
+        if (rotateTool_.updatePreview(
+                point, currentSnap_, rotateSnapIncrementDegrees(),
+                rotateToolPreferences_.angleSnapStrengthDegrees,
+                &cursorPoint)) {
+            cursorWorld_ = cursorPoint;
+            if (manualAngle) {
+                rawCursorWorld_ = cursorPoint;
+                lastWorldPosition_ = cursorPoint;
             }
-            rotateAccumulatedAngle_ += delta;
-            rotateLastRawAngle_ = rawAngle;
         }
-        rotatePreviewAngle_ = rotateAccumulatedAngle_;
-    }
-
-    QPointF rotateSnappedPoint(const QPointF &point) const
-    {
-        if (rotateStep_ > 0 && currentSnap_.isValid() &&
-            currentSnap_.hasWorldPoint &&
-            isValidWorkPlaneFrame(rotateFrame_)) {
-            return worldPointToWorkPlaneFrame(currentSnap_.worldPoint,
-                                              rotateFrame_);
-        }
-        return point;
-    }
-
-    void updateRotateCursorForPreviewAngle()
-    {
-        if (rotateStep_ != 2) {
-            return;
-        }
-        QPointF radial = rotateLastPointerPoint_ - rotateBaseWorld_;
-        qreal radius = std::hypot(radial.x(), radial.y());
-        if (radius <= 1.0e-12) {
-            radial = rotateReferenceWorld_ - rotateBaseWorld_;
-            radius = std::hypot(radial.x(), radial.y());
-        }
-        if (radius <= 1.0e-12) {
-            return;
-        }
-
-        const qreal angle = rotateReferenceAngle_ + rotatePreviewAngle_;
-        cursorWorld_ = rotateBaseWorld_ +
-                       QPointF(radius * std::cos(angle),
-                               radius * std::sin(angle));
-        rawCursorWorld_ = cursorWorld_;
-        lastWorldPosition_ = cursorWorld_;
     }
 
     bool setRotateTypedAngle(const QString &text)
     {
-        bool validAngle = false;
-        const qreal degrees = text.toDouble(&validAngle);
-        if (!validAngle || !std::isfinite(degrees)) {
+        QPointF cursorPoint = cursorWorld_;
+        if (!rotateTool_.setTypedAngle(text, &cursorPoint)) {
             return false;
         }
-        if (!rotateAngleInputDirectionCaptured_) {
-            rotateAngleInputDirection_ = rotateAccumulatedAngle_ < -1.0e-12
-                                             ? -1.0
-                                             : 1.0;
-            rotateAngleInputDirectionCaptured_ = true;
-        }
-        const qreal angleRadians =
-            degrees * 3.14159265358979323846 / 180.0;
-        rotatePreviewAngle_ = rotateAngleInputDirection_ * angleRadians;
-        rotateAccumulatedAngle_ = rotatePreviewAngle_;
-        rotateAngleInputManual_ = true;
-        updateRotateCursorForPreviewAngle();
+        cursorWorld_ = cursorPoint;
+        rawCursorWorld_ = cursorPoint;
+        lastWorldPosition_ = cursorPoint;
         return true;
     }
 
     void rotateShapeGeometry(Shape *shape, qreal angle) const
     {
-        if (shape == nullptr || !isValidWorkPlaneFrame(rotateFrame_)) {
-            return;
-        }
-
-        if (validateNurbsSurface(shape->nurbsSurface)) {
-            for (Point3D &point : shape->nurbsSurface.controlPoints) {
-                point = rotateWorldPoint(point,
-                                         rotateBaseWorldPoint_,
-                                         rotateFrame_.normal,
-                                         angle);
-            }
-            return;
-        }
-        shape->workPlaneFrame = rotateWorkPlaneFrame(
-            shapeWorkPlaneFrame(*shape),
-            rotateBaseWorldPoint_,
-            rotateFrame_.normal,
-            angle);
-    }
-
-    void rotateShapes(const QVector<ObjectId> &objectIds, qreal angle)
-    {
-        for (const ObjectId objectId : objectIds) {
-            const int shapeIndex = objectIndex(objectId);
-            if (shapeIndex >= 0 && document_.isObjectEditable(objectId)) {
-                rotateShapeGeometry(&shapes_[shapeIndex], angle);
-            }
-        }
+        classiCAD::rotateShapeGeometry(shape,
+                                       rotateState().baseWorldPoint,
+                                       rotateState().frame.normal,
+                                       angle);
     }
 
     void commitRotate(qreal angle)
     {
-        if (!std::isfinite(angle)) {
+        const RotateTool::InteractionState state = rotateState();
+        if (!rotateTool_.commitAngle(angle,
+                                     rotateToolPreferences_.angleSnapEnabled,
+                                     toolContext_)) {
             return;
         }
-        if (std::abs(angle) > 1.0e-12) {
-            recordGeometryChange();
-            rotateShapes(rotateShapeIndices_, angle);
-            updateAssociativeDimensions(document_, curveSampler_);
-            notifyLayersChanged();
-        }
-
+        currentSnap_ = SnapResult{};
         DebugLog::instance().write(QStringLiteral("rotate committed shapes=%1 angleDegrees=%2 pivot=%3 reference=%4")
-                                       .arg(rotateShapeIndices_.size())
+                                       .arg(state.sourceObjectIds.size())
                                        .arg(angle * 180.0 / 3.14159265358979323846, 0, 'f', 4)
-                                       .arg(precisePoint3DText(rotateBaseWorldPoint_))
-                                       .arg(pointText(rotateReferenceWorld_)));
-        resetRotateInteraction();
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
+                                       .arg(precisePoint3DText(state.baseWorldPoint))
+                                       .arg(pointText(state.referencePoint)));
         update();
     }
 
-    bool handleRotatePoint(const QPointF &worldPoint)
+    bool handleRotatePoint(const ToolInput &input)
     {
-        if (activeTool_ != Tool::Rotate || rotateShapeIndices_.isEmpty()) {
+        if (activeTool_ != Tool::Rotate) {
             return false;
         }
+        const int previousStage = rotateState().stage;
+        const RotatePointResult result = rotateTool_.acceptPoint(
+            input, rotateSnapIncrementDegrees(),
+            rotateToolPreferences_.angleSnapStrengthDegrees, toolContext_);
+        if (result.updateCursor) {
+            cursorWorld_ = result.cursorPoint;
+        }
+        if (result.updateRawCursor) {
+            rawCursorWorld_ = result.cursorPoint;
+            lastWorldPosition_ = result.cursorPoint;
+        }
 
-        constexpr qreal minimumPointDistance = 1.0e-9;
-        if (rotateStep_ == 0) {
-            const WorkPlaneFrame inputFrame =
-                isValidWorkPlaneFrame(viewportTransform_.workPlaneFrame())
-                    ? viewportTransform_.workPlaneFrame()
-                    : makeWorkPlaneFrame(WorkPlane::XY, 0.0);
-            rotateBaseWorldPoint_ = currentSnap_.isValid() &&
-                                            currentSnap_.hasWorldPoint
-                                        ? currentSnap_.worldPoint
-                                        : workPlaneFramePointToWorld(worldPoint,
-                                                                     inputFrame);
-            rotateFrame_ = inputFrame;
-            rotateFrame_.origin = rotateBaseWorldPoint_;
-            const bool usedPrePivotPerpendicular =
-                rotatePrePivotPerpendicularActive_ &&
-                isValidWorkPlaneFrame(rotatePrePivotFloorFrame_);
-            rotatePrimaryFrame_ = usedPrePivotPerpendicular
-                                      ? rotatePrePivotFloorFrame_
-                                      : rotateFrame_;
-            rotatePrimaryFrame_.origin = rotateBaseWorldPoint_;
-            rotateReferenceNormal_ = usedPrePivotPerpendicular
-                                         ? rotatePrePivotFloorNormal_
-                                         : rotateFrame_.normal;
-            rotatePrePivotPerpendicularActive_ = false;
-            rotatePrePivotPlaneFrame_ = {};
-            rotatePrePivotFloorFrame_ = {};
-            rotatePrePivotFloorNormal_ = {};
-            rotateAxisLockKey_ = 0;
-            rotateBaseWorld_ = QPointF();
-            rotateReferenceWorld_ = QPointF();
-            rotateStep_ = 1;
-            rotatePreviewAngle_ = 0.0;
-            rotateAccumulatedAngle_ = 0.0;
-            rotateHasPreviousAngle_ = false;
-            rotateAngleInputManual_ = false;
-            rotateAngleInputActive_ = false;
-            rotateAngleInput_.clear();
+        if (result.action == RotatePointAction::PivotCaptured) {
             currentSnap_ = SnapResult{};
-            cursorWorld_ = rotateBaseWorld_;
-            viewportTransform_.setWorkPlaneFrame(rotateFrame_);
             DebugLog::instance().write(QStringLiteral("rotate pivot=%1 planeNormal=(%2,%3,%4)")
-                                           .arg(precisePoint3DText(rotateBaseWorldPoint_))
-                                           .arg(rotateFrame_.normal.x, 0, 'g', 10)
-                                           .arg(rotateFrame_.normal.y, 0, 'g', 10)
-                                           .arg(rotateFrame_.normal.z, 0, 'g', 10));
+                                           .arg(precisePoint3DText(rotateState().baseWorldPoint))
+                                           .arg(rotateState().frame.normal.x, 0, 'g', 10)
+                                           .arg(rotateState().frame.normal.y, 0, 'g', 10)
+                                           .arg(rotateState().frame.normal.z, 0, 'g', 10));
             update();
             return true;
         }
 
-        if (rotateStep_ == 1) {
-            updateRotateReferencePreview(worldPoint);
-            const QPointF reference = cursorWorld_ - rotateBaseWorld_;
-            const qreal radius = std::hypot(reference.x(), reference.y());
-            if (radius <= minimumPointDistance) {
-                DebugLog::instance().write(QStringLiteral("rotate reference ignored at center"));
-                return false;
-            }
-
-            rotateReferenceWorld_ = cursorWorld_;
-            rotateReferenceWorldPoint_ = workPlaneFramePointToWorld(
-                rotateReferenceWorld_, rotateFrame_);
-            rotateLastPointerPoint_ = rotateReferenceWorld_;
-            rotateReferenceAngle_ = std::atan2(reference.y(), reference.x());
-            rotateStep_ = 2;
-            rotatePreviewAngle_ = 0.0;
-            rotateAccumulatedAngle_ = 0.0;
-            rotateLastRawAngle_ = rotateReferenceAngle_;
-            rotateHasPreviousAngle_ = true;
-            rotateAngleInputManual_ = false;
-            rotateAngleInputActive_ = false;
-            rotateAngleInput_.clear();
+        if (result.action == RotatePointAction::ReferenceCaptured) {
             DebugLog::instance().write(QStringLiteral("rotate reference=%1")
-                                           .arg(pointText(rotateReferenceWorld_)));
+                                           .arg(pointText(rotateState().referencePoint)));
             update();
             return true;
         }
 
-        updateRotatePreview(worldPoint);
-        if (rotateAngleInputActive_ && !rotateAngleInput_.isEmpty()) {
-            if (!setRotateTypedAngle(rotateAngleInput_)) {
-                return false;
-            }
+        if (result.action == RotatePointAction::CommitRequested) {
+            commitRotate(result.angle);
+            return true;
         }
-        if (std::hypot(worldPoint.x() - rotateBaseWorld_.x(),
-                       worldPoint.y() - rotateBaseWorld_.y()) <=
-                minimumPointDistance &&
-            std::abs(rotatePreviewAngle_) <= minimumPointDistance) {
+
+        if (previousStage == 1) {
+            DebugLog::instance().write(QStringLiteral("rotate reference ignored at center"));
+        } else if (previousStage == 2 &&
+                   std::hypot(input.worldPosition.x() - rotateState().basePoint.x(),
+                              input.worldPosition.y() - rotateState().basePoint.y()) <=
+                       1.0e-9 &&
+                   std::abs(rotateState().previewAngle) <= 1.0e-9) {
             DebugLog::instance().write(QStringLiteral("rotate final point ignored at center"));
-            return false;
-        }
-
-        commitRotate(rotatePreviewAngle_);
-        return true;
-    }
-
-    void remapRotateCursorToFrame(const WorkPlaneFrame &frame,
-                                  const WorkPlaneFrame &previousFrame)
-    {
-        const Point3D previousWorld = workPlaneFramePointToWorld(cursorWorld_,
-                                                                  previousFrame);
-        viewportTransform_.setWorkPlaneFrame(frame);
-        QPointF remapped;
-        if (!viewportTransform_.screenToWorkPlane(
-                QPointF(lastMousePosition_), size(), frame, &remapped)) {
-            remapped = worldPointToWorkPlaneFrame(previousWorld, frame);
-        }
-        cursorWorld_ = remapped;
-        rawCursorWorld_ = remapped;
-        lastWorldPosition_ = remapped;
-        if (currentSnap_.isValid() && currentSnap_.hasWorldPoint) {
-            currentSnap_.point = worldPointToWorkPlaneFrame(
-                currentSnap_.worldPoint, frame);
-        }
-    }
-
-    bool setRotatePrePivotAxisPlane(int key)
-    {
-        const WorkPlaneFrame currentFrame = viewportTransform_.workPlaneFrame();
-        if (!isValidWorkPlaneFrame(currentFrame)) {
-            return false;
-        }
-        if (rotateAxisLockKey_ == key) {
-            rotateAxisLockKey_ = 0;
-            rotatePrePivotPerpendicularActive_ = false;
-            rotatePrePivotPlaneFrame_ = {};
-            rotatePrePivotFloorFrame_ = {};
-            rotatePrePivotFloorNormal_ = {};
-            updateDrawingWorkPlaneFromHover(QPointF(lastMousePosition_));
-            return true;
-        }
-
-        const Point3D cursorWorld = workPlaneFramePointToWorld(cursorWorld_,
-                                                               currentFrame);
-        Point3D normal;
-        if (key == Qt::Key_X) normal = {1.0, 0.0, 0.0};
-        if (key == Qt::Key_Y) normal = {0.0, 1.0, 0.0};
-        if (key == Qt::Key_Z) normal = {0.0, 0.0, 1.0};
-        const Point3D preferred = key == Qt::Key_X
-                                      ? currentFrame.yAxis
-                                      : currentFrame.xAxis;
-        rotatePrePivotPlaneFrame_ = makeWorkPlaneFrameFromNormal(
-            cursorWorld, normal, preferred);
-        if (!isValidWorkPlaneFrame(rotatePrePivotPlaneFrame_)) {
-            return false;
-        }
-        rotateAxisLockKey_ = key;
-        rotatePrePivotPerpendicularActive_ = false;
-        rotatePrePivotFloorFrame_ = {};
-        rotatePrePivotFloorNormal_ = {};
-        remapRotateCursorToFrame(rotatePrePivotPlaneFrame_, currentFrame);
-        return true;
-    }
-
-    bool toggleRotatePerpendicularPlane()
-    {
-        if (rotateStep_ == 0) {
-            if (rotatePrePivotPerpendicularActive_) {
-                rotatePrePivotPerpendicularActive_ = false;
-                rotatePrePivotPlaneFrame_ = {};
-                rotatePrePivotFloorFrame_ = {};
-                rotatePrePivotFloorNormal_ = {};
-                rotateAxisLockKey_ = 0;
-                updateDrawingWorkPlaneFromHover(QPointF(lastMousePosition_));
-                return true;
-            }
-
-            const WorkPlaneFrame baseFrame = viewportTransform_.workPlaneFrame();
-            if (!isValidWorkPlaneFrame(baseFrame)) {
-                return true;
-            }
-            const Point3D viewDirection = viewportTransform_.viewDirection();
-            const qreal xAlignment = std::abs(arcVectorDot(viewDirection,
-                                                           baseFrame.xAxis));
-            const qreal yAlignment = std::abs(arcVectorDot(viewDirection,
-                                                           baseFrame.yAxis));
-            const Point3D normal = xAlignment > yAlignment
-                                       ? baseFrame.xAxis
-                                       : baseFrame.yAxis;
-            const Point3D preferred = xAlignment > yAlignment
-                                          ? baseFrame.yAxis
-                                          : baseFrame.xAxis;
-            const Point3D cursorWorld = workPlaneFramePointToWorld(cursorWorld_,
-                                                                   baseFrame);
-            rotatePrePivotPlaneFrame_ = makeWorkPlaneFrameFromNormal(
-                cursorWorld, normal, preferred);
-            if (isValidWorkPlaneFrame(rotatePrePivotPlaneFrame_)) {
-                rotatePrePivotFloorFrame_ = baseFrame;
-                rotatePrePivotFloorNormal_ = baseFrame.normal;
-                rotatePrePivotPerpendicularActive_ = true;
-                rotateAxisLockKey_ = 0;
-                remapRotateCursorToFrame(rotatePrePivotPlaneFrame_, baseFrame);
-            }
-            return true;
-        }
-
-        const WorkPlaneFrame oldFrame = rotateFrame_;
-        Point3D targetWorld = workPlaneFramePointToWorld(cursorWorld_, oldFrame);
-        WorkPlaneFrame nextFrame;
-        if (rotatePerpendicularActive_) {
-            nextFrame = rotatePrimaryFrame_;
-            rotatePerpendicularActive_ = false;
-        } else {
-            const Point3D bridgePoint = rotateStep_ == 1
-                                            ? targetWorld
-                                            : rotateReferenceWorldPoint_;
-            Point3D bridge = arcVectorSubtract(bridgePoint,
-                                               rotateBaseWorldPoint_);
-            bridge = arcVectorSubtract(
-                bridge,
-                arcVectorScale(rotateReferenceNormal_,
-                               arcVectorDot(bridge,
-                                            rotateReferenceNormal_)));
-            const qreal bridgeLength = arcVectorLength(bridge);
-            if (bridgeLength <= 1.0e-9) {
-                return true;
-            }
-            const Point3D xAxis = arcVectorScale(bridge, 1.0 / bridgeLength);
-            const Point3D yAxis = rotateReferenceNormal_;
-            const Point3D normal = arcVectorCross(xAxis, yAxis);
-            nextFrame = WorkPlaneFrame{rotateBaseWorldPoint_,
-                                       xAxis,
-                                       yAxis,
-                                       normal,
-                                       true};
-            rotatePerpendicularActive_ = true;
-        }
-
-        if (!isValidWorkPlaneFrame(nextFrame)) {
-            return true;
-        }
-        rotateFrame_ = nextFrame;
-        viewportTransform_.setWorkPlaneFrame(rotateFrame_);
-        cursorWorld_ = worldPointToWorkPlaneFrame(targetWorld, rotateFrame_);
-        rawCursorWorld_ = cursorWorld_;
-        lastWorldPosition_ = cursorWorld_;
-        if (currentSnap_.isValid() && currentSnap_.hasWorldPoint) {
-            currentSnap_.point = worldPointToWorkPlaneFrame(
-                currentSnap_.worldPoint, rotateFrame_);
-        }
-        if (rotateStep_ == 2) {
-            rotateReferenceWorld_ = worldPointToWorkPlaneFrame(
-                rotateReferenceWorldPoint_, rotateFrame_);
-            const QPointF reference = rotateReferenceWorld_ - rotateBaseWorld_;
-            rotateReferenceAngle_ = std::atan2(reference.y(), reference.x());
-            rotateAngleInputActive_ = false;
-            rotateAngleInputManual_ = false;
-            rotateAngleInput_.clear();
-            const QPointF direction = cursorWorld_ - rotateBaseWorld_;
-            if (std::hypot(direction.x(), direction.y()) > 1.0e-12) {
-                rotateLastRawAngle_ = std::atan2(direction.y(), direction.x());
-                rotateAccumulatedAngle_ = rotationAngleForPoint(cursorWorld_);
-                rotatePreviewAngle_ = rotateAccumulatedAngle_;
-                rotateHasPreviousAngle_ = true;
-            } else {
-                rotateHasPreviousAngle_ = false;
-            }
-            rotateLastPointerPoint_ = cursorWorld_;
-        }
-        return true;
-    }
-
-    bool handleRotateKey(QKeyEvent *event)
-    {
-        if (event == nullptr || activeTool_ != Tool::Rotate ||
-            event->isAutoRepeat() || event->modifiers() != Qt::NoModifier) {
-            return false;
-        }
-
-        if ((event->key() == Qt::Key_Return ||
-             event->key() == Qt::Key_Enter ||
-             event->key() == Qt::Key_Space) && rotateStep_ == 2) {
-            if (rotateAngleInputActive_ && !rotateAngleInput_.isEmpty()) {
-                if (!setRotateTypedAngle(rotateAngleInput_)) {
-                    event->accept();
-                    return true;
-                }
-            }
-            commitRotate(rotatePreviewAngle_);
-            event->accept();
-            return true;
-        }
-
-        if (rotateStep_ == 2 && event->key() == Qt::Key_A) {
-            rotateAngleInputActive_ = true;
-            rotateAngleInputManual_ = false;
-            rotateAngleInput_.clear();
-            rotateAngleInputDirectionCaptured_ = false;
-            update();
-            event->accept();
-            return true;
-        }
-
-        if (event->key() == Qt::Key_C) {
-            rotateAngleSnapEnabled_ = !rotateAngleSnapEnabled_;
-            if (rotateStep_ == 1) {
-                updateRotateReferencePreview(cursorWorld_);
-            } else if (rotateStep_ == 2) {
-                if (rotateAngleSnapEnabled_ && !currentSnap_.isValid()) {
-                    const QPointF offset = cursorWorld_ - rotateBaseWorld_;
-                    if (std::hypot(offset.x(), offset.y()) > 1.0e-12) {
-                        rotateLastRawAngle_ = std::atan2(offset.y(), offset.x());
-                        rotateHasPreviousAngle_ = true;
-                    }
-                }
-            }
-            update();
-            event->accept();
-            return true;
-        }
-
-        if (event->key() == Qt::Key_P) {
-            toggleRotatePerpendicularPlane();
-            update();
-            event->accept();
-            return true;
-        }
-
-        if (rotateStep_ == 0 &&
-            (event->key() == Qt::Key_X || event->key() == Qt::Key_Y ||
-             event->key() == Qt::Key_Z)) {
-            setRotatePrePivotAxisPlane(event->key());
-            update();
-            event->accept();
-            return true;
-        }
-
-        if (rotateStep_ == 2 && rotateAngleInputActive_) {
-            if (event->key() == Qt::Key_Backspace) {
-                rotateAngleInput_.chop(1);
-                rotateAngleInputManual_ = !rotateAngleInput_.isEmpty();
-                if (rotateAngleInput_.isEmpty()) {
-                    rotateAngleInputDirectionCaptured_ = false;
-                    rotateAngleInputManual_ = false;
-                    updateRotatePreview(rotateLastPointerPoint_);
-                } else {
-                    setRotateTypedAngle(rotateAngleInput_);
-                }
-                update();
-                event->accept();
-                return true;
-            }
-
-            const QString text = event->text();
-            if (text.size() == 1) {
-                const QChar character = text.front();
-                const bool digit = character.isDigit();
-                const bool decimal = character == QLatin1Char('.') &&
-                                     !rotateAngleInput_.contains(QLatin1Char('.'));
-                const bool sign = (character == QLatin1Char('-') ||
-                                   character == QLatin1Char('+')) &&
-                                  rotateAngleInput_.isEmpty();
-                if (digit || decimal || sign) {
-                    if (rotateAngleInput_.isEmpty()) {
-                        rotateAngleInputDirectionCaptured_ = false;
-                    }
-                    rotateAngleInput_.append(character);
-                    setRotateTypedAngle(rotateAngleInput_);
-                    update();
-                    event->accept();
-                    return true;
-                }
-            }
-        }
-
-        if (rotateStep_ == 2) {
-            const QString text = event->text();
-            if (text.size() == 1 &&
-                (text.front().isDigit() || text.front() == QLatin1Char('.') ||
-                 text.front() == QLatin1Char('-') ||
-                 text.front() == QLatin1Char('+'))) {
-                rotateAngleInputActive_ = true;
-                rotateAngleInput_ = text;
-                rotateAngleInputDirectionCaptured_ = false;
-                setRotateTypedAngle(rotateAngleInput_);
-                update();
-                event->accept();
-                return true;
-            }
         }
         return false;
     }
 
-    void cancelRotate()
+    bool handleRotatePoint(const QPointF &worldPoint)
     {
-        if (activeTool_ != Tool::Rotate && rotateShapeIndices_.isEmpty()) {
+        ToolInput input;
+        input.rawWorldPosition = worldPoint;
+        input.worldPosition = worldPoint;
+        input.workPlaneFrame = viewportTransform_.workPlaneFrame();
+        input.viewportSize = size();
+        input.snapResult = currentSnap_;
+        return handleRotatePoint(input);
+    }
+
+    ToolInput makeRotateToolInput() const
+    {
+        ToolInput input;
+        input.screenPosition = lastMousePosition_;
+        input.rawWorldPosition = rawCursorWorld_;
+        input.worldPosition = cursorWorld_;
+        input.workPlaneFrame = viewportTransform_.workPlaneFrame();
+        input.viewportSize = size();
+        input.snapResult = currentSnap_;
+        input.snapType = currentSnap_.type;
+        return input;
+    }
+
+    void applyRotateFrameResult(const RotateFrameResult &result)
+    {
+        if (result.restoreDrawingFrame) {
+            updateDrawingWorkPlaneFromHover(QPointF(lastMousePosition_));
+        }
+        if (!result.changed || !result.updateCursor) {
             return;
         }
-
-        resetRotateInteraction();
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
-        update();
-        DebugLog::instance().write(QStringLiteral("rotate canceled"));
+        cursorWorld_ = result.cursorPoint;
+        rawCursorWorld_ = result.cursorPoint;
+        lastWorldPosition_ = result.cursorPoint;
+        currentSnap_ = result.snapResult;
     }
 
     void resetMirrorInteraction()
     {
-        mirrorShapeIndices_.clear();
-    }
-
-    bool handleMirrorPoint(const QPointF &worldPoint)
-    {
-        if (activeTool_ != Tool::Mirror || mirrorShapeIndices_.isEmpty()) {
-            return false;
-        }
-
-        pendingPoints_.append(worldPoint);
-        if (pendingPoints_.size() < 2) {
-            update();
-            return true;
-        }
-
-        const QPointF axisStart = pendingPoints_[0];
-        const QPointF axisEnd = pendingPoints_[1];
-        QVector<SceneObject> mirroredObjects;
-        mirroredObjects.reserve(mirrorShapeIndices_.size());
-        for (const ObjectId objectId : mirrorShapeIndices_) {
-            const SceneObject *sourceObject = document_.object(objectId);
-            if (sourceObject == nullptr || !document_.isObjectEditable(objectId)) {
-                continue;
-            }
-
-            Shape mirroredShape;
-            if (!mirrorShapeAcrossLine(sourceObject->geometry,
-                                       axisStart,
-                                       axisEnd,
-                                       &mirroredShape)) {
-                continue;
-            }
-
-            SceneObject mirroredObject;
-            mirroredObject.layerId = sourceObject->layerId;
-            mirroredObject.geometry = mirroredShape;
-            mirroredObjects.append(mirroredObject);
-        }
-
-        if (mirroredObjects.isEmpty()) {
-            DebugLog::instance().write(QStringLiteral("mirror rejected axis=%1->%2 objects=%3")
-                                           .arg(pointText(axisStart), pointText(axisEnd))
-                                           .arg(mirrorShapeIndices_.size()));
-            pendingPoints_.removeLast();
-            update();
-            return false;
-        }
-
-        const int sourceCount = mirrorShapeIndices_.size();
-        recordGeometryChange();
-        QVector<ObjectId> mirroredIds;
-        mirroredIds.reserve(mirroredObjects.size());
-        for (const SceneObject &mirroredObject : mirroredObjects) {
-            mirroredIds.append(shapes_.insertObject(shapes_.size(), mirroredObject));
-        }
-
-        selection_.setObjectIds(mirroredIds);
-        selectedShapeIndex_ = selection_.primaryObjectId();
-        pendingPoints_.clear();
-        resetMirrorInteraction();
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
-        notifyLayersChanged();
-        update();
-        DebugLog::instance().write(QStringLiteral("mirror committed sourceCount=%1 copyCount=%2 axis=%3->%4")
-                                       .arg(sourceCount)
-                                       .arg(mirroredIds.size())
-                                       .arg(pointText(axisStart), pointText(axisEnd)));
-        return true;
-    }
-
-    void cancelMirror()
-    {
-        if (activeTool_ != Tool::Mirror && mirrorShapeIndices_.isEmpty()) {
-            return;
-        }
-
-        pendingPoints_.clear();
-        resetMirrorInteraction();
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
-        update();
-        DebugLog::instance().write(QStringLiteral("mirror canceled"));
+        mirrorTool_.clearInteraction();
     }
 
     void translateControlPoint(ObjectId objectId,
                                int controlPointIndex,
                                const QPointF &delta)
     {
-        const int shapeIndex = objectIndex(objectId);
-        if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
-            controlPointIndex < 0 ||
+        if (controlPointIndex < 0 ||
             (qFuzzyIsNull(delta.x()) && qFuzzyIsNull(delta.y()))) {
             return;
         }
 
-        Shape &shape = shapes_[shapeIndex];
-        if (shape.geometryType == GeometryType::PolyCurve) {
-            int remaining = controlPointIndex;
-            for (int componentIndex = 0; componentIndex < shape.components.size(); ++componentIndex) {
-                Shape::NurbsCurve2D &component = shape.components[componentIndex];
-                if (remaining < component.controlPoints.size()) {
-                    const QPointF oldPoint = component.controlPoints[remaining];
-                    component.controlPoints[remaining] += delta;
-                    const qreal seamTolerance = joinEndpointTolerance();
-                    if (remaining == 0 && componentIndex > 0) {
-                        Shape::NurbsCurve2D &previous = shape.components[componentIndex - 1];
-                        if (!previous.controlPoints.isEmpty() &&
-                            std::hypot(previous.controlPoints.last().x() - oldPoint.x(),
-                                       previous.controlPoints.last().y() - oldPoint.y()) <=
-                                seamTolerance) {
-                            previous.controlPoints.last() += delta;
+        document_.mutateGeometry(
+            objectId,
+            [&](Shape &shape) {
+                if (shape.geometryType == GeometryType::PolyCurve) {
+                    int remaining = controlPointIndex;
+                    for (int componentIndex = 0;
+                         componentIndex < shape.components.size();
+                         ++componentIndex) {
+                        Shape::NurbsCurve2D &component = shape.components[componentIndex];
+                        if (remaining < component.controlPoints.size()) {
+                            const QPointF oldPoint = component.controlPoints[remaining];
+                            component.controlPoints[remaining] += delta;
+                            const qreal seamTolerance = joinEndpointTolerance();
+                            if (remaining == 0 && componentIndex > 0) {
+                                Shape::NurbsCurve2D &previous =
+                                    shape.components[componentIndex - 1];
+                                if (!previous.controlPoints.isEmpty() &&
+                                    std::hypot(previous.controlPoints.last().x() - oldPoint.x(),
+                                               previous.controlPoints.last().y() - oldPoint.y()) <=
+                                        seamTolerance) {
+                                    previous.controlPoints.last() += delta;
+                                }
+                            }
+                            if (remaining == component.controlPoints.size() - 1 &&
+                                componentIndex + 1 < shape.components.size()) {
+                                Shape::NurbsCurve2D &next =
+                                    shape.components[componentIndex + 1];
+                                if (!next.controlPoints.isEmpty() &&
+                                    std::hypot(next.controlPoints.first().x() - oldPoint.x(),
+                                               next.controlPoints.first().y() - oldPoint.y()) <=
+                                        seamTolerance) {
+                                    next.controlPoints.first() += delta;
+                                }
+                            }
+                            shape.points = polyCurvePoints(shape.components);
+                            return true;
                         }
+                        remaining -= component.controlPoints.size();
                     }
-                    if (remaining == component.controlPoints.size() - 1 &&
-                        componentIndex + 1 < shape.components.size()) {
-                        Shape::NurbsCurve2D &next = shape.components[componentIndex + 1];
-                        if (!next.controlPoints.isEmpty() &&
-                            std::hypot(next.controlPoints.first().x() - oldPoint.x(),
-                                       next.controlPoints.first().y() - oldPoint.y()) <=
-                                seamTolerance) {
-                            next.controlPoints.first() += delta;
-                        }
-                    }
-                    shape.points = polyCurvePoints(shape.components);
-                    return;
+                    return false;
                 }
-                remaining -= component.controlPoints.size();
-            }
-            return;
-        }
 
-        if (!shape.nurbs.controlPoints.isEmpty()) {
-            if (controlPointIndex >= shape.nurbs.controlPoints.size()) {
-                return;
-            }
+                if (!shape.nurbs.controlPoints.isEmpty()) {
+                    if (controlPointIndex >= shape.nurbs.controlPoints.size()) {
+                        return false;
+                    }
 
-            const QPointF newControlPoint =
-                shape.nurbs.controlPoints[controlPointIndex] + delta;
-            if (!setClosedNurbsSeamControlPoint(&shape,
-                                               controlPointIndex,
-                                               newControlPoint)) {
-                shape.nurbs.controlPoints[controlPointIndex] = newControlPoint;
-            }
+                    const QPointF newControlPoint =
+                        shape.nurbs.controlPoints[controlPointIndex] + delta;
+                    if (!setClosedNurbsSeamControlPoint(&shape,
+                                                       controlPointIndex,
+                                                       newControlPoint)) {
+                        shape.nurbs.controlPoints[controlPointIndex] = newControlPoint;
+                    }
 
-            // These curve types keep their source points in the same order as
-            // their NURBS CVs. Keep both representations synchronized. Arc
-            // and circle construction points intentionally remain unchanged;
-            // their stored NURBS is the geometry being edited.
-            if ((shape.geometryType == GeometryType::Line || shape.geometryType == GeometryType::Bezier ||
-                 shape.geometryType == GeometryType::Nurbs) &&
-                controlPointIndex < shape.points.size()) {
-                shape.points[controlPointIndex] += delta;
-            }
-            if (shape.geometryType == GeometryType::Rectangle) {
-                shape.points = rectangleVertices(shape);
-            }
-            return;
-        }
+                    // These curve types keep their source points in the same
+                    // order as their NURBS CVs. Keep both synchronized. Arc
+                    // and circle construction points intentionally remain
+                    // unchanged; their stored NURBS is the edited geometry.
+                    if ((shape.geometryType == GeometryType::Line ||
+                         shape.geometryType == GeometryType::Bezier ||
+                         shape.geometryType == GeometryType::Nurbs) &&
+                        controlPointIndex < shape.points.size()) {
+                        shape.points[controlPointIndex] += delta;
+                    }
+                    if (shape.geometryType == GeometryType::Rectangle) {
+                        shape.points = rectangleVertices(shape);
+                    }
+                    return true;
+                }
 
-        if (controlPointIndex < shape.points.size()) {
-            shape.points[controlPointIndex] += delta;
-        }
+                if (controlPointIndex < shape.points.size()) {
+                    shape.points[controlPointIndex] += delta;
+                    return true;
+                }
+                return false;
+            });
     }
 
     void translateShape(ObjectId objectId, const QPointF &delta)
     {
-        const int index = objectIndex(objectId);
-        if (index < 0 || index >= shapes_.size()) {
+        if (qFuzzyIsNull(delta.x()) && qFuzzyIsNull(delta.y())) {
             return;
         }
 
-        Shape &shape = shapes_[index];
-        if (validateNurbsSurface(shape.nurbsSurface)) {
-            const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
-            const Point3D localOrigin = workPlaneFramePointToWorld({}, inputFrame);
-            const Point3D localEnd = workPlaneFramePointToWorld(delta, inputFrame);
-            const Point3D worldDelta{localEnd.x - localOrigin.x,
-                                     localEnd.y - localOrigin.y,
-                                     localEnd.z - localOrigin.z};
-            for (Point3D &point : shape.nurbsSurface.controlPoints) {
-                point.x += worldDelta.x;
-                point.y += worldDelta.y;
-                point.z += worldDelta.z;
-            }
-            return;
-        }
-        const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
-        const Point3D end = workPlaneFramePointToWorld(delta, inputFrame);
-        WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-        const Point3D displacedOrigin{frame.origin.x + end.x - inputFrame.origin.x,
-                                     frame.origin.y + end.y - inputFrame.origin.y,
-                                     frame.origin.z + end.z - inputFrame.origin.z};
-        if (shape.geometryType == GeometryType::PolyCurve &&
-            shape.componentWorkPlaneFrames.size() == shape.components.size()) {
-            const Point3D worldDelta{displacedOrigin.x - frame.origin.x,
-                                     displacedOrigin.y - frame.origin.y,
-                                     displacedOrigin.z - frame.origin.z};
-            frame.origin = displacedOrigin;
-            shape.workPlaneFrame = frame;
-            for (WorkPlaneFrame &componentFrame :
-                 shape.componentWorkPlaneFrames) {
-                componentFrame.origin.x += worldDelta.x;
-                componentFrame.origin.y += worldDelta.y;
-                componentFrame.origin.z += worldDelta.z;
-            }
-            return;
-        }
-        const QPointF localDelta = worldPointToWorkPlaneFrame(displacedOrigin, frame);
-        translateShapeGeometry(shape, localDelta);
-        const Point3D planarEnd = workPlaneFramePointToWorld(localDelta, frame);
-        frame.origin.x += displacedOrigin.x - planarEnd.x;
-        frame.origin.y += displacedOrigin.y - planarEnd.y;
-        frame.origin.z += displacedOrigin.z - planarEnd.z;
-        shape.workPlaneFrame = frame;
+        document_.mutateGeometry(
+            objectId,
+            [&](Shape &shape) {
+                if (validateNurbsSurface(shape.nurbsSurface)) {
+                    const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
+                    const Point3D localOrigin = workPlaneFramePointToWorld({}, inputFrame);
+                    const Point3D localEnd = workPlaneFramePointToWorld(delta, inputFrame);
+                    const Point3D worldDelta{localEnd.x - localOrigin.x,
+                                             localEnd.y - localOrigin.y,
+                                             localEnd.z - localOrigin.z};
+                    for (Point3D &point : shape.nurbsSurface.controlPoints) {
+                        point.x += worldDelta.x;
+                        point.y += worldDelta.y;
+                        point.z += worldDelta.z;
+                    }
+                    return true;
+                }
+                const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
+                const Point3D end = workPlaneFramePointToWorld(delta, inputFrame);
+                WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+                const Point3D displacedOrigin{frame.origin.x + end.x - inputFrame.origin.x,
+                                             frame.origin.y + end.y - inputFrame.origin.y,
+                                             frame.origin.z + end.z - inputFrame.origin.z};
+                if (shape.geometryType == GeometryType::PolyCurve &&
+                    shape.componentWorkPlaneFrames.size() == shape.components.size()) {
+                    const Point3D worldDelta{displacedOrigin.x - frame.origin.x,
+                                             displacedOrigin.y - frame.origin.y,
+                                             displacedOrigin.z - frame.origin.z};
+                    frame.origin = displacedOrigin;
+                    shape.workPlaneFrame = frame;
+                    for (WorkPlaneFrame &componentFrame :
+                         shape.componentWorkPlaneFrames) {
+                        componentFrame.origin.x += worldDelta.x;
+                        componentFrame.origin.y += worldDelta.y;
+                        componentFrame.origin.z += worldDelta.z;
+                    }
+                    return true;
+                }
+                const QPointF localDelta = worldPointToWorkPlaneFrame(displacedOrigin, frame);
+                translateShapeGeometry(shape, localDelta);
+                const Point3D planarEnd = workPlaneFramePointToWorld(localDelta, frame);
+                frame.origin.x += displacedOrigin.x - planarEnd.x;
+                frame.origin.y += displacedOrigin.y - planarEnd.y;
+                frame.origin.z += displacedOrigin.z - planarEnd.z;
+                shape.workPlaneFrame = frame;
+                return true;
+            });
     }
 
     void translateShapeGeometry(Shape &shape, const QPointF &delta) const
     {
-        if (shape.geometryType == GeometryType::PolyCurve &&
-            shape.componentWorkPlaneFrames.size() == shape.components.size()) {
-            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-            const Point3D worldDelta{
-                frame.xAxis.x * delta.x() + frame.yAxis.x * delta.y(),
-                frame.xAxis.y * delta.x() + frame.yAxis.y * delta.y(),
-                frame.xAxis.z * delta.x() + frame.yAxis.z * delta.y()};
-            shape.workPlaneFrame.origin.x += worldDelta.x;
-            shape.workPlaneFrame.origin.y += worldDelta.y;
-            shape.workPlaneFrame.origin.z += worldDelta.z;
-            for (WorkPlaneFrame &componentFrame :
-                 shape.componentWorkPlaneFrames) {
-                componentFrame.origin.x += worldDelta.x;
-                componentFrame.origin.y += worldDelta.y;
-                componentFrame.origin.z += worldDelta.z;
-            }
-            return;
-        }
-        for (QPointF &point : shape.points) {
-            point += delta;
-        }
-        for (QPointF &point : shape.nurbs.controlPoints) {
-            point += delta;
-        }
-        for (Shape::NurbsCurve2D &component : shape.components) {
-            for (QPointF &point : component.controlPoints) {
-                point += delta;
-            }
-        }
-        if (validateNurbsSurface(shape.nurbsSurface)) {
-            const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
-            const Point3D origin = workPlaneFramePointToWorld({}, frame);
-            const Point3D end = workPlaneFramePointToWorld(delta, frame);
-            const Point3D worldDelta{end.x - origin.x,
-                                     end.y - origin.y,
-                                     end.z - origin.z};
-            for (Point3D &point : shape.nurbsSurface.controlPoints) {
-                point.x += worldDelta.x;
-                point.y += worldDelta.y;
-                point.z += worldDelta.z;
-            }
-        }
+        classiCAD::translateShapeGeometry(
+            &shape, delta, viewportTransform_.workPlaneFrame());
     }
 
     void translateShapes(const QVector<ObjectId> &objectIds, const QPointF &delta)
@@ -13769,26 +8441,29 @@ private:
             return;
         }
         for (const ObjectId objectId : objectIds) {
-            const int index = objectIndex(objectId);
-            if (index < 0 || index >= shapes_.size()) continue;
-            WorkPlaneFrame frame = shapeWorkPlaneFrame(shapes_[index]);
-            frame.origin.x += snap.worldTranslation.x;
-            frame.origin.y += snap.worldTranslation.y;
-            frame.origin.z += snap.worldTranslation.z;
-            shapes_[index].workPlaneFrame = frame;
-            if (validateNurbsSurface(shapes_[index].nurbsSurface)) {
-                for (Point3D &point : shapes_[index].nurbsSurface.controlPoints) {
-                    point.x += snap.worldTranslation.x;
-                    point.y += snap.worldTranslation.y;
-                    point.z += snap.worldTranslation.z;
-                }
-            }
-            for (WorkPlaneFrame &componentFrame :
-                 shapes_[index].componentWorkPlaneFrames) {
-                componentFrame.origin.x += snap.worldTranslation.x;
-                componentFrame.origin.y += snap.worldTranslation.y;
-                componentFrame.origin.z += snap.worldTranslation.z;
-            }
+            document_.mutateGeometry(
+                objectId,
+                [&](Shape &shape) {
+                    WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+                    frame.origin.x += snap.worldTranslation.x;
+                    frame.origin.y += snap.worldTranslation.y;
+                    frame.origin.z += snap.worldTranslation.z;
+                    shape.workPlaneFrame = frame;
+                    if (validateNurbsSurface(shape.nurbsSurface)) {
+                        for (Point3D &point : shape.nurbsSurface.controlPoints) {
+                            point.x += snap.worldTranslation.x;
+                            point.y += snap.worldTranslation.y;
+                            point.z += snap.worldTranslation.z;
+                        }
+                    }
+                    for (WorkPlaneFrame &componentFrame :
+                         shape.componentWorkPlaneFrames) {
+                        componentFrame.origin.x += snap.worldTranslation.x;
+                        componentFrame.origin.y += snap.worldTranslation.y;
+                        componentFrame.origin.z += snap.worldTranslation.z;
+                    }
+                    return true;
+                });
         }
         DebugLog::instance().write(QStringLiteral("object-drag-snap applied targetShape=%1 worldDelta=(%2,%3,%4)")
             .arg(snap.targetShapeIndex).arg(snap.worldTranslation.x,0,'g',12)
@@ -13811,7 +8486,7 @@ private:
 
     void updateGrabPosition(const QVector<ObjectId> &dragIndices)
     {
-        if (!grabActive_ || grabPickingBasePoint_) {
+        if (!grabTool_.isActive() || grabTool_.isPickingBasePoint()) {
             return;
         }
 
@@ -13830,11 +8505,12 @@ private:
 
         // Rebuild the preview from the saved document so axis changes and snap
         // changes never accumulate an additional incremental delta.
-        document_.restoreSnapshot(grabStartSnapshot_);
+        document_.restoreSnapshot(grabTool_.startSnapshot());
         QPointF totalDelta;
         QPointF freeDestination;
-        if (grabHasBasePoint_) {
-            const QPointF destinationCursor = rawCursorWorld_ - grabCursorOffset_;
+        if (grabTool_.hasBasePoint()) {
+            const QPointF destinationCursor =
+                rawCursorWorld_ - grabTool_.cursorOffset();
             currentSnap_ = findGrabDestinationSnap(destinationCursor);
             const QPointF destination = currentSnap_.isValid()
                                             ? currentSnap_.point
@@ -13842,13 +8518,13 @@ private:
             cursorWorld_ = destination;
             lastWorldPosition_ = destination;
             freeDestination = destinationCursor;
-            totalDelta = destination - grabBasePoint_;
+            totalDelta = destination - grabTool_.basePoint();
         } else {
             currentSnap_ = SnapResult{};
-            totalDelta = rawCursorWorld_ - grabStartWorld_;
+            totalDelta = rawCursorWorld_ - grabTool_.startWorldPosition();
         }
         QPointF delta = constrainDragDelta(totalDelta);
-        if (grabHasBasePoint_ && currentSnap_.isValid() &&
+        if (grabTool_.hasBasePoint() && currentSnap_.isValid() &&
             (!qFuzzyIsNull(delta.x() - totalDelta.x()) ||
              !qFuzzyIsNull(delta.y() - totalDelta.y()))) {
             // Do not show a snap marker for a destination the axis lock makes
@@ -13857,17 +8533,17 @@ private:
             currentSnap_ = SnapResult{};
             cursorWorld_ = freeDestination;
             lastWorldPosition_ = freeDestination;
-            totalDelta = freeDestination - grabBasePoint_;
+            totalDelta = freeDestination - grabTool_.basePoint();
             delta = constrainDragDelta(totalDelta);
         }
         if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
             translateShapes(dragIndices, delta);
-            grabMoved_ = true;
+            grabTool_.setMoved(true);
         } else {
-            grabMoved_ = false;
+            grabTool_.setMoved(false);
         }
         currentDragSnap_ = DragSnapResult{};
-        if (grabHasBasePoint_ && dragAxisLock_ == DragAxisLock::None) {
+        if (grabTool_.hasBasePoint() && dragAxisLock_ == DragAxisLock::None) {
             constexpr int maximumTangentRefinements = 12;
             constexpr qreal tangentSnapPrecisionPixels = 0.01;
             QPointF totalTangentCorrection;
@@ -13889,7 +8565,7 @@ private:
 
                 translateShapes(dragIndices, dragSnap.translation);
                 totalTangentCorrection += dragSnap.translation;
-                grabMoved_ = true;
+                grabTool_.setMoved(true);
             }
 
             const DragSnapResult finalTangentSnap = findDragSnap(dragIndices, true);
@@ -13906,7 +8582,7 @@ private:
             if (preciselySnapped) {
                 currentDragSnap_ = finalTangentSnap;
                 currentSnap_ = SnapResult{};
-                grabMoved_ = true;
+                grabTool_.setMoved(true);
                 dragSnapLocked_ = true;
                 dragSnapCursorWorld_ = rawCursorWorld_;
                 DebugLog::instance().write(
@@ -13922,12 +8598,14 @@ private:
                 currentDragSnap_ = DragSnapResult{};
             }
         }
-        lastDragWorld_ = rawCursorWorld_;
+        setSelectionLastDragWorldPosition(rawCursorWorld_);
         DebugLog::instance().write(
             QStringLiteral("grab move delta=%1 cursorWorld=%2 basePoint=%3 snap=%4 axisLock=%5")
                 .arg(pointText(delta))
                 .arg(pointText(rawCursorWorld_))
-                .arg(grabHasBasePoint_ ? pointText(grabBasePoint_) : QStringLiteral("none"))
+                .arg(grabTool_.hasBasePoint()
+                         ? pointText(grabTool_.basePoint())
+                         : QStringLiteral("none"))
                 .arg(snapTypeName(currentSnap_.type))
                 .arg(dragAxisLockName(dragAxisLock_)));
     }
@@ -13939,650 +8617,97 @@ private:
 
     void resetArcInputState()
     {
-        arcReferenceFrame_ = {};
-        arcInputFrame_ = {};
-        arcAxisBaseFrame_ = {};
-        arcReferenceNormal_ = {};
-        arcFirstPointWorld_ = {};
-        arcSecondPointWorld_ = {};
-        arcResolvedChordPointWorld_ = {};
-        arcReferenceFrameValid_ = false;
-        arcInputFrameValid_ = false;
-        arcAxisBaseFrameValid_ = false;
-        arcChordWorldPointsValid_ = false;
-        arcResolvedChordPointValid_ = false;
-        arcAxisConstraintKey_ = 0;
-        arcPlaneNormalLockKey_ = 0;
-        arcVerticalOverrideAxis_ = 0;
-        arcTwoPointPerpendicularNormal_ = {};
-        arcTwoPointPerpendicularNormalValid_ = false;
-        arcWasVertical_ = false;
-        arcPreviewStartAngle_ = 0.0;
-        arcAngleSnapEnabled_ = true;
-        arcPerpendicularPlaneActive_ = false;
-        arcPlaneLocked_ = false;
-        arcLockedFrame_ = {};
-        arcLockedFrameValid_ = false;
-        arcTextInputMode_ = ArcTextInputMode::None;
-        arcTextInput_.clear();
+        arcTool_.resetInputState();
     }
 
-    void captureArcReferenceForFirstPoint(const QPointF &localPoint)
+    void synchronizeArcInputPoints()
     {
-        arcReferenceFrame_ = viewportTransform_.workPlaneFrame();
-        arcInputFrame_ = arcReferenceFrame_;
-        arcReferenceFrameValid_ = isValidWorkPlaneFrame(arcReferenceFrame_);
-        arcInputFrameValid_ = arcReferenceFrameValid_;
-        if (!arcReferenceFrameValid_) {
-            return;
-        }
-
-        arcReferenceNormal_ = arcReferenceFrame_.normal;
-        arcTwoPointPerpendicularNormal_ = {};
-        arcTwoPointPerpendicularNormalValid_ = false;
-        arcFirstPointWorld_ = workPlaneFramePointToWorld(localPoint,
-                                                          arcReferenceFrame_);
-        arcChordWorldPointsValid_ = false;
-        arcResolvedChordPointValid_ = false;
-        arcWasVertical_ = false;
+        pendingPoints_ = arcTool_.inputPoints();
     }
 
-    void beginArcTextInput(ArcTextInputMode mode, const QString &initialText = {})
+    void appendArcInputPoint(const QPointF &point)
     {
-        if (pendingPoints_.isEmpty()) {
-            return;
+        arcTool_.appendInputPoint(point);
+        synchronizeArcInputPoints();
+    }
+
+    void setArcInputPoint(int index, const QPointF &point)
+    {
+        if (arcTool_.setInputPoint(index, point)) {
+            synchronizeArcInputPoints();
         }
-        arcTextInputMode_ = mode;
-        arcTextInput_ = initialText;
-        update();
     }
 
     void applyArcTextInput()
     {
-        const ArcTextInputMode inputMode = arcTextInputMode_;
-        const QString input = arcTextInput_.trimmed();
-        arcTextInputMode_ = ArcTextInputMode::None;
-        arcTextInput_.clear();
-
-        if (activeTool_ == Tool::Arc && arcMode_ == ArcMode::TwoPoint) {
-            qreal distance = 0.0;
-            if (parseDocumentLengthInput(input,
-                                         document_.settings().lengthUnit,
-                                         &distance)) {
-                distance = std::abs(distance);
-                if (inputMode == ArcTextInputMode::ChordLength &&
-                    pendingPoints_.size() == 1) {
-                    setTwoPointArcChordLength(distance);
-                } else if (inputMode == ArcTextInputMode::Sagitta &&
-                           pendingPoints_.size() >= 2) {
-                    setTwoPointArcSagitta(distance);
-                }
-            }
-            update();
-            emitCoordinateUpdate();
-            return;
+        const ArcTextInputUpdate inputUpdate = arcTool_.applyTextInput(
+            document_.settings(), cursorWorld_, currentSnap_.isValid());
+        pendingPoints_ = arcTool_.inputPoints();
+        if (inputUpdate.hasLengthValue) {
+            setTwoPointArcChordLength(inputUpdate.lengthValue);
         }
-
-        if (inputMode == ArcTextInputMode::Radius) {
-            qreal radius = 0.0;
-            if (parseDocumentLengthInput(input,
-                                        document_.settings().lengthUnit,
-                                        &radius) &&
-                !pendingPoints_.isEmpty()) {
-                radius = std::max<qreal>(0.1, std::abs(radius));
-                const QPointF center = pendingPoints_.first();
-                QPointF direction = pendingPoints_.size() >= 2
-                                        ? pendingPoints_[1] - center
-                                        : cursorWorld_ - center;
-                qreal directionLength = std::hypot(direction.x(), direction.y());
-                if (directionLength <= 1.0e-9) {
-                    direction = QPointF(1.0, 0.0);
-                    directionLength = 1.0;
-                }
-                direction /= directionLength;
-                qreal angle = std::atan2(direction.y(), direction.x());
-                if (pendingPoints_.size() == 1 && arcAngleSnapEnabled_ &&
-                    !currentSnap_.isValid()) {
-                    angle = snapOnePointArcAngle(angle);
-                }
-                arcPreviewStartAngle_ = angle;
-                const QPointF start = center +
-                    QPointF(radius * std::cos(angle), radius * std::sin(angle));
-                if (pendingPoints_.size() == 1) {
-                    pendingPoints_.append(start);
-                    initializeArcPreviewTracking();
-                } else {
-                    pendingPoints_[1] = start;
-                    arcPreviewStartAngle_ = angle;
-                    arcPreviewPreviousAngle_ = angle + arcPreviewSweepAngle_;
-                    arcPreviewInitialized_ = true;
-                    cursorWorld_ = center + QPointF(
-                        radius * std::cos(arcPreviewPreviousAngle_),
-                        radius * std::sin(arcPreviewPreviousAngle_));
-                    lastWorldPosition_ = cursorWorld_;
-                }
-            }
-        } else if (inputMode == ArcTextInputMode::Angle &&
-                   pendingPoints_.size() >= 2) {
-            QString angleInput = input;
-            angleInput.remove(QStringLiteral("°"));
-            bool valid = false;
-            const qreal degrees = angleInput.toDouble(&valid);
-            if (valid && std::isfinite(degrees)) {
-                constexpr qreal pi = 3.14159265358979323846;
-                // Arc input uses the drafting convention: clockwise is positive.
-                // The stored workplane sweep follows the usual right-handed
-                // mathematical convention, where clockwise is negative.
-                arcPreviewSweepAngle_ = -degrees * pi / 180.0;
-                const QPointF radiusVector = pendingPoints_[1] - pendingPoints_[0];
-                arcPreviewStartAngle_ = std::atan2(radiusVector.y(),
-                                                   radiusVector.x());
-                arcPreviewPreviousAngle_ = arcPreviewStartAngle_ +
-                                           arcPreviewSweepAngle_;
-                arcPreviewInitialized_ = true;
-                const qreal radius = std::hypot(radiusVector.x(),
-                                                radiusVector.y());
-                cursorWorld_ = pendingPoints_[0] + QPointF(
-                    radius * std::cos(arcPreviewPreviousAngle_),
-                    radius * std::sin(arcPreviewPreviousAngle_));
-                lastWorldPosition_ = cursorWorld_;
-                cursorValid_ = true;
-                currentSnap_ = SnapResult{};
-                arcAngleValueLocked_ = true;
-            }
-        }
-        update();
-        emitCoordinateUpdate();
-    }
-
-    bool handleOnePointArcKey(QKeyEvent *event)
-    {
-        if (event == nullptr || activeTool_ != Tool::Arc ||
-            arcMode_ != ArcMode::OnePoint) {
-            return false;
-        }
-
-        if (arcTextInputMode_ != ArcTextInputMode::None) {
-            if (event->key() == Qt::Key_Escape) {
-                arcTextInputMode_ = ArcTextInputMode::None;
-                arcTextInput_.clear();
-                pendingPoints_.clear();
-                setTool(Tool::Select);
-                if (commandFinished_) {
-                    commandFinished_(Tool::Select);
-                }
-                update();
-                event->accept();
-                return true;
-            }
-            if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
-                applyArcTextInput();
-                event->accept();
-                return true;
-            }
-            if (event->key() == Qt::Key_Backspace) {
-                arcTextInput_.chop(1);
-                update();
-                event->accept();
-                return true;
-            }
-
-            const QString typedText = event->text();
-            bool accepted = !typedText.isEmpty();
-            for (const QChar character : typedText) {
-                const bool numeric = character.isDigit() ||
-                                     character == QLatin1Char('.') ||
-                                     character == QLatin1Char(',') ||
-                                     character == QLatin1Char('-') ||
-                                     character == QLatin1Char('+') ||
-                                     character == QLatin1Char('/') ||
-                                     character == QLatin1Char(' ') ||
-                                     character == QLatin1Char('\'') ||
-                                     character == QLatin1Char('"') ||
-                                     character.isLetter();
-                if (!numeric) {
-                    accepted = false;
-                    break;
-                }
-            }
-            if (accepted) {
-                arcTextInput_.append(typedText == QStringLiteral(",")
-                                         ? QStringLiteral(".")
-                                         : typedText);
-                update();
-                event->accept();
-                return true;
-            }
-            return false;
-        }
-
-        if (event->isAutoRepeat() || event->modifiers() != Qt::NoModifier) {
-            return false;
-        }
-        switch (event->key()) {
-        case Qt::Key_C:
-            arcAngleSnapEnabled_ = !arcAngleSnapEnabled_;
-            update();
-            event->accept();
-            return true;
-        case Qt::Key_L:
-            arcPlaneLocked_ = !arcPlaneLocked_;
-            if (arcPlaneLocked_ && pendingPoints_.isEmpty()) {
-                arcLockedFrame_ = viewportTransform_.workPlaneFrame();
-                arcLockedFrameValid_ = isValidWorkPlaneFrame(arcLockedFrame_);
-            } else if (!arcPlaneLocked_) {
-                arcLockedFrame_ = {};
-                arcLockedFrameValid_ = false;
-                if (pendingPoints_.isEmpty()) {
-                    updateDrawingWorkPlaneFromHover(currentArcScreenPosition());
-                }
-            }
-            update();
-            event->accept();
-            return true;
-        case Qt::Key_P:
-            toggleOnePointArcPerpendicularPlane();
-            event->accept();
-            return true;
-        case Qt::Key_R:
-            beginArcTextInput(ArcTextInputMode::Radius);
-            event->accept();
-            return true;
-        case Qt::Key_A:
-            if (pendingPoints_.size() >= 2) {
-                beginArcTextInput(ArcTextInputMode::Angle);
-                event->accept();
-                return true;
-            }
-            return false;
-        case Qt::Key_Return:
-        case Qt::Key_Enter:
-        case Qt::Key_Space:
-            if (pendingPoints_.size() >= 2) {
-                finishOnePointArcAt(cursorWorld_);
-                event->accept();
-                return true;
-            }
-            return false;
-        default:
-            break;
-        }
-
-        if (!pendingPoints_.isEmpty()) {
-            const QString typedText = event->text();
-            if (typedText.size() == 1 &&
-                (typedText.front().isDigit() || typedText.front() == QLatin1Char('.') ||
-                 typedText.front() == QLatin1Char('-') ||
-                 typedText.front() == QLatin1Char('+'))) {
-                beginArcTextInput(pendingPoints_.size() >= 2
-                                       ? ArcTextInputMode::Angle
-                                       : ArcTextInputMode::Radius,
-                                  typedText);
-                event->accept();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    bool handleTwoPointArcKey(QKeyEvent *event)
-    {
-        if (event == nullptr || activeTool_ != Tool::Arc ||
-            arcMode_ != ArcMode::TwoPoint) {
-            return false;
-        }
-
-        if (arcTextInputMode_ != ArcTextInputMode::None) {
-            if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
-                applyArcTextInput();
-                event->accept();
-                return true;
-            }
-            if (event->key() == Qt::Key_Backspace) {
-                arcTextInput_.chop(1);
-                update();
-                event->accept();
-                return true;
-            }
-
-            const QString typedText = event->text();
-            bool accepted = !typedText.isEmpty();
-            for (const QChar character : typedText) {
-                const bool numeric = character.isDigit() ||
-                                     character == QLatin1Char('.') ||
-                                     character == QLatin1Char(',') ||
-                                     character == QLatin1Char('-') ||
-                                     character == QLatin1Char('+') ||
-                                     character == QLatin1Char('/') ||
-                                     character == QLatin1Char(' ') ||
-                                     character == QLatin1Char('\'') ||
-                                     character == QLatin1Char('"') ||
-                                     character.isLetter();
-                if (!numeric) {
-                    accepted = false;
-                    break;
-                }
-            }
-            if (accepted) {
-                arcTextInput_.append(typedText == QStringLiteral(",")
-                                         ? QStringLiteral(".")
-                                         : typedText);
-                update();
-                event->accept();
-                return true;
-            }
-            return false;
-        }
-
-        if (event->isAutoRepeat() || event->modifiers() != Qt::NoModifier) {
-            return false;
-        }
-        switch (event->key()) {
-        case Qt::Key_D:
-            if (pendingPoints_.size() == 1) {
-                beginArcTextInput(ArcTextInputMode::ChordLength);
-                event->accept();
-                return true;
-            }
-            return false;
-        case Qt::Key_H:
-            if (pendingPoints_.size() >= 2) {
-                beginArcTextInput(ArcTextInputMode::Sagitta);
-                event->accept();
-                return true;
-            }
-            return false;
-        case Qt::Key_P:
-            toggleTwoPointArcPerpendicularPlane();
-            event->accept();
-            return true;
-        case Qt::Key_L:
-            toggleArcPlaneLock();
-            event->accept();
-            return true;
-        case Qt::Key_Return:
-        case Qt::Key_Enter:
-        case Qt::Key_Space:
-            if (pendingPoints_.size() >= 2) {
-                finishTwoPointArcAt(cursorWorld_);
-                event->accept();
-                return true;
-            }
-            return false;
-        default:
-            break;
-        }
-
-        if (!pendingPoints_.isEmpty()) {
-            const QString typedText = event->text();
-            if (typedText.size() == 1 &&
-                (typedText.front().isDigit() ||
-                 typedText.front() == QLatin1Char('.') ||
-                 typedText.front() == QLatin1Char('-') ||
-                 typedText.front() == QLatin1Char('+'))) {
-                beginArcTextInput(pendingPoints_.size() >= 2
-                                      ? ArcTextInputMode::Sagitta
-                                      : ArcTextInputMode::ChordLength,
-                                  typedText);
-                event->accept();
-                return true;
-            }
-        }
-        return false;
-    }
-
-    bool handleThreePointArcKey(QKeyEvent *event)
-    {
-        if (event == nullptr || activeTool_ != Tool::Arc ||
-            arcMode_ != ArcMode::ThreePoint || event->isAutoRepeat() ||
-            event->modifiers() != Qt::NoModifier) {
-            return false;
-        }
-
-        switch (event->key()) {
-        case Qt::Key_P:
-            toggleTwoPointArcPerpendicularPlane();
-            event->accept();
-            return true;
-        case Qt::Key_L:
-            toggleArcPlaneLock();
-            event->accept();
-            return true;
-        case Qt::Key_Return:
-        case Qt::Key_Enter:
-        case Qt::Key_Space:
-            if (pendingPoints_.size() >= 2) {
-                finishThreePointArcAt(cursorWorld_);
-                event->accept();
-                return true;
-            }
-            return false;
-        default:
-            return false;
-        }
-    }
-
-    void toggleOnePointArcPerpendicularPlane()
-    {
-        if (pendingPoints_.isEmpty() || !arcReferenceFrameValid_ ||
-            !arcInputFrameValid_) {
-            return;
-        }
-
-        const WorkPlaneFrame oldFrame = viewportTransform_.workPlaneFrame();
-        const Point3D centerWorld = arcFirstPointWorld_;
-        Point3D startWorld = centerWorld;
-        if (pendingPoints_.size() >= 2) {
-            startWorld = workPlaneFramePointToWorld(pendingPoints_[1], oldFrame);
-        }
-
-        WorkPlaneFrame nextFrame;
-        if (arcPerpendicularPlaneActive_) {
-            nextFrame = arcReferenceFrame_;
-        } else {
-            const QPointF bridgeLocal = pendingPoints_.size() >= 2
-                                            ? pendingPoints_[1] - pendingPoints_[0]
-                                            : cursorWorld_ - pendingPoints_[0];
-            const Point3D bridgeWorld = arcVectorSubtract(
-                workPlaneFramePointToWorld(pendingPoints_[0] + bridgeLocal,
-                                           oldFrame),
-                centerWorld);
-            const qreal bridgeLength = arcVectorLength(bridgeWorld);
-            if (bridgeLength <= 1.0e-9) {
-                return;
-            }
-            const Point3D bridgeDirection =
-                arcVectorScale(bridgeWorld, 1.0 / bridgeLength);
-            const Point3D normal = arcVectorCross(bridgeDirection,
-                                                  arcReferenceNormal_);
-            const qreal normalLength = arcVectorLength(normal);
-            if (normalLength <= 1.0e-9) {
-                return;
-            }
-            const Point3D perpendicularNormal =
-                arcVectorScale(normal, 1.0 / normalLength);
-            const Point3D xAxis = arcVectorCross(arcReferenceNormal_,
-                                                 perpendicularNormal);
-            const qreal xLength = arcVectorLength(xAxis);
-            if (xLength <= 1.0e-9) {
-                return;
-            }
-            nextFrame.origin = centerWorld;
-            nextFrame.xAxis = arcVectorScale(xAxis, 1.0 / xLength);
-            nextFrame.yAxis = arcReferenceNormal_;
-            nextFrame.normal = perpendicularNormal;
-            nextFrame.valid = true;
-            if (!isValidWorkPlaneFrame(nextFrame)) {
-                return;
-            }
-        }
-
-        if (!isValidWorkPlaneFrame(nextFrame)) {
-            return;
-        }
-        const qreal previousSweep = arcPreviewSweepAngle_;
-        viewportTransform_.setWorkPlaneFrame(nextFrame);
-        arcInputFrame_ = nextFrame;
-        arcInputFrameValid_ = true;
-        pendingPoints_[0] = worldPointToWorkPlaneFrame(centerWorld, nextFrame);
-        if (pendingPoints_.size() >= 2) {
-            QPointF startLocal = worldPointToWorkPlaneFrame(startWorld, nextFrame);
-            const qreal startRadius = std::hypot(startLocal.x() - pendingPoints_[0].x(),
-                                                 startLocal.y() - pendingPoints_[0].y());
-            if (startRadius <= 1.0e-9) {
-                const QPointF oldRadius = pendingPoints_[1] - pendingPoints_[0];
-                startLocal = pendingPoints_[0] + QPointF(
-                    std::hypot(oldRadius.x(), oldRadius.y()), 0.0);
-            }
-            pendingPoints_[1] = startLocal;
-        }
-        arcPerpendicularPlaneActive_ = !arcPerpendicularPlaneActive_;
-        arcPreviewSweepAngle_ = previousSweep;
-
-        const QPointF screenPosition = currentArcScreenPosition();
-        QPointF updatedCursor;
-        if (viewportTransform_.screenToWorkPlane(screenPosition,
-                                                 size(),
-                                                 nextFrame,
-                                                 &updatedCursor)) {
-            rawCursorWorld_ = updatedCursor;
-            cursorWorld_ = constrainLinePoint(updatedCursor, false, &screenPosition);
+        if (inputUpdate.updateCursor) {
+            cursorWorld_ = inputUpdate.cursorPoint;
             lastWorldPosition_ = cursorWorld_;
+            cursorValid_ = true;
+        }
+        if (inputUpdate.updateRawCursor) {
+            rawCursorWorld_ = inputUpdate.cursorPoint;
+        }
+        if (inputUpdate.clearGeometrySnap) {
+            currentSnap_ = SnapResult{};
+        }
+        update();
+        emitCoordinateUpdate();
+    }
+
+    bool handleArcKeyInput(const ToolInput &input, QKeyEvent *event)
+    {
+        if (event == nullptr || activeTool_ != Tool::Arc) {
+            return false;
+        }
+        const ArcKeyResult result = arcTool_.handleKeyInput(
+            input.key, input.text, input.modifiers, input.autoRepeat);
+        if (!result.handled) {
+            return false;
         }
 
-        if (pendingPoints_.size() >= 2) {
-            const QPointF radiusVector = pendingPoints_[1] - pendingPoints_[0];
-            arcPreviewStartAngle_ = std::atan2(radiusVector.y(), radiusVector.x());
-            const QPointF cursorVector = cursorWorld_ - pendingPoints_[0];
-            if (std::hypot(cursorVector.x(), cursorVector.y()) > 1.0e-9) {
-                arcPreviewPreviousAngle_ = std::atan2(cursorVector.y(), cursorVector.x());
-                arcPreviewInitialized_ = true;
-            } else {
-                arcPreviewPreviousAngle_ = arcPreviewStartAngle_ + previousSweep;
-                arcPreviewInitialized_ = true;
+        switch (result.action) {
+        case ArcKeyAction::BeginTextInput:
+        case ArcKeyAction::ChangeTextInput:
+            update();
+            break;
+        case ArcKeyAction::ApplyTextInput:
+            applyArcTextInput();
+            event->accept();
+            return true;
+        case ArcKeyAction::CancelArc:
+            setTool(Tool::Select);
+            if (commandFinished_) {
+                commandFinished_(Tool::Select);
             }
-        }
-        update();
-        emitCoordinateUpdate();
-    }
-
-    void finishOnePointArcAt(const QPointF &cursorPoint)
-    {
-        if (activeTool_ != Tool::Arc || arcMode_ != ArcMode::OnePoint ||
-            pendingPoints_.size() < 2 || !isValidWorkPlaneFrame(
-                viewportTransform_.workPlaneFrame())) {
-            return;
-        }
-        updateArcPreviewTracking(cursorPoint);
-        constexpr qreal twoPi = 6.28318530717958647692;
-        const qreal sweep = std::clamp(arcPreviewSweepAngle_,
-                                       -twoPi + 1.0e-6,
-                                       twoPi - 1.0e-6);
-        if (std::abs(sweep) <= 1.0e-12) {
-            return;
-        }
-        QVector<QPointF> points = pendingPoints_;
-        const QPointF radiusVector = points[1] - points[0];
-        const qreal radius = std::hypot(radiusVector.x(), radiusVector.y());
-        if (radius <= 1.0e-9) {
-            return;
-        }
-        const qreal startAngle = std::atan2(radiusVector.y(), radiusVector.x());
-        points.append(points[0] + QPointF(radius * std::cos(startAngle + sweep),
-                                          radius * std::sin(startAngle + sweep)));
-        Shape completedShape;
-        completedShape.geometryType = GeometryType::Arc;
-        completedShape.points = points;
-        completedShape.arcMode = ArcMode::OnePoint;
-        completedShape.arcSweep = sweep;
-        completedShape.workPlane = viewportTransform_.workPlane();
-        completedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
-        completedShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
-        completedShape.nurbs = makeArcNurbsCurve(completedShape);
-        if (!isValidNurbsCurve(completedShape.nurbs)) {
-            return;
-        }
-        recordGeometryChange();
-        shapes_.append(completedShape);
-        DebugLog::instance().write(
-            QStringLiteral("one-point arc committed by finish action radius=%1 sweep=%2")
-                .arg(radius, 0, 'f', 4)
-                .arg(sweep, 0, 'f', 6));
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
-        update();
-        emitCoordinateUpdate();
-    }
-
-    void finishTwoPointArcAt(const QPointF &cursorPoint)
-    {
-        if (activeTool_ != Tool::Arc || arcMode_ != ArcMode::TwoPoint ||
-            pendingPoints_.size() < 2 ||
-            !isValidWorkPlaneFrame(viewportTransform_.workPlaneFrame())) {
-            return;
+            update();
+            event->accept();
+            return true;
+        case ArcKeyAction::ToggleAngleSnap:
+            update();
+            break;
+        case ArcKeyAction::TogglePlaneLock:
+            toggleArcPlaneLock();
+            break;
+        case ArcKeyAction::TogglePerpendicularPlane:
+            toggleArcPerpendicularPlane();
+            break;
+        case ArcKeyAction::FinishArc:
+            finishArcAt(cursorWorld_);
+            event->accept();
+            return true;
+        case ArcKeyAction::Unhandled:
+            return false;
         }
 
-        QVector<QPointF> points{pendingPoints_[0], pendingPoints_[1]};
-        points.append(constrainTwoPointArcThroughPoint(
-            cursorPoint, currentSnap_.isValid(), false));
-        Shape completedShape;
-        if (!makeToolShape(Tool::Arc, points, ArcMode::TwoPoint, 0.0,
-                           &completedShape)) {
-            return;
-        }
-
-        recordGeometryChange();
-        shapes_.append(completedShape);
-        DebugLog::instance().write(
-            QStringLiteral("two-point arc committed chord=%1 sagitta=%2")
-                .arg(std::hypot(points[1].x() - points[0].x(),
-                               points[1].y() - points[0].y()),
-                     0, 'f', 4)
-                .arg(std::hypot(points[2].x() -
-                                    (points[0].x() + points[1].x()) * 0.5,
-                                points[2].y() -
-                                    (points[0].y() + points[1].y()) * 0.5),
-                     0, 'f', 4));
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
-        update();
-        emitCoordinateUpdate();
-    }
-
-    void finishThreePointArcAt(const QPointF &cursorPoint)
-    {
-        if (activeTool_ != Tool::Arc || arcMode_ != ArcMode::ThreePoint ||
-            pendingPoints_.size() < 2 ||
-            !isValidWorkPlaneFrame(viewportTransform_.workPlaneFrame())) {
-            return;
-        }
-
-        const QVector<QPointF> points{pendingPoints_[0], pendingPoints_[1],
-                                      cursorPoint};
-        Shape completedShape;
-        if (!makeToolShape(Tool::Arc, points, ArcMode::ThreePoint, 0.0,
-                           &completedShape)) {
-            return;
-        }
-
-        recordGeometryChange();
-        shapes_.append(completedShape);
-        CircularArc2D arc;
-        const bool arcDefined = makeCircularArcThroughPoint(
-            points[0], points[1], points[2], &arc);
-        DebugLog::instance().write(
-            QStringLiteral("three-point arc committed radius=%1")
-                .arg(arcDefined ? arc.radius : 0.0, 0, 'f', 4));
-        setTool(Tool::Select);
-        if (commandFinished_) {
-            commandFinished_(Tool::Select);
-        }
-        update();
-        emitCoordinateUpdate();
+        event->accept();
+        return true;
     }
 
     QPointF currentArcScreenPosition(const QPointF *screenPosition = nullptr) const
@@ -14598,248 +8723,92 @@ private:
                                                : QPointF(lastMousePosition_);
     }
 
-    Point3D arcVerticalPlaneNormal() const
+    ArcClickResult dispatchArcClick(const ToolInput &input,
+                                   bool worldPositionValid)
     {
-        if (!arcReferenceFrameValid_) {
-            return {};
+        ArcClickResult result;
+        if (activeTool_ != Tool::Arc) {
+            return result;
         }
 
-        // Match the add-on's orthonormal_basis_from_normal(): the manual X/Y
-        // orientations are based on the reference normal and world axes, not
-        // on whichever X/Y rotation happened to be in the captured frame.
-        Point3D referenceNormal = arcReferenceNormal_;
-        const qreal normalLength = arcVectorLength(referenceNormal);
-        if (normalLength <= 1.0e-9) {
-            return {};
+        result = arcTool_.handleClick(input, worldPositionValid, toolContext_);
+        if (result.chordEndpointCaptured) {
+            updateArcTwoPointWorkPlaneForView();
         }
-        referenceNormal = arcVectorScale(referenceNormal, 1.0 / normalLength);
-        const Point3D worldX{1.0, 0.0, 0.0};
-        const Point3D worldY{0.0, 1.0, 0.0};
-        const Point3D referenceAxis =
-            std::abs(arcVectorDot(referenceNormal, worldX)) < 0.99
-                ? worldX
-                : worldY;
-        Point3D basisY = arcVectorCross(referenceNormal, referenceAxis);
-        const qreal basisYLength = arcVectorLength(basisY);
-        if (basisYLength <= 1.0e-9) {
-            return {};
-        }
-        basisY = arcVectorScale(basisY, 1.0 / basisYLength);
-        Point3D basisX = arcVectorCross(basisY, referenceNormal);
-        const qreal basisXLength = arcVectorLength(basisX);
-        if (basisXLength <= 1.0e-9) {
-            return {};
-        }
-        basisX = arcVectorScale(basisX, 1.0 / basisXLength);
+        synchronizeArcInputPoints();
+        logArcCommit(result.commit);
+        return result;
+    }
 
-        if (arcVerticalOverrideAxis_ == Qt::Key_X) {
-            return basisX;
+    void finishArcAt(const QPointF &cursorPoint)
+    {
+        if (activeTool_ != Tool::Arc ||
+            !isValidWorkPlaneFrame(viewportTransform_.workPlaneFrame())) {
+            return;
         }
-        if (arcVerticalOverrideAxis_ == Qt::Key_Y) {
-            return basisY;
+        const ArcCommitResult result = arcTool_.commitAt(
+            cursorPoint, currentSnap_.isValid(), toolContext_);
+        logArcCommit(result);
+        if (result.committed) {
+            synchronizeArcInputPoints();
+            update();
+            emitCoordinateUpdate();
         }
+    }
 
-        const Point3D viewForward = viewportTransform_.viewDirection();
-        return std::abs(arcVectorDot(viewForward, basisX)) >
-                       std::abs(arcVectorDot(viewForward, basisY))
-                   ? basisX
-                   : basisY;
+    void logArcCommit(const ArcCommitResult &result)
+    {
+        if (!result.committed) {
+            return;
+        }
+        switch (result.mode) {
+        case ArcMode::OnePoint:
+            DebugLog::instance().write(
+                QStringLiteral("one-point arc committed by finish action radius=%1 sweep=%2")
+                    .arg(result.radius, 0, 'f', 4)
+                    .arg(result.sweep, 0, 'f', 6));
+            break;
+        case ArcMode::TwoPoint:
+            DebugLog::instance().write(
+                QStringLiteral("two-point arc committed chord=%1 sagitta=%2")
+                    .arg(result.chordLength, 0, 'f', 4)
+                    .arg(result.sagitta, 0, 'f', 4));
+            break;
+        case ArcMode::ThreePoint:
+            DebugLog::instance().write(
+                QStringLiteral("three-point arc committed radius=%1")
+                    .arg(result.radius, 0, 'f', 4));
+            break;
+        }
     }
 
     void restoreArcChordReferencePlaneForEndpointPick()
     {
-        if (!arcReferenceFrameValid_) {
-            return;
-        }
-        viewportTransform_.setWorkPlaneFrame(arcReferenceFrame_);
-        arcInputFrame_ = arcReferenceFrame_;
-        arcInputFrameValid_ = true;
-        if (!pendingPoints_.isEmpty()) {
-            pendingPoints_[0] = worldPointToWorkPlaneFrame(
-                arcFirstPointWorld_, arcReferenceFrame_);
-        }
+        arcTool_.restoreChordReferenceFrame(toolContext_);
+        synchronizeArcInputPoints();
     }
 
     void updateArcTwoPointWorkPlaneForView(
         const Point3D *previewEndpointWorld = nullptr)
     {
-        if (activeTool_ != Tool::Arc ||
-            (arcMode_ != ArcMode::TwoPoint &&
-             arcMode_ != ArcMode::ThreePoint) ||
-            !arcReferenceFrameValid_) {
-            return;
-        }
-
-        const bool haveEndpoint = previewEndpointWorld != nullptr ||
-                                  arcChordWorldPointsValid_;
-        if (!haveEndpoint) {
-            return;
-        }
-        // In the add-on, P changes the chord-picking plane immediately.
-        // Keep that chosen plane fixed while the second endpoint is moving;
-        // only build the final arc frame after the chord has been committed.
-        if (arcMode_ == ArcMode::TwoPoint &&
-            pendingPoints_.size() == 1 && !arcChordWorldPointsValid_) {
-            return;
-        }
-        const Point3D endpoint = previewEndpointWorld != nullptr
-                                     ? *previewEndpointWorld
-                                     : arcSecondPointWorld_;
-        const Point3D chord = arcVectorSubtract(endpoint,
-                                                arcFirstPointWorld_);
-        const qreal chordLength = arcVectorLength(chord);
-        if (!std::isfinite(chordLength) || chordLength <= 1.0e-9) {
-            return;
-        }
-
-        const Point3D chordDirection = arcVectorScale(chord, 1.0 / chordLength);
-        const qreal verticalThreshold = arcWasVertical_ ? 0.98 : 0.995;
-        const bool isVertical = std::abs(arcVectorDot(chordDirection,
-                                                      arcReferenceNormal_)) >
-                                verticalThreshold;
-        arcWasVertical_ = isVertical;
-
-        WorkPlaneFrame frame = arcReferenceFrame_;
-        if (arcMode_ == ArcMode::TwoPoint) {
-            Point3D planeNormal;
-            if (isVertical) {
-                planeNormal = arcVerticalPlaneNormal();
-            } else if (arcPerpendicularPlaneActive_) {
-                planeNormal = arcTwoPointPerpendicularNormalValid_
-                                  ? arcTwoPointPerpendicularNormal_
-                                  : arcVectorCross(chordDirection,
-                                                   arcReferenceNormal_);
-                const Point3D viewForward = viewportTransform_.viewDirection();
-                if (arcVectorDot(planeNormal, viewForward) > 0.0) {
-                    planeNormal = arcVectorScale(planeNormal, -1.0);
-                }
-            } else {
-                planeNormal = arcReferenceNormal_;
-            }
-
-            // A snapped endpoint can sit slightly outside the selected plane.
-            // Make the arc plane contain the final chord while keeping its
-            // normal as close as possible to the add-on's selected normal.
-            planeNormal = arcVectorSubtract(
-                planeNormal,
-                arcVectorScale(chordDirection,
-                               arcVectorDot(planeNormal, chordDirection)));
-            const qreal planeNormalLength = arcVectorLength(planeNormal);
-            if (planeNormalLength > 1.0e-9) {
-                planeNormal = arcVectorScale(planeNormal,
-                                             1.0 / planeNormalLength);
-                Point3D arcY = arcVectorCross(planeNormal, chordDirection);
-                const qreal arcYLength = arcVectorLength(arcY);
-                if (arcYLength > 1.0e-9) {
-                    arcY = arcVectorScale(arcY, 1.0 / arcYLength);
-                    frame.origin = arcVectorScale(
-                        arcVectorAdd(arcFirstPointWorld_, endpoint), 0.5);
-                    frame.xAxis = chordDirection;
-                    frame.yAxis = arcY;
-                    frame.normal = arcVectorCross(chordDirection, arcY);
-                    const qreal frameNormalLength = arcVectorLength(frame.normal);
-                    if (frameNormalLength > 1.0e-9) {
-                        frame.normal = arcVectorScale(frame.normal,
-                                                      1.0 / frameNormalLength);
-                        frame.valid = true;
-                    }
-                }
-            }
-        } else if (isVertical) {
-            const Point3D midpoint = arcVectorScale(
-                arcVectorAdd(arcFirstPointWorld_, endpoint), 0.5);
-            frame = makeWorkPlaneFrameFromNormal(midpoint,
-                                                 arcVerticalPlaneNormal());
-        } else if (arcPerpendicularPlaneActive_) {
-            const Point3D midpoint = arcVectorScale(
-                arcVectorAdd(arcFirstPointWorld_, endpoint), 0.5);
-            Point3D normal = arcVectorCross(chordDirection,
-                                            arcReferenceNormal_);
-            const qreal normalLength = arcVectorLength(normal);
-            if (normalLength > 1.0e-9) {
-                normal = arcVectorScale(normal, 1.0 / normalLength);
-                frame = makeWorkPlaneFrameFromNormal(midpoint, normal);
-            }
-        }
-        if (!isValidWorkPlaneFrame(frame)) {
-            return;
-        }
-
-        viewportTransform_.setWorkPlaneFrame(frame);
-        arcInputFrame_ = frame;
-        arcInputFrameValid_ = true;
-        if (!pendingPoints_.isEmpty()) {
-            pendingPoints_[0] = worldPointToWorkPlaneFrame(arcFirstPointWorld_,
-                                                            frame);
-        }
-        if (pendingPoints_.size() >= 2 && arcChordWorldPointsValid_) {
-            pendingPoints_[1] = worldPointToWorkPlaneFrame(arcSecondPointWorld_,
-                                                            frame);
-        }
+        arcTool_.updateChordWorkPlane(toolContext_, previewEndpointWorld);
+        synchronizeArcInputPoints();
     }
 
     void setTwoPointArcChordLength(qreal chordLength)
     {
-        if (pendingPoints_.size() != 1 || !arcReferenceFrameValid_ ||
-            !std::isfinite(chordLength) || chordLength <= 1.0e-9) {
+        ToolInput input;
+        input.rawWorldPosition = rawCursorWorld_;
+        input.worldPosition = cursorWorld_;
+        input.workPlaneFrame = viewportTransform_.workPlaneFrame();
+        input.viewportSize = size();
+        const ArcChordLengthResult result = arcTool_.applyChordLength(
+            chordLength, input, toolContext_);
+        if (!result.applied) {
             return;
         }
-
-        const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
-        const Point3D cursorWorld = workPlaneFramePointToWorld(cursorWorld_, frame);
-        Point3D direction = arcVectorSubtract(cursorWorld, arcFirstPointWorld_);
-        if (arcAxisConstraintKey_ != 0) {
-            const Point3D axis = arcAxisDirection(arcAxisConstraintKey_);
-            const qreal directionLength = arcVectorLength(direction);
-            const qreal sign = directionLength > 1.0e-9 &&
-                                       arcVectorDot(direction, axis) < 0.0
-                                   ? -1.0
-                                   : 1.0;
-            direction = arcVectorScale(axis, sign);
-        } else {
-            const qreal directionLength = arcVectorLength(direction);
-            if (directionLength <= 1.0e-9) {
-                direction = arcReferenceFrame_.xAxis;
-            } else {
-                direction = arcVectorScale(direction, 1.0 / directionLength);
-            }
-        }
-
-        arcSecondPointWorld_ = arcVectorAdd(
-            arcFirstPointWorld_, arcVectorScale(direction, chordLength));
-        arcChordWorldPointsValid_ = true;
-        updateArcTwoPointWorkPlaneForView(&arcSecondPointWorld_);
-        pendingPoints_[0] = worldPointToWorkPlaneFrame(
-            arcFirstPointWorld_, viewportTransform_.workPlaneFrame());
-        pendingPoints_.append(worldPointToWorkPlaneFrame(
-            arcSecondPointWorld_, viewportTransform_.workPlaneFrame()));
-        arcAxisConstraintKey_ = 0;
-        arcResolvedChordPointValid_ = false;
-        cursorWorld_ = pendingPoints_[1];
-        rawCursorWorld_ = cursorWorld_;
-        lastWorldPosition_ = cursorWorld_;
-        cursorValid_ = true;
-        currentSnap_ = SnapResult{};
-    }
-
-    void setTwoPointArcSagitta(qreal sagitta)
-    {
-        if (pendingPoints_.size() < 2 || !std::isfinite(sagitta)) {
-            return;
-        }
-
-        const QPointF chord = pendingPoints_[1] - pendingPoints_[0];
-        const qreal chordLength = std::hypot(chord.x(), chord.y());
-        if (chordLength <= 1.0e-9) {
-            return;
-        }
-        const QPointF midpoint = (pendingPoints_[0] + pendingPoints_[1]) * 0.5;
-        const QPointF perpendicular(-chord.y() / chordLength,
-                                    chord.x() / chordLength);
-        const qreal currentHeight = QPointF::dotProduct(cursorWorld_ - midpoint,
-                                                        perpendicular);
-        const qreal sign = currentHeight < 0.0 ? -1.0 : 1.0;
-        cursorWorld_ = midpoint + perpendicular * (sign * std::abs(sagitta));
+        synchronizeArcInputPoints();
+        cursorWorld_ = result.cursorPoint;
         rawCursorWorld_ = cursorWorld_;
         lastWorldPosition_ = cursorWorld_;
         cursorValid_ = true;
@@ -14848,278 +8817,63 @@ private:
 
     void toggleArcPlaneLock()
     {
-        arcPlaneLocked_ = !arcPlaneLocked_;
-        if (arcPlaneLocked_ && pendingPoints_.isEmpty()) {
-            arcLockedFrame_ = viewportTransform_.workPlaneFrame();
-            arcLockedFrameValid_ = isValidWorkPlaneFrame(arcLockedFrame_);
-        } else if (!arcPlaneLocked_) {
-            arcLockedFrame_ = {};
-            arcLockedFrameValid_ = false;
-            if (pendingPoints_.isEmpty()) {
-                updateDrawingWorkPlaneFromHover(currentArcScreenPosition());
-            }
+        const bool refreshDrawingPlane = arcTool_.togglePlaneLock(
+            viewportTransform_.workPlaneFrame(),
+            arcTool_.inputStage() == ArcInputStage::FirstPoint);
+        if (refreshDrawingPlane) {
+            updateDrawingWorkPlaneFromHover(currentArcScreenPosition());
         }
         update();
     }
 
-    void toggleTwoPointArcPerpendicularPlane()
+    void toggleArcPerpendicularPlane()
     {
-        if (arcMode_ == ArcMode::TwoPoint && pendingPoints_.size() == 1 &&
-            arcReferenceFrameValid_) {
-            if (arcPerpendicularPlaneActive_) {
-                arcPerpendicularPlaneActive_ = false;
-                arcTwoPointPerpendicularNormal_ = {};
-                arcTwoPointPerpendicularNormalValid_ = false;
-                arcVerticalOverrideAxis_ = 0;
-                restoreArcChordReferencePlaneForEndpointPick();
-                pendingPoints_[0] = worldPointToWorkPlaneFrame(
-                    arcFirstPointWorld_, viewportTransform_.workPlaneFrame());
-            } else {
-                const Point3D endpoint = arcResolvedChordPointValid_
-                                             ? arcResolvedChordPointWorld_
-                                             : workPlaneFramePointToWorld(
-                                                   cursorWorld_,
-                                                   viewportTransform_.workPlaneFrame());
-                const Point3D bridge = arcVectorSubtract(endpoint,
-                                                         arcFirstPointWorld_);
-                const qreal bridgeLength = arcVectorLength(bridge);
-                if (bridgeLength <= 1.0e-9) {
-                    return;
-                }
-                const Point3D bridgeDirection =
-                    arcVectorScale(bridge, 1.0 / bridgeLength);
-                Point3D normal = arcVectorCross(bridgeDirection,
-                                                arcReferenceNormal_);
-                const qreal normalLength = arcVectorLength(normal);
-                if (normalLength <= 1.0e-9) {
-                    return;
-                }
-                normal = arcVectorScale(normal, 1.0 / normalLength);
-                Point3D floorNormal = arcReferenceNormal_;
-                const qreal floorNormalLength = arcVectorLength(floorNormal);
-                if (floorNormalLength <= 1.0e-9) {
-                    return;
-                }
-                floorNormal = arcVectorScale(floorNormal,
-                                             1.0 / floorNormalLength);
-                Point3D planeX = arcVectorCross(floorNormal, normal);
-                const qreal planeXLength = arcVectorLength(planeX);
-                if (planeXLength <= 1.0e-9) {
-                    return;
-                }
-
-                WorkPlaneFrame frame;
-                frame.origin = arcFirstPointWorld_;
-                frame.xAxis = arcVectorScale(planeX, 1.0 / planeXLength);
-                frame.yAxis = floorNormal;
-                frame.normal = normal;
-                frame.valid = true;
-                if (!isValidWorkPlaneFrame(frame)) {
-                    return;
-                }
-
-                arcPerpendicularPlaneActive_ = true;
-                arcTwoPointPerpendicularNormal_ = normal;
-                arcTwoPointPerpendicularNormalValid_ = true;
-                arcVerticalOverrideAxis_ = 0;
-                viewportTransform_.setWorkPlaneFrame(frame);
-                arcInputFrame_ = frame;
-                arcInputFrameValid_ = true;
-                pendingPoints_[0] = worldPointToWorkPlaneFrame(
-                    arcFirstPointWorld_, frame);
-            }
-
-            refreshArcCursorOnCurrentFrame();
-            update();
-            emitCoordinateUpdate();
+        if (activeTool_ != Tool::Arc) {
             return;
         }
-
-        if (pendingPoints_.size() == 1 && arcReferenceFrameValid_) {
-            // Match the add-on: P can choose the arc plane while the chord
-            // endpoint is still moving. The next cursor update resolves the
-            // provisional chord and applies this plane to its preview.
-            arcPerpendicularPlaneActive_ = !arcPerpendicularPlaneActive_;
-            arcVerticalOverrideAxis_ = 0;
-            restoreArcChordReferencePlaneForEndpointPick();
-            refreshArcCursorOnCurrentFrame();
-            update();
-            emitCoordinateUpdate();
+        const ArcPlaneToggleResult result = arcTool_.togglePerpendicularPlane(
+            cursorWorld_, toolContext_);
+        if (!result.changed) {
             return;
         }
-        if (pendingPoints_.size() < 2 || !arcChordWorldPointsValid_) {
-            return;
+        synchronizeArcInputPoints();
+        if (result.refreshCursor) {
+            refreshArcCursorOnCurrentFrame(result.forceCursorRefresh);
         }
-
-        const Point3D chord = arcVectorSubtract(arcSecondPointWorld_,
-                                                arcFirstPointWorld_);
-        const qreal chordLength = arcVectorLength(chord);
-        if (chordLength <= 1.0e-9) {
-            return;
+        if (result.rebaseOnePointPreview) {
+            arcTool_.rebaseOnePointPreview(cursorWorld_);
         }
-        const Point3D chordDirection = arcVectorScale(chord, 1.0 / chordLength);
-        const qreal verticalThreshold = arcWasVertical_ ? 0.98 : 0.995;
-        const bool isVertical = std::abs(arcVectorDot(chordDirection,
-                                                      arcReferenceNormal_)) >
-                                verticalThreshold;
-        arcWasVertical_ = isVertical;
-        if (isVertical) {
-            arcVerticalOverrideAxis_ = arcVerticalOverrideAxis_ == Qt::Key_X
-                                           ? Qt::Key_Y
-                                           : Qt::Key_X;
-        } else {
-            arcPerpendicularPlaneActive_ = !arcPerpendicularPlaneActive_;
-            arcVerticalOverrideAxis_ = 0;
-            if (arcPerpendicularPlaneActive_) {
-                arcTwoPointPerpendicularNormal_ = arcVectorCross(
-                    chordDirection, arcReferenceNormal_);
-                const qreal normalLength =
-                    arcVectorLength(arcTwoPointPerpendicularNormal_);
-                if (normalLength > 1.0e-9) {
-                    arcTwoPointPerpendicularNormal_ = arcVectorScale(
-                        arcTwoPointPerpendicularNormal_, 1.0 / normalLength);
-                    arcTwoPointPerpendicularNormalValid_ = true;
-                } else {
-                    arcTwoPointPerpendicularNormal_ = {};
-                    arcTwoPointPerpendicularNormalValid_ = false;
-                }
-            } else {
-                arcTwoPointPerpendicularNormal_ = {};
-                arcTwoPointPerpendicularNormalValid_ = false;
-            }
-        }
-
-        updateArcTwoPointWorkPlaneForView();
-        refreshArcCursorOnCurrentFrame();
         update();
         emitCoordinateUpdate();
-    }
-
-    int inferredArcChordAxis(const QPointF &screenPosition) const
-    {
-        if (!arcReferenceFrameValid_) {
-            return 0;
-        }
-
-        QPointF anchorScreen;
-        if (!viewportTransform_.worldPointToScreen(arcFirstPointWorld_,
-                                                   size(),
-                                                   &anchorScreen)) {
-            return 0;
-        }
-        QPointF cursorDirection = screenPosition - anchorScreen;
-        const qreal cursorLength = std::hypot(cursorDirection.x(),
-                                              cursorDirection.y());
-        if (!std::isfinite(cursorLength) || cursorLength < 1.0) {
-            return 0;
-        }
-        cursorDirection /= cursorLength;
-
-        qreal bestAlignment = -1.0;
-        int bestKey = 0;
-        constexpr int axisKeys[] = {Qt::Key_X, Qt::Key_Y, Qt::Key_Z};
-        for (const int key : axisKeys) {
-            QPointF axisScreen;
-            const Point3D unitAxis = arcAxisDirection(key);
-            const Point3D unitPoint = arcVectorAdd(arcFirstPointWorld_, unitAxis);
-            if (!viewportTransform_.worldPointToScreen(unitPoint,
-                                                       size(),
-                                                       &axisScreen)) {
-                continue;
-            }
-            QPointF projectedDirection = axisScreen - anchorScreen;
-            const qreal projectedLength = std::hypot(projectedDirection.x(),
-                                                     projectedDirection.y());
-            if (!std::isfinite(projectedLength) || projectedLength <= 1.0e-9) {
-                continue;
-            }
-            projectedDirection /= projectedLength;
-            const qreal alignment = std::abs(QPointF::dotProduct(
-                cursorDirection, projectedDirection));
-            if (alignment > bestAlignment) {
-                bestAlignment = alignment;
-                bestKey = key;
-            }
-        }
-
-        constexpr qreal sixDegreeAlignment = 0.9945218953682733;
-        return bestAlignment >= sixDegreeAlignment ? bestKey : 0;
     }
 
     QPointF constrainArcChordEndpoint(const QPointF &rawPoint,
                                       bool altModifier,
                                       const QPointF &screenPosition)
     {
-        const WorkPlaneFrame oldFrame = viewportTransform_.workPlaneFrame();
-        if (!isValidWorkPlaneFrame(oldFrame) || !arcReferenceFrameValid_) {
-            arcResolvedChordPointValid_ = false;
-            return rawPoint;
+        ToolInput input;
+        input.screenPosition = screenPosition;
+        input.rawWorldPosition = rawPoint;
+        input.worldPosition = rawPoint;
+        input.workPlaneFrame = viewportTransform_.workPlaneFrame();
+        input.viewportSize = size();
+        input.snapResult = currentSnap_;
+        input.snapType = currentSnap_.type;
+        if (altModifier) {
+            input.modifiers |= Qt::AltModifier;
         }
-
-        const Point3D rawWorld = workPlaneFramePointToWorld(rawPoint, oldFrame);
-        Point3D targetWorld = currentSnap_.isValid()
-                                  ? (currentSnap_.hasWorldPoint
-                                         ? currentSnap_.worldPoint
-                                         : workPlaneFramePointToWorld(
-                                               currentSnap_.point, oldFrame))
-                                  : rawWorld;
-        int axisKey = 0;
-        if (!altModifier) {
-            axisKey = arcAxisConstraintKey_;
-            if (axisKey == 0 && !currentSnap_.isValid()) {
-                axisKey = inferredArcChordAxis(screenPosition);
-            }
+        const ArcEndpointConstraintResult result =
+            arcTool_.constrainChordEndpoint(input, toolContext_);
+        currentSnap_ = result.snapResult;
+        if (result.updateRawCursor) {
+            rawCursorWorld_ = result.rawCursorPoint;
         }
-
-        if (axisKey != 0) {
-            const Point3D direction = arcAxisDirection(axisKey);
-            if (currentSnap_.isValid()) {
-                const Point3D delta = arcVectorSubtract(targetWorld,
-                                                        arcFirstPointWorld_);
-                targetWorld = arcVectorAdd(
-                    arcFirstPointWorld_,
-                    arcVectorScale(direction, arcVectorDot(delta, direction)));
-            } else {
-                Point3D axisPoint;
-                if (viewportTransform_.screenToWorldAxis(screenPosition,
-                                                         size(),
-                                                         arcFirstPointWorld_,
-                                                         direction,
-                                                         &axisPoint)) {
-                    targetWorld = axisPoint;
-                }
-            }
-        }
-
-        arcResolvedChordPointWorld_ = targetWorld;
-        arcResolvedChordPointValid_ = true;
-        if (arcMode_ != ArcMode::TwoPoint || arcChordWorldPointsValid_) {
-            updateArcTwoPointWorkPlaneForView(&targetWorld);
-        }
-        const WorkPlaneFrame newFrame = viewportTransform_.workPlaneFrame();
-        const QPointF targetLocal = worldPointToWorkPlaneFrame(targetWorld,
-                                                               newFrame);
-        if (currentSnap_.isValid()) {
-            currentSnap_.point = targetLocal;
-        }
-
-        if (!workPlaneFramesMatch(oldFrame, newFrame)) {
-            QPointF remappedRaw;
-            if (viewportTransform_.screenToWorkPlane(screenPosition,
-                                                      size(),
-                                                      newFrame,
-                                                      &remappedRaw)) {
-                rawCursorWorld_ = remappedRaw;
-            } else {
-                rawCursorWorld_ = worldPointToWorkPlaneFrame(rawWorld, newFrame);
-            }
-        }
-        return targetLocal;
+        return result.point;
     }
 
-    void refreshArcCursorOnCurrentFrame()
+    void refreshArcCursorOnCurrentFrame(bool force = false)
     {
-        if (!cursorValid_) {
+        if (!cursorValid_ && !force) {
             return;
         }
         const QPointF screenPosition = currentArcScreenPosition();
@@ -15136,119 +8890,138 @@ private:
         lastWorldPosition_ = cursorWorld_;
     }
 
-    bool handleArcAxisKey(int key)
+    bool handleArcAxisKey(const ToolInput &input)
     {
         if (activeTool_ != Tool::Arc) {
             return false;
         }
-
-        if (arcMode_ == ArcMode::OnePoint) {
-            if (!pendingPoints_.isEmpty()) {
-                return true;
-            }
-            const WorkPlaneFrame currentFrame = viewportTransform_.workPlaneFrame();
-            if (arcPlaneNormalLockKey_ == key && arcAxisBaseFrameValid_) {
-                viewportTransform_.setWorkPlaneFrame(arcAxisBaseFrame_);
-                toolDrawingFrame_ = {};
-                toolDrawingPlaneLocked_ = false;
-                arcPlaneNormalLockKey_ = 0;
-                arcAxisBaseFrame_ = {};
-                arcAxisBaseFrameValid_ = false;
-            } else {
-                if (!arcAxisBaseFrameValid_) {
-                    arcAxisBaseFrame_ = currentFrame;
-                    arcAxisBaseFrameValid_ = isValidWorkPlaneFrame(currentFrame);
-                }
-                const QPointF screenPosition = currentArcScreenPosition();
-                QPointF cursorLocal;
-                Point3D planeOrigin = currentFrame.origin;
-                if (viewportTransform_.screenToWorkPlane(screenPosition,
-                                                         size(),
-                                                         currentFrame,
-                                                         &cursorLocal)) {
-                    planeOrigin = workPlaneFramePointToWorld(cursorLocal,
-                                                             currentFrame);
-                }
-                const WorkPlaneFrame lockedFrame = makeWorkPlaneFrameFromNormal(
-                    planeOrigin, arcAxisDirection(key));
-                if (isValidWorkPlaneFrame(lockedFrame)) {
-                    viewportTransform_.setWorkPlaneFrame(lockedFrame);
-                    toolDrawingFrame_ = lockedFrame;
-                    toolDrawingPlaneLocked_ = true;
-                    arcPlaneNormalLockKey_ = key;
-                }
-            }
+        const ArcAxisKeyResult result = arcTool_.handleAxisKey(
+            input.key, input, toolContext_);
+        if (!result.handled) {
+            return false;
+        }
+        if (result.drawingFrameChanged) {
+            toolDrawingFrame_ = result.drawingFrame;
+            toolDrawingPlaneLocked_ = result.drawingPlaneLocked;
+        }
+        synchronizeArcInputPoints();
+        if (result.refreshCursor) {
             refreshArcCursorOnCurrentFrame();
-            update();
-            return true;
-        }
-
-        if (pendingPoints_.isEmpty()) {
-            arcAxisConstraintKey_ = arcAxisConstraintKey_ == key ? 0 : key;
-            update();
-            return true;
-        }
-
-        if ((arcMode_ == ArcMode::TwoPoint ||
-             arcMode_ == ArcMode::ThreePoint) &&
-            pendingPoints_.size() == 1) {
-            arcAxisConstraintKey_ = arcAxisConstraintKey_ == key ? 0 : key;
-            if (!(arcMode_ == ArcMode::TwoPoint &&
-                  arcPerpendicularPlaneActive_)) {
-                restoreArcChordReferencePlaneForEndpointPick();
-            }
-            refreshArcCursorOnCurrentFrame();
-            update();
-            return true;
-        }
-
-        if (pendingPoints_.size() >= 2 && arcChordWorldPointsValid_ &&
-            (key == Qt::Key_X || key == Qt::Key_Y)) {
-            const Point3D chord = arcVectorSubtract(arcSecondPointWorld_,
-                                                    arcFirstPointWorld_);
-            const qreal chordLength = arcVectorLength(chord);
-            if (chordLength > 1.0e-9 &&
-                std::abs(arcVectorDot(arcVectorScale(chord, 1.0 / chordLength),
-                                      arcReferenceNormal_)) > 0.99) {
-                arcVerticalOverrideAxis_ = key;
-                updateArcTwoPointWorkPlaneForView();
-                refreshArcCursorOnCurrentFrame();
-            }
         }
         return true;
     }
 
-    void updateDrawingWorkPlaneFromHover(const QPointF &screenPosition)
+    DrawingPlaneResolutionRequest drawingPlaneRequest(bool drawingShape,
+                                                       bool selectingObject) const
     {
-        if (draggingSelected_ || draggingControlPoint_ || grabActive_ || duplicateActive_) {
+        DrawingPlaneResolutionRequest request;
+        request.activeTool = activeTool_;
+        request.drawingShape = drawingShape;
+        request.selectingObject = selectingObject;
+        request.controlPointsVisible = controlPointsVisible_;
+        request.perspectiveEnabled = viewportTransform_.isPerspectiveEnabled();
+        request.viewPreset = viewportTransform_.viewPreset();
+        request.viewDirection = viewportTransform_.viewDirection();
+        request.viewUp = viewportTransform_.viewUp();
+        request.viewTarget = viewportTransform_.viewTarget();
+        return request;
+    }
+
+    void applyDrawingPlaneResolution(
+        const DrawingPlaneResolution &resolution,
+        const QPointF &screenPosition,
+        int hoveredShapeIndex = -1)
+    {
+        if (!resolution.hasFrame()) {
             return;
         }
-        if (activeTool_ == Tool::Arc && pendingPoints_.isEmpty() &&
-            arcPlaneLocked_ &&
-            arcLockedFrameValid_) {
-            viewportTransform_.setWorkPlaneFrame(arcLockedFrame_);
+
+        WorkPlaneFrame frame = resolution.frame;
+        if (resolution.kind ==
+            DrawingPlaneResolutionKind::EdgeOnSelectionDrag) {
+            Point3D pickWorld = frame.origin;
+            curveHitTester_.hitTestVisibleDepth(document_,
+                                                screenPosition,
+                                                viewportTransform_,
+                                                size(),
+                                                &pickWorld);
+            frame.origin = pickWorld;
+        }
+
+        if (resolution.usesPrincipalPlane()) {
+            const bool frameChanged = !workPlaneFramesMatch(
+                viewportTransform_.workPlaneFrame(), frame);
+            const bool planeChanged = !workPlaneMatches(
+                viewportTransform_.workPlane(),
+                viewportTransform_.workPlaneOffset(),
+                resolution.plane,
+                0.0);
+            if (frameChanged || planeChanged) {
+                viewportTransform_.setWorkPlane(resolution.plane, 0.0);
+                notifyViewStateChanged();
+            }
+        } else {
+            viewportTransform_.setWorkPlaneFrame(frame);
+        }
+
+        if (resolution.kind == DrawingPlaneResolutionKind::HoveredObject &&
+            hoveredShapeIndex >= 0 && hoveredShapeIndex < shapes_.size() &&
+            qEnvironmentVariable("CLASSICAD_SNAP_TRACE") ==
+                QStringLiteral("1")) {
+            const auto point3DText = [](const Point3D &point) {
+                return QStringLiteral("(%1, %2, %3)")
+                    .arg(point.x, 0, 'g', 12)
+                    .arg(point.y, 0, 'g', 12)
+                    .arg(point.z, 0, 'g', 12);
+            };
+            DebugLog::instance().write(
+                QStringLiteral("osnap-trace hover-frame shape=%1 geometry=%2 screen=%3 origin=%4 x=%5 y=%6 normal=%7")
+                    .arg(hoveredShapeIndex)
+                    .arg(geometryTypeName(
+                        shapes_[hoveredShapeIndex].geometryType))
+                    .arg(precisePointText(screenPosition))
+                    .arg(point3DText(frame.origin))
+                    .arg(point3DText(frame.xAxis))
+                    .arg(point3DText(frame.yAxis))
+                    .arg(point3DText(frame.normal)));
+        }
+    }
+
+    void updateDrawingWorkPlaneFromHover(const QPointF &screenPosition)
+    {
+        if (objectSelectionDragActive() || controlPointSelectionDragActive() ||
+            grabTool_.isActive() || duplicateTool_.isActive()) {
+            return;
+        }
+        if (activeTool_ == Tool::Arc &&
+            arcTool_.inputStage() == ArcInputStage::FirstPoint &&
+            arcState().planeLocked && arcState().lockedFrameValid) {
+            viewportTransform_.setWorkPlaneFrame(arcState().lockedFrame);
             return;
         }
         if (activeTool_ == Tool::Rotate) {
-            if (rotateStep_ > 0 && isValidWorkPlaneFrame(rotateFrame_)) {
-                viewportTransform_.setWorkPlaneFrame(rotateFrame_);
+            if (rotateState().stage > 0 && isValidWorkPlaneFrame(rotateState().frame)) {
+                viewportTransform_.setWorkPlaneFrame(rotateState().frame);
                 return;
             }
-            if ((rotateAxisLockKey_ != 0 ||
-                 rotatePrePivotPerpendicularActive_) &&
-                isValidWorkPlaneFrame(rotatePrePivotPlaneFrame_)) {
-                viewportTransform_.setWorkPlaneFrame(rotatePrePivotPlaneFrame_);
+            if ((rotateState().axisLockKey != 0 ||
+                 rotateState().prePivotPerpendicularActive) &&
+                isValidWorkPlaneFrame(rotateState().prePivotPlaneFrame)) {
+                viewportTransform_.setWorkPlaneFrame(rotateState().prePivotPlaneFrame);
                 return;
             }
 
+            DrawingPlaneResolutionRequest request =
+                drawingPlaneRequest(true, false);
             const int shapeIndex = curveHitTester_.hitTestShapeOnAnyWorkPlane(
                 document_, screenPosition, viewportTransform_, size());
             if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
-                viewportTransform_.setWorkPlaneFrame(
-                    shapeWorkPlaneFrame(shapes_[shapeIndex]));
-            } else {
-                useAddonCompatibleDrawingPlane();
+                request.hasHoveredPlane = true;
+                request.hoveredPlane = shapeWorkPlaneFrame(shapes_[shapeIndex]);
             }
+            applyDrawingPlaneResolution(DrawingPlaneResolver::resolve(request),
+                                        screenPosition,
+                                        shapeIndex);
             return;
         }
         if (activeTool_ != Tool::Line && toolDrawingPlaneLocked_ &&
@@ -15259,166 +9032,44 @@ private:
         const bool unlockedPointInput =
             (activeTool_ == Tool::PointByLine ||
              activeTool_ == Tool::PointByArcs) && !toolDrawingPlaneLocked_;
-        if ((activeTool_ == Tool::Line && linePreviewPlaneLocked_) ||
+        if ((activeTool_ == Tool::Line && toolPreview_.planeLocked) ||
             (activeTool_ != Tool::Line && !pendingPoints_.isEmpty() &&
              !unlockedPointInput)) {
             return;
         }
+
         const bool drawingShape =
             geometryTypeForTool(activeTool_) != GeometryType::Invalid;
         const bool selectingObject = activeTool_ == Tool::Select;
+        DrawingPlaneResolutionRequest request =
+            drawingPlaneRequest(drawingShape, selectingObject);
         if (!drawingShape && !selectingObject) {
             return;
         }
+
         const int shapeIndex = selectingObject
-            ? curveHitTester_.hitTestShape(document_, screenPosition, viewportTransform_, size())
+            ? curveHitTester_.hitTestShape(document_,
+                                           screenPosition,
+                                           viewportTransform_,
+                                           size())
             : curveHitTester_.hitTestShapeOnAnyWorkPlane(
                   document_, screenPosition, viewportTransform_, size());
         if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
-            const Shape &shape = shapes_[shapeIndex];
-            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-            const Point3D viewNormal = viewportTransform_.viewDirection();
-            const qreal planeFacing = std::abs(frame.normal.x*viewNormal.x +
-                frame.normal.y*viewNormal.y + frame.normal.z*viewNormal.z);
-            if (selectingObject && !controlPointsVisible_ && planeFacing < 0.15) {
-                // An almost edge-on object plane makes tiny cursor moves
-                // produce enormous world deltas. Drag through the visible
-                // pick depth on a plane facing the camera instead.
-                Point3D pickWorld = frame.origin;
-                curveHitTester_.hitTestVisibleDepth(document_, screenPosition,
-                    viewportTransform_, size(), &pickWorld);
-                WorkPlaneFrame dragFrame = viewAlignedDrawingFrame();
-                dragFrame.origin = pickWorld;
-                viewportTransform_.setWorkPlaneFrame(dragFrame);
-                return;
-            }
-            if (drawingShape || selectingObject) {
+            request.hasHoveredPlane = true;
+            request.hoveredPlane = shapeWorkPlaneFrame(shapes_[shapeIndex]);
+            if (drawingShape) {
                 QPointF planePoint;
-                if (!drawingShape || viewportTransform_.screenToWorkPlane(
-                        screenPosition, size(), frame, &planePoint)) {
-                    viewportTransform_.setWorkPlaneFrame(frame);
-                    if (qEnvironmentVariable("CLASSICAD_SNAP_TRACE") ==
-                        QStringLiteral("1")) {
-                        const auto point3DText = [](const Point3D &point) {
-                            return QStringLiteral("(%1, %2, %3)")
-                                .arg(point.x, 0, 'g', 12)
-                                .arg(point.y, 0, 'g', 12)
-                                .arg(point.z, 0, 'g', 12);
-                        };
-                        DebugLog::instance().write(
-                            QStringLiteral("osnap-trace hover-frame shape=%1 geometry=%2 screen=%3 origin=%4 x=%5 y=%6 normal=%7")
-                                .arg(shapeIndex)
-                                .arg(geometryTypeName(shape.geometryType))
-                                .arg(precisePointText(screenPosition))
-                                .arg(point3DText(frame.origin))
-                                .arg(point3DText(frame.xAxis))
-                                .arg(point3DText(frame.yAxis))
-                                .arg(point3DText(frame.normal)));
-                    }
-                    return;
-                }
-            }
-            if (!drawingShape) {
-                return;
-            }
-        }
-        if (drawingShape) {
-            // SurfaceDrawTool resolves a fresh plane from hovered scene
-            // geometry first. Empty-space input follows Blender's view-based
-            // fallback, mapped onto the supported principal workplanes.
-            useAddonCompatibleDrawingPlane();
-        }
-    }
-
-    void useAddonCompatibleDrawingPlane()
-    {
-        WorkPlane plane = WorkPlane::XY;
-        if (viewportTransform_.isPerspectiveEnabled()) {
-            // DrawManager.get_snap_data uses world Z as its perspective
-            // fallback, regardless of the camera's viewing direction.
-            plane = WorkPlane::XY;
-        } else {
-            switch (viewportTransform_.viewPreset()) {
-            // Fixed views use the plane visible to the cursor. These map to
-            // the app's principal workplanes and offsets.
-            case ViewportViewPreset::Top:
-            case ViewportViewPreset::Bottom:
-                plane = WorkPlane::XY;
-                break;
-            case ViewportViewPreset::Front:
-            case ViewportViewPreset::Back:
-                plane = WorkPlane::XZ;
-                break;
-            case ViewportViewPreset::Right:
-            case ViewportViewPreset::Left:
-                plane = WorkPlane::YZ;
-                break;
-            case ViewportViewPreset::Isometric:
-            case ViewportViewPreset::Perspective:
-            case ViewportViewPreset::Custom:
-                {
-                    const Point3D normal = viewportTransform_.viewDirection();
-                    const qreal xAlignment = std::abs(normal.x);
-                    const qreal yAlignment = std::abs(normal.y);
-                    const qreal zAlignment = std::abs(normal.z);
-                    if (activeTool_ == Tool::Line &&
-                        std::max({xAlignment, yAlignment, zAlignment}) <= 0.99) {
-                        // The addon uses the actual camera-facing plane for
-                        // oblique ortho. Storage remains local planar NURBS.
-                        viewportTransform_.setWorkPlaneFrame(
-                            makeWorkPlaneFrameFromNormal({0.0, 0.0, 0.0},
-                                {-normal.x, -normal.y, -normal.z}));
-                        return;
-                    }
-                    plane = xAlignment >= yAlignment && xAlignment >= zAlignment
-                                ? WorkPlane::YZ
-                                : (yAlignment >= zAlignment ? WorkPlane::XZ
-                                                            : WorkPlane::XY);
-                }
-                break;
+                request.hoveredPlaneUsable = viewportTransform_.screenToWorkPlane(
+                    screenPosition,
+                    size(),
+                    request.hoveredPlane,
+                    &planePoint);
             }
         }
 
-        const WorkPlaneFrame frame = makeWorkPlaneFrame(plane, 0.0);
-        const bool frameChanged = !workPlaneFramesMatch(
-            viewportTransform_.workPlaneFrame(), frame);
-        const bool planeChanged = !workPlaneMatches(
-            viewportTransform_.workPlane(),
-            viewportTransform_.workPlaneOffset(),
-            plane,
-            0.0);
-        if (!frameChanged && !planeChanged) {
-            return;
-        }
-        viewportTransform_.setWorkPlane(plane, 0.0);
-        notifyViewStateChanged();
-    }
-
-    WorkPlaneFrame viewAlignedDrawingFrame() const
-    {
-        const Point3D target = viewportTransform_.viewTarget();
-        switch (viewportTransform_.viewPreset()) {
-        case ViewportViewPreset::Top:
-        case ViewportViewPreset::Bottom:
-            return makeWorkPlaneFrame(WorkPlane::XY, target.z);
-        case ViewportViewPreset::Front:
-        case ViewportViewPreset::Back:
-            return makeWorkPlaneFrame(WorkPlane::XZ, target.y);
-        case ViewportViewPreset::Right:
-        case ViewportViewPreset::Left:
-            return makeWorkPlaneFrame(WorkPlane::YZ, target.x);
-        case ViewportViewPreset::Isometric:
-        case ViewportViewPreset::Perspective:
-        case ViewportViewPreset::Custom:
-            break;
-        }
-
-        const Point3D normal = viewportTransform_.viewDirection();
-        const Point3D up = viewportTransform_.viewUp();
-        const Point3D screenRight{up.y * normal.z - up.z * normal.y,
-                                  up.z * normal.x - up.x * normal.z,
-                                  up.x * normal.y - up.y * normal.x};
-        return makeWorkPlaneFrameFromNormal(target, normal, screenRight);
+        applyDrawingPlaneResolution(DrawingPlaneResolver::resolve(request),
+                                    screenPosition,
+                                    shapeIndex);
     }
 
     QPointF worldToScreen(const QPointF &world) const
@@ -15435,16 +9086,17 @@ private:
 
     void drawLineToolPreview(QPainter &painter, bool drawCurve = true)
     {
-        if (activeTool_ == Tool::Line && !linePreviewWorldPoints_.isEmpty()) {
-            viewportOverlay_.drawWorldLinePreview(painter, linePreviewWorldPoints_,
-                linePreviewWorldCursor_, cursorValid_, size(), drawCurve,
-                linePreviewFrame_);
+        if (activeTool_ == Tool::Line && !toolPreview_.worldPoints.isEmpty()) {
+            viewportOverlay_.toolPreviewRenderer().drawWorldLinePreview(painter,
+                toolPreview_.worldPoints,
+                toolPreview_.worldCursorPoint, cursorValid_, size(), drawCurve,
+                toolPreview_.workPlaneFrame);
             if (currentSnap_.isValid()) {
                 drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
             }
             return;
         }
-        viewportOverlay_.drawLinePreview(painter,
+        viewportOverlay_.toolPreviewRenderer().drawLinePreview(painter,
                                          pendingPoints_,
                                          cursorWorld_,
                                          cursorValid_,
@@ -15452,7 +9104,7 @@ private:
                                          size(),
                                          drawCurve,
                                          activeTool_ == Tool::Line
-                                             ? linePreviewFrame_
+                                             ? toolPreview_.workPlaneFrame
                                              : WorkPlaneFrame{});
     }
 
@@ -15460,13 +9112,13 @@ private:
         QPainter &painter,
         const QVector<ObjectId> &gpuHandledObjects = {})
     {
-        if (pendingPoints_.isEmpty() || !cursorValid_) {
+        if (!mirrorTool_.hasAxisStart() || !cursorValid_) {
             return;
         }
 
-        const QPointF axisStart = pendingPoints_.first();
+        const QPointF axisStart = mirrorTool_.axisStart();
         const QPointF axisEnd = cursorWorld_;
-        for (const ObjectId objectId : mirrorShapeIndices_) {
+        for (const ObjectId objectId : mirrorTool_.sourceObjectIds()) {
             const int shapeIndex = objectIndex(objectId);
             if (shapeIndex < 0 || shapeIndex >= shapes_.size() ||
                 !document_.isObjectVisible(objectId)) {
@@ -15481,7 +9133,8 @@ private:
                 if (!gpuHandledObjects.contains(objectId)) {
                     drawShape(painter, mirroredShape, true, false, false);
                 }
-                if (!subdivisionActive_ || objectId != subdivisionShapeIndex_) {
+                if (!subdivisionTool_.isActive() ||
+                    objectId != subdivisionTool_.targetObjectId()) {
                     drawSubdivisionPoints(painter,
                                           mirroredShape,
                                           mirroredShape.subdivisionParameters,
@@ -15493,85 +9146,23 @@ private:
 
     void resetArcPreviewTracking()
     {
-        arcPreviewInitialized_ = false;
-        arcPreviewPreviousAngle_ = 0.0;
-        arcPreviewSweepAngle_ = 0.0;
-        arcAngleValueLocked_ = false;
+        arcTool_.resetPreviewTracking();
     }
 
     void initializeArcPreviewTracking()
     {
-        resetArcPreviewTracking();
-        if (arcMode_ != ArcMode::OnePoint || pendingPoints_.size() < 2) {
-            return;
-        }
-
-        const QPointF radiusVector = pendingPoints_[1] - pendingPoints_[0];
-        const qreal radius = std::hypot(radiusVector.x(), radiusVector.y());
-        if (radius <= 1e-9) {
-            return;
-        }
-
-        arcPreviewStartAngle_ = std::atan2(radiusVector.y(),
-                                           radiusVector.x());
-        arcPreviewPreviousAngle_ = arcPreviewStartAngle_;
-        arcPreviewInitialized_ = true;
+        arcTool_.initializePreviewTracking();
     }
 
     void updateArcPreviewTracking(const QPointF &cursorWorld)
     {
-        if (arcMode_ != ArcMode::OnePoint || pendingPoints_.size() < 2 ||
-            arcAngleValueLocked_) {
-            return;
-        }
-
-        const QPointF cursorVector = cursorWorld - pendingPoints_[0];
-        const qreal radius = std::hypot(cursorVector.x(), cursorVector.y());
-        if (radius <= 1e-9) {
-            return;
-        }
-
-        qreal angle = std::atan2(cursorVector.y(), cursorVector.x());
-        if (arcAngleSnapEnabled_ && !currentSnap_.isValid()) {
-            angle = snapOnePointArcAngle(angle);
-        }
-        if (!arcPreviewInitialized_) {
-            arcPreviewStartAngle_ = std::atan2(
-                pendingPoints_[1].y() - pendingPoints_[0].y(),
-                pendingPoints_[1].x() - pendingPoints_[0].x());
-            arcPreviewPreviousAngle_ = angle;
-            arcPreviewInitialized_ = true;
-            return;
-        }
-
-        constexpr qreal pi = 3.14159265358979323846;
-        constexpr qreal twoPi = 2.0 * pi;
-        qreal delta = angle - arcPreviewPreviousAngle_;
-        if (delta > pi) {
-            delta -= twoPi;
-        } else if (delta < -pi) {
-            delta += twoPi;
-        }
-
-        arcPreviewSweepAngle_ += delta;
-        constexpr qreal sweepLimit = 2.0 * pi;
-        if (std::abs(arcPreviewSweepAngle_) > sweepLimit &&
-            std::cos(angle - arcPreviewStartAngle_) > 0.8) {
-            qreal phase = std::fmod(arcPreviewSweepAngle_ + pi, twoPi);
-            if (phase < 0.0) {
-                phase += twoPi;
-            }
-            phase -= pi;
-            arcPreviewSweepAngle_ =
-                std::copysign(sweepLimit, arcPreviewSweepAngle_) + phase;
-        }
-        arcPreviewPreviousAngle_ = angle;
+        arcTool_.updatePreviewTracking(cursorWorld, currentSnap_.isValid());
     }
 
     qreal arcCompassRotation() const
     {
         qreal rotation = 0.0;
-        if (arcMode_ == ArcMode::OnePoint && !pendingPoints_.isEmpty()) {
+        if (arcState().mode == ArcMode::OnePoint && !pendingPoints_.isEmpty()) {
             const QPointF center = pendingPoints_.first();
             const QPointF radiusVector = pendingPoints_.size() >= 2
                                              ? pendingPoints_[1] - center
@@ -15598,22 +9189,22 @@ private:
         const DocumentSettings settings = document_.settings();
         const qreal unitsPerMillimeter =
             1.0 / millimetersPerDocumentUnit(settings.lengthUnit);
-        const QString radiusText = arcTextInputMode_ == ArcTextInputMode::Radius
-                                       ? arcTextInput_ + QLatin1Char('|')
+        const QString radiusText = arcTool_.textInputMode() == ArcTextInputMode::Radius
+                                       ? arcTool_.textInput() + QLatin1Char('|')
                                        : QStringLiteral("%1 %2")
                                              .arg(radius * unitsPerMillimeter,
                                                   0,
                                                   'f',
                                                   3)
                                              .arg(arcLengthUnitSuffix(settings.lengthUnit));
-        const QString angleText = arcTextInputMode_ == ArcTextInputMode::Angle
-                                      ? arcTextInput_ + QLatin1Char('|')
+        const QString angleText = arcTool_.textInputMode() == ArcTextInputMode::Angle
+                                      ? arcTool_.textInput() + QLatin1Char('|')
                                       : QStringLiteral("%1°")
-                                            .arg(-arcPreviewSweepAngle_ * 180.0 / pi,
+                                            .arg(-arcState().previewSweepAngle * 180.0 / pi,
                                                  0,
                                                  'f',
                                                  1);
-        const QString stageHint = arcTextInputMode_ != ArcTextInputMode::None
+        const QString stageHint = arcTool_.textInputMode() != ArcTextInputMode::None
                                       ? QStringLiteral("Enter applies value")
                                       : pendingPoints_.isEmpty()
                                             ? QStringLiteral("Click center")
@@ -15623,7 +9214,7 @@ private:
         return {QStringLiteral("R: %1    ∠ %2").arg(radiusText, angleText),
                 QStringLiteral("%1  •  Esc exits  •  C snap %2  •  R radius  •  A angle  •  P perp  •  L plane lock")
                     .arg(stageHint,
-                         arcAngleSnapEnabled_ ? QStringLiteral("on")
+                         arcState().angleSnapEnabled ? QStringLiteral("on")
                                               : QStringLiteral("off"))};
     }
 
@@ -15649,21 +9240,21 @@ private:
         const DocumentSettings settings = document_.settings();
         const qreal unitsPerMillimeter =
             1.0 / millimetersPerDocumentUnit(settings.lengthUnit);
-        const QString chordText = arcTextInputMode_ == ArcTextInputMode::ChordLength
-                                       ? arcTextInput_ + QLatin1Char('|')
+        const QString chordText = arcTool_.textInputMode() == ArcTextInputMode::ChordLength
+                                       ? arcTool_.textInput() + QLatin1Char('|')
                                        : QStringLiteral("%1 %2")
                                              .arg(chordLength * unitsPerMillimeter,
                                                   0, 'f', 3)
                                              .arg(arcLengthUnitSuffix(settings.lengthUnit));
-        const QString heightText = arcTextInputMode_ == ArcTextInputMode::Sagitta
-                                       ? arcTextInput_ + QLatin1Char('|')
+        const QString heightText = arcTool_.textInputMode() == ArcTextInputMode::Sagitta
+                                       ? arcTool_.textInput() + QLatin1Char('|')
                                        : QStringLiteral("%1 %2")
                                              .arg(height * unitsPerMillimeter,
                                                   0, 'f', 3)
                                              .arg(arcLengthUnitSuffix(settings.lengthUnit));
 
         QString stageHint;
-        if (arcTextInputMode_ != ArcTextInputMode::None) {
+        if (arcTool_.textInputMode() != ArcTextInputMode::None) {
             stageHint = QStringLiteral("Enter applies value");
         } else if (pendingPoints_.isEmpty()) {
             stageHint = QStringLiteral("Click first endpoint  •  L locks plane");
@@ -15671,12 +9262,12 @@ private:
             stageHint = QStringLiteral("Click chord end  •  D length  •  X/Y/Z axis  •  P perp  •  Alt bypass");
         } else {
             stageHint = QStringLiteral("Click arc height  •  H sagitta  •  P perpendicular plane %1  •  Alt bypass half-circle snap")
-                            .arg(arcPerpendicularPlaneActive_
+                            .arg(arcState().perpendicularPlaneActive
                                      ? QStringLiteral("ON")
                                      : QStringLiteral("OFF"));
-            if (arcVerticalOverrideAxis_ != 0) {
+            if (arcState().verticalOverrideAxis != 0) {
                 stageHint += QStringLiteral("  •  %1 plane")
-                                 .arg(arcVerticalOverrideAxis_ == Qt::Key_X
+                                 .arg(arcState().verticalOverrideAxis == Qt::Key_X
                                           ? QStringLiteral("X")
                                           : QStringLiteral("Y"));
             }
@@ -15733,12 +9324,12 @@ private:
             stageHint = QStringLiteral("Click arc end  •  X/Y/Z axis  •  Alt bypass");
         } else {
             stageHint = QStringLiteral("Click point on arc  •  P perpendicular plane %1")
-                            .arg(arcPerpendicularPlaneActive_
+                            .arg(arcState().perpendicularPlaneActive
                                      ? QStringLiteral("ON")
                                      : QStringLiteral("OFF"));
-            if (arcVerticalOverrideAxis_ != 0) {
+            if (arcState().verticalOverrideAxis != 0) {
                 stageHint += QStringLiteral("  •  %1 plane")
-                                 .arg(arcVerticalOverrideAxis_ == Qt::Key_X
+                                 .arg(arcState().verticalOverrideAxis == Qt::Key_X
                                           ? QStringLiteral("X")
                                           : QStringLiteral("Y"));
             }
@@ -15803,24 +9394,24 @@ private:
                             bool drawCurve,
                             const QColor &curveColor)
     {
-        viewportOverlay_.drawArcPreview(painter,
+        viewportOverlay_.toolPreviewRenderer().drawArcPreview(painter,
                                         pendingPoints_,
-                                        arcMode_,
+                                        arcState().mode,
                                         cursorWorld_,
                                         cursorValid_,
-                                        arcPreviewSweepAngle_,
+                                        arcState().previewSweepAngle,
                                         currentSnap_,
                                         size(),
                                         viewportTransform_.workPlaneFrame(),
                                         arcCompassRotation(),
                                         curveColor,
                                         drawCurve);
-        if (arcMode_ == ArcMode::OnePoint) {
+        if (arcState().mode == ArcMode::OnePoint) {
             const ArcHudDisplay display = onePointArcHudDisplay();
             drawArcHudPanel(painter, display, 570.0);
-        } else if (arcMode_ == ArcMode::TwoPoint) {
+        } else if (arcState().mode == ArcMode::TwoPoint) {
             drawArcHudPanel(painter, twoPointArcHudDisplay(), 750.0);
-        } else if (arcMode_ == ArcMode::ThreePoint) {
+        } else if (arcState().mode == ArcMode::ThreePoint) {
             drawArcHudPanel(painter, threePointArcHudDisplay(), 750.0);
         }
     }
@@ -15834,16 +9425,16 @@ private:
                 : QColor(QStringLiteral("#d28b45"));
         const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
         const bool previewUsesSeparateFrame =
-            controllerPreviewShapeVisible_ &&
-            isValidWorkPlaneFrame(controllerPreviewShape_.workPlaneFrame) &&
+            toolPreview_.hasShape &&
+            isValidWorkPlaneFrame(toolPreview_.shape.workPlaneFrame) &&
             isValidWorkPlaneFrame(inputFrame) &&
-            !workPlaneFramesMatch(controllerPreviewShape_.workPlaneFrame,
+            !workPlaneFramesMatch(toolPreview_.shape.workPlaneFrame,
                                   inputFrame);
         if (drawCurve && previewUsesSeparateFrame) {
-            drawShape(painter, controllerPreviewShape_, true);
+            drawShape(painter, toolPreview_.shape, true);
         }
         if (drawCurve) {
-            viewportOverlay_.drawCirclePreview(painter,
+            viewportOverlay_.toolPreviewRenderer().drawCirclePreview(painter,
                                                activeTool_,
                                                pendingPoints_,
                                                cursorWorld_,
@@ -15857,52 +9448,54 @@ private:
             drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
         }
         drawArcHudPanel(painter,
-                        {circleHudDimensionsLine_, circleHudInstructionsLine_},
+                        {toolPreview_.hudDimensionsLine,
+                         toolPreview_.hudInstructionsLine},
                         750.0);
     }
 
     void drawCircleTangentToolPreview(QPainter &painter,
                                       bool drawPreviewGeometry = true)
     {
-        if (controllerPreviewShapeVisible_ && drawPreviewGeometry) {
-            drawShape(painter, controllerPreviewShape_, true);
+        if (toolPreview_.hasShape && drawPreviewGeometry) {
+            drawShape(painter, toolPreview_.shape, true);
         }
     }
 
     void drawEllipseToolPreview(QPainter &painter, bool drawCurve = true)
     {
-        if (drawCurve && controllerPreviewShapeVisible_) {
-            drawShape(painter, controllerPreviewShape_, true);
+        if (drawCurve && toolPreview_.hasShape) {
+            drawShape(painter, toolPreview_.shape, true);
         }
-        viewportOverlay_.drawEllipsePreview(painter,
+        viewportOverlay_.toolPreviewRenderer().drawEllipsePreview(painter,
                                              pendingPoints_,
                                              cursorWorld_,
                                              cursorValid_,
-                                             ellipsePreviewGuides_,
+                                             toolPreview_.guides,
                                              currentSnap_,
                                              size());
         drawArcHudPanel(painter,
-                        {ellipseHudDimensionsLine_, ellipseHudInstructionsLine_},
+                        {toolPreview_.hudDimensionsLine,
+                         toolPreview_.hudInstructionsLine},
                         750.0);
     }
 
     void drawRectangleToolPreview(QPainter &painter, bool drawCurve = true)
     {
         if (drawCurve) {
-            if (controllerPreviewShapeVisible_) {
+            if (toolPreview_.hasShape) {
                 const Layer *layer = document_.layer(document_.activeLayerId());
                 const QColor color = layer != nullptr && layer->color.isValid()
                     ? layer->color : QColor(QStringLiteral("#000000"));
-                drawShape(painter, controllerPreviewShape_, true, false, true, color);
+                drawShape(painter, toolPreview_.shape, true, false, true, color);
             }
             QVector<QPointF> markers = pendingPoints_;
-            if (controllerPreviewShapeVisible_ &&
-                controllerPreviewShape_.geometryType == GeometryType::Rectangle) {
-                markers += rectangleVertices(controllerPreviewShape_);
+            if (toolPreview_.hasShape &&
+                toolPreview_.shape.geometryType == GeometryType::Rectangle) {
+                markers += rectangleVertices(toolPreview_.shape);
             }
             painter.save();
             painter.setRenderHint(QPainter::Antialiasing, true);
-            for (const ToolPreviewGuide &guide : rectanglePreviewGuides_) {
+            for (const ToolPreviewGuide &guide : toolPreview_.guides) {
                 painter.setPen(QPen(guide.color, 1.5));
                 painter.drawLine(worldToScreen(guide.line.p1()),worldToScreen(guide.line.p2()));
             }
@@ -15916,22 +9509,23 @@ private:
         }
         if (currentSnap_.isValid()) drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
         drawArcHudPanel(painter,
-                        {rectangleHudDimensionsLine_, rectangleHudInstructionsLine_},
+                        {toolPreview_.hudDimensionsLine,
+                         toolPreview_.hudInstructionsLine},
                         750.0);
     }
 
     void drawPolygonToolPreview(QPainter &painter, bool drawCurve = true)
     {
-        if (drawCurve && controllerPreviewShapeVisible_) {
+        if (drawCurve && toolPreview_.hasShape) {
             const Layer *activeLayer = document_.layer(document_.activeLayerId());
             const QColor previewColor =
                 activeLayer != nullptr && activeLayer->color.isValid()
                     ? activeLayer->color
                     : QColor(QStringLiteral("#d28b45"));
-            drawShape(painter, controllerPreviewShape_, true, false, true,
+            drawShape(painter, toolPreview_.shape, true, false, true,
                       previewColor);
         }
-        viewportOverlay_.drawPolygonPreview(painter,
+        viewportOverlay_.toolPreviewRenderer().drawPolygonPreview(painter,
                                             activeTool_,
                                             polygonSideCount_,
                                             pendingPoints_,
@@ -15941,7 +9535,8 @@ private:
                                             size(),
                                             false);
         drawArcHudPanel(painter,
-                        {polygonHudDimensionsLine_, polygonHudInstructionsLine_},
+                        {toolPreview_.hudDimensionsLine,
+                         toolPreview_.hudInstructionsLine},
                         750.0);
     }
 
@@ -15957,7 +9552,7 @@ private:
                                            size(),
                                            shapes_.objectIdAt(shapeIndex),
                                            selectedShapeIndex_,
-                                           draggingControlPoint_,
+                                           controlPointSelectionDragActive(),
                                            controlPointIndex_,
                                            drawMarkers);
         viewportTransform_.setWorkPlaneFrame(previousFrame);
@@ -16007,7 +9602,7 @@ private:
 
     void drawPointToolPreview(QPainter &painter, bool drawPoint = true)
     {
-        viewportOverlay_.drawPointPreview(painter,
+        viewportOverlay_.toolPreviewRenderer().drawPointPreview(painter,
                                           cursorWorld_,
                                           cursorValid_,
                                           currentSnap_,
@@ -16020,7 +9615,7 @@ private:
     {
         if (drawPreviewGeometry) {
             const QColor arcColor(QStringLiteral("#33cc33"));
-            for (const Shape &preview : pointPreviewShapes_) {
+            for (const Shape &preview : toolPreview_.shapes) {
                 if (preview.geometryType == GeometryType::Point) continue;
                 const bool isArc = preview.geometryType == GeometryType::Arc ||
                                    preview.geometryType == GeometryType::Circle;
@@ -16029,16 +9624,16 @@ private:
                 drawShape(painter, preview, true, false, true,
                           pointByArcsArc ? arcColor : QColor(Qt::black));
             }
-            for (const ToolPreviewGuide &guide : pointPreviewGuides_) {
+            for (const ToolPreviewGuide &guide : toolPreview_.guides) {
                 Shape line;
                 line.geometryType = GeometryType::Line;
                 line.points = {guide.line.p1(), guide.line.p2()};
                 line.workPlane = WorkPlane::XY;
                 line.workPlaneOffset = guide.hasWorkPlaneFrame
                     ? guide.workPlaneFrame.origin.z
-                    : pointPreviewFrame_.origin.z;
+                    : toolPreview_.workPlaneFrame.origin.z;
                 line.workPlaneFrame = guide.hasWorkPlaneFrame
-                    ? guide.workPlaneFrame : pointPreviewFrame_;
+                    ? guide.workPlaneFrame : toolPreview_.workPlaneFrame;
                 drawShape(painter, line, true, false, true, guide.color);
             }
         }
@@ -16090,14 +9685,14 @@ private:
             }
             painter.restore();
         };
-        for (const Shape &preview : pointPreviewShapes_) {
+        for (const Shape &preview : toolPreview_.shapes) {
             if (preview.geometryType != GeometryType::Point ||
                 preview.points.isEmpty()) {
                 continue;
             }
             const WorkPlaneFrame frame = shapeWorkPlaneFrame(preview);
             const qreal markerSize = activeTool_ == Tool::PointByArcs &&
-                                             pointPreviewStage_ == 5
+                                             toolPreview_.activeStage == 5
                                          ? 3.0 : 5.0;
             drawPointCross(workPlaneFramePointToWorld(preview.points.first(), frame),
                            frame, markerSize);
@@ -16109,19 +9704,19 @@ private:
 
     void drawRotateToolPreview(QPainter &painter, bool drawGeometry = true)
     {
-        viewportOverlay_.drawRotatePreview(painter,
+        viewportOverlay_.toolPreviewRenderer().drawRotatePreview(painter,
                                            cursorWorld_,
                                            cursorValid_,
-                                           rotateStep_,
-                                           isValidWorkPlaneFrame(rotateFrame_)
-                                               ? rotateFrame_
+                                           rotateState().stage,
+                                           isValidWorkPlaneFrame(rotateState().frame)
+                                               ? rotateState().frame
                                                : viewportTransform_.workPlaneFrame(),
-                                           rotateBaseWorld_,
-                                           rotateReferenceWorld_,
-                                           rotatePreviewAngle_,
-                                           rotateAngleInput_,
-                                           rotateAngleInputActive_,
-                                           rotateAngleSnapEnabled_,
+                                           rotateState().basePoint,
+                                           rotateState().referencePoint,
+                                           rotateState().previewAngle,
+                                           rotateState().angleInput,
+                                           rotateState().angleInputActive,
+                                           rotateState().angleSnapEnabled,
                                            rotateSnapIncrementDegrees(),
                                            rotateToolPreferences_.useRadians,
                                            currentSnap_,
@@ -16131,43 +9726,43 @@ private:
 
     void drawScaleToolGuide(QPainter &painter, bool drawGuide = true)
     {
-        if (!drawGuide || !cursorValid_ || scaleStep_ != 2) {
+        if (!drawGuide || !cursorValid_ || scaleState().stage != 2) {
             return;
         }
 
         QPointF guideEnd = cursorWorld_;
-        if (scaleMode_ == ScaleMode::OneD && !scaleUsingTypedFactor_) {
-            const QPointF offset = cursorWorld_ - scaleBaseWorld_;
-            guideEnd = scaleBaseWorld_ +
-                       scaleAxisDirection_ *
-                           QPointF::dotProduct(offset, scaleAxisDirection_);
+        if (scaleState().mode == ScaleMode::OneD && !scaleState().usingTypedFactor) {
+            const QPointF offset = cursorWorld_ - scaleState().basePoint;
+            guideEnd = scaleState().basePoint +
+                       scaleState().axisDirection *
+                           QPointF::dotProduct(offset, scaleState().axisDirection);
         }
 
         painter.save();
         painter.setPen(QPen(QColor(QStringLiteral("#8aa7c7")), 1.0, Qt::DashLine));
-        painter.drawLine(worldToScreen(scaleBaseWorld_), worldToScreen(guideEnd));
+        painter.drawLine(worldToScreen(scaleState().basePoint), worldToScreen(guideEnd));
         painter.setPen(QPen(QColor(QStringLiteral("#e6b85c")), 1.5));
         painter.setBrush(QColor(QStringLiteral("#282828")));
-        painter.drawEllipse(worldToScreen(scaleBaseWorld_), 4.0, 4.0);
+        painter.drawEllipse(worldToScreen(scaleState().basePoint), 4.0, 4.0);
         painter.restore();
     }
 
     void drawEraseCandidatePreview(QPainter &painter, int shapeIndex)
     {
-        viewportOverlay_.drawEraseCandidatePreview(painter,
-                                                   eraseTargetCurveCaches_,
-                                                   shapeIndex,
-                                                   !eraseStrokeScreenPath_.isEmpty());
+        eraseOverlayRenderer_.drawCandidatePreview(painter,
+                                                  eraseTargetCurveCaches_,
+                                                  shapeIndex,
+                                                  !eraseLikeScreenPath().isEmpty());
     }
 
     void drawErasePreview(QPainter &painter)
     {
-        viewportOverlay_.drawErasePreview(painter,
-                                          activeTool_,
-                                          eraseCursorScreen_,
-                                          cursorValid_,
-                                          eraseCursorPressed_,
-                                          eraseCandidateShapeIndices_.size());
+        eraseOverlayRenderer_.drawCursorPreview(painter,
+                                               activeTool_,
+                                               eraseTool_.cursorScreenPosition(),
+                                               cursorValid_,
+                                               eraseTool_.cursorPressed(),
+                                               eraseCandidates().size());
     }
 
     void drawShape(QPainter &painter,
@@ -16177,7 +9772,10 @@ private:
                    bool drawPreviewPoints = true,
                    const QColor &layerColor = QColor(),
                    const QString &layerLineType = QString(),
-                   qreal layerLineWeightMm = 0.0)
+                   qreal layerLineWeightMm = 0.0,
+                   ObjectId shapeObjectId = ObjectId::invalid(),
+                   quint64 geometryRevision = 0,
+                   const ViewportDepthGeometry *preparedGeometry = nullptr)
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -16189,7 +9787,10 @@ private:
                                     drawPreviewPoints,
                                     layerColor,
                                     layerLineType,
-                                    layerLineWeightMm);
+                                    layerLineWeightMm,
+                                    shapeObjectId,
+                                    geometryRevision,
+                                    preparedGeometry);
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 
@@ -16243,65 +9844,22 @@ private:
         update();
     }
 
-    ToolInput makeToolInput(const QMouseEvent *event,
-                            const QPointF &screenPosition,
-                            const QPointF &rawWorldPosition,
-                            const QPointF &worldPosition) const
+    ToolInput makeKeyToolInput(const QKeyEvent &event) const
     {
-        ToolInput input;
-        input.screenPosition = screenPosition;
-        input.rawWorldPosition = rawWorldPosition;
-        input.worldPosition = worldPosition;
-        input.workPlaneFrame = viewportTransform_.workPlaneFrame();
-        input.orthoEnabled = orthoEnabled_;
-        input.viewportSize = size();
-        input.snapResult = currentSnap_;
-        input.snapType = currentSnap_.type;
-        if (activeTool_ != Tool::Line && activeTool_ != Tool::PointEdgeCenter &&
-            activeTool_ != Tool::PointByLine && activeTool_ != Tool::PointByArcs &&
-            input.snapResult.isValid() &&
-            input.snapResult.hasWorldPoint &&
-            isValidWorkPlaneFrame(input.workPlaneFrame)) {
-            const QPointF snapPosition = worldPointToWorkPlaneFrame(
-                input.snapResult.worldPoint, input.workPlaneFrame);
-            if (std::hypot(snapPosition.x() - worldPosition.x(),
-                           snapPosition.y() - worldPosition.y()) > 1.0e-7) {
-                // A tool constraint may project or redirect the acquired snap.
-                // Keep that constrained preview point authoritative instead of
-                // letting a consumer restore the unconstrained target.
-                input.snapResult = SnapResult{};
-            }
+        const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
+        QPointF screenPosition = mapFromGlobal(QCursor::pos());
+        if (!rect().contains(screenPosition.toPoint())) {
+            screenPosition = lastMousePosition_;
         }
-        if (event != nullptr) {
-            input.button = event->button();
-            input.buttons = event->buttons();
-            input.modifiers = event->modifiers();
-        }
-        return input;
-    }
-
-    ToolInput makeKeyToolInput(const QKeyEvent *event) const
-    {
-        ToolInput input;
-        input.workPlaneFrame = viewportTransform_.workPlaneFrame();
-        input.viewportSize = size();
-        input.screenPosition = mapFromGlobal(QCursor::pos());
-        if (!rect().contains(input.screenPosition.toPoint())) {
-            input.screenPosition = lastMousePosition_;
-        }
-        if (!viewportTransform_.screenToWorkPlane(input.screenPosition,
+        QPointF rawWorldPosition;
+        if (!viewportTransform_.screenToWorkPlane(screenPosition,
                                                   size(),
-                                                  input.workPlaneFrame,
-                                                  &input.rawWorldPosition)) {
-            input.rawWorldPosition = rawCursorWorld_;
+                                                  frame,
+                                                  &rawWorldPosition)) {
+            rawWorldPosition = rawCursorWorld_;
         }
-        input.worldPosition = input.rawWorldPosition;
-        if (event != nullptr) {
-            input.key = event->key();
-            input.text = event->text();
-            input.modifiers = event->modifiers();
-        }
-        return input;
+        return ToolInputTranslator::fromKeyEvent(event, screenPosition,
+                                                 rawWorldPosition, frame, size());
     }
 
     bool makeToolShape(ToolId tool,
@@ -16314,13 +9872,11 @@ private:
             return false;
         }
 
-        Shape result{geometryTypeForTool(tool),
-                     points,
-                     Shape::NurbsCurve2D{},
-                     arcMode,
-                     arcSweep,
-                     {},
-                     {}};
+        Shape result;
+        result.geometryType = geometryTypeForTool(tool);
+        result.points = points;
+        result.arcMode = arcMode;
+        result.arcSweep = arcSweep;
         result.workPlane = viewportTransform_.workPlane();
         result.workPlaneOffset = viewportTransform_.workPlaneOffset();
         result.workPlaneFrame = viewportTransform_.workPlaneFrame();
@@ -16391,79 +9947,43 @@ private:
     static constexpr int maxSubdivisionSections = 10000;
     ToolId activeTool_ = ToolId::Select;
     ToolId repeatTool_ = ToolId::Select;
-    ArcMode arcMode_ = ArcMode::OnePoint;
-    bool arcPreviewInitialized_ = false;
-    qreal arcPreviewPreviousAngle_ = 0.0;
-    qreal arcPreviewSweepAngle_ = 0.0;
-    bool arcAngleValueLocked_ = false;
-    qreal arcPreviewStartAngle_ = 0.0;
-    bool arcAngleSnapEnabled_ = true;
-    bool arcPerpendicularPlaneActive_ = false;
-    bool arcPlaneLocked_ = false;
-    WorkPlaneFrame arcLockedFrame_;
-    bool arcLockedFrameValid_ = false;
-    ArcTextInputMode arcTextInputMode_ = ArcTextInputMode::None;
-    QString arcTextInput_;
-    WorkPlaneFrame arcReferenceFrame_;
-    WorkPlaneFrame arcInputFrame_;
-    WorkPlaneFrame arcAxisBaseFrame_;
-    Point3D arcReferenceNormal_;
-    Point3D arcFirstPointWorld_;
-    Point3D arcSecondPointWorld_;
-    Point3D arcResolvedChordPointWorld_;
-    bool arcReferenceFrameValid_ = false;
-    bool arcInputFrameValid_ = false;
-    bool arcAxisBaseFrameValid_ = false;
-    bool arcChordWorldPointsValid_ = false;
-    bool arcResolvedChordPointValid_ = false;
-    int arcAxisConstraintKey_ = 0;
-    int arcPlaneNormalLockKey_ = 0;
-    int arcVerticalOverrideAxis_ = 0;
-    Point3D arcTwoPointPerpendicularNormal_;
-    bool arcTwoPointPerpendicularNormalValid_ = false;
-    bool arcWasVertical_ = false;
     bool controlPointsVisible_ = false;
-    Document document_;
-    SelectionModel selection_;
-    History history_;
+    std::unique_ptr<ApplicationSession> ownedSession_;
+    ApplicationSession &session_;
+    Document &document_;
+    SelectionModel &selection_;
+    History &history_;
     ViewportTransform viewportTransform_;
-    QVariantAnimation *navigationAnimation_ = nullptr;
-    ViewportCameraState navigationAnimationStart_;
-    ViewportCameraState navigationAnimationEnd_;
-    QPointF navigationHoverPosition_{-1000.0, -1000.0};
-    QPointF navigationPressPosition_;
-    QPointF navigationLastPosition_;
-    BlenderNavigationHit navigationPressHit_;
-    BlenderNavigationAction navigationPressedAction_ = BlenderNavigationAction::None;
-    bool navigationMoved_ = false;
     CurveSampler curveSampler_;
+    SurfaceTessellationCache surfaceTessellationCache_;
+    ViewportGeometryCache viewportGeometryCache_;
     CurveHitTester curveHitTester_;
     SnapEngine snapEngine_;
     ViewportRenderer viewportRenderer_;
     BlenderGridRenderer blenderGridRenderer_;
     ViewportGpuSurface *gpuSurface_ = nullptr;
     ViewportOverlay viewportOverlay_;
+    ViewportEraseOverlayRenderer eraseOverlayRenderer_;
+    ViewportHudRenderer viewportHudRenderer_;
+    ViewportNavigationGizmo navigationGizmo_;
+    NavigationController navigationController_;
+    GrabTool grabTool_;
+    DuplicateTool duplicateTool_;
     BlenderGridAppearance gridAppearance_;
     ToolContext toolContext_;
-    ToolRegistry toolRegistry_;
+    ToolRegistry &toolRegistry_;
+    ArcTool &arcTool_;
+    RotateTool &rotateTool_;
+    MirrorTool &mirrorTool_;
+    ScaleTool &scaleTool_;
+    TrimTool &trimTool_;
+    EraseTool &eraseTool_;
+    JoinTool joinTool_;
+    SubdivisionTool subdivisionTool_;
+    CommandRouter commandRouter_;
     InteractionTool *activeToolController_ = nullptr;
     ToolStatus toolStatus_;
-    QString circleHudDimensionsLine_;
-    QString circleHudInstructionsLine_;
-    QString ellipseHudDimensionsLine_;
-    QString ellipseHudInstructionsLine_;
-    QString polygonHudDimensionsLine_;
-    QString polygonHudInstructionsLine_;
-    QString rectangleHudDimensionsLine_;
-    QString rectangleHudInstructionsLine_;
-    QVector<ToolPreviewGuide> rectanglePreviewGuides_;
-    QVector<ToolPreviewGuide> ellipsePreviewGuides_;
-    QVector<Shape> pointPreviewShapes_;
-    QVector<ToolPreviewGuide> pointPreviewGuides_;
-    QVector<Point3D> pointPreviewWorldPoints_;
-    QString pointHudInstructionsLine_;
-    int pointPreviewStage_ = -1;
-    WorkPlaneFrame pointPreviewFrame_;
+    ToolPreview toolPreview_;
     WorkPlaneFrame toolDrawingFrame_;
     bool toolDrawingPlaneLocked_ = false;
     // Temporary source-compatibility view. Document owns the storage and
@@ -16474,14 +9994,6 @@ private:
     QImage pendingPictureImage_;
     QByteArray pendingPictureImageData_;
     QString pendingPicturePath_;
-    Shape controllerPreviewShape_;
-    WorkPlaneFrame linePreviewFrame_;
-    QVector<Point3D> linePreviewWorldPoints_;
-    Point3D linePreviewWorldCursor_;
-    QVector<Shape> linePreviewShapes_;
-    QVector<Shape> pointExtrudePreviewShapes_;
-    bool linePreviewPlaneLocked_ = false;
-    bool controllerPreviewShapeVisible_ = false;
     int polygonSideCount_ = 32;
     QPointF &pan_;
     QPointF lastWorldPosition_{0.0, 0.0};
@@ -16494,51 +10006,16 @@ private:
     // values are references into SelectionModel, and therefore stable object
     // IDs, never container indexes. These aliases keep the current viewport
     // implementation source-compatible while selection behavior migrates.
-    QVector<ObjectId> &selectedShapeIndices_;
-    ObjectId &selectedShapeIndex_;
-    bool draggingSelected_ = false;
-    QVector<ObjectId> draggingShapeIndices_;
-    bool draggingControlPoint_ = false;
-    bool dragGestureStarted_ = false;
-    int &controlPointIndex_;
+    const QVector<ObjectId> &selectedShapeIndices_;
+    const ObjectId &selectedShapeIndex_;
+    const int &controlPointIndex_;
     bool dragHistoryRecorded_ = false;
     bool dragSnapLocked_ = false;
     quint64 dragSnapTraceSequence_ = 0;
     DragAxisLock dragAxisLock_ = DragAxisLock::None;
-    bool grabActive_ = false;
-    bool grabMoved_ = false;
-    bool grabPickingBasePoint_ = false;
-    bool grabHasBasePoint_ = false;
-    Document::Snapshot grabStartSnapshot_;
-    QPointF grabStartWorld_{0.0, 0.0};
-    QPointF grabBasePoint_{0.0, 0.0};
-    QPointF grabCursorOffset_{0.0, 0.0};
     QPointF dragSnapCursorWorld_{0.0, 0.0};
     QPointF nearDragFreeSourcePoint_{0.0, 0.0};
     bool nearDragFreeSourcePointValid_ = false;
-    QPointF dragStartScreen_{0.0, 0.0};
-    QPointF lastDragWorld_{0.0, 0.0};
-    QPointF lastControlPointWorld_{0.0, 0.0};
-    bool duplicateActive_ = false;
-    bool duplicatePickingBasePoint_ = false;
-    bool duplicateHasBasePoint_ = false;
-    QVector<SceneObject> duplicateSourceObjects_;
-    QVector<Shape> duplicatePreviewShapes_;
-    QPointF duplicateBasePoint_{0.0, 0.0};
-    QPointF duplicateCursorOffset_{0.0, 0.0};
-    QPointF duplicateDestination_{0.0, 0.0};
-    bool selectionBoxActive_ = false;
-    bool selectionBoxMoved_ = false;
-    bool selectionBoxAdditive_ = false;
-    bool trimBoxSelectionActive_ = false;
-    QPointF selectionBoxStartScreen_{0.0, 0.0};
-    QPointF selectionBoxCurrentScreen_{0.0, 0.0};
-    bool eraseStrokeActive_ = false;
-    bool eraseCursorPressed_ = false;
-    QPointF eraseCursorScreen_{0.0, 0.0};
-    QPointF lastEraseScreen_{0.0, 0.0};
-    QVector<QPointF> eraseStrokeScreenPath_;
-    QVector<ObjectId> eraseCandidateShapeIndices_;
     QVector<ObjectId> eraseTargetShapeIndices_;
     QVector<EraseCurveSampleCache> eraseSceneCurveCaches_;
     QVector<EraseCurveSampleCache> eraseTargetCurveCaches_;
@@ -16546,19 +10023,11 @@ private:
     ViewportCameraState eraseCacheCameraState_;
     ViewportCameraPreferences eraseCacheCameraPreferences_;
     QSize eraseCacheViewportSize_;
-    bool trimHoverPositionValid_ = false;
-    int trimHoverComponentIndex_ = -1;
-    QPointF trimHoverScreenPosition_{0.0, 0.0};
     QElapsedTimer trimHoverTimingWindow_;
     qint64 trimHoverWindowTotalUs_ = 0;
     qint64 trimHoverWindowMaxUs_ = 0;
     int trimHoverWindowEvents_ = 0;
     qreal &zoom_;
-    bool panning_ = false;
-    bool orbiting_ = false;
-    bool panMoved_ = false;
-    QPoint panStartPosition_;
-    Qt::MouseButton panButton_ = Qt::MiddleButton;
     bool lineCommandActive_ = false;
     bool cursorValid_ = false;
     bool orthoEnabled_ = false;
@@ -16571,60 +10040,18 @@ private:
     bool tangentSnapEnabled_ = false;
     bool nearSnapEnabled_ = false;
     bool controlPointSnapEnabled_ = false;
-    bool subdivisionActive_ = false;
-    ObjectId subdivisionShapeIndex_ = ObjectId::invalid();
-    int subdivisionSections_ = 2;
-    int subdivisionWheelAccumulator_ = 0;
-    qreal subdivisionPixelAccumulator_ = 0.0;
-    bool joinActive_ = false;
-    QVector<ObjectId> joinShapeIndices_;
-    QVector<ObjectId> rotateShapeIndices_;
-    QVector<ObjectId> scaleShapeIds_;
-    QVector<ObjectId> mirrorShapeIndices_;
-    int rotateStep_ = 0;
-    WorkPlaneFrame rotateFrame_;
-    WorkPlaneFrame rotatePrimaryFrame_;
-    WorkPlaneFrame rotatePrePivotPlaneFrame_;
-    WorkPlaneFrame rotatePrePivotFloorFrame_;
     RotateToolPreferences rotateToolPreferences_;
-    Point3D rotateBaseWorldPoint_;
-    Point3D rotateReferenceWorldPoint_;
-    Point3D rotateReferenceNormal_;
-    Point3D rotatePrePivotFloorNormal_;
-    QPointF rotateBaseWorld_{0.0, 0.0};
-    QPointF rotateReferenceWorld_{0.0, 0.0};
-    qreal rotatePreviewAngle_ = 0.0;
-    qreal rotateAccumulatedAngle_ = 0.0;
-    qreal rotateLastRawAngle_ = 0.0;
-    qreal rotateReferenceAngle_ = 0.0;
-    bool rotateHasPreviousAngle_ = false;
-    bool rotateAngleSnapEnabled_ = true;
-    bool rotateAngleInputActive_ = false;
-    bool rotateAngleInputManual_ = false;
-    QString rotateAngleInput_;
-    qreal rotateAngleInputDirection_ = 1.0;
-    bool rotateAngleInputDirectionCaptured_ = false;
-    QPointF rotateLastPointerPoint_;
-    bool rotatePerpendicularActive_ = false;
-    bool rotatePrePivotPerpendicularActive_ = false;
-    int rotateAxisLockKey_ = 0;
-    ScaleMode scaleMode_ = ScaleMode::TwoD;
-    int scaleStep_ = 0;
-    QPointF scaleBaseWorld_{0.0, 0.0};
-    QPointF scaleReferenceWorld_{0.0, 0.0};
-    QPointF scaleAxisDirection_{0.0, 0.0};
-    qreal scaleReferenceLength_ = 0.0;
-    bool scaleUsingTypedFactor_ = false;
-    qreal scaleTypedFactor_ = 1.0;
-    QString scaleFactorText_;
-    qreal scalePreviewFactor_ = 1.0;
-    QPointF scalePreviewAxis_{0.0, 0.0};
-    bool scalePreviewValid_ = false;
 };
 
 ViewportWidgetApi *createViewportWidget(QWidget *parent)
 {
-    return new ViewportWidget(parent);
+    return new ViewportWidget(nullptr, parent);
+}
+
+ViewportWidgetApi *createViewportWidget(ApplicationSession &session,
+                                        QWidget *parent)
+{
+    return new ViewportWidget(&session, parent);
 }
 
 } // namespace classiCAD

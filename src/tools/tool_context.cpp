@@ -1,5 +1,13 @@
 #include "tool_context.h"
 
+#include "core/document/document.h"
+#include "core/document/selection_model.h"
+#include "core/history/history.h"
+#include "services/hit_testing/curve_hit_tester.h"
+#include "services/sampling/curve_sampler.h"
+#include "services/snapping/snap_engine.h"
+#include "services/viewport/viewport_transform.h"
+
 namespace classiCAD {
 
 ToolContext::ToolContext(Document &document,
@@ -69,6 +77,21 @@ void ToolContext::setToolFinisher(ToolFinisher finisher)
     toolFinisher_ = std::move(finisher);
 }
 
+void ToolContext::setTransactionCommitter(TransactionCommitter committer)
+{
+    transactionCommitter_ = std::move(committer);
+}
+
+void ToolContext::setLayersChangedNotifier(ChangeNotifier notifier)
+{
+    layersChangedNotifier_ = std::move(notifier);
+}
+
+void ToolContext::setSelectionChangedNotifier(ChangeNotifier notifier)
+{
+    selectionChangedNotifier_ = std::move(notifier);
+}
+
 void ToolContext::setPreviewPublisher(PreviewPublisher publisher)
 {
     previewPublisher_ = std::move(publisher);
@@ -95,10 +118,18 @@ void ToolContext::setArcSweepProvider(ArcSweepProvider provider)
 }
 
 void ToolContext::setPolygonSideCountCallbacks(PolygonSideCountProvider provider,
-                                              PolygonSideCountSetter setter)
+                                                PolygonSideCountSetter setter)
 {
     polygonSideCountProvider_ = std::move(provider);
     polygonSideCountSetter_ = std::move(setter);
+}
+
+void ToolContext::setSelectionInteractionCallbacks(
+    SelectionHitTest hitTest,
+    SelectionGestureHandler gestureHandler)
+{
+    selectionHitTest_ = std::move(hitTest);
+    selectionGestureHandler_ = std::move(gestureHandler);
 }
 
 bool ToolContext::createShape(ToolId tool,
@@ -137,6 +168,31 @@ void ToolContext::finishTool(ToolId tool) const
 {
     if (toolFinisher_) {
         toolFinisher_(tool);
+    }
+}
+
+DocumentTransaction ToolContext::beginTransaction() const
+{
+    return DocumentTransaction(document_, history_);
+}
+
+bool ToolContext::commitTransaction(DocumentTransaction &transaction) const
+{
+    return transactionCommitter_ ? transactionCommitter_(transaction)
+                                 : transaction.commit();
+}
+
+void ToolContext::notifyLayersChanged() const
+{
+    if (layersChangedNotifier_) {
+        layersChangedNotifier_();
+    }
+}
+
+void ToolContext::notifySelectionChanged() const
+{
+    if (selectionChangedNotifier_) {
+        selectionChangedNotifier_();
     }
 }
 
@@ -180,6 +236,24 @@ void ToolContext::setPolygonSideCount(int sideCount) const
 {
     if (polygonSideCountSetter_) {
         polygonSideCountSetter_(sideCount);
+    }
+}
+
+SelectionHit ToolContext::hitTestSelection(const QPointF &screenPosition,
+                                           bool includeControlPoint) const
+{
+    return selectionHitTest_ ? selectionHitTest_(screenPosition,
+                                                 includeControlPoint)
+                             : SelectionHit{};
+}
+
+void ToolContext::beginSelectionGesture(SelectionGestureKind gesture,
+                                        const ToolInput &input,
+                                        const SelectionHit &hit,
+                                        bool additive) const
+{
+    if (selectionGestureHandler_) {
+        selectionGestureHandler_(gesture, input, hit, additive);
     }
 }
 

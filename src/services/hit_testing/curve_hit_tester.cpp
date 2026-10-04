@@ -1,8 +1,14 @@
 #include "curve_hit_tester.h"
 
+#include "core/document/document.h"
+#include "core/geometry/shape_mapping.h"
+
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_surface_tessellator.h"
 #include "services/dimensions/dimension_layout.h"
+#include "services/hit_testing/projected_curve_bounds.h"
+#include "services/viewport/viewport_transform.h"
 
 #include <QPolygonF>
 
@@ -11,6 +17,83 @@
 #include <limits>
 
 namespace classiCAD {
+namespace {
+
+bool shapeHasCurveControlHull(const Shape &shape)
+{
+    switch (shape.geometryType) {
+    case GeometryType::Line:
+    case GeometryType::Arc:
+    case GeometryType::Bezier:
+    case GeometryType::Nurbs:
+    case GeometryType::Rectangle:
+    case GeometryType::Circle:
+    case GeometryType::PolyCurve:
+    case GeometryType::Ellipse:
+    case GeometryType::Polygon:
+        return true;
+    default:
+        return false;
+    }
+}
+
+void includeScreenBounds(const QRectF &candidate,
+                        QRectF *bounds,
+                        bool *initialized)
+{
+    if (bounds == nullptr || initialized == nullptr) {
+        return;
+    }
+    const QRectF normalized = candidate.normalized();
+    if (!*initialized) {
+        *bounds = normalized;
+        *initialized = true;
+        return;
+    }
+    *bounds = QRectF(QPointF(std::min(bounds->left(), normalized.left()),
+                             std::min(bounds->top(), normalized.top())),
+                     QPointF(std::max(bounds->right(), normalized.right()),
+                             std::max(bounds->bottom(), normalized.bottom())));
+}
+
+bool projectedNurbsSurfaceControlHullBounds(
+    const NurbsSurface3D &surface,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    QRectF *bounds)
+{
+    if (bounds == nullptr || !validateNurbsSurface(surface) ||
+        surface.controlPoints.isEmpty()) {
+        return false;
+    }
+    bool initialized = false;
+    for (const Point3D &point : surface.controlPoints) {
+        QPointF screenPoint;
+        if (!transform.worldPointToScreenUnclipped(point,
+                                                   viewportSize,
+                                                   &screenPoint)) {
+            return false;
+        }
+        includeScreenBounds(QRectF(screenPoint, QSizeF(0.0, 0.0)),
+                            bounds,
+                            &initialized);
+    }
+    return initialized;
+}
+
+} // namespace
+
+CurveHitTester::CurveHitTester(
+    const SurfaceTessellationCache *surfaceTessellationCache)
+    : surfaceTessellationCache_(surfaceTessellationCache)
+{
+}
+
+void CurveHitTester::setSurfaceTessellationCache(
+    const SurfaceTessellationCache *surfaceTessellationCache)
+{
+    surfaceTessellationCache_ = surfaceTessellationCache;
+}
 
 void CurveHitTester::setArchitecturalDimensionFont(bool enabled)
 {
@@ -305,13 +388,17 @@ qreal CurveHitTester::distanceToCubicCurve(const QPointF &screenPosition,
 qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                       const Shape &shape,
                                       const ViewportTransform &transform,
-                                      const QSize &viewportSize) const
+                                      const QSize &viewportSize,
+                                      ObjectId objectId,
+                                      quint64 geometryRevision) const
 {
     if (shape.geometryType == GeometryType::NurbsSurface) {
         return distanceToNurbsSurface(screenPosition,
                                       shape.nurbsSurface,
                                       transform,
-                                      viewportSize);
+                                      viewportSize,
+                                      objectId,
+                                      geometryRevision);
     }
     if (isDimensionGeometryType(shape.geometryType)) {
         return distanceToDimensionLayout(
@@ -459,92 +546,31 @@ qreal CurveHitTester::distanceToNurbsSurface(
     const QPointF &screenPosition,
     const Shape::NurbsSurface3D &surface,
     const ViewportTransform &transform,
-    const QSize &viewportSize) const
+    const QSize &viewportSize,
+    ObjectId objectId,
+    quint64 geometryRevision) const
 {
-    if (!validateNurbsSurface(surface)) {
+    PreparedNurbsSurfaceTessellation localTessellation;
+    QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
+    const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+    if (surfaceTessellationCache_ != nullptr && objectId.isValid()) {
+        cachedTessellation = surfaceTessellationCache_->acquire(
+            objectId, geometryRevision, surface);
+        tessellation = cachedTessellation.data();
+    } else if (localTessellation.prepare(surface)) {
+        tessellation = &localTessellation;
+    }
+    if (tessellation == nullptr) {
         return 1.0e9;
     }
-    qreal uStart = 0.0;
-    qreal uEnd = 0.0;
-    qreal vStart = 0.0;
-    qreal vEnd = 0.0;
-    if (!nurbsSurfaceParameterDomains(surface,
-                                      &uStart,
-                                      &uEnd,
-                                      &vStart,
-                                      &vEnd)) {
-        return 1.0e9;
-    }
-
-    constexpr int gridCount = 32;
-    QVector<QVector<QPointF>> trimPolygons;
-    trimPolygons.reserve(surface.trimLoops.size());
-    for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
-        trimPolygons.append(sampleNurbsSurfaceTrimLoop(loop, 256));
-    }
-    const auto insidePolygon = [](const QPointF &point,
-                                  const QVector<QPointF> &polygon) {
-        bool inside = false;
-        for (int current = 0, previous = polygon.size() - 1;
-             current < polygon.size();
-             previous = current++) {
-            const QPointF &a = polygon[current];
-            const QPointF &b = polygon[previous];
-            const bool crosses = (a.y() > point.y()) != (b.y() > point.y());
-            if (crosses && point.x() < (b.x() - a.x()) *
-                                             (point.y() - a.y()) /
-                                             (b.y() - a.y()) + a.x()) {
-                inside = !inside;
-            }
-        }
-        return inside;
-    };
-    const auto insideTrim = [&](qreal u, qreal v) {
-        if (trimPolygons.isEmpty()) {
-            return true;
-        }
-        bool insideOuter = false;
-        for (int index = 0; index < trimPolygons.size(); ++index) {
-            const bool inside = insidePolygon(QPointF(u, v), trimPolygons[index]);
-            if (!surface.trimLoops[index].isHole && inside) {
-                insideOuter = true;
-            } else if (surface.trimLoops[index].isHole && inside) {
-                return false;
-            }
-        }
-        return insideOuter;
-    };
-    QPointF projected[gridCount + 1][gridCount + 1];
-    bool valid[gridCount + 1][gridCount + 1]{};
-    for (int uIndex = 0; uIndex <= gridCount; ++uIndex) {
-        const qreal u = uStart + (uEnd - uStart) * uIndex / gridCount;
-        for (int vIndex = 0; vIndex <= gridCount; ++vIndex) {
-            const qreal v = vStart + (vEnd - vStart) * vIndex / gridCount;
-            Point3D worldPoint;
-            valid[uIndex][vIndex] =
-                evaluateNurbsSurfacePoint(surface, u, v, &worldPoint) &&
-                transform.worldPointToScreenUnclipped(worldPoint,
-                                                      viewportSize,
-                                                      &projected[uIndex][vIndex]);
-        }
-    }
-
     qreal distance = 1.0e9;
-    for (const QVector<QPointF> &trimPolygon : trimPolygons) {
-        if (trimPolygon.size() < 3) {
-            continue;
-        }
+    for (const PreparedNurbsSurfaceTessellation::Polyline &polyline :
+         tessellation->wireframe()) {
         QPointF previous;
         bool havePrevious = false;
-        for (int index = 0; index <= trimPolygon.size(); ++index) {
-            const QPointF &parameter = trimPolygon[index % trimPolygon.size()];
-            Point3D worldPoint;
+        for (const Point3D &worldPoint : polyline.points) {
             QPointF screenPoint;
-            if (!evaluateNurbsSurfacePoint(surface,
-                                           parameter.x(),
-                                           parameter.y(),
-                                           &worldPoint) ||
-                !transform.worldPointToScreenUnclipped(worldPoint,
+            if (!transform.worldPointToScreenUnclipped(worldPoint,
                                                        viewportSize,
                                                        &screenPoint)) {
                 havePrevious = false;
@@ -559,48 +585,24 @@ qreal CurveHitTester::distanceToNurbsSurface(
             havePrevious = true;
         }
     }
-    for (int uIndex = 0; uIndex < gridCount; ++uIndex) {
-        for (int vIndex = 0; vIndex < gridCount; ++vIndex) {
-            const qreal cellU = uStart + (uEnd - uStart) *
-                                             (uIndex + 0.5) / gridCount;
-            const qreal cellV = vStart + (vEnd - vStart) *
-                                             (vIndex + 0.5) / gridCount;
-            if (!insideTrim(cellU, cellV)) {
-                continue;
+    for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
+         tessellation->triangles()) {
+        QPolygonF projectedTriangle;
+        bool validTriangle = true;
+        for (const int vertexIndex : triangle) {
+            QPointF screenPoint;
+            if (!transform.worldPointToScreenUnclipped(
+                    tessellation->vertices()[vertexIndex],
+                    viewportSize,
+                    &screenPoint)) {
+                validTriangle = false;
+                break;
             }
-            const qreal uMid = uStart + (uEnd - uStart) *
-                                            (uIndex + 0.5) / gridCount;
-            const qreal vAt = vStart + (vEnd - vStart) * vIndex / gridCount;
-            if (valid[uIndex][vIndex] && valid[uIndex + 1][vIndex] &&
-                insideTrim(uMid, vAt)) {
-                distance = std::min(
-                    distance,
-                    distanceToSegment(screenPosition,
-                                      projected[uIndex][vIndex],
-                                      projected[uIndex + 1][vIndex]));
-            }
-            const qreal uAt = uStart + (uEnd - uStart) * uIndex / gridCount;
-            const qreal vMid = vStart + (vEnd - vStart) *
-                                            (vIndex + 0.5) / gridCount;
-            if (valid[uIndex][vIndex] && valid[uIndex][vIndex + 1] &&
-                insideTrim(uAt, vMid)) {
-                distance = std::min(
-                    distance,
-                    distanceToSegment(screenPosition,
-                                      projected[uIndex][vIndex],
-                                      projected[uIndex][vIndex + 1]));
-            }
-            if (valid[uIndex][vIndex] && valid[uIndex + 1][vIndex] &&
-                valid[uIndex + 1][vIndex + 1] && valid[uIndex][vIndex + 1]) {
-                QPolygonF cell;
-                cell << projected[uIndex][vIndex]
-                     << projected[uIndex + 1][vIndex]
-                     << projected[uIndex + 1][vIndex + 1]
-                     << projected[uIndex][vIndex + 1];
-                if (cell.containsPoint(screenPosition, Qt::OddEvenFill)) {
-                    distance = std::min<qreal>(distance, 8.0);
-                }
-            }
+            projectedTriangle.append(screenPoint);
+        }
+        if (validTriangle &&
+            projectedTriangle.containsPoint(screenPosition, Qt::OddEvenFill)) {
+            distance = std::min<qreal>(distance, 8.0);
         }
     }
     return distance;
@@ -716,10 +718,57 @@ int CurveHitTester::hitTestShape(const Document &document,
         const Shape &shape = document[index];
         ViewportTransform shapeTransform = transform;
         shapeTransform.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
+        const QVector<ShapeNurbsCurveComponent> curveComponents =
+            shapeHasCurveControlHull(shape)
+                ? nurbsCurveComponentsForShape(shape)
+                : QVector<ShapeNurbsCurveComponent>{};
+        if (!curveComponents.isEmpty()) {
+            bool hullIsKnown = true;
+            QRectF projectedHull;
+            bool hasProjectedHull = false;
+            for (const ShapeNurbsCurveComponent &component : curveComponents) {
+                QRectF componentBounds;
+                if (!projectedNurbsControlHullBounds(component.curve,
+                                                      component.workPlaneFrame,
+                                                      transform,
+                                                      viewportSize,
+                                                      &componentBounds)) {
+                    hullIsKnown = false;
+                    break;
+                }
+                includeScreenBounds(componentBounds,
+                                    &projectedHull,
+                                    &hasProjectedHull);
+            }
+            if (hullIsKnown && hasProjectedHull) {
+                const QRectF hitBounds(
+                    screenPosition - QPointF(hitRadiusPixels, hitRadiusPixels),
+                    QSizeF(2.0 * hitRadiusPixels, 2.0 * hitRadiusPixels));
+                if (!screenBoundsOverlap(projectedHull, hitBounds)) {
+                    continue;
+                }
+            }
+        }
+        if (shape.geometryType == GeometryType::NurbsSurface) {
+            QRectF projectedHull;
+            if (projectedNurbsSurfaceControlHullBounds(shape.nurbsSurface,
+                                                       transform,
+                                                       viewportSize,
+                                                       &projectedHull)) {
+                const QRectF hitBounds(
+                    screenPosition - QPointF(hitRadiusPixels, hitRadiusPixels),
+                    QSizeF(2.0 * hitRadiusPixels, 2.0 * hitRadiusPixels));
+                if (!screenBoundsOverlap(projectedHull, hitBounds)) {
+                    continue;
+                }
+            }
+        }
         const qreal distance = distanceToShape(screenPosition,
                                                shape,
                                                shapeTransform,
-                                               viewportSize);
+                                               viewportSize,
+                                               objectId,
+                                               document.objectGeometryRevision(objectId));
         if (distance <= closestDistance) {
             closestDistance = distance;
             closestShape = index;
@@ -753,6 +802,37 @@ int CurveHitTester::hitTestShapeOnAnyWorkPlane(
         ViewportTransform shapeTransform = transform;
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
         shapeTransform.setWorkPlaneFrame(frame);
+        const QVector<ShapeNurbsCurveComponent> curveComponents =
+            shapeHasCurveControlHull(shape)
+                ? nurbsCurveComponentsForShape(shape)
+                : QVector<ShapeNurbsCurveComponent>{};
+        if (!curveComponents.isEmpty()) {
+            bool hullIsKnown = true;
+            QRectF projectedHull;
+            bool hasProjectedHull = false;
+            for (const ShapeNurbsCurveComponent &component : curveComponents) {
+                QRectF componentBounds;
+                if (!projectedNurbsControlHullBounds(component.curve,
+                                                      component.workPlaneFrame,
+                                                      transform,
+                                                      viewportSize,
+                                                      &componentBounds)) {
+                    hullIsKnown = false;
+                    break;
+                }
+                includeScreenBounds(componentBounds,
+                                    &projectedHull,
+                                    &hasProjectedHull);
+            }
+            if (hullIsKnown && hasProjectedHull) {
+                const QRectF hitBounds(
+                    screenPosition - QPointF(hitRadiusPixels, hitRadiusPixels),
+                    QSizeF(2.0 * hitRadiusPixels, 2.0 * hitRadiusPixels));
+                if (!screenBoundsOverlap(projectedHull, hitBounds)) {
+                    continue;
+                }
+            }
+        }
         const qreal distance = distanceToShape(screenPosition,
                                                shape,
                                                shapeTransform,
@@ -805,7 +885,10 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
         const qreal screenDistance = distanceToShape(screenPosition,
                                                       shape,
                                                       shapeTransform,
-                                                      viewportSize);
+                                                      viewportSize,
+                                                      document.objectIdAt(index),
+                                                      document.objectGeometryRevision(
+                                                          document.objectIdAt(index)));
         if (!std::isfinite(screenDistance) || screenDistance > hitRadiusPixels) {
             continue;
         }

@@ -1,11 +1,16 @@
 #pragma once
 
-#include "core/document/document.h"
-#include "core/model.h"
-#include "services/sampling/curve_sampler.h"
-#include "services/viewport/viewport_transform.h"
+#include "core/document/dimension_anchor.h"
+#include "services/snapping/snap_types.h"
+
+#include <QPointF>
+#include <QSize>
 
 namespace classiCAD {
+
+class Document;
+class CurveSampler;
+class ViewportTransform;
 
 DimensionAnchorReference captureDimensionAnchor(
     const Document &document,

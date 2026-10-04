@@ -1,6 +1,7 @@
 #pragma once
 
-#include "core/model.h"
+#include "core/document/shape.h"
+#include "core/tool_id.h"
 #include "tool_input.h"
 
 #include <QColor>
@@ -71,6 +72,11 @@ struct ToolPreview {
 
 class InteractionTool {
 public:
+    enum class EventResult {
+        Unhandled,
+        Handled,
+    };
+
     virtual ~InteractionTool() = default;
 
     virtual ToolId id() const = 0;
@@ -80,6 +86,16 @@ public:
     virtual bool handleMouseRelease(const ToolInput &input, ToolContext &context);
     virtual bool handleWheel(const ToolInput &input, ToolContext &context);
     virtual bool handleKey(const ToolInput &input, ToolContext &context);
+
+    // Explicit routing boundary for Qt adapters. The bool-based handlers stay
+    // as the incremental migration contract for existing tools.
+    virtual EventResult dispatchMousePress(const ToolInput &input,
+                                           ToolContext &context);
+    EventResult dispatchMouseMove(const ToolInput &input, ToolContext &context);
+    EventResult dispatchWheel(const ToolInput &input, ToolContext &context);
+    virtual EventResult dispatchKey(const ToolInput &input,
+                                    ToolContext &context);
+
     virtual void cancel(ToolContext &context);
     virtual void commit(ToolContext &context);
     virtual ToolPreview preview() const;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/model.h"
+#include "core/document/shape.h"
 #include "services/viewport/viewport_transform.h"
 
 #include <QLineF>

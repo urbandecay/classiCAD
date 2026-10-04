@@ -1,4 +1,6 @@
 #include "core/document/document.h"
+#include "core/geometry/curve_construction.h"
+#include "core/geometry/shape_mapping.h"
 #include "core/serialization/document_serializer.h"
 #include "core/serialization/blender_project_file.h"
 #include "core/serialization/rhino3dm_interchange.h"

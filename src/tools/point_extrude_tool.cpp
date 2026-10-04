@@ -1,5 +1,13 @@
 #include "point_extrude_tool.h"
 
+#include "core/geometry/curve_construction.h"
+#include "core/geometry/shape_mapping.h"
+#include "core/document/document.h"
+#include "core/document/selection_model.h"
+#include "services/sampling/curve_sampler.h"
+#include "services/snapping/snap_engine.h"
+#include "services/viewport/viewport_transform.h"
+
 #include "tool_context.h"
 #include "core/geometry/nurbs_surface_factory.h"
 

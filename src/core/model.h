@@ -49,10 +49,24 @@ struct SnapResult {
 };
 
 struct SnapCandidate {
+    SnapCandidate() = default;
+    SnapCandidate(SnapType snapType,
+                  const QPointF &localPoint,
+                  int sourceShapeIndex = -1,
+                  int sourceComponentIndex = -1)
+        : type(snapType)
+        , point(localPoint)
+        , shapeIndex(sourceShapeIndex)
+        , componentIndex(sourceComponentIndex)
+    {
+    }
+
     SnapType type = SnapType::None;
     QPointF point;
     int shapeIndex = -1;
     int componentIndex = -1;
+    Point3D worldPoint;
+    bool hasWorldPoint = false;
 };
 
 struct LineSegment {
@@ -140,6 +154,10 @@ struct Shape {
     // A joined spline remains a Rhino-style component curve collection. Each
     // component keeps its own degree, weights, knots, and parameter domain.
     QVector<NurbsCurve2D> components;
+    // Normally all components share the shape frame. Mixed-plane PolyCurves
+    // store one frame per component so the planar NURBS data remains exact.
+    // An empty vector is the legacy representation and uses workPlaneFrame.
+    QVector<WorkPlaneFrame> componentWorkPlaneFrames;
     QVector<DimensionAnchorReference> dimensionAnchors;
     qreal dimensionOffset = 0.0;
     bool dimensionOffsetValid = false;
@@ -155,7 +173,11 @@ struct Shape {
 };
 
 WorkPlaneFrame shapeWorkPlaneFrame(const Shape &shape);
+WorkPlaneFrame shapeComponentWorkPlaneFrame(const Shape &shape, int componentIndex);
 Point3D shapePointToWorld(const Shape &shape, const QPointF &point);
+Point3D shapeComponentPointToWorld(const Shape &shape,
+                                   int componentIndex,
+                                   const QPointF &point);
 QPointF shapeWorldPointToLocal(const Shape &shape, const Point3D &point);
 QVector<QPointF> polygonVerticesForShape(const Shape &shape);
 

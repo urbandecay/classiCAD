@@ -157,7 +157,7 @@ def insert_knot_once(control_points, knots, degree, knot):
     return refined_points, refined_knots
 
 
-def nurbs_bezier_spans(nurbs):
+def nurbs_bezier_spans(nurbs, local_transform=None):
     # Blender exposes spline order and endpoint settings, but not an arbitrary
     # knot array. Knot insertion turns each supported span into an exact
     # rational Bezier NURBS that Blender can store as a clamped spline.
@@ -166,10 +166,12 @@ def nurbs_bezier_spans(nurbs):
         return None
 
     degree = prepared["degree"]
-    control_points = [
-        [x * weight, y * weight, 0.0, weight]
-        for (x, y), weight in zip(prepared["points"], prepared["weights"])
-    ]
+    control_points = []
+    for (x, y), weight in zip(prepared["points"], prepared["weights"]):
+        homogeneous = Vector((x * weight, y * weight, 0.0, weight))
+        if local_transform is not None:
+            homogeneous = local_transform @ homogeneous
+        control_points.append(list(homogeneous))
     knots = list(prepared["full_knots"])
     last_control = len(control_points) - 1
     parameter_start = knots[degree]
@@ -347,12 +349,13 @@ def add_polyline_spline(curve_data, points):
     spline = curve_data.splines.new("POLY")
     spline.points.add(len(points) - 1)
     for index, point in enumerate(points):
-        spline.points[index].co = (float(point[0]), float(point[1]), 0.0, 1.0)
+        z = float(point[2]) if len(point) > 2 else 0.0
+        spline.points[index].co = (float(point[0]), float(point[1]), z, 1.0)
     return True
 
 
-def add_nurbs_curve(curve_data, nurbs):
-    bezier_spans = nurbs_bezier_spans(nurbs)
+def add_nurbs_curve(curve_data, nurbs, local_transform=None):
+    bezier_spans = nurbs_bezier_spans(nurbs, local_transform)
     if bezier_spans is not None:
         order = int(nurbs["order"])
         added = False
@@ -362,6 +365,11 @@ def add_nurbs_curve(curve_data, nurbs):
 
     added = False
     for points in sample_nurbs(nurbs):
+        if local_transform is not None:
+            points = [
+                tuple(local_transform @ Vector((point[0], point[1], 0.0)))
+                for point in points
+            ]
         added = add_polyline_spline(curve_data, points) or added
     return added
 
@@ -393,10 +401,19 @@ def add_scene_object(layer_collections, record):
     curve_data.resolution_u = 16
 
     components = shape.get("components", [])
+    component_frames = shape.get("componentWorkPlaneFrames", [])
     has_curve = False
     if components:
-        for component in components:
-            has_curve = add_nurbs_curve(curve_data, component) or has_curve
+        for index, component in enumerate(components):
+            local_transform = None
+            if len(component_frames) == len(components):
+                component_frame = frame_matrix(
+                    {"workPlaneFrame": component_frames[index]}
+                )
+                local_transform = frame.inverted() @ component_frame
+            has_curve = add_nurbs_curve(
+                curve_data, component, local_transform
+            ) or has_curve
     else:
         has_curve = add_nurbs_curve(curve_data, shape.get("nurbs", {}))
 

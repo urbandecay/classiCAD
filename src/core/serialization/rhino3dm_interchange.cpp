@@ -302,21 +302,7 @@ bool importCurve(const ON_Curve &curve,
         Shape result;
         result.geometryType = GeometryType::PolyCurve;
         result.components.reserve(polyCurve->Count());
-        ON_Plane polyCurvePlane;
-        WorkPlaneFrame commonFrame;
-        if (!polyCurve->IsPlanar(&polyCurvePlane, planarTolerance) ||
-            !workPlaneFrameFromOpenNurbsPlane(polyCurvePlane,
-                                              unitScale,
-                                              &result.workPlane,
-                                              &result.workPlaneOffset,
-                                              &commonFrame)) {
-            if (reason != nullptr) {
-                *reason = QStringLiteral("polycurve is not planar or its plane is invalid");
-            }
-            return false;
-        }
-        result.workPlaneFrame = commonFrame;
-        bool hasPlane = false;
+        result.componentWorkPlaneFrames.reserve(polyCurve->Count());
         for (int index = 0; index < polyCurve->Count(); ++index) {
             const ON_Curve *segment = polyCurve->SegmentCurve(index);
             Shape::NurbsCurve2D converted;
@@ -331,23 +317,27 @@ bool importCurve(const ON_Curve &curve,
                                   &segmentPlane,
                                   &segmentOffset,
                                   &segmentFrame,
-                                  &commonFrame,
+                                  nullptr,
                                   reason)) {
                 return false;
             }
-            if (hasPlane && !workPlaneFramesMatch(result.workPlaneFrame,
-                                                  segmentFrame)) {
-                if (reason != nullptr) {
-                    *reason = QStringLiteral("polycurve segments use different workplanes");
-                }
-                return false;
+            if (result.components.isEmpty()) {
+                result.workPlane = segmentPlane;
+                result.workPlaneOffset = segmentOffset;
+                result.workPlaneFrame = segmentFrame;
             }
-            hasPlane = true;
             if (result.points.isEmpty()) {
-                result.points.append(converted.controlPoints.first());
+                const Point3D startWorld = workPlaneFramePointToWorld(
+                    converted.controlPoints.first(), segmentFrame);
+                result.points.append(worldPointToWorkPlaneFrame(
+                    startWorld, result.workPlaneFrame));
             }
-            result.points.append(converted.controlPoints.last());
+            const Point3D endWorld = workPlaneFramePointToWorld(
+                converted.controlPoints.last(), segmentFrame);
+            result.points.append(worldPointToWorkPlaneFrame(
+                endWorld, result.workPlaneFrame));
             result.components.append(std::move(converted));
+            result.componentWorkPlaneFrames.append(segmentFrame);
         }
         if (result.components.isEmpty()) {
             if (reason != nullptr) {

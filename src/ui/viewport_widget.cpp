@@ -152,6 +152,162 @@ qreal arcVectorLength(const Point3D &vector)
     return std::sqrt(arcVectorDot(vector, vector));
 }
 
+QJsonObject point3DToJson(const Point3D &point)
+{
+    return {{QStringLiteral("x"), point.x},
+            {QStringLiteral("y"), point.y},
+            {QStringLiteral("z"), point.z}};
+}
+
+bool point3DFromJson(const QJsonValue &value, Point3D *point)
+{
+    if (point == nullptr || !value.isObject()) {
+        return false;
+    }
+
+    const QJsonObject object = value.toObject();
+    const QJsonValue xValue = object.value(QStringLiteral("x"));
+    const QJsonValue yValue = object.value(QStringLiteral("y"));
+    const QJsonValue zValue = object.value(QStringLiteral("z"));
+    if (!xValue.isDouble() || !yValue.isDouble() || !zValue.isDouble()) {
+        return false;
+    }
+
+    const Point3D restored{xValue.toDouble(), yValue.toDouble(), zValue.toDouble()};
+    if (!std::isfinite(restored.x) || !std::isfinite(restored.y) ||
+        !std::isfinite(restored.z)) {
+        return false;
+    }
+
+    *point = restored;
+    return true;
+}
+
+QJsonObject workPlaneFrameToJson(const WorkPlaneFrame &frame)
+{
+    return {{QStringLiteral("origin"), point3DToJson(frame.origin)},
+            {QStringLiteral("xAxis"), point3DToJson(frame.xAxis)},
+            {QStringLiteral("yAxis"), point3DToJson(frame.yAxis)},
+            {QStringLiteral("normal"), point3DToJson(frame.normal)},
+            {QStringLiteral("valid"), frame.valid}};
+}
+
+bool workPlaneFrameFromJson(const QJsonValue &value, WorkPlaneFrame *frame)
+{
+    if (frame == nullptr || !value.isObject()) {
+        return false;
+    }
+
+    const QJsonObject object = value.toObject();
+    WorkPlaneFrame restored;
+    if (!point3DFromJson(object.value(QStringLiteral("origin")), &restored.origin) ||
+        !point3DFromJson(object.value(QStringLiteral("xAxis")), &restored.xAxis) ||
+        !point3DFromJson(object.value(QStringLiteral("yAxis")), &restored.yAxis) ||
+        !point3DFromJson(object.value(QStringLiteral("normal")), &restored.normal) ||
+        !object.value(QStringLiteral("valid")).toBool(false)) {
+        return false;
+    }
+    restored.valid = true;
+    if (!isValidWorkPlaneFrame(restored)) {
+        return false;
+    }
+
+    *frame = restored;
+    return true;
+}
+
+QJsonObject viewportCameraStateToJson(const ViewportCameraState &state)
+{
+    QJsonObject orientation;
+    orientation.insert(QStringLiteral("w"), state.orientation.w);
+    orientation.insert(QStringLiteral("x"), state.orientation.x);
+    orientation.insert(QStringLiteral("y"), state.orientation.y);
+    orientation.insert(QStringLiteral("z"), state.orientation.z);
+
+    QJsonObject object;
+    object.insert(QStringLiteral("zoom"), state.zoom);
+    object.insert(QStringLiteral("pan"), pointToJson(state.pan));
+    object.insert(QStringLiteral("orbitPivot"), point3DToJson(state.orbitPivot));
+    object.insert(QStringLiteral("yawRadians"), state.yawRadians);
+    object.insert(QStringLiteral("pitchRadians"), state.pitchRadians);
+    object.insert(QStringLiteral("perspective"), state.perspective);
+    object.insert(QStringLiteral("preset"), static_cast<int>(state.preset));
+    object.insert(QStringLiteral("gridViewDistance"), state.gridViewDistance);
+    object.insert(QStringLiteral("orientation"), orientation);
+    object.insert(QStringLiteral("hasOrientation"), state.hasOrientation);
+    return object;
+}
+
+bool viewportCameraStateFromJson(const QJsonValue &value,
+                                 ViewportCameraState *state)
+{
+    if (state == nullptr || !value.isObject()) {
+        return false;
+    }
+
+    const QJsonObject object = value.toObject();
+    const auto finiteNumber = [&object](const QString &key, qreal *number) {
+        const QJsonValue value = object.value(key);
+        if (number == nullptr || !value.isDouble()) {
+            return false;
+        }
+        const qreal restored = value.toDouble();
+        if (!std::isfinite(restored)) {
+            return false;
+        }
+        *number = restored;
+        return true;
+    };
+
+    ViewportCameraState restored;
+    int preset = -1;
+    if (!finiteNumber(QStringLiteral("zoom"), &restored.zoom) ||
+        restored.zoom <= 0.0 ||
+        !pointFromJson(object.value(QStringLiteral("pan")), &restored.pan) ||
+        !point3DFromJson(object.value(QStringLiteral("orbitPivot")),
+                         &restored.orbitPivot) ||
+        !finiteNumber(QStringLiteral("yawRadians"), &restored.yawRadians) ||
+        !finiteNumber(QStringLiteral("pitchRadians"), &restored.pitchRadians) ||
+        !finiteNumber(QStringLiteral("gridViewDistance"),
+                      &restored.gridViewDistance) ||
+        restored.gridViewDistance <= 0.0 ||
+        !object.value(QStringLiteral("preset")).isDouble() ||
+        !object.value(QStringLiteral("perspective")).isBool() ||
+        !object.value(QStringLiteral("hasOrientation")).isBool()) {
+        return false;
+    }
+    preset = object.value(QStringLiteral("preset")).toInt(-1);
+    if (preset < static_cast<int>(ViewportViewPreset::Top) ||
+        preset > static_cast<int>(ViewportViewPreset::Left)) {
+        return false;
+    }
+    restored.preset = static_cast<ViewportViewPreset>(preset);
+    restored.perspective = object.value(QStringLiteral("perspective")).toBool();
+    restored.hasOrientation = object.value(QStringLiteral("hasOrientation")).toBool();
+
+    const QJsonObject orientation = object.value(QStringLiteral("orientation")).toObject();
+    const QJsonValue orientationW = orientation.value(QStringLiteral("w"));
+    const QJsonValue orientationX = orientation.value(QStringLiteral("x"));
+    const QJsonValue orientationY = orientation.value(QStringLiteral("y"));
+    const QJsonValue orientationZ = orientation.value(QStringLiteral("z"));
+    if (!orientationW.isDouble() || !orientationX.isDouble() ||
+        !orientationY.isDouble() || !orientationZ.isDouble()) {
+        return false;
+    }
+    restored.orientation = {orientationW.toDouble(),
+                            orientationX.toDouble(),
+                            orientationY.toDouble(),
+                            orientationZ.toDouble()};
+    const qreal orientationLengthSquared = restored.orientation.dot(restored.orientation);
+    if (!std::isfinite(orientationLengthSquared) ||
+        (restored.hasOrientation && orientationLengthSquared <= 1.0e-12)) {
+        return false;
+    }
+
+    *state = restored;
+    return true;
+}
+
 Point3D arcVectorAdd(const Point3D &first, const Point3D &second)
 {
     return {first.x + second.x, first.y + second.y, first.z + second.z};
@@ -2085,7 +2241,7 @@ public:
         DebugLog::instance().write(
             QStringLiteral("beginJoinMode preselected=%1")
                 .arg(joinShapeIndices_.size()));
-        if (joinShapeIndices_.size() >= 2) {
+        if (!joinShapeIndices_.isEmpty()) {
             if (!applyJoin()) {
                 cancelJoinMode(false);
             }
@@ -2133,7 +2289,7 @@ public:
             return false;
         }
 
-        if (joinShapeIndices_.size() < 2) {
+        if (joinShapeIndices_.isEmpty()) {
             notifyJoinStatus(QStringLiteral("Join needs at least two curves"));
             return false;
         }
@@ -2155,6 +2311,8 @@ public:
         const WorkPlane joinWorkPlane = referenceShape.workPlane;
         const qreal joinWorkPlaneOffset = referenceShape.workPlaneOffset;
         QVector<Shape::NurbsCurve2D> components;
+        QVector<WorkPlaneFrame> componentFrames;
+        bool mixedPlanes = false;
         for (const ObjectId objectId : joinShapeIndices_) {
             const int shapeIndex = objectIndex(objectId);
             if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
@@ -2163,10 +2321,6 @@ public:
             }
             const Shape &sourceShape = shapes_[shapeIndex];
             const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(sourceShape);
-            if (!workPlaneFramesCoplanar(joinFrame, sourceFrame)) {
-                notifyJoinStatus(QStringLiteral("Join failed — curves must lie on the same plane"));
-                return false;
-            }
             const int firstComponent = components.size();
             if (!appendJoinComponents(sourceShape, &components)) {
                 notifyJoinStatus(QStringLiteral("Join failed — select lines or curves only"));
@@ -2175,12 +2329,15 @@ public:
             for (int componentIndex = firstComponent;
                  componentIndex < components.size();
                  ++componentIndex) {
-                for (QPointF &controlPoint :
-                     components[componentIndex].controlPoints) {
-                    controlPoint = worldPointToWorkPlaneFrame(
-                        workPlaneFramePointToWorld(controlPoint, sourceFrame),
-                        joinFrame);
-                }
+                const int sourceComponentIndex = componentIndex - firstComponent;
+                const WorkPlaneFrame componentFrame =
+                    sourceShape.geometryType == GeometryType::PolyCurve
+                        ? shapeComponentWorkPlaneFrame(sourceShape,
+                                                       sourceComponentIndex)
+                        : sourceFrame;
+                componentFrames.append(componentFrame);
+                mixedPlanes = mixedPlanes ||
+                              !workPlaneFramesCoplanar(joinFrame, componentFrame);
             }
         }
 
@@ -2190,8 +2347,52 @@ public:
         }
 
         const qreal selectedJoinTolerance = selectedJoinEndpointTolerance();
-        fuseOverlappingLineComponents(&components, selectedJoinTolerance);
-        if (!joinComponentsAreContinuous(components, selectedJoinTolerance)) {
+        if (mixedPlanes) {
+            fuseOverlappingLineComponentsInWorld(&components,
+                                                  &componentFrames,
+                                                  selectedJoinTolerance);
+            QVector<Shape::NurbsCurve2D> orderedComponents;
+            QVector<WorkPlaneFrame> orderedFrames;
+            if (!orderJoinComponentsInWorld(components,
+                                            componentFrames,
+                                            &orderedComponents,
+                                            &orderedFrames,
+                                            selectedJoinTolerance)) {
+                notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
+                DebugLog::instance().write(
+                    QStringLiteral("applyJoin rejected mixed-plane components=%1 tolerance=%2")
+                        .arg(components.size())
+                        .arg(selectedJoinTolerance, 0, 'f', 6));
+                return false;
+            }
+            components = std::move(orderedComponents);
+            componentFrames = std::move(orderedFrames);
+            if (!closeJoinGapsInWorld(&components,
+                                      &componentFrames,
+                                      selectedJoinTolerance) ||
+                !joinComponentsAreContinuousInWorld(components,
+                                                    componentFrames,
+                                                    selectedJoinTolerance)) {
+                notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
+                return false;
+            }
+        } else {
+            for (int componentIndex = 0;
+                 componentIndex < components.size();
+                 ++componentIndex) {
+                for (QPointF &controlPoint :
+                     components[componentIndex].controlPoints) {
+                    controlPoint = worldPointToWorkPlaneFrame(
+                        workPlaneFramePointToWorld(
+                            controlPoint, componentFrames[componentIndex]),
+                        joinFrame);
+                }
+            }
+            componentFrames.clear();
+            fuseOverlappingLineComponents(&components, selectedJoinTolerance);
+        }
+        if (!mixedPlanes &&
+            !joinComponentsAreContinuous(components, selectedJoinTolerance)) {
             QVector<Shape::NurbsCurve2D> orderedComponents;
             if (!orderJoinComponents(components,
                                      &orderedComponents,
@@ -2245,8 +2446,9 @@ public:
                                            .arg(components.size()));
         }
 
-        if (!closeJoinGaps(&components, selectedJoinTolerance) ||
-            !joinComponentsAreContinuous(components, selectedJoinTolerance)) {
+        if (!mixedPlanes &&
+            (!closeJoinGaps(&components, selectedJoinTolerance) ||
+             !joinComponentsAreContinuous(components, selectedJoinTolerance))) {
             notifyJoinStatus(QStringLiteral("Join failed — selected curves are not connected"));
             DebugLog::instance().write(QStringLiteral("applyJoin rejected reordered components=%1")
                                            .arg(components.size()));
@@ -2276,18 +2478,40 @@ public:
         }
 
         Shape joined;
+        const WorkPlaneFrame resultFrame = mixedPlanes && components.size() == 1
+                                               ? componentFrames.first()
+                                               : joinFrame;
         if (components.size() == 1) {
             joined.geometryType = GeometryType::Nurbs;
             joined.nurbs = components.first();
             joined.points = joined.nurbs.controlPoints;
         } else {
             joined.geometryType = GeometryType::PolyCurve;
-            joined.points = polyCurvePoints(components);
+            if (mixedPlanes) {
+                for (int index = 0; index < components.size(); ++index) {
+                    QPointF start;
+                    QPointF end;
+                    if (!nurbsCurveEndpoints(components[index], &start, &end)) {
+                        continue;
+                    }
+                    if (index == 0) {
+                        joined.points.append(worldPointToWorkPlaneFrame(
+                            workPlaneFramePointToWorld(start, componentFrames[index]),
+                            joinFrame));
+                    }
+                    joined.points.append(worldPointToWorkPlaneFrame(
+                        workPlaneFramePointToWorld(end, componentFrames[index]),
+                        joinFrame));
+                }
+                joined.componentWorkPlaneFrames = componentFrames;
+            } else {
+                joined.points = polyCurvePoints(components);
+            }
             joined.components = components;
         }
         joined.workPlane = joinWorkPlane;
         joined.workPlaneOffset = joinWorkPlaneOffset;
-        joined.workPlaneFrame = joinFrame;
+        joined.workPlaneFrame = resultFrame;
         SceneObject joinedObject;
         joinedObject.layerId = joinedLayerId;
         joinedObject.geometry = joined;
@@ -2393,7 +2617,13 @@ public:
                 continue;
             }
 
-            for (const Shape::NurbsCurve2D &component : source.components) {
+            for (int componentIndex = 0;
+                 componentIndex < source.components.size();
+                 ++componentIndex) {
+                const Shape::NurbsCurve2D &component =
+                    source.components[componentIndex];
+                const WorkPlaneFrame componentFrame =
+                    shapeComponentWorkPlaneFrame(source, componentIndex);
                 const int newIndex = explodedObjects.size();
                 SceneObject componentObject;
                 componentObject.layerId = sourceObject.layerId;
@@ -2407,7 +2637,7 @@ public:
                     {component}};
                 componentObject.geometry.workPlane = source.workPlane;
                 componentObject.geometry.workPlaneOffset = source.workPlaneOffset;
-                componentObject.geometry.workPlaneFrame = source.workPlaneFrame;
+                componentObject.geometry.workPlaneFrame = componentFrame;
                 explodedObjects.append(componentObject);
                 explodedSelectionIndices.append(newIndex);
             }
@@ -2449,13 +2679,52 @@ public:
         }
 
         QJsonObject root;
-        // Version 3 stores the document once, including its layers and object
-        // identities. The version 1/2 restore path below still reads legacy
-        // shape-only sessions.
-        root.insert(QStringLiteral("version"), 3);
+        // Version 4 also carries the complete camera/workplane state so an
+        // update restart reopens the same viewport, not just the same scene.
+        // The version 1/2 restore path below still reads legacy shape-only
+        // sessions, and version 3 keeps its original scene-only behavior.
+        root.insert(QStringLiteral("version"), 4);
         root.insert(QStringLiteral("zoom"), zoom_);
         root.insert(QStringLiteral("pan"), pointToJson(pan_));
         root.insert(QStringLiteral("document"), documentToJson(document_));
+
+        root.insert(QStringLiteral("viewportCamera"),
+                    viewportCameraStateToJson(viewportTransform_.cameraState()));
+        root.insert(QStringLiteral("workPlane"),
+                    static_cast<int>(viewportTransform_.workPlane()));
+        root.insert(QStringLiteral("workPlaneOffset"),
+                    viewportTransform_.workPlaneOffset());
+        root.insert(QStringLiteral("workPlaneFrame"),
+                    workPlaneFrameToJson(viewportTransform_.workPlaneFrame()));
+
+        const ViewportCameraPreferences cameraPreferences =
+            viewportTransform_.cameraPreferences();
+        QJsonObject cameraPreferencesJson;
+        cameraPreferencesJson.insert(QStringLiteral("focalLengthMillimeters"),
+                                     cameraPreferences.focalLengthMillimeters);
+        cameraPreferencesJson.insert(QStringLiteral("clipStart"),
+                                     cameraPreferences.clipStart);
+        cameraPreferencesJson.insert(QStringLiteral("clipEnd"),
+                                     cameraPreferences.clipEnd);
+        root.insert(QStringLiteral("cameraPreferences"), cameraPreferencesJson);
+
+        QJsonArray selectedObjectIds;
+        for (const ObjectId objectId : selectedShapeIndices_) {
+            selectedObjectIds.append(QString::number(objectId.value()));
+        }
+        root.insert(QStringLiteral("selectedObjectIds"), selectedObjectIds);
+        root.insert(QStringLiteral("primaryObjectId"),
+                    QString::number(selectedShapeIndex_.value()));
+        const ControlPointReference activeControlPoint =
+            selection_.activeControlPoint();
+        if (activeControlPoint.isValid()) {
+            QJsonObject controlPoint;
+            controlPoint.insert(QStringLiteral("objectId"),
+                                QString::number(activeControlPoint.objectId.value()));
+            controlPoint.insert(QStringLiteral("index"), activeControlPoint.index);
+            root.insert(QStringLiteral("activeControlPoint"), controlPoint);
+        }
+        root.insert(QStringLiteral("controlPointsVisible"), controlPointsVisible_);
 
         const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Compact);
         if (file.write(data) != data.size()) {
@@ -2464,10 +2733,14 @@ public:
             return false;
         }
 
-        DebugLog::instance().write(QStringLiteral("saveUpdateSession path=%1 shapes=%2 layers=%3")
+        DebugLog::instance().write(QStringLiteral("saveUpdateSession path=%1 shapes=%2 layers=%3 version=4 preset=%4 perspective=%5 zoom=%6 pan=%7")
                                        .arg(path)
                                        .arg(shapes_.size())
-                                       .arg(document_.layers().size()));
+                                       .arg(document_.layers().size())
+                                       .arg(static_cast<int>(viewportTransform_.viewPreset()))
+                                       .arg(viewportTransform_.isPerspectiveEnabled())
+                                       .arg(zoom_, 0, 'g', 17)
+                                       .arg(precisePointText(pan_)));
         return true;
     }
 
@@ -2490,7 +2763,7 @@ public:
 
         const QJsonObject root = document.object();
         const int version = root.value(QStringLiteral("version")).toInt(-1);
-        if (version != 1 && version != 2 && version != 3) {
+        if (version < 1 || version > 4) {
             DebugLog::instance().write(QStringLiteral("restoreUpdateSession unsupported version=%1 path=%2")
                                            .arg(version)
                                            .arg(path));
@@ -2512,7 +2785,142 @@ public:
             return false;
         }
 
-        if (version == 3) {
+        ViewportCameraState restoredCameraState;
+        WorkPlane restoredWorkPlane = WorkPlane::XY;
+        qreal restoredWorkPlaneOffset = 0.0;
+        WorkPlaneFrame restoredWorkPlaneFrame;
+        ViewportCameraPreferences restoredCameraPreferences =
+            viewportTransform_.cameraPreferences();
+        QVector<ObjectId> restoredSelectedObjectIds;
+        ObjectId restoredPrimaryObjectId = ObjectId::invalid();
+        ControlPointReference restoredActiveControlPoint;
+        bool restoredControlPointsVisible = controlPointsVisible_;
+        if (version >= 4) {
+            if (!viewportCameraStateFromJson(
+                    root.value(QStringLiteral("viewportCamera")),
+                    &restoredCameraState)) {
+                DebugLog::instance().write(
+                    QStringLiteral("restoreUpdateSession invalid viewport camera path=%1")
+                        .arg(path));
+                return false;
+            }
+
+            WorkPlane parsedWorkPlane;
+            const QJsonValue workPlaneValue = root.value(QStringLiteral("workPlane"));
+            const QJsonValue workPlaneOffsetValue =
+                root.value(QStringLiteral("workPlaneOffset"));
+            restoredWorkPlaneOffset = workPlaneOffsetValue.toDouble(
+                std::numeric_limits<qreal>::quiet_NaN());
+            if (!workPlaneValue.isDouble() ||
+                !workPlaneFromValue(workPlaneValue.toInt(-1), &parsedWorkPlane) ||
+                !std::isfinite(restoredWorkPlaneOffset) ||
+                !workPlaneFrameFromJson(root.value(QStringLiteral("workPlaneFrame")),
+                                        &restoredWorkPlaneFrame)) {
+                DebugLog::instance().write(
+                    QStringLiteral("restoreUpdateSession invalid workplane path=%1")
+                        .arg(path));
+                return false;
+            }
+            restoredWorkPlane = parsedWorkPlane;
+
+            const QJsonObject cameraPreferences =
+                root.value(QStringLiteral("cameraPreferences")).toObject();
+            const QJsonValue focalLengthValue =
+                cameraPreferences.value(QStringLiteral("focalLengthMillimeters"));
+            const QJsonValue clipStartValue =
+                cameraPreferences.value(QStringLiteral("clipStart"));
+            const QJsonValue clipEndValue =
+                cameraPreferences.value(QStringLiteral("clipEnd"));
+            restoredCameraPreferences = {focalLengthValue.toDouble(
+                                             std::numeric_limits<qreal>::quiet_NaN()),
+                                         clipStartValue.toDouble(
+                                             std::numeric_limits<qreal>::quiet_NaN()),
+                                         clipEndValue.toDouble(
+                                             std::numeric_limits<qreal>::quiet_NaN())};
+            if (!focalLengthValue.isDouble() || !clipStartValue.isDouble() ||
+                !clipEndValue.isDouble() ||
+                !std::isfinite(restoredCameraPreferences.focalLengthMillimeters) ||
+                restoredCameraPreferences.focalLengthMillimeters < 1.0 ||
+                restoredCameraPreferences.focalLengthMillimeters > 2000.0 ||
+                !std::isfinite(restoredCameraPreferences.clipStart) ||
+                restoredCameraPreferences.clipStart < 0.000001 ||
+                !std::isfinite(restoredCameraPreferences.clipEnd) ||
+                restoredCameraPreferences.clipEnd <= restoredCameraPreferences.clipStart ||
+                restoredCameraPreferences.clipEnd > 1.0e9) {
+                DebugLog::instance().write(
+                    QStringLiteral("restoreUpdateSession invalid camera preferences path=%1")
+                        .arg(path));
+                return false;
+            }
+
+            const QJsonValue selectedIdsValue =
+                root.value(QStringLiteral("selectedObjectIds"));
+            if (!selectedIdsValue.isArray()) {
+                DebugLog::instance().write(
+                    QStringLiteral("restoreUpdateSession invalid selection path=%1")
+                        .arg(path));
+                return false;
+            }
+            for (const QJsonValue &idValue : selectedIdsValue.toArray()) {
+                bool idOk = false;
+                const quint64 id = idValue.toString().toULongLong(&idOk);
+                if (!idValue.isString() || !idOk || id == 0) {
+                    DebugLog::instance().write(
+                        QStringLiteral("restoreUpdateSession invalid selection id path=%1")
+                            .arg(path));
+                    return false;
+                }
+                restoredSelectedObjectIds.append(ObjectId::fromValue(id));
+            }
+
+            bool primaryIdOk = false;
+            const quint64 primaryId =
+                root.value(QStringLiteral("primaryObjectId")).toString()
+                    .toULongLong(&primaryIdOk);
+            if (!primaryIdOk) {
+                DebugLog::instance().write(
+                    QStringLiteral("restoreUpdateSession invalid primary selection path=%1")
+                        .arg(path));
+                return false;
+            }
+            restoredPrimaryObjectId = ObjectId::fromValue(primaryId);
+
+            const QJsonValue activeControlPointValue =
+                root.value(QStringLiteral("activeControlPoint"));
+            if (!activeControlPointValue.isUndefined()) {
+                const QJsonObject activeControlPoint =
+                    activeControlPointValue.toObject();
+                bool objectIdOk = false;
+                const quint64 objectId =
+                    activeControlPoint.value(QStringLiteral("objectId"))
+                        .toString()
+                        .toULongLong(&objectIdOk);
+                const QJsonValue indexValue =
+                    activeControlPoint.value(QStringLiteral("index"));
+                const int index = indexValue.toInt(-1);
+                if (!activeControlPointValue.isObject() || !objectIdOk ||
+                    objectId == 0 || !indexValue.isDouble() || index < 0) {
+                    DebugLog::instance().write(
+                        QStringLiteral("restoreUpdateSession invalid active control point path=%1")
+                            .arg(path));
+                    return false;
+                }
+                restoredActiveControlPoint = {
+                    ObjectId::fromValue(objectId), index};
+            }
+
+            const QJsonValue controlPointsValue =
+                root.value(QStringLiteral("controlPointsVisible"));
+            if (!controlPointsValue.isBool()) {
+                DebugLog::instance().write(
+                    QStringLiteral("restoreUpdateSession invalid control-point visibility path=%1")
+                        .arg(path));
+                return false;
+            }
+            restoredControlPointsVisible = controlPointsValue.toBool();
+        }
+
+        if (version >= 3) {
             QString documentError;
             if (!documentFromJson(root.value(QStringLiteral("document")),
                                   &document_,
@@ -2590,16 +2998,41 @@ public:
         repeatTool_ = Tool::Select;
         pan_ = restoredPan;
         zoom_ = restoredZoom;
+        if (version >= 4) {
+            viewportTransform_.setGridSpacing(
+                documentGridSpacingInMillimeters(document_.settings()));
+            viewportTransform_.setCameraPreferences(restoredCameraPreferences);
+            viewportTransform_.setWorkPlane(restoredWorkPlane,
+                                             restoredWorkPlaneOffset);
+            viewportTransform_.setWorkPlaneFrame(restoredWorkPlaneFrame);
+            viewportTransform_.setCameraState(restoredCameraState);
+            selection_.setObjectIds(restoredSelectedObjectIds,
+                                    restoredPrimaryObjectId);
+            selection_.prune(document_);
+            if (restoredActiveControlPoint.isValid() &&
+                selection_.contains(restoredActiveControlPoint.objectId)) {
+                selection_.setActiveControlPoint(
+                    restoredActiveControlPoint.objectId,
+                    restoredActiveControlPoint.index);
+            }
+            controlPointsVisible_ = restoredControlPointsVisible;
+            notifyViewStateChanged();
+        }
         setCursor(Qt::ArrowCursor);
         update();
         emitCoordinateUpdate();
         notifyHistoryChanged();
         notifyLayersChanged();
 
-        DebugLog::instance().write(QStringLiteral("restoreUpdateSession path=%1 shapes=%2 layers=%3")
+        DebugLog::instance().write(QStringLiteral("restoreUpdateSession path=%1 shapes=%2 layers=%3 version=%4 preset=%5 perspective=%6 zoom=%7 pan=%8")
                                        .arg(path)
                                        .arg(shapes_.size())
-                                       .arg(document_.layers().size()));
+                                       .arg(document_.layers().size())
+                                       .arg(version)
+                                       .arg(static_cast<int>(viewportTransform_.viewPreset()))
+                                       .arg(viewportTransform_.isPerspectiveEnabled())
+                                       .arg(zoom_, 0, 'g', 17)
+                                       .arg(precisePointText(pan_)));
         return true;
     }
 
@@ -5962,7 +6395,7 @@ private:
         QVector<Shape::NurbsCurve2D> *components,
         qreal tolerance) const
     {
-        if (components == nullptr || components->size() < 2) {
+        if (components == nullptr || components->isEmpty()) {
             return;
         }
 
@@ -6100,6 +6533,66 @@ private:
                             .arg(secondIndex)
                             .arg(tolerance, 0, 'f', 6));
                     break;
+                }
+            }
+        }
+    }
+
+    void fuseOverlappingLineComponentsInWorld(
+        QVector<Shape::NurbsCurve2D> *components,
+        QVector<WorkPlaneFrame> *frames,
+        qreal tolerance) const
+    {
+        // Split bent degree-1 curves in their own planes before comparing
+        // spans. A straight span can belong to several different planes.
+        QVector<Shape::NurbsCurve2D> spans;
+        QVector<WorkPlaneFrame> spanFrames;
+        for (int index = 0; index < components->size(); ++index) {
+            QVector<Shape::NurbsCurve2D> pieces{components->at(index)};
+            // The planar helper also performs the domain-preserving split.
+            fuseOverlappingLineComponents(&pieces, tolerance);
+            for (const auto &piece : pieces) {
+                spans.append(piece);
+                spanFrames.append(frames->at(index));
+            }
+        }
+        *components = spans;
+        *frames = spanFrames;
+        bool merged = true;
+        while (merged) {
+            merged = false;
+            for (int first = 0; first < components->size() && !merged; ++first) {
+                if (components->at(first).degree != 1 ||
+                    components->at(first).controlPoints.size() != 2) {
+                    continue;
+                }
+                for (int second = first + 1; second < components->size(); ++second) {
+                    if (components->at(second).degree != 1 ||
+                        components->at(second).controlPoints.size() != 2) {
+                        continue;
+                    }
+                    auto mapped = components->at(second);
+                    bool inPlane = true;
+                    for (QPointF &point : mapped.controlPoints) {
+                        const Point3D world = workPlaneFramePointToWorld(point, frames->at(second));
+                        point = worldPointToWorkPlaneFrame(world, frames->at(first));
+                        const Point3D projected = workPlaneFramePointToWorld(point, frames->at(first));
+                        inPlane = inPlane && std::hypot(
+                            std::hypot(world.x - projected.x, world.y - projected.y),
+                            world.z - projected.z) <= 1.0e-7;
+                    }
+                    if (!inPlane) {
+                        continue;
+                    }
+                    QVector<Shape::NurbsCurve2D> pair{components->at(first), mapped};
+                    fuseOverlappingLineComponents(&pair, tolerance);
+                    if (pair.size() == 1) {
+                        (*components)[first] = pair.first();
+                        components->removeAt(second);
+                        frames->removeAt(second);
+                        merged = true;
+                        break;
+                    }
                 }
             }
         }
@@ -6271,6 +6764,170 @@ private:
         }
 
         return false;
+    }
+
+    bool orderJoinComponentsInWorld(
+        const QVector<Shape::NurbsCurve2D> &input,
+        const QVector<WorkPlaneFrame> &frames,
+        QVector<Shape::NurbsCurve2D> *ordered,
+        QVector<WorkPlaneFrame> *orderedFrames,
+        qreal tolerance) const
+    {
+        if (ordered == nullptr || orderedFrames == nullptr || input.isEmpty() ||
+            input.size() != frames.size()) {
+            return false;
+        }
+
+        const auto distance = [](const Point3D &first, const Point3D &second) {
+            return std::hypot(std::hypot(first.x - second.x,
+                                         first.y - second.y),
+                              first.z - second.z);
+        };
+        QVector<Point3D> starts;
+        QVector<Point3D> ends;
+        starts.reserve(input.size());
+        ends.reserve(input.size());
+        for (int index = 0; index < input.size(); ++index) {
+            QPointF start;
+            QPointF end;
+            if (!isValidWorkPlaneFrame(frames[index]) ||
+                !nurbsCurveEndpoints(input[index], &start, &end)) {
+                return false;
+            }
+            starts.append(workPlaneFramePointToWorld(start, frames[index]));
+            ends.append(workPlaneFramePointToWorld(end, frames[index]));
+        }
+
+        QVector<int> componentOrder;
+        QVector<bool> componentReversed;
+        QVector<bool> used(input.size(), false);
+        const auto makeResult = [&]() {
+            ordered->clear();
+            orderedFrames->clear();
+            ordered->reserve(componentOrder.size());
+            orderedFrames->reserve(componentOrder.size());
+            for (int position = 0; position < componentOrder.size(); ++position) {
+                const int componentIndex = componentOrder[position];
+                ordered->append(componentReversed[position]
+                                    ? reversedNurbsCurve(input[componentIndex])
+                                    : input[componentIndex]);
+                orderedFrames->append(frames[componentIndex]);
+            }
+        };
+
+        std::function<bool(const Point3D &)> extendChain;
+        extendChain = [&](const Point3D &currentEnd) {
+            if (componentOrder.size() == input.size()) {
+                return true;
+            }
+            for (int candidate = 0; candidate < input.size(); ++candidate) {
+                if (used[candidate]) {
+                    continue;
+                }
+                for (const bool reverseCandidate : {false, true}) {
+                    const Point3D &candidateStart = reverseCandidate
+                                                        ? ends[candidate]
+                                                        : starts[candidate];
+                    const Point3D &candidateEnd = reverseCandidate
+                                                      ? starts[candidate]
+                                                      : ends[candidate];
+                    if (distance(currentEnd, candidateStart) > tolerance) {
+                        continue;
+                    }
+                    used[candidate] = true;
+                    componentOrder.append(candidate);
+                    componentReversed.append(reverseCandidate);
+                    if (extendChain(candidateEnd)) {
+                        return true;
+                    }
+                    componentReversed.removeLast();
+                    componentOrder.removeLast();
+                    used[candidate] = false;
+                }
+            }
+            return false;
+        };
+
+        for (int first = 0; first < input.size(); ++first) {
+            for (const bool reverseFirst : {false, true}) {
+                std::fill(used.begin(), used.end(), false);
+                componentOrder.clear();
+                componentReversed.clear();
+                used[first] = true;
+                componentOrder.append(first);
+                componentReversed.append(reverseFirst);
+                const Point3D &firstEnd = reverseFirst ? starts[first]
+                                                       : ends[first];
+                if (extendChain(firstEnd)) {
+                    makeResult();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool closeJoinGapsInWorld(QVector<Shape::NurbsCurve2D> *components,
+                              QVector<WorkPlaneFrame> *frames,
+                              qreal tolerance) const
+    {
+        if (components == nullptr || frames == nullptr || components->isEmpty() ||
+            components->size() != frames->size()) {
+            return false;
+        }
+        for (int index = 0; index + 1 < components->size(); ++index) {
+            QPointF previousEnd;
+            QPointF nextStart;
+            if (!nurbsCurveEndpoints(components->at(index), nullptr, &previousEnd) ||
+                !nurbsCurveEndpoints(components->at(index + 1), &nextStart, nullptr)) {
+                return false;
+            }
+            const Point3D previousWorld = workPlaneFramePointToWorld(
+                previousEnd, frames->at(index));
+            const Point3D nextWorld = workPlaneFramePointToWorld(
+                nextStart, frames->at(index + 1));
+            const Point3D delta{previousWorld.x - nextWorld.x,
+                                previousWorld.y - nextWorld.y,
+                                previousWorld.z - nextWorld.z};
+            const qreal gap = std::hypot(std::hypot(delta.x, delta.y), delta.z);
+            if (gap > tolerance) {
+                return false;
+            }
+            WorkPlaneFrame &nextFrame = (*frames)[index + 1];
+            nextFrame.origin.x += delta.x;
+            nextFrame.origin.y += delta.y;
+            nextFrame.origin.z += delta.z;
+        }
+        return true;
+    }
+
+    bool joinComponentsAreContinuousInWorld(
+        const QVector<Shape::NurbsCurve2D> &components,
+        const QVector<WorkPlaneFrame> &frames,
+        qreal tolerance) const
+    {
+        if (components.size() != frames.size()) {
+            return false;
+        }
+        for (int index = 0; index + 1 < components.size(); ++index) {
+            QPointF previousEnd;
+            QPointF nextStart;
+            if (!nurbsCurveEndpoints(components[index], nullptr, &previousEnd) ||
+                !nurbsCurveEndpoints(components[index + 1], &nextStart, nullptr)) {
+                return false;
+            }
+            const Point3D first = workPlaneFramePointToWorld(previousEnd,
+                                                              frames[index]);
+            const Point3D second = workPlaneFramePointToWorld(nextStart,
+                                                               frames[index + 1]);
+            const qreal gap = std::hypot(
+                std::hypot(first.x - second.x, first.y - second.y),
+                first.z - second.z);
+            if (gap > tolerance) {
+                return false;
+            }
+        }
+        return true;
     }
 
     bool closeJoinGaps(QVector<Shape::NurbsCurve2D> *components,
@@ -6466,6 +7123,13 @@ private:
             const Shape &source = sceneObject.geometry;
             if (source.geometryType != GeometryType::PolyCurve ||
                 source.components.size() < 2) {
+                normalizedObjects.append(sceneObject);
+                continue;
+            }
+            if (!source.componentWorkPlaneFrames.isEmpty()) {
+                // A mixed-plane joined curve already has world-space seam
+                // continuity; the legacy planar grouping compares local 2D
+                // coordinates and must not flatten or split these components.
                 normalizedObjects.append(sceneObject);
                 continue;
             }
@@ -6691,6 +7355,12 @@ private:
         };
         const auto segmentIntersectsRect = [&hitRect](const QPointF &start,
                                                        const QPointF &end) {
+            // Clipped samples have NaN coordinates. Comparisons in the
+            // clipping algorithm otherwise fall through and report a hit.
+            if (!std::isfinite(start.x()) || !std::isfinite(start.y()) ||
+                !std::isfinite(end.x()) || !std::isfinite(end.y())) {
+                return false;
+            }
             // Liang-Barsky clipping checks the actual projected segment. This
             // avoids selecting a distant diagonal curve just because its
             // axis-aligned bounding box overlaps the crossing window.
@@ -6726,10 +7396,14 @@ private:
         const QVector<Shape::NurbsCurve2D> curves =
             curveSampler_.curvesForShape(shape);
         if (!curves.isEmpty()) {
-            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
             bool sampledGeometry = false;
             bool intersects = false;
-            for (const Shape::NurbsCurve2D &curve : curves) {
+            for (int componentIndex = 0; componentIndex < curves.size(); ++componentIndex) {
+                const Shape::NurbsCurve2D &curve = curves[componentIndex];
+                const WorkPlaneFrame frame =
+                    shape.geometryType == GeometryType::PolyCurve
+                        ? shapeComponentWorkPlaneFrame(shape, componentIndex)
+                        : shapeWorkPlaneFrame(shape);
                 SampledNurbsCurve2D sampled;
                 if (!curveSampler_.sampleNurbsCurve(curve,
                                                      frame,
@@ -12700,6 +13374,21 @@ private:
         const Point3D displacedOrigin{frame.origin.x + end.x - inputFrame.origin.x,
                                      frame.origin.y + end.y - inputFrame.origin.y,
                                      frame.origin.z + end.z - inputFrame.origin.z};
+        if (shape.geometryType == GeometryType::PolyCurve &&
+            shape.componentWorkPlaneFrames.size() == shape.components.size()) {
+            const Point3D worldDelta{displacedOrigin.x - frame.origin.x,
+                                     displacedOrigin.y - frame.origin.y,
+                                     displacedOrigin.z - frame.origin.z};
+            frame.origin = displacedOrigin;
+            shape.workPlaneFrame = frame;
+            for (WorkPlaneFrame &componentFrame :
+                 shape.componentWorkPlaneFrames) {
+                componentFrame.origin.x += worldDelta.x;
+                componentFrame.origin.y += worldDelta.y;
+                componentFrame.origin.z += worldDelta.z;
+            }
+            return;
+        }
         const QPointF localDelta = worldPointToWorkPlaneFrame(displacedOrigin, frame);
         translateShapeGeometry(shape, localDelta);
         const Point3D planarEnd = workPlaneFramePointToWorld(localDelta, frame);
@@ -12711,6 +13400,24 @@ private:
 
     void translateShapeGeometry(Shape &shape, const QPointF &delta) const
     {
+        if (shape.geometryType == GeometryType::PolyCurve &&
+            shape.componentWorkPlaneFrames.size() == shape.components.size()) {
+            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+            const Point3D worldDelta{
+                frame.xAxis.x * delta.x() + frame.yAxis.x * delta.y(),
+                frame.xAxis.y * delta.x() + frame.yAxis.y * delta.y(),
+                frame.xAxis.z * delta.x() + frame.yAxis.z * delta.y()};
+            shape.workPlaneFrame.origin.x += worldDelta.x;
+            shape.workPlaneFrame.origin.y += worldDelta.y;
+            shape.workPlaneFrame.origin.z += worldDelta.z;
+            for (WorkPlaneFrame &componentFrame :
+                 shape.componentWorkPlaneFrames) {
+                componentFrame.origin.x += worldDelta.x;
+                componentFrame.origin.y += worldDelta.y;
+                componentFrame.origin.z += worldDelta.z;
+            }
+            return;
+        }
         for (QPointF &point : shape.points) {
             point += delta;
         }
@@ -12746,6 +13453,12 @@ private:
             frame.origin.y += snap.worldTranslation.y;
             frame.origin.z += snap.worldTranslation.z;
             shapes_[index].workPlaneFrame = frame;
+            for (WorkPlaneFrame &componentFrame :
+                 shapes_[index].componentWorkPlaneFrames) {
+                componentFrame.origin.x += snap.worldTranslation.x;
+                componentFrame.origin.y += snap.worldTranslation.y;
+                componentFrame.origin.z += snap.worldTranslation.z;
+            }
         }
         DebugLog::instance().write(QStringLiteral("object-drag-snap applied targetShape=%1 worldDelta=(%2,%3,%4)")
             .arg(snap.targetShapeIndex).arg(snap.worldTranslation.x,0,'g',12)

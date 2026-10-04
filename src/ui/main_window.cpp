@@ -33,6 +33,8 @@
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QIcon>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -46,6 +48,7 @@
 #include <QProcess>
 #include <QPushButton>
 #include <QPixmap>
+#include <QSaveFile>
 #include <QShortcut>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -1085,6 +1088,40 @@ public:
             return false;
         }
 
+        QFile file(path);
+        if (file.open(QIODevice::ReadOnly)) {
+            QJsonParseError parseError;
+            const QJsonDocument session =
+                QJsonDocument::fromJson(file.readAll(), &parseError);
+            if (parseError.error == QJsonParseError::NoError && session.isObject()) {
+                const QJsonValue controlPointsValue =
+                    session.object().value(QStringLiteral("controlPointsVisible"));
+                if (controlPointsValue.isBool() && controlPointsButton_ != nullptr) {
+                    controlPointsButton_->setChecked(controlPointsValue.toBool());
+                }
+                const QByteArray geometry =
+                    session.object().value(QStringLiteral("windowGeometry"))
+                        .toString()
+                        .toLatin1();
+                if (!geometry.isEmpty() &&
+                    !restoreGeometry(QByteArray::fromBase64(geometry))) {
+                    DebugLog::instance().write(
+                        QStringLiteral("restoreUpdateWindowGeometry rejected path=%1")
+                            .arg(path));
+                }
+                const QByteArray splitterState =
+                    session.object().value(QStringLiteral("workspaceSplitterState"))
+                        .toString()
+                        .toLatin1();
+                if (!splitterState.isEmpty()) {
+                    if (QSplitter *splitter =
+                            findChild<QSplitter *>(QStringLiteral("workspaceSplitter"))) {
+                        splitter->restoreState(QByteArray::fromBase64(splitterState));
+                    }
+                }
+            }
+        }
+
         QFile::remove(path);
         statusBar()->showMessage(QStringLiteral("Update complete — scene restored"), 5000);
         return true;
@@ -1330,6 +1367,53 @@ private:
                                                                : QString()));
     }
 
+    bool saveUpdateWindowGeometry(const QString &path)
+    {
+        QFile input(path);
+        if (!input.open(QIODevice::ReadOnly)) {
+            DebugLog::instance().write(
+                QStringLiteral("saveUpdateWindowGeometry read failed path=%1 error=%2")
+                    .arg(path, input.errorString()));
+            return false;
+        }
+
+        QJsonParseError parseError;
+        QJsonDocument session = QJsonDocument::fromJson(input.readAll(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !session.isObject()) {
+            DebugLog::instance().write(
+                QStringLiteral("saveUpdateWindowGeometry parse failed path=%1 error=%2")
+                    .arg(path, parseError.errorString()));
+            return false;
+        }
+        input.close();
+
+        QJsonObject root = session.object();
+        root.insert(QStringLiteral("windowGeometry"),
+                    QString::fromLatin1(saveGeometry().toBase64()));
+        if (QSplitter *splitter =
+                findChild<QSplitter *>(QStringLiteral("workspaceSplitter"))) {
+            root.insert(QStringLiteral("workspaceSplitterState"),
+                        QString::fromLatin1(splitter->saveState().toBase64()));
+        }
+        session.setObject(root);
+
+        QSaveFile output(path);
+        if (!output.open(QIODevice::WriteOnly)) {
+            DebugLog::instance().write(
+                QStringLiteral("saveUpdateWindowGeometry write failed path=%1 error=%2")
+                    .arg(path, output.errorString()));
+            return false;
+        }
+        const QByteArray data = session.toJson(QJsonDocument::Compact);
+        if (output.write(data) != data.size() || !output.commit()) {
+            DebugLog::instance().write(
+                QStringLiteral("saveUpdateWindowGeometry commit failed path=%1 error=%2")
+                    .arg(path, output.errorString()));
+            return false;
+        }
+        return true;
+    }
+
     void updateApplication()
     {
         if (updateProcess_ != nullptr) {
@@ -1347,6 +1431,13 @@ private:
         if (viewport_ == nullptr || !viewport_->saveUpdateSession(sessionPath)) {
             statusBar()->showMessage(QStringLiteral("Update cancelled — could not save the current scene"),
                                      8000);
+            return;
+        }
+        if (!saveUpdateWindowGeometry(sessionPath)) {
+            QFile::remove(sessionPath);
+            statusBar()->showMessage(
+                QStringLiteral("Update cancelled — could not save the current window view"),
+                8000);
             return;
         }
 
@@ -1404,6 +1495,13 @@ private:
                     if (exitStatus != QProcess::NormalExit || exitCode != 0) {
                         failUpdate(QStringLiteral("Update failed — build exited with code %1")
                                        .arg(exitCode));
+                        return;
+                    }
+
+                    if (viewport_ == nullptr ||
+                        !viewport_->saveUpdateSession(sessionPath) ||
+                        !saveUpdateWindowGeometry(sessionPath)) {
+                        failUpdate(QStringLiteral("Update failed — could not preserve the current view"));
                         return;
                     }
 
@@ -2099,6 +2197,10 @@ private:
 
         coordinateLabel_ = new QLabel(QStringLiteral("X 0.00   Y 0.00   Zoom 100%"));
         statusBar()->addWidget(coordinateLabel_);
+        joinFeedbackLabel_ = new QLabel;
+        joinFeedbackLabel_->setObjectName(QStringLiteral("joinFeedback"));
+        joinFeedbackLabel_->hide();
+        statusBar()->addWidget(joinFeedbackLabel_);
 
         orthoAction_ = new QAction(QStringLiteral("Ortho"), this);
         orthoAction_->setCheckable(true);
@@ -2164,6 +2266,22 @@ private:
             }
         };
         viewportCallbacks.joinStatusUpdate = [this](const QString &message) {
+            if (message.startsWith(QStringLiteral("Joined "))) {
+                const quint64 feedbackGeneration = ++joinFeedbackGeneration_;
+                joinFeedbackLabel_->setText(QStringLiteral("✓ %1").arg(message));
+                joinFeedbackLabel_->show();
+                QTimer::singleShot(6000, joinFeedbackLabel_, [this, feedbackGeneration]() {
+                    if (feedbackGeneration != joinFeedbackGeneration_) {
+                        return;
+                    }
+                    joinFeedbackLabel_->clear();
+                    joinFeedbackLabel_->hide();
+                });
+            } else if (message.startsWith(QStringLiteral("Join"))) {
+                ++joinFeedbackGeneration_;
+                joinFeedbackLabel_->clear();
+                joinFeedbackLabel_->hide();
+            }
             if (message.isEmpty()) {
                 statusBar()->clearMessage();
             } else {
@@ -4298,11 +4416,19 @@ private:
                 color: #999999;
                 border-top: 1px solid #151515;
             }
+            QLabel#joinFeedback {
+                color: #8ed6a4;
+                font-weight: 600;
+                padding-left: 10px;
+                padding-right: 10px;
+            }
         )"));
     }
 
     ViewportWidgetApi *viewport_ = nullptr;
     QLabel *coordinateLabel_ = nullptr;
+    QLabel *joinFeedbackLabel_ = nullptr;
+    quint64 joinFeedbackGeneration_ = 0;
     QLabel *toolHelp_ = nullptr;
     QToolButton *selectToolButton_ = nullptr;
     QToolButton *pointToolButton_ = nullptr;
@@ -4368,10 +4494,10 @@ private:
 int runApplication(QApplication &application, const QString &updateSessionPath)
 {
     MainWindow window;
+    window.show();
     if (!updateSessionPath.isEmpty()) {
         window.restoreUpdateSession(updateSessionPath);
     }
-    window.show();
     return application.exec();
 }
 

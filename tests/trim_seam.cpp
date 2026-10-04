@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QKeyEvent>
+#include <QTemporaryDir>
 #define private public
 #define protected public
 #include "../src/ui/viewport_widget.cpp"
@@ -14,6 +15,85 @@ int main(int argc, char **argv)
     ViewportWidget view;
     view.resize(640, 480);
     int failures = 0;
+    if (app.arguments().contains(QStringLiteral("--box-only"))) {
+        for (const bool perspective : {false, true}) {
+            view.viewportTransform_.setViewPreset(ViewportViewPreset::Top);
+            view.viewportTransform_.setPerspectiveEnabled(perspective);
+            Shape distant;
+            distant.geometryType = GeometryType::Line;
+            distant.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+            distant.workPlaneFrame.origin.z = 1.0e9;
+            distant.nurbs = makeDegreeOneNurbs({QPointF(-10, 0), QPointF(10, 0)});
+            distant.points = distant.nurbs.controlPoints;
+            const QRectF box(280, 200, 80, 80);
+            for (const bool crossing : {false, true}) {
+                if (view.shapeMatchesSelectionBox(distant, box, crossing)) {
+                    qWarning() << "Box must reject camera-clipped geometry" << perspective << crossing;
+                    ++failures;
+                }
+            }
+
+            Shape joined;
+            joined.geometryType = GeometryType::PolyCurve;
+            joined.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+            joined.components = {distant.nurbs};
+            joined.componentWorkPlaneFrames = {distant.workPlaneFrame};
+            if (view.shapeMatchesSelectionBox(joined, box, true)) {
+                qWarning() << "Box must use each component's actual plane" << perspective;
+                ++failures;
+            }
+
+            distant.workPlaneFrame.origin.z = 0;
+            view.shapes_ = {distant, joined};
+            view.beginSelectionBox(box.bottomRight(), false);
+            view.selectionBoxCurrentScreen_ = box.topLeft();
+            view.finishSelectionBox();
+            if (view.selectedShapeIndices_ != QVector<ObjectId>{view.shapes_.objectIdAt(0)}) {
+                qWarning() << "Crossing box must select only its visible curve" << perspective;
+                ++failures;
+            }
+        }
+        qInfo() << "Box selection failures:" << failures;
+        return failures ? 1 : 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--update-only"))) {
+        QTemporaryDir directory;
+        for (const bool perspective : {false, true}) {
+            ViewportWidget source;
+            source.resize(840, 620);
+            source.viewportTransform_.setViewPreset(ViewportViewPreset::Isometric);
+            source.viewportTransform_.setPerspectiveEnabled(perspective);
+            source.viewportTransform_.orbitByPixels(QPointF(43, -21));
+            source.viewportTransform_.panByPixels(QPointF(62, -35), source.size());
+            source.viewportTransform_.zoomAt(QPointF(320, 240), 1.4, source.size());
+            source.viewportTransform_.setWorkPlane(WorkPlane::XZ, 12.0);
+            const QString path = directory.filePath(QStringLiteral("update.json"));
+            ViewportWidget restored;
+            restored.resize(source.size());
+            bool matches = source.saveUpdateSession(path) &&
+                           restored.restoreUpdateSession(path) &&
+                           restored.workPlane() == source.workPlane() &&
+                           restored.workPlaneOffset() == source.workPlaneOffset() &&
+                           restored.viewportTransform_.isPerspectiveEnabled() ==
+                               source.viewportTransform_.isPerspectiveEnabled();
+            for (const Point3D &point : {Point3D{0, 0, 0}, Point3D{30, 12, 8},
+                                         Point3D{-14, 19, 32}}) {
+                QPointF before;
+                QPointF after;
+                matches = matches &&
+                    source.viewportTransform_.worldPointToScreenUnclipped(
+                        point, source.size(), &before) &&
+                    restored.viewportTransform_.worldPointToScreenUnclipped(
+                        point, restored.size(), &after) &&
+                    std::hypot(before.x() - after.x(), before.y() - after.y()) < 1.0e-7;
+            }
+            if (!matches) {
+                qWarning() << "Update must preserve projected scene positions" << perspective;
+                ++failures;
+            }
+        }
+        return failures ? 1 : 0;
+    }
     // A bent degree-1 spline overlaps two straight curves along its long
     // leg. Join must fuse that leg and retain the bend in one selected object.
     for (const bool reversed : {false, true}) {
@@ -63,6 +143,145 @@ int main(int argc, char **argv)
         }
         if (!joinedCorrectly) {
             qWarning() << "Join must fuse overlapping spans of a bent spline" << reversed;
+            ++failures;
+        }
+    }
+    // Duplicate and partially overlapping legs can use different planes even
+    // though their world-space geometry forms a single visible corner.
+    for (const bool reversed : {false, true}) {
+        Shape bent;
+        bent.geometryType = GeometryType::Nurbs;
+        bent.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        bent.nurbs = makeDegreeOneNurbs(
+            {QPointF(0, 0), QPointF(100, 0), QPointF(100, 30)});
+        bent.points = bent.nurbs.controlPoints;
+        Shape overlap;
+        overlap.geometryType = GeometryType::Line;
+        overlap.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XZ);
+        overlap.nurbs = makeDegreeOneNurbs({QPointF(20, 0), QPointF(100, 0)});
+        if (reversed) {
+            overlap.nurbs = view.reversedNurbsCurve(overlap.nurbs);
+        }
+        overlap.points = overlap.nurbs.controlPoints;
+        view.shapes_ = {bent, overlap};
+        view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0), view.shapes_.objectIdAt(1)};
+        view.selectedShapeIndex_ = view.selectedShapeIndices_.last();
+        view.beginJoinMode();
+        bool correct = view.shapes_.size() == 1 &&
+                       view.shapes_[0].components.size() == 2;
+        if (correct) {
+            const Shape &joined = view.shapes_[0];
+            correct = view.joinComponentsAreContinuousInWorld(
+                joined.components, joined.componentWorkPlaneFrames, 1.0e-7);
+            qreal length = 0;
+            for (const auto &curve : joined.components) {
+                QPointF start, end;
+                correct = correct && validateNurbsCurve(curve, nullptr) &&
+                          view.nurbsCurveEndpoints(curve, &start, &end);
+                length += std::hypot(end.x() - start.x(), end.y() - start.y());
+            }
+            correct = correct && std::abs(length - 130.0) < 1.0e-7;
+        }
+        if (!correct) {
+            qWarning() << "Join must fuse world-space overlapping legs across planes" << reversed;
+            ++failures;
+        }
+    }
+    // A connected corner may contain planar components with different
+    // workplanes. Join must keep each component's plane while ordering them
+    // from their coincident world-space endpoints.
+    {
+        Shape vertical;
+        vertical.geometryType = GeometryType::Line;
+        vertical.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XZ);
+        vertical.nurbs = makeDegreeOneNurbs(
+            {QPointF(50, 0), QPointF(50, 40)});
+        vertical.points = vertical.nurbs.controlPoints;
+
+        Shape horizontal;
+        horizontal.geometryType = GeometryType::Line;
+        horizontal.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        horizontal.nurbs = makeDegreeOneNurbs(
+            {QPointF(0, 0), QPointF(50, 0)});
+        horizontal.points = horizontal.nurbs.controlPoints;
+
+        view.shapes_ = {vertical, horizontal};
+        view.selectedShapeIndices_ = {view.shapes_.objectIdAt(0),
+                                      view.shapes_.objectIdAt(1)};
+        view.selectedShapeIndex_ = view.selectedShapeIndices_.last();
+        view.beginJoinMode();
+
+        bool joinedCorrectly = !view.joinActive_ && view.shapes_.size() == 1;
+        if (joinedCorrectly) {
+            const Shape &joined = view.shapes_[0];
+            joinedCorrectly = joined.geometryType == GeometryType::PolyCurve &&
+                              joined.components.size() == 2 &&
+                              joined.componentWorkPlaneFrames.size() == 2;
+            for (int index = 0; joinedCorrectly && index < 2; ++index) {
+                QPointF start;
+                QPointF end;
+                joinedCorrectly = view.nurbsCurveEndpoints(
+                                      joined.components[index], &start, &end) &&
+                                  isValidWorkPlaneFrame(
+                                      joined.componentWorkPlaneFrames[index]);
+            }
+            if (joinedCorrectly) {
+                QPointF firstEnd;
+                QPointF secondStart;
+                view.nurbsCurveEndpoints(joined.components[0], nullptr, &firstEnd);
+                view.nurbsCurveEndpoints(joined.components[1], &secondStart, nullptr);
+                const Point3D firstWorld = shapeComponentPointToWorld(
+                    joined, 0, firstEnd);
+                const Point3D secondWorld = shapeComponentPointToWorld(
+                    joined, 1, secondStart);
+                joinedCorrectly = std::hypot(
+                    std::hypot(firstWorld.x - secondWorld.x,
+                               firstWorld.y - secondWorld.y),
+                    firstWorld.z - secondWorld.z) < 1.0e-7;
+            }
+            if (joinedCorrectly) {
+                ViewportTransform joinedTransform = view.viewportTransform_;
+                joinedTransform.setWorkPlaneFrame(shapeWorkPlaneFrame(joined));
+                const QPointF componentMidpoint =
+                    (joined.components[0].controlPoints.first() +
+                     joined.components[0].controlPoints.last()) * 0.5;
+                const Point3D midpointWorld = shapeComponentPointToWorld(
+                    joined, 0, componentMidpoint);
+                QPointF midpointScreen;
+                joinedCorrectly = joinedTransform.worldPointToScreen(
+                                      midpointWorld, view.size(), &midpointScreen) &&
+                                  view.curveHitTester_.distanceToShape(
+                                      midpointScreen,
+                                      joined,
+                                      joinedTransform,
+                                      view.size()) < 0.5;
+            }
+        }
+
+        Shape roundTripped;
+        if (joinedCorrectly) {
+            joinedCorrectly = shapeFromJson(shapeToJson(view.shapes_[0]),
+                                            &roundTripped) &&
+                              roundTripped.componentWorkPlaneFrames.size() == 2;
+        }
+        if (joinedCorrectly) {
+            const Shape beforeMove = view.shapes_[0];
+            const ObjectId joinedId = view.shapes_.objectIdAt(0);
+            view.translateShape(joinedId, QPointF(3.0, 4.0));
+            const Shape &moved = view.shapes_[0];
+            for (int index = 0; joinedCorrectly && index < 2; ++index) {
+                const QPointF local = beforeMove.components[index].controlPoints.first();
+                const Point3D beforeWorld = shapeComponentPointToWorld(
+                    beforeMove, index, local);
+                const Point3D afterWorld = shapeComponentPointToWorld(
+                    moved, index, local);
+                joinedCorrectly = std::abs(afterWorld.x - beforeWorld.x - 3.0) < 1.0e-7 &&
+                                  std::abs(afterWorld.y - beforeWorld.y - 4.0) < 1.0e-7 &&
+                                  std::abs(afterWorld.z - beforeWorld.z) < 1.0e-7;
+            }
+        }
+        if (!joinedCorrectly) {
+            qWarning() << "Join must preserve connected curves on different workplanes";
             ++failures;
         }
     }

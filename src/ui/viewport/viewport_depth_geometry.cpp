@@ -164,8 +164,8 @@ void appendPictureDepthSurface(const Shape &shape,
     }
 }
 
-void appendCurveDepthVertices(const Shape &shape,
-                              const Shape::NurbsCurve2D &curve,
+void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
+                              const WorkPlaneFrame &frame,
                               QVector<QVector3D> *vertices)
 {
     if (!validateNurbsCurve(curve)) {
@@ -209,8 +209,8 @@ void appendCurveDepthVertices(const Shape &shape,
             if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
                 return;
             }
-            const QVector3D worldPoint = asVector(shapePointToWorld(shape,
-                                                                   localPoint));
+            const Point3D world = workPlaneFramePointToWorld(localPoint, frame);
+            const QVector3D worldPoint = asVector(world);
             if (hasPreviousPoint) {
                 vertices->append(previousPoint);
                 vertices->append(worldPoint);
@@ -268,10 +268,12 @@ void appendShapeDepthGeometry(const Shape &shape,
         }
 
         const QVector<Shape::NurbsCurve2D> curves = sampler.curvesForShape(shape);
-        for (const Shape::NurbsCurve2D &curve : curves) {
-            appendCurveDepthVertices(shape,
-                                     curve,
-                                     &geometry.lineVertices);
+        for (int index = 0; index < curves.size(); ++index) {
+            const WorkPlaneFrame frame =
+                shape.geometryType == GeometryType::PolyCurve
+                    ? shapeComponentWorkPlaneFrame(shape, index)
+                    : shapeWorkPlaneFrame(shape);
+            appendCurveDepthVertices(curves[index], frame, &geometry.lineVertices);
         }
 }
 
@@ -323,7 +325,22 @@ QByteArray viewportDepthGeometryCacheKey(
         }
         writeCurve(stream, shape.nurbs);
         stream << qint32(shape.components.size());
-        for (const Shape::NurbsCurve2D &curve : shape.components) {
+        for (int index = 0; index < shape.components.size(); ++index) {
+            const Shape::NurbsCurve2D &curve = shape.components[index];
+            const WorkPlaneFrame componentFrame =
+                shapeComponentWorkPlaneFrame(shape, index);
+            stream << double(componentFrame.origin.x)
+                   << double(componentFrame.origin.y)
+                   << double(componentFrame.origin.z)
+                   << double(componentFrame.xAxis.x)
+                   << double(componentFrame.xAxis.y)
+                   << double(componentFrame.xAxis.z)
+                   << double(componentFrame.yAxis.x)
+                   << double(componentFrame.yAxis.y)
+                   << double(componentFrame.yAxis.z)
+                   << double(componentFrame.normal.x)
+                   << double(componentFrame.normal.y)
+                   << double(componentFrame.normal.z);
             writeCurve(stream, curve);
         }
         // Picture depth geometry also depends on pixel alpha, so include the

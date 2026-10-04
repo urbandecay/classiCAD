@@ -825,9 +825,13 @@ void ViewportRenderer::drawShape(QPainter &painter,
     }
 
     if (shape.geometryType == GeometryType::PolyCurve && !shape.components.isEmpty()) {
-        for (const Shape::NurbsCurve2D &component : shape.components) {
+        for (int index = 0; index < shape.components.size(); ++index) {
+            const Shape::NurbsCurve2D &component = shape.components[index];
             if (isValidNurbsCurve(component)) {
-                drawNurbsCurve(painter, component, viewportSize);
+                drawNurbsCurve(painter,
+                               component,
+                               shapeComponentWorkPlaneFrame(shape, index),
+                               viewportSize);
             }
         }
     } else if (shape.geometryType == GeometryType::Point && !shape.points.isEmpty()) {
@@ -987,14 +991,19 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
     painter.setBrush(Qt::NoBrush);
 
     int globalControlPointIndex = 0;
-    const auto drawControlPointChain = [&](const QVector<QPointF> &controlPoints) {
+    const auto drawControlPointChain = [&](const QVector<QPointF> &controlPoints,
+                                           const WorkPlaneFrame &frame) {
         if (controlPoints.isEmpty()) {
             return;
         }
 
         for (int index = 0; index + 1 < controlPoints.size(); ++index) {
-            painter.drawLine(worldToScreen(controlPoints[index], viewportSize),
-                             worldToScreen(controlPoints[index + 1], viewportSize));
+            painter.drawLine(transform_.workPlaneToScreen(controlPoints[index],
+                                                          viewportSize,
+                                                          frame),
+                             transform_.workPlaneToScreen(controlPoints[index + 1],
+                                                          viewportSize,
+                                                          frame));
         }
 
         for (int index = 0; index < controlPoints.size(); ++index) {
@@ -1007,7 +1016,8 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
             painter.setPen(QPen(active ? QColor(QStringLiteral("#f0a45a")) : handleColor,
                                 1.5));
             painter.setBrush(active ? QColor(QStringLiteral("#f0a45a")) : handleFill);
-            const QPointF screenPoint = worldToScreen(controlPoints[index], viewportSize);
+            const QPointF screenPoint = transform_.workPlaneToScreen(
+                controlPoints[index], viewportSize, frame);
             painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
                                     screenPoint + QPointF(4.0, 4.0)));
         }
@@ -1015,13 +1025,15 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
     };
 
     if (shape.geometryType == GeometryType::PolyCurve) {
-        for (const Shape::NurbsCurve2D &component : shape.components) {
-            drawControlPointChain(component.controlPoints);
+        for (int index = 0; index < shape.components.size(); ++index) {
+            drawControlPointChain(shape.components[index].controlPoints,
+                                  shapeComponentWorkPlaneFrame(shape, index));
         }
         return;
     }
 
-    drawControlPointChain(curveHitTester_.controlPointsForShape(shape));
+    drawControlPointChain(curveHitTester_.controlPointsForShape(shape),
+                          shapeWorkPlaneFrame(shape));
 }
 
 void ViewportRenderer::drawSubdivisionPoints(QPainter &painter,
@@ -1073,9 +1085,21 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
                                       const Shape::NurbsCurve2D &curve,
                                       const QSize &viewportSize) const
 {
-    if (!isValidNurbsCurve(curve)) {
+    drawNurbsCurve(painter, curve, transform_.workPlaneFrame(), viewportSize);
+}
+
+void ViewportRenderer::drawNurbsCurve(QPainter &painter,
+                                      const Shape::NurbsCurve2D &curve,
+                                      const WorkPlaneFrame &frame,
+                                      const QSize &viewportSize) const
+{
+    if (!isValidNurbsCurve(curve) || !isValidWorkPlaneFrame(frame)) {
         return;
     }
+
+    const auto project = [&](const QPointF &point) {
+        return transform_.workPlaneToScreen(point, viewportSize, frame);
+    };
 
     const int controlPointCount = curve.controlPoints.size();
     const QVector<double> fullKnots = expandedNurbsKnotVector(curve);
@@ -1099,7 +1123,7 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
             if (!evaluateNurbsPoint(curve, parameter, &point)) {
                 continue;
             }
-            const QPointF screenPoint = worldToScreen(point, viewportSize);
+            const QPointF screenPoint = project(point);
             if (!hasStart) {
                 path.moveTo(screenPoint);
                 hasStart = true;
@@ -1129,7 +1153,7 @@ void ViewportRenderer::drawNurbsCurve(QPainter &painter,
         if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
             return false;
         }
-        *screenPoint = worldToScreen(worldPoint, viewportSize);
+        *screenPoint = project(worldPoint);
         return true;
     };
     const auto distanceToSegment = [](const QPointF &point,

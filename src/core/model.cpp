@@ -93,9 +93,28 @@ WorkPlaneFrame shapeWorkPlaneFrame(const Shape &shape)
                : makeWorkPlaneFrame(shape.workPlane, shape.workPlaneOffset);
 }
 
+WorkPlaneFrame shapeComponentWorkPlaneFrame(const Shape &shape,
+                                           int componentIndex)
+{
+    if (componentIndex >= 0 &&
+        componentIndex < shape.componentWorkPlaneFrames.size() &&
+        isValidWorkPlaneFrame(shape.componentWorkPlaneFrames[componentIndex])) {
+        return shape.componentWorkPlaneFrames[componentIndex];
+    }
+    return shapeWorkPlaneFrame(shape);
+}
+
 Point3D shapePointToWorld(const Shape &shape, const QPointF &point)
 {
     return workPlaneFramePointToWorld(point, shapeWorkPlaneFrame(shape));
+}
+
+Point3D shapeComponentPointToWorld(const Shape &shape,
+                                  int componentIndex,
+                                  const QPointF &point)
+{
+    return workPlaneFramePointToWorld(
+        point, shapeComponentWorkPlaneFrame(shape, componentIndex));
 }
 
 QPointF shapeWorldPointToLocal(const Shape &shape, const Point3D &point)
@@ -785,6 +804,13 @@ QJsonObject shapeToJson(const Shape &shape)
         components.append(nurbsToJson(component));
     }
     object.insert(QStringLiteral("components"), components);
+    if (!shape.componentWorkPlaneFrames.isEmpty()) {
+        QJsonArray componentFrames;
+        for (const WorkPlaneFrame &frame : shape.componentWorkPlaneFrames) {
+            componentFrames.append(workPlaneFrameToJson(frame));
+        }
+        object.insert(QStringLiteral("componentWorkPlaneFrames"), componentFrames);
+    }
 
     if (!shape.dimensionAnchors.isEmpty()) {
         QJsonArray anchors;
@@ -936,6 +962,23 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         }
     }
 
+    QVector<WorkPlaneFrame> componentWorkPlaneFrames;
+    const QJsonValue componentFramesValue =
+        object.value(QStringLiteral("componentWorkPlaneFrames"));
+    if (!componentFramesValue.isUndefined()) {
+        if (!componentFramesValue.isArray() ||
+            componentFramesValue.toArray().size() != components.size()) {
+            return false;
+        }
+        for (const QJsonValue &frameValue : componentFramesValue.toArray()) {
+            WorkPlaneFrame frame;
+            if (!workPlaneFrameFromJson(frameValue, &frame)) {
+                return false;
+            }
+            componentWorkPlaneFrames.append(frame);
+        }
+    }
+
     QVector<DimensionAnchorReference> dimensionAnchors;
     const QJsonValue dimensionAnchorsValue =
         object.value(QStringLiteral("dimensionAnchors"));
@@ -1024,6 +1067,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->arcSweep = arcSweepValue.toDouble();
     shape->subdivisionParameters = subdivisionParameters;
     shape->components = components;
+    shape->componentWorkPlaneFrames = componentWorkPlaneFrames;
     shape->dimensionAnchors = dimensionAnchors;
     shape->dimensionOffset = dimensionOffset;
     shape->dimensionOffsetValid = dimensionOffsetValid;

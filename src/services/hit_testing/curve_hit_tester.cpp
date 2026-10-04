@@ -318,11 +318,14 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
     }
     if (shape.geometryType == GeometryType::PolyCurve && !shape.components.isEmpty()) {
         qreal distance = 1.0e9;
-        for (const Shape::NurbsCurve2D &component : shape.components) {
+        for (int index = 0; index < shape.components.size(); ++index) {
+            ViewportTransform componentTransform = transform;
+            componentTransform.setWorkPlaneFrame(
+                shapeComponentWorkPlaneFrame(shape, index));
             distance = std::min(distance,
                                 distanceToNurbsCurve(screenPosition,
-                                                     component,
-                                                     transform,
+                                                     shape.components[index],
+                                                     componentTransform,
                                                      viewportSize));
         }
         return distance;
@@ -486,8 +489,32 @@ bool CurveHitTester::hitTestSelectedControlPoint(
         if (candidateShapeIndex < 0 || candidateShapeIndex >= document.size()) {
             continue;
         }
-        const QVector<QPointF> controlPoints =
-            controlPointsForShape(document[candidateShapeIndex]);
+        const Shape &shape = document[candidateShapeIndex];
+        if (shape.geometryType == GeometryType::PolyCurve) {
+            int globalIndex = 0;
+            for (int componentIndex = 0;
+                 componentIndex < shape.components.size();
+                 ++componentIndex) {
+                const WorkPlaneFrame frame =
+                    shapeComponentWorkPlaneFrame(shape, componentIndex);
+                for (const QPointF &controlPoint :
+                     shape.components[componentIndex].controlPoints) {
+                    const QPointF screenPoint = transform.workPlaneToScreen(
+                        controlPoint, viewportSize, frame);
+                    const qreal distance = std::hypot(
+                        screenPosition.x() - screenPoint.x(),
+                        screenPosition.y() - screenPoint.y());
+                    if (distance <= closestDistance) {
+                        closestDistance = distance;
+                        closestShapeIndex = candidateShapeIndex;
+                        closestControlPointIndex = globalIndex;
+                    }
+                    ++globalIndex;
+                }
+            }
+            continue;
+        }
+        const QVector<QPointF> controlPoints = controlPointsForShape(shape);
         for (int candidateControlPointIndex = 0;
              candidateControlPointIndex < controlPoints.size();
              ++candidateControlPointIndex) {
@@ -630,7 +657,8 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
         // Curves are unfilled geometry: the closest sampled stroke point is
         // their actual scene depth, while a picture face uses the ray/plane hit.
         qreal closestStrokeDistance = hitRadiusPixels;
-        const auto considerCurve = [&](const Shape::NurbsCurve2D &curve) {
+        const auto considerCurve = [&](const Shape::NurbsCurve2D &curve,
+                                       const WorkPlaneFrame &curveFrame) {
             qreal firstParameter = 0.0;
             qreal lastParameter = 0.0;
             if (!validateNurbsCurve(curve) ||
@@ -642,8 +670,8 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
             if (!evaluateNurbsPoint(curve, firstParameter, &previousLocal)) {
                 return;
             }
-            QPointF previousScreen = shapeTransform.worldToScreen(
-                previousLocal, viewportSize);
+            QPointF previousScreen = transform.workPlaneToScreen(
+                previousLocal, viewportSize, curveFrame);
             for (int sample = 1; sample <= samples; ++sample) {
                 QPointF currentLocal;
                 const qreal parameter = firstParameter +
@@ -651,8 +679,8 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
                 if (!evaluateNurbsPoint(curve, parameter, &currentLocal)) {
                     continue;
                 }
-                const QPointF currentScreen = shapeTransform.worldToScreen(
-                    currentLocal, viewportSize);
+                const QPointF currentScreen = transform.workPlaneToScreen(
+                    currentLocal, viewportSize, curveFrame);
                 const QPointF segment = currentScreen - previousScreen;
                 const qreal lengthSquared = QPointF::dotProduct(segment, segment);
                 const qreal fraction = lengthSquared > 1.0e-12
@@ -668,18 +696,21 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
                     closestStrokeDistance = distance;
                     candidate = workPlaneFramePointToWorld(
                         previousLocal + (currentLocal - previousLocal) * fraction,
-                        frame);
+                        curveFrame);
                 }
                 previousLocal = currentLocal;
                 previousScreen = currentScreen;
             }
         };
         if (shape.geometryType == GeometryType::PolyCurve) {
-            for (const Shape::NurbsCurve2D &component : shape.components) {
-                considerCurve(component);
+            for (int componentIndex = 0;
+                 componentIndex < shape.components.size();
+                 ++componentIndex) {
+                considerCurve(shape.components[componentIndex],
+                              shapeComponentWorkPlaneFrame(shape, componentIndex));
             }
         } else {
-            considerCurve(shape.nurbs);
+            considerCurve(shape.nurbs, frame);
         }
         if (shape.geometryType == GeometryType::Point &&
             !shape.points.isEmpty()) {

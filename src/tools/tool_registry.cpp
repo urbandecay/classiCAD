@@ -14,6 +14,7 @@
 #include "perpendicular_from_curve_tool.h"
 #include "point_tool.h"
 #include "point_construction_tool.h"
+#include "point_extrude_tool.h"
 #include "polygon_tool.h"
 #include "rectangle_tool.h"
 #include "rotate_tool.h"
@@ -28,6 +29,7 @@ ToolRegistry::ToolRegistry()
 {
     add(std::make_unique<SelectTool>());
     add(std::make_unique<PointTool>());
+    add(std::make_unique<PointExtrudeTool>());
     add(std::make_unique<PointConstructionTool>(ToolId::PointByLine));
     add(std::make_unique<PointConstructionTool>(ToolId::PointByArcs));
     add(std::make_unique<PointConstructionTool>(ToolId::PointCenter));

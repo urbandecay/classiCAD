@@ -342,6 +342,172 @@ int main(int argc, char **argv)
     viewport->setGridAppearance(blenderGridAppearance);
 
     const QPointF center(320.0, 240.0);
+    // Extrude must receive screen input even when the mouse ray cannot hit
+    // the selected points' XY plane, just as the spatial Line tool does.
+    {
+        QTemporaryDir directory;
+        Document source;
+        for (const QPointF position : {QPointF(0.0, 0.0), QPointF(5.0, 0.0)}) {
+            Shape point;
+            point.geometryType = GeometryType::Point;
+            point.points = {position};
+            point.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+            source.append(point);
+        }
+        const QString path = directory.filePath(QStringLiteral("point-extrude.vignola"));
+        QString error;
+        std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+        probe->resize(interactionViewportSize);
+        probe->show();
+        for (const ViewportViewPreset preset :
+             {ViewportViewPreset::Front, ViewportViewPreset::Top}) {
+            passed &= check(saveVignolaDocument(path, source, &error) &&
+                                probe->loadVignolaDocument(path, &error),
+                            "point extrusion fixture must load");
+            probe->setViewPreset(preset);
+            passed &= check(waitForViewPreset(probe.get(), preset),
+                            "extrusion camera transition must finish");
+            probe->setOsnapEnabled(false);
+            probe->setTool(ToolId::Select);
+            QKeyEvent selectAll(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+            QApplication::sendEvent(probe.get(), &selectAll);
+            passed &= check(probe->executeCommand(ViewportCommand::BeginPointExtrude).count == 2,
+                            "extrusion must capture both selected points");
+            QKeyEvent axisKey(QEvent::KeyPress, Qt::Key_Z, Qt::NoModifier);
+            QApplication::sendEvent(probe.get(), &axisKey);
+            ViewportTransform projection;
+            projection.setViewPreset(preset);
+            QPointF endScreen;
+            qreal expectedHeight = 20.0;
+            if (preset == ViewportViewPreset::Front) {
+                passed &= check(projection.worldPointToScreen(
+                                    {0.0, 0.0, expectedHeight}, interactionViewportSize, &endScreen),
+                                "elevated extrusion endpoint must project on screen");
+                QPointF planePoint;
+                passed &= check(!projection.screenToWorkPlane(
+                                    endScreen, interactionViewportSize, WorkPlane::XY, 0.0, &planePoint),
+                                "extrusion regression must exercise a missing XY ray hit");
+            } else {
+                endScreen = center + QPointF(0.0, -80.0);
+                expectedHeight = 80.0 / projection.viewScalePixelsPerWorldUnit(interactionViewportSize);
+            }
+            sendMouse(probe.get(), QEvent::MouseMove, endScreen,
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            if (preset == ViewportViewPreset::Front) {
+                // Enter commits the last preview: a dropped mouse move would
+                // leave this uncommittable even if click handling was fixed.
+                QKeyEvent confirm(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                QApplication::sendEvent(probe.get(), &confirm);
+            } else {
+                sendMouse(probe.get(), QEvent::MouseButtonPress, endScreen,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            }
+            Document result;
+            bool committed = probe->saveVignolaDocument(path, &error) &&
+                loadVignolaDocument(path, &result, &error) && result.size() == 4;
+            if (committed) {
+                for (int index = 0; index < 2; ++index) {
+                    const Shape &line = result[index + 2];
+                    const WorkPlaneFrame frame = shapeWorkPlaneFrame(line);
+                    const Point3D start = workPlaneFramePointToWorld(line.nurbs.controlPoints.first(), frame);
+                    const Point3D end = workPlaneFramePointToWorld(line.nurbs.controlPoints.last(), frame);
+                    committed &= validateNurbsCurve(line.nurbs) &&
+                        std::abs(start.x - index * 5.0) < 1.0e-6 &&
+                        std::abs(end.x - start.x) < 1.0e-6 &&
+                        std::abs(end.y - start.y) < 1.0e-6 &&
+                        std::abs(end.z - start.z - expectedHeight) < 1.0e-6;
+                }
+            }
+            passed &= check(committed,
+                            "both points must commit parallel Z extrusions above the source XY plane");
+        }
+    }
+    {
+        QTemporaryDir directory;
+        Document source;
+        Shape point;
+        point.geometryType = GeometryType::Point;
+        point.points = {QPointF(0.0, 0.0)};
+        point.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        source.append(point);
+        Shape upperPoint = point;
+        upperPoint.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 20.0);
+        const ObjectId upperId = source.append(upperPoint);
+        const LayerId targetLayer = source.createLayer(QStringLiteral("Snap target"));
+        source.moveObjectToLayer(upperId, targetLayer);
+        source.setLayerLocked(targetLayer, true);
+        ProjectViewportCameraSettings camera;
+        camera.storedInProject = camera.view.storedInProject = true;
+        camera.view.perspective = true;
+        camera.view.preset = static_cast<int>(ViewportViewPreset::Custom);
+        camera.view.yawRadians = 0.7853981633974483;
+        camera.view.pitchRadians = 0.08726646259971647;
+        ViewportTransform projection;
+        ViewportCameraState state;
+        state.perspective = true;
+        state.preset = ViewportViewPreset::Custom;
+        state.yawRadians = camera.view.yawRadians;
+        state.pitchRadians = camera.view.pitchRadians;
+        projection.setCameraState(state);
+        const QString path = directory.filePath(QStringLiteral("shallow-extrude.vignola"));
+        QString error;
+        std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+        probe->resize(interactionViewportSize);
+        probe->show();
+        for (int mode = 0; mode < 3; ++mode) {
+            passed &= check(saveVignolaDocument(path, source, camera, &error) &&
+                                probe->loadVignolaDocument(path, &error),
+                            "shallow perspective extrusion fixture must load");
+            probe->setOsnapEnabled(mode != 0);
+            probe->setSnapModes(true, false, false, false, false, false, false, false);
+            probe->setTool(ToolId::Select);
+            QKeyEvent selectAll(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+            QApplication::sendEvent(probe.get(), &selectAll);
+            passed &= check(probe->executeCommand(ViewportCommand::BeginPointExtrude).count == 1,
+                            "only the editable base point must extrude");
+            if (mode == 1) {
+                QKeyEvent axis(QEvent::KeyPress, Qt::Key_Z, Qt::NoModifier);
+                QApplication::sendEvent(probe.get(), &axis);
+            }
+            QPointF endpointScreen;
+            projection.worldPointToScreen({0.0, 0.0, 20.0}, interactionViewportSize, &endpointScreen);
+            QPointF floorPoint;
+            passed &= check(!projection.screenToWorkPlane(endpointScreen, interactionViewportSize,
+                                                          WorkPlane::XY, 0.0, &floorPoint),
+                            "upper point must lie above the shallow perspective floor horizon");
+            Point3D expected{0.0, 0.0, 20.0};
+            if (mode == 0) {
+                const WorkPlaneFrame dragFrame = makeWorkPlaneFrameFromNormal(
+                    {}, projection.viewDirection(), projection.viewUp());
+                QPointF local;
+                passed &= check(projection.screenToWorkPlaneUnclipped(
+                                    endpointScreen, interactionViewportSize, dragFrame, &local),
+                                "free extrusion target must intersect the camera-facing plane");
+                expected = workPlaneFramePointToWorld(local, dragFrame);
+            }
+            sendMouse(probe.get(), QEvent::MouseMove, endpointScreen,
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            QKeyEvent confirm(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(probe.get(), &confirm);
+            Document result;
+            bool valid = probe->saveVignolaDocument(path, &error) &&
+                loadVignolaDocument(path, &result, &error) && result.size() == 3;
+            if (valid) {
+                const Shape &line = result[2];
+                const Point3D end = workPlaneFramePointToWorld(
+                    line.nurbs.controlPoints.last(), shapeWorkPlaneFrame(line));
+                valid = validateNurbsCurve(line.nurbs) &&
+                    std::abs(end.x - expected.x) < 1.0e-6 &&
+                    std::abs(end.y - expected.y) < 1.0e-6 &&
+                    std::abs(end.z - expected.z) < 1.0e-6;
+            }
+            passed &= check(valid,
+                            "free, Z-constrained, and snapped extrusion must continue above the perspective horizon");
+        }
+    }
+    if (application.arguments().contains(QStringLiteral("--point-extrude-only"))) {
+        return passed ? 0 : 1;
+    }
     // A side-view click over an edge-on XY curve must use the visible YZ
     // plane, rather than discarding input on an unpickable inherited plane.
     {

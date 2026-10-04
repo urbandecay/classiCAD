@@ -75,6 +75,7 @@ set(CLASSICAD_TOOL_SOURCES
     src/tools/arc_tool.cpp
     src/tools/erase_tool.cpp
     src/tools/point_tool.cpp
+    src/tools/point_extrude_tool.cpp
     src/tools/point_construction_tool.cpp
     src/tools/curve_drawing_tool.cpp
     src/tools/two_curve_line_tool.cpp

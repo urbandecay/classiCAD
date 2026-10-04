@@ -31,6 +31,7 @@ enum class ViewportCommand {
     BeginMirror,
     BeginDuplicate,
     DuplicateInPlace,
+    BeginPointExtrude,
 };
 
 struct ViewportCommandResult {

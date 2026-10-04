@@ -406,6 +406,17 @@ public:
                     cursorValid_ = true;
                 }
             }
+            if (activeTool_ == Tool::PointExtrude && preview.overridesSnap) {
+                pointExtrudePreviewShapes_ = preview.shapes;
+                currentSnap_ = preview.snap;
+                if (preview.hasCursorPoint &&
+                    isValidWorkPlaneFrame(viewportTransform_.workPlaneFrame())) {
+                    cursorWorld_ = worldPointToWorkPlaneFrame(
+                        preview.worldCursorPoint,
+                        viewportTransform_.workPlaneFrame());
+                    cursorValid_ = true;
+                }
+            }
             controllerPreviewShape_ = preview.shape;
             if (preview.hasShape &&
                 !isValidWorkPlaneFrame(controllerPreviewShape_.workPlaneFrame)) {
@@ -624,6 +635,7 @@ public:
         ellipseHudInstructionsLine_.clear();
         ellipsePreviewGuides_.clear();
         pointPreviewShapes_.clear();
+        pointExtrudePreviewShapes_.clear();
         pointPreviewGuides_.clear();
         pointPreviewWorldPoints_.clear();
         pointHudInstructionsLine_.clear();
@@ -654,7 +666,7 @@ public:
             repeatTool_ = tool;
             if (!isEraseLikeTool(tool) && tool != Tool::Rotate &&
                 tool != Tool::Scale && tool != Tool::Mirror) {
-                if (tool != Tool::PointCenter) {
+                if (tool != Tool::PointCenter && tool != Tool::PointExtrude) {
                     selectedShapeIndices_.clear();
                     selectedShapeIndex_ = ObjectId::invalid();
                 }
@@ -794,6 +806,11 @@ public:
             return {beginDuplicate(), 0};
         case ViewportCommand::DuplicateInPlace:
             return {duplicateInPlace(), 0};
+        case ViewportCommand::BeginPointExtrude:
+        {
+            const int pointCount = beginPointExtrude();
+            return {pointCount > 0, pointCount};
+        }
         }
 
         return {};
@@ -1618,6 +1635,40 @@ public:
 
         return QStringLiteral("Subdivide: %1 sections  •  Scroll to change  •  Click/Enter to apply  •  Esc to cancel")
             .arg(subdivisionSections_);
+    }
+
+    int beginPointExtrude()
+    {
+        QVector<ObjectId> selected = selectedShapeIndices_;
+        if (selectedShapeIndex_.isValid() &&
+            !selected.contains(selectedShapeIndex_)) {
+            selected.append(selectedShapeIndex_);
+        }
+        int pointCount = 0;
+        for (const ObjectId sourceObjectId : selected) {
+            const Shape *sourceShape = document_.shape(sourceObjectId);
+            if (sourceShape != nullptr &&
+                sourceShape->geometryType == GeometryType::Point &&
+                sourceShape->points.size() == 1 &&
+                document_.isObjectVisible(sourceObjectId) &&
+                document_.isObjectEditable(sourceObjectId)) {
+                ++pointCount;
+            }
+        }
+        if (pointCount == 0) {
+            DebugLog::instance().write(
+                QStringLiteral("beginPointExtrude ignored selectionCount=%1 noEditablePoints")
+                    .arg(selected.size()));
+            return 0;
+        }
+
+        setTool(Tool::PointExtrude);
+        setFocus(Qt::OtherFocusReason);
+        setCursor(Qt::CrossCursor);
+        update();
+        DebugLog::instance().write(QStringLiteral("beginPointExtrude selectedPoints=%1")
+                                       .arg(pointCount));
+        return activeTool_ == Tool::PointExtrude ? pointCount : 0;
     }
 
     bool beginRotate()
@@ -3171,6 +3222,13 @@ protected:
                     1.5f, false, 0.0f,
                     false, false);
             }
+            if (activeTool_ == Tool::PointExtrude) {
+                for (const Shape &previewShape : pointExtrudePreviewShapes_) {
+                    gpuActiveToolPreview |= addPreviewShape(
+                        previewShape, activeToolPreviewColor,
+                        1.5f, false, 0.0f, false, false);
+                }
+            }
 
             if (isRectangleTool(activeTool_)) {
                 const QColor markerColor(QStringLiteral("#101010"));
@@ -3677,6 +3735,12 @@ protected:
         } else if (activeTool_ == Tool::Scale && scaleStep_ == 2) {
             drawScaleToolGuide(painter,
                                !gpuActiveToolPreview || !gpuPreviewRendered);
+        } else if (activeTool_ == Tool::PointExtrude) {
+            if (!gpuActiveToolPreview || !gpuPreviewRendered) {
+                for (const Shape &previewShape : pointExtrudePreviewShapes_) {
+                    drawShape(painter, previewShape, true);
+                }
+            }
         } else if (controllerPreviewShapeVisible_ &&
                    (isPointCreationTool(activeTool_) ||
                     isCurveCreationTool(activeTool_) ||
@@ -3710,6 +3774,7 @@ protected:
         }
 
         if ((grabActive_ || duplicateActive_ || activeTool_ == Tool::Scale ||
+             activeTool_ == Tool::PointExtrude ||
              activeTool_ == Tool::Picture) &&
             currentSnap_.isValid()) {
             drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
@@ -3826,7 +3891,8 @@ protected:
 
         if (!worldPositionValid && event->button() == Qt::LeftButton &&
             event->button() != panButton_ &&
-            !(activeTool_ == Tool::Line && !pendingPoints_.isEmpty())) {
+            !(activeTool_ == Tool::Line && !pendingPoints_.isEmpty()) &&
+            activeTool_ != Tool::PointExtrude) {
             event->ignore();
             return;
         }
@@ -3930,7 +3996,8 @@ protected:
              activeTool_ == Tool::CurveInterpolate ||
              activeTool_ == Tool::CurveFreehand ||
              isRectangleTool(activeTool_) ||
-             isTwoCurveLineTool(activeTool_)) &&
+             isTwoCurveLineTool(activeTool_) ||
+             activeTool_ == Tool::PointExtrude) &&
             activeToolController_ != nullptr) {
             const ToolInput input = makeToolInput(event, screenPosition,
                                                   rawWorldPosition, worldPosition);
@@ -4604,8 +4671,9 @@ protected:
                                                   &rawCursorWorld_)) {
             cursorValid_ = false;
             currentSnap_ = SnapResult{};
-            if (activeTool_ == Tool::Line && activeToolController_ != nullptr &&
-                !pendingPoints_.isEmpty()) {
+            if (activeToolController_ != nullptr &&
+                ((activeTool_ == Tool::Line && !pendingPoints_.isEmpty()) ||
+                 activeTool_ == Tool::PointExtrude)) {
                 const ToolInput input = makeToolInput(event, screenPosition,
                                                       lastWorldPosition_, lastWorldPosition_);
                 activeToolController_->handleMouseMove(input, toolContext_);
@@ -5783,6 +5851,7 @@ private:
         pendingPicturePath_.clear();
         controllerPreviewShape_ = Shape{};
         controllerPreviewShapeVisible_ = false;
+        pointExtrudePreviewShapes_.clear();
         resetArcPreviewTracking();
         selectedShapeIndices_.clear();
         selectedShapeIndex_ = ObjectId::invalid();
@@ -15367,6 +15436,7 @@ private:
     QVector<Point3D> linePreviewWorldPoints_;
     Point3D linePreviewWorldCursor_;
     QVector<Shape> linePreviewShapes_;
+    QVector<Shape> pointExtrudePreviewShapes_;
     bool linePreviewPlaneLocked_ = false;
     bool controllerPreviewShapeVisible_ = false;
     int polygonSideCount_ = 32;

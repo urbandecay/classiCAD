@@ -195,6 +195,8 @@ QString toolName(ToolId tool)
         return QStringLiteral("Tangent to Two Curves");
     case ToolId::PerpendicularToTwoCurves:
         return QStringLiteral("Perpendicular to Two Curves");
+    case ToolId::PointExtrude:
+        return QStringLiteral("Extrude Point");
     }
 
     return QStringLiteral("Unknown");
@@ -257,6 +259,7 @@ int requiredPoints(ToolId tool)
     case ToolId::PerpendicularFromEdge:
     case ToolId::TangentToTwoCurves:
     case ToolId::PerpendicularToTwoCurves:
+    case ToolId::PointExtrude:
     case ToolId::CurveInterpolate:
     case ToolId::CurveFreehand:
         return 0;

@@ -138,6 +138,7 @@ GeometryType geometryTypeForTool(ToolId tool)
     case ToolId::Mirror:
     case ToolId::TangentFromCurve:
     case ToolId::PerpendicularFromCurve:
+    case ToolId::PointExtrude:
         return GeometryType::Invalid;
     }
 

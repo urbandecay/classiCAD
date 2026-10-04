@@ -1589,7 +1589,12 @@ void ViewportOverlay::drawToolStatus(QPainter &painter,
                              .arg(joinCount));
     }
 
-    if (activeTool == Tool::Erase) {
+    if (activeTool == Tool::PointExtrude) {
+        painter.setPen(QColor(QStringLiteral("#777777")));
+        painter.drawText(18,
+                         viewportSize.height() - 18,
+                         QStringLiteral("Click endpoint for first point; same offset for each selected point  •  X/Y/Z locks axis  •  Enter confirms  •  Esc/RMB cancels"));
+    } else if (activeTool == Tool::Erase) {
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,
                          viewportSize.height() - 18,

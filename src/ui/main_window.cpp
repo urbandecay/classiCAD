@@ -1487,6 +1487,34 @@ private:
                 .arg(snapIncrementLabel));
     }
 
+    void startPointExtrude()
+    {
+        const ViewportCommandResult result =
+            viewport_ == nullptr
+                ? ViewportCommandResult{}
+                : viewport_->executeCommand(ViewportCommand::BeginPointExtrude);
+        if (!result.accepted) {
+            if (pointExtrudeToolButton_ != nullptr) {
+                pointExtrudeToolButton_->setChecked(false);
+            }
+            if (selectToolButton_ != nullptr) {
+                selectToolButton_->setChecked(true);
+            }
+            statusBar()->showMessage(
+                QStringLiteral("Select one or more editable points before using Extrude"),
+                4000);
+            return;
+        }
+
+        if (pointExtrudeToolButton_ != nullptr) {
+            pointExtrudeToolButton_->setChecked(true);
+        }
+        statusBar()->showMessage(
+            QStringLiteral("Point Extrude: click endpoint for first point; same offset for %1 point%2  •  X/Y/Z locks axis  •  OSnap when enabled  •  Esc cancels")
+                .arg(result.count)
+                .arg(result.count == 1 ? QString() : QStringLiteral("s")));
+    }
+
     void startScale(ScaleMode mode)
     {
         scaleMode_ = mode;
@@ -1757,6 +1785,12 @@ private:
         rotateAction->setShortcutContext(Qt::WindowShortcut);
         connect(rotateAction, &QAction::triggered, this, [this]() {
             startRotate();
+        });
+
+        QAction *pointExtrudeAction =
+            editMenu->addAction(QStringLiteral("Extrude Point"));
+        connect(pointExtrudeAction, &QAction::triggered, this, [this]() {
+            startPointExtrude();
         });
 
         QAction *mirrorAction = editMenu->addAction(QStringLiteral("Mirror"));
@@ -2298,6 +2332,10 @@ private:
         trimToolButton_->setIcon(makeTrimIcon());
         trimToolButton_->setIconSize(QSize(24, 24));
         trimToolButton_->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+        pointExtrudeToolButton_ = addToolButton(
+            layout, group, QStringLiteral("↑\nExtrude"), Tool::PointExtrude);
+        pointExtrudeToolButton_->setToolTip(
+            QStringLiteral("Point Extrude — create parallel lines from selected points using one shared offset"));
         rotateToolButton_ = addToolButton(layout, group, QStringLiteral("↻\nRotate"), Tool::Rotate);
         mirrorToolButton_ = addToolButton(layout, group, QStringLiteral("⇄\nMirror"), Tool::Mirror);
         scaleToolButton_ = addToolButton(layout, group, QStringLiteral("⤢\nScale"), Tool::Scale);
@@ -2407,6 +2445,10 @@ private:
             }
             if (tool == Tool::Scale) {
                 startScale(scaleMode_);
+                return;
+            }
+            if (tool == Tool::PointExtrude) {
+                startPointExtrude();
                 return;
             }
             if (tool == Tool::Arc) {
@@ -4279,6 +4321,7 @@ private:
     QToolButton *joinButton_ = nullptr;
     QToolButton *explodeButton_ = nullptr;
     QToolButton *rotateToolButton_ = nullptr;
+    QToolButton *pointExtrudeToolButton_ = nullptr;
     QToolButton *mirrorToolButton_ = nullptr;
     QToolButton *scaleToolButton_ = nullptr;
     ScaleMode scaleMode_ = ScaleMode::TwoD;

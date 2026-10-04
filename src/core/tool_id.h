@@ -50,6 +50,7 @@ enum class ToolId : int {
     PerpendicularFromEdge = 39,
     TangentToTwoCurves = 40,
     PerpendicularToTwoCurves = 41,
+    PointExtrude = 42,
 };
 
 enum class EllipseMode {

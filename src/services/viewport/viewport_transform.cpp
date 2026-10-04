@@ -996,7 +996,7 @@ void ViewportTransform::orbitByPixels(const QPointF &delta)
     const qreal radiansPerPixel =
         navigationPreferences_.turntableSensitivityRadiansPerPixel;
     const ViewportOrientation yaw = ViewportOrientation::fromAxisAngle(
-        0.0, 0.0, 1.0, delta.x() * radiansPerPixel);
+        0.0, 0.0, 1.0, -delta.x() * radiansPerPixel);
     const Vec3 right = rotate(yaw * orientation_, {1.0, 0.0, 0.0});
     const ViewportOrientation pitch = ViewportOrientation::fromAxisAngle(
         right.x, right.y, right.z, -delta.y() * radiansPerPixel);

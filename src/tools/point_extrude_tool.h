@@ -22,6 +22,7 @@ private:
         Point3D worldPoint;
         WorkPlaneFrame workPlaneFrame;
         Shape::NurbsCurve2D curve;
+        Shape::NurbsSurface3D surface;
     };
 
     Point3D resolveTarget(const ToolInput &input, ToolContext &context);
@@ -37,6 +38,7 @@ private:
     Point3D cursorPoint_;
     ToolInput lastInput_;
     int constraintAxisKey_ = 0;
+    bool normalConstraint_ = false;
     bool hasLastInput_ = false;
     bool hasCursorPoint_ = false;
     SnapResult snap_;

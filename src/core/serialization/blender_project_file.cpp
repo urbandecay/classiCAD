@@ -44,33 +44,40 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
     }
     QJsonObject displayMeshes;
     for (const classiCAD::SceneObject &sceneObject : document.objects()) {
-        if (sceneObject.geometry.geometryType !=
-            classiCAD::GeometryType::NurbsSurface) {
+        if (sceneObject.geometry.geometryType != classiCAD::GeometryType::NurbsSurface &&
+            sceneObject.geometry.geometryType != classiCAD::GeometryType::NurbsSolid) {
             continue;
         }
-        classiCAD::PreparedNurbsSurfaceTessellation tessellation;
-        if (!tessellation.prepare(sceneObject.geometry.nurbsSurface)) {
-            setError(errorMessage,
-                     QStringLiteral("Could not tessellate NURBS surface object %1 for display")
-                         .arg(sceneObject.id.value()));
-            return false;
-        }
         QJsonArray vertices;
-        for (const classiCAD::Point3D &point : tessellation.vertices()) {
-            QJsonArray vertex;
-            vertex.append(point.x);
-            vertex.append(point.y);
-            vertex.append(point.z);
-            vertices.append(vertex);
-        }
         QJsonArray faces;
-        for (const classiCAD::PreparedNurbsSurfaceTessellation::Triangle &triangle :
-             tessellation.triangles()) {
-            QJsonArray face;
-            face.append(triangle[0]);
-            face.append(triangle[1]);
-            face.append(triangle[2]);
-            faces.append(face);
+        int surfaceIndex = 0;
+        for (const auto &surface : classiCAD::shapeSurfaceFaces(sceneObject.geometry)) {
+            classiCAD::PreparedNurbsSurfaceTessellation tessellation;
+            if (!tessellation.prepare(surface)) {
+                setError(errorMessage,
+                         QStringLiteral("Could not tessellate NURBS surface object %1 for display")
+                             .arg(sceneObject.id.value()));
+                return false;
+            }
+            const int vertexOffset = vertices.size();
+            const bool reversed = sceneObject.geometry.geometryType == classiCAD::GeometryType::NurbsSolid &&
+                classiCAD::nurbsSolidFaceReversed(sceneObject.geometry.nurbsSolid, surfaceIndex);
+            for (const classiCAD::Point3D &point : tessellation.vertices()) {
+                QJsonArray vertex;
+                vertex.append(point.x);
+                vertex.append(point.y);
+                vertex.append(point.z);
+                vertices.append(vertex);
+            }
+            for (const classiCAD::PreparedNurbsSurfaceTessellation::Triangle &triangle :
+                 tessellation.triangles()) {
+                QJsonArray face;
+                face.append(vertexOffset + triangle[0]);
+                face.append(vertexOffset + triangle[reversed ? 2 : 1]);
+                face.append(vertexOffset + triangle[reversed ? 1 : 2]);
+                faces.append(face);
+            }
+            ++surfaceIndex;
         }
         QJsonObject mesh;
         mesh.insert(QStringLiteral("vertices"), vertices);

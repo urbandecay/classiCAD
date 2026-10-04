@@ -531,7 +531,7 @@ def add_scene_object(layer_collections, record, surface_display_mesh=None):
 
     object_name = "classiCAD.%s.%s" % (geometry_type, object_id)
     frame = frame_matrix(shape)
-    if geometry_type == 14:
+    if geometry_type in {14, 15}:
         obj = add_nurbs_surface_mesh(
             layer_collection,
             object_name,

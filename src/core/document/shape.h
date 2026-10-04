@@ -5,6 +5,7 @@
 #include "core/geometry/geometry_type.h"
 #include "core/geometry/nurbs_curve.h"
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_solid.h"
 #include "core/geometry/work_plane.h"
 
 #include <QByteArray>
@@ -46,6 +47,22 @@ struct Shape {
     WorkPlaneFrame workPlaneFrame;
     using NurbsSurface3D = classiCAD::NurbsSurface3D;
     NurbsSurface3D nurbsSurface;
+    NurbsExtrusionSolid3D nurbsSolid;
 };
+
+inline QVector<NurbsSurface3D> shapeSurfaceFaces(const Shape &shape)
+{
+    if (shape.geometryType == GeometryType::NurbsSolid)
+        return nurbsSolidFaces(shape.nurbsSolid);
+    if (shape.geometryType == GeometryType::NurbsSurface)
+        return {shape.nurbsSurface};
+    return {};
+}
+
+inline NurbsSurface3D &shapeBaseSurface(Shape &shape)
+{
+    return shape.geometryType == GeometryType::NurbsSolid
+               ? shape.nurbsSolid.baseSurface : shape.nurbsSurface;
+}
 
 } // namespace classiCAD

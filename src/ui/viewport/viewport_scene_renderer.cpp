@@ -341,7 +341,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
         geometryType == GeometryType::PolyCurve ||
         geometryType == GeometryType::Bezier ||
         geometryType == GeometryType::Nurbs ||
-        geometryType == GeometryType::NurbsSurface;
+        geometryType == GeometryType::NurbsSurface ||
+        geometryType == GeometryType::NurbsSolid;
     const LayerGpuLinePattern layerPattern =
         layerGpuLinePattern(object.layerLineType);
     const bool nativeStroke =
@@ -359,6 +360,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
          validateNurbsCurve(shape.nurbs)) &&
         (geometryType != GeometryType::NurbsSurface ||
          validateNurbsSurface(shape.nurbsSurface)) &&
+        (geometryType != GeometryType::NurbsSolid ||
+         validateNurbsSolid(shape.nurbsSolid)) &&
         (geometryType != GeometryType::PolyCurve ||
          !shape.components.isEmpty());
     if (!nativeStroke) {

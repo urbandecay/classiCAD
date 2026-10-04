@@ -71,6 +71,7 @@ void PointExtrudeTool::begin(ToolContext &context)
     cursorPoint_ = {};
     lastInput_ = {};
     constraintAxisKey_ = 0;
+    normalConstraint_ = false;
     hasLastInput_ = false;
     hasCursorPoint_ = false;
     snap_ = {};
@@ -97,6 +98,14 @@ void PointExtrudeTool::begin(ToolContext &context)
             if (isValidWorkPlaneFrame(source.workPlaneFrame)) {
                 sourcePoints_.append(source);
             }
+        } else if (selectedShape->geometryType == GeometryType::NurbsSurface) {
+            SourcePoint source;
+            if (!nurbsSolidBaseFrame(selectedShape->nurbsSurface,
+                                     &source.workPlaneFrame)) continue;
+            source.objectId = selectedObjectId;
+            source.surface = selectedShape->nurbsSurface;
+            source.worldPoint = source.workPlaneFrame.origin;
+            sourcePoints_.append(source);
         } else {
             const auto curves = context.curveSampler().curvesForShape(*selectedShape);
             for (int index = 0; index < curves.size(); ++index) {
@@ -116,6 +125,7 @@ void PointExtrudeTool::begin(ToolContext &context)
     }
 
     if (!sourcePoints_.isEmpty()) {
+        normalConstraint_ = !sourcePoints_.first().surface.controlPoints.isEmpty();
         inputFrame_ = sourcePoints_.first().workPlaneFrame;
         inputFrame_.origin = sourcePoints_.first().worldPoint;
         cursorPoint_ = sourcePoints_.first().worldPoint;
@@ -177,6 +187,7 @@ bool PointExtrudeTool::handleKey(const ToolInput &input, ToolContext &context)
     }
     if (input.key == Qt::Key_X || input.key == Qt::Key_Y ||
         input.key == Qt::Key_Z) {
+        normalConstraint_ = false;
         constraintAxisKey_ = constraintAxisKey_ == input.key ? 0 : input.key;
         if (hasLastInput_ && !sourcePoints_.isEmpty()) {
             cursorPoint_ = resolveTarget(lastInput_, context);
@@ -198,6 +209,7 @@ void PointExtrudeTool::cancel(ToolContext &context)
 {
     sourcePoints_.clear();
     constraintAxisKey_ = 0;
+    normalConstraint_ = false;
     hasLastInput_ = false;
     hasCursorPoint_ = false;
     snap_ = {};
@@ -271,7 +283,7 @@ Point3D PointExtrudeTool::resolveTarget(const ToolInput &input,
         context.viewportTransform(),
         input.viewportSize);
     const bool hasSnapPoint = snap_.isValid() && snap_.hasWorldPoint;
-    if (!hasSnapPoint && constraintAxisKey_ == 0) {
+    if (!hasSnapPoint && constraintAxisKey_ == 0 && !normalConstraint_) {
         // Free extrusion is a spatial displacement operation. The original
         // point's plane must not limit dragging to its perspective horizon.
         // Keep the reference depth and follow the cursor in a camera-facing
@@ -294,12 +306,13 @@ Point3D PointExtrudeTool::resolveTarget(const ToolInput &input,
                                      isValidWorkPlaneFrame(input.workPlaneFrame)
                                          ? input.workPlaneFrame
                                          : inputFrame_);
-    if (constraintAxisKey_ == 0) {
+    if (constraintAxisKey_ == 0 && !normalConstraint_) {
         return target;
     }
 
     const Point3D reference = sourcePoints_.first().worldPoint;
-    const Point3D direction = axisDirection(constraintAxisKey_);
+    const Point3D direction = normalConstraint_ ? inputFrame_.normal
+                                                : axisDirection(constraintAxisKey_);
     Point3D constrainedPoint;
     if (!hasSnapPoint &&
         context.viewportTransform().screenToWorldAxis(
@@ -400,7 +413,13 @@ QVector<Shape> PointExtrudeTool::makeLineShapes(const Point3D &endPoint) const
                                          sourcePoints_.first().worldPoint);
     for (const SourcePoint &source : sourcePoints_) {
         Shape line;
-        if (!source.curve.controlPoints.isEmpty()) {
+        if (!source.surface.controlPoints.isEmpty()) {
+            line.geometryType = GeometryType::NurbsSolid;
+            line.workPlaneFrame = source.workPlaneFrame;
+            if (!makeNurbsExtrusionSolid(source.surface, displacement,
+                                         &line.nurbsSolid)) return {};
+            lines.append(line);
+        } else if (!source.curve.controlPoints.isEmpty()) {
             line.geometryType = GeometryType::NurbsSurface;
             if (makeNurbsExtrusionSurface(source.curve, source.workPlaneFrame,
                                            displacement, &line.nurbsSurface)) {
@@ -419,7 +438,7 @@ void PointExtrudeTool::updateStatus()
     status_.canCommit = !sourcePoints_.isEmpty() && hasCursorPoint_ &&
                         !makeLineShapes(cursorPoint_).isEmpty();
     if (sourcePoints_.isEmpty()) {
-        status_.text = QStringLiteral("Extrude: select editable points or curves first");
+        status_.text = QStringLiteral("Extrude: select points, curves, or planar faces first");
     } else if (status_.canCommit) {
         status_.text = QStringLiteral("Extrude: click endpoint; same offset for %1 source%2")
                            .arg(sourcePoints_.size())
@@ -430,6 +449,8 @@ void PointExtrudeTool::updateStatus()
     if (constraintAxisKey_ != 0) {
         status_.text += QStringLiteral(" • %1 axis")
                             .arg(QChar(constraintAxisKey_));
+    } else if (normalConstraint_) {
+        status_.text += QStringLiteral(" • face normal");
     }
 }
 

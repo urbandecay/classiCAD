@@ -853,7 +853,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
-        !validateNurbsSurface(shape.nurbsSurface)) {
+        !validateNurbsSurface(shape.nurbsSurface) &&
+        !validateNurbsSolid(shape.nurbsSolid)) {
         return;
     }
 
@@ -978,6 +979,17 @@ void ViewportRenderer::drawShape(QPainter &painter,
         return;
     }
 
+    if (shape.geometryType == GeometryType::NurbsSolid) {
+        const auto faces = shapeSurfaceFaces(shape);
+        if (preparedGeometry != nullptr && !faces.isEmpty()) {
+            drawNurbsSurface(painter, faces.first(), viewportSize,
+                             shapeObjectId, geometryRevision, preparedGeometry);
+        } else {
+            for (const auto &face : faces)
+                drawNurbsSurface(painter, face, viewportSize);
+        }
+        return;
+    }
     if (shape.geometryType == GeometryType::NurbsSurface) {
         drawNurbsSurface(painter,
                          shape.nurbsSurface,
@@ -1498,7 +1510,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         PreparedNurbsSurfaceTessellation localTessellation;
         QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
         const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
-        if (surfaceTessellationCache_ != nullptr && objectId.isValid()) {
+        if (surfaceTessellationCache_ != nullptr) {
             cachedTessellation = surfaceTessellationCache_->acquire(
                 objectId, geometryRevision, surface);
             tessellation = cachedTessellation.data();

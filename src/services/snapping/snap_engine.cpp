@@ -843,6 +843,7 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     }
     if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
         shape.geometryType != GeometryType::NurbsSurface &&
+        shape.geometryType != GeometryType::NurbsSolid &&
         shape.components.isEmpty()) {
         return candidates;
     }
@@ -857,13 +858,16 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         }
     }
 
-    if (shape.geometryType == GeometryType::NurbsSurface) {
-        for (const Point3D &point : nurbsSurfaceCorners(shape.nurbsSurface)) {
-            SnapCandidate candidate{SnapType::Endpoint,
-                                    QPointF(point.x, point.y)};
-            candidate.worldPoint = point;
-            candidate.hasWorldPoint = true;
-            candidates.append(candidate);
+    if (shape.geometryType == GeometryType::NurbsSurface ||
+        shape.geometryType == GeometryType::NurbsSolid) {
+        for (const auto &face : shapeSurfaceFaces(shape)) {
+            for (const Point3D &point : nurbsSurfaceCorners(face)) {
+                SnapCandidate candidate{SnapType::Endpoint,
+                                        QPointF(point.x, point.y)};
+                candidate.worldPoint = point;
+                candidate.hasWorldPoint = true;
+                candidates.append(candidate);
+            }
         }
         return candidates;
     }
@@ -1206,6 +1210,7 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
         }
         if (shape.points.isEmpty() && !validateNurbsCurve(shape.nurbs) &&
             shape.geometryType != GeometryType::NurbsSurface &&
+            shape.geometryType != GeometryType::NurbsSolid &&
             shape.components.isEmpty()) {
             continue;
         }
@@ -1326,14 +1331,17 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             }
         }
 
-        if (shape.geometryType == GeometryType::NurbsSurface) {
+        if (shape.geometryType == GeometryType::NurbsSurface ||
+            shape.geometryType == GeometryType::NurbsSolid) {
             if (settings_.endpoint) {
-                for (const Point3D &point : nurbsSurfaceCorners(shape.nurbsSurface)) {
-                    SnapCandidate candidate{SnapType::Endpoint,
-                                            QPointF(point.x, point.y)};
-                    candidate.worldPoint = point;
-                    candidate.hasWorldPoint = true;
-                    candidates.append(candidate);
+                for (const auto &face : shapeSurfaceFaces(shape)) {
+                    for (const Point3D &point : nurbsSurfaceCorners(face)) {
+                        SnapCandidate candidate{SnapType::Endpoint,
+                                                QPointF(point.x, point.y)};
+                        candidate.worldPoint = point;
+                        candidate.hasWorldPoint = true;
+                        candidates.append(candidate);
+                    }
                 }
             }
             continue;

@@ -504,7 +504,7 @@ private:
                 selectToolButton_->setChecked(true);
             }
             statusBar()->showMessage(
-                QStringLiteral("Select one or more editable points or curves before using Extrude"),
+                QStringLiteral("Select editable points, curves, or planar faces before using Extrude"),
                 4000);
             return;
         }
@@ -805,10 +805,15 @@ private:
             startMirror();
         });
 
-        QAction *duplicateAction = editMenu->addAction(QStringLiteral("Duplicate in Place"));
+        QAction *duplicateAction = editMenu->addAction(QStringLiteral("Duplicate"));
         duplicateAction->setShortcut(QKeySequence(QStringLiteral("Shift+D")));
         duplicateAction->setShortcutContext(Qt::WindowShortcut);
         connect(duplicateAction, &QAction::triggered, this, [this]() {
+            startDuplicate();
+        });
+        QAction *duplicateInPlaceAction =
+            editMenu->addAction(QStringLiteral("Duplicate in Place"));
+        connect(duplicateInPlaceAction, &QAction::triggered, this, [this]() {
             duplicateInPlace();
         });
 

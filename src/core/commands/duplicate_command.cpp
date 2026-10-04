@@ -1,6 +1,7 @@
 #include "duplicate_command.h"
 
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_solid.h"
 
 #include <cmath>
 
@@ -9,6 +10,9 @@ namespace {
 
 bool validDuplicateGeometry(const Shape &shape)
 {
+    if (shape.geometryType == GeometryType::NurbsSolid) {
+        return validateNurbsSolid(shape.nurbsSolid);
+    }
     if (shape.geometryType == GeometryType::NurbsSurface) {
         return validateNurbsSurface(shape.nurbsSurface);
     }

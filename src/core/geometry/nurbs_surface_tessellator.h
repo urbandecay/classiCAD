@@ -28,6 +28,7 @@ public:
     bool prepare(const NurbsSurface3D &surface);
     bool prepare(const NurbsSurface3D &surface, const Options &options);
     bool isValid() const;
+    PreparedNurbsSurfaceTessellation translated(const Point3D &offset) const;
     const QVector<Point3D> &vertices() const;
     const QVector<Triangle> &triangles() const;
     const QVector<Polyline> &wireframe() const;

@@ -19,13 +19,18 @@ The first pass is intentionally a Blender-inspired layout:
 
 The workspace bar selects the fallback XY/XZ/YZ drawing plane and its offset, alongside Top/Front/Right, Isometric, or Perspective camera views. When a drawing tool starts over a planar object, cursor input inherits that object's plane. In empty space, drawing follows the add-on's fallback within the app's principal-plane scope: perspective uses world XY; fixed orthographic views use XY, XZ, or YZ through the origin; oblique orthographic views use the principal plane whose normal is most aligned with the view. Line uses the actual camera-facing plane in oblique views and resolves axis constraints in world space, as described below. The remaining tool modules still need explicit frame capture. Existing OSnap candidates and controls are reused without another snap overlay. Selection, object snaps, trimming, and erase operate on the active plane. Projects can be saved as `.vignola` by default or `.blend` from Save As; both are native Blender 5.2.2 files. The exact classiCAD document snapshot, including NURBS knots, surface control nets, and plane frames, is stored in a Blender Text datablock. Blender Curve objects store rational NURBS spans split at the classiCAD curve knot boundaries, preserving the curves' shapes without relying on Blender to regenerate their knot vectors; the Text data retains exact source geometry. Blender displays NURBS surfaces through a derived mesh proxy while the Text datablock retains their exact tensor-product surface data. Either extension opens through the same classiCAD project loader. Rhino `.3dm` import remains a separate geometry interchange operation and imports supported planar NURBS curves and NURBS surfaces. Blender-side geometry edits are not yet synchronized back into classiCAD. Mesh modeling is not included.
 
-Select editable points or curves and choose Extrude on the tool shelf or Edit > Extrude.
+Select editable points, curves, or planar faces and choose Extrude on the tool shelf or Edit > Extrude.
 Move the cursor to define the extrusion vector, optionally press X, Y, or Z to
 constrain it to a world axis, and click to create the result. OSnap uses the
 existing spatial snap engine. Points produce edges and curves produce exact
-ruled NURBS surfaces, using the same controls and shared vector. Mixed selections
-commit together in one undoable operation. A surface is an open sheet without
-caps.
+ruled NURBS surfaces. Planar faces (including faces made with Fill) produce one
+closed extrusion solid with exact bottom/top caps and ruled boundary walls.
+Face extrusion starts along the face normal; X/Y/Z override its direction.
+Mixed selections commit together in one undoable operation. Curve extrusion
+creates an uncapped sheet. Zero-height and in-plane face sweeps are rejected;
+curved-face extrusion and general BRep/Boolean editing are not implemented.
+Native save/load preserves the solid's exact base face and extrusion vector;
+its Blender mesh is a derived display proxy.
 
 The Line tool follows the add-on's 3D direction handling: left-click plants points, X/Y/Z constrain the next segment to a world axis, Shift locks its direction, N locks the drawing-plane normal, L toggles plane locking, Backspace removes the last point, and right-click finishes. Constrained placement finds the closest point between the mouse ray and the world line, including axes outside the initial plane. Passive inference checks all three world axes. OSnap uses the existing engine and preserves a target's actual world depth. Orthographic empty-space input uses the visible principal plane in fixed views and a camera-facing plane in oblique views; perspective starts on XY. The normal locks at the first point, and the drawing plane moves through each new pivot. Preview vertices are temporary world points; committed geometry remains local planar `NurbsCurve2D`. A planar chain stays one degree-1 curve; a chain changing planes becomes connected planar runs committed together with one Undo. Tilted runs use the existing oriented frame representation, without introducing spatial NURBS or meshes. Existing selection dragging and move snapping remain available.
 

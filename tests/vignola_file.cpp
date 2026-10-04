@@ -1,6 +1,7 @@
 #include "core/document/document.h"
 #include "core/geometry/curve_construction.h"
 #include "core/geometry/shape_mapping.h"
+#include "core/geometry/nurbs_surface_factory.h"
 #include "core/serialization/document_serializer.h"
 #include "core/serialization/blender_project_file.h"
 #include "core/serialization/rhino3dm_interchange.h"
@@ -119,6 +120,14 @@ int main(int argc, char **argv)
     picture.pictureImage = QImage(4, 2, QImage::Format_ARGB32);
     picture.pictureImage.fill(QColor(QStringLiteral("#4c86b8")));
     source.append(picture);
+
+    Shape solid;
+    solid.geometryType = GeometryType::NurbsSolid;
+    NurbsSurface3D cap;
+    passed &= check(makeNurbsPlanarFillSurface(circle.nurbs, shapeWorkPlaneFrame(circle), &cap) &&
+                        makeNurbsExtrusionSolid(cap, {0,0,7}, &solid.nurbsSolid),
+                    "solid save fixture must have exact caps and walls");
+    source.append(solid);
 
     QTemporaryDir temporaryDirectory;
     passed &= check(temporaryDirectory.isValid(), "temporary directory must be available");

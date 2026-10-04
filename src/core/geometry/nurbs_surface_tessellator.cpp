@@ -375,6 +375,26 @@ bool PreparedNurbsSurfaceTessellation::isValid() const
     return valid_;
 }
 
+PreparedNurbsSurfaceTessellation PreparedNurbsSurfaceTessellation::translated(
+    const Point3D &offset) const
+{
+    auto result = *this;
+    const auto move = [&offset](Point3D &point) {
+        point.x += offset.x;
+        point.y += offset.y;
+        point.z += offset.z;
+    };
+    for (Point3D &point : result.vertices_) {
+        move(point);
+    }
+    for (Polyline &line : result.wireframe_) {
+        for (Point3D &point : line.points) {
+            move(point);
+        }
+    }
+    return result;
+}
+
 const QVector<Point3D> &PreparedNurbsSurfaceTessellation::vertices() const
 {
     return vertices_;

@@ -325,6 +325,8 @@ public:
             for (const Shape &shape : shapes) {
                 if (shape.geometryType == GeometryType::NurbsSurface) {
                     if (!validateNurbsSurface(shape.nurbsSurface)) return false;
+                } else if (shape.geometryType == GeometryType::NurbsSolid) {
+                    if (!validateNurbsSolid(shape.nurbsSolid)) return false;
                 } else if (!isValidWorkPlaneFrame(shape.workPlaneFrame)) {
                     return false;
                 } else if (shape.geometryType == GeometryType::Point) {
@@ -1295,6 +1297,12 @@ public:
             } else if (sourceShape != nullptr &&
                        document_.isObjectVisible(sourceObjectId) &&
                        document_.isObjectEditable(sourceObjectId)) {
+                WorkPlaneFrame faceFrame;
+                if (sourceShape->geometryType == GeometryType::NurbsSurface &&
+                    nurbsSolidBaseFrame(sourceShape->nurbsSurface, &faceFrame)) {
+                    ++pointCount;
+                    continue;
+                }
                 for (const auto &curve : curveSampler_.curvesForShape(*sourceShape)) {
                     if (validateNurbsCurve(curve)) ++pointCount;
                 }
@@ -1302,7 +1310,7 @@ public:
         }
         if (pointCount == 0) {
             DebugLog::instance().write(
-                QStringLiteral("beginPointExtrude ignored selectionCount=%1 noEditablePointsOrCurves")
+                QStringLiteral("beginPointExtrude ignored selectionCount=%1 noEditableSources")
                     .arg(selected.size()));
             return 0;
         }
@@ -2368,7 +2376,9 @@ protected:
                         type == GeometryType::Rectangle || type == GeometryType::Polygon ||
                         type == GeometryType::Circle || type == GeometryType::Ellipse ||
                         type == GeometryType::Arc || type == GeometryType::PolyCurve ||
-                        type == GeometryType::Bezier || type == GeometryType::Nurbs;
+                        type == GeometryType::Bezier || type == GeometryType::Nurbs ||
+                        type == GeometryType::NurbsSolid ||
+                        type == GeometryType::NurbsSurface;
                     if (!supportedType || isDimensionGeometryType(type) ||
                         type == GeometryType::Picture) {
                         return false;
@@ -2378,7 +2388,8 @@ protected:
                           type == GeometryType::Arc || type == GeometryType::Bezier ||
                           type == GeometryType::Nurbs) &&
                          !validateNurbsCurve(shape.nurbs)) ||
-                        (type == GeometryType::PolyCurve && shape.components.isEmpty())) {
+                        (type == GeometryType::PolyCurve && shape.components.isEmpty()) ||
+                        (type == GeometryType::NurbsSolid && !validateNurbsSolid(shape.nurbsSolid))) {
                         return false;
                     }
                     gpuPreviewGeometry.append(
@@ -2727,6 +2738,17 @@ protected:
                                       preview.pointDiameter,
                                       preview.dashed,
                                       preview.pointOutline});
+            if (!preview.controlGuide &&
+                (preview.shape.geometryType == GeometryType::NurbsSurface ||
+                 preview.shape.geometryType == GeometryType::NurbsSolid)) {
+                ViewportRenderObject object;
+                object.shape = preview.shape;
+                object.cacheable = false;
+                gpuPreviewStrokes.last().preparedDepthGeometry =
+                    QSharedPointer<ViewportDepthGeometry>::create(
+                        buildViewportDepthGeometry(object,
+                                                   &surfaceTessellationCache_));
+            }
         }
         gpuPreviewStrokes.reserve(gpuPreviewStrokes.size() +
                                   gpuPreviewPictures.size());
@@ -8374,14 +8396,14 @@ private:
         document_.mutateGeometry(
             objectId,
             [&](Shape &shape) {
-                if (validateNurbsSurface(shape.nurbsSurface)) {
+                if (validateNurbsSurface(shapeBaseSurface(shape))) {
                     const WorkPlaneFrame inputFrame = viewportTransform_.workPlaneFrame();
                     const Point3D localOrigin = workPlaneFramePointToWorld({}, inputFrame);
                     const Point3D localEnd = workPlaneFramePointToWorld(delta, inputFrame);
                     const Point3D worldDelta{localEnd.x - localOrigin.x,
                                              localEnd.y - localOrigin.y,
                                              localEnd.z - localOrigin.z};
-                    for (Point3D &point : shape.nurbsSurface.controlPoints) {
+                    for (Point3D &point : shapeBaseSurface(shape).controlPoints) {
                         point.x += worldDelta.x;
                         point.y += worldDelta.y;
                         point.z += worldDelta.z;
@@ -8449,8 +8471,8 @@ private:
                     frame.origin.y += snap.worldTranslation.y;
                     frame.origin.z += snap.worldTranslation.z;
                     shape.workPlaneFrame = frame;
-                    if (validateNurbsSurface(shape.nurbsSurface)) {
-                        for (Point3D &point : shape.nurbsSurface.controlPoints) {
+                    if (validateNurbsSurface(shapeBaseSurface(shape))) {
+                        for (Point3D &point : shapeBaseSurface(shape).controlPoints) {
                             point.x += snap.worldTranslation.x;
                             point.y += snap.worldTranslation.y;
                             point.z += snap.worldTranslation.z;
@@ -8503,9 +8525,9 @@ private:
             currentDragSnap_ = DragSnapResult{};
         }
 
-        // Rebuild the preview from the saved document so axis changes and snap
-        // changes never accumulate an additional incremental delta.
-        document_.restoreSnapshot(grabTool_.startSnapshot());
+        // Restore only the moving objects. Restoring the whole document here
+        // invalidates every stationary object's render and query caches.
+        grabTool_.restoreSourceGeometry(document_);
         QPointF totalDelta;
         QPointF freeDestination;
         if (grabTool_.hasBasePoint()) {

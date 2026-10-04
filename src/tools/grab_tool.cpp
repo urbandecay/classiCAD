@@ -11,6 +11,7 @@ bool GrabTool::begin(Document &document,
     for (const ObjectId objectId : selectedObjectIds) {
         if (document.isObjectEditable(objectId) && !objectIds_.contains(objectId)) {
             objectIds_.append(objectId);
+            sourceGeometry_.append(*document.shape(objectId));
         }
     }
     if (objectIds_.isEmpty()) {
@@ -31,13 +32,23 @@ bool GrabTool::enterBasePointMode(Document &document)
 
     const bool restored = moved_;
     if (restored) {
-        document.restoreSnapshot(startSnapshot_);
+        restoreSourceGeometry(document);
     }
     moved_ = false;
     pickingBasePoint_ = true;
     hasBasePoint_ = false;
     cursorOffset_ = {};
     return restored;
+}
+
+void GrabTool::restoreSourceGeometry(Document &document) const
+{
+    for (int i = 0; i < objectIds_.size(); ++i) {
+        document.mutateGeometry(objectIds_[i], [this, i](Shape &geometry) {
+            geometry = sourceGeometry_[i];
+            return true;
+        });
+    }
 }
 
 void GrabTool::acceptBasePoint(const QPointF &basePoint,
@@ -64,6 +75,7 @@ void GrabTool::reset()
     pickingBasePoint_ = false;
     hasBasePoint_ = false;
     objectIds_.clear();
+    sourceGeometry_.clear();
     startSnapshot_ = Document::Snapshot{};
     startWorldPosition_ = {};
     basePoint_ = {};

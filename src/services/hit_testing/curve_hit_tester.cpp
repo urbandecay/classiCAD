@@ -392,6 +392,20 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                       ObjectId objectId,
                                       quint64 geometryRevision) const
 {
+    if (shape.geometryType == GeometryType::NurbsSolid) {
+        qreal closest = 1.0e9;
+        const auto faces = shapeSurfaceFaces(shape);
+        for (int index = 0; index < faces.size(); ++index) {
+            QRectF bounds;
+            if (projectedNurbsSurfaceControlHullBounds(faces[index], transform,
+                                                       viewportSize, &bounds) &&
+                !bounds.adjusted(-12, -12, 12, 12).contains(screenPosition)) continue;
+            closest = std::min(closest, distanceToNurbsSurface(
+                screenPosition, faces[index], transform, viewportSize,
+                objectId, geometryRevision, index));
+        }
+        return closest;
+    }
     if (shape.geometryType == GeometryType::NurbsSurface) {
         return distanceToNurbsSurface(screenPosition,
                                       shape.nurbsSurface,
@@ -548,14 +562,15 @@ qreal CurveHitTester::distanceToNurbsSurface(
     const ViewportTransform &transform,
     const QSize &viewportSize,
     ObjectId objectId,
-    quint64 geometryRevision) const
+    quint64 geometryRevision,
+    int faceIndex) const
 {
     PreparedNurbsSurfaceTessellation localTessellation;
     QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
     const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
     if (surfaceTessellationCache_ != nullptr && objectId.isValid()) {
         cachedTessellation = surfaceTessellationCache_->acquire(
-            objectId, geometryRevision, surface);
+            objectId, geometryRevision, surface, faceIndex);
         tessellation = cachedTessellation.data();
     } else if (localTessellation.prepare(surface)) {
         tessellation = &localTessellation;
@@ -794,9 +809,10 @@ int CurveHitTester::hitTestShapeOnAnyWorkPlane(
             continue;
         }
         const Shape &shape = document[index];
-        if (shape.geometryType == GeometryType::NurbsSurface) {
-            // A spatial surface has no single drawing plane to inherit. It
-            // remains selectable in the regular hit test above.
+        if (shape.geometryType == GeometryType::NurbsSurface ||
+            shape.geometryType == GeometryType::NurbsSolid) {
+            // Spatial faces have no single drawing plane to inherit. They
+            // remain selectable in the regular hit test above.
             continue;
         }
         ViewportTransform shapeTransform = transform;

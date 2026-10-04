@@ -8,6 +8,23 @@
 namespace classiCAD {
 namespace {
 
+template <typename Map>
+bool transformSpatialGeometry(Shape *shape, const Map &map)
+{
+    NurbsSurface3D &surface = shapeBaseSurface(*shape);
+    if (!validateNurbsSurface(surface)) return false;
+    if (shape->geometryType == GeometryType::NurbsSolid) {
+        const Point3D origin = surface.controlPoints.first();
+        const Point3D offset = shape->nurbsSolid.displacement;
+        const Point3D start = map(origin);
+        const Point3D end = map({origin.x + offset.x, origin.y + offset.y,
+                                 origin.z + offset.z});
+        shape->nurbsSolid.displacement = {end.x-start.x, end.y-start.y, end.z-start.z};
+    }
+    for (Point3D &point : surface.controlPoints) point = map(point);
+    return true;
+}
+
 QPointF mirrorPointAcrossLine(const QPointF &point,
                               const QPointF &axisStart,
                               const QPointF &unitNormal)
@@ -132,17 +149,16 @@ bool translateShapeGeometry(Shape *shape,
             point += delta;
         }
     }
-    if (validateNurbsSurface(shape->nurbsSurface)) {
+    if (validateNurbsSurface(shapeBaseSurface(*shape))) {
         const Point3D origin = workPlaneFramePointToWorld({}, inputFrame);
         const Point3D end = workPlaneFramePointToWorld(delta, inputFrame);
         const Point3D worldDelta{end.x - origin.x,
                                  end.y - origin.y,
                                  end.z - origin.z};
-        for (Point3D &point : shape->nurbsSurface.controlPoints) {
-            point.x += worldDelta.x;
-            point.y += worldDelta.y;
-            point.z += worldDelta.z;
-        }
+        transformSpatialGeometry(shape, [&](const Point3D &point) {
+            return Point3D{point.x + worldDelta.x, point.y + worldDelta.y,
+                            point.z + worldDelta.z};
+        });
     }
     return true;
 }
@@ -178,9 +194,9 @@ bool mirrorShapeAcrossLine(const Shape &source,
     for (Shape::NurbsCurve2D &component : mirrored->components) {
         mirrorCurve(&component, axisStart, unitNormal);
     }
-    if (validateNurbsSurface(mirrored->nurbsSurface)) {
+    if (validateNurbsSurface(shapeBaseSurface(*mirrored))) {
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(*mirrored);
-        for (Point3D &point : mirrored->nurbsSurface.controlPoints) {
+        transformSpatialGeometry(mirrored, [&](Point3D point) {
             const qreal depth = signedDistanceFromWorkPlaneFrame(point, frame);
             const QPointF local = mirrorPointAcrossLine(
                 worldPointToWorkPlaneFrame(point, frame), axisStart, unitNormal);
@@ -188,7 +204,8 @@ bool mirrorShapeAcrossLine(const Shape &source,
             point.x += frame.normal.x * depth;
             point.y += frame.normal.y * depth;
             point.z += frame.normal.z * depth;
-        }
+            return point;
+        });
     }
 
     // Reflection reverses the orientation of center-defined arcs. The stored
@@ -262,16 +279,19 @@ bool scaleShapeGeometry(Shape *shape,
             point = scaledPoint(point);
         }
     }
-    if (validateNurbsSurface(shape->nurbsSurface)) {
-        for (Point3D &point : shape->nurbsSurface.controlPoints) {
-            const qreal depth = signedDistanceFromWorkPlaneFrame(point, surfaceFrame);
+    if (validateNurbsSurface(shapeBaseSurface(*shape))) {
+        transformSpatialGeometry(shape, [&](Point3D point) {
+            qreal depth = signedDistanceFromWorkPlaneFrame(point, surfaceFrame);
+            if (shape->geometryType == GeometryType::NurbsSolid && !oneDimensional)
+                depth *= factor;
             const QPointF local = scaledPoint(
                 worldPointToWorkPlaneFrame(point, surfaceFrame));
             point = workPlaneFramePointToWorld(local, surfaceFrame);
             point.x += surfaceFrame.normal.x * depth;
             point.y += surfaceFrame.normal.y * depth;
             point.z += surfaceFrame.normal.z * depth;
-        }
+            return point;
+        });
     }
     return true;
 }
@@ -284,10 +304,10 @@ bool rotateShapeGeometry(Shape *shape,
     if (shape == nullptr) {
         return false;
     }
-    if (validateNurbsSurface(shape->nurbsSurface)) {
-        for (Point3D &point : shape->nurbsSurface.controlPoints) {
-            point = rotatePoint(point, pivot, axis, angle);
-        }
+    if (validateNurbsSurface(shapeBaseSurface(*shape))) {
+        transformSpatialGeometry(shape, [&](const Point3D &point) {
+            return rotatePoint(point, pivot, axis, angle);
+        });
         return true;
     }
     WorkPlaneFrame frame = shapeWorkPlaneFrame(*shape);

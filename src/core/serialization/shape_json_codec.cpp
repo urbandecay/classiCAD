@@ -359,6 +359,15 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
     object.insert(QStringLiteral("nurbsSurface"),
                   nurbsSurfaceToJson(shape.nurbsSurface));
+    if (shape.geometryType == GeometryType::NurbsSolid) {
+        QJsonObject solid;
+        solid.insert(QStringLiteral("baseSurface"),
+                     nurbsSurfaceToJson(shape.nurbsSolid.baseSurface));
+        solid.insert(QStringLiteral("displacement"), QJsonArray{
+            shape.nurbsSolid.displacement.x, shape.nurbsSolid.displacement.y,
+            shape.nurbsSolid.displacement.z});
+        object.insert(QStringLiteral("nurbsSolid"), solid);
+    }
     object.insert(QStringLiteral("workPlane"), static_cast<int>(shape.workPlane));
     object.insert(QStringLiteral("workPlaneOffset"), shape.workPlaneOffset);
     if (isValidWorkPlaneFrame(shape.workPlaneFrame)) {
@@ -506,6 +515,18 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         return false;
     }
     QImage pictureImage;
+    NurbsExtrusionSolid3D nurbsSolid;
+    if (geometryType == GeometryType::NurbsSolid) {
+        const QJsonObject solid = object.value(QStringLiteral("nurbsSolid")).toObject();
+        const QJsonArray offset = solid.value(QStringLiteral("displacement")).toArray();
+        if (offset.size() != 3 || !offset[0].isDouble() ||
+            !offset[1].isDouble() || !offset[2].isDouble() ||
+            !nurbsSurfaceFromJson(solid.value(QStringLiteral("baseSurface")),
+                                  &nurbsSolid.baseSurface)) return false;
+        nurbsSolid.displacement = {offset[0].toDouble(), offset[1].toDouble(),
+                                    offset[2].toDouble()};
+        if (!validateNurbsSolid(nurbsSolid)) return false;
+    }
     if (geometryType == GeometryType::Picture) {
         const QJsonValue imageValue = object.value(QStringLiteral("pictureImage"));
         if (points.size() != 4 || !imageValue.isString() ||
@@ -663,6 +684,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->points = points;
     shape->nurbs = nurbs;
     shape->nurbsSurface = nurbsSurface;
+    shape->nurbsSolid = nurbsSolid;
     shape->arcMode = static_cast<ArcMode>(arcModeValue);
     shape->arcSweep = arcSweepValue.toDouble();
     shape->subdivisionParameters = subdivisionParameters;

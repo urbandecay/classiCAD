@@ -8,6 +8,7 @@
 #include "core/geometry/curve_construction.h"
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/shape_mapping.h"
+#include "core/geometry/nurbs_surface_factory.h"
 #include "core/serialization/blender_project_file.h"
 
 #include <QApplication>
@@ -345,6 +346,7 @@ int main(int argc, char **argv)
     viewport->setGridAppearance(blenderGridAppearance);
 
     const QPointF center(320.0, 240.0);
+    if (!application.arguments().contains(QStringLiteral("--solid-extrude-only"))) {
     // Extrude must receive screen input even when the mouse ray cannot hit
     // the selected points' XY plane, just as the spatial Line tool does.
     {
@@ -655,7 +657,55 @@ int main(int argc, char **argv)
                             "one Undo must remove the complete mixed extrusion");
         }
     }
-    if (application.arguments().contains(QStringLiteral("--point-extrude-only"))) {
+    }
+    {
+        QTemporaryDir directory;
+        Document source;
+        Shape face;
+        face.geometryType = GeometryType::NurbsSurface;
+        face.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        passed &= check(makeNurbsPlanarFillSurface(
+            makeCircleNurbs({{0,0}, {4,0}}), face.workPlaneFrame, &face.nurbsSurface),
+            "filled circle face fixture");
+        source.append(face);
+        const QString path = directory.filePath(QStringLiteral("face-extrude.vignola"));
+        QString error;
+        std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+        probe->resize(interactionViewportSize);
+        probe->show();
+        passed &= check(saveVignolaDocument(path,source,&error) &&
+                            probe->loadVignolaDocument(path,&error), "face fixture load");
+        probe->setViewPreset(ViewportViewPreset::Front);
+        passed &= check(waitForViewPreset(probe.get(),ViewportViewPreset::Front), "face extrusion front view");
+        probe->setOsnapEnabled(false);
+        QKeyEvent selectAll(QEvent::KeyPress,Qt::Key_A,Qt::NoModifier);
+        QApplication::sendEvent(probe.get(),&selectAll);
+        const auto started = probe->executeCommand(ViewportCommand::BeginPointExtrude);
+        passed &= check(started.accepted && started.count == 1,"existing Extrude entry must accept faces");
+        ViewportTransform projection;
+        projection.setViewPreset(ViewportViewPreset::Front);
+        const Point3D anchor = face.nurbsSurface.controlPoints.first();
+        QPointF endpoint;
+        projection.worldPointToScreen({anchor.x,anchor.y,anchor.z+12},interactionViewportSize,&endpoint);
+        sendMouse(probe.get(),QEvent::MouseMove,endpoint,Qt::NoButton,Qt::NoButton,Qt::NoModifier);
+        application.processEvents();
+        passed &= check(pixelsNearColor(captureViewport(probe.get()),QColor("#d28b45"),45)>100,
+                        "solid extrusion preview must be visible");
+        QKeyEvent confirm(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);
+        QApplication::sendEvent(probe.get(),&confirm);
+        Document result;
+        bool valid = probe->saveVignolaDocument(path,&error) &&
+                     loadVignolaDocument(path,&result,&error) && result.size()==2;
+        if (valid) valid = result[1].geometryType==GeometryType::NurbsSolid &&
+            validateNurbsSolid(result[1].nurbsSolid) && shapeSurfaceFaces(result[1]).size()==3 &&
+            std::abs(result[1].nurbsSolid.displacement.z-12)<1.0e-6;
+        passed &= check(valid,"face extrusion must commit and save one capped solid");
+        passed &= check(probe->executeCommand(ViewportCommand::Undo).accepted &&
+            probe->saveVignolaDocument(path,&error) && loadVignolaDocument(path,&result,&error) &&
+            result.size()==1,"one Undo must remove the solid");
+    }
+    if (application.arguments().contains(QStringLiteral("--point-extrude-only")) ||
+        application.arguments().contains(QStringLiteral("--solid-extrude-only"))) {
         return passed ? 0 : 1;
     }
     // Trim's public Qt event path must show the hovered intersection-bounded

@@ -177,6 +177,15 @@ misread or implemented incorrectly.
 
 ## Point tool port findings
 
+- Face extrusion extends the existing Extrude tool. Both the public command's
+  source filter and the controller must accept planar faces; updating only the
+  controller leaves the command unable to start. Faces default to their normal,
+  including edge-on axis input and top-view drag fallback. X/Y/Z override it.
+- Closed face extrusion is one stored `NurbsExtrusionSolid3D`, not three loose
+  surface objects. Derived caps preserve exact trims and walls preserve rational
+  boundary curves. Use face indices in tessellation-cache keys to prevent the
+  base cap, top cap, and wall from sharing the same cached mesh.
+
 - Extrude is one selection-driven command: points create edges and curves
   create exact NURBS surfaces. Capture both through the existing controller so
   spatial mouse input, free dragging, XYZ constraints, snaps, and completion

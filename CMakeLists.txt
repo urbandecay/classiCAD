@@ -53,6 +53,7 @@ set(CLASSICAD_GEOMETRY_SOURCES
     src/core/geometry/nurbs_surface.cpp
     src/core/geometry/nurbs_surface_evaluator.cpp
     src/core/geometry/nurbs_surface_factory.cpp
+    src/core/geometry/nurbs_solid.cpp
     src/core/geometry/nurbs_surface_tessellator.cpp
     src/core/geometry/arc_curve_factory.cpp
     src/core/geometry/interpolating_curve_factory.cpp
@@ -392,6 +393,16 @@ if (CLASSICAD_BUILD_TESTS)
     )
     add_test(NAME core_contracts COMMAND classicad_core_contracts_test)
     set_tests_properties(core_contracts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(classicad_solid_extrusion_contracts_test tests/solid_extrusion_contracts.cpp)
+    classicad_configure_ui_target(classicad_solid_extrusion_contracts_test)
+    classicad_attach_object_modules(classicad_solid_extrusion_contracts_test
+        classicad_geometry_objects classicad_document_objects
+        classicad_command_objects classicad_serialization_objects
+        classicad_service_objects classicad_tool_objects classicad_viewport_shared_objects
+        classicad_viewport_support_objects)
+    add_test(NAME solid_extrusion_contracts COMMAND classicad_solid_extrusion_contracts_test)
+    set_tests_properties(solid_extrusion_contracts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     add_executable(classicad_viewport_render_contracts_test
         tests/viewport_render_contracts.cpp

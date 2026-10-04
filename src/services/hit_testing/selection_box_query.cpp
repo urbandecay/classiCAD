@@ -110,8 +110,8 @@ ProjectedShapeBoundsResult queryProjectedShapeBounds(
         includeWorldPoint(workPlaneFramePointToWorld(point, frame));
     }
 
-    if (validateNurbsSurface(shape.nurbsSurface)) {
-        for (const Point3D &point : shape.nurbsSurface.controlPoints) {
+    for (const auto &face : shapeSurfaceFaces(shape)) {
+        for (const Point3D &point : face.controlPoints) {
             includeWorldPoint(point);
         }
     }

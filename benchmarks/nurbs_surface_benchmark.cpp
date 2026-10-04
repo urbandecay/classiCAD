@@ -1,4 +1,7 @@
 #include "core/geometry/nurbs_surface_evaluator.h"
+#include "core/geometry/curve_construction.h"
+#include "core/geometry/nurbs_surface_factory.h"
+#include "core/geometry/nurbs_solid.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
 #include "services/sampling/surface_tessellation_cache.h"
 
@@ -145,6 +148,62 @@ void benchmarkSurface(int controlPointCount)
               << coordinateChecksum << '\n';
 }
 
+void benchmarkMovingCylinder()
+{
+    NurbsSurface3D cap;
+    NurbsExtrusionSolid3D solid;
+    if (!makeNurbsPlanarFillSurface(makeCircleNurbs({{0, 0}, {3, 0}}),
+                                   makeWorkPlaneFrame(WorkPlane::XY), &cap) ||
+        !makeNurbsExtrusionSolid(cap, {0, 0, 5}, &solid)) {
+        std::cerr << "Failed to create cylinder benchmark\n";
+        return;
+    }
+    const auto faces = nurbsSolidFaces(solid);
+    constexpr int frames = 12;
+    double checksum = 0;
+    const auto moved = [](NurbsSurface3D face, int frame) {
+        for (auto &point : face.controlPoints) {
+            point.x += frame * 0.137;
+            point.y -= frame * 0.053;
+        }
+        return face;
+    };
+    const double rebuilt = medianMilliseconds(3, [&]() {
+        for (int frame = 1; frame <= frames; ++frame) {
+            for (const auto &face : faces) {
+                PreparedNurbsSurfaceTessellation tessellation;
+                tessellation.prepare(moved(face, frame));
+                checksum += tessellation.vertices().size();
+            }
+        }
+    });
+    SurfaceTessellationCache cache;
+    for (int i = 0; i < faces.size(); ++i) {
+        cache.acquire(ObjectId::fromValue(1), 1, faces[i], i);
+    }
+    const double dragged = medianMilliseconds(5, [&]() {
+        for (int frame = 1; frame <= frames; ++frame) {
+            for (int i = 0; i < faces.size(); ++i) {
+                const auto mesh = cache.acquire(ObjectId::fromValue(1),
+                    frame + 2, moved(faces[i], frame), i);
+                checksum += mesh->vertices().size();
+            }
+        }
+    });
+    const double preview = medianMilliseconds(5, [&]() {
+        for (int frame = 1; frame <= frames; ++frame) {
+            for (const auto &face : faces) {
+                const auto mesh = cache.acquire(ObjectId::invalid(), 0,
+                                                moved(face, frame));
+                checksum += mesh->vertices().size();
+            }
+        }
+    });
+    std::cout << "Cylinder, " << frames << " movement frames: rebuild="
+              << rebuilt << " ms; drag=" << dragged << " ms; duplicate preview="
+              << preview << " ms; checksum=" << checksum << '\n';
+}
+
 } // namespace
 
 int main()
@@ -152,5 +211,6 @@ int main()
     for (const int controlPointCount : {4, 12, 24}) {
         benchmarkSurface(controlPointCount);
     }
+    benchmarkMovingCylinder();
     return 0;
 }

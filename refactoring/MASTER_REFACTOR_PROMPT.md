@@ -53,6 +53,7 @@ src/core/geometry/nurbs_curve.*    shared NURBS storage, knot expansion, validat
 src/core/geometry/nurbs_surface.*  tensor-product 3D NURBS surface storage, UV trim loops, validation, and evaluation
 src/core/geometry/nurbs_surface_evaluator.* validated prepared surface state for repeated evaluation
 src/core/geometry/nurbs_surface_factory.* exact ruled extrusion and planar Fill with UV trim boundaries
+src/core/geometry/nurbs_solid.*    exact closed planar-face extrusion, caps/walls, validation, and face orientation
 src/core/geometry/arc_curve_factory.* signed direction and exact rational NURBS construction for three-point arcs
 src/core/geometry/interpolating_curve_factory.* centripetal Catmull-Rom interpolation represented as exact piecewise cubic NURBS
 src/core/geometry/work_plane.*     principal and oriented local-2D to world-3D frame mapping
@@ -66,7 +67,7 @@ src/core/geometry/curve_join.* connected-curve grouping, planar and world-frame 
 src/core/geometry/curve_subdivision.* equal arc-length NURBS parameter selection for subdivision markers
 src/core/geometry/surface_trim_region.* prepared sampled UV trim loops and shared outer/hole containment
 src/core/geometry/nurbs_surface_tessellator.* shared trimmed wireframe, visible triangles, and Blender display proxy data
-benchmarks/nurbs_surface_benchmark.cpp opt-in evaluator, tessellation, and cache microbenchmark
+benchmarks/nurbs_surface_benchmark.cpp opt-in evaluator, tessellation, cache, and moving capped-cylinder microbenchmark
 benchmarks/viewport_query_benchmark.cpp opt-in whole-scene curve hit-test and selection-box microbenchmark
 benchmarks/viewport_runtime_benchmark.cpp opt-in snap/pick, redraw, per-object cache-invalidation, and snapshot-history benchmark
 src/core/geometry/geometry_transform.* world-plane-aware translation, reflection, uniform/one-axis scaling, and world-axis rotation transforms
@@ -74,7 +75,7 @@ src/core/document/object_id.h      stable scene-object identity value type
 src/core/document/layer_id.h       stable layer identity value type
 src/core/document/layer.h          layer record, visibility, locking, and object membership
 src/core/document/dimension_anchor.h persistent dimension-to-geometry references
-src/core/document/shape.h          persistent shape data, curves, surfaces, and workplane placement
+src/core/document/shape.h          persistent curves, surfaces, closed extrusion solids, and workplane placement
 src/core/document/scene_object.h   persistent object identity, layer, and Shape payload
 src/core/document/document.*       document-owned scene objects, layers, IDs, and snapshots
 src/core/document/document_settings.* persistent document display units and grid spacing
@@ -102,7 +103,7 @@ src/core/debug_log.*               application logging
 src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/frame picking, presets, zoom, pan, and Blender-style turntable/trackball orbit math
 src/services/sampling/curve_sampler.* NURBS display/erase sampling and scene cache generation
 src/services/sampling/curve_sample_data.h sampled NURBS and erase-cache values
-src/services/sampling/surface_tessellation_cache.* bounded ObjectId/revision cache for prepared surface display data
+src/services/sampling/surface_tessellation_cache.* bounded ObjectId/revision and translation-reuse caches for prepared surface display data
 src/services/hit_testing/curve_hit_tester.* curve/control-point hit-testing, drawing-plane inheritance, and cross-workplane orbit-depth picking
 src/services/hit_testing/projected_curve_bounds.* conservative perspective-aware projection of positive-weight NURBS control hulls
 src/services/hit_testing/selection_box_query.* sampled NURBS/point box queries, projected fallback bounds, and camera clipping
@@ -128,9 +129,9 @@ src/tools/polygon_tool.*           four-mode regular polygon construction, dimen
 src/tools/arc_tool.*               Arc mode/state reset, frame capture, canonical staged points, click/key/axis stage decisions, unit-aware numeric input, preview math, chord solving, endpoint axis inference/projection, chord-length completion, vertical hysteresis, chord-plane construction, commit construction, and planar endpoint constraints; screen coordinates and final cursor/snap presentation remain in the viewport
 src/tools/bezier_tool.*            Bezier creation
 src/tools/nurbs_tool.*             NURBS creation
-src/tools/point_extrude_tool.*     unified Extrude: points to edges, curves to ruled NURBS surfaces
+src/tools/point_extrude_tool.*     unified Extrude: points to edges, curves to ruled surfaces, planar faces to capped solids
 src/tools/circle_tangent_tool.*   circle construction tangent to selected NURBS curves
-src/tools/grab_tool.*              base-point move state and rollback snapshot lifecycle
+src/tools/grab_tool.*              base-point move state, selected-source restoration, and rollback snapshot lifecycle
 src/tools/duplicate_tool.*         interactive duplicate source/base/destination and preview state
 src/tools/join_tool.*              interactive Join input, curve planning, command transaction, selection result, and prompt
 src/tools/subdivision_tool.*       section/wheel/preview state, translated wheel/key/click decisions, and command transaction
@@ -178,6 +179,7 @@ cmake/check_dependencies.py        downward-include and implementation-include a
 CMakePresets.json                  isolated app-only, full-test, and benchmark build configurations
 tests/trim_seam.cpp                geometry, query, tool, command, selection-box, and update-session contract coverage without implementation includes
 tests/core_contracts.cpp            vocabulary, ID, NURBS, session, camera, and orbit-math compatibility coverage
+tests/solid_extrusion_contracts.cpp exact cap/wall boundaries, transforms, face caches, rendering, persistence, mixed Extrude and Undo
 tests/viewport_render_contracts.cpp layer-line patterns and committed GPU stroke-style contract coverage
 tests/viewport_interaction.cpp      viewport mouse/wheel and GPU/fallback interaction coverage
 ```
@@ -1019,3 +1021,48 @@ viewport construction; and `git diff --check` passed. App-only clean and
 several incremental builds did not consistently improve, while the warm
 all-target clean source build improved substantially. No blanket performance
 claim is made. Phase 24 is complete; nothing was committed or pushed.
+
+#### Closed face extrusion feature checkpoint (2026-10-04)
+
+`core/geometry/nurbs_solid.*` owns the closed planar-face extrusion contract:
+one exact base surface and a world-space vector, two matching trimmed caps,
+and exact ruled boundary walls. `Shape` stores this as one `NurbsSolid` object.
+The existing Extrude controller and public command accept face selections;
+faces default to their normal and retain XYZ constraints, spatial snapping,
+shared displacement, preview, completion, and atomic mixed-source Undo.
+
+Rendering/depth, hit/box selection, corner snapping, move/rotate/mirror/scale,
+native JSON and `.vignola`/`.blend` display proxies consume that contract.
+Surface tessellation keys now include the face index to prevent aliasing.
+General BRep editing, Boolean operations, and curved base faces remain outside
+this feature. Zero-volume sweeps are rejected.
+
+Full build and dependency audit passed. Solid, core, command, scene-query,
+render, and Vignola file checks passed. Public viewport `--point-extrude-only`
+and `--solid-extrude-only` checks passed offscreen, including preview,
+save/reload, and Undo. Offscreen startup reached the window and viewport before
+the expected five-second timeout. Native GL routing is covered by contract;
+the offscreen interaction run uses the CPU fallback. `git diff --check` passed.
+The new feature is uncommitted; the historical refactor phase stays complete.
+
+#### Move and Duplicate performance correction (2026-10-04)
+
+Surface revision changes previously triggered full tessellation during movement;
+anonymous duplicate previews also rebuilt it on every paint. The bounded shared
+surface cache now compares degrees, knots, weights, UV trims, and control nets
+up to translation (with floating-point roundoff tolerance), then translates
+existing samples. Deformations retain the full tessellation path. CPU fallback,
+transient GPU surface/solid previews, depth, and hit queries share this cache.
+Surface previews are accepted by the native stroke path alongside solids.
+
+G/Grab previously restored the entire document on each cursor move, advancing
+every object's revision. GrabTool now retains selected source geometry and
+restores only those objects for each placement update and base-point transition.
+The full rollback snapshot remains available for cancellation and history.
+
+The capped-cylinder microbenchmark measured 12 movement steps at 1872.53 ms
+with fresh tessellation, 1.09725 ms with revision-changing translation reuse,
+and 1.0963 ms for anonymous duplicate previews. These are mesh preparation
+times, not whole-frame latency or an interactive GUI measurement. Full build,
+dependency audit, diff checks, and offscreen startup passed; regression suites
+were not run. Changes remain uncommitted.

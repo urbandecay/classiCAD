@@ -16,6 +16,7 @@ public:
                const QVector<ObjectId> &selectedObjectIds,
                const QPointF &startWorldPosition);
     bool enterBasePointMode(Document &document);
+    void restoreSourceGeometry(Document &document) const;
     void acceptBasePoint(const QPointF &basePoint,
                          const QPointF &cursorOffset);
     void setMoved(bool moved);
@@ -37,6 +38,7 @@ private:
     bool pickingBasePoint_ = false;
     bool hasBasePoint_ = false;
     QVector<ObjectId> objectIds_;
+    QVector<Shape> sourceGeometry_;
     Document::Snapshot startSnapshot_;
     QPointF startWorldPosition_;
     QPointF basePoint_;

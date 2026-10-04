@@ -230,7 +230,8 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                                  ViewportDepthGeometry *geometry,
                                  const SurfaceTessellationCache *cache = nullptr,
                                  ObjectId objectId = ObjectId::invalid(),
-                                 quint64 geometryRevision = 0)
+                                 quint64 geometryRevision = 0,
+                                 int faceIndex = 0)
 {
     if (geometry == nullptr) {
         return;
@@ -238,8 +239,8 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
     PreparedNurbsSurfaceTessellation localTessellation;
     QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
     const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
-    if (cache != nullptr && objectId.isValid()) {
-        cachedTessellation = cache->acquire(objectId, geometryRevision, surface);
+    if (cache != nullptr) {
+        cachedTessellation = cache->acquire(objectId, geometryRevision, surface, faceIndex);
         tessellation = cachedTessellation.data();
     } else if (localTessellation.prepare(surface)) {
         tessellation = &localTessellation;
@@ -327,12 +328,16 @@ void appendShapeDepthGeometry(const Shape &shape,
             }
             return;
         }
-        if (shape.geometryType == GeometryType::NurbsSurface) {
-            appendNurbsSurfaceDepthMesh(shape.nurbsSurface,
-                                        &geometry,
-                                        surfaceCache,
-                                        objectId,
-                                        geometryRevision);
+        if (shape.geometryType == GeometryType::NurbsSurface ||
+            shape.geometryType == GeometryType::NurbsSolid) {
+            const auto faces = shapeSurfaceFaces(shape);
+            for (int index = 0; index < faces.size(); ++index) {
+                appendNurbsSurfaceDepthMesh(faces[index],
+                                            &geometry,
+                                            surfaceCache,
+                                            objectId,
+                                            geometryRevision, index);
+            }
             return;
         }
 
@@ -381,7 +386,7 @@ ViewportDepthGeometry buildViewportDepthGeometry(
     appendShapeDepthGeometry(sceneObject.shape,
                              sampler,
                              geometry,
-                             useCache ? surfaceTessellationCache : nullptr,
+                             surfaceTessellationCache,
                              useCache ? sceneObject.objectId : ObjectId::invalid(),
                              useCache ? sceneObject.geometryRevision : 0);
     return geometry;
@@ -437,31 +442,34 @@ QByteArray viewportDepthGeometryCacheKey(
             stream << double(point.x()) << double(point.y());
         }
         writeCurve(stream, shape.nurbs);
-        const Shape::NurbsSurface3D &surface = shape.nurbsSurface;
-        stream << qint32(surface.dimension)
-               << qint32(surface.degreeU) << qint32(surface.degreeV)
-               << qint32(surface.orderU) << qint32(surface.orderV)
-               << qint32(surface.controlVertexCountU)
-               << qint32(surface.controlVertexCountV)
-               << quint8(surface.rational ? 1 : 0)
-               << qint32(surface.controlPoints.size());
-        for (int index = 0; index < surface.controlPoints.size(); ++index) {
-            const Point3D &point = surface.controlPoints[index];
-            stream << double(point.x) << double(point.y) << double(point.z)
-                   << double(surface.weights.value(index, 1.0));
-        }
-        stream << qint32(surface.knotsU.size());
-        for (const double knot : surface.knotsU) {
-            stream << knot;
-        }
-        stream << qint32(surface.knotsV.size());
-        for (const double knot : surface.knotsV) {
-            stream << knot;
-        }
-        stream << qint32(surface.trimLoops.size());
-        for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
-            stream << quint8(loop.isHole ? 1 : 0);
-            writeCurve(stream, loop.curve);
+        const auto faces = shapeSurfaceFaces(shape);
+        stream << qint32(faces.size());
+        for (const Shape::NurbsSurface3D &surface : faces) {
+            stream << qint32(surface.dimension)
+                   << qint32(surface.degreeU) << qint32(surface.degreeV)
+                   << qint32(surface.orderU) << qint32(surface.orderV)
+                   << qint32(surface.controlVertexCountU)
+                   << qint32(surface.controlVertexCountV)
+                   << quint8(surface.rational ? 1 : 0)
+                   << qint32(surface.controlPoints.size());
+            for (int index = 0; index < surface.controlPoints.size(); ++index) {
+                const Point3D &point = surface.controlPoints[index];
+                stream << double(point.x) << double(point.y) << double(point.z)
+                       << double(surface.weights.value(index, 1.0));
+            }
+            stream << qint32(surface.knotsU.size());
+            for (const double knot : surface.knotsU) {
+                stream << knot;
+            }
+            stream << qint32(surface.knotsV.size());
+            for (const double knot : surface.knotsV) {
+                stream << knot;
+            }
+            stream << qint32(surface.trimLoops.size());
+            for (const NurbsSurfaceTrimLoop &loop : surface.trimLoops) {
+                stream << quint8(loop.isHole ? 1 : 0);
+                writeCurve(stream, loop.curve);
+            }
         }
         stream << qint32(shape.components.size());
         for (int index = 0; index < shape.components.size(); ++index) {

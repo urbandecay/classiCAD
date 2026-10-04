@@ -69,6 +69,7 @@ bool TangentFromCurveTool::handleMousePress(const ToolInput &input,
         case GeometryType::AngularDimension:
         case GeometryType::Picture:
         case GeometryType::NurbsSurface:
+        case GeometryType::NurbsSolid:
             status_.text = QStringLiteral("Choose a curve, not a point or rectangle");
             publish(context);
             return true;

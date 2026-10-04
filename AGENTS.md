@@ -97,6 +97,21 @@ Reference documentation:
 - https://developer.rhino3d.com/api/cpp/class_o_n___nurbs_surface.html
 - https://developer.rhino3d.com/en/samples/cpp/create-nurbs-surface/
 
+## Closed extrusion solids
+
+- `GeometryType::NurbsSolid` stores `NurbsExtrusionSolid3D`: an exact affine
+  planar `baseSurface` with its UV trim curves plus a world XYZ displacement.
+  It is a closed translational extrusion, with two matching caps and one exact
+  ruled wall per boundary loop. It is one scene object, not separate surfaces.
+- Solid faces are derived by `nurbsSolidFaces`; meshes are display proxies.
+  Persist the base face and vector. Transform the base CVs and the vector
+  together. Keep surface-cache face indices distinct under a shared object ID.
+- The existing Extrude interaction handles points, curves, and planar faces.
+  A face source defaults to its normal; X/Y/Z override the direction.
+  Reject sweeps tangent to the base plane and unsupported curved base faces.
+  General BRep editing, Boolean operations, and curved-face extrusion require
+  a separate topology contract.
+
 ## Project workflow
 
 - Keep the application UI in C++/Qt and the geometry model in C++.

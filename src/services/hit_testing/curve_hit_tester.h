@@ -40,7 +40,8 @@ public:
                                  const ViewportTransform &transform,
                                  const QSize &viewportSize,
                                  ObjectId objectId = ObjectId::invalid(),
-                                 quint64 geometryRevision = 0) const;
+                                 quint64 geometryRevision = 0,
+                                 int faceIndex = 0) const;
 
     int hitTestShape(const Document &document,
                      const QPointF &screenPosition,

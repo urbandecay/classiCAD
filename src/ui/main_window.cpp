@@ -1742,11 +1742,12 @@ private:
         const ViewportCommandResult result =
             viewport_->executeCommand(ViewportCommand::Explode);
         if (!result.accepted) {
-            statusBar()->showMessage(QStringLiteral("Select a joined spline first"), 4000);
+            statusBar()->showMessage(
+                QStringLiteral("Select a rectangle or joined spline first"), 4000);
             return;
         }
 
-        statusBar()->showMessage(QStringLiteral("Exploded into %1 separate splines")
+        statusBar()->showMessage(QStringLiteral("Exploded into %1 separate curves")
                                      .arg(result.count),
                                  5000);
     }
@@ -1871,7 +1872,7 @@ private:
             startJoinMode();
         });
 
-        QAction *explodeAction = editMenu->addAction(QStringLiteral("Explode Splines"));
+        QAction *explodeAction = editMenu->addAction(QStringLiteral("Explode Curves"));
         explodeAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+J")));
         explodeAction->setShortcutContext(Qt::WindowShortcut);
         connect(explodeAction, &QAction::triggered, this, [this]() {
@@ -2509,8 +2510,8 @@ private:
 
         explodeButton_ = new QToolButton;
         explodeButton_->setObjectName(QStringLiteral("toolButton"));
-        explodeButton_->setText(QStringLiteral("Explode\nSplines"));
-        explodeButton_->setToolTip(QStringLiteral("Separate selected joined splines into individual curves"));
+        explodeButton_->setText(QStringLiteral("Explode\nCurves"));
+        explodeButton_->setToolTip(QStringLiteral("Separate selected rectangles or joined splines into individual curves"));
         explodeButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         layout->addWidget(explodeButton_);
         connect(explodeButton_, &QToolButton::clicked, this, [this]() {

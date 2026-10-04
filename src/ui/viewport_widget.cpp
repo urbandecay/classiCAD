@@ -2554,6 +2554,41 @@ public:
             return selected.contains(objectId);
         };
 
+        const auto componentsForExplode = [this](
+            const Shape &shape,
+            QVector<Shape::NurbsCurve2D> *components) {
+            if (components == nullptr) {
+                return false;
+            }
+            components->clear();
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                if (shape.components.isEmpty()) {
+                    return false;
+                }
+                *components = shape.components;
+            } else if (shape.geometryType == GeometryType::Rectangle) {
+                const QVector<QPointF> vertices = rectangleVertices(shape);
+                if (vertices.size() < 4) {
+                    return false;
+                }
+                components->reserve(4);
+                for (int index = 0; index < 4; ++index) {
+                    components->append(makeDegreeOneNurbs(
+                        {vertices[index], vertices[(index + 1) % 4]}));
+                }
+            } else {
+                return false;
+            }
+
+            for (const Shape::NurbsCurve2D &component : *components) {
+                if (!isValidNurbsCurve(component)) {
+                    components->clear();
+                    return false;
+                }
+            }
+            return !components->isEmpty();
+        };
+
         int explodeableShapeCount = 0;
         int explodedComponentCount = 0;
         for (const ObjectId objectId : selected) {
@@ -2563,25 +2598,16 @@ public:
             }
 
             const Shape &shape = shapes_[shapeIndex];
-            if (shape.geometryType != GeometryType::PolyCurve || shape.components.isEmpty()) {
-                continue;
-            }
-
-            bool validComponents = true;
-            for (const Shape::NurbsCurve2D &component : shape.components) {
-                if (!isValidNurbsCurve(component)) {
-                    validComponents = false;
-                    break;
-                }
-            }
-            if (validComponents) {
+            QVector<Shape::NurbsCurve2D> components;
+            if (componentsForExplode(shape, &components)) {
                 ++explodeableShapeCount;
-                explodedComponentCount += shape.components.size();
+                explodedComponentCount += components.size();
             }
         }
 
         if (explodeableShapeCount == 0) {
-            DebugLog::instance().write(QStringLiteral("explode ignored no PolyCurve selection"));
+            DebugLog::instance().write(
+                QStringLiteral("explode ignored no rectangle or PolyCurve selection"));
             return 0;
         }
 
@@ -2595,18 +2621,9 @@ public:
             const SceneObject sourceObject = document_.objects()[sourceIndex];
             const Shape &source = sourceObject.geometry;
             const bool selectedSource = selectedContains(sourceObject.id);
-            const bool canExplode = selectedSource &&
-                                    source.geometryType == GeometryType::PolyCurve &&
-                                    !source.components.isEmpty();
-            bool validComponents = canExplode;
-            if (validComponents) {
-                for (const Shape::NurbsCurve2D &component : source.components) {
-                    if (!isValidNurbsCurve(component)) {
-                        validComponents = false;
-                        break;
-                    }
-                }
-            }
+            QVector<Shape::NurbsCurve2D> components;
+            const bool validComponents = selectedSource &&
+                                         componentsForExplode(source, &components);
 
             if (!validComponents) {
                 const int newIndex = explodedObjects.size();
@@ -2618,23 +2635,31 @@ public:
             }
 
             for (int componentIndex = 0;
-                 componentIndex < source.components.size();
+                 componentIndex < components.size();
                  ++componentIndex) {
                 const Shape::NurbsCurve2D &component =
-                    source.components[componentIndex];
+                    components[componentIndex];
                 const WorkPlaneFrame componentFrame =
-                    shapeComponentWorkPlaneFrame(source, componentIndex);
+                    source.geometryType == GeometryType::PolyCurve
+                        ? shapeComponentWorkPlaneFrame(source, componentIndex)
+                        : shapeWorkPlaneFrame(source);
                 const int newIndex = explodedObjects.size();
                 SceneObject componentObject;
                 componentObject.layerId = sourceObject.layerId;
-                componentObject.geometry = Shape{
-                    GeometryType::PolyCurve,
-                    polyCurvePoints({component}),
-                    Shape::NurbsCurve2D{},
-                    ArcMode::TwoPoint,
-                    0.0,
-                    {},
-                    {component}};
+                if (source.geometryType == GeometryType::Rectangle) {
+                    componentObject.geometry.geometryType = GeometryType::Line;
+                    componentObject.geometry.points = component.controlPoints;
+                    componentObject.geometry.nurbs = component;
+                } else {
+                    componentObject.geometry = Shape{
+                        GeometryType::PolyCurve,
+                        polyCurvePoints({component}),
+                        Shape::NurbsCurve2D{},
+                        ArcMode::TwoPoint,
+                        0.0,
+                        {},
+                        {component}};
+                }
                 componentObject.geometry.workPlane = source.workPlane;
                 componentObject.geometry.workPlaneOffset = source.workPlaneOffset;
                 componentObject.geometry.workPlaneFrame = componentFrame;

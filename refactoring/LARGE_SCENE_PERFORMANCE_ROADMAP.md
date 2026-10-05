@@ -79,24 +79,51 @@ Check object IDs, ordering, layer membership, rollback, and Undo/Redo.
 **Expected impact:** Very high for moving large selections.
 **Effort:** High; requires a persistent model and file-format contract.
 
-Store NURBS geometry in object-local coordinates and give each scene object a
-placement transform. A drag can update one preview transform and commit the
-placement without rewriting every surface control point. The renderer can
-apply the transform while drawing. This also removes the current need to scan
-surface control points to detect a rigid translation after each geometry
-revision.
+Give each scene object a persistent placement separate from its NURBS data.
+The first implementation is translation-only for spatial NURBS surfaces and
+solids: moving them updates one world-space offset per object and leaves every
+surface control point unchanged. The render and query paths apply that offset,
+allowing prepared tessellation and GPU buffers to be reused. Rotation, scale,
+and reflection bake the offset into the NURBS geometry before changing it;
+general transform composition remains a future contract.
+
+**Implementation checkpoint (2026-10-04):** `SceneObject` now stores spatial
+NURBS placement, and the document tracks it as a persistent change. Group move,
+drag snapping, Grab restoration, and duplicate preview/commit use placement
+updates. Viewport strokes, cached display/depth geometry, CPU surface drawing,
+hit testing, box selection, spatial corner snaps, and Blender display proxies
+all account for the offset. CPU fallback depth picking intersects the visible
+surface triangles so orbit pivots and edge-on drawing-plane anchors use the
+placed surface, and projected control-hull culling includes the offset so moved
+surfaces still skip off-screen narrow-phase queries. Scale, rotate, and mirror
+bake placement into the exact base surface CVs before editing; solid extrusion
+vectors remain unchanged by that translation bake. Curves retain their
+workplane representation.
+
+Document JSON is now version 5. Versions 1–4 load with zero placement, and
+native `.vignola`/`.blend` files preserve the offset in the embedded document.
+The full build and 277-source dependency audit passed. No test suite, GUI smoke,
+or before/after scene benchmark was run for this checkpoint, so the realized
+large-scene speedup is not yet measured. In particular, render-frame creation
+still walks the scene and copies shape records; that cost must be measured
+separately.
 
 Relevant code:
 
-- `src/core/document/scene_object.h`: currently stores ID, layer, and geometry.
-- `src/core/commands/transform_command.cpp`: applies edits object by object.
-- `src/core/geometry/geometry_transform.cpp`: currently translates surface
-  control points.
+- `src/core/document/scene_object.h`: stores ID, layer, geometry, and the
+  translation-only placement value for spatial NURBS objects.
+- `src/core/commands/transform_command.cpp`: bakes placement before edits that
+  change spatial surface geometry.
+- `src/core/geometry/geometry_transform.cpp`: placement baking and existing
+  geometry transforms.
 - `src/services/sampling/surface_tessellation_cache.cpp` and
   `src/ui/viewport/viewport_geometry_cache.cpp`: recognize translation and
-  retain prepared geometry.
+  retain prepared geometry; the viewport cache adds the persistent placement
+  offset when drawing.
 - Serialization, Rhino/openNURBS interchange, hit testing, snapping, and
-  workplane mapping must all agree on the local-to-world transform.
+  workplane mapping must all agree on the local-to-world transform. Native
+  JSON placement is implemented; Rhino import remains zero-offset and there is
+  no Rhino export path yet.
 
 Keep the first implementation narrowly scoped to translation if that can be
 done without creating incompatible geometry paths. Define how rotation, scale,

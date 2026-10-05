@@ -73,6 +73,7 @@ ViewportRenderFrame buildViewportRenderFrame(
 
         ViewportRenderObject entry;
         entry.shape = sceneObject.geometry;
+        entry.placementTranslation = sceneObject.placementTranslation;
         entry.objectId = sceneObject.id;
         entry.objectIndex = objectIndex++;
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
@@ -88,6 +89,10 @@ ViewportRenderFrame buildViewportRenderFrame(
             entry.scalePreview = true;
             entry.cacheable = false;
             const ViewportRenderTransform &preview = input.transformPreview;
+            if (bakeShapePlacementTranslation(
+                    &entry.shape, entry.placementTranslation)) {
+                entry.placementTranslation = {};
+            }
             scaleShapeGeometry(&entry.shape,
                                preview.scaleBasePoint,
                                preview.scaleAxis,
@@ -99,6 +104,10 @@ ViewportRenderFrame buildViewportRenderFrame(
             entry.rotatePreview = true;
             entry.cacheable = false;
             const ViewportRenderTransform &preview = input.transformPreview;
+            if (bakeShapePlacementTranslation(
+                    &entry.shape, entry.placementTranslation)) {
+                entry.placementTranslation = {};
+            }
             rotateShapeGeometry(&entry.shape,
                                 preview.rotatePivot,
                                 preview.rotateAxis,

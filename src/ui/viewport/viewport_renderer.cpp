@@ -1538,8 +1538,13 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         for (const PreparedNurbsSurfaceTessellation::Polyline &polyline :
              tessellation->wireframe()) {
             for (int index = 1; index < polyline.points.size(); ++index) {
-                appendScreenLine(polyline.points[index - 1],
-                                 polyline.points[index]);
+                const auto moved = [&preparedOffset](const Point3D &point) {
+                    return Point3D{point.x + preparedOffset.x,
+                                   point.y + preparedOffset.y,
+                                   point.z + preparedOffset.z};
+                };
+                appendScreenLine(moved(polyline.points[index - 1]),
+                                 moved(polyline.points[index]));
             }
         }
     }

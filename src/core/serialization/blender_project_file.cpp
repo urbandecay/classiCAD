@@ -82,9 +82,9 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
                 classiCAD::nurbsSolidFaceReversed(sceneObject.geometry.nurbsSolid, surfaceIndex);
             for (const classiCAD::Point3D &point : tessellation.vertices()) {
                 QJsonArray vertex;
-                vertex.append(point.x);
-                vertex.append(point.y);
-                vertex.append(point.z);
+                vertex.append(point.x + sceneObject.placementTranslation.x);
+                vertex.append(point.y + sceneObject.placementTranslation.y);
+                vertex.append(point.z + sceneObject.placementTranslation.z);
                 vertices.append(vertex);
             }
             for (const classiCAD::PreparedNurbsSurfaceTessellation::Triangle &triangle :

@@ -14,6 +14,7 @@ struct DocumentChangeSet {
     QVector<ObjectId> objectIds;
     QVector<LayerId> layerIds;
     bool geometryChanged = false;
+    bool placementChanged = false;
     bool structureChanged = false;
     bool layerPropertiesChanged = false;
     bool visibilityChanged = false;
@@ -23,14 +24,14 @@ struct DocumentChangeSet {
     bool isEmpty() const
     {
         return objectIds.isEmpty() && layerIds.isEmpty() &&
-               !geometryChanged && !structureChanged &&
+               !geometryChanged && !placementChanged && !structureChanged &&
                !layerPropertiesChanged && !visibilityChanged &&
                !settingsChanged && !selectionChanged;
     }
 
     bool affectsPersistentDocument() const
     {
-        return geometryChanged || structureChanged ||
+        return geometryChanged || placementChanged || structureChanged ||
                layerPropertiesChanged || visibilityChanged || settingsChanged;
     }
 

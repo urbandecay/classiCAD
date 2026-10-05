@@ -4,6 +4,11 @@
 
 namespace classiCAD {
 
+// Bake a scene object's world-space translation into a spatial NURBS shape.
+// Used only when a non-translation geometry edit needs world-space CVs.
+bool bakeShapePlacementTranslation(Shape *shape,
+                                   const Point3D &translation);
+
 // Reflect a shape across the infinite line defined by axisStart and axisEnd.
 // The curve degree, order, weights, knots, and parameter domain are preserved;
 // only Euclidean positions are transformed.

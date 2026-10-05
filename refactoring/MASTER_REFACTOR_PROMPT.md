@@ -73,14 +73,14 @@ src/core/geometry/nurbs_surface_tessellator.* shared trimmed wireframe, visible 
 benchmarks/nurbs_surface_benchmark.cpp opt-in evaluator, tessellation, cache, and moving capped-cylinder microbenchmark
 benchmarks/viewport_query_benchmark.cpp opt-in whole-scene curve hit-test and selection-box microbenchmark
 benchmarks/viewport_runtime_benchmark.cpp opt-in snap/pick, redraw, per-object cache-invalidation, and snapshot-history benchmark
-src/core/geometry/geometry_transform.* world-plane-aware translation, reflection, uniform/one-axis scaling, and world-axis rotation transforms
+src/core/geometry/geometry_transform.* world-plane-aware translation, placement baking, reflection, uniform/one-axis scaling, and world-axis rotation transforms
 src/core/document/object_id.h      stable scene-object identity value type
 src/core/document/layer_id.h       stable layer identity value type
 src/core/document/layer.h          layer record, visibility, locking, and object membership
 src/core/document/dimension_anchor.h persistent dimension-to-geometry references
 src/core/document/shape.h          persistent curves, surfaces, closed extrusion solids, and workplane placement
-src/core/document/scene_object.h   persistent object identity, layer, and Shape payload
-src/core/document/document.*       document-owned scene objects, layers, IDs, and snapshots
+src/core/document/scene_object.h   persistent object identity, layer, Shape payload, and translation placement for spatial NURBS
+src/core/document/document.*       document-owned scene objects, layers, IDs, snapshots, geometry revisions, and placement revisions
 src/core/document/document_settings.* persistent document display units and grid spacing
 src/core/document/document_change_set.h changed object/layer IDs and invalidation categories for one edit
 src/core/document/selection_model.* selected object and control-point references
@@ -96,7 +96,7 @@ src/core/commands/mirror_command.*  mirrored copy creation through shared geomet
 src/core/commands/subdivision_command.* subdivision-marker document edits
 src/core/commands/trim_erase_command.* atomic replacement, removal, and fragment insertion for Trim/Erase commits
 src/core/commands/transform_command.* shared transform edit routing for editable objects
-src/core/serialization/document_serializer.* versioned classiCAD document/layer/object snapshot
+src/core/serialization/document_serializer.* versioned classiCAD document/layer/object snapshot, including backward-compatible spatial placement
 src/core/serialization/shape_json_codec.* Shape, curve, surface, and point JSON codec
 src/core/serialization/blender_project_file.* `.vignola`/`.blend` save/open through the pinned Blender 5.2.2 runtime
 src/core/serialization/blender_project_adapter.py Blender-native collections, Curve datablocks, and document Text datablock
@@ -107,10 +107,10 @@ src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/
 src/services/sampling/curve_sampler.* NURBS display/erase sampling and scene cache generation
 src/services/sampling/curve_sample_data.h sampled NURBS and erase-cache values
 src/services/sampling/surface_tessellation_cache.* bounded ObjectId/revision/face caches; exact-geometry translation detection reuses prepared surface display data
-src/services/hit_testing/curve_hit_tester.* curve/control-point hit-testing, drawing-plane inheritance, and cross-workplane orbit-depth picking
+src/services/hit_testing/curve_hit_tester.* curve/control-point hit-testing, placed-surface hit points, drawing-plane inheritance, and cross-workplane orbit-depth picking
 src/services/hit_testing/projected_curve_bounds.* conservative perspective-aware projection of positive-weight NURBS control hulls
 src/services/hit_testing/selection_box_query.* sampled NURBS/point box queries, projected fallback bounds, and camera clipping
-src/services/snapping/snap_engine.* endpoint, midpoint, center, intersection, perpendicular, tangent, and projected-hull-filtered near snapping
+src/services/snapping/snap_engine.* endpoint, midpoint, center, intersection, perpendicular, tangent, placement-aware surface corners, and projected-hull-filtered near snapping
 src/services/snapping/snap_types.* snap result, candidate, drag-result contracts, and labels
 src/tools/tool.*                  non-Qt interaction lifecycle, typed handled/unhandled dispatch results, and preview/status values
 src/tools/tool_input.h            translated mouse, wheel, and keyboard input payload with the active workplane frame
@@ -135,7 +135,7 @@ src/tools/nurbs_tool.*             NURBS creation
 src/tools/point_extrude_tool.*     unified Extrude: points to edges, curves to ruled surfaces, planar faces to capped solids
 src/tools/circle_tangent_tool.*   circle construction tangent to selected NURBS curves
 src/tools/grab_tool.*              base-point move state, selected-source restoration, and rollback snapshot lifecycle
-src/tools/duplicate_tool.*         interactive duplicate source/base/destination and preview state
+src/tools/duplicate_tool.*         interactive duplicate source/base/destination and preview geometry plus placement state
 src/tools/join_tool.*              interactive Join input, curve planning, command transaction, selection result, and prompt
 src/tools/subdivision_tool.*       section/wheel/preview state, translated wheel/key/click decisions, and command transaction
 src/tools/rotate_tool.*             rotate pivot/reference/final-point transitions, axis/perpendicular-plane changes, keyboard input, angular preview/snap, typed-angle calculations, and transform commit
@@ -1121,3 +1121,29 @@ timings remain open. Full CTest passed 11/11 in 325.71 seconds, including the
 new command contracts; `git diff --check` passed. The offscreen startup smoke
 was skipped to avoid starting a second application beside the user's open
 unsaved scene. This follow-up remains uncommitted.
+
+#### Large-scene spatial placement checkpoint (2026-10-04)
+
+`SceneObject` now stores a persistent world translation for NURBS surfaces and
+solids. Group moves and spatial duplicate previews update this value while the
+surface/solid CV arrays stay unchanged. Render-frame strokes, CPU drawing,
+depth meshes, hit testing, box selection, spatial snaps, and Blender display
+proxies apply the placement offset. CPU fallback depth picking intersects the
+visible tessellation triangles, so orbit pivots and edge-on drawing-plane
+anchors land on moved surfaces. Scale, rotate, and mirror bake placement into
+the exact NURBS geometry before editing it. Planar curves retain their existing
+workplane mapping.
+
+Native document JSON is version 5 and stores the placement per object; versions
+1–4 restore zero placement. `.vignola` and `.blend` retain the translation in
+the embedded document, while generated Blender display proxies use world
+positions. Rhino import remains unchanged because imported objects begin with
+zero placement and no Rhino export path exists yet.
+
+`git diff --check`, `cmake --build build`, and its 277-source dependency audit
+passed. No CTest suite, GUI smoke, or performance benchmark was run for this
+checkpoint; the open app contains an unsaved scene and was left running. The
+code is uncommitted and unpushed. Follow-up: run placement-aware persistence,
+transform, duplicate, snap, selection, and CPU-depth contracts, then measure
+large-scene group moves against the prior revision and inspect the full-scene
+frame-construction cost.

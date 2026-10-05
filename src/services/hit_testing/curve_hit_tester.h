@@ -29,7 +29,8 @@ public:
                           const ViewportTransform &transform,
                           const QSize &viewportSize,
                           ObjectId objectId = ObjectId::invalid(),
-                          quint64 geometryRevision = 0) const;
+                          quint64 geometryRevision = 0,
+                          const Point3D &worldOffset = {}) const;
 
     qreal distanceToNurbsCurve(const QPointF &screenPosition,
                                const Shape::NurbsCurve2D &curve,
@@ -41,7 +42,8 @@ public:
                                  const QSize &viewportSize,
                                  ObjectId objectId = ObjectId::invalid(),
                                  quint64 geometryRevision = 0,
-                                 int faceIndex = 0) const;
+                                 int faceIndex = 0,
+                                 const Point3D &worldOffset = {}) const;
 
     int hitTestShape(const Document &document,
                      const QPointF &screenPosition,

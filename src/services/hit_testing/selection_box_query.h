@@ -25,7 +25,8 @@ ProjectedShapeBoundsResult queryProjectedShapeBounds(
     const Shape &shape,
     const CurveHitTester &curveHitTester,
     const ViewportTransform &viewportTransform,
-    const QSize &viewportSize);
+    const QSize &viewportSize,
+    const Point3D &worldOffset = {});
 
 // Evaluates selection against sampled curve geometry or a point object's
 // projected location. Other object types stay with the viewport's projected
@@ -36,6 +37,7 @@ SelectionBoxGeometryResult queryCurveOrPointSelectionBox(
     bool crossingSelection,
     const CurveSampler &curveSampler,
     const ViewportTransform &viewportTransform,
-    const QSize &viewportSize);
+    const QSize &viewportSize,
+    const Point3D &worldOffset = {});
 
 } // namespace classiCAD

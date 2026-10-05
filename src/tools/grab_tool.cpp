@@ -8,10 +8,15 @@ bool GrabTool::begin(Document &document,
 {
     reset();
     objectIds_.reserve(selectedObjectIds.size());
+    sourceGeometry_.reserve(selectedObjectIds.size());
+    sourcePlacementTranslations_.reserve(selectedObjectIds.size());
     for (const ObjectId objectId : selectedObjectIds) {
-        if (document.isObjectEditable(objectId) && !objectIds_.contains(objectId)) {
+        const SceneObject *sceneObject = document.object(objectId);
+        if (sceneObject != nullptr && document.isObjectEditable(objectId) &&
+            !objectIds_.contains(objectId)) {
             objectIds_.append(objectId);
-            sourceGeometry_.append(*document.shape(objectId));
+            sourceGeometry_.append(sceneObject->geometry);
+            sourcePlacementTranslations_.append(sceneObject->placementTranslation);
         }
     }
     if (objectIds_.isEmpty()) {
@@ -44,11 +49,16 @@ bool GrabTool::enterBasePointMode(Document &document)
 void GrabTool::restoreSourceGeometry(Document &document) const
 {
     for (int i = 0; i < objectIds_.size(); ++i) {
-        document.mutateGeometry(objectIds_[i], [this, i](Shape &geometry) {
-            geometry = sourceGeometry_[i];
-            return true;
-        });
+        const GeometryType type = sourceGeometry_[i].geometryType;
+        if (type != GeometryType::NurbsSurface && type != GeometryType::NurbsSolid) {
+            document.mutateGeometry(objectIds_[i], [this, i](Shape &geometry) {
+                geometry = sourceGeometry_[i];
+                return true;
+            });
+        }
     }
+    document.setObjectPlacementTranslations(objectIds_,
+                                            sourcePlacementTranslations_);
 }
 
 void GrabTool::acceptBasePoint(const QPointF &basePoint,
@@ -76,6 +86,7 @@ void GrabTool::reset()
     hasBasePoint_ = false;
     objectIds_.clear();
     sourceGeometry_.clear();
+    sourcePlacementTranslations_.clear();
     startSnapshot_ = Document::Snapshot{};
     startWorldPosition_ = {};
     basePoint_ = {};

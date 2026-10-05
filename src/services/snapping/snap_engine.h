@@ -45,7 +45,8 @@ public:
     QVector<SnapCandidate> snapCandidatesForShape(
         const Shape &shape,
         const ViewportTransform &transform,
-        const QSize &viewportSize) const;
+        const QSize &viewportSize,
+        const Point3D &worldOffset = {}) const;
     QVector<SnapCandidate> edgeCenterCandidatesForShape(
         const Shape &shape) const;
     SnapResult findEdgeCenterSnapPoint(

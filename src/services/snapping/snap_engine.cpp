@@ -115,7 +115,8 @@ Point3D candidateWorldPoint(const SnapCandidate &candidate,
                : workPlaneFramePointToWorld(candidate.point, fallbackFrame);
 }
 
-QVector<Point3D> nurbsSurfaceCorners(const NurbsSurface3D &surface)
+QVector<Point3D> nurbsSurfaceCorners(const NurbsSurface3D &surface,
+                                     const Point3D &worldOffset = {})
 {
     if (!surface.trimLoops.isEmpty()) {
         const NurbsSurfaceTrimLoop &outerLoop = surface.trimLoops.first();
@@ -141,12 +142,15 @@ QVector<Point3D> nurbsSurfaceCorners(const NurbsSurface3D &surface)
             Point3D point;
             if (evaluateNurbsPoint(outerLoop.curve, parameter, &uv) &&
                 evaluateNurbsSurfacePoint(surface, uv.x(), uv.y(), &point)) {
+                const Point3D placedPoint{point.x + worldOffset.x,
+                                          point.y + worldOffset.y,
+                                          point.z + worldOffset.z};
                 bool isDuplicate = false;
                 for (const Point3D &previous : trimVertices) {
                     const qreal distance = std::hypot(
-                        point.x - previous.x,
-                        std::hypot(point.y - previous.y,
-                                   point.z - previous.z));
+                        placedPoint.x - previous.x,
+                        std::hypot(placedPoint.y - previous.y,
+                                   placedPoint.z - previous.z));
                     if (distance <= 1.0e-9) {
                         isDuplicate = true;
                         break;
@@ -155,7 +159,7 @@ QVector<Point3D> nurbsSurfaceCorners(const NurbsSurface3D &surface)
                 if (isDuplicate) {
                     continue;
                 }
-                trimVertices.append(point);
+                trimVertices.append(placedPoint);
             }
         }
         return trimVertices;
@@ -178,7 +182,9 @@ QVector<Point3D> nurbsSurfaceCorners(const NurbsSurface3D &surface)
             if (!evaluateNurbsSurfacePoint(surface, u, v, &point)) {
                 return {};
             }
-            corners.append(point);
+            corners.append({point.x + worldOffset.x,
+                            point.y + worldOffset.y,
+                            point.z + worldOffset.z});
         }
     }
     return corners;
@@ -877,7 +883,8 @@ bool SnapEngine::arcSnapPointAtFraction(const Shape &shape,
 QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     const Shape &shape,
     const ViewportTransform &transform,
-    const QSize &viewportSize) const
+    const QSize &viewportSize,
+    const Point3D &worldOffset) const
 {
     Q_UNUSED(transform);
     Q_UNUSED(viewportSize);
@@ -905,7 +912,7 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
     if (shape.geometryType == GeometryType::NurbsSurface ||
         shape.geometryType == GeometryType::NurbsSolid) {
         for (const auto &face : shapeSurfaceFaces(shape)) {
-            for (const Point3D &point : nurbsSurfaceCorners(face)) {
+            for (const Point3D &point : nurbsSurfaceCorners(face, worldOffset)) {
                 SnapCandidate candidate{SnapType::Endpoint,
                                         QPointF(point.x, point.y)};
                 candidate.worldPoint = point;
@@ -1244,8 +1251,16 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
         if (!document.isObjectVisible(document.objectIdAt(shapeIndex))) {
             continue;
         }
+        const ObjectId objectId = document.objectIdAt(shapeIndex);
+        const SceneObject *sceneObject = document.object(objectId);
         const Shape &shape = document[shapeIndex];
-        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+        const Point3D worldOffset = sceneObject != nullptr
+                                        ? sceneObject->placementTranslation
+                                        : Point3D{};
+        const bool spatialSurface = shape.geometryType == GeometryType::NurbsSurface ||
+                                    shape.geometryType == GeometryType::NurbsSolid;
+        if (!spatialSurface &&
+            !workPlaneMatches(shapeWorkPlaneFrame(shape),
                               transform.workPlaneFrame())) {
             continue;
         }
@@ -1379,7 +1394,8 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
             shape.geometryType == GeometryType::NurbsSolid) {
             if (settings_.endpoint) {
                 for (const auto &face : shapeSurfaceFaces(shape)) {
-                    for (const Point3D &point : nurbsSurfaceCorners(face)) {
+                    for (const Point3D &point : nurbsSurfaceCorners(face,
+                                                                   worldOffset)) {
                         SnapCandidate candidate{SnapType::Endpoint,
                                                 QPointF(point.x, point.y)};
                         candidate.worldPoint = point;
@@ -2305,6 +2321,8 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
     for (int index = 0; index < document.size(); ++index) {
         if (!document.isObjectVisible(document.objectIdAt(index))) continue;
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(document[index]);
+        const SceneObject *sourceObject =
+            document.object(document.objectIdAt(index));
         QByteArray key;
         QDataStream stream(&key, QIODevice::WriteOnly);
         for (const Point3D &value : {frame.origin, frame.xAxis, frame.yAxis, frame.normal}) {
@@ -2316,7 +2334,13 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
             sceneByFrame.insert(key, sceneIndex);
             scenes.append({frame, Document{}});
         }
-        scenes[sceneIndex].document.append(document[index]);
+        SceneObject snapObject;
+        snapObject.geometry = document[index];
+        if (sourceObject != nullptr) {
+            snapObject.placementTranslation = sourceObject->placementTranslation;
+        }
+        scenes[sceneIndex].document.insertObject(
+            scenes[sceneIndex].document.size(), snapObject);
     }
     for (const PlaneScene &scene : scenes) {
         const WorkPlaneFrame &frame = scene.frame;
@@ -2573,12 +2597,21 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
             continue;
         }
         const Shape &shape = document[shapeIndex];
+        const SceneObject *sourceObject =
+            document.object(document.objectIdAt(shapeIndex));
         const WorkPlaneFrame shapeFrame = shapeWorkPlaneFrame(shape);
-        if (!workPlaneFramesAreCoplanar(shapeFrame, activeFrame)) {
+        const bool spatialSurface = shape.geometryType == GeometryType::NurbsSurface ||
+                                    shape.geometryType == GeometryType::NurbsSolid;
+        if (!spatialSurface &&
+            !workPlaneFramesAreCoplanar(shapeFrame, activeFrame)) {
             continue;
         }
         SceneObject snapObject;
-        snapObject.geometry = mapShapeBetweenFrames(shape, activeFrame);
+        snapObject.geometry = spatialSurface ? shape
+                                             : mapShapeBetweenFrames(shape, activeFrame);
+        if (sourceObject != nullptr) {
+            snapObject.placementTranslation = sourceObject->placementTranslation;
+        }
         coplanarObjects.append(std::move(snapObject));
     }
     Document coplanarScene;
@@ -2695,8 +2728,13 @@ DragSnapResult SnapEngine::findDragSnap(
     for (const int shapeIndex : selectedShapeIndices) {
         if (shapeIndex >= 0 && shapeIndex < document.size()) {
             const Shape &shape = document[shapeIndex];
+            const SceneObject *sceneObject =
+                document.object(document.objectIdAt(shapeIndex));
+            const Point3D worldOffset = sceneObject != nullptr
+                                            ? sceneObject->placementTranslation
+                                            : Point3D{};
             QVector<SnapCandidate> candidates = snapCandidatesForShape(
-                shape, transform, viewportSize);
+                shape, transform, viewportSize, worldOffset);
             for (SnapCandidate candidate : candidates) {
                 const Point3D world = candidateWorldPoint(
                     candidate, shapeWorkPlaneFrame(shape));
@@ -2727,13 +2765,19 @@ DragSnapResult SnapEngine::findDragSnap(
             continue;
         }
         const Shape &shape = document[index];
+        const SceneObject *sceneObject =
+            document.object(document.objectIdAt(index));
+        const Point3D worldOffset = sceneObject != nullptr
+                                        ? sceneObject->placementTranslation
+                                        : Point3D{};
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
         if (workPlaneMatches(frame, transform.workPlaneFrame())) {
             continue;
         }
         // Project only targets on the drag plane: different local origins and
         // axes do not imply different geometric planes.
-        for (SnapCandidate candidate : snapCandidatesForShape(shape, transform, viewportSize)) {
+        for (SnapCandidate candidate : snapCandidatesForShape(
+                 shape, transform, viewportSize, worldOffset)) {
             if ((candidate.type == SnapType::Endpoint && !settings_.endpoint) ||
                 (candidate.type == SnapType::Midpoint && !settings_.midpoint) ||
                 (candidate.type == SnapType::Center && !settings_.center) ||
@@ -2873,7 +2917,13 @@ DragSnapResult SnapEngine::findDragSnap(
         if (selectedSet.contains(index) ||
             !document.isObjectVisible(document.objectIdAt(index))) continue;
         const Shape &targetShape = document[index];
-        for (const SnapCandidate &target : snapCandidatesForShape(targetShape, transform, viewportSize)) {
+        const SceneObject *sceneObject =
+            document.object(document.objectIdAt(index));
+        const Point3D worldOffset = sceneObject != nullptr
+                                        ? sceneObject->placementTranslation
+                                        : Point3D{};
+        for (const SnapCandidate &target : snapCandidatesForShape(
+                 targetShape, transform, viewportSize, worldOffset)) {
             if ((target.type == SnapType::Endpoint && !settings_.endpoint) ||
                 (target.type == SnapType::Midpoint && !settings_.midpoint) ||
                 (target.type == SnapType::Center && !settings_.center) ||

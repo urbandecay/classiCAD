@@ -67,7 +67,8 @@ ProjectedShapeBoundsResult queryProjectedShapeBounds(
     const Shape &shape,
     const CurveHitTester &curveHitTester,
     const ViewportTransform &viewportTransform,
-    const QSize &viewportSize)
+    const QSize &viewportSize,
+    const Point3D &worldOffset)
 {
     QVector<QPointF> points = curveHitTester.controlPointsForShape(shape);
     // Keep source points in the bounds even when a malformed or legacy NURBS
@@ -112,7 +113,9 @@ ProjectedShapeBoundsResult queryProjectedShapeBounds(
 
     for (const auto &face : shapeSurfaceFaces(shape)) {
         for (const Point3D &point : face.controlPoints) {
-            includeWorldPoint(point);
+            includeWorldPoint({point.x + worldOffset.x,
+                               point.y + worldOffset.y,
+                               point.z + worldOffset.z});
         }
     }
 
@@ -131,7 +134,8 @@ SelectionBoxGeometryResult queryCurveOrPointSelectionBox(
     bool crossingSelection,
     const CurveSampler &curveSampler,
     const ViewportTransform &viewportTransform,
-    const QSize &viewportSize)
+    const QSize &viewportSize,
+    const Point3D &worldOffset)
 {
     const QRectF selectionRect = box.normalized();
     constexpr qreal crossingTolerancePixels = 2.0;
@@ -203,7 +207,13 @@ SelectionBoxGeometryResult queryCurveOrPointSelectionBox(
         QPointF screenPoint;
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
         const bool projects = viewportTransform.worldPointToScreen(
-            workPlaneFramePointToWorld(shape.points.first(), frame),
+            [&]() {
+                Point3D world = workPlaneFramePointToWorld(shape.points.first(), frame);
+                world.x += worldOffset.x;
+                world.y += worldOffset.y;
+                world.z += worldOffset.z;
+                return world;
+            }(),
             viewportSize,
             &screenPoint);
         return {true, projects && pointInside(hitRect, screenPoint)};

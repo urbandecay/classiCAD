@@ -84,6 +84,32 @@ bool DocumentTransaction::replaceGeometry(ObjectId objectId, const Shape &shape)
     return true;
 }
 
+bool DocumentTransaction::setObjectPlacementTranslation(
+    ObjectId objectId, const Point3D &translation)
+{
+    if (!document_.setObjectPlacementTranslation(objectId, translation)) {
+        return false;
+    }
+    changes_.addObject(objectId);
+    changes_.placementChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::translateObjects(const QVector<ObjectId> &objectIds,
+                                           const Point3D &worldDelta)
+{
+    if (!document_.translateObjects(objectIds, worldDelta)) {
+        return false;
+    }
+    for (const ObjectId objectId : objectIds) {
+        if (document_.object(objectId) != nullptr) {
+            changes_.addObject(objectId);
+        }
+    }
+    changes_.placementChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::removeObject(ObjectId objectId)
 {
     const SceneObject *sceneObject = document_.object(objectId);

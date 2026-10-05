@@ -39,6 +39,7 @@ private:
     bool hasBasePoint_ = false;
     QVector<ObjectId> objectIds_;
     QVector<Shape> sourceGeometry_;
+    QVector<Point3D> sourcePlacementTranslations_;
     Document::Snapshot startSnapshot_;
     QPointF startWorldPosition_;
     QPointF basePoint_;

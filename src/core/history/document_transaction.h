@@ -24,6 +24,10 @@ public:
     QVector<ObjectId> insertObjects(int index,
                                     const QVector<SceneObject> &objects);
     bool replaceGeometry(ObjectId objectId, const Shape &shape);
+    bool setObjectPlacementTranslation(ObjectId objectId,
+                                       const Point3D &translation);
+    bool translateObjects(const QVector<ObjectId> &objectIds,
+                          const Point3D &worldDelta);
     bool removeObject(ObjectId objectId);
     QVector<ObjectId> removeObjects(const QVector<ObjectId> &objectIds);
     bool moveObjectToLayer(ObjectId objectId, LayerId layerId);

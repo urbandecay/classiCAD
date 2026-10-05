@@ -1,5 +1,7 @@
 #include "transform_command.h"
 
+#include "core/geometry/geometry_transform.h"
+
 namespace classiCAD {
 
 bool TransformCommand::apply(Document &document,
@@ -20,9 +22,20 @@ bool TransformCommand::apply(Document &document,
         if (!document.isObjectEditable(objectId)) {
             continue;
         }
+        const SceneObject *sceneObject = document.object(objectId);
+        const Point3D placementTranslation = sceneObject != nullptr
+                                                 ? sceneObject->placementTranslation
+                                                 : Point3D{};
         Shape *shape = transaction.editGeometry(objectId);
         if (shape == nullptr) {
             continue;
+        }
+        if (placementTranslation.x != 0.0 || placementTranslation.y != 0.0 ||
+            placementTranslation.z != 0.0) {
+            if (!bakeShapePlacementTranslation(shape, placementTranslation) ||
+                !transaction.setObjectPlacementTranslation(objectId, {})) {
+                continue;
+            }
         }
         edit(*shape);
         ++count;

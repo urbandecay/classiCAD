@@ -120,6 +120,9 @@ void Document::applyChanges(const DocumentChangeSet &changes)
             }
         }
     }
+    if (changes.placementChanged) {
+        bumpRevision(&revisions_.placement);
+    }
     if (changes.structureChanged) {
         bumpRevision(&revisions_.structure);
     }
@@ -156,6 +159,91 @@ bool Document::mutateGeometry(ObjectId id,
     return true;
 }
 
+bool Document::setObjectPlacementTranslation(ObjectId id,
+                                             const Point3D &translation)
+{
+    return setObjectPlacementTranslations({id}, {translation});
+}
+
+bool Document::setObjectPlacementTranslations(
+    const QVector<ObjectId> &ids, const QVector<Point3D> &translations)
+{
+    if (ids.size() != translations.size()) {
+        return false;
+    }
+    DocumentChangeSet changes;
+    for (int index = 0; index < ids.size(); ++index) {
+        const ObjectId id = ids[index];
+        const Point3D &translation = translations[index];
+        SceneObject *sceneObject = mutableObject(id);
+        const bool spatialNurbs = sceneObject != nullptr &&
+            (sceneObject->geometry.geometryType == GeometryType::NurbsSurface ||
+             sceneObject->geometry.geometryType == GeometryType::NurbsSolid);
+        if (sceneObject == nullptr || !isObjectEditable(id) ||
+            !std::isfinite(translation.x) || !std::isfinite(translation.y) ||
+            !std::isfinite(translation.z) ||
+            (!spatialNurbs && (translation.x != 0.0 || translation.y != 0.0 ||
+                               translation.z != 0.0))) {
+            continue;
+        }
+        const Point3D &current = sceneObject->placementTranslation;
+        if (current.x == translation.x && current.y == translation.y &&
+            current.z == translation.z) {
+            continue;
+        }
+        sceneObject->placementTranslation = translation;
+        changes.addObject(id);
+    }
+    if (changes.objectIds.isEmpty()) {
+        return true;
+    }
+    changes.placementChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::translateObjects(const QVector<ObjectId> &ids,
+                                const Point3D &worldDelta)
+{
+    if (!std::isfinite(worldDelta.x) || !std::isfinite(worldDelta.y) ||
+        !std::isfinite(worldDelta.z) ||
+        (worldDelta.x == 0.0 && worldDelta.y == 0.0 && worldDelta.z == 0.0)) {
+        return false;
+    }
+
+    QSet<quint64> seen;
+    seen.reserve(ids.size());
+    DocumentChangeSet changes;
+    for (const ObjectId id : ids) {
+        if (!id.isValid() || seen.contains(id.value()) ||
+            !isObjectEditable(id)) {
+            continue;
+        }
+        SceneObject *sceneObject = mutableObject(id);
+        if (sceneObject == nullptr ||
+            (sceneObject->geometry.geometryType != GeometryType::NurbsSurface &&
+             sceneObject->geometry.geometryType != GeometryType::NurbsSolid)) {
+            continue;
+        }
+        Point3D translated{sceneObject->placementTranslation.x + worldDelta.x,
+                           sceneObject->placementTranslation.y + worldDelta.y,
+                           sceneObject->placementTranslation.z + worldDelta.z};
+        if (!std::isfinite(translated.x) || !std::isfinite(translated.y) ||
+            !std::isfinite(translated.z)) {
+            continue;
+        }
+        sceneObject->placementTranslation = translated;
+        seen.insert(id.value());
+        changes.addObject(id);
+    }
+    if (changes.objectIds.isEmpty()) {
+        return false;
+    }
+    changes.placementChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
 ObjectId Document::append(const Shape &shape)
 {
     return insert(objects_.size(), shape);
@@ -189,6 +277,9 @@ ObjectId Document::insertObject(int index, SceneObject object)
     DocumentChangeSet changes;
     changes.addObject(object.id);
     changes.geometryChanged = true;
+    changes.placementChanged = object.placementTranslation.x != 0.0 ||
+                               object.placementTranslation.y != 0.0 ||
+                               object.placementTranslation.z != 0.0;
     changes.structureChanged = true;
     applyChanges(changes);
     return object.id;
@@ -210,6 +301,7 @@ QVector<ObjectId> Document::insertObjects(
     insertedIds.reserve(sourceObjects.size());
     QSet<quint64> batchIds;
     batchIds.reserve(sourceObjects.size());
+    bool insertedPlacementChanged = false;
 
     for (const SceneObject &source : sourceObjects) {
         SceneObject object = source;
@@ -220,6 +312,10 @@ QVector<ObjectId> Document::insertObjects(
             nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
         }
         object.layerId = normalizedLayerId(object.layerId);
+        insertedPlacementChanged = insertedPlacementChanged ||
+            object.placementTranslation.x != 0.0 ||
+            object.placementTranslation.y != 0.0 ||
+            object.placementTranslation.z != 0.0;
         batchIds.insert(object.id.value());
         insertedIds.append(object.id);
         insertedObjects.append(std::move(object));
@@ -263,6 +359,7 @@ QVector<ObjectId> Document::insertObjects(
         changes.addObject(id);
     }
     changes.geometryChanged = true;
+    changes.placementChanged = insertedPlacementChanged;
     changes.structureChanged = true;
     applyChanges(changes);
     return insertedIds;
@@ -291,6 +388,7 @@ bool Document::removeAt(int index)
         return false;
     }
     const ObjectId removedId = objects_[index].id;
+    const Point3D removedPlacement = objects_[index].placementTranslation;
     objects_.removeAt(index);
     objectGeometryRevisions_.remove(removedId.value());
     rebuildLayerObjectIds();
@@ -302,6 +400,9 @@ bool Document::removeAt(int index)
     changes.addObject(removedId);
     changes.geometryChanged = true;
     changes.structureChanged = true;
+    changes.placementChanged = removedPlacement.x != 0.0 ||
+                               removedPlacement.y != 0.0 ||
+                               removedPlacement.z != 0.0;
     applyChanges(changes);
     return true;
 }
@@ -330,6 +431,10 @@ QVector<ObjectId> Document::removeObjects(const QVector<ObjectId> &objectIds)
     DocumentChangeSet changes;
     for (const SceneObject &object : objects_) {
         if (idsToRemove.contains(object.id.value())) {
+            changes.placementChanged = changes.placementChanged ||
+                object.placementTranslation.x != 0.0 ||
+                object.placementTranslation.y != 0.0 ||
+                object.placementTranslation.z != 0.0;
             removedIds.append(object.id);
             changes.addObject(object.id);
             changes.addLayer(object.layerId);
@@ -367,6 +472,7 @@ QVector<ObjectId> Document::replaceShapes(const QVector<Shape> &shapes)
     clearChanges.structureChanged = true;
     clearChanges.layerPropertiesChanged = true;
     clearChanges.visibilityChanged = true;
+    clearChanges.placementChanged = true;
     applyChanges(clearChanges);
     QVector<ObjectId> ids;
     ids.reserve(shapes.size());
@@ -378,6 +484,12 @@ QVector<ObjectId> Document::replaceShapes(const QVector<Shape> &shapes)
 
 void Document::replaceObjects(const QVector<SceneObject> &objects)
 {
+    const bool removedPlacement = std::any_of(
+        objects_.cbegin(), objects_.cend(), [](const SceneObject &object) {
+            return object.placementTranslation.x != 0.0 ||
+                   object.placementTranslation.y != 0.0 ||
+                   object.placementTranslation.z != 0.0;
+        });
     objects_.clear();
     objectIndices_.clear();
     objectGeometryRevisions_.clear();
@@ -400,6 +512,12 @@ void Document::replaceObjects(const QVector<SceneObject> &objects)
     for (const SceneObject &object : objects_) {
         changes.addObject(object.id);
     }
+    changes.placementChanged = removedPlacement || std::any_of(
+        objects_.cbegin(), objects_.cend(), [](const SceneObject &object) {
+            return object.placementTranslation.x != 0.0 ||
+                   object.placementTranslation.y != 0.0 ||
+                   object.placementTranslation.z != 0.0;
+        });
     applyChanges(changes);
 }
 
@@ -779,6 +897,7 @@ void Document::restoreSnapshot(const Snapshot &snapshot)
     changes.layerPropertiesChanged = true;
     changes.visibilityChanged = true;
     changes.settingsChanged = true;
+    changes.placementChanged = true;
     for (const SceneObject &object : objects_) {
         changes.addObject(object.id);
     }

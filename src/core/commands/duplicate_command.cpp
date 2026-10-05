@@ -35,14 +35,17 @@ bool validDuplicateGeometry(const Shape &shape)
 bool buildDuplicateCommandPlan(const Document &document,
                                const QVector<ObjectId> &sourceObjectIds,
                                const QVector<Shape> &duplicateGeometry,
-                               DuplicateCommandPlan *plan)
+                               DuplicateCommandPlan *plan,
+                               QVector<Point3D> duplicatePlacementTranslations)
 {
     if (plan == nullptr) {
         return false;
     }
     *plan = DuplicateCommandPlan{};
     if (sourceObjectIds.isEmpty() ||
-        sourceObjectIds.size() != duplicateGeometry.size()) {
+        sourceObjectIds.size() != duplicateGeometry.size() ||
+        (!duplicatePlacementTranslations.isEmpty() &&
+         duplicatePlacementTranslations.size() != sourceObjectIds.size())) {
         return false;
     }
 
@@ -61,6 +64,15 @@ bool buildDuplicateCommandPlan(const Document &document,
         SceneObject duplicate = *sourceObject;
         duplicate.id = ObjectId::invalid();
         duplicate.geometry = geometry;
+        if (!duplicatePlacementTranslations.isEmpty()) {
+            const Point3D &translation = duplicatePlacementTranslations[index];
+            if (!std::isfinite(translation.x) || !std::isfinite(translation.y) ||
+                !std::isfinite(translation.z)) {
+                *plan = DuplicateCommandPlan{};
+                return false;
+            }
+            duplicate.placementTranslation = translation;
+        }
         plan->sourceObjectIds.append(sourceId);
         plan->duplicateObjects.append(std::move(duplicate));
     }

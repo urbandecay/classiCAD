@@ -100,10 +100,20 @@ void PointExtrudeTool::begin(ToolContext &context)
             }
         } else if (selectedShape->geometryType == GeometryType::NurbsSurface) {
             SourcePoint source;
-            if (!nurbsSolidBaseFrame(selectedShape->nurbsSurface,
+            const SceneObject *sceneObject =
+                context.document().object(selectedObjectId);
+            source.surface = selectedShape->nurbsSurface;
+            if (sceneObject != nullptr) {
+                const Point3D &offset = sceneObject->placementTranslation;
+                for (Point3D &point : source.surface.controlPoints) {
+                    point.x += offset.x;
+                    point.y += offset.y;
+                    point.z += offset.z;
+                }
+            }
+            if (!nurbsSolidBaseFrame(source.surface,
                                      &source.workPlaneFrame)) continue;
             source.objectId = selectedObjectId;
-            source.surface = selectedShape->nurbsSurface;
             source.worldPoint = source.workPlaneFrame.origin;
             sourcePoints_.append(source);
         } else {

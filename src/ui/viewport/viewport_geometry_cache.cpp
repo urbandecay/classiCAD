@@ -63,7 +63,10 @@ void ViewportGeometryCache::prepareFrame(
         }
         object.preparedDepthGeometry = cached->geometry;
         object.preparedGeometryRevision = cached->preparedGeometryRevision;
-        object.preparedGeometryOffset = cached->offset;
+        object.preparedGeometryOffset = {
+            cached->offset.x + object.placementTranslation.x,
+            cached->offset.y + object.placementTranslation.y,
+            cached->offset.z + object.placementTranslation.z};
     }
 
     for (auto cached = entries_.begin(); cached != entries_.end();) {

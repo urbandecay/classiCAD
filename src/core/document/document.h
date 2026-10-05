@@ -20,6 +20,7 @@ public:
     struct RuntimeRevisions {
         quint64 epoch = 1;
         quint64 geometry = 1;
+        quint64 placement = 1;
         quint64 structure = 1;
         quint64 layer = 1;
         quint64 visibility = 1;
@@ -58,6 +59,12 @@ public:
     // advances the document and per-object geometry revisions automatically.
     bool mutateGeometry(ObjectId id,
                         const std::function<bool(Shape &)> &edit);
+    bool setObjectPlacementTranslation(ObjectId id,
+                                       const Point3D &translation);
+    bool setObjectPlacementTranslations(const QVector<ObjectId> &ids,
+                                       const QVector<Point3D> &translations);
+    bool translateObjects(const QVector<ObjectId> &ids,
+                          const Point3D &worldDelta);
 
     ObjectId append(const Shape &shape);
     ObjectId insert(int index, const Shape &shape);

@@ -113,6 +113,31 @@ WorkPlaneFrame rotateFrame(const WorkPlaneFrame &frame,
 
 } // namespace
 
+bool bakeShapePlacementTranslation(Shape *shape,
+                                   const Point3D &translation)
+{
+    if (shape == nullptr ||
+        (shape->geometryType != GeometryType::NurbsSurface &&
+         shape->geometryType != GeometryType::NurbsSolid) ||
+        !std::isfinite(translation.x) || !std::isfinite(translation.y) ||
+        !std::isfinite(translation.z)) {
+        return false;
+    }
+    if (translation.x == 0.0 && translation.y == 0.0 && translation.z == 0.0) {
+        return true;
+    }
+    NurbsSurface3D &surface = shapeBaseSurface(*shape);
+    if (!validateNurbsSurface(surface)) {
+        return false;
+    }
+    for (Point3D &point : surface.controlPoints) {
+        point.x += translation.x;
+        point.y += translation.y;
+        point.z += translation.z;
+    }
+    return true;
+}
+
 bool translateShapeGeometry(Shape *shape,
                             const QPointF &delta,
                             const WorkPlaneFrame &inputFrame)

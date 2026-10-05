@@ -13,7 +13,8 @@ struct DuplicateCommandPlan {
 bool buildDuplicateCommandPlan(const Document &document,
                               const QVector<ObjectId> &sourceObjectIds,
                               const QVector<Shape> &duplicateGeometry,
-                              DuplicateCommandPlan *plan);
+                              DuplicateCommandPlan *plan,
+                              QVector<Point3D> duplicatePlacementTranslations = {});
 bool applyDuplicateCommand(const Document &document,
                            DocumentTransaction &transaction,
                            const DuplicateCommandPlan &plan,

@@ -181,6 +181,7 @@ struct TransientPreviewStroke {
     float pointDiameter = 0.0f;
     bool dashed = false;
     bool pointOutline = false;
+    Point3D worldOffset;
 };
 
 struct TransientPreviewPicture {
@@ -1582,8 +1583,19 @@ public:
         duplicateTool_.updatePlacement(
             destinationCursor,
             currentSnap_,
-            [this](Shape &shape, const QPointF &delta) {
-                translateShapeGeometry(shape, delta);
+            [this](Shape &shape, Point3D &placement, const QPointF &delta) {
+                if (shape.geometryType == GeometryType::NurbsSurface ||
+                    shape.geometryType == GeometryType::NurbsSolid) {
+                    const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
+                    placement.x += frame.xAxis.x * delta.x() +
+                                   frame.yAxis.x * delta.y();
+                    placement.y += frame.xAxis.y * delta.x() +
+                                   frame.yAxis.y * delta.y();
+                    placement.z += frame.xAxis.z * delta.x() +
+                                   frame.yAxis.z * delta.y();
+                } else {
+                    translateShapeGeometry(shape, delta);
+                }
             });
         cursorWorld_ = duplicateTool_.destination();
         lastWorldPosition_ = duplicateTool_.destination();
@@ -1602,7 +1614,8 @@ public:
         if (!buildDuplicateCommandPlan(document_,
                                       sourceObjectIds,
                                       duplicateTool_.previewShapes(),
-                                      &plan)) {
+                                      &plan,
+                                      duplicateTool_.previewPlacementTranslations())) {
             return;
         }
 
@@ -2371,7 +2384,8 @@ protected:
                                      bool controlGuide,
                                      float pointDiameter,
                                      bool dashed,
-                                     bool pointOutline) {
+                                     bool pointOutline,
+                                     const Point3D &worldOffset = Point3D{}) {
                     const GeometryType type = shape.geometryType;
                     const bool supportedType =
                         type == GeometryType::Point || type == GeometryType::Line ||
@@ -2396,7 +2410,7 @@ protected:
                     }
                     gpuPreviewGeometry.append(
                         {shape, color, width, controlGuide, pointDiameter,
-                         dashed, pointOutline});
+                         dashed, pointOutline, worldOffset});
                     return true;
                 };
 
@@ -2484,7 +2498,8 @@ protected:
                                       ObjectId::invalid());
                 } else {
                     gpuDuplicatePreviewHandled[index] = addPreviewShape(
-                        preview, previewColor, 1.5f, false, 0.0f, false, false);
+                        preview, previewColor, 1.5f, false, 0.0f, false, false,
+                        duplicateTool_.previewPlacementTranslations().value(index));
                 }
             }
 
@@ -2497,7 +2512,16 @@ protected:
                         continue;
                     }
                     Shape mirroredShape;
-                    if (mirrorShapeAcrossLine(shapes_[shapeIndex],
+                    Shape sourceShape = shapes_[shapeIndex];
+                    const SceneObject *sourceObject = document_.object(objectId);
+                    if (sourceObject != nullptr &&
+                        (sourceObject->placementTranslation.x != 0.0 ||
+                         sourceObject->placementTranslation.y != 0.0 ||
+                         sourceObject->placementTranslation.z != 0.0)) {
+                        bakeShapePlacementTranslation(
+                            &sourceShape, sourceObject->placementTranslation);
+                    }
+                    if (mirrorShapeAcrossLine(sourceShape,
                                               mirrorTool_.axisStart(),
                                               cursorWorld_,
                                               &mirroredShape)) {
@@ -2740,11 +2764,13 @@ protected:
                                       preview.pointDiameter,
                                       preview.dashed,
                                       preview.pointOutline});
+            gpuPreviewStrokes.last().worldOffset = preview.worldOffset;
             if (!preview.controlGuide &&
                 (preview.shape.geometryType == GeometryType::NurbsSurface ||
                  preview.shape.geometryType == GeometryType::NurbsSolid)) {
                 ViewportRenderObject object;
                 object.shape = preview.shape;
+                object.placementTranslation = preview.worldOffset;
                 object.cacheable = false;
                 gpuPreviewStrokes.last().preparedDepthGeometry =
                     QSharedPointer<ViewportDepthGeometry>::create(
@@ -2867,7 +2893,9 @@ protected:
                     if (stroke.shape != nullptr && !stroke.controlGuide) {
                         drawShape(painter, *stroke.shape, false,
                                   stroke.color == QColor(QStringLiteral("#5da9e9")),
-                                  true, stroke.color);
+                                  true, stroke.color, QString(), 0.0,
+                                  ObjectId::invalid(), 0, nullptr,
+                                  stroke.worldOffset);
                     }
                 }
             }
@@ -2923,7 +2951,9 @@ protected:
                 if (!gpuPreviewRendered || !gpuDuplicatePreviewHandled.value(index)) {
                     drawShape(painter,
                               duplicateTool_.previewShapes()[index],
-                              true);
+                              true, false, true, QColor(), QString(), 0.0,
+                              ObjectId::invalid(), 0, nullptr,
+                              duplicateTool_.previewPlacementTranslations().value(index));
                 }
             }
         }
@@ -5254,10 +5284,11 @@ private:
     }
 
     QRectF selectionBoundsForShape(const Shape &shape,
-                                   bool *hasProjectedPoints = nullptr) const
+                                   bool *hasProjectedPoints = nullptr,
+                                   const Point3D &worldOffset = {}) const
     {
         const ProjectedShapeBoundsResult result = queryProjectedShapeBounds(
-            shape, curveHitTester_, viewportTransform_, size());
+            shape, curveHitTester_, viewportTransform_, size(), worldOffset);
         if (hasProjectedPoints != nullptr) {
             *hasProjectedPoints = result.hasProjectedPoints;
         }
@@ -5266,7 +5297,8 @@ private:
 
     bool shapeMatchesSelectionBox(const Shape &shape,
                                   const QRectF &box,
-                                  bool crossingSelection) const
+                                  bool crossingSelection,
+                                  const Point3D &worldOffset = {}) const
     {
         const QRectF selectionRect = box.normalized();
         constexpr qreal crossingTolerancePixels = 2.0;
@@ -5283,7 +5315,8 @@ private:
                                           crossingSelection,
                                           curveSampler_,
                                           viewportTransform_,
-                                          size());
+                                          size(),
+                                          worldOffset);
         if (geometryHit.applies) {
             return geometryHit.matches;
         }
@@ -5291,7 +5324,8 @@ private:
         // Non-curve geometry such as pictures and dimensions has no NURBS
         // path to sample, so retain its existing projected-bounds selection.
         bool hasProjectedPoints = false;
-        const QRectF bounds = selectionBoundsForShape(shape, &hasProjectedPoints)
+        const QRectF bounds = selectionBoundsForShape(shape, &hasProjectedPoints,
+                                                      worldOffset)
                                   .normalized();
         if (!hasProjectedPoints) {
             return false;
@@ -5357,9 +5391,13 @@ private:
                 if (!document_.isObjectEditable(objectId)) {
                     continue;
                 }
+                const SceneObject *sceneObject = document_.object(objectId);
                 if (shapeMatchesSelectionBox(shapes_[index],
                                               selectionBox,
-                                              crossingSelection)) {
+                                              crossingSelection,
+                                              sceneObject != nullptr
+                                                  ? sceneObject->placementTranslation
+                                                  : Point3D{})) {
                     boxSelection.append(shapes_.objectIdAt(index));
                 }
             }
@@ -6471,14 +6509,19 @@ private:
             };
             for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
                 const Shape &shape = document_[shapeIndex];
-                const bool visible =
-                    document_.isObjectVisible(document_.objectIdAt(shapeIndex));
+                const ObjectId objectId = document_.objectIdAt(shapeIndex);
+                const SceneObject *sceneObject = document_.object(objectId);
+                const Point3D worldOffset = sceneObject != nullptr
+                                                ? sceneObject->placementTranslation
+                                                : Point3D{};
+                const bool visible = document_.isObjectVisible(objectId);
                 const WorkPlaneFrame targetFrame = shapeWorkPlaneFrame(shape);
                 const bool frameMatches = workPlaneMatches(targetFrame, activeFrame);
                 const QVector<SnapCandidate> candidates =
                     visible ? snapEngine_.snapCandidatesForShape(shape,
                                                                  viewportTransform_,
-                                                                 size())
+                                                                 size(),
+                                                                 worldOffset)
                             : QVector<SnapCandidate>{};
                 if (candidates.isEmpty()) {
                     DebugLog::instance().write(
@@ -7149,6 +7192,7 @@ private:
                 const bool visible = document_.isObjectVisible(objectId);
                 const bool editable = document_.isObjectEditable(objectId);
                 const Shape &shape = document_[shapeIndex];
+                const SceneObject *sceneObject = document_.object(objectId);
                 const WorkPlaneFrame targetFrame = shapeWorkPlaneFrame(shape);
                 ViewportTransform shapeTransform = viewportTransform_;
                 shapeTransform.setWorkPlaneFrame(targetFrame);
@@ -7156,7 +7200,12 @@ private:
                     visible ? curveHitTester_.distanceToShape(screenPosition,
                                                              shape,
                                                              shapeTransform,
-                                                             size())
+                                                             size(),
+                                                             objectId,
+                                                             document_.objectGeometryRevision(objectId),
+                                                             sceneObject != nullptr
+                                                                 ? sceneObject->placementTranslation
+                                                                 : Point3D{})
                             : std::numeric_limits<qreal>::infinity();
                 const QString reason = !visible
                     ? QStringLiteral("hidden")
@@ -8077,7 +8126,11 @@ private:
             if (shapeIndex < 0) {
                 continue;
             }
-            const QRectF bounds = selectionBoundsForShape(shapes_[shapeIndex]);
+            const SceneObject *sceneObject = document_.object(objectId);
+            const QRectF bounds = selectionBoundsForShape(
+                shapes_[shapeIndex], nullptr,
+                sceneObject != nullptr ? sceneObject->placementTranslation
+                                       : Point3D{});
             if (bounds.isNull()) {
                 continue;
             }
@@ -8452,7 +8505,31 @@ private:
 
     void translateShapes(const QVector<ObjectId> &objectIds, const QPointF &delta)
     {
+        QVector<ObjectId> spatialObjects;
+        spatialObjects.reserve(objectIds.size());
+        QVector<ObjectId> geometryObjects;
+        geometryObjects.reserve(objectIds.size());
         for (const ObjectId objectId : objectIds) {
+            const Shape *shape = document_.shape(objectId);
+            if (shape == nullptr) {
+                continue;
+            }
+            if (shape->geometryType == GeometryType::NurbsSurface ||
+                shape->geometryType == GeometryType::NurbsSolid) {
+                spatialObjects.append(objectId);
+            } else {
+                geometryObjects.append(objectId);
+            }
+        }
+        if (!spatialObjects.isEmpty()) {
+            const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
+            const Point3D worldDelta{
+                frame.xAxis.x * delta.x() + frame.yAxis.x * delta.y(),
+                frame.xAxis.y * delta.x() + frame.yAxis.y * delta.y(),
+                frame.xAxis.z * delta.x() + frame.yAxis.z * delta.y()};
+            document_.translateObjects(spatialObjects, worldDelta);
+        }
+        for (const ObjectId objectId : geometryObjects) {
             translateShape(objectId, delta);
         }
     }
@@ -8464,7 +8541,26 @@ private:
             translateShapes(objectIds, snap.translation);
             return;
         }
+        QVector<ObjectId> spatialObjects;
+        spatialObjects.reserve(objectIds.size());
+        QVector<ObjectId> geometryObjects;
+        geometryObjects.reserve(objectIds.size());
         for (const ObjectId objectId : objectIds) {
+            const Shape *shape = document_.shape(objectId);
+            if (shape == nullptr) {
+                continue;
+            }
+            if (shape->geometryType == GeometryType::NurbsSurface ||
+                shape->geometryType == GeometryType::NurbsSolid) {
+                spatialObjects.append(objectId);
+            } else {
+                geometryObjects.append(objectId);
+            }
+        }
+        if (!spatialObjects.isEmpty()) {
+            document_.translateObjects(spatialObjects, snap.worldTranslation);
+        }
+        for (const ObjectId objectId : geometryObjects) {
             document_.mutateGeometry(
                 objectId,
                 [&](Shape &shape) {
@@ -9149,8 +9245,17 @@ private:
                 continue;
             }
 
+            Shape sourceShape = shapes_[shapeIndex];
+            const SceneObject *sourceObject = document_.object(objectId);
+            if (sourceObject != nullptr &&
+                (sourceObject->placementTranslation.x != 0.0 ||
+                 sourceObject->placementTranslation.y != 0.0 ||
+                 sourceObject->placementTranslation.z != 0.0)) {
+                bakeShapePlacementTranslation(
+                    &sourceShape, sourceObject->placementTranslation);
+            }
             Shape mirroredShape;
-            if (mirrorShapeAcrossLine(shapes_[shapeIndex],
+            if (mirrorShapeAcrossLine(sourceShape,
                                       axisStart,
                                       axisEnd,
                                       &mirroredShape)) {

@@ -24,7 +24,7 @@ public:
     void updatePlacement(
         const QPointF &destinationCursor,
         const SnapResult &destinationSnap,
-        const std::function<void(Shape &, const QPointF &)> &translate);
+        const std::function<void(Shape &, Point3D &, const QPointF &)> &translate);
     void reset();
 
     bool isActive() const;
@@ -33,6 +33,7 @@ public:
     const QVector<SceneObject> &sourceObjects() const;
     QVector<ObjectId> sourceObjectIds() const;
     const QVector<Shape> &previewShapes() const;
+    const QVector<Point3D> &previewPlacementTranslations() const;
     QPointF basePoint() const;
     QPointF cursorOffset() const;
     QPointF destination() const;
@@ -43,6 +44,7 @@ private:
     bool hasBasePoint_ = false;
     QVector<SceneObject> sourceObjects_;
     QVector<Shape> previewShapes_;
+    QVector<Point3D> previewPlacementTranslations_;
     QPointF basePoint_;
     QPointF cursorOffset_;
     QPointF destination_;

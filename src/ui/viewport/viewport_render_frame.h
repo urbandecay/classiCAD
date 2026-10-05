@@ -58,6 +58,7 @@ struct ViewportRenderObject {
     int objectIndex = -1;
     quint64 geometryRevision = 0;
     bool cacheable = true;
+    Point3D placementTranslation;
     QSharedPointer<const ViewportDepthGeometry> preparedDepthGeometry;
     // The immutable mesh may stay at its original position after translation.
     quint64 preparedGeometryRevision = 0;

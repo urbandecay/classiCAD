@@ -21,8 +21,16 @@ bool MirrorCommand::apply(const Document &document,
             continue;
         }
 
+        Shape sourceGeometry = sourceObject->geometry;
+        if ((sourceObject->placementTranslation.x != 0.0 ||
+             sourceObject->placementTranslation.y != 0.0 ||
+             sourceObject->placementTranslation.z != 0.0) &&
+            !bakeShapePlacementTranslation(&sourceGeometry,
+                                           sourceObject->placementTranslation)) {
+            continue;
+        }
         Shape mirroredShape;
-        if (!mirrorShapeAcrossLine(sourceObject->geometry,
+        if (!mirrorShapeAcrossLine(sourceGeometry,
                                    axisStart,
                                    axisEnd,
                                    &mirroredShape)) {

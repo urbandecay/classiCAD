@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace classiCAD {
 
@@ -58,7 +59,7 @@ bool idFromJson(const QJsonValue &value, quint64 *id)
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 4);
+    serialized.insert(QStringLiteral("version"), 5);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -96,6 +97,11 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("id"), idToJson(sceneObject.id.value()));
         serializedObject.insert(QStringLiteral("layerId"), idToJson(sceneObject.layerId.value()));
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
+        QJsonObject placement;
+        placement.insert(QStringLiteral("x"), sceneObject.placementTranslation.x);
+        placement.insert(QStringLiteral("y"), sceneObject.placementTranslation.y);
+        placement.insert(QStringLiteral("z"), sceneObject.placementTranslation.z);
+        serializedObject.insert(QStringLiteral("placementTranslation"), placement);
         objects.append(serializedObject);
     }
     serialized.insert(QStringLiteral("objects"), objects);
@@ -113,7 +119,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 4) {
+    if (version < 1 || version > 5) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -271,9 +277,45 @@ bool documentFromJson(const QJsonValue &value,
             return false;
         }
 
-        snapshot.objects.append(SceneObject{ObjectId::fromValue(objectValueId),
-                                            LayerId::fromValue(objectLayerValue),
-                                            shape});
+        Point3D placementTranslation;
+        if (version >= 5) {
+            const QJsonValue placementValue =
+                serializedObject.value(QStringLiteral("placementTranslation"));
+            if (!placementValue.isObject()) {
+                setError(errorMessage, QStringLiteral("invalid object placement"));
+                return false;
+            }
+            const QJsonObject placementObject = placementValue.toObject();
+            const QJsonValue xValue = placementObject.value(QStringLiteral("x"));
+            const QJsonValue yValue = placementObject.value(QStringLiteral("y"));
+            const QJsonValue zValue = placementObject.value(QStringLiteral("z"));
+            if (!xValue.isDouble() || !yValue.isDouble() || !zValue.isDouble() ||
+                !std::isfinite(xValue.toDouble()) ||
+                !std::isfinite(yValue.toDouble()) ||
+                !std::isfinite(zValue.toDouble())) {
+                setError(errorMessage, QStringLiteral("invalid object placement"));
+                return false;
+            }
+            placementTranslation = {xValue.toDouble(), yValue.toDouble(),
+                                    zValue.toDouble()};
+            const bool hasSpatialPlacement =
+                placementTranslation.x != 0.0 || placementTranslation.y != 0.0 ||
+                placementTranslation.z != 0.0;
+            if (hasSpatialPlacement &&
+                shape.geometryType != GeometryType::NurbsSurface &&
+                shape.geometryType != GeometryType::NurbsSolid) {
+                setError(errorMessage,
+                         QStringLiteral("placement is only supported for spatial NURBS objects"));
+                return false;
+            }
+        }
+
+        SceneObject sceneObject;
+        sceneObject.id = ObjectId::fromValue(objectValueId);
+        sceneObject.layerId = LayerId::fromValue(objectLayerValue);
+        sceneObject.geometry = std::move(shape);
+        sceneObject.placementTranslation = placementTranslation;
+        snapshot.objects.append(std::move(sceneObject));
         objectIds.insert(objectValueId);
         if (objectValueId < std::numeric_limits<quint64>::max()) {
             nextObjectValue = std::max(nextObjectValue, objectValueId + 1);

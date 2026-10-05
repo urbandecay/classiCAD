@@ -2841,15 +2841,32 @@ DragSnapResult SnapEngine::findDragSnap(
         }
     }
 
+    QVector<SnapCandidate> planarTargetCandidates;
+    planarTargetCandidates.reserve(targetCandidates.size());
     ScreenCandidateIndex planarTargets;
-    for (int i = 0; i < targetCandidates.size(); ++i) {
-        planarTargets.append(transform.worldToScreen(targetCandidates[i].point,
-                                                     viewportSize), i);
+    const WorkPlaneFrame &activeFrame = transform.workPlaneFrame();
+    for (SnapCandidate candidate : targetCandidates) {
+        if (candidate.hasWorldPoint) {
+            if (std::abs(signedDistanceFromWorkPlaneFrame(candidate.worldPoint,
+                                                          activeFrame)) > 1.0e-7) {
+                // Off-plane targets are compared in the spatial screen-space
+                // pass below. Treating their world XY as drawing-plane
+                // coordinates loses height and can make a drag jump on
+                // snap release.
+                continue;
+            }
+            candidate.point = worldPointToWorkPlaneFrame(candidate.worldPoint,
+                                                         activeFrame);
+        }
+        const int targetIndex = planarTargetCandidates.size();
+        planarTargetCandidates.append(candidate);
+        planarTargets.append(transform.worldToScreen(candidate.point,
+                                                     viewportSize), targetIndex);
     }
     for (const SnapCandidate &source : sourceCandidates) {
         const auto sourceScreen = transform.worldToScreen(source.point, viewportSize);
         for (const int targetIndex : planarTargets.nearby(sourceScreen)) {
-            const auto &target = targetCandidates[targetIndex];
+            const auto &target = planarTargetCandidates[targetIndex];
             consider(target.type,
                      source.point,
                      target.point,

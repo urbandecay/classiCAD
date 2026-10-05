@@ -48,7 +48,8 @@ public:
                                     qreal baseGridStep,
                                     const BlenderGridAppearance &appearance);
     bool renderBackgroundToCurrentFramebuffer(const QSize &viewportSize,
-                                              qreal devicePixelRatio);
+                                              qreal devicePixelRatio,
+                                              const QColor &solidColor = QColor());
     bool pickScenePoint(const QPointF &screenPosition,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,

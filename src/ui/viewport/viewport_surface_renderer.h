@@ -9,6 +9,8 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
+#include <QMatrix4x4>
+#include <QVector3D>
 #include <QString>
 
 namespace classiCAD {
@@ -43,18 +45,49 @@ private:
         int count = 0;
         Point3D offset;
         bool selected = false;
+        QColor objectColor;
+        quint64 objectSeed = 0;
+    };
+
+    struct OutlineRange {
+        int first = 0;
+        int count = 0;
+        Point3D offset;
+    };
+
+    struct SilhouetteEdge {
+        QVector3D start;
+        QVector3D end;
+        QVector3D firstNormal;
+        QVector3D secondNormal;
     };
 
     bool initialize();
     void prepareGeometry(const QVector<ViewportRenderObject> &objects);
+    bool renderShadowMap(const ViewportTransform &transform,
+                         const QSize &viewportSize,
+                         const ViewportShadingSettings &settings);
+    bool ensureShadowMap();
     bool ensureMatcapTexture(const QString &presetName);
+    bool ensureAgxDisplayTexture();
 
     QOpenGLShaderProgram program_;
+    QOpenGLShaderProgram outlineProgram_;
+    QOpenGLShaderProgram shadowProgram_;
     QOpenGLVertexArrayObject vertexArray_;
+    QOpenGLVertexArrayObject outlineVertexArray_;
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer outlineVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QVector<SurfaceVertex> vertices_;
+    QVector<QVector3D> outlineVertices_;
     QVector<DrawRange> ranges_;
+    QVector<OutlineRange> outlineRanges_;
+    QVector<QVector<SilhouetteEdge>> silhouetteEdges_;
     unsigned int matcapTexture_ = 0;
+    unsigned int agxDisplayTexture_ = 0;
+    unsigned int shadowTexture_ = 0;
+    unsigned int shadowFramebuffer_ = 0;
+    QMatrix4x4 shadowViewProjection_;
     QString matcapTextureName_;
     QByteArray geometryKey_;
     bool geometryDirty_ = true;

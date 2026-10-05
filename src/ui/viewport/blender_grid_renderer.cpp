@@ -418,7 +418,8 @@ bool BlenderGridRenderer::renderToCurrentFramebuffer(
 
 bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
     const QSize &viewportSize,
-    qreal devicePixelRatio)
+    qreal devicePixelRatio,
+    const QColor &solidColor)
 {
     if (viewportSize.isEmpty() || QOpenGLContext::currentContext() == nullptr) {
         return false;
@@ -461,14 +462,18 @@ bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
             "uViewportSize",
             QVector2D(static_cast<float>(viewportSize.width() * dpr),
                       static_cast<float>(viewportSize.height() * dpr)));
+        const QColor high = solidColor.isValid()
+                                ? solidColor
+                                : QColor(61, 61, 61);
+        const QColor low = solidColor.isValid()
+                               ? solidColor
+                               : QColor(48, 48, 48);
         backgroundProgram_.setUniformValue(
-            "uHighGradient", QVector3D(61.0f / 255.0f,
-                                       61.0f / 255.0f,
-                                       61.0f / 255.0f));
+            "uHighGradient", QVector3D(high.redF(), high.greenF(),
+                                       high.blueF()));
         backgroundProgram_.setUniformValue(
-            "uGradient", QVector3D(48.0f / 255.0f,
-                                   48.0f / 255.0f,
-                                   48.0f / 255.0f));
+            "uGradient", QVector3D(low.redF(), low.greenF(),
+                                   low.blueF()));
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     backgroundProgram_.release();

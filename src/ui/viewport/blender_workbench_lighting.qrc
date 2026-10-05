@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/workbench-lighting">
+        <file alias="color/agx_srgb_default_65.bin">../../../resources/blender/colormanagement/agx_srgb_default_65.bin</file>
         <file alias="studio/basic.sl">../../../resources/blender/studiolights/studio/basic.sl</file>
         <file alias="studio/outdoor.sl">../../../resources/blender/studiolights/studio/outdoor.sl</file>
         <file alias="studio/paint.sl">../../../resources/blender/studiolights/studio/paint.sl</file>

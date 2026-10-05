@@ -873,8 +873,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                         : preview
                                               ? QColor(QStringLiteral("#e6b85c"))
                                               : QColor(QStringLiteral("#d28b45"));
+    if (!selected && !preview &&
+        shadingSettings_.wireColorMode == ViewportWireColorMode::Random) {
+        const quint32 seed = static_cast<quint32>(shapeObjectId.value());
+        curveColor = QColor::fromHsv(
+            static_cast<int>((seed * 2654435761u) % 360u), 160, 230);
+    }
     if (shadingSettings_.xrayEnabled() && !preview) {
-        curveColor.setAlphaF(curveColor.alphaF() * 0.5);
+        curveColor.setAlphaF(curveColor.alphaF() * shadingSettings_.xrayAlpha);
     }
     const QColor controlColor = QColor(QStringLiteral("#8aa7c7"));
     const qreal storedWidth = layerLineWeightMm > 0.0
@@ -995,12 +1001,16 @@ void ViewportRenderer::drawShape(QPainter &painter,
         if (preparedGeometry != nullptr && !faces.isEmpty()) {
             drawNurbsSurface(painter, faces.first(), viewportSize,
                              shapeObjectId, geometryRevision, preparedGeometry,
-                             preparedOffset, preview, selected);
+                             preparedOffset, preview, selected, false,
+                             layerColor);
         } else {
-            for (const auto &face : faces)
-                drawNurbsSurface(painter, face, viewportSize,
+            for (int index = 0; index < faces.size(); ++index)
+                drawNurbsSurface(painter, faces[index], viewportSize,
                                  ObjectId::invalid(), 0, nullptr, {},
-                                 preview, selected);
+                                 preview, selected,
+                                 nurbsSolidFaceReversed(shape.nurbsSolid,
+                                                        index),
+                                 layerColor);
         }
         return;
     }
@@ -1010,7 +1020,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          viewportSize,
                          preview ? ObjectId::invalid() : shapeObjectId,
                          preview ? 0 : geometryRevision,
-                         preparedGeometry, preparedOffset, preview, selected);
+                         preparedGeometry, preparedOffset, preview, selected,
+                         false, layerColor);
         return;
     }
 
@@ -1498,16 +1509,30 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         const ViewportDepthGeometry *preparedGeometry,
                                         const Point3D &preparedOffset,
                                         bool preview,
-                                        bool selected) const
+                                        bool selected,
+                                        bool reverseOrientation,
+                                        const QColor &objectColor) const
 {
+    Q_UNUSED(selected);
     if (shadingSettings_.mode == ViewportShadingMode::Solid) {
+        QColor sourceColor = QColor(Qt::white);
+        if (shadingSettings_.colorMode == ViewportColorMode::Custom) {
+            sourceColor = shadingSettings_.customColor;
+        } else if (shadingSettings_.colorMode == ViewportColorMode::Object &&
+                   objectColor.isValid()) {
+            sourceColor = objectColor;
+        } else if (shadingSettings_.colorMode == ViewportColorMode::Random) {
+            const quint32 seed = static_cast<quint32>(objectId.value());
+            sourceColor = QColor::fromHsv(
+                static_cast<int>((seed * 2654435761u) % 360u), 96, 204);
+        }
         const QColor baseColor = preview
                                      ? QColor(QStringLiteral("#d89a4e"))
-                                     : selected
-                                           ? QColor(QStringLiteral("#6d9fc7"))
-                                           : QColor(Qt::white);
-        const qreal alpha = (preview || shadingSettings_.xrayEnabled())
+                                     : sourceColor;
+        const qreal alpha = preview
                                 ? 0.5
+                                : shadingSettings_.xrayEnabled()
+                                      ? shadingSettings_.xrayAlpha
                                 : 1.0;
         const Point3D viewDirection = transform_.viewDirection();
         const Point3D viewUp = transform_.viewUp();
@@ -1529,7 +1554,11 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const QVector3D camera(static_cast<float>(cameraPosition.x),
                                static_cast<float>(cameraPosition.y),
                                static_cast<float>(cameraPosition.z));
-        const QVector3D baseColorVector = preview || selected
+        const QVector3D baseColorVector = preview ||
+                shadingSettings_.colorMode == ViewportColorMode::Custom ||
+                shadingSettings_.colorMode == ViewportColorMode::Random ||
+                (shadingSettings_.colorMode == ViewportColorMode::Object &&
+                 objectColor.isValid())
             ? workbenchSrgbToSceneLinear(
                   QVector3D(baseColor.redF(), baseColor.greenF(),
                             baseColor.blueF()))
@@ -1537,7 +1566,23 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const auto shade = [&](const QVector3D &sourceNormal,
                                const Point3D &sourcePosition) {
             const QVector3D normalWorld = workbenchNormalize(
-                sourceNormal, QVector3D(0.0f, 0.0f, 1.0f));
+                reverseOrientation && preparedGeometry == nullptr
+                    ? -sourceNormal
+                    : sourceNormal,
+                QVector3D(0.0f, 0.0f, 1.0f));
+            if (shadingSettings_.backfaceCulling) {
+                const QVector3D position(
+                    static_cast<float>(sourcePosition.x + preparedOffset.x),
+                    static_cast<float>(sourcePosition.y + preparedOffset.y),
+                    static_cast<float>(sourcePosition.z + preparedOffset.z));
+                const QVector3D towardCamera = transform_.isPerspectiveEnabled()
+                    ? workbenchNormalize(camera - position, worldFacing)
+                    : -worldFacing;
+                if (QVector3D::dotProduct(normalWorld, towardCamera) <= 0.0f) {
+                    QColor culled(Qt::transparent);
+                    return culled;
+                }
+            }
             const QVector3D normalView(
                 QVector3D::dotProduct(normalWorld, worldRight),
                 QVector3D::dotProduct(normalWorld, worldUp),
@@ -1557,11 +1602,11 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             QVector3D shadedLinear = baseColorVector;
             if (shadingSettings_.lightingMode ==
                 ViewportLightingMode::Studio) {
-                const WorkbenchStudioLighting &lighting =
-                    shadingSettings_.hasCustomStudioLighting
-                        ? shadingSettings_.customStudioLighting
-                        : workbenchStudioLightingPreset(
-                              shadingSettings_.studioLightPreset);
+                WorkbenchStudioLighting lighting =
+                    workbenchStudioLightingPreset(
+                        shadingSettings_.studioLightPreset);
+                lighting.useSpecular = shadingSettings_.specularLighting &&
+                                       lighting.useSpecular;
                 const WorkbenchStudioLighting viewLighting =
                     workbenchStudioLightingForView(
                         lighting,
@@ -1575,10 +1620,11 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                        ViewportLightingMode::MatCap) {
                 shadedLinear = workbenchMatcapShade(
                     shadingSettings_.matcapPreset, baseColorVector,
-                    normalView, incidentView);
+                    normalView, incidentView,
+                    shadingSettings_.specularLighting);
             }
             const QVector3D shaded =
-                workbenchSceneLinearToSrgb(shadedLinear);
+                workbenchSceneLinearToAgxSrgb(shadedLinear);
             QColor color = baseColor;
             color.setRedF(std::clamp<qreal>(shaded.x(), 0.0, 1.0));
             color.setGreenF(std::clamp<qreal>(shaded.y(), 0.0, 1.0));

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <QFile>
+#include <QByteArray>
 #include <QColor>
 #include <QHash>
 #include <QImage>
@@ -15,6 +16,8 @@
 #include <QStringList>
 #include <QVector2D>
 #include <QVector3D>
+#include <QVector>
+#include <QtEndian>
 
 #include <array>
 #include <algorithm>
@@ -72,6 +75,82 @@ inline QVector3D workbenchSceneLinearToSrgb(const QVector3D &color)
             workbenchSceneLinearToSrgb(color.z())};
 }
 
+inline constexpr int workbenchAgxDisplayLutSize = 65;
+inline constexpr float workbenchAgxDisplayLutMaximum = 2.0f;
+
+inline const QVector<float> &workbenchAgxDisplayLutData()
+{
+    static const QVector<float> values = [] {
+        QFile file(QStringLiteral(
+            ":/workbench-lighting/color/agx_srgb_default_65.bin"));
+        if (!file.open(QIODevice::ReadOnly)) {
+            return QVector<float>{};
+        }
+        const QByteArray bytes = file.readAll();
+        constexpr qsizetype valueCount =
+            workbenchAgxDisplayLutSize * workbenchAgxDisplayLutSize *
+            workbenchAgxDisplayLutSize * 3;
+        constexpr qsizetype byteCount = valueCount * sizeof(quint32);
+        if (bytes.size() != byteCount) {
+            return QVector<float>{};
+        }
+
+        QVector<float> result(valueCount);
+        const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
+        for (qsizetype index = 0; index < valueCount; ++index) {
+            const quint32 bits = qFromLittleEndian<quint32>(
+                source + index * sizeof(quint32));
+            std::memcpy(&result[index], &bits, sizeof(bits));
+        }
+        return result;
+    }();
+    return values;
+}
+
+inline QVector3D workbenchSceneLinearToAgxSrgb(const QVector3D &color)
+{
+    const QVector<float> &lut = workbenchAgxDisplayLutData();
+    if (lut.isEmpty()) {
+        return workbenchSceneLinearToSrgb(color);
+    }
+
+    const float maximumIndex = workbenchAgxDisplayLutSize - 1.0f;
+    const auto coordinate = [maximumIndex](float value) {
+        return std::clamp(value, 0.0f, workbenchAgxDisplayLutMaximum) *
+               maximumIndex / workbenchAgxDisplayLutMaximum;
+    };
+    const float rx = coordinate(color.x());
+    const float gy = coordinate(color.y());
+    const float bz = coordinate(color.z());
+    const int x0 = static_cast<int>(rx);
+    const int y0 = static_cast<int>(gy);
+    const int z0 = static_cast<int>(bz);
+    const int x1 = std::min(x0 + 1, workbenchAgxDisplayLutSize - 1);
+    const int y1 = std::min(y0 + 1, workbenchAgxDisplayLutSize - 1);
+    const int z1 = std::min(z0 + 1, workbenchAgxDisplayLutSize - 1);
+    const float tx = rx - x0;
+    const float ty = gy - y0;
+    const float tz = bz - z0;
+    const auto sample = [&lut](int red, int green, int blue) {
+        const qsizetype index =
+            ((static_cast<qsizetype>(blue) * workbenchAgxDisplayLutSize +
+              green) * workbenchAgxDisplayLutSize + red) * 3;
+        return QVector3D(lut[index], lut[index + 1], lut[index + 2]);
+    };
+    const auto interpolate = [](const QVector3D &first,
+                                const QVector3D &second,
+                                float fraction) {
+        return first * (1.0f - fraction) + second * fraction;
+    };
+    const QVector3D lowerBlue = interpolate(
+        interpolate(sample(x0, y0, z0), sample(x1, y0, z0), tx),
+        interpolate(sample(x0, y1, z0), sample(x1, y1, z0), tx), ty);
+    const QVector3D upperBlue = interpolate(
+        interpolate(sample(x0, y0, z1), sample(x1, y0, z1), tx),
+        interpolate(sample(x0, y1, z1), sample(x1, y1, z1), tx), ty);
+    return interpolate(lowerBlue, upperBlue, tz);
+}
+
 inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()
 {
     // Blender's factory-startup material uses diffuse_color = (0.8, 0.8, 0.8).
@@ -83,8 +162,6 @@ inline WorkbenchStudioLighting workbenchStudioLightingPreset(
     const QString &presetName)
 {
     if (presetName.compare(QStringLiteral("Default"),
-                           Qt::CaseInsensitive) == 0 ||
-        presetName.compare(QStringLiteral("Custom"),
                            Qt::CaseInsensitive) == 0) {
         return defaultWorkbenchStudioLighting();
     }
@@ -279,7 +356,8 @@ inline QVector2D workbenchMatcapUv(const QVector3D &sourceIncident,
 inline QVector3D workbenchMatcapShade(const QString &presetName,
                                       const QVector3D &baseColor,
                                       const QVector3D &normal,
-                                      const QVector3D &incident)
+                                      const QVector3D &incident,
+                                      bool useSpecular = true)
 {
     const QImage diffuseImage = workbenchMatcapDiffuseImage(presetName);
     const QImage specularImage = workbenchMatcapSpecularImage(presetName);
@@ -293,7 +371,9 @@ inline QVector3D workbenchMatcapShade(const QString &presetName,
                                     (diffuseImage.height() - 1)),
                              0, diffuseImage.height() - 1);
     const QColor diffuseSample = diffuseImage.pixelColor(x, y);
-    const QColor specularSample = specularImage.pixelColor(x, y);
+    const QColor specularSample = useSpecular
+                                      ? specularImage.pixelColor(x, y)
+                                      : QColor(Qt::black);
     const QVector3D diffuse = workbenchSrgbToSceneLinear(
         QVector3D(diffuseSample.redF(), diffuseSample.greenF(),
                   diffuseSample.blueF()));

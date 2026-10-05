@@ -8,6 +8,7 @@
 #include "ui/viewport/workbench_lighting.h"
 
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_solid.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/viewport/viewport_transform.h"
 
@@ -69,6 +70,13 @@ int main(int argc, char *argv[])
         QVector3D(0.0f, 0.0f, 1.0f));
     const QVector3D roundTripColor = workbenchSceneLinearToSrgb(
         workbenchSrgbToSceneLinear(QVector3D(0.2f, 0.5f, 0.8f)));
+    const QVector3D defaultCubeFace = workbenchStudioShade(
+        defaultMaterialColor, QVector3D(0.0f, 0.0f, 1.0f),
+        QVector3D(0.0f, 0.0f, 1.0f));
+    const QVector3D defaultCubeFaceAgx =
+        workbenchSceneLinearToAgxSrgb(defaultCubeFace);
+    const QVector3D blenderDefaultCubeFaceSrgb(
+        154.0f / 255.0f, 155.0f / 255.0f, 156.0f / 255.0f);
     passed &= check(workbenchLighting.useSpecular &&
                         workbenchLighting.lights[0].enabled &&
                         workbenchLighting.lights[3].enabled &&
@@ -82,8 +90,14 @@ int main(int argc, char *argv[])
                         std::abs(litDefaultSurface.z() - 0.248113f) < 2.0e-3f &&
                         std::abs(roundTripColor.x() - 0.2f) < 1.0e-5f &&
                         std::abs(roundTripColor.y() - 0.5f) < 1.0e-5f &&
-                        std::abs(roundTripColor.z() - 0.8f) < 1.0e-5f,
-                    "solid NURBS shading must use Workbench's studio rig and convert face colors through scene-linear space");
+                        std::abs(roundTripColor.z() - 0.8f) < 1.0e-5f &&
+                        workbenchAgxDisplayLutData().size() ==
+                            workbenchAgxDisplayLutSize *
+                                workbenchAgxDisplayLutSize *
+                                workbenchAgxDisplayLutSize * 3 &&
+                        (defaultCubeFaceAgx - blenderDefaultCubeFaceSrgb)
+                                .length() < 0.01f,
+                    "default solid cube face must use Blender's Workbench lighting and AgX display transform");
 
     const WorkbenchStudioLighting basicStudioLight =
         workbenchStudioLightingPreset(QStringLiteral("Basic"));
@@ -139,7 +153,14 @@ int main(int argc, char *argv[])
                         shading.lightingMode == ViewportLightingMode::Studio &&
                         shading.studioLightPreset == QStringLiteral("Default") &&
                         !shading.worldSpaceLighting &&
-                        shading.studioLightRotationDegrees == 0,
+                        shading.studioLightRotationDegrees == 0 &&
+                        shading.colorMode == ViewportColorMode::Material &&
+                        shading.backgroundMode == ViewportBackgroundMode::Theme &&
+                        !shading.backfaceCulling && shading.outline &&
+                        shading.specularLighting && !shading.shadows &&
+                        !shading.depthOfField && !shading.cavity &&
+                        std::abs(shading.xrayAlpha - 0.5) < 1.0e-9 &&
+                        std::abs(shading.shadowIntensity - 0.5) < 1.0e-9,
                     "viewport must preserve through-visible wireframe as its initial mode");
     shading.toggleXray();
     passed &= check(!shading.xrayEnabled() && !shading.xrayWireframe &&
@@ -152,6 +173,10 @@ int main(int argc, char *argv[])
     passed &= check(shading.xrayEnabled() && shading.xray &&
                         !shading.xrayWireframe,
                     "solid X-Ray toggle must preserve wireframe X-Ray state");
+    shading.xrayAlpha = 1.0;
+    passed &= check(!shading.xrayEnabled(),
+                    "solid X-Ray at full opacity must resolve as normal depth-tested drawing");
+    shading.xrayAlpha = 0.5;
     shading.mode = ViewportShadingMode::Wireframe;
     passed &= check(!shading.xrayEnabled(),
                     "returning to wireframe must restore its X-Ray state");
@@ -173,6 +198,23 @@ int main(int argc, char *argv[])
     Shape surfaceShape;
     surfaceShape.geometryType = GeometryType::NurbsSurface;
     surfaceShape.nurbsSurface = fillSurface;
+    NurbsSurface3D cubeBaseSurface = fillSurface;
+    for (Point3D &point : cubeBaseSurface.controlPoints) {
+        point.z = -1.0;
+    }
+    Shape cubeShape;
+    cubeShape.geometryType = GeometryType::NurbsSolid;
+    passed &= check(makeNurbsExtrusionSolid(cubeBaseSurface, {0.0, 0.0, 2.0},
+                                            &cubeShape.nurbsSolid),
+                    "cube display comparison must create an exact NURBS extrusion solid");
+    const ViewportDepthGeometry cubeDepthGeometry =
+        buildViewportDepthGeometry(cubeShape);
+    passed &= check(cubeDepthGeometry.surfaceNormals.size() >= 12 &&
+                        cubeDepthGeometry.surfaceNormals[0].z() < -0.99f &&
+                        cubeDepthGeometry.surfaceNormals[
+                            cubeDepthGeometry.surfaceNormals.size() / 2]
+                                .z() > 0.99f,
+                    "NURBS extrusion cube cap normals must face outward on both ends");
     ViewportTransform surfaceTransform;
     surfaceTransform.zoom() = 32.0;
     surfaceTransform.setViewPreset(ViewportViewPreset::Top);
@@ -183,14 +225,15 @@ int main(int argc, char *argv[])
         int coveredPixels = 0;
         QColor centerColor;
     };
-    const auto renderedSurface = [&](const ViewportShadingSettings &settings) {
+    const auto renderedSurface = [&](const ViewportShadingSettings &settings,
+                                     bool selected = false) {
         QImage image(surfaceViewportSize,
                      QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::transparent);
         surfaceRenderer.setShadingSettings(settings);
         QPainter painter(&image);
         surfaceRenderer.drawShape(painter, surfaceShape, surfaceViewportSize,
-                                 false);
+                                 false, selected);
         painter.end();
         int coveredPixels = 0;
         for (int y = 0; y < image.height(); ++y) {
@@ -204,17 +247,19 @@ int main(int argc, char *argv[])
     ViewportShadingSettings solidShading;
     solidShading.mode = ViewportShadingMode::Solid;
     const RenderedSurface solidSurface = renderedSurface(solidShading);
+    const RenderedSurface selectedSolidSurface = renderedSurface(solidShading,
+                                                                  true);
     ViewportShadingSettings matcapShading = solidShading;
     matcapShading.lightingMode = ViewportLightingMode::MatCap;
     matcapShading.matcapPreset = QStringLiteral("metal_bronze");
     const RenderedSurface matcapSurface = renderedSurface(matcapShading);
     const QVector3D surfaceBaseLinear =
         workbenchDefaultSolidMaterialDiffuseColor();
-    const QVector3D expectedCpuColor = workbenchSceneLinearToSrgb(
+    const QVector3D expectedCpuColor = workbenchSceneLinearToAgxSrgb(
         workbenchStudioShade(surfaceBaseLinear,
                              QVector3D(0.0f, 0.0f, 1.0f),
                              QVector3D(0.0f, 0.0f, 1.0f)));
-    const QVector3D expectedMatcapColor = workbenchSceneLinearToSrgb(
+    const QVector3D expectedMatcapColor = workbenchSceneLinearToAgxSrgb(
         workbenchMatcapShade(QStringLiteral("metal_bronze"),
                              surfaceBaseLinear,
                              QVector3D(0.0f, 0.0f, 1.0f),
@@ -228,6 +273,12 @@ int main(int argc, char *argv[])
                         std::abs(solidSurface.centerColor.greenF() -
                                  expectedCpuColor.y()) < 0.025f &&
                         std::abs(solidSurface.centerColor.blueF() -
+                                 expectedCpuColor.z()) < 0.025f &&
+                        std::abs(selectedSolidSurface.centerColor.redF() -
+                                 expectedCpuColor.x()) < 0.025f &&
+                        std::abs(selectedSolidSurface.centerColor.greenF() -
+                                 expectedCpuColor.y()) < 0.025f &&
+                        std::abs(selectedSolidSurface.centerColor.blueF() -
                                  expectedCpuColor.z()) < 0.025f &&
                         matcapSurface.coveredPixels > wireframeSurface.coveredPixels * 3 &&
                         std::abs(matcapSurface.centerColor.redF() -
@@ -255,10 +306,18 @@ int main(int argc, char *argv[])
             passed &= check(functions.initializeOpenGLFunctions(),
                             "NURBS solid display test must initialize OpenGL 3.3");
             QImage gpuImage;
+            QImage gpuWithoutOutlineImage;
+            QImage gpuBottomImage;
+            QImage gpuShadowImage;
             QImage gpuMatcapImage;
             bool gpuDrawSucceeded = false;
             bool gpuMatcapDrawSucceeded = false;
-            const QSize glSize(160, 160);
+            bool gpuBottomDrawSucceeded = false;
+            bool gpuShadowDrawSucceeded = false;
+            const QSize glSize(640, 480);
+            ViewportTransform gpuTransform;
+            gpuTransform.zoom() = 17.28;
+            gpuTransform.setViewDirection({4.0, -6.0, 4.0});
             {
                 QOpenGLFramebufferObjectFormat framebufferFormat;
                 framebufferFormat.setAttachment(
@@ -269,15 +328,13 @@ int main(int argc, char *argv[])
                                 "NURBS solid display test must allocate a depth framebuffer");
                 if (framebuffer.isValid()) {
                     ViewportRenderObject surfaceObject;
-                    surfaceObject.shape = surfaceShape;
+                    surfaceObject.shape = cubeShape;
                     surfaceObject.objectId = ObjectId::fromValue(1);
+                    surfaceObject.selected = true;
                     surfaceObject.geometryRevision = 1;
                     surfaceObject.preparedDepthGeometry =
                         QSharedPointer<ViewportDepthGeometry>::create(
                             buildViewportDepthGeometry(surfaceObject.shape));
-                    ViewportTransform gpuTransform;
-                    gpuTransform.zoom() = 32.0;
-                    gpuTransform.setViewPreset(ViewportViewPreset::Top);
                     ViewportShadingSettings gpuSolidShading;
                     gpuSolidShading.mode = ViewportShadingMode::Solid;
                     ViewportSurfaceRenderer gpuSurfaceRenderer;
@@ -293,6 +350,40 @@ int main(int argc, char *argv[])
                         gpuSolidShading);
                     functions.glFinish();
                     gpuImage = framebuffer.toImage();
+                    const QString capturePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_CAPTURE");
+                    if (!capturePath.isEmpty()) {
+                        gpuImage.save(capturePath);
+                    }
+
+                    ViewportShadingSettings noOutline = gpuSolidShading;
+                    noOutline.outline = false;
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    gpuSurfaceRenderer.draw({surfaceObject}, gpuTransform,
+                                            glSize, 1.0, noOutline);
+                    functions.glFinish();
+                    gpuWithoutOutlineImage = framebuffer.toImage();
+
+                    ViewportTransform bottomTransform;
+                    bottomTransform.zoom() = gpuTransform.zoom();
+                    bottomTransform.setViewDirection({4.0, -6.0, -4.0});
+                    ViewportShadingSettings bottomShading = gpuSolidShading;
+                    bottomShading.backfaceCulling = true;
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    gpuBottomDrawSucceeded = gpuSurfaceRenderer.draw(
+                        {surfaceObject}, bottomTransform, glSize, 1.0,
+                        bottomShading);
+                    functions.glFinish();
+                    gpuBottomImage = framebuffer.toImage();
+
+                    ViewportShadingSettings shadowShading = gpuSolidShading;
+                    shadowShading.shadows = true;
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    gpuShadowDrawSucceeded = gpuSurfaceRenderer.draw(
+                        {surfaceObject}, gpuTransform, glSize, 1.0,
+                        shadowShading);
+                    functions.glFinish();
+                    gpuShadowImage = framebuffer.toImage();
 
                     ViewportShadingSettings gpuMatcapShading = gpuSolidShading;
                     gpuMatcapShading.lightingMode = ViewportLightingMode::MatCap;
@@ -309,7 +400,10 @@ int main(int argc, char *argv[])
             context.doneCurrent();
             int gpuFacePixels = 0;
             bool gpuLightingMatchesWorkbench = false;
+            bool gpuCubeFaceVisible = false;
             bool gpuMatcapMatchesWorkbench = false;
+            bool gpuOutlineRendered = false;
+            bool gpuBackfaceCullingKeepsOutwardFaces = false;
             if (!gpuImage.isNull()) {
                 for (int y = 0; y < gpuImage.height(); ++y) {
                     for (int x = 0; x < gpuImage.width(); ++x) {
@@ -321,27 +415,123 @@ int main(int argc, char *argv[])
                 }
                 const QVector3D linearBaseColor =
                     workbenchDefaultSolidMaterialDiffuseColor();
-                const QVector3D expectedLighting = workbenchSceneLinearToSrgb(
-                    workbenchStudioShade(linearBaseColor,
-                                         QVector3D(0.0f, 0.0f, 1.0f),
-                                         QVector3D(0.0f, 0.0f, 1.0f)));
-                const QColor gpuCenter = gpuImage.pixelColor(80, 80);
-                constexpr qreal channelTolerance = 0.025;
-                gpuLightingMatchesWorkbench =
-                    std::abs(gpuCenter.redF() - expectedLighting.x()) <
-                        channelTolerance &&
-                    std::abs(gpuCenter.greenF() - expectedLighting.y()) <
-                        channelTolerance &&
-                    std::abs(gpuCenter.blueF() - expectedLighting.z()) <
-                        channelTolerance;
-                const QVector3D expectedMatcap = workbenchSceneLinearToSrgb(
+                const Point3D viewDirectionPoint =
+                    gpuTransform.viewDirection();
+                const Point3D viewUpPoint = gpuTransform.viewUp();
+                const QVector3D facingVector = workbenchNormalize(
+                    QVector3D(static_cast<float>(viewDirectionPoint.x),
+                              static_cast<float>(viewDirectionPoint.y),
+                              static_cast<float>(viewDirectionPoint.z)),
+                    QVector3D(0.0f, 0.0f, 1.0f));
+                const QVector3D upVector = workbenchNormalize(
+                    QVector3D(static_cast<float>(viewUpPoint.x),
+                              static_cast<float>(viewUpPoint.y),
+                              static_cast<float>(viewUpPoint.z)),
+                    QVector3D(0.0f, 1.0f, 0.0f));
+                const QVector3D rightVector = workbenchNormalize(
+                    QVector3D::crossProduct(upVector, facingVector),
+                    QVector3D(1.0f, 0.0f, 0.0f));
+                const QVector3D incidentView(0.0f, 0.0f, 1.0f);
+                const auto pixelForWorldPoint = [&](const Point3D &position) {
+                    QPointF screen;
+                    if (!gpuTransform.worldPointToScreen(position, glSize,
+                                                         &screen)) {
+                        return QPoint(-1, -1);
+                    }
+                    return QPoint(qRound(screen.x()), qRound(screen.y()));
+                };
+                const auto sampleCubeFace = [&](const Point3D &position) {
+                    const QPoint pixel = pixelForWorldPoint(position);
+                    if (pixel.x() < 0 || pixel.y() < 0) {
+                        return QColor();
+                    }
+                    return gpuImage.pixelColor(pixel);
+                };
+                const auto viewNormal = [&](const QVector3D &normal) {
+                    return QVector3D(
+                        QVector3D::dotProduct(normal, rightVector),
+                        QVector3D::dotProduct(normal, upVector),
+                        QVector3D::dotProduct(normal, facingVector));
+                };
+                const QVector3D frontNormal = viewNormal(
+                    QVector3D(0.0f, -1.0f, 0.0f));
+                const QVector3D topNormal = viewNormal(
+                    QVector3D(0.0f, 0.0f, 1.0f));
+                const QVector3D rightNormal = viewNormal(
+                    QVector3D(1.0f, 0.0f, 0.0f));
+                const QVector3D expectedFront = workbenchSceneLinearToAgxSrgb(
+                    workbenchStudioShade(linearBaseColor, frontNormal,
+                                         incidentView));
+                const QVector3D expectedTop = workbenchSceneLinearToAgxSrgb(
+                    workbenchStudioShade(linearBaseColor, topNormal,
+                                         incidentView));
+                const QVector3D expectedRight = workbenchSceneLinearToAgxSrgb(
+                    workbenchStudioShade(linearBaseColor, rightNormal,
+                                         incidentView));
+                const QColor gpuFront = sampleCubeFace({0.0, -1.0, 0.0});
+                const QColor gpuFrontNearCrease = sampleCubeFace(
+                    {0.95, -1.0, 0.0});
+                const QColor gpuTop = sampleCubeFace({0.0, 0.0, 1.0});
+                const QColor gpuRight = sampleCubeFace({1.0, 0.0, 0.0});
+                constexpr qreal channelTolerance = 2.0 / 255.0;
+                const auto matchesColor = [channelTolerance](
+                                              const QColor &actual,
+                                              const QVector3D &expected) {
+                    return actual.isValid() &&
+                           std::abs(actual.redF() - expected.x()) <
+                               channelTolerance &&
+                           std::abs(actual.greenF() - expected.y()) <
+                               channelTolerance &&
+                           std::abs(actual.blueF() - expected.z()) <
+                               channelTolerance;
+                };
+                // Reference values sampled from Blender 5.2.2's Workbench
+                // render of the factory cube at this same camera angle.
+                const bool lightingMatchesBlender =
+                    matchesColor(QColor(138, 139, 139), expectedFront) &&
+                    matchesColor(QColor(142, 144, 145), expectedTop) &&
+                    matchesColor(QColor(53, 50, 50), expectedRight);
+                gpuLightingMatchesWorkbench = lightingMatchesBlender &&
+                    matchesColor(gpuFront, expectedFront) &&
+                    matchesColor(gpuFrontNearCrease, expectedFront) &&
+                    matchesColor(gpuTop, expectedTop) &&
+                    matchesColor(gpuRight, expectedRight);
+                gpuCubeFaceVisible = gpuFront.isValid() &&
+                                     gpuFront.red() > 70;
+                const auto countNearBlack = [](const QImage &image) {
+                    int count = 0;
+                    for (int y = 0; y < image.height(); ++y) {
+                        for (int x = 0; x < image.width(); ++x) {
+                            const QColor pixel = image.pixelColor(x, y);
+                            count += pixel.red() < 20 && pixel.green() < 20 &&
+                                     pixel.blue() < 20;
+                        }
+                    }
+                    return count;
+                };
+                gpuOutlineRendered = countNearBlack(gpuImage) > 100 &&
+                                     countNearBlack(gpuWithoutOutlineImage) == 0;
+                int bottomFacePixels = 0;
+                for (int y = 0; y < gpuBottomImage.height(); ++y) {
+                    for (int x = 0; x < gpuBottomImage.width(); ++x) {
+                        const QColor pixel = gpuBottomImage.pixelColor(x, y);
+                        bottomFacePixels += pixel.red() > 70 &&
+                                            pixel.green() > 70 &&
+                                            pixel.blue() > 70;
+                    }
+                }
+                gpuBackfaceCullingKeepsOutwardFaces =
+                    bottomFacePixels > 4000;
+                const QVector3D expectedMatcap = workbenchSceneLinearToAgxSrgb(
                     workbenchMatcapShade(QStringLiteral("metal_bronze"),
                                          linearBaseColor,
-                                         QVector3D(0.0f, 0.0f, 1.0f),
-                                         QVector3D(0.0f, 0.0f, 1.0f)));
+                                         frontNormal, incidentView));
+                const QPoint frontPixel = pixelForWorldPoint(
+                    {0.0, -1.0, 0.0});
                 const QColor gpuMatcapCenter = gpuMatcapImage.isNull()
+                    || frontPixel.x() < 0 || frontPixel.y() < 0
                     ? QColor()
-                    : gpuMatcapImage.pixelColor(80, 80);
+                    : gpuMatcapImage.pixelColor(frontPixel);
                 gpuMatcapMatchesWorkbench =
                     std::abs(gpuMatcapCenter.redF() - expectedMatcap.x()) <
                         channelTolerance &&
@@ -351,13 +541,17 @@ int main(int argc, char *argv[])
                         channelTolerance;
             }
             passed &= check(gpuDrawSucceeded && gpuFacePixels > 4000 &&
-                            gpuImage.pixelColor(80, 80).red() > 70 &&
+                            gpuCubeFaceVisible &&
                                 gpuLightingMatchesWorkbench &&
                                 gpuMatcapDrawSucceeded &&
                                 !gpuMatcapImage.isNull() &&
-                                gpuMatcapImage.pixelColor(80, 80).red() > 70 &&
-                                gpuMatcapMatchesWorkbench,
-                            "OpenGL solid shading must fill NURBS faces with Blender Workbench studio-light colors");
+                                gpuMatcapMatchesWorkbench &&
+                                gpuOutlineRendered &&
+                                gpuBottomDrawSucceeded &&
+                                gpuBackfaceCullingKeepsOutwardFaces &&
+                                gpuShadowDrawSucceeded &&
+                                !gpuShadowImage.isNull(),
+                            "OpenGL NURBS cubes must match Blender face colors, show outlines, retain outward bottom faces under culling, and render the Shadow option");
         }
     }
 

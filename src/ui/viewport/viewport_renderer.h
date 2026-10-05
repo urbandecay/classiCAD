@@ -56,7 +56,9 @@ public:
                           const ViewportDepthGeometry *preparedGeometry = nullptr,
                           const Point3D &preparedOffset = {},
                           bool preview = false,
-                          bool selected = false) const;
+                          bool selected = false,
+                          bool reverseOrientation = false,
+                          const QColor &objectColor = QColor()) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,

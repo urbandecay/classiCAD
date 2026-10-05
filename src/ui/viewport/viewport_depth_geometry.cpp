@@ -261,7 +261,8 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                                  const SurfaceTessellationCache *cache = nullptr,
                                  ObjectId objectId = ObjectId::invalid(),
                                  quint64 geometryRevision = 0,
-                                 int faceIndex = 0)
+                                 int faceIndex = 0,
+                                 bool reverseOrientation = false)
 {
     if (geometry == nullptr) {
         return;
@@ -304,12 +305,30 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
             geometry->preciseLineVertices.append(end);
         }
     }
-    QVector<QVector3D> vertexNormals(tessellation->vertices().size());
-    for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
-         tessellation->triangles()) {
-        const Point3D &a = tessellation->vertices()[triangle[0]];
-        const Point3D &b = tessellation->vertices()[triangle[1]];
-        const Point3D &c = tessellation->vertices()[triangle[2]];
+    // Keep NURBS corners hard while smoothing the smaller normal changes
+    // produced by tessellating a curved patch.
+    constexpr float smoothCreaseCosine = 0.70710678f;
+    const auto normalizedNormal = [](const QVector3D &value,
+                                     const QVector3D &fallback) {
+        const float lengthSquared = value.lengthSquared();
+        return std::isfinite(lengthSquared) && lengthSquared > 1.0e-20f
+                   ? value / std::sqrt(lengthSquared)
+                   : fallback;
+    };
+    QVector<QVector3D> triangleNormals;
+    triangleNormals.reserve(tessellation->triangles().size());
+    QVector<QVector<int>> trianglesAtVertex(tessellation->vertices().size());
+    for (int triangleIndex = 0;
+         triangleIndex < tessellation->triangles().size();
+         ++triangleIndex) {
+        const PreparedNurbsSurfaceTessellation::Triangle &triangle =
+            tessellation->triangles()[triangleIndex];
+        const int firstVertex = triangle[0];
+        const int secondVertex = triangle[reverseOrientation ? 2 : 1];
+        const int thirdVertex = triangle[reverseOrientation ? 1 : 2];
+        const Point3D &a = tessellation->vertices()[firstVertex];
+        const Point3D &b = tessellation->vertices()[secondVertex];
+        const Point3D &c = tessellation->vertices()[thirdVertex];
         const QVector3D ab(static_cast<float>(b.x - a.x),
                            static_cast<float>(b.y - a.y),
                            static_cast<float>(b.z - a.z));
@@ -317,30 +336,45 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                            static_cast<float>(c.y - a.y),
                            static_cast<float>(c.z - a.z));
         const QVector3D normal = QVector3D::crossProduct(ab, ac);
-        if (normal.lengthSquared() > 1.0e-20f) {
-            vertexNormals[triangle[0]] += normal;
-            vertexNormals[triangle[1]] += normal;
-            vertexNormals[triangle[2]] += normal;
-        }
-    }
-    for (QVector3D &normal : vertexNormals) {
-        if (normal.lengthSquared() > 1.0e-20f) {
-            normal.normalize();
-        } else {
-            normal = QVector3D(0.0f, 0.0f, 1.0f);
-        }
+        triangleNormals.append(normal);
+        trianglesAtVertex[firstVertex].append(triangleIndex);
+        trianglesAtVertex[secondVertex].append(triangleIndex);
+        trianglesAtVertex[thirdVertex].append(triangleIndex);
     }
 
     geometry->surfaceVertices.reserve(
         geometry->surfaceVertices.size() + tessellation->triangles().size() * 3);
     geometry->surfaceNormals.reserve(
         geometry->surfaceNormals.size() + tessellation->triangles().size() * 3);
-    for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
-         tessellation->triangles()) {
-        for (const int vertexIndex : triangle) {
+    for (int triangleIndex = 0;
+         triangleIndex < tessellation->triangles().size();
+         ++triangleIndex) {
+        const PreparedNurbsSurfaceTessellation::Triangle &triangle =
+            tessellation->triangles()[triangleIndex];
+        const QVector3D faceNormal = normalizedNormal(
+            triangleNormals[triangleIndex], QVector3D(0.0f, 0.0f, 1.0f));
+        const int orderedVertices[] = {
+            triangle[0], triangle[reverseOrientation ? 2 : 1],
+            triangle[reverseOrientation ? 1 : 2]};
+        for (const int vertexIndex : orderedVertices) {
             geometry->surfaceVertices.append(
                 asVector(tessellation->vertices()[vertexIndex]));
-            geometry->surfaceNormals.append(vertexNormals[vertexIndex]);
+            QVector3D normal;
+            for (const int adjacentTriangle : trianglesAtVertex[vertexIndex]) {
+                const QVector3D &adjacentNormal =
+                    triangleNormals[adjacentTriangle];
+                if (adjacentNormal.lengthSquared() <= 1.0e-20f) {
+                    continue;
+                }
+                const QVector3D unitAdjacentNormal = normalizedNormal(
+                    adjacentNormal, faceNormal);
+                if (QVector3D::dotProduct(faceNormal, unitAdjacentNormal) >=
+                    smoothCreaseCosine) {
+                    normal += adjacentNormal;
+                }
+            }
+            geometry->surfaceNormals.append(normalizedNormal(normal,
+                                                             faceNormal));
         }
     }
 }
@@ -401,7 +435,11 @@ void appendShapeDepthGeometry(const Shape &shape,
                                             &geometry,
                                             surfaceCache,
                                             objectId,
-                                            geometryRevision, index);
+                                            geometryRevision, index,
+                                            shape.geometryType ==
+                                                    GeometryType::NurbsSolid &&
+                                                nurbsSolidFaceReversed(
+                                                    shape.nurbsSolid, index));
             }
             return;
         }

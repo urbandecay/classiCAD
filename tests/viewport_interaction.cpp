@@ -13,6 +13,7 @@
 #include "core/serialization/blender_project_file.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QDir>
@@ -337,12 +338,38 @@ int main(int argc, char **argv)
         QStringLiteral("LightingModeMatCap"));
     auto *flatModeButton = viewport->findChild<QToolButton *>(
         QStringLiteral("LightingModeFlat"));
+    auto *studioLightSettingsButton = viewport->findChild<QToolButton *>(
+        QStringLiteral("StudioLightSettings"));
     auto *worldLightingButton = viewport->findChild<QToolButton *>(
         QStringLiteral("WorldSpaceLighting"));
     auto *rotationSlider = viewport->findChild<QSlider *>(
         QStringLiteral("StudioLightRotation"));
     auto *rotationLabel = viewport->findChild<QLabel *>(
         QStringLiteral("StudioLightRotationValue"));
+    auto *backfaceCulling = viewport->findChild<QCheckBox *>(
+        QStringLiteral("BackfaceCulling"));
+    auto *objectOutline = viewport->findChild<QCheckBox *>(
+        QStringLiteral("ObjectOutline"));
+    auto *specularLighting = viewport->findChild<QCheckBox *>(
+        QStringLiteral("SpecularLighting"));
+    auto *solidXray = viewport->findChild<QCheckBox *>(
+        QStringLiteral("SolidXRay"));
+    auto *xrayAlpha = viewport->findChild<QSlider *>(
+        QStringLiteral("XRayAlpha"));
+    auto *workbenchShadows = viewport->findChild<QCheckBox *>(
+        QStringLiteral("WorkbenchShadows"));
+    auto *shadowIntensity = viewport->findChild<QSlider *>(
+        QStringLiteral("ShadowIntensity"));
+    auto *depthOfField = viewport->findChild<QCheckBox *>(
+        QStringLiteral("ViewportDepthOfField"));
+    auto *cavity = viewport->findChild<QCheckBox *>(
+        QStringLiteral("WorkbenchCavity"));
+    auto *cavityType = viewport->findChild<QToolButton *>(
+        QStringLiteral("CavityType"));
+    auto *materialColor = viewport->findChild<QToolButton *>(
+        QStringLiteral("SolidColorMaterial"));
+    auto *themeBackground = viewport->findChild<QToolButton *>(
+        QStringLiteral("BackgroundTheme"));
     const QPoint shadingSettingsPosition(viewport->width() - 21,
                                          viewport->height() - 23);
     sendMouse(viewport.get(), QEvent::MouseButtonPress,
@@ -355,8 +382,23 @@ int main(int argc, char **argv)
     passed &= check(shadingPopover != nullptr && shadingPopover->isVisible() &&
                         studioModeButton != nullptr && matcapModeButton != nullptr &&
                         flatModeButton != nullptr && worldLightingButton != nullptr &&
-                        rotationSlider != nullptr && rotationLabel != nullptr,
-                    "viewport shading popover must open with Lighting mode, world-space, and rotation controls");
+                        rotationSlider != nullptr && rotationLabel != nullptr &&
+                        studioLightSettingsButton == nullptr,
+                    "viewport Lighting popover must not invent Blender Studio Light Preferences controls");
+    passed &= check(backfaceCulling != nullptr && objectOutline != nullptr &&
+                        specularLighting != nullptr && solidXray != nullptr &&
+                        xrayAlpha != nullptr && workbenchShadows != nullptr &&
+                        shadowIntensity != nullptr && depthOfField != nullptr &&
+                        cavity != nullptr && cavityType != nullptr &&
+                        materialColor != nullptr && themeBackground != nullptr &&
+                        !backfaceCulling->isChecked() &&
+                        objectOutline->isChecked() &&
+                        specularLighting->isChecked() && !solidXray->isChecked() &&
+                        !workbenchShadows->isChecked() &&
+                        !depthOfField->isChecked() && !cavity->isChecked() &&
+                        cavityType->text() == QStringLiteral("Type: Screen") &&
+                        !xrayAlpha->isEnabled() && !shadowIntensity->isEnabled(),
+                    "Solid Color and Options controls must expose the Blender screenshot defaults");
     if (shadingPopover != nullptr && studioModeButton != nullptr &&
         matcapModeButton != nullptr && flatModeButton != nullptr &&
         worldLightingButton != nullptr && rotationSlider != nullptr &&

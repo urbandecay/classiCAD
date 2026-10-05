@@ -304,13 +304,43 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
             geometry->preciseLineVertices.append(end);
         }
     }
+    QVector<QVector3D> vertexNormals(tessellation->vertices().size());
+    for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
+         tessellation->triangles()) {
+        const Point3D &a = tessellation->vertices()[triangle[0]];
+        const Point3D &b = tessellation->vertices()[triangle[1]];
+        const Point3D &c = tessellation->vertices()[triangle[2]];
+        const QVector3D ab(static_cast<float>(b.x - a.x),
+                           static_cast<float>(b.y - a.y),
+                           static_cast<float>(b.z - a.z));
+        const QVector3D ac(static_cast<float>(c.x - a.x),
+                           static_cast<float>(c.y - a.y),
+                           static_cast<float>(c.z - a.z));
+        const QVector3D normal = QVector3D::crossProduct(ab, ac);
+        if (normal.lengthSquared() > 1.0e-20f) {
+            vertexNormals[triangle[0]] += normal;
+            vertexNormals[triangle[1]] += normal;
+            vertexNormals[triangle[2]] += normal;
+        }
+    }
+    for (QVector3D &normal : vertexNormals) {
+        if (normal.lengthSquared() > 1.0e-20f) {
+            normal.normalize();
+        } else {
+            normal = QVector3D(0.0f, 0.0f, 1.0f);
+        }
+    }
+
     geometry->surfaceVertices.reserve(
         geometry->surfaceVertices.size() + tessellation->triangles().size() * 3);
+    geometry->surfaceNormals.reserve(
+        geometry->surfaceNormals.size() + tessellation->triangles().size() * 3);
     for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
          tessellation->triangles()) {
         for (const int vertexIndex : triangle) {
             geometry->surfaceVertices.append(
                 asVector(tessellation->vertices()[vertexIndex]));
+            geometry->surfaceNormals.append(vertexNormals[vertexIndex]);
         }
     }
 }
@@ -455,6 +485,7 @@ ViewportDepthGeometry buildViewportDepthGeometry(
             geometry.preciseLineVertices += prepared.preciseLineVertices;
             geometry.pointVertices += prepared.pointVertices;
             geometry.surfaceVertices += prepared.surfaceVertices;
+            geometry.surfaceNormals += prepared.surfaceNormals;
             continue;
         }
 
@@ -464,6 +495,7 @@ ViewportDepthGeometry buildViewportDepthGeometry(
         geometry.preciseLineVertices += prepared.preciseLineVertices;
         geometry.pointVertices += prepared.pointVertices;
         geometry.surfaceVertices += prepared.surfaceVertices;
+        geometry.surfaceNormals += prepared.surfaceNormals;
     }
     return geometry;
 }

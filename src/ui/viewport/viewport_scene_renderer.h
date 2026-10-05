@@ -154,7 +154,9 @@ public:
     bool draw(const QVector<ViewportSceneStroke> &strokes,
               const ViewportTransform &transform,
               const QSize &viewportSize,
-              qreal devicePixelRatio);
+              qreal devicePixelRatio,
+              bool depthTest = false,
+              qreal opacity = 1.0);
     bool drawArcToolOverlay(const ViewportTransform &transform,
                             const QSize &viewportSize,
                             qreal devicePixelRatio,

@@ -16,6 +16,7 @@ ViewportGpuSurface::ViewportGpuSurface(QWidget *parent)
     , sceneRenderer_(std::make_unique<ViewportSceneRenderer>())
     , previewRenderer_(std::make_unique<ViewportSceneRenderer>())
     , controlPointRenderer_(std::make_unique<ViewportControlPointRenderer>())
+    , surfaceRenderer_(std::make_unique<ViewportSurfaceRenderer>())
 {
     QSurfaceFormat format = QSurfaceFormat::defaultFormat();
     format.setVersion(3, 3);
@@ -33,6 +34,7 @@ ViewportGpuSurface::~ViewportGpuSurface()
         makeCurrent();
     }
     controlPointRenderer_.reset();
+    surfaceRenderer_.reset();
     previewRenderer_.reset();
     sceneRenderer_.reset();
     gridRenderer_.reset();
@@ -136,7 +138,7 @@ void ViewportGpuSurface::paintGL()
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         drawCallback_(painter, *gridRenderer_, *sceneRenderer_, *previewRenderer_,
-                      *controlPointRenderer_);
+                      *controlPointRenderer_, *surfaceRenderer_);
     }
 }
 

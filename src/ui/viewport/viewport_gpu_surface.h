@@ -5,6 +5,7 @@
 #include "blender_grid_renderer.h"
 #include "viewport_control_point_renderer.h"
 #include "viewport_scene_renderer.h"
+#include "viewport_surface_renderer.h"
 
 #include <QOpenGLWidget>
 
@@ -22,7 +23,8 @@ public:
     using DrawCallback = std::function<void(QPainter &, BlenderGridRenderer &,
                                             ViewportSceneRenderer &,
                                             ViewportSceneRenderer &,
-                                            ViewportControlPointRenderer &)>;
+                                            ViewportControlPointRenderer &,
+                                            ViewportSurfaceRenderer &)>;
 
     explicit ViewportGpuSurface(QWidget *parent = nullptr);
     ~ViewportGpuSurface() override;
@@ -52,6 +54,7 @@ private:
     std::unique_ptr<ViewportSceneRenderer> sceneRenderer_;
     std::unique_ptr<ViewportSceneRenderer> previewRenderer_;
     std::unique_ptr<ViewportControlPointRenderer> controlPointRenderer_;
+    std::unique_ptr<ViewportSurfaceRenderer> surfaceRenderer_;
 };
 
 } // namespace classiCAD

@@ -11,6 +11,7 @@
 #include "blender_grid_frame.h"
 #include "line_type_style.h"
 #include "viewport_depth_geometry.h"
+#include "workbench_lighting.h"
 #include "services/dimensions/dimension_font.h"
 #include "services/dimensions/dimension_layout.h"
 
@@ -323,6 +324,12 @@ void ViewportRenderer::setGridAppearance(const BlenderGridAppearance &appearance
     if (isValidBlenderGridAppearance(appearance)) {
         gridAppearance_ = appearance;
     }
+}
+
+void ViewportRenderer::setShadingSettings(
+    const ViewportShadingSettings &settings)
+{
+    shadingSettings_ = settings;
 }
 
 void ViewportRenderer::setGridBaseStep(qreal baseGridStep)
@@ -859,13 +866,16 @@ void ViewportRenderer::drawShape(QPainter &painter,
         return;
     }
 
-    const QColor curveColor = selected
+    QColor curveColor = selected
                                   ? QColor(QStringLiteral("#5da9e9"))
                                   : layerColor.isValid()
                                         ? layerColor
                                         : preview
                                               ? QColor(QStringLiteral("#e6b85c"))
                                               : QColor(QStringLiteral("#d28b45"));
+    if (shadingSettings_.xrayEnabled() && !preview) {
+        curveColor.setAlphaF(curveColor.alphaF() * 0.5);
+    }
     const QColor controlColor = QColor(QStringLiteral("#8aa7c7"));
     const qreal storedWidth = layerLineWeightMm > 0.0
                                   ? std::clamp(layerLineWeightMm * 6.0, 1.0, 10.0)
@@ -985,10 +995,12 @@ void ViewportRenderer::drawShape(QPainter &painter,
         if (preparedGeometry != nullptr && !faces.isEmpty()) {
             drawNurbsSurface(painter, faces.first(), viewportSize,
                              shapeObjectId, geometryRevision, preparedGeometry,
-                             preparedOffset);
+                             preparedOffset, preview, selected);
         } else {
             for (const auto &face : faces)
-                drawNurbsSurface(painter, face, viewportSize);
+                drawNurbsSurface(painter, face, viewportSize,
+                                 ObjectId::invalid(), 0, nullptr, {},
+                                 preview, selected);
         }
         return;
     }
@@ -998,7 +1010,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          viewportSize,
                          preview ? ObjectId::invalid() : shapeObjectId,
                          preview ? 0 : geometryRevision,
-                         preparedGeometry, preparedOffset);
+                         preparedGeometry, preparedOffset, preview, selected);
         return;
     }
 
@@ -1484,8 +1496,149 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         ObjectId objectId,
                                         quint64 geometryRevision,
                                         const ViewportDepthGeometry *preparedGeometry,
-                                        const Point3D &preparedOffset) const
+                                        const Point3D &preparedOffset,
+                                        bool preview,
+                                        bool selected) const
 {
+    if (shadingSettings_.mode == ViewportShadingMode::Solid) {
+        const QColor baseColor = preview
+                                     ? QColor(QStringLiteral("#d89a4e"))
+                                     : selected
+                                           ? QColor(QStringLiteral("#6d9fc7"))
+                                           : QColor(QStringLiteral("#aeb4bb"));
+        const qreal alpha = (preview || shadingSettings_.xrayEnabled())
+                                ? 0.5
+                                : 1.0;
+        const Point3D viewDirection = transform_.viewDirection();
+        const Point3D viewUp = transform_.viewUp();
+        const Point3D viewRight{
+            viewUp.y * viewDirection.z - viewUp.z * viewDirection.y,
+            viewUp.z * viewDirection.x - viewUp.x * viewDirection.z,
+            viewUp.x * viewDirection.y - viewUp.y * viewDirection.x};
+        const Point3D viewFacing = viewDirection;
+        const Point3D cameraPosition = transform_.cameraPosition(viewportSize);
+        const QVector3D worldRight(static_cast<float>(viewRight.x),
+                                   static_cast<float>(viewRight.y),
+                                   static_cast<float>(viewRight.z));
+        const QVector3D worldUp(static_cast<float>(viewUp.x),
+                                static_cast<float>(viewUp.y),
+                                static_cast<float>(viewUp.z));
+        const QVector3D worldFacing(static_cast<float>(viewFacing.x),
+                                    static_cast<float>(viewFacing.y),
+                                    static_cast<float>(viewFacing.z));
+        const QVector3D camera(static_cast<float>(cameraPosition.x),
+                               static_cast<float>(cameraPosition.y),
+                               static_cast<float>(cameraPosition.z));
+        const QVector3D baseColorVector = workbenchSrgbToSceneLinear(
+            QVector3D(baseColor.redF(), baseColor.greenF(),
+                      baseColor.blueF()));
+        const auto shade = [&](const QVector3D &sourceNormal,
+                               const Point3D &sourcePosition) {
+            const QVector3D normalWorld = workbenchNormalize(
+                sourceNormal, QVector3D(0.0f, 0.0f, 1.0f));
+            const QVector3D normalView(
+                QVector3D::dotProduct(normalWorld, worldRight),
+                QVector3D::dotProduct(normalWorld, worldUp),
+                QVector3D::dotProduct(normalWorld, worldFacing));
+            QVector3D incidentView(0.0f, 0.0f, 1.0f);
+            if (transform_.isPerspectiveEnabled()) {
+                const QVector3D position(
+                    static_cast<float>(sourcePosition.x + preparedOffset.x),
+                    static_cast<float>(sourcePosition.y + preparedOffset.y),
+                    static_cast<float>(sourcePosition.z + preparedOffset.z));
+                const QVector3D incidentWorld = workbenchNormalize(camera - position,
+                                                                  worldFacing);
+                incidentView = {QVector3D::dotProduct(incidentWorld, worldRight),
+                                QVector3D::dotProduct(incidentWorld, worldUp),
+                                QVector3D::dotProduct(incidentWorld, worldFacing)};
+            }
+            const QVector3D shaded = workbenchSceneLinearToSrgb(
+                workbenchStudioShade(baseColorVector, normalView,
+                                     incidentView));
+            QColor color = baseColor;
+            color.setRedF(std::clamp<qreal>(shaded.x(), 0.0, 1.0));
+            color.setGreenF(std::clamp<qreal>(shaded.y(), 0.0, 1.0));
+            color.setBlueF(std::clamp<qreal>(shaded.z(), 0.0, 1.0));
+            color.setAlphaF(alpha);
+            return color;
+        };
+        const auto project = [&](const Point3D &point, QPointF *screen) {
+            const Point3D moved{point.x + preparedOffset.x,
+                                point.y + preparedOffset.y,
+                                point.z + preparedOffset.z};
+            return transform_.worldPointToScreenUnclipped(moved,
+                                                          viewportSize,
+                                                          screen);
+        };
+        const auto drawTriangle = [&](const Point3D &a,
+                                      const Point3D &b,
+                                      const Point3D &c,
+                                      const QVector3D &normal) {
+            QPointF screenA;
+            QPointF screenB;
+            QPointF screenC;
+            if (!project(a, &screenA) || !project(b, &screenB) ||
+                !project(c, &screenC)) {
+                return;
+            }
+            painter.setPen(Qt::NoPen);
+            const Point3D center{(a.x + b.x + c.x) / 3.0,
+                                 (a.y + b.y + c.y) / 3.0,
+                                 (a.z + b.z + c.z) / 3.0};
+            painter.setBrush(shade(normal, center));
+            painter.drawPolygon(QPolygonF{screenA, screenB, screenC});
+        };
+
+        painter.save();
+        if (preparedGeometry != nullptr &&
+            preparedGeometry->surfaceVertices.size() >= 3) {
+            const QVector<QVector3D> &vertices =
+                preparedGeometry->surfaceVertices;
+            const QVector<QVector3D> &normals =
+                preparedGeometry->surfaceNormals;
+            for (int index = 0; index + 2 < vertices.size(); index += 3) {
+                const QVector3D normal =
+                    normals.size() > index + 2
+                        ? normals[index] + normals[index + 1] + normals[index + 2]
+                        : QVector3D::crossProduct(vertices[index + 1] - vertices[index],
+                                                  vertices[index + 2] - vertices[index]);
+                const auto point = [&preparedOffset](const QVector3D &value) {
+                    return Point3D{value.x(), value.y(), value.z()};
+                };
+                drawTriangle(point(vertices[index]), point(vertices[index + 1]),
+                             point(vertices[index + 2]), normal);
+            }
+        } else {
+            PreparedNurbsSurfaceTessellation localTessellation;
+            QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
+            const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+            if (surfaceTessellationCache_ != nullptr) {
+                cachedTessellation = surfaceTessellationCache_->acquire(
+                    objectId, geometryRevision, surface);
+                tessellation = cachedTessellation.data();
+            } else if (localTessellation.prepare(surface)) {
+                tessellation = &localTessellation;
+            }
+            if (tessellation != nullptr) {
+                for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
+                     tessellation->triangles()) {
+                    const Point3D &a = tessellation->vertices()[triangle[0]];
+                    const Point3D &b = tessellation->vertices()[triangle[1]];
+                    const Point3D &c = tessellation->vertices()[triangle[2]];
+                    const QVector3D ab(static_cast<float>(b.x - a.x),
+                                       static_cast<float>(b.y - a.y),
+                                       static_cast<float>(b.z - a.z));
+                    const QVector3D ac(static_cast<float>(c.x - a.x),
+                                       static_cast<float>(c.y - a.y),
+                                       static_cast<float>(c.z - a.z));
+                    drawTriangle(a, b, c, QVector3D::crossProduct(ab, ac));
+                }
+            }
+        }
+        painter.restore();
+        return;
+    }
+
     QVector<QLineF> screenLines;
     const auto appendScreenLine = [&](const Point3D &start,
                                       const Point3D &end) {

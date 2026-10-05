@@ -6,6 +6,7 @@
 #include "services/sampling/surface_tessellation_cache.h"
 #include "services/viewport/viewport_transform.h"
 #include "blender_grid_appearance.h"
+#include "viewport_shading.h"
 
 #include <QPainter>
 #include <QColor>
@@ -24,6 +25,7 @@ public:
     void drawGrid(QPainter &painter, const QSize &viewportSize) const;
     void drawOrigin(QPainter &painter, const QSize &viewportSize) const;
     void setGridAppearance(const BlenderGridAppearance &appearance);
+    void setShadingSettings(const ViewportShadingSettings &settings);
     void setGridBaseStep(qreal baseGridStep);
     void drawShape(QPainter &painter,
                    const Shape &shape,
@@ -52,7 +54,9 @@ public:
                           ObjectId objectId = ObjectId::invalid(),
                           quint64 geometryRevision = 0,
                           const ViewportDepthGeometry *preparedGeometry = nullptr,
-                          const Point3D &preparedOffset = {}) const;
+                          const Point3D &preparedOffset = {},
+                          bool preview = false,
+                          bool selected = false) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,
@@ -107,6 +111,7 @@ private:
     bool smoothCurveDisplay_ = true;
     bool architecturalDimensionFont_ = false;
     BlenderGridAppearance gridAppearance_;
+    ViewportShadingSettings shadingSettings_;
     qreal gridBaseStep_ = 1.0;
 };
 

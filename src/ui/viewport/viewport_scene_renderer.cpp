@@ -601,7 +601,9 @@ bool ViewportSceneRenderer::draw(
     const QVector<ViewportSceneStroke> &strokes,
     const ViewportTransform &transform,
     const QSize &viewportSize,
-    qreal devicePixelRatio)
+    qreal devicePixelRatio,
+    bool depthTest,
+    qreal opacity)
 {
     if (strokes.isEmpty()) {
         strokeGeometryKeys_.clear();
@@ -720,11 +722,37 @@ bool ViewportSceneRenderer::draw(
     if (patternOffsetsChanged) {
         cachedPatternOffsets_ = std::move(patternOffsets);
     }
+
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    GLboolean previousDepthMask = GL_TRUE;
+    GLint previousDepthFunction = GL_LESS;
+    GLint previousBlendSourceRgb = GL_ONE;
+    GLint previousBlendDestinationRgb = GL_ZERO;
+    GLint previousBlendSourceAlpha = GL_ONE;
+    GLint previousBlendDestinationAlpha = GL_ZERO;
+    GLint previousBlendEquationRgb = GL_FUNC_ADD;
+    GLint previousBlendEquationAlpha = GL_FUNC_ADD;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSourceRgb);
+    glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDestinationRgb);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &previousBlendSourceAlpha);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &previousBlendDestinationAlpha);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &previousBlendEquationRgb);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &previousBlendEquationAlpha);
+
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
-    glDisable(GL_DEPTH_TEST);
+    if (depthTest) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
+    glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glEnable(GL_MULTISAMPLE);
-    glBlendEquation(GL_FUNC_ADD);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glEnable(GL_PROGRAM_POINT_SIZE);
 
@@ -778,7 +806,9 @@ bool ViewportSceneRenderer::draw(
                                        stroke.worldOffset.z));
         boundProgram->setUniformValue(
             "uColor", QVector4D(stroke.color.redF(), stroke.color.greenF(),
-                                  stroke.color.blueF(), stroke.color.alphaF()));
+                                  stroke.color.blueF(),
+                                  stroke.color.alphaF() *
+                                      std::clamp(opacity, 0.0, 1.0)));
         if (stroke.pointDiameter > 0.0f) {
             boundProgram->setUniformValue("uPointSize",
                                           stroke.pointDiameter * float(dpr));
@@ -828,7 +858,24 @@ bool ViewportSceneRenderer::draw(
         boundProgram->release();
     }
     glDisable(GL_PROGRAM_POINT_SIZE);
-    glDisable(GL_BLEND);
+    glDepthMask(previousDepthMask);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    if (previousDepthTest) {
+        glEnable(GL_DEPTH_TEST);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
+    if (previousBlend) {
+        glEnable(GL_BLEND);
+    } else {
+        glDisable(GL_BLEND);
+    }
+    glBlendEquationSeparate(static_cast<GLenum>(previousBlendEquationRgb),
+                            static_cast<GLenum>(previousBlendEquationAlpha));
+    glBlendFuncSeparate(static_cast<GLenum>(previousBlendSourceRgb),
+                        static_cast<GLenum>(previousBlendDestinationRgb),
+                        static_cast<GLenum>(previousBlendSourceAlpha),
+                        static_cast<GLenum>(previousBlendDestinationAlpha));
     return true;
 }
 

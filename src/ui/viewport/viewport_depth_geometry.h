@@ -21,6 +21,8 @@ struct ViewportDepthGeometry {
     QVector<Point3D> preciseLineVertices;
     QVector<QVector3D> pointVertices;
     QVector<QVector3D> surfaceVertices;
+    // One smooth normal per expanded GL_TRIANGLES vertex.
+    QVector<QVector3D> surfaceNormals;
 };
 
 ViewportDepthGeometry buildViewportDepthGeometry(

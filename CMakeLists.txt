@@ -187,6 +187,7 @@ set(CLASSICAD_VIEWPORT_SHARED_SOURCES
     src/ui/viewport/viewport_renderer.cpp
     src/ui/viewport/viewport_overlay.cpp
     src/ui/viewport/blender_navigation_icons.qrc
+    src/ui/viewport/blender_shading_icons.qrc
 )
 
 set(CLASSICAD_VIEWPORT_ADAPTER_SUPPORT_SOURCES
@@ -196,6 +197,7 @@ set(CLASSICAD_VIEWPORT_ADAPTER_SUPPORT_SOURCES
     src/ui/viewport/viewport_gpu_surface.cpp
     src/ui/viewport/viewport_control_point_renderer.cpp
     src/ui/viewport/viewport_scene_renderer.cpp
+    src/ui/viewport/viewport_surface_renderer.cpp
 )
 
 set(CLASSICAD_VIEWPORT_SUPPORT_SOURCES
@@ -416,6 +418,7 @@ if (CLASSICAD_BUILD_TESTS)
         classicad_service_objects
         classicad_tool_objects
         classicad_viewport_shared_objects
+        classicad_viewport_support_objects
     )
     add_test(NAME viewport_render_contracts COMMAND classicad_viewport_render_contracts_test)
     set_tests_properties(viewport_render_contracts PROPERTIES

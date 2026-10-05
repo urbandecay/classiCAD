@@ -3,6 +3,7 @@
 #include "ui/viewport/viewport_gpu_surface.h"
 #include "ui/viewport/viewport_depth_geometry.h"
 #include "ui/viewport/line_type_style.h"
+#include "ui/viewport/viewport_surface_renderer.h"
 
 #include "core/document/document.h"
 #include "core/geometry/curve_construction.h"
@@ -1665,6 +1666,10 @@ int main(int argc, char **argv)
     viewport->setTool(ToolId::Select);
     application.processEvents();
     const QImage afterRectangle = captureViewport(viewport.get());
+    const QColor xrayLayerColor(
+        (rectangleLayerColor.red() + 55) / 2,
+        (rectangleLayerColor.green() + 55) / 2,
+        (rectangleLayerColor.blue() + 55) / 2);
     const auto orangePixels = [](const QImage &image) {
         int count = 0;
         for (int y = 0; y < image.height(); ++y) {
@@ -1678,9 +1683,9 @@ int main(int argc, char **argv)
         return count;
     };
     passed &= check(afterRectangle != beforeRectangle &&
-                        pixelsNearColor(afterRectangle, rectangleLayerColor, 45) >
-                            pixelsNearColor(beforeRectangle, rectangleLayerColor, 45) + 25,
-                    "committed rectangle stroke must appear after viewport rendering");
+                        pixelsNearColor(afterRectangle, xrayLayerColor, 45) >
+                            pixelsNearColor(beforeRectangle, xrayLayerColor, 45) + 25,
+                    "committed X-Ray rectangle stroke must keep the active layer tint after viewport rendering");
     rectangleColorRequest.color = previousRectangleLayerColor;
     viewport->executeLayerCommand(rectangleColorRequest);
 
@@ -1967,7 +1972,8 @@ int main(int argc, char **argv)
                              BlenderGridRenderer &,
                              ViewportSceneRenderer &sceneRenderer,
                              ViewportSceneRenderer &,
-                             ViewportControlPointRenderer &) {
+                             ViewportControlPointRenderer &,
+                             ViewportSurfaceRenderer &) {
                 painter.fillRect(QRect(QPoint(0, 0), gpuPatternSize),
                                  QColor(34, 34, 34));
                 painter.beginNativePainting();
@@ -2230,7 +2236,8 @@ int main(int argc, char **argv)
                               BlenderGridRenderer &gridRenderer,
                               ViewportSceneRenderer &,
                               ViewportSceneRenderer &,
-                              ViewportControlPointRenderer &) {
+                              ViewportControlPointRenderer &,
+                              ViewportSurfaceRenderer &) {
                 painter.fillRect(QRect(QPoint(0, 0), painter.viewport().size()),
                                  QColor(QStringLiteral("#282828")));
                 painter.beginNativePainting();

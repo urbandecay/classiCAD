@@ -84,6 +84,7 @@
 #include <QImageReader>
 #include <QKeyEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QPixmap>
@@ -103,6 +104,33 @@ namespace classiCAD {
 namespace {
 
 constexpr qreal kDragSnapBreakawayPixels = 36.0;
+constexpr qreal kViewportShadingButtonSize = 20.0;
+constexpr qreal kViewportShadingButtonGap = 1.0;
+constexpr qreal kViewportShadingPanelPadding = 2.0;
+
+QRectF viewportShadingPanelRect(const QSize &size)
+{
+    const qreal buttonWidth = kViewportShadingButtonSize * 3.0 +
+                              kViewportShadingButtonGap * 2.0;
+    const qreal width = buttonWidth + kViewportShadingPanelPadding * 2.0;
+    const qreal height = kViewportShadingButtonSize +
+                         kViewportShadingPanelPadding * 2.0;
+    return QRectF(size.width() - 12.0 - width,
+                  size.height() - 12.0 - height,
+                  width,
+                  height);
+}
+
+QRectF viewportShadingButtonRect(const QSize &size, int index)
+{
+    const QRectF panel = viewportShadingPanelRect(size);
+    return QRectF(panel.left() + kViewportShadingPanelPadding +
+                      index * (kViewportShadingButtonSize +
+                               kViewportShadingButtonGap),
+                  panel.top() + kViewportShadingPanelPadding,
+                  kViewportShadingButtonSize,
+                  kViewportShadingButtonSize);
+}
 
 void fillViewportBackground(QPainter &painter, const QRect &bounds)
 {
@@ -555,9 +583,11 @@ public:
                 [this](QPainter &painter, BlenderGridRenderer &gridRenderer,
                        ViewportSceneRenderer &sceneRenderer,
                        ViewportSceneRenderer &previewRenderer,
-                       ViewportControlPointRenderer &controlPointRenderer) {
+                       ViewportControlPointRenderer &controlPointRenderer,
+                       ViewportSurfaceRenderer &surfaceRenderer) {
                     paintViewport(painter, &gridRenderer, &sceneRenderer,
-                                  &previewRenderer, &controlPointRenderer);
+                                  &previewRenderer, &controlPointRenderer,
+                                  &surfaceRenderer);
                 });
             gpuSurface_->show();
         }
@@ -2155,7 +2185,7 @@ protected:
         }
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        paintViewport(painter, nullptr, nullptr, nullptr, nullptr);
+        paintViewport(painter, nullptr, nullptr, nullptr, nullptr, nullptr);
     }
 
     void resizeEvent(QResizeEvent *event) override
@@ -2196,11 +2226,81 @@ protected:
         return frame;
     }
 
+    void drawViewportShadingControls(QPainter &painter)
+    {
+        static const QPixmap xrayIcon(QStringLiteral(":/blender-shading/xray.png"));
+        static const QPixmap wireframeIcon(
+            QStringLiteral(":/blender-shading/shading_wire.png"));
+        static const QPixmap solidIcon(
+            QStringLiteral(":/blender-shading/shading_solid.png"));
+        const QPixmap *icons[] = {&xrayIcon, &wireframeIcon, &solidIcon};
+        const QRectF panel = viewportShadingPanelRect(size());
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(QColor(20, 21, 23, 245), 1.0));
+        painter.setBrush(QColor(31, 32, 34, 248));
+        painter.drawRoundedRect(panel, 3.0, 3.0);
+
+        for (int index = 0; index < 3; ++index) {
+            const QRectF button = viewportShadingButtonRect(size(), index);
+            const bool active = index == 0
+                                    ? viewportShadingSettings_.xrayEnabled()
+                                    : index == 1
+                                          ? viewportShadingSettings_.mode ==
+                                                ViewportShadingMode::Wireframe
+                                          : viewportShadingSettings_.mode ==
+                                                ViewportShadingMode::Solid;
+            const bool hovered = index == shadingControlHover_;
+            const QColor buttonColor = active
+                                           ? QColor(58, 126, 184, 255)
+                                           : hovered
+                                                 ? QColor(83, 85, 88, 255)
+                                                 : QColor(60, 61, 63, 255);
+            painter.setPen(QPen(active ? QColor(76, 142, 197, 255)
+                                       : QColor(42, 43, 45, 255),
+                                1.0));
+            painter.setBrush(buttonColor);
+            painter.drawRoundedRect(button, 2.0, 2.0);
+
+            const QPointF center = button.center();
+            const QRectF iconRect(center.x() - 8.0, center.y() - 8.0,
+                                  16.0, 16.0);
+            painter.drawPixmap(iconRect, *icons[index],
+                               QRectF(icons[index]->rect()));
+        }
+        painter.restore();
+    }
+
+    int viewportShadingControlAt(const QPointF &position) const
+    {
+        for (int index = 0; index < 3; ++index) {
+            if (viewportShadingButtonRect(size(), index).contains(position)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    void activateViewportShadingControl(int index)
+    {
+        if (index == 0) {
+            viewportShadingSettings_.toggleXray();
+        } else if (index == 1) {
+            viewportShadingSettings_.mode = ViewportShadingMode::Wireframe;
+        } else if (index == 2) {
+            viewportShadingSettings_.mode = ViewportShadingMode::Solid;
+        } else {
+            return;
+        }
+        update();
+    }
+
     void paintViewport(QPainter &painter,
                        BlenderGridRenderer *nativeRenderer,
                        ViewportSceneRenderer *sceneRenderer,
                        ViewportSceneRenderer *previewRenderer,
-                       ViewportControlPointRenderer *controlPointRenderer)
+                       ViewportControlPointRenderer *controlPointRenderer,
+                       ViewportSurfaceRenderer *surfaceRenderer)
     {
         invalidateEraseGeometryCacheForView();
         if (nativeRenderer != nullptr) {
@@ -2214,6 +2314,7 @@ protected:
         const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
         viewportRenderer_.setGridBaseStep(baseGridStep);
         viewportRenderer_.setGridAppearance(gridAppearance_);
+        viewportRenderer_.setShadingSettings(viewportShadingSettings_);
         const ViewportRenderFrame renderFrame = viewportRenderFrame();
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
         const ToolPreview &activeToolPreview = renderFrame.activeToolPreview;
@@ -2318,6 +2419,11 @@ protected:
             const bool scalePreview = renderObject.scalePreview;
             const bool rotatePreview = renderObject.rotatePreview;
             const GeometryType geometryType = visibleShape.geometryType;
+            if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                (geometryType == GeometryType::NurbsSurface ||
+                 geometryType == GeometryType::NurbsSolid)) {
+                continue;
+            }
             if (sceneRenderer != nullptr && previewRenderer != nullptr &&
                 geometryType == GeometryType::Picture &&
                 !scalePreview && !rotatePreview &&
@@ -2798,7 +2904,25 @@ protected:
 
         QVector<ViewportSceneStroke> gpuPreviewStrokes;
         gpuPreviewStrokes.reserve(gpuPreviewGeometry.size());
+        QVector<ViewportRenderObject> gpuPreviewSurfaceObjects;
+        gpuPreviewSurfaceObjects.reserve(gpuPreviewGeometry.size());
         for (const TransientPreviewStroke &preview : gpuPreviewGeometry) {
+            if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                (preview.shape.geometryType == GeometryType::NurbsSurface ||
+                 preview.shape.geometryType == GeometryType::NurbsSolid)) {
+                ViewportRenderObject surfaceObject;
+                surfaceObject.shape = preview.shape;
+                surfaceObject.placementTranslation = preview.worldOffset;
+                surfaceObject.preparedGeometryOffset = preview.worldOffset;
+                surfaceObject.cacheable = false;
+                surfaceObject.selected = false;
+                surfaceObject.preparedDepthGeometry =
+                    QSharedPointer<ViewportDepthGeometry>::create(
+                        buildViewportDepthGeometry(surfaceObject,
+                                                   &surfaceTessellationCache_));
+                gpuPreviewSurfaceObjects.append(std::move(surfaceObject));
+                continue;
+            }
             gpuPreviewStrokes.append({&preview.shape,
                                       preview.color,
                                       preview.width,
@@ -2859,11 +2983,21 @@ protected:
                     }
                 }
             }
+            const bool surfacesDrawn = surfaceRenderer == nullptr ||
+                surfaceRenderer->draw(visibleShapes,
+                                      renderFrame.camera,
+                                      renderFrame.viewportSize,
+                                      devicePixelRatioF(),
+                                      viewportShadingSettings_);
             const bool sceneDrawn = sceneRenderer == nullptr ||
                                     sceneRenderer->draw(gpuStrokes,
                                                         renderFrame.camera,
                                                         renderFrame.viewportSize,
-                                                        devicePixelRatioF());
+                                                        devicePixelRatioF(),
+                                                        !viewportShadingSettings_.xrayEnabled(),
+                                                        viewportShadingSettings_.xrayEnabled()
+                                                            ? 0.5
+                                                            : 1.0);
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 renderFrame.camera, renderFrame.viewportSize,
                 devicePixelRatioF(),
@@ -2897,6 +3031,16 @@ protected:
                                               preview.sceneShapeIndex < 0,
                                               false});
                 }
+            }
+            if (surfaceRenderer != nullptr &&
+                !gpuPreviewSurfaceObjects.isEmpty()) {
+                surfaceRenderer->draw(gpuPreviewSurfaceObjects,
+                                     renderFrame.camera,
+                                     renderFrame.viewportSize,
+                                     devicePixelRatioF(),
+                                     viewportShadingSettings_,
+                                     true,
+                                     false);
             }
             gpuPreviewRendered = previewRenderer != nullptr &&
                                  previewRenderer->draw(gpuPreviewStrokes,
@@ -2938,6 +3082,21 @@ protected:
                                   true, stroke.color, QString(), 0.0,
                                   ObjectId::invalid(), 0, nullptr,
                                   stroke.worldOffset);
+                    }
+                }
+            }
+            if (!surfacesDrawn) {
+                for (const ViewportRenderObject &renderObject : visibleShapes) {
+                    if (renderObject.shape.geometryType == GeometryType::NurbsSurface ||
+                        renderObject.shape.geometryType == GeometryType::NurbsSolid) {
+                        drawShape(painter, renderObject.shape, false,
+                                  renderObject.selected, true,
+                                  renderObject.layerColor,
+                                  renderObject.layerLineType,
+                                  renderObject.layerLineWeightMm,
+                                  ObjectId::invalid(), 0,
+                                  renderObject.preparedDepthGeometry.data(),
+                                  renderObject.preparedGeometryOffset);
                     }
                 }
             }
@@ -3179,12 +3338,24 @@ protected:
         viewportHudRenderer_.draw(painter, size(), hudState);
         navigationGizmo_.draw(
             painter, size(), navigationController_.hoverPosition());
+        drawViewportShadingControls(painter);
     }
 
     void mousePressEvent(QMouseEvent *event) override
     {
         navigationController_.stopAnimation();
         const QPointF screenPosition = eventPosition(event);
+        if (event->button() == Qt::LeftButton) {
+            const int shadingControl = viewportShadingControlAt(screenPosition);
+            if (shadingControl >= 0) {
+                shadingControlPressed_ = shadingControl;
+                shadingControlHover_ = shadingControl;
+                event->accept();
+                update();
+                return;
+            }
+            shadingControlPressed_ = -1;
+        }
         if (event->button() == Qt::LeftButton &&
             navigationController_.handleGizmoPress(screenPosition, size())) {
             event->accept();
@@ -3698,6 +3869,33 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
+        const int shadingControl = viewportShadingControlAt(screenPosition);
+        if (shadingControlPressed_ >= 0) {
+            if (shadingControl != shadingControlHover_) {
+                shadingControlHover_ = shadingControl;
+                update();
+            }
+            event->accept();
+            return;
+        }
+        if (shadingControl >= 0) {
+            if (shadingControl != shadingControlHover_) {
+                shadingControlHover_ = shadingControl;
+                const QStringList tips{
+                    QStringLiteral("X-Ray (Alt+Z)"),
+                    QStringLiteral("Wireframe"),
+                    QStringLiteral("Solid")};
+                setToolTip(tips[shadingControl]);
+                update();
+            }
+            event->accept();
+            return;
+        }
+        if (shadingControlHover_ >= 0) {
+            shadingControlHover_ = -1;
+            setToolTip(QString());
+            update();
+        }
         if (navigationController_.handleGizmoMove(screenPosition,
                                                   event->buttons(),
                                                   size())) {
@@ -4239,11 +4437,28 @@ protected:
     void leaveEvent(QEvent *event) override
     {
         navigationController_.pointerLeave();
+        if (shadingControlPressed_ < 0 && shadingControlHover_ >= 0) {
+            shadingControlHover_ = -1;
+            setToolTip(QString());
+            update();
+        }
         QWidget::leaveEvent(event);
     }
 
     void mouseReleaseEvent(QMouseEvent *event) override
     {
+        if (event->button() == Qt::LeftButton &&
+            shadingControlPressed_ >= 0) {
+            const int pressed = shadingControlPressed_;
+            shadingControlPressed_ = -1;
+            if (viewportShadingControlAt(eventPosition(event)) == pressed) {
+                activateViewportShadingControl(pressed);
+            } else {
+                update();
+            }
+            event->accept();
+            return;
+        }
         if (navigationController_.handleGizmoRelease(event->button(),
                                                      eventPosition(event),
                                                      size())) {
@@ -4430,6 +4645,12 @@ protected:
                                        .arg(toolName(activeTool_))
                                        .arg(lineCommandActive_)
                                        .arg(pendingPoints_.size()));
+        if (!event->isAutoRepeat() && event->key() == Qt::Key_Z &&
+            event->modifiers().testFlag(Qt::AltModifier)) {
+            activateViewportShadingControl(0);
+            event->accept();
+            return;
+        }
         ToolInput keyInput = makeKeyToolInput(*event);
         if (activeTool_ == Tool::Rotate) {
             keyInput = makeRotateToolInput();
@@ -10326,6 +10547,9 @@ private:
     CurveHitTester curveHitTester_;
     SnapEngine snapEngine_;
     ViewportRenderer viewportRenderer_;
+    ViewportShadingSettings viewportShadingSettings_;
+    int shadingControlHover_ = -1;
+    int shadingControlPressed_ = -1;
     BlenderGridRenderer blenderGridRenderer_;
     ViewportGpuSurface *gpuSurface_ = nullptr;
     ViewportOverlay viewportOverlay_;

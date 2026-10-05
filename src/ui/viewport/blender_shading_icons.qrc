@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/blender-shading">
+        <file alias="xray.png">../../../resources/icons/blender/xray.png</file>
+        <file alias="shading_wire.png">../../../resources/icons/blender/shading_wire.png</file>
+        <file alias="shading_solid.png">../../../resources/icons/blender/shading_solid.png</file>
+    </qresource>
+</RCC>

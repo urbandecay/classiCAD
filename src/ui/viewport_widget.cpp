@@ -480,6 +480,42 @@ public:
                 dragSnapLocked_ = false;
                 dragAxisLock_ = DragAxisLock::None;
                 if (gesture == SelectionGestureKind::BeginControlPointDrag) {
+                    controlPointDragFrame_ = controlPointWorkPlaneFrame(
+                        hit.objectId, hit.controlPointIndex);
+                    controlPointDragFrameValid_ =
+                        isValidWorkPlaneFrame(controlPointDragFrame_);
+                    controlPointLastCursorScreen_ = input.screenPosition;
+                    controlPointCursorOffsetScreen_ = {};
+                    QPointF controlPointCursor;
+                    if (controlPointDragFrameValid_ &&
+                        viewportTransform_.screenToWorkPlane(
+                            input.screenPosition,
+                            size(),
+                            controlPointDragFrame_,
+                            &controlPointCursor)) {
+                        setSelectionLastControlPointWorldPosition(
+                            controlPointCursor);
+                    }
+                    const Shape *dragShape = document_.shape(hit.objectId);
+                    if (controlPointDragFrameValid_ && dragShape != nullptr &&
+                        hit.controlPointIndex >= 0) {
+                        const QVector<QPointF> controlPoints =
+                            controlPointsForShape(*dragShape);
+                        if (hit.controlPointIndex < controlPoints.size()) {
+                            const Point3D controlPointWorld =
+                                workPlaneFramePointToWorld(
+                                    controlPoints[hit.controlPointIndex],
+                                    controlPointDragFrame_);
+                            QPointF controlPointScreen;
+                            if (viewportTransform_.worldPointToScreen(
+                                    controlPointWorld,
+                                    size(),
+                                    &controlPointScreen)) {
+                                controlPointCursorOffsetScreen_ =
+                                    controlPointScreen - input.screenPosition;
+                            }
+                        }
+                    }
                     setCursor(Qt::SizeAllCursor);
                     DebugLog::instance().write(
                         QStringLiteral("control point drag start shape=%1 index=%2 world=%3")
@@ -489,6 +525,8 @@ public:
                     return;
                 }
 
+                controlPointDragFrameValid_ = false;
+                controlPointCursorOffsetScreen_ = {};
                 setFocus(Qt::MouseFocusReason);
                 setCursor(Qt::SizeAllCursor);
                 const int shapeIndex = objectIndex(selection_.primaryObjectId());
@@ -3689,9 +3727,13 @@ protected:
                      arcState().perpendicularPlaneActive)) {
             restoreArcChordReferencePlaneForEndpointPick();
         }
+        const WorkPlaneFrame cursorWorkPlaneFrame =
+            controlPointSelectionDragActive() && controlPointDragFrameValid_
+                ? controlPointDragFrame_
+                : viewportTransform_.workPlaneFrame();
         if (!viewportTransform_.screenToWorkPlane(screenPosition,
                                                   size(),
-                                                  viewportTransform_.workPlaneFrame(),
+                                                  cursorWorkPlaneFrame,
                                                   &rawCursorWorld_)) {
             cursorValid_ = false;
             currentSnap_ = SnapResult{};
@@ -3845,17 +3887,39 @@ protected:
         if (controlPointSelectionDragActive() && selectionDragStarted() &&
             selectedIndex >= 0 &&
             controlPointIndex_ >= 0) {
-            const QPointF previousControlPointCursorWorld =
-                selectionLastControlPointWorldPosition();
             const QPointF cursorStepScreen =
-                screenPosition - worldToScreen(previousControlPointCursorWorld);
-            const QPointF delta = rawCursorWorld_ -
-                                  selectionLastControlPointWorldPosition();
+                screenPosition - controlPointLastCursorScreen_;
+            controlPointLastCursorScreen_ = screenPosition;
+            const QVector<QPointF> controlPoints =
+                controlPointsForShape(shapes_[selectedIndex]);
+            const bool hasControlPoint =
+                controlPointIndex_ < controlPoints.size();
+            const QPointF currentControlPoint = hasControlPoint
+                                                   ? controlPoints[controlPointIndex_]
+                                                   : QPointF{};
+            QPointF desiredControlPoint = currentControlPoint;
+            const QPointF desiredControlPointScreen =
+                screenPosition + controlPointCursorOffsetScreen_;
+            const bool hasDesiredControlPoint =
+                hasControlPoint && controlPointDragFrameValid_ &&
+                viewportTransform_.screenToWorkPlane(
+                    desiredControlPointScreen,
+                    size(),
+                    controlPointDragFrame_,
+                    &desiredControlPoint);
+            if (!hasDesiredControlPoint && hasControlPoint) {
+                desiredControlPoint = currentControlPoint +
+                    (rawCursorWorld_ -
+                     selectionLastControlPointWorldPosition());
+            }
+            const QPointF delta = hasControlPoint
+                                      ? desiredControlPoint - currentControlPoint
+                                      : QPointF{};
             if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
                 qint64 snapEvaluationMicroseconds = -1;
                 const qreal cursorDistanceFromSnap =
-                    std::hypot(screenPosition.x() - worldToScreen(dragSnapCursorWorld_).x(),
-                               screenPosition.y() - worldToScreen(dragSnapCursorWorld_).y());
+                    std::hypot(screenPosition.x() - dragSnapCursorScreen_.x(),
+                               screenPosition.y() - dragSnapCursorScreen_.y());
 
                 if (dragSnapLocked_ &&
                     cursorDistanceFromSnap <= kDragSnapBreakawayPixels) {
@@ -3866,9 +3930,10 @@ protected:
                             .arg(cursorDistanceFromSnap, 0, 'f', 2)
                             .arg(kDragSnapBreakawayPixels, 0, 'f', 2));
                 } else if (dragSnapLocked_) {
-                    const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
                     beginDragHistory();
-                    translateControlPoint(selectedShapeIndex_, controlPointIndex_, detachDelta);
+                    translateControlPoint(selectedShapeIndex_,
+                                          controlPointIndex_,
+                                          delta);
                     currentDragSnap_ = DragSnapResult{};
                     dragSnapLocked_ = false;
                     DebugLog::instance().write(
@@ -3880,15 +3945,15 @@ protected:
                     beginDragHistory();
                     translateControlPoint(selectedShapeIndex_, controlPointIndex_, delta);
 
-                    const QVector<QPointF> controlPoints =
+                    const QVector<QPointF> movedControlPoints =
                         controlPointsForShape(shapes_[selectedIndex]);
-                    if (controlPointIndex_ < controlPoints.size()) {
+                    if (controlPointIndex_ < movedControlPoints.size()) {
                         QElapsedTimer snapTimer;
                         snapTimer.start();
                         currentDragSnap_ = findControlPointSnap(
                             selectedShapeIndex_,
                             controlPointIndex_,
-                            controlPoints[controlPointIndex_]);
+                            movedControlPoints[controlPointIndex_]);
                         snapEvaluationMicroseconds = snapTimer.nsecsElapsed() / 1000;
                         if (currentDragSnap_.isValid()) {
                             translateControlPoint(selectedShapeIndex_,
@@ -3896,6 +3961,10 @@ protected:
                                                   currentDragSnap_.translation);
                             dragSnapLocked_ = true;
                             dragSnapCursorWorld_ = rawCursorWorld_;
+                            dragSnapCursorScreen_ = screenPosition;
+                            // Keep the original mouse-to-handle offset. A snap
+                            // temporarily holds the CV at its target; release
+                            // restores the cursor-relative drag position.
                             DebugLog::instance().write(
                                 QStringLiteral("control point snapped shape=%1 index=%2 type=%3 target=%4")
                                     .arg(selectedIndex)
@@ -5152,6 +5221,41 @@ private:
         }
     }
 
+    WorkPlaneFrame controlPointWorkPlaneFrame(ObjectId objectId,
+                                               int controlPointIndex) const
+    {
+        const Shape *shape = document_.shape(objectId);
+        if (shape == nullptr) {
+            return {};
+        }
+        const auto withObjectPlacement = [&](WorkPlaneFrame frame) {
+            const SceneObject *sceneObject = document_.object(objectId);
+            if (sceneObject != nullptr) {
+                frame.origin.x += sceneObject->placementTranslation.x;
+                frame.origin.y += sceneObject->placementTranslation.y;
+                frame.origin.z += sceneObject->placementTranslation.z;
+            }
+            return frame;
+        };
+        if (shape->geometryType != GeometryType::PolyCurve) {
+            return withObjectPlacement(shapeWorkPlaneFrame(*shape));
+        }
+
+        int remainingControlPointIndex = controlPointIndex;
+        for (int componentIndex = 0;
+             componentIndex < shape->components.size();
+             ++componentIndex) {
+            const Shape::NurbsCurve2D &component =
+                shape->components[componentIndex];
+            if (remainingControlPointIndex < component.controlPoints.size()) {
+                return withObjectPlacement(
+                    shapeComponentWorkPlaneFrame(*shape, componentIndex));
+            }
+            remainingControlPointIndex -= component.controlPoints.size();
+        }
+        return withObjectPlacement(shapeWorkPlaneFrame(*shape));
+    }
+
     void beginSelectionObjectDrag(const QVector<ObjectId> &objectIds,
                                   const QPointF &screenPosition,
                                   const QPointF &worldPosition,
@@ -5167,6 +5271,7 @@ private:
 
     void clearSelectionDragState()
     {
+        controlPointDragFrameValid_ = false;
         if (SelectTool *selectTool = selectionToolController()) {
             selectTool->clearDragState();
         }
@@ -10277,7 +10382,12 @@ private:
     QPointF grabAxisStartScreen_;
     Point3D dragAxisLastPosition_;
     bool dragAxisPositionValid_ = false;
+    WorkPlaneFrame controlPointDragFrame_;
+    bool controlPointDragFrameValid_ = false;
+    QPointF controlPointLastCursorScreen_;
+    QPointF controlPointCursorOffsetScreen_;
     QPointF dragSnapCursorWorld_{0.0, 0.0};
+    QPointF dragSnapCursorScreen_;
     QPointF nearDragFreeSourcePoint_{0.0, 0.0};
     bool nearDragFreeSourcePointValid_ = false;
     QVector<ObjectId> eraseTargetShapeIndices_;

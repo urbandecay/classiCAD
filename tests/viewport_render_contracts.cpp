@@ -61,6 +61,8 @@ int main(int argc, char *argv[])
 
     const WorkbenchStudioLighting &workbenchLighting =
         defaultWorkbenchStudioLighting();
+    const QVector3D defaultMaterialColor =
+        workbenchDefaultSolidMaterialDiffuseColor();
     const QVector3D litDefaultSurface = workbenchStudioShade(
         QVector3D(0.5f, 0.5f, 0.5f),
         QVector3D(0.0f, 0.0f, 1.0f),
@@ -70,6 +72,9 @@ int main(int argc, char *argv[])
     passed &= check(workbenchLighting.useSpecular &&
                         workbenchLighting.lights[0].enabled &&
                         workbenchLighting.lights[3].enabled &&
+                        std::abs(defaultMaterialColor.x() - 0.8f) < 1.0e-7f &&
+                        std::abs(defaultMaterialColor.y() - 0.8f) < 1.0e-7f &&
+                        std::abs(defaultMaterialColor.z() - 0.8f) < 1.0e-7f &&
                         std::abs(workbenchLighting.lights[1].diffuseColor.x() -
                                  0.521082997f) < 1.0e-7f &&
                         std::abs(litDefaultSurface.x() - 0.239758f) < 2.0e-3f &&
@@ -147,10 +152,8 @@ int main(int argc, char *argv[])
     ViewportShadingSettings solidShading;
     solidShading.mode = ViewportShadingMode::Solid;
     const RenderedSurface solidSurface = renderedSurface(solidShading);
-    const QColor surfaceBaseColor(QStringLiteral("#aeb4bb"));
-    const QVector3D surfaceBaseLinear = workbenchSrgbToSceneLinear(
-        QVector3D(surfaceBaseColor.redF(), surfaceBaseColor.greenF(),
-                  surfaceBaseColor.blueF()));
+    const QVector3D surfaceBaseLinear =
+        workbenchDefaultSolidMaterialDiffuseColor();
     const QVector3D expectedCpuColor = workbenchSceneLinearToSrgb(
         workbenchStudioShade(surfaceBaseLinear,
                              QVector3D(0.0f, 0.0f, 1.0f),
@@ -235,10 +238,8 @@ int main(int argc, char *argv[])
                                          pixel.blue() > 70;
                     }
                 }
-                const QColor baseColor(QStringLiteral("#aeb4bb"));
-                const QVector3D linearBaseColor = workbenchSrgbToSceneLinear(
-                    QVector3D(baseColor.redF(), baseColor.greenF(),
-                              baseColor.blueF()));
+                const QVector3D linearBaseColor =
+                    workbenchDefaultSolidMaterialDiffuseColor();
                 const QVector3D expectedLighting = workbenchSceneLinearToSrgb(
                     workbenchStudioShade(linearBaseColor,
                                          QVector3D(0.0f, 0.0f, 1.0f),

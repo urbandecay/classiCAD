@@ -60,6 +60,13 @@ inline QVector3D workbenchSceneLinearToSrgb(const QVector3D &color)
             workbenchSceneLinearToSrgb(color.z())};
 }
 
+inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()
+{
+    // Blender's factory-startup material uses diffuse_color = (0.8, 0.8, 0.8).
+    // This value is already scene-linear; it must not be decoded as sRGB.
+    return {0.8f, 0.8f, 0.8f};
+}
+
 inline const WorkbenchStudioLighting &defaultWorkbenchStudioLighting()
 {
     // Blender's factory-startup SolidLight preferences, in view-space.

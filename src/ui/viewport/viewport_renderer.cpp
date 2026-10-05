@@ -1505,7 +1505,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                      ? QColor(QStringLiteral("#d89a4e"))
                                      : selected
                                            ? QColor(QStringLiteral("#6d9fc7"))
-                                           : QColor(QStringLiteral("#aeb4bb"));
+                                           : QColor(Qt::white);
         const qreal alpha = (preview || shadingSettings_.xrayEnabled())
                                 ? 0.5
                                 : 1.0;
@@ -1529,9 +1529,11 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const QVector3D camera(static_cast<float>(cameraPosition.x),
                                static_cast<float>(cameraPosition.y),
                                static_cast<float>(cameraPosition.z));
-        const QVector3D baseColorVector = workbenchSrgbToSceneLinear(
-            QVector3D(baseColor.redF(), baseColor.greenF(),
-                      baseColor.blueF()));
+        const QVector3D baseColorVector = preview || selected
+            ? workbenchSrgbToSceneLinear(
+                  QVector3D(baseColor.redF(), baseColor.greenF(),
+                            baseColor.blueF()))
+            : workbenchDefaultSolidMaterialDiffuseColor();
         const auto shade = [&](const QVector3D &sourceNormal,
                                const Point3D &sourcePosition) {
             const QVector3D normalWorld = workbenchNormalize(

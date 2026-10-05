@@ -458,13 +458,15 @@ bool ViewportSurfaceRenderer::draw(
                                          ? QColor(QStringLiteral("#d89a4e"))
                                          : range.selected
                                                ? QColor(QStringLiteral("#6d9fc7"))
-                                               : QColor(QStringLiteral("#aeb4bb"));
+                                               : QColor(Qt::white);
             const float alpha = (previewOverlay || settings.xrayEnabled())
                                     ? 0.5f
                                     : 1.0f;
-            const QVector3D baseColorLinear = workbenchSrgbToSceneLinear(
-                QVector3D(baseColor.redF(), baseColor.greenF(),
-                          baseColor.blueF()));
+            const QVector3D baseColorLinear = previewOverlay || range.selected
+                ? workbenchSrgbToSceneLinear(
+                      QVector3D(baseColor.redF(), baseColor.greenF(),
+                                baseColor.blueF()))
+                : workbenchDefaultSolidMaterialDiffuseColor();
             program_.setUniformValue(
                 "uBaseColor",
                 QVector4D(baseColorLinear.x(), baseColorLinear.y(),

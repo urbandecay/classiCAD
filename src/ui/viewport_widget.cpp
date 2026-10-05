@@ -199,6 +199,7 @@ enum class DragAxisLock {
     None,
     X,
     Y,
+    Z,
 };
 
 QString dragAxisLockName(DragAxisLock lock)
@@ -208,6 +209,8 @@ QString dragAxisLockName(DragAxisLock lock)
         return QStringLiteral("X");
     case DragAxisLock::Y:
         return QStringLiteral("Y");
+    case DragAxisLock::Z:
+        return QStringLiteral("Z");
     case DragAxisLock::None:
         return QStringLiteral("None");
     }
@@ -1455,6 +1458,7 @@ public:
         if (!grabTool_.begin(document_, validSelection, rawCursorWorld_)) {
             return false;
         }
+        grabAxisStartScreen_ = localCursor;
         if (!selectedShapeIndex_.isValid() || !validSelection.contains(selectedShapeIndex_)) {
             selection_.setPrimaryObjectId(validSelection.back());
         }
@@ -3239,6 +3243,7 @@ protected:
                     if (baseSnap.isValid()) {
                         const QPointF cursorOffset = rawWorldPosition - baseSnap.point;
                         grabTool_.acceptBasePoint(baseSnap.point, cursorOffset);
+                        grabAxisStartScreen_ = screenPosition;
                         currentSnap_ = baseSnap;
                         setCursor(Qt::SizeAllCursor);
                         DebugLog::instance().write(
@@ -3254,7 +3259,8 @@ protected:
                     emitCoordinateUpdate();
                 } else {
                     if (grabTool_.hasBasePoint()) {
-                        updateGrabPosition(selectionDraggedObjectIds());
+                        updateGrabPosition(selectionDraggedObjectIds(),
+                                           screenPosition);
                     }
                     finishGrab();
                 }
@@ -3689,6 +3695,18 @@ protected:
                                                   &rawCursorWorld_)) {
             cursorValid_ = false;
             currentSnap_ = SnapResult{};
+            if (activeTool_ == Tool::Select && objectSelectionDragActive() &&
+                selectionDragStarted()) {
+                const QVector<ObjectId> dragIndices =
+                    selectionDraggedObjectIds().isEmpty()
+                        ? QVector<ObjectId>{selectedShapeIndex_}
+                        : selectionDraggedObjectIds();
+                if (grabTool_.isActive()) {
+                    updateGrabPosition(dragIndices, screenPosition);
+                } else if (dragAxisLock_ == DragAxisLock::Z) {
+                    updateWorldZAxisDrag(dragIndices, screenPosition);
+                }
+            }
             if (activeToolController_ != nullptr &&
                 ((activeTool_ == Tool::Line && !pendingPoints_.isEmpty()) ||
                  activeTool_ == Tool::PointExtrude)) {
@@ -3923,7 +3941,7 @@ protected:
                                                      ? QVector<ObjectId>{selectedShapeIndex_}
                                                      : selectionDraggedObjectIds();
             if (grabTool_.isActive()) {
-                updateGrabPosition(dragIndices);
+                updateGrabPosition(dragIndices, screenPosition);
             } else {
                 const bool groupDrag = dragIndices.size() > 1;
                 const QPointF previousDragCursorWorld =
@@ -3936,12 +3954,15 @@ protected:
                 if (!qFuzzyIsNull(rawDelta.x()) || !qFuzzyIsNull(rawDelta.y())) {
                     qint64 snapEvaluationMicroseconds = -1;
                     if (dragAxisLock_ != DragAxisLock::None) {
-                        if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+                        if (dragAxisLock_ == DragAxisLock::Z) {
+                            updateWorldZAxisDrag(dragIndices, screenPosition);
+                        } else if (!qFuzzyIsNull(delta.x()) ||
+                                   !qFuzzyIsNull(delta.y())) {
                             beginDragHistory();
                             translateShapes(dragIndices, delta);
                         }
                         // Axis locking takes priority over object snapping so the
-                        // move remains exactly horizontal or vertical.
+                        // move remains exactly on the chosen world axis.
                         currentDragSnap_ = DragSnapResult{};
                         dragSnapLocked_ = false;
                     } else {
@@ -4422,19 +4443,28 @@ protected:
 
         if (activeTool_ == Tool::Select && objectSelectionDragActive() &&
             !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
-            (event->key() == Qt::Key_X || event->key() == Qt::Key_Y)) {
-            const DragAxisLock requestedLock = event->key() == Qt::Key_X
-                                                   ? DragAxisLock::X
-                                                   : DragAxisLock::Y;
+            (event->key() == Qt::Key_X || event->key() == Qt::Key_Y ||
+             event->key() == Qt::Key_Z)) {
+            const DragAxisLock requestedLock =
+                event->key() == Qt::Key_X ? DragAxisLock::X
+                : event->key() == Qt::Key_Y ? DragAxisLock::Y
+                                            : DragAxisLock::Z;
             dragAxisLock_ = dragAxisLock_ == requestedLock
                                 ? DragAxisLock::None
                                 : requestedLock;
+            dragAxisPositionValid_ = false;
+            if (dragAxisLock_ == DragAxisLock::Z) {
+                const QPointF pointerScreen = mapFromGlobal(QCursor::pos());
+                dragAxisPositionValid_ = worldZAxisPositionAtScreen(
+                    pointerScreen, &dragAxisLastPosition_);
+            }
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
             if (grabTool_.isActive()) {
                 updateGrabPosition(selectionDraggedObjectIds().isEmpty()
                                        ? QVector<ObjectId>{selectedShapeIndex_}
-                                       : selectionDraggedObjectIds());
+                                       : selectionDraggedObjectIds(),
+                                   mapFromGlobal(QCursor::pos()));
             }
             DebugLog::instance().write(
                 QStringLiteral("selection drag axis lock=%1")
@@ -8534,16 +8564,79 @@ private:
         }
     }
 
-    void applyObjectDragSnap(const QVector<ObjectId> &objectIds,
-                             const DragSnapResult &snap)
+    static bool isZeroWorldDelta(const Point3D &delta)
     {
-        if (!snap.hasWorldTranslation) {
-            translateShapes(objectIds, snap.translation);
+        return qFuzzyIsNull(delta.x) && qFuzzyIsNull(delta.y) &&
+               qFuzzyIsNull(delta.z);
+    }
+
+    bool worldZAxisPositionAtScreen(const QPointF &screenPosition,
+                                   Point3D *axisPosition) const
+    {
+        if (axisPosition == nullptr) {
+            return false;
+        }
+        constexpr Point3D worldOrigin{};
+        constexpr Point3D worldZAxis{0.0, 0.0, 1.0};
+        if (viewportTransform_.screenToWorldAxis(screenPosition,
+                                                 size(),
+                                                 worldOrigin,
+                                                 worldZAxis,
+                                                 axisPosition)) {
+            return true;
+        }
+
+        // When the camera looks exactly down world Z, that axis collapses to
+        // one screen point. Use vertical mouse motion as the depth control so
+        // Z remains usable in a top view too.
+        const qreal pixelsPerUnit =
+            viewportTransform_.viewScalePixelsPerWorldUnit(size());
+        if (!std::isfinite(pixelsPerUnit) || pixelsPerUnit <= 1.0e-12) {
+            return false;
+        }
+        const Point3D viewDirection = viewportTransform_.viewDirection();
+        const qreal orientation = viewDirection.z < 0.0 ? -1.0 : 1.0;
+        const qreal z = -screenPosition.y() / pixelsPerUnit * orientation;
+        if (!std::isfinite(z)) {
+            return false;
+        }
+        *axisPosition = {0.0, 0.0, z};
+        return true;
+    }
+
+    void updateWorldZAxisDrag(const QVector<ObjectId> &objectIds,
+                              const QPointF &screenPosition)
+    {
+        Point3D axisPosition;
+        if (worldZAxisPositionAtScreen(screenPosition, &axisPosition)) {
+            if (dragAxisPositionValid_) {
+                const Point3D worldDelta{
+                    axisPosition.x - dragAxisLastPosition_.x,
+                    axisPosition.y - dragAxisLastPosition_.y,
+                    axisPosition.z - dragAxisLastPosition_.z};
+                if (!isZeroWorldDelta(worldDelta)) {
+                    beginDragHistory();
+                    translateShapesWorldDelta(objectIds, worldDelta);
+                }
+            }
+            dragAxisLastPosition_ = axisPosition;
+            dragAxisPositionValid_ = true;
+        }
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        setSelectionLastDragWorldPosition(rawCursorWorld_);
+    }
+
+    void translateShapesWorldDelta(const QVector<ObjectId> &objectIds,
+                                   const Point3D &worldDelta)
+    {
+        if (isZeroWorldDelta(worldDelta)) {
             return;
         }
+
         QVector<ObjectId> spatialObjects;
-        spatialObjects.reserve(objectIds.size());
         QVector<ObjectId> geometryObjects;
+        spatialObjects.reserve(objectIds.size());
         geometryObjects.reserve(objectIds.size());
         for (const ObjectId objectId : objectIds) {
             const Shape *shape = document_.shape(objectId);
@@ -8558,33 +8651,43 @@ private:
             }
         }
         if (!spatialObjects.isEmpty()) {
-            document_.translateObjects(spatialObjects, snap.worldTranslation);
+            document_.translateObjects(spatialObjects, worldDelta);
         }
         for (const ObjectId objectId : geometryObjects) {
             document_.mutateGeometry(
                 objectId,
                 [&](Shape &shape) {
                     WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-                    frame.origin.x += snap.worldTranslation.x;
-                    frame.origin.y += snap.worldTranslation.y;
-                    frame.origin.z += snap.worldTranslation.z;
+                    frame.origin.x += worldDelta.x;
+                    frame.origin.y += worldDelta.y;
+                    frame.origin.z += worldDelta.z;
                     shape.workPlaneFrame = frame;
                     if (validateNurbsSurface(shapeBaseSurface(shape))) {
                         for (Point3D &point : shapeBaseSurface(shape).controlPoints) {
-                            point.x += snap.worldTranslation.x;
-                            point.y += snap.worldTranslation.y;
-                            point.z += snap.worldTranslation.z;
+                            point.x += worldDelta.x;
+                            point.y += worldDelta.y;
+                            point.z += worldDelta.z;
                         }
                     }
                     for (WorkPlaneFrame &componentFrame :
                          shape.componentWorkPlaneFrames) {
-                        componentFrame.origin.x += snap.worldTranslation.x;
-                        componentFrame.origin.y += snap.worldTranslation.y;
-                        componentFrame.origin.z += snap.worldTranslation.z;
+                        componentFrame.origin.x += worldDelta.x;
+                        componentFrame.origin.y += worldDelta.y;
+                        componentFrame.origin.z += worldDelta.z;
                     }
                     return true;
                 });
         }
+    }
+
+    void applyObjectDragSnap(const QVector<ObjectId> &objectIds,
+                             const DragSnapResult &snap)
+    {
+        if (!snap.hasWorldTranslation) {
+            translateShapes(objectIds, snap.translation);
+            return;
+        }
+        translateShapesWorldDelta(objectIds, snap.worldTranslation);
         DebugLog::instance().write(QStringLiteral("object-drag-snap applied targetShape=%1 worldDelta=(%2,%3,%4)")
             .arg(snap.targetShapeIndex).arg(snap.worldTranslation.x,0,'g',12)
             .arg(snap.worldTranslation.y,0,'g',12).arg(snap.worldTranslation.z,0,'g',12));
@@ -8597,6 +8700,8 @@ private:
             return QPointF(delta.x(), 0.0);
         case DragAxisLock::Y:
             return QPointF(0.0, delta.y());
+        case DragAxisLock::Z:
+            return {};
         case DragAxisLock::None:
             return delta;
         }
@@ -8604,7 +8709,8 @@ private:
         return delta;
     }
 
-    void updateGrabPosition(const QVector<ObjectId> &dragIndices)
+    void updateGrabPosition(const QVector<ObjectId> &dragIndices,
+                            const QPointF &screenPosition)
     {
         if (!grabTool_.isActive() || grabTool_.isPickingBasePoint()) {
             return;
@@ -8628,6 +8734,31 @@ private:
         grabTool_.restoreSourceGeometry(document_);
         QPointF totalDelta;
         QPointF freeDestination;
+        if (dragAxisLock_ == DragAxisLock::Z) {
+            Point3D startAxisPosition;
+            Point3D currentAxisPosition;
+            currentSnap_ = SnapResult{};
+            if (worldZAxisPositionAtScreen(grabAxisStartScreen_,
+                                           &startAxisPosition) &&
+                worldZAxisPositionAtScreen(screenPosition,
+                                           &currentAxisPosition)) {
+                const Point3D worldDelta{
+                    currentAxisPosition.x - startAxisPosition.x,
+                    currentAxisPosition.y - startAxisPosition.y,
+                    currentAxisPosition.z - startAxisPosition.z};
+                if (!isZeroWorldDelta(worldDelta)) {
+                    translateShapesWorldDelta(dragIndices, worldDelta);
+                    grabTool_.setMoved(true);
+                } else {
+                    grabTool_.setMoved(false);
+                }
+            } else {
+                grabTool_.setMoved(false);
+            }
+            currentDragSnap_ = DragSnapResult{};
+            setSelectionLastDragWorldPosition(rawCursorWorld_);
+            return;
+        }
         if (grabTool_.hasBasePoint()) {
             const QPointF destinationCursor =
                 rawCursorWorld_ - grabTool_.cursorOffset();
@@ -10143,6 +10274,9 @@ private:
     bool dragSnapLocked_ = false;
     quint64 dragSnapTraceSequence_ = 0;
     DragAxisLock dragAxisLock_ = DragAxisLock::None;
+    QPointF grabAxisStartScreen_;
+    Point3D dragAxisLastPosition_;
+    bool dragAxisPositionValid_ = false;
     QPointF dragSnapCursorWorld_{0.0, 0.0};
     QPointF nearDragFreeSourcePoint_{0.0, 0.0};
     bool nearDragFreeSourcePointValid_ = false;

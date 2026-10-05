@@ -523,6 +523,7 @@ if (CLASSICAD_BUILD_BENCHMARKS)
         classicad_geometry_objects
         classicad_document_objects
         classicad_command_objects
+        classicad_serialization_objects
         classicad_service_objects
         classicad_tool_objects
         classicad_viewport_shared_objects

@@ -155,10 +155,14 @@ bool translateShapeGeometry(Shape *shape,
         const Point3D worldDelta{end.x - origin.x,
                                  end.y - origin.y,
                                  end.z - origin.z};
-        transformSpatialGeometry(shape, [&](const Point3D &point) {
-            return Point3D{point.x + worldDelta.x, point.y + worldDelta.y,
-                            point.z + worldDelta.z};
-        });
+        // Translation changes placement only. Recomputing the solid's vector
+        // by subtracting translated endpoints introduces cancellation error
+        // and makes an unchanged extrusion appear deformed to display caches.
+        for (Point3D &point : shapeBaseSurface(*shape).controlPoints) {
+            point.x += worldDelta.x;
+            point.y += worldDelta.y;
+            point.z += worldDelta.z;
+        }
     }
     return true;
 }

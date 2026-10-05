@@ -1,5 +1,7 @@
 #include "delete_command.h"
 
+#include <QSet>
+
 namespace classiCAD {
 
 bool DeleteCommand::apply(const Document &document,
@@ -12,23 +14,25 @@ bool DeleteCommand::apply(const Document &document,
     }
     QVector<ObjectId> uniqueIds;
     uniqueIds.reserve(objectIds.size());
+    QSet<quint64> seenIds;
+    seenIds.reserve(objectIds.size());
     for (const ObjectId objectId : objectIds) {
-        if (!objectId.isValid() || uniqueIds.contains(objectId) ||
+        if (!objectId.isValid() || seenIds.contains(objectId.value()) ||
             !document.isObjectEditable(objectId)) {
             continue;
         }
+        seenIds.insert(objectId.value());
         uniqueIds.append(objectId);
     }
 
-    for (const ObjectId objectId : uniqueIds) {
-        if (!transaction.removeObject(objectId)) {
-            return false;
-        }
+    const QVector<ObjectId> removedIds = transaction.removeObjects(uniqueIds);
+    if (removedIds.isEmpty()) {
+        return false;
     }
     if (deletedCount != nullptr) {
-        *deletedCount = uniqueIds.size();
+        *deletedCount = removedIds.size();
     }
-    return !uniqueIds.isEmpty();
+    return true;
 }
 
 } // namespace classiCAD

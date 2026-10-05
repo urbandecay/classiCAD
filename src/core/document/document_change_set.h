@@ -3,6 +3,7 @@
 #include "layer_id.h"
 #include "object_id.h"
 
+#include <QSet>
 #include <QVector>
 
 namespace classiCAD {
@@ -41,17 +42,23 @@ struct DocumentChangeSet {
 
     void addObject(ObjectId id)
     {
-        if (id.isValid() && !objectIds.contains(id)) {
+        if (id.isValid() && !objectIdValues_.contains(id.value())) {
+            objectIdValues_.insert(id.value());
             objectIds.append(id);
         }
     }
 
     void addLayer(LayerId id)
     {
-        if (id.isValid() && !layerIds.contains(id)) {
+        if (id.isValid() && !layerIdValues_.contains(id.value())) {
+            layerIdValues_.insert(id.value());
             layerIds.append(id);
         }
     }
+
+private:
+    QSet<quint64> objectIdValues_;
+    QSet<quint64> layerIdValues_;
 };
 
 } // namespace classiCAD

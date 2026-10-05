@@ -649,12 +649,33 @@ void BlenderGridRenderer::updateSceneDepthGeometry(
     const QVector<ViewportRenderObject> &visibleSceneShapes)
 {
     const QByteArray depthGeometryKey =
-        viewportDepthGeometryCacheKey(visibleSceneShapes);
+        viewportDepthGeometryCacheKey(visibleSceneShapes, false);
     if (depthGeometryCacheValid_ && depthGeometryCacheKey_ == depthGeometryKey) {
+        for (int i = 0; i < depthObjectRanges_.size(); ++i) {
+            depthObjectRanges_[i].offset = visibleSceneShapes[i].preparedGeometryOffset;
+        }
         return;
     }
     cachedDepthGeometry_ = buildViewportDepthGeometry(
-        visibleSceneShapes, surfaceTessellationCache_);
+        visibleSceneShapes, surfaceTessellationCache_, false);
+    depthObjectRanges_.clear();
+    int lineFirst = 0;
+    int surfaceFirst = cachedDepthGeometry_.lineVertices.size();
+    int pointFirst = surfaceFirst + cachedDepthGeometry_.surfaceVertices.size();
+    for (const auto &object : visibleSceneShapes) {
+        ViewportDepthGeometry fallback;
+        const ViewportDepthGeometry *mesh = object.preparedDepthGeometry.data();
+        if (mesh == nullptr) {
+            fallback = buildViewportDepthGeometry(object, surfaceTessellationCache_);
+            mesh = &fallback;
+        }
+        depthObjectRanges_.append({lineFirst, int(mesh->lineVertices.size()),
+            surfaceFirst, int(mesh->surfaceVertices.size()),
+            pointFirst, int(mesh->pointVertices.size()), object.preparedGeometryOffset});
+        lineFirst += mesh->lineVertices.size();
+        surfaceFirst += mesh->surfaceVertices.size();
+        pointFirst += mesh->pointVertices.size();
+    }
     depthGeometryCacheKey_ = depthGeometryKey;
     depthGeometryCacheValid_ = true;
     uploadSceneDepthGeometry(cachedDepthGeometry_);
@@ -721,15 +742,32 @@ void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,
             glDisable(GL_PROGRAM_POINT_SIZE);
         }
     };
-    drawVertices(0, sceneDepthLineVertexCount_, GL_LINES, false);
-    drawVertices(sceneDepthLineVertexCount_,
-                 sceneDepthSurfaceVertexCount_,
-                 GL_TRIANGLES,
-                 false);
-    drawVertices(sceneDepthLineVertexCount_ + sceneDepthSurfaceVertexCount_,
-                 sceneDepthPointVertexCount_,
-                 GL_POINTS,
-                 true);
+    for (int primitive = 0; primitive < 3; ++primitive) {
+        const auto firstOf = [primitive](const DepthObjectRange &range) {
+            return primitive == 0 ? range.lineFirst :
+                   primitive == 1 ? range.surfaceFirst : range.pointFirst;
+        };
+        const auto countOf = [primitive](const DepthObjectRange &range) {
+            return primitive == 0 ? range.lineCount :
+                   primitive == 1 ? range.surfaceCount : range.pointCount;
+        };
+        for (int i = 0; i < depthObjectRanges_.size(); ++i) {
+            const auto &range = depthObjectRanges_[i];
+            const QVector3D offset(range.offset.x, range.offset.y, range.offset.z);
+            int count = countOf(range);
+            const int first = firstOf(range);
+            while (i + 1 < depthObjectRanges_.size()) {
+                const auto &next = depthObjectRanges_[i + 1];
+                if (firstOf(next) != first + count ||
+                    QVector3D(next.offset.x, next.offset.y, next.offset.z) != offset) break;
+                count += countOf(next);
+                ++i;
+            }
+            sceneDepthProgram_.setUniformValue("uWorldOffset", offset);
+            drawVertices(first, count, primitive == 0 ? GL_LINES :
+                primitive == 1 ? GL_TRIANGLES : GL_POINTS, primitive == 2);
+        }
+    }
 
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_TRUE);

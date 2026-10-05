@@ -3,6 +3,8 @@
 #include "core/geometry/nurbs_surface.h"
 #include "core/geometry/nurbs_solid.h"
 
+#include <QHash>
+
 #include <cmath>
 
 namespace classiCAD {
@@ -74,38 +76,40 @@ bool applyDuplicateCommand(const Document &document,
         return false;
     }
     duplicateObjectIds->clear();
-    duplicateObjectIds->reserve(plan.duplicateObjects.size());
-    for (const SceneObject &duplicate : plan.duplicateObjects) {
-        const ObjectId duplicateId =
-            transaction.insertObject(document.size(), duplicate);
-        if (!duplicateId.isValid()) {
-            duplicateObjectIds->clear();
-            return false;
-        }
-        duplicateObjectIds->append(duplicateId);
+    *duplicateObjectIds = transaction.insertObjects(document.size(),
+                                                     plan.duplicateObjects);
+    if (duplicateObjectIds->size() != plan.duplicateObjects.size()) {
+        duplicateObjectIds->clear();
+        return false;
     }
 
+    QHash<quint64, ObjectId> duplicateIdBySource;
+    duplicateIdBySource.reserve(plan.sourceObjectIds.size());
+    for (int index = 0; index < plan.sourceObjectIds.size(); ++index) {
+        const quint64 sourceValue = plan.sourceObjectIds[index].value();
+        if (!duplicateIdBySource.contains(sourceValue)) {
+            duplicateIdBySource.insert(sourceValue, (*duplicateObjectIds)[index]);
+        }
+    }
     for (int duplicateIndex = 0;
          duplicateIndex < duplicateObjectIds->size();
          ++duplicateIndex) {
+        const Shape *currentDuplicate =
+            document.shape((*duplicateObjectIds)[duplicateIndex]);
+        if (currentDuplicate == nullptr ||
+            !isDimensionGeometryType(currentDuplicate->geometryType)) {
+            continue;
+        }
         Shape *duplicateGeometry =
             transaction.editGeometry((*duplicateObjectIds)[duplicateIndex]);
-        if (duplicateGeometry == nullptr ||
-            !isDimensionGeometryType(duplicateGeometry->geometryType)) {
+        if (duplicateGeometry == nullptr) {
             continue;
         }
         for (DimensionAnchorReference &anchor : duplicateGeometry->dimensionAnchors) {
-            bool remapped = false;
-            for (int sourceIndex = 0;
-                 sourceIndex < plan.duplicateObjects.size();
-                 ++sourceIndex) {
-                if (anchor.objectId == plan.sourceObjectIds[sourceIndex]) {
-                    anchor.objectId = (*duplicateObjectIds)[sourceIndex];
-                    remapped = true;
-                    break;
-                }
-            }
-            if (!remapped) {
+            const auto mapped = duplicateIdBySource.constFind(anchor.objectId.value());
+            if (mapped != duplicateIdBySource.cend()) {
+                anchor.objectId = mapped.value();
+            } else {
                 // Keep the annotation positioned while detaching references
                 // that were not included in this duplicate operation.
                 anchor = DimensionAnchorReference{};

@@ -3,9 +3,13 @@
 #include "core/document/document.h"
 #include "core/geometry/curve_construction.h"
 #include "core/geometry/nurbs_surface_factory.h"
+#include "core/geometry/geometry_transform.h"
+#include "core/geometry/geometry_type.h"
 #include "core/geometry/shape_mapping.h"
 #include "core/history/document_transaction.h"
 #include "core/history/history.h"
+#include "core/serialization/blender_project_file.h"
+#include "core/serialization/document_serializer.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/sampling/curve_sampler.h"
 #include "services/sampling/surface_tessellation_cache.h"
@@ -16,11 +20,17 @@
 #include "ui/viewport/viewport_render_frame.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "ui/viewport/viewport_scene_renderer.h"
+#include "ui/viewport/blender_grid_renderer.h"
 
 #include <QElapsedTimer>
 #include <QCoreApplication>
+#include <QFile>
 #include <QGuiApplication>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QJsonValue>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
 #include <QOpenGLFunctions_3_3_Core>
@@ -105,6 +115,31 @@ Document makeScene(int curveCount)
     return document;
 }
 
+Document makeBatchCurveScene(int curveCount)
+{
+    Document document;
+    const WorkPlaneFrame frame = makeWorkPlaneFrame(WorkPlane::XY);
+    QVector<SceneObject> objects;
+    objects.reserve(curveCount);
+    for (int index = 0; index < curveCount; ++index) {
+        const qreal y = (static_cast<qreal>(index) - curveCount / 2.0) * 0.2;
+        Shape shape;
+        shape.geometryType = GeometryType::Bezier;
+        shape.workPlaneFrame = frame;
+        shape.points = {QPointF(-80.0, y),
+                        QPointF(-40.0, y + 3.0),
+                        QPointF(40.0, y - 3.0),
+                        QPointF(80.0, y)};
+        shape.nurbs = makeBezierNurbs(shape.points);
+        SceneObject object;
+        object.layerId = document.activeLayerId();
+        object.geometry = std::move(shape);
+        objects.append(std::move(object));
+    }
+    document.insertObjects(0, objects);
+    return document;
+}
+
 Document makeSurfaceScene(int surfaceCount)
 {
     Document document;
@@ -125,6 +160,230 @@ Document makeSurfaceScene(int surfaceCount)
         document.append(shape);
     }
     return document;
+}
+
+bool isNurbsGeometry(const Shape &shape)
+{
+    switch (shape.geometryType) {
+    case GeometryType::Line:
+    case GeometryType::Arc:
+    case GeometryType::Bezier:
+    case GeometryType::Nurbs:
+    case GeometryType::Rectangle:
+    case GeometryType::Circle:
+    case GeometryType::PolyCurve:
+    case GeometryType::Ellipse:
+    case GeometryType::Polygon:
+    case GeometryType::NurbsSurface:
+    case GeometryType::NurbsSolid:
+        return true;
+    case GeometryType::Invalid:
+    case GeometryType::Point:
+    case GeometryType::LinearDimension:
+    case GeometryType::AngularDimension:
+    case GeometryType::Picture:
+        return false;
+    }
+    return false;
+}
+
+int nurbsGeometryCount(const Document &document)
+{
+    return static_cast<int>(std::count_if(
+        document.objects().cbegin(), document.objects().cend(),
+        [](const SceneObject &object) {
+            return isNurbsGeometry(object.geometry);
+        }));
+}
+
+bool benchmarkDocumentBatchOperationsForScene(const Document &source,
+                                             const QString &sceneLabel)
+{
+    QVector<SceneObject> duplicateObjects;
+    duplicateObjects.reserve(nurbsGeometryCount(source));
+    for (const SceneObject &sourceObject : source.objects()) {
+        if (!isNurbsGeometry(sourceObject.geometry)) {
+            continue;
+        }
+        SceneObject duplicate = sourceObject;
+        duplicate.id = ObjectId::invalid();
+        duplicateObjects.append(std::move(duplicate));
+    }
+    if (duplicateObjects.isEmpty()) {
+        std::cerr << "The project contains no NURBS geometry objects to benchmark.\n";
+        return false;
+    }
+
+    constexpr int sampleCount = 3;
+    const auto insertSample = [&](bool useBatch) {
+        Document document = source;
+        History history(document);
+        QElapsedTimer timer;
+        timer.start();
+        DocumentTransaction transaction(document, history);
+        QVector<ObjectId> insertedIds;
+        if (useBatch) {
+            insertedIds = transaction.insertObjects(document.size(), duplicateObjects);
+        } else {
+            insertedIds.reserve(duplicateObjects.size());
+            for (const SceneObject &object : duplicateObjects) {
+                const ObjectId id = transaction.insertObject(document.size(), object);
+                if (!id.isValid()) {
+                    return -1.0;
+                }
+                insertedIds.append(id);
+            }
+        }
+        if (insertedIds.size() != duplicateObjects.size() ||
+            !transaction.commit() ||
+            document.size() != source.size() + duplicateObjects.size()) {
+            return -1.0;
+        }
+        return timer.nsecsElapsed() / 1.0e6;
+    };
+
+    std::vector<double> repeatedInsertSamples;
+    std::vector<double> batchInsertSamples;
+    repeatedInsertSamples.reserve(sampleCount);
+    batchInsertSamples.reserve(sampleCount);
+    std::cout << "document-batch benchmark: loaded " << source.size()
+              << " objects; " << duplicateObjects.size()
+              << " NURBS objects will be duplicated; timing 3 samples per route"
+              << std::endl;
+    for (int sample = 0; sample < sampleCount; ++sample) {
+        repeatedInsertSamples.push_back(insertSample(false));
+        batchInsertSamples.push_back(insertSample(true));
+    }
+    if (std::any_of(repeatedInsertSamples.cbegin(), repeatedInsertSamples.cend(),
+                    [](double sample) { return sample < 0.0; }) ||
+        std::any_of(batchInsertSamples.cbegin(), batchInsertSamples.cend(),
+                    [](double sample) { return sample < 0.0; })) {
+        std::cerr << "An insertion sample failed its document-size or commit check.\n";
+        return false;
+    }
+
+    Document preparedForDelete = source;
+    const QVector<ObjectId> duplicatedIds = preparedForDelete.insertObjects(
+        preparedForDelete.size(), duplicateObjects);
+    if (duplicatedIds.size() != duplicateObjects.size()) {
+        std::cerr << "Could not prepare the delete benchmark document.\n";
+        return false;
+    }
+    const auto deleteSample = [&](bool useBatch) {
+        Document document = preparedForDelete;
+        History history(document);
+        QElapsedTimer timer;
+        timer.start();
+        DocumentTransaction transaction(document, history);
+        if (useBatch) {
+            if (transaction.removeObjects(duplicatedIds).size() != duplicatedIds.size()) {
+                return -1.0;
+            }
+        } else {
+            for (const ObjectId id : duplicatedIds) {
+                if (!transaction.removeObject(id)) {
+                    return -1.0;
+                }
+            }
+        }
+        if (!transaction.commit() || document.size() != source.size()) {
+            return -1.0;
+        }
+        return timer.nsecsElapsed() / 1.0e6;
+    };
+
+    std::vector<double> repeatedDeleteSamples;
+    std::vector<double> batchDeleteSamples;
+    repeatedDeleteSamples.reserve(sampleCount);
+    batchDeleteSamples.reserve(sampleCount);
+    for (int sample = 0; sample < sampleCount; ++sample) {
+        repeatedDeleteSamples.push_back(deleteSample(false));
+        batchDeleteSamples.push_back(deleteSample(true));
+    }
+    if (std::any_of(repeatedDeleteSamples.cbegin(), repeatedDeleteSamples.cend(),
+                    [](double sample) { return sample < 0.0; }) ||
+        std::any_of(batchDeleteSamples.cbegin(), batchDeleteSamples.cend(),
+                    [](double sample) { return sample < 0.0; })) {
+        std::cerr << "A deletion sample failed its document-size or commit check.\n";
+        return false;
+    }
+
+    const TimingSummary repeatedInsert = summarize(repeatedInsertSamples);
+    const TimingSummary batchInsert = summarize(batchInsertSamples);
+    const TimingSummary repeatedDelete = summarize(repeatedDeleteSamples);
+    const TimingSummary batchDelete = summarize(batchDeleteSamples);
+    std::cout << "scene=" << sceneLabel.toStdString()
+              << " total-objects=" << source.size()
+              << " nurbs-objects=" << duplicateObjects.size()
+              << " inserted-or-removed-per-sample=" << duplicateObjects.size() << '\n';
+    printTiming("repeated-insert-transaction+commit", repeatedInsert);
+    std::cout << " ";
+    printTiming("batched-insert-transaction+commit", batchInsert);
+    std::cout << " speedup="
+              << (batchInsert.medianMilliseconds > 0.0
+                      ? repeatedInsert.medianMilliseconds / batchInsert.medianMilliseconds
+                      : 0.0)
+              << "x\n";
+    printTiming("repeated-delete-transaction+commit", repeatedDelete);
+    std::cout << " ";
+    printTiming("batched-delete-transaction+commit", batchDelete);
+    std::cout << " speedup="
+              << (batchDelete.medianMilliseconds > 0.0
+                      ? repeatedDelete.medianMilliseconds / batchDelete.medianMilliseconds
+                      : 0.0)
+              << "x\n";
+    return true;
+}
+
+bool loadBenchmarkDocument(const QString &path,
+                           Document *document,
+                           QString *error)
+{
+    if (document == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("A benchmark document destination is required");
+        }
+        return false;
+    }
+    if (!path.endsWith(QStringLiteral(".json"), Qt::CaseInsensitive)) {
+        return loadVignolaDocument(path, document, error);
+    }
+
+    QFile snapshotFile(path);
+    if (!snapshotFile.open(QIODevice::ReadOnly)) {
+        if (error != nullptr) {
+            *error = snapshotFile.errorString();
+        }
+        return false;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument session = QJsonDocument::fromJson(
+        snapshotFile.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !session.isObject()) {
+        if (error != nullptr) {
+            *error = QStringLiteral("Could not parse session JSON: %1")
+                         .arg(parseError.errorString());
+        }
+        return false;
+    }
+    const QJsonObject root = session.object();
+    const QJsonValue documentValue =
+        root.value(QStringLiteral("document")).isObject()
+        ? root.value(QStringLiteral("document"))
+        : QJsonValue(root);
+    return documentFromJson(documentValue, document, error);
+}
+
+bool benchmarkDocumentBatchOperations(const QString &projectPath)
+{
+    Document source;
+    QString error;
+    if (!loadBenchmarkDocument(projectPath, &source, &error)) {
+        std::cerr << "Could not load benchmark project: "
+                  << error.toStdString() << '\n';
+        return false;
+    }
+    return benchmarkDocumentBatchOperationsForScene(source, projectPath);
 }
 
 ViewportTransform makeCamera()
@@ -334,7 +593,8 @@ bool benchmarkNativeGlRedraw(const Document &document,
                              ViewportTransform camera,
                              const QSize &viewportSize,
                              int objectCount,
-                             const char *objectLabel = "curves");
+                             const char *objectLabel = "curves",
+                             bool moveObjects = false);
 
 void benchmarkSurfaceWorkload(int surfaceCount,
                               const QSize &viewportSize)
@@ -400,7 +660,7 @@ void benchmarkSurfaceWorkload(int surfaceCount,
     printTiming("cpu-surface-scene-redraw", redrawTiming);
     std::cout << ' ';
     printTiming("surface-selection-hit-test", hitTiming);
-    std::cout << " (48x48 trim mesh and 9 isocurves per direction)"
+    std::cout << " (curved-direction samples, endpoint rows for linear extrusions; 9 isocurves per direction)"
               << " top-cursor-hit-index=" << hitShape
               << " isometric-cursor-hit-index=" << isometricHitShape
               << " checksum=" << checksum << '\n';
@@ -415,7 +675,8 @@ bool benchmarkNativeGlRedraw(const Document &document,
                              ViewportTransform camera,
                              const QSize &viewportSize,
                              int objectCount,
-                             const char *objectLabel)
+                             const char *objectLabel,
+                             bool moveObjects)
 {
     QSurfaceFormat format;
     format.setRenderableType(QSurfaceFormat::OpenGL);
@@ -460,17 +721,40 @@ bool benchmarkNativeGlRedraw(const Document &document,
 
     SurfaceTessellationCache surfaceCache;
     ViewportGeometryCache geometryCache;
-    ViewportRenderFrame frame = makePreparedFrame(document,
+    Document movingDocument = document;
+    ViewportRenderFrame frame = makePreparedFrame(movingDocument,
                                                    camera,
                                                    viewportSize,
                                                    &geometryCache,
                                                    &surfaceCache);
-    const QVector<ViewportSceneStroke> strokes = makeStrokes(frame);
+    QVector<ViewportSceneStroke> strokes = makeStrokes(frame);
     quint64 checksum = 0;
     bool allDrawsSucceeded = true;
+    quint64 regeneratedMeshes = 0;
     {
         ViewportSceneRenderer renderer;
+        BlenderGridRenderer gridRenderer;
+        gridRenderer.setSurfaceTessellationCache(&surfaceCache);
         const auto draw = [&](int iteration) {
+            if (moveObjects) {
+                for (int i = 0; i < movingDocument.size(); ++i) {
+                    movingDocument.mutateGeometry(movingDocument.objectIdAt(i),
+                        [&](Shape &shape) {
+                            translateShapeGeometry(&shape, {0.05, -0.02},
+                                makeWorkPlaneFrame(WorkPlane::XY));
+                            return true;
+                        });
+                }
+                auto nextFrame = makePreparedFrame(movingDocument, camera, viewportSize,
+                                                   &geometryCache, &surfaceCache);
+                for (int i = 0; i < frame.objects.size(); ++i) {
+                    regeneratedMeshes += nextFrame.objects[i].preparedDepthGeometry !=
+                                         frame.objects[i].preparedDepthGeometry;
+                }
+                frame = std::move(nextFrame);
+                for (auto &object : frame.objects) object.selected = true;
+                strokes = makeStrokes(frame);
+            }
             camera.pan() = QPointF((iteration % 5) * 0.25,
                                   (iteration % 3) * -0.2);
             framebuffer.bind();
@@ -481,6 +765,10 @@ bool benchmarkNativeGlRedraw(const Document &document,
                                                  camera,
                                                  viewportSize,
                                                  1.0);
+            if (moveObjects) {
+                allDrawsSucceeded &= gridRenderer.renderToCurrentFramebuffer(
+                    camera, viewportSize, 1.0, frame.objects, 10.0, {});
+            }
             functions.glFinish();
             framebuffer.release();
             allDrawsSucceeded = allDrawsSucceeded && succeeded;
@@ -493,12 +781,79 @@ bool benchmarkNativeGlRedraw(const Document &document,
             draw(iteration++);
         });
         std::cout << objectLabel << '=' << objectCount << ' ';
-        printTiming("native-gl-cached-scene-redraw", timing);
-        std::cout << " (prepared world vertices; no grid/Qt overlays)"
+        printTiming(moveObjects ? "native-gl-group-move-frame" :
+                                  "native-gl-cached-scene-redraw", timing);
+        std::cout << (moveObjects ? " (model edit+frame+strokes+depth+grid+glFinish)" :
+                                  " (prepared world vertices; no grid/Qt overlays)")
+                  << " regenerated-meshes=" << regeneratedMeshes
                   << " checksum=" << checksum << '\n';
     }
     context.doneCurrent();
     return allDrawsSucceeded;
+}
+
+void benchmarkSolidMovement(int objectCount, const QSize &viewportSize)
+{
+    Document document;
+    const auto plane = makeWorkPlaneFrame(WorkPlane::XY);
+    NurbsSurface3D cap;
+    Shape solid;
+    solid.geometryType = GeometryType::NurbsSolid;
+    makeNurbsPlanarFillSurface(makeCircleNurbs({{0, 0}, {1, 0}}), plane, &cap);
+    makeNurbsExtrusionSolid(cap, {0, 0, 3}, &solid.nurbsSolid);
+    for (int i = 0; i < objectCount; ++i) {
+        auto placed = solid;
+        translateShapeGeometry(&placed, {double(i % 20) * 3,
+                                        double(i / 20) * 3}, plane);
+        document.append(placed);
+    }
+    auto camera = makeCamera();
+    camera.setViewPreset(ViewportViewPreset::Isometric);
+    camera.zoom() = 7;
+    SurfaceTessellationCache surfaceCache;
+    ViewportGeometryCache geometryCache;
+    auto frame = makePreparedFrame(document, camera, viewportSize,
+                                    &geometryCache, &surfaceCache);
+    const auto move = [&]() {
+        for (int i = 0; i < document.size(); ++i) {
+            document.mutateGeometry(document.objectIdAt(i), [&](Shape &shape) {
+                translateShapeGeometry(&shape, {0.05, -0.02}, plane);
+                return true;
+            });
+        }
+    };
+    quint64 checksum = 0;
+    const auto rebuilt = measure(1, 7, [&]() {
+        move();
+        auto rebuiltFrame = buildViewportRenderFrame(document, camera, viewportSize, {});
+        for (auto &object : rebuiltFrame.objects) {
+            object.preparedDepthGeometry = QSharedPointer<ViewportDepthGeometry>::create(
+                buildViewportDepthGeometry(object, &surfaceCache));
+        }
+        const auto depth = buildViewportDepthGeometry(rebuiltFrame.objects, &surfaceCache);
+        checksum += depth.lineVertices.size();
+    });
+    const auto retained = measure(2, 15, [&]() {
+        move();
+        frame = makePreparedFrame(document, camera, viewportSize, &geometryCache, &surfaceCache);
+        const auto key = viewportDepthGeometryCacheKey(frame.objects, false);
+        checksum += key.size();
+    });
+    SnapEngine snapEngine;
+    QVector<int> selected;
+    for (int i = 0; i < document.size(); ++i) selected.append(i);
+    const auto snaps = measure(2, 15, [&]() {
+        checksum += int(snapEngine.findDragSnap(document, selected,
+                           camera, viewportSize, true).type);
+    });
+    std::cout << "solids=" << objectCount << ' ';
+    printTiming("rebuild-meshes+combine-depth", rebuilt);
+    std::cout << ' ';
+    printTiming("retained-mesh-move+frame+depth-key", retained);
+    std::cout << ' ';
+    printTiming("all-selected-snap-query", snaps);
+    std::cout << " checksum=" << checksum << '\n';
+    benchmarkNativeGlRedraw(document, camera, viewportSize, objectCount, "solids", true);
 }
 
 void benchmarkInvalidation(Document &document,
@@ -674,6 +1029,25 @@ int main(int argc, char **argv)
     QGuiApplication application(argc, argv);
 
     constexpr QSize viewportSize{1280, 720};
+    if (argc == 3 && std::string(argv[1]) == "--document-batch-only") {
+        return benchmarkDocumentBatchOperations(
+                   QString::fromLocal8Bit(argv[2]))
+                   ? 0
+                   : 1;
+    }
+    if (argc == 3 && std::string(argv[1]) == "--document-batch-synthetic-only") {
+        const int objectCount = std::max(1, std::atoi(argv[2]));
+        const Document syntheticDocument = makeBatchCurveScene(objectCount);
+        return benchmarkDocumentBatchOperationsForScene(
+                   syntheticDocument,
+                   QStringLiteral("synthetic-%1-NURBS-curves").arg(objectCount))
+                   ? 0
+                   : 1;
+    }
+    if (argc == 3 && std::string(argv[1]) == "--solid-move-only") {
+        benchmarkSolidMovement(std::max(1, std::atoi(argv[2])), viewportSize);
+        return 0;
+    }
     for (const int curveCount : {64, 256, 1024}) {
         Document document = makeScene(curveCount);
         ViewportTransform camera = makeCamera();

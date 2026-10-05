@@ -59,6 +59,9 @@ struct ViewportRenderObject {
     quint64 geometryRevision = 0;
     bool cacheable = true;
     QSharedPointer<const ViewportDepthGeometry> preparedDepthGeometry;
+    // The immutable mesh may stay at its original position after translation.
+    quint64 preparedGeometryRevision = 0;
+    Point3D preparedGeometryOffset;
 
     QColor layerColor;
     QString layerLineType;

@@ -1,5 +1,7 @@
 #include "document_transaction.h"
 
+#include <QSet>
+
 #include <utility>
 
 namespace classiCAD {
@@ -52,6 +54,26 @@ ObjectId DocumentTransaction::insertObject(int index, const SceneObject &source)
     return objectId;
 }
 
+QVector<ObjectId> DocumentTransaction::insertObjects(
+    int index, const QVector<SceneObject> &objects)
+{
+    QVector<ObjectId> objectIds = document_.insertObjects(index, objects);
+    if (objectIds.isEmpty()) {
+        return objectIds;
+    }
+
+    for (const ObjectId objectId : objectIds) {
+        changes_.addObject(objectId);
+        const SceneObject *sceneObject = document_.object(objectId);
+        if (sceneObject != nullptr) {
+            changes_.addLayer(sceneObject->layerId);
+        }
+    }
+    changes_.geometryChanged = true;
+    changes_.structureChanged = true;
+    return objectIds;
+}
+
 bool DocumentTransaction::replaceGeometry(ObjectId objectId, const Shape &shape)
 {
     if (!document_.replace(objectId, shape)) {
@@ -77,6 +99,37 @@ bool DocumentTransaction::removeObject(ObjectId objectId)
     changes_.geometryChanged = true;
     changes_.structureChanged = true;
     return true;
+}
+
+QVector<ObjectId> DocumentTransaction::removeObjects(
+    const QVector<ObjectId> &objectIds)
+{
+    QSet<quint64> seenLayerIds;
+    seenLayerIds.reserve(objectIds.size());
+    QVector<LayerId> oldLayerIds;
+    oldLayerIds.reserve(objectIds.size());
+    for (const ObjectId objectId : objectIds) {
+        const SceneObject *sceneObject = document_.object(objectId);
+        if (sceneObject != nullptr && sceneObject->layerId.isValid() &&
+            !seenLayerIds.contains(sceneObject->layerId.value())) {
+            seenLayerIds.insert(sceneObject->layerId.value());
+            oldLayerIds.append(sceneObject->layerId);
+        }
+    }
+
+    QVector<ObjectId> removedIds = document_.removeObjects(objectIds);
+    if (removedIds.isEmpty()) {
+        return removedIds;
+    }
+    for (const ObjectId objectId : removedIds) {
+        changes_.addObject(objectId);
+    }
+    for (const LayerId layerId : oldLayerIds) {
+        changes_.addLayer(layerId);
+    }
+    changes_.geometryChanged = true;
+    changes_.structureChanged = true;
+    return removedIds;
 }
 
 bool DocumentTransaction::moveObjectToLayer(ObjectId objectId, LayerId layerId)

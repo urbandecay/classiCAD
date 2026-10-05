@@ -849,7 +849,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  qreal layerLineWeightMm,
                                  ObjectId shapeObjectId,
                                  quint64 geometryRevision,
-                                 const ViewportDepthGeometry *preparedGeometry) const
+                                 const ViewportDepthGeometry *preparedGeometry,
+                                 const Point3D &preparedOffset) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -983,7 +984,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
         const auto faces = shapeSurfaceFaces(shape);
         if (preparedGeometry != nullptr && !faces.isEmpty()) {
             drawNurbsSurface(painter, faces.first(), viewportSize,
-                             shapeObjectId, geometryRevision, preparedGeometry);
+                             shapeObjectId, geometryRevision, preparedGeometry,
+                             preparedOffset);
         } else {
             for (const auto &face : faces)
                 drawNurbsSurface(painter, face, viewportSize);
@@ -996,7 +998,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          viewportSize,
                          preview ? ObjectId::invalid() : shapeObjectId,
                          preview ? 0 : geometryRevision,
-                         preparedGeometry);
+                         preparedGeometry, preparedOffset);
         return;
     }
 
@@ -1481,7 +1483,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         const QSize &viewportSize,
                                         ObjectId objectId,
                                         quint64 geometryRevision,
-                                        const ViewportDepthGeometry *preparedGeometry) const
+                                        const ViewportDepthGeometry *preparedGeometry,
+                                        const Point3D &preparedOffset) const
 {
     QVector<QLineF> screenLines;
     const auto appendScreenLine = [&](const Point3D &start,
@@ -1504,7 +1507,12 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             preparedGeometry->preciseLineVertices;
         screenLines.reserve(worldLines.size() / 2);
         for (int index = 0; index + 1 < worldLines.size(); index += 2) {
-            appendScreenLine(worldLines[index], worldLines[index + 1]);
+            const auto moved = [&preparedOffset](const Point3D &point) {
+                return Point3D{point.x + preparedOffset.x,
+                               point.y + preparedOffset.y,
+                               point.z + preparedOffset.z};
+            };
+            appendScreenLine(moved(worldLines[index]), moved(worldLines[index + 1]));
         }
     } else {
         PreparedNurbsSurfaceTessellation localTessellation;

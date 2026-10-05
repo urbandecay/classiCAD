@@ -21,8 +21,11 @@ public:
     Shape *editGeometry(ObjectId objectId);
     ObjectId addShape(const Shape &shape);
     ObjectId insertObject(int index, const SceneObject &object);
+    QVector<ObjectId> insertObjects(int index,
+                                    const QVector<SceneObject> &objects);
     bool replaceGeometry(ObjectId objectId, const Shape &shape);
     bool removeObject(ObjectId objectId);
+    QVector<ObjectId> removeObjects(const QVector<ObjectId> &objectIds);
     bool moveObjectToLayer(ObjectId objectId, LayerId layerId);
     bool editLayer(LayerId layerId,
                    const std::function<void(Layer &)> &edit,

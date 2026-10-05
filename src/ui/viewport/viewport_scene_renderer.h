@@ -70,6 +70,7 @@ struct ViewportSceneStroke {
     quint64 geometryRevision = 0;
     bool cacheableGeometry = false;
     QSharedPointer<const ViewportDepthGeometry> preparedDepthGeometry;
+    Point3D worldOffset;
 };
 
 struct ViewportSceneStrokePattern {

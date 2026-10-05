@@ -9,7 +9,7 @@ namespace {
 
 constexpr int kMaximumCachedSurfaces = 128;
 
-bool translationOffset(const NurbsSurface3D &source,
+bool surfaceTranslationOffset(const NurbsSurface3D &source,
                        const NurbsSurface3D &target, Point3D *offset)
 {
     if (source.dimension != target.dimension || source.degreeU != target.degreeU ||
@@ -39,7 +39,10 @@ bool translationOffset(const NurbsSurface3D &source,
     *offset = {b.x - a.x, b.y - a.y, b.z - a.z};
     const auto matches = [](double original, double moved, double delta) {
         const double expected = original + delta;
-        const double tolerance = 8 * std::numeric_limits<double>::epsilon() *
+        // Live incremental drags accumulate rounding in each CV. Allow a
+        // small multiple of machine precision so that rounding does not turn
+        // a rigid move into a full mesh rebuild. Exact model data is untouched.
+        const double tolerance = 256 * std::numeric_limits<double>::epsilon() *
             std::max({1.0, std::abs(original), std::abs(moved), std::abs(delta)});
         return std::isfinite(expected) && std::isfinite(moved) &&
                std::abs(expected - moved) <= tolerance;
@@ -66,6 +69,12 @@ QSharedPointer<const PreparedNurbsSurfaceTessellation> buildTessellation(
 }
 
 } // namespace
+
+bool SurfaceTessellationCache::translationOffset(
+    const NurbsSurface3D &source, const NurbsSurface3D &target, Point3D *offset)
+{
+    return offset != nullptr && surfaceTranslationOffset(source, target, offset);
+}
 
 QSharedPointer<const PreparedNurbsSurfaceTessellation>
 SurfaceTessellationCache::acquire(ObjectId objectId,

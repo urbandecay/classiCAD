@@ -62,9 +62,12 @@ public:
     ObjectId append(const Shape &shape);
     ObjectId insert(int index, const Shape &shape);
     ObjectId insertObject(int index, SceneObject object);
+    QVector<ObjectId> insertObjects(int index,
+                                    const QVector<SceneObject> &objects);
     bool replace(ObjectId id, const Shape &shape);
     bool remove(ObjectId id);
     bool removeAt(int index);
+    QVector<ObjectId> removeObjects(const QVector<ObjectId> &objectIds);
 
     // Used only while restoring legacy update sessions and by the current
     // explode implementation. New objects get IDs; existing snapshots use

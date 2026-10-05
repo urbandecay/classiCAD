@@ -1,5 +1,7 @@
 #include "document.h"
 
+#include <QSet>
+
 #include <algorithm>
 #include <cmath>
 
@@ -192,6 +194,80 @@ ObjectId Document::insertObject(int index, SceneObject object)
     return object.id;
 }
 
+QVector<ObjectId> Document::insertObjects(
+    int index, const QVector<SceneObject> &sourceObjects)
+{
+    if (sourceObjects.isEmpty()) {
+        return {};
+    }
+
+    ensureDefaultLayer();
+    index = std::clamp(index, 0, static_cast<int>(objects_.size()));
+
+    QVector<SceneObject> insertedObjects;
+    insertedObjects.reserve(sourceObjects.size());
+    QVector<ObjectId> insertedIds;
+    insertedIds.reserve(sourceObjects.size());
+    QSet<quint64> batchIds;
+    batchIds.reserve(sourceObjects.size());
+
+    for (const SceneObject &source : sourceObjects) {
+        SceneObject object = source;
+        if (!object.id.isValid() || indexOf(object.id) >= 0 ||
+            batchIds.contains(object.id.value())) {
+            object.id = allocateObjectId();
+        } else {
+            nextObjectValue_ = std::max(nextObjectValue_, object.id.value() + 1);
+        }
+        object.layerId = normalizedLayerId(object.layerId);
+        batchIds.insert(object.id.value());
+        insertedIds.append(object.id);
+        insertedObjects.append(std::move(object));
+    }
+
+    const int oldSize = objects_.size();
+    const int newSize = oldSize + insertedObjects.size();
+    objectIndices_.reserve(newSize);
+    objectGeometryRevisions_.reserve(newSize);
+    if (index == oldSize) {
+        objects_.reserve(newSize);
+        for (int insertedIndex = 0; insertedIndex < insertedObjects.size();
+             ++insertedIndex) {
+            objects_.append(std::move(insertedObjects[insertedIndex]));
+            objectIndices_.insert(insertedIds[insertedIndex].value(),
+                                  oldSize + insertedIndex);
+        }
+    } else {
+        QVector<SceneObject> reorderedObjects;
+        reorderedObjects.reserve(newSize);
+        for (int objectIndex = 0; objectIndex < index; ++objectIndex) {
+            reorderedObjects.append(objects_[objectIndex]);
+        }
+        for (SceneObject &object : insertedObjects) {
+            reorderedObjects.append(std::move(object));
+        }
+        for (int objectIndex = index; objectIndex < oldSize; ++objectIndex) {
+            reorderedObjects.append(objects_[objectIndex]);
+        }
+        objects_ = std::move(reorderedObjects);
+        rebuildObjectIndex();
+    }
+
+    for (const ObjectId id : insertedIds) {
+        objectGeometryRevisions_.insert(id.value(), revisionClock_);
+    }
+    rebuildLayerObjectIds();
+
+    DocumentChangeSet changes;
+    for (const ObjectId id : insertedIds) {
+        changes.addObject(id);
+    }
+    changes.geometryChanged = true;
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return insertedIds;
+}
+
 bool Document::replace(ObjectId id, const Shape &shape)
 {
     SceneObject *sceneObject = mutableObject(id);
@@ -228,6 +304,51 @@ bool Document::removeAt(int index)
     changes.structureChanged = true;
     applyChanges(changes);
     return true;
+}
+
+QVector<ObjectId> Document::removeObjects(const QVector<ObjectId> &objectIds)
+{
+    if (objectIds.isEmpty() || objects_.isEmpty()) {
+        return {};
+    }
+
+    QSet<quint64> idsToRemove;
+    idsToRemove.reserve(objectIds.size());
+    for (const ObjectId id : objectIds) {
+        if (id.isValid() && objectIndices_.contains(id.value())) {
+            idsToRemove.insert(id.value());
+        }
+    }
+    if (idsToRemove.isEmpty()) {
+        return {};
+    }
+
+    QVector<SceneObject> remainingObjects;
+    remainingObjects.reserve(objects_.size() - idsToRemove.size());
+    QVector<ObjectId> removedIds;
+    removedIds.reserve(idsToRemove.size());
+    DocumentChangeSet changes;
+    for (const SceneObject &object : objects_) {
+        if (idsToRemove.contains(object.id.value())) {
+            removedIds.append(object.id);
+            changes.addObject(object.id);
+            changes.addLayer(object.layerId);
+        } else {
+            remainingObjects.append(object);
+        }
+    }
+
+    objects_ = std::move(remainingObjects);
+    for (const ObjectId id : removedIds) {
+        objectGeometryRevisions_.remove(id.value());
+    }
+    rebuildObjectIndex();
+    rebuildLayerObjectIds();
+
+    changes.geometryChanged = true;
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return removedIds;
 }
 
 QVector<ObjectId> Document::replaceShapes(const QVector<Shape> &shapes)

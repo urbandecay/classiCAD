@@ -2339,7 +2339,8 @@ protected:
                           layerLineWeightMm,
                           ObjectId::invalid(),
                           0,
-                          renderObject.preparedDepthGeometry.data());
+                          renderObject.preparedDepthGeometry.data(),
+                          renderObject.preparedGeometryOffset);
             } else {
                 drawShape(scenePainter,
                           visibleShape,
@@ -2351,7 +2352,8 @@ protected:
                           layerLineWeightMm,
                           objectId,
                           renderObject.geometryRevision,
-                          renderObject.preparedDepthGeometry.data());
+                          renderObject.preparedDepthGeometry.data(),
+                          renderObject.preparedGeometryOffset);
             }
         }
 
@@ -9797,7 +9799,8 @@ private:
                    qreal layerLineWeightMm = 0.0,
                    ObjectId shapeObjectId = ObjectId::invalid(),
                    quint64 geometryRevision = 0,
-                   const ViewportDepthGeometry *preparedGeometry = nullptr)
+                   const ViewportDepthGeometry *preparedGeometry = nullptr,
+                   const Point3D &preparedOffset = {})
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -9812,7 +9815,7 @@ private:
                                     layerLineWeightMm,
                                     shapeObjectId,
                                     geometryRevision,
-                                    preparedGeometry);
+                                    preparedGeometry, preparedOffset);
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 

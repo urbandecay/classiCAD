@@ -12,6 +12,7 @@
 #include <QDataStream>
 #include <QHash>
 #include <QIODevice>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +21,49 @@
 
 namespace classiCAD {
 namespace {
+
+// Retain insertion order so equal-distance snaps resolve exactly as before.
+class ScreenCandidateIndex {
+public:
+    void append(const QPointF &point, int index)
+    {
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y())) return;
+        all_.append(index);
+        if (!indexable(point)) {
+            distant_.append(index);
+            return;
+        }
+        cells_[cell(point)].append(index);
+    }
+    QVector<int> nearby(const QPointF &point) const
+    {
+        if (!indexable(point)) return all_;
+        QVector<int> result = distant_;
+        const auto center = cell(point);
+        for (qint64 x = center.first - 1; x <= center.first + 1; ++x) {
+            for (qint64 y = center.second - 1; y <= center.second + 1; ++y) {
+                const auto found = cells_.constFind(qMakePair(x, y));
+                if (found != cells_.cend()) result += *found;
+            }
+        }
+        std::sort(result.begin(), result.end());
+        return result;
+    }
+private:
+    static bool indexable(const QPointF &point)
+    {
+        return std::isfinite(point.x()) && std::isfinite(point.y()) &&
+               std::abs(point.x()) < 1.0e15 && std::abs(point.y()) < 1.0e15;
+    }
+    static QPair<qint64, qint64> cell(const QPointF &point)
+    {
+        return {qint64(std::floor(point.x() / 12.0)),
+                qint64(std::floor(point.y() / 12.0))};
+    }
+    QHash<QPair<qint64, qint64>, QVector<int>> cells_;
+    QVector<int> all_;
+    QVector<int> distant_;
+};
 
 QPointF ellipseCenter(const Shape &shape)
 {
@@ -2626,6 +2670,25 @@ DragSnapResult SnapEngine::findDragSnap(
         return best;
     }
 
+    const QSet<int> selectedSet(selectedShapeIndices.cbegin(),
+                                selectedShapeIndices.cend());
+    bool hasTarget = false;
+    bool hasNearTarget = false;
+    for (int index = 0; index < document.size(); ++index) {
+        if (selectedSet.contains(index) ||
+            !document.isObjectVisible(document.objectIdAt(index))) {
+            continue;
+        }
+        hasTarget = true;
+        const auto type = document[index].geometryType;
+        hasNearTarget |= type != GeometryType::NurbsSolid &&
+                         type != GeometryType::NurbsSurface &&
+                         type != GeometryType::Point;
+    }
+    if (!hasTarget) {
+        return best;
+    }
+
     QVector<SnapCandidate> sourceCandidates;
     struct WorldCandidate { SnapType type; Point3D point; int shapeIndex; };
     QVector<WorldCandidate> worldSources;
@@ -2659,7 +2722,7 @@ DragSnapResult SnapEngine::findDragSnap(
                                transform,
                                viewportSize);
     for (int index = 0; index < document.size(); ++index) {
-        if (selectedShapeIndices.contains(index) ||
+        if (selectedSet.contains(index) ||
             !document.isObjectVisible(document.objectIdAt(index))) {
             continue;
         }
@@ -2716,7 +2779,7 @@ DragSnapResult SnapEngine::findDragSnap(
         }
     };
 
-    if (includeNear && settings_.near) {
+    if (includeNear && settings_.near && hasNearTarget) {
         for (const SnapCandidate &source : sourceCandidates) {
             const QVector<SnapCandidate> nearTargets = nearCandidatesForScene(
                 document,
@@ -2734,8 +2797,15 @@ DragSnapResult SnapEngine::findDragSnap(
         }
     }
 
+    ScreenCandidateIndex planarTargets;
+    for (int i = 0; i < targetCandidates.size(); ++i) {
+        planarTargets.append(transform.worldToScreen(targetCandidates[i].point,
+                                                     viewportSize), i);
+    }
     for (const SnapCandidate &source : sourceCandidates) {
-        for (const SnapCandidate &target : targetCandidates) {
+        const auto sourceScreen = transform.worldToScreen(source.point, viewportSize);
+        for (const int targetIndex : planarTargets.nearby(sourceScreen)) {
+            const auto &target = targetCandidates[targetIndex];
             consider(target.type,
                      source.point,
                      target.point,
@@ -2791,8 +2861,16 @@ DragSnapResult SnapEngine::findDragSnap(
     // Object dragging can translate the entire planar curve in world XYZ.
     // Match actual endpoint projections, then retain the full displacement;
     // flattening either endpoint into the drag frame loses its depth.
+    ScreenCandidateIndex spatialSources;
+    QVector<QPointF> sourceScreens(worldSources.size());
+    for (int i = 0; i < worldSources.size(); ++i) {
+        if (transform.worldPointToScreen(worldSources[i].point, viewportSize,
+                                         &sourceScreens[i])) {
+            spatialSources.append(sourceScreens[i], i);
+        }
+    }
     for (int index = 0; index < document.size(); ++index) {
-        if (selectedShapeIndices.contains(index) ||
+        if (selectedSet.contains(index) ||
             !document.isObjectVisible(document.objectIdAt(index))) continue;
         const Shape &targetShape = document[index];
         for (const SnapCandidate &target : snapCandidatesForShape(targetShape, transform, viewportSize)) {
@@ -2805,9 +2883,9 @@ DragSnapResult SnapEngine::findDragSnap(
                 target, shapeWorkPlaneFrame(targetShape));
             QPointF targetScreen;
             if (!transform.worldPointToScreen(targetWorld, viewportSize, &targetScreen)) continue;
-            for (const WorldCandidate &source : worldSources) {
-                QPointF sourceScreen;
-                if (!transform.worldPointToScreen(source.point, viewportSize, &sourceScreen)) continue;
+            for (const int sourceIndex : spatialSources.nearby(targetScreen)) {
+                const auto &source = worldSources[sourceIndex];
+                const auto &sourceScreen = sourceScreens[sourceIndex];
                 const qreal distance = std::hypot(targetScreen.x()-sourceScreen.x(),
                                                    targetScreen.y()-sourceScreen.y());
                 if (distance > snapRadiusPixels ||

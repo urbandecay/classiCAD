@@ -96,6 +96,16 @@ private:
     QOpenGLVertexArrayObject sceneDepthVertexArray_;
     QOpenGLBuffer sceneDepthVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     ViewportDepthGeometry cachedDepthGeometry_;
+    struct DepthObjectRange {
+        int lineFirst = 0;
+        int lineCount = 0;
+        int surfaceFirst = 0;
+        int surfaceCount = 0;
+        int pointFirst = 0;
+        int pointCount = 0;
+        Point3D offset;
+    };
+    QVector<DepthObjectRange> depthObjectRanges_;
     const SurfaceTessellationCache *surfaceTessellationCache_ = nullptr;
     QByteArray depthGeometryCacheKey_;
     int sceneDepthLineVertexCount_ = 0;

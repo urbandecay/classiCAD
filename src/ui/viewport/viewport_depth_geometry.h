@@ -27,7 +27,8 @@ ViewportDepthGeometry buildViewportDepthGeometry(
     const QVector<Shape> &visibleSceneShapes);
 ViewportDepthGeometry buildViewportDepthGeometry(
     const QVector<ViewportRenderObject> &visibleSceneShapes,
-    const SurfaceTessellationCache *surfaceTessellationCache = nullptr);
+    const SurfaceTessellationCache *surfaceTessellationCache = nullptr,
+    bool applyOffsets = true);
 ViewportDepthGeometry buildViewportDepthGeometry(
     const ViewportRenderObject &sceneObject,
     const SurfaceTessellationCache *surfaceTessellationCache = nullptr);
@@ -35,6 +36,7 @@ ViewportDepthGeometry buildViewportDepthGeometry(const Shape &shape);
 QByteArray viewportDepthGeometryCacheKey(
     const QVector<Shape> &visibleSceneShapes);
 QByteArray viewportDepthGeometryCacheKey(
-    const QVector<ViewportRenderObject> &visibleSceneShapes);
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
+    bool includeOffsets = true);
 
 } // namespace classiCAD

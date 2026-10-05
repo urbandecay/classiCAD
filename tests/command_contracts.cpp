@@ -86,6 +86,116 @@ bool deleteContracts()
                  "Delete must deduplicate IDs, skip locked/stale targets, and keep no-ops out of history");
 }
 
+bool batchDocumentMutationContracts()
+{
+    Document document;
+    const LayerId defaultLayer = document.activeLayerId();
+    const LayerId secondaryLayer = document.createLayer(QStringLiteral("Batch"));
+
+    QVector<SceneObject> initialObjects;
+    initialObjects.reserve(3);
+    SceneObject first;
+    first.layerId = defaultLayer;
+    first.geometry = lineShape({{0, 0}, {1, 0}});
+    initialObjects.append(first);
+    SceneObject second;
+    second.layerId = secondaryLayer;
+    second.geometry = lineShape({{0, 1}, {1, 1}});
+    initialObjects.append(second);
+    SceneObject third;
+    third.layerId = defaultLayer;
+    third.geometry = lineShape({{0, 2}, {1, 2}});
+    initialObjects.append(third);
+
+    const QVector<ObjectId> initialIds = document.insertObjects(0, initialObjects);
+    bool valid = initialIds.size() == 3 && document.size() == 3 &&
+                 document.objectIdAt(0) == initialIds.value(0) &&
+                 document.objectIdAt(1) == initialIds.value(1) &&
+                 document.objectIdAt(2) == initialIds.value(2) &&
+                 document.layer(defaultLayer)->objectIds ==
+                     QVector<ObjectId>{initialIds[0], initialIds[2]} &&
+                 document.layer(secondaryLayer)->objectIds ==
+                     QVector<ObjectId>{initialIds[1]};
+
+    // Existing and repeated incoming IDs must each be replaced with a unique ID.
+    SceneObject sameIdFirst = *document.object(initialIds[0]);
+    SceneObject sameIdSecond = sameIdFirst;
+    const QVector<ObjectId> collisionIds = document.insertObjects(
+        1, {sameIdFirst, sameIdSecond});
+    valid = valid && collisionIds.size() == 2 &&
+            collisionIds[0].isValid() && collisionIds[1].isValid() &&
+            collisionIds[0] != collisionIds[1] &&
+            collisionIds[0] != initialIds[0] &&
+            document.objectIdAt(0) == initialIds[0] &&
+            document.objectIdAt(1) == collisionIds[0] &&
+            document.objectIdAt(2) == collisionIds[1] &&
+            document.layer(defaultLayer)->objectIds ==
+                QVector<ObjectId>{initialIds[0], collisionIds[0],
+                                  collisionIds[1], initialIds[2]};
+
+    const ObjectId staleId = ObjectId::fromValue(999999);
+    const QVector<ObjectId> removedIds = document.removeObjects(
+        {initialIds[1], collisionIds[0], initialIds[1],
+         ObjectId::invalid(), staleId});
+    valid = valid && removedIds == QVector<ObjectId>{collisionIds[0], initialIds[1]} &&
+            document.size() == 3 && document.objectIdAt(0) == initialIds[0] &&
+            document.objectIdAt(1) == collisionIds[1] &&
+            document.objectIdAt(2) == initialIds[2] &&
+            document.indexOf(initialIds[1]) == -1 &&
+            document.layer(defaultLayer)->objectIds ==
+                QVector<ObjectId>{initialIds[0], collisionIds[1], initialIds[2]} &&
+            document.layer(secondaryLayer)->objectIds.isEmpty();
+
+    Document transactionDocument;
+    const ObjectId anchorId = transactionDocument.append(
+        lineShape({{-1, 0}, {1, 0}}));
+    History history(transactionDocument);
+    QVector<SceneObject> transactionObjects;
+    for (int index = 0; index < 3; ++index) {
+        SceneObject object;
+        object.layerId = transactionDocument.activeLayerId();
+        object.geometry = lineShape({{0, double(index)}, {2, double(index)}});
+        transactionObjects.append(object);
+    }
+
+    QVector<ObjectId> transactionIds;
+    {
+        DocumentTransaction transaction(transactionDocument, history);
+        transactionIds = transaction.insertObjects(1, transactionObjects);
+        valid = valid && transactionIds.size() == 3 && transaction.commit();
+    }
+    valid = valid && transactionDocument.size() == 4 &&
+            transactionDocument.objectIdAt(0) == anchorId &&
+            transactionDocument.objectIdAt(1) == transactionIds.value(0) &&
+            history.undoCount() == 1 && history.undo() &&
+            transactionDocument.size() == 1 &&
+            transactionDocument.objectIdAt(0) == anchorId && history.redo() &&
+            transactionDocument.size() == 4 &&
+            transactionDocument.objectIdAt(3) == transactionIds.value(2);
+
+    {
+        DocumentTransaction transaction(transactionDocument, history);
+        const QVector<ObjectId> removed = transaction.removeObjects(
+            {transactionIds[0], transactionIds[0], staleId});
+        valid = valid && removed == QVector<ObjectId>{transactionIds[0]};
+        transaction.rollback();
+    }
+    valid = valid && transactionDocument.size() == 4 &&
+            transactionDocument.object(transactionIds[0]) != nullptr;
+    {
+        DocumentTransaction transaction(transactionDocument, history);
+        valid = valid && transaction.removeObjects(
+                            {transactionIds[0], transactionIds[1],
+                             transactionIds[2]}).size() == 3 &&
+                transaction.commit();
+    }
+    valid = valid && transactionDocument.size() == 1 && history.undo() &&
+            transactionDocument.size() == 4;
+
+    return check(valid,
+                 "Batch insert/remove must preserve IDs, ordering, layers, rollback, and Undo/Redo");
+}
+
 bool duplicateContracts()
 {
     Document document;
@@ -234,6 +344,7 @@ bool joinCommandContracts()
 int main()
 {
     bool passed = deleteContracts();
+    passed = batchDocumentMutationContracts() && passed;
     passed = duplicateContracts() && passed;
     passed = fillContracts() && passed;
     passed = explodeContracts() && passed;

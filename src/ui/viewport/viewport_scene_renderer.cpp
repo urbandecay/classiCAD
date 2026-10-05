@@ -395,9 +395,11 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
             ? (highlighted ? 10.0f : 9.0f)
             : 0.0f};
     sceneStroke->objectId = object.objectId;
-    sceneStroke->geometryRevision = object.geometryRevision;
+    sceneStroke->geometryRevision = object.preparedGeometryRevision != 0
+        ? object.preparedGeometryRevision : object.geometryRevision;
     sceneStroke->cacheableGeometry = object.cacheable;
     sceneStroke->preparedDepthGeometry = object.preparedDepthGeometry;
+    sceneStroke->worldOffset = object.preparedGeometryOffset;
 
     if (!highlighted) {
         switch (layerPattern.kind) {
@@ -677,9 +679,12 @@ bool ViewportSceneRenderer::draw(
                           qRound(viewportSize.height() * dpr));
     const QMatrix4x4 viewProjection =
         viewportViewProjection(transform, viewportSize);
-    QVector<float> patternOffsets(cachedVertices_.size(), 0.0f);
+    QVector<float> patternOffsets = cachedPatternOffsets_;
     for (int index = 0; index < strokes.size(); ++index) {
-        if (strokes[index].pointDiameter > 0.0f) {
+        if (strokes[index].pointDiameter > 0.0f ||
+            viewportSceneStrokePattern(strokes[index],
+                strokes[index].width * float(dpr)).style ==
+                ViewportSceneLineStyle::Solid) {
             continue;
         }
         const auto range = strokeRanges_[index];
@@ -689,8 +694,10 @@ bool ViewportSceneRenderer::draw(
         for (int offset = 0; offset + 1 < range.second; offset += 2) {
             const int firstIndex = range.first + offset;
             const int secondIndex = firstIndex + 1;
-            const QVector3D &first = cachedVertices_[firstIndex];
-            const QVector3D &second = cachedVertices_[secondIndex];
+            const Point3D &offsetWorld = strokes[index].worldOffset;
+            const QVector3D translation(offsetWorld.x, offsetWorld.y, offsetWorld.z);
+            const QVector3D first = cachedVertices_[firstIndex] + translation;
+            const QVector3D second = cachedVertices_[secondIndex] + translation;
             if (hasPreviousEnd) {
                 const float coordinateScale = std::max(
                     {1.0f, first.length(), previousEnd.length()});
@@ -766,6 +773,10 @@ bool ViewportSceneRenderer::draw(
             boundProgram = nextProgram;
         }
         boundProgram->setUniformValue(
+            "uWorldOffset", QVector3D(stroke.worldOffset.x,
+                                       stroke.worldOffset.y,
+                                       stroke.worldOffset.z));
+        boundProgram->setUniformValue(
             "uColor", QVector4D(stroke.color.redF(), stroke.color.greenF(),
                                   stroke.color.blueF(), stroke.color.alphaF()));
         if (stroke.pointDiameter > 0.0f) {
@@ -778,6 +789,23 @@ bool ViewportSceneRenderer::draw(
             const float widthPixels = stroke.width * float(dpr);
             const ViewportSceneStrokePattern pattern =
                 viewportSceneStrokePattern(stroke, widthPixels);
+            int count = range.second;
+            int last = index;
+            const QVector3D offset(stroke.worldOffset.x, stroke.worldOffset.y,
+                                    stroke.worldOffset.z);
+            if (pattern.style == ViewportSceneLineStyle::Solid) {
+                while (last + 1 < strokes.size()) {
+                    const auto &next = strokes[last + 1];
+                    const auto nextRange = strokeRanges_[last + 1];
+                    if (next.pointDiameter > 0 || next.color != stroke.color ||
+                        next.width != stroke.width || nextRange.first != range.first + count ||
+                        QVector3D(next.worldOffset.x, next.worldOffset.y, next.worldOffset.z) != offset ||
+                        viewportSceneStrokePattern(next, widthPixels).style !=
+                            ViewportSceneLineStyle::Solid) break;
+                    count += nextRange.second;
+                    ++last;
+                }
+            }
             boundProgram->setUniformValue("uWidth", widthPixels);
             boundProgram->setUniformValue(
                 "uLineStyle", static_cast<int>(pattern.style));
@@ -791,7 +819,8 @@ bool ViewportSceneRenderer::draw(
                     "uPatternSegments", pattern.segmentsPixels.data(),
                     pattern.segmentCount, 1);
             }
-            glDrawArrays(GL_LINES, range.first, range.second);
+            glDrawArrays(GL_LINES, range.first, count);
+            index = last;
         }
     }
     vertexArray_.release();

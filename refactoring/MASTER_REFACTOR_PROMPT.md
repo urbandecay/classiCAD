@@ -12,6 +12,9 @@ modules, and measuring build/runtime improvements is
 [`MODULARITY_AND_BUILD_REFACTOR_PLAN.md`](MODULARITY_AND_BUILD_REFACTOR_PLAN.md).
 Read it after this contract before beginning that work. Its R0–R12 phases
 continue this ledger; historical completed phases remain historical records.
+The ranked follow-up opportunities for large-scene NURBS movement, duplication,
+rendering, and query performance are recorded in
+[`LARGE_SCENE_PERFORMANCE_ROADMAP.md`](LARGE_SCENE_PERFORMANCE_ROADMAP.md).
 
 ## Mission
 
@@ -103,7 +106,7 @@ src/core/debug_log.*               application logging
 src/services/viewport/viewport_transform.* quaternion 3D camera projection, ray/frame picking, presets, zoom, pan, and Blender-style turntable/trackball orbit math
 src/services/sampling/curve_sampler.* NURBS display/erase sampling and scene cache generation
 src/services/sampling/curve_sample_data.h sampled NURBS and erase-cache values
-src/services/sampling/surface_tessellation_cache.* bounded ObjectId/revision and translation-reuse caches for prepared surface display data
+src/services/sampling/surface_tessellation_cache.* bounded ObjectId/revision/face caches; exact-geometry translation detection reuses prepared surface display data
 src/services/hit_testing/curve_hit_tester.* curve/control-point hit-testing, drawing-plane inheritance, and cross-workplane orbit-depth picking
 src/services/hit_testing/projected_curve_bounds.* conservative perspective-aware projection of positive-weight NURBS control hulls
 src/services/hit_testing/selection_box_query.* sampled NURBS/point box queries, projected fallback bounds, and camera clipping
@@ -162,7 +165,7 @@ src/ui/viewport/blender_grid_renderer.* 3D grid shader setup, offscreen/on-scree
 src/ui/viewport/viewport_gpu_surface.* native QOpenGLWidget presentation surface and renderer lifetime
 src/ui/viewport/viewport_scene_renderer.* GPU committed-curve strokes, linetype/style resolution, and dashed control guides
 src/ui/viewport/viewport_render_frame.* immutable camera, visible scene geometry, layer styling, selection, transform previews, revisions, and active ToolPreview snapshot
-src/ui/viewport/viewport_geometry_cache.* revision-keyed immutable double-precision world geometry reused by GPU strokes, depth, and CPU fallback
+src/ui/viewport/viewport_geometry_cache.* revision-keyed immutable double-precision world geometry, pinned prepared revisions, and draw-time placement offsets reused by GPU strokes, depth, and CPU fallback
 src/ui/viewport/blender_grid_scale.*     Blender-compatible viewport grid step ladder and view-dependent LOD selection
 src/ui/viewport/blender_grid_frame.*     Blender-compatible visual grid plane, camera-relative origin, orthographic distance, and global-axis mapping
 src/ui/viewport/blender_grid_appearance.* shared theme colors, opacity, stipple, and camera-fade settings for GPU/Qt grid paths
@@ -292,6 +295,10 @@ rotation and scaling use shared geometry transforms. `nurbs_surface_tessellator.
 supplies the clipped wireframe and visible triangles consumed by viewport
 display, depth, hit testing, and Blender proxy generation. Proxy mesh data is
 transient; the exact surface and UV trim curves remain authoritative.
+Large document edits use `Document::insertObjects()` and
+`Document::removeObjects()` to update layer membership and indexes once per
+batch. Duplicate and Delete use these transaction methods, and
+`DocumentChangeSet` keeps ordered ID lists with hash-backed de-duplication.
 The duplicate pre-delegation
 rendering, hit-testing, and NURBS-evaluation helper bodies have been removed
 after the extracted modules were verified as the only live implementations.
@@ -801,7 +808,7 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 
 | Phase | Status | Notes |
 |---|---|---|
-| 24. Modularity, scalability, and build improvements | Complete | CPU fallback and GPU/depth share revision-keyed world samples; projected positive-weight hulls conservatively filter hit, box, and near-snap queries. Runtime snap/pick, CPU/native-GL redraw, one-object invalidation, and snapshot-history latency/RSS measurements are recorded. Matched warm R0/current build scenarios, all ten tests, dependency audit, preset configuration, and offscreen startup are recorded in the companion plan and baseline files. App-only clean/header/one-tool/link timings are not consistently faster; the measured all-target clean improvement and its conditions are stated without a blanket speed claim. |
+| 24. Modularity, scalability, and build improvements | In progress (large-scene follow-up) | The earlier viewport/cache/build work is complete. Added batched document insert/remove paths for Duplicate/Delete and hash-backed changed-ID de-duplication. The 16,344-object synthetic NURBS benchmark and full 11-test CTest run passed. The requested real-scene run is still pending because `ForGPTest.vignola` was not visible at the reported Desktop path; no real-scene speed claim is made. |
 
 R12 follow-up checkpoint: added isolated `app-dev` and `full-test` CMake
 configure/build presets and documented them in the README. `cmake --list-presets`
@@ -1066,3 +1073,51 @@ and 1.0963 ms for anonymous duplicate previews. These are mesh preparation
 times, not whole-frame latency or an interactive GUI measurement. Full build,
 dependency audit, diff checks, and offscreen startup passed; regression suites
 were not run. Changes remain uncommitted.
+
+#### Large NURBS solid group movement checkpoint (2026-10-04)
+
+Group movement used to copy each object's prepared world geometry, rebuild
+depth buffers, and upload the full scene again for every cursor update. The
+geometry cache now pins immutable prepared meshes across pure translations and
+stores a per-object world offset; stroke and point shaders apply that offset,
+and the depth renderer reuses the same buffers. Solid extrusion vectors are
+preserved exactly during translation to avoid accumulated subtraction error.
+Adjacent strokes and depth ranges with matching draw state are batched. Drag
+snapping builds screen-space buckets and skips selected sources when all
+visible objects are moving. Collinear straight isocurve samples collapse to
+two endpoints. Constant linear extrusion walls sample only their curved
+direction, while convex affine planar caps use a boundary fan instead of a
+dense interior grid; exact NURBS surface and trim data remain unchanged.
+
+The 512-solid synthetic fixture measured native GL group-move frames at
+5.187 ms median and 5.946 ms p95, down from 21.018/24.058 ms before the final
+flat-cap display-mesh optimization. No prepared meshes were regenerated during
+movement. The measurement includes model edit, frame, strokes, depth, grid,
+and `glFinish`, but excludes Qt overlays and event-loop latency. See
+`PERFORMANCE_BASELINE.md` for CPU/cache timings and benchmark limits. Full build
+and dependency audit passed; scene-query contracts passed after the latest
+fixture correction; offscreen startup reached viewport construction, and
+`git diff --check` passed. The full CTest run is being repeated against the
+corrected scene-query fixture. Work remains uncommitted and unpushed.
+
+#### Large-scene document batch checkpoint (2026-10-04)
+
+`Document::insertObjects()` and `removeObjects()` now perform ordered bulk
+mutation with one layer-membership rebuild per batch; Duplicate and Delete use
+those paths. `DocumentChangeSet` avoids quadratic vector membership checks by
+keeping hash-backed membership beside its ordered public lists. Command tests
+cover batch ordering, generated IDs, layer membership, duplicate/stale delete
+IDs, rollback, and Undo/Redo. `cmake --build build` and the focused command
+contracts test passed.
+
+The 16,344-object synthetic degree-3 Bezier NURBS fixture measured 3,231.85 ms
+for repeated insertion versus 25.586 ms batched (126x), and 26,349.6 ms for
+repeated deletion versus 24.629 ms batched (1,070x). These transaction timings
+include document snapshots and commit, but exclude viewport redraw and geometry
+plan construction. They are document-container measurements, not results for
+the user's surface/solid scene. The requested `ForGPTest.vignola` file was not
+visible at the reported Desktop path when checked, so real-scene counts and
+timings remain open. Full CTest passed 11/11 in 325.71 seconds, including the
+new command contracts; `git diff --check` passed. The offscreen startup smoke
+was skipped to avoid starting a second application beside the user's open
+unsaved scene. This follow-up remains uncommitted.

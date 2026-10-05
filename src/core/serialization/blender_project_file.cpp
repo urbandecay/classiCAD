@@ -17,6 +17,7 @@
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -42,6 +43,23 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
                  QStringLiteral("Could not attach derived surface display meshes"));
         return false;
     }
+    const auto displaySurfaceCount = std::count_if(
+        document.objects().cbegin(), document.objects().cend(),
+        [](const classiCAD::SceneObject &sceneObject) {
+            return sceneObject.geometry.geometryType == classiCAD::GeometryType::NurbsSurface ||
+                   sceneObject.geometry.geometryType == classiCAD::GeometryType::NurbsSolid;
+        });
+    classiCAD::PreparedNurbsSurfaceTessellation::Options displayOptions;
+    if (displaySurfaceCount >= 256) {
+        // These meshes are Blender display proxies only; the exact NURBS
+        // remains in the document snapshot. Keep large-project save payloads
+        // bounded instead of serializing a 48-by-48 grid for every face.
+        displayOptions.gridCount = 24;
+        displayOptions.trimBoundaryDepth = 3;
+        displayOptions.isocurveCount = 1;
+        displayOptions.isocurveSamples = 1;
+        displayOptions.trimSamples = 96;
+    }
     QJsonObject displayMeshes;
     for (const classiCAD::SceneObject &sceneObject : document.objects()) {
         if (sceneObject.geometry.geometryType != classiCAD::GeometryType::NurbsSurface &&
@@ -53,7 +71,7 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
         int surfaceIndex = 0;
         for (const auto &surface : classiCAD::shapeSurfaceFaces(sceneObject.geometry)) {
             classiCAD::PreparedNurbsSurfaceTessellation tessellation;
-            if (!tessellation.prepare(surface)) {
+            if (!tessellation.prepare(surface, displayOptions)) {
                 setError(errorMessage,
                          QStringLiteral("Could not tessellate NURBS surface object %1 for display")
                              .arg(sceneObject.id.value()));

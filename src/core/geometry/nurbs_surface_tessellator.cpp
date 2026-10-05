@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace classiCAD {
 namespace {
@@ -248,6 +249,126 @@ bool PreparedNurbsSurfaceTessellation::prepare(
                                   vStart,
                                   vEnd);
     wireframe_ += sampledTrimBoundaries(surfaceEvaluator, trimRegion);
+
+    // An affine plane with one convex trim needs only boundary triangles.
+    // Validate convexity against every edge so self-intersecting or concave
+    // loops cannot accidentally fill regions outside their visible boundary.
+    bool affinePlane = !surface.rational && surface.degreeU == 1 &&
+        surface.degreeV == 1 && surface.controlVertexCountU == 2 &&
+        surface.controlVertexCountV == 2 && trimRegion.loops().size() == 1 &&
+        !trimRegion.loops().first().isHole;
+    if (affinePlane) {
+        const auto &p = surface.controlPoints;
+        const double tolerance = 256 * std::numeric_limits<double>::epsilon() *
+            std::max({1.0, std::abs(p[0].x), std::abs(p[0].y), std::abs(p[0].z),
+                      std::abs(p[3].x), std::abs(p[3].y), std::abs(p[3].z)});
+        affinePlane = std::abs((p[1].x - p[0].x) - (p[3].x - p[2].x)) <= tolerance &&
+                      std::abs((p[1].y - p[0].y) - (p[3].y - p[2].y)) <= tolerance &&
+                      std::abs((p[1].z - p[0].z) - (p[3].z - p[2].z)) <= tolerance;
+    }
+    if (affinePlane) {
+        const double scale = std::max({uEnd - uStart, vEnd - vStart, 1.0e-12});
+        const double tolerance = 256 * std::numeric_limits<double>::epsilon() * scale;
+        QVector<QPointF> polygon;
+        for (const auto &point : trimRegion.loops().first().points) {
+            if (point.x() < uStart - tolerance || point.x() > uEnd + tolerance ||
+                point.y() < vStart - tolerance || point.y() > vEnd + tolerance) {
+                affinePlane = false;
+                break;
+            }
+            if (polygon.isEmpty() || std::hypot(point.x() - polygon.last().x(),
+                                                point.y() - polygon.last().y()) > tolerance) {
+                polygon.append(point);
+            }
+        }
+        if (polygon.size() > 1 && std::hypot(polygon.first().x() - polygon.last().x(),
+                                            polygon.first().y() - polygon.last().y()) <= tolerance) {
+            polygon.removeLast();
+        }
+        const auto cross = [](const QPointF &a, const QPointF &b) {
+            return a.x() * b.y() - a.y() * b.x();
+        };
+        double area = 0;
+        QPointF center;
+        if (polygon.size() < 3) affinePlane = false;
+        for (int i = 0; i < polygon.size(); ++i) {
+            area += cross(polygon[i] - polygon.first(),
+                          polygon[(i + 1) % polygon.size()] - polygon.first());
+            center += polygon[i];
+        }
+        if (std::abs(area) <= tolerance * scale) affinePlane = false;
+        const double sign = area < 0 ? -1 : 1;
+        for (int i = 0; affinePlane && i < polygon.size(); ++i) {
+            const QPointF edge = polygon[(i + 1) % polygon.size()] - polygon[i];
+            for (const auto &point : polygon) {
+                if (sign * cross(edge, point - polygon[i]) < -tolerance * scale) {
+                    affinePlane = false;
+                    break;
+                }
+            }
+        }
+        if (affinePlane) {
+            center /= polygon.size();
+            affinePlane = trimRegion.contains(center);
+        }
+        if (affinePlane) {
+            if (area < 0) std::reverse(polygon.begin(), polygon.end());
+            polygon.prepend(center);
+            for (const auto &parameter : polygon) {
+                Point3D point;
+                if (!surfaceEvaluator.evaluate(std::clamp(parameter.x(), uStart, uEnd),
+                                               std::clamp(parameter.y(), vStart, vEnd), &point)) return false;
+                vertices_.append(point);
+            }
+            for (int i = 1; i < polygon.size(); ++i) {
+                triangles_.append({0, i, i + 1 < polygon.size() ? i + 1 : 1});
+            }
+            valid_ = true;
+            return true;
+        }
+    }
+
+    // A translational extrusion is linear in V. Extra V rows repeat the
+    // same planar strips, adding vertices and triangles without improving
+    // the approximation of the curved U direction.
+    bool linearExtrusion = !trimRegion.isTrimmed() && surface.degreeV == 1 &&
+                           surface.controlVertexCountV == 2;
+    if (linearExtrusion) {
+        const auto &a = surface.controlPoints[0];
+        const auto &b = surface.controlPoints[1];
+        const Point3D vector{b.x - a.x, b.y - a.y, b.z - a.z};
+        for (int u = 0; u < surface.controlVertexCountU; ++u) {
+            const auto &p = surface.controlPoints[u * 2];
+            const auto &q = surface.controlPoints[u * 2 + 1];
+            const double tolerance = 256 * std::numeric_limits<double>::epsilon() *
+                std::max({1.0, std::abs(p.x), std::abs(p.y), std::abs(p.z),
+                          std::abs(q.x), std::abs(q.y), std::abs(q.z)});
+            if (std::abs((q.x - p.x) - vector.x) > tolerance ||
+                std::abs((q.y - p.y) - vector.y) > tolerance ||
+                std::abs((q.z - p.z) - vector.z) > tolerance ||
+                (surface.rational && surface.weights[u * 2] != surface.weights[u * 2 + 1])) {
+                linearExtrusion = false;
+                break;
+            }
+        }
+    }
+    if (linearExtrusion) {
+        for (int u = 0; u <= options.gridCount; ++u) {
+            const qreal parameter = uStart + (uEnd - uStart) * u / options.gridCount;
+            for (const qreal v : {vStart, vEnd}) {
+                Point3D point;
+                if (!surfaceEvaluator.evaluate(parameter, v, &point)) return false;
+                vertices_.append(point);
+            }
+            if (u > 0) {
+                const int first = (u - 1) * 2;
+                triangles_.append({first, first + 2, first + 3});
+                triangles_.append({first, first + 3, first + 1});
+            }
+        }
+        valid_ = !triangles_.isEmpty();
+        return valid_;
+    }
 
     const int subdivisions = 1 << options.trimBoundaryDepth;
     const int meshGridSize = options.gridCount * subdivisions;

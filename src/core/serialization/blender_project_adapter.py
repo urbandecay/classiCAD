@@ -597,6 +597,129 @@ def add_scene_object(layer_collections, record, surface_display_mesh=None):
     layer_collection.objects.link(obj)
 
 
+def add_curve_record_to_group(curve_data, record):
+    shape = record["geometry"]
+    geometry_type = int(shape.get("geometryType", shape.get("tool", 0)))
+    frame = frame_matrix(shape)
+    components = shape.get("components", [])
+    component_frames = shape.get("componentWorkPlaneFrames", [])
+    has_curve = False
+
+    if components:
+        for index, component in enumerate(components):
+            transform = frame
+            if len(component_frames) == len(components):
+                transform = frame_matrix(
+                    {"workPlaneFrame": component_frames[index]}
+                )
+            has_curve = add_nurbs_curve(
+                curve_data, component, transform
+            ) or has_curve
+    else:
+        has_curve = add_nurbs_curve(
+            curve_data, shape.get("nurbs", {}), frame
+        )
+
+    if not has_curve and geometry_type in {5, 10, 13}:
+        points = []
+        for point in shape.get("points", []):
+            world = frame @ Vector(
+                (float(point["x"]), float(point["y"]), 0.0, 1.0)
+            )
+            points.append((world.x, world.y, world.z))
+        if add_polyline_spline(curve_data, points):
+            curve_data.splines[-1].use_cyclic_u = geometry_type in {5, 10, 13}
+            has_curve = True
+    return has_curve
+
+
+def create_grouped_scene_objects(layer_collections, records, surface_display_meshes):
+    # Large projects use grouped Blender display proxies. Per-object identity,
+    # exact NURBS data, and layer membership remain in the authoritative text.
+    mesh_batches = {}
+    curve_batches = {}
+    fallback_records = []
+    curve_types = {1, 2, 3, 4, 5, 6, 8, 9, 10}
+
+    for record in records:
+        object_id = str(record["id"])
+        layer_id = str(record["layerId"])
+        shape = record["geometry"]
+        geometry_type = int(shape.get("geometryType", shape.get("tool", 0)))
+        if geometry_type in {14, 15}:
+            display_mesh = surface_display_meshes.get(object_id)
+            if display_mesh is None:
+                fallback_records.append(record)
+                continue
+            source_vertices = display_mesh.get("vertices", [])
+            source_faces = display_mesh.get("faces", [])
+            if not source_vertices or not source_faces:
+                raise ValueError("derived NURBS surface display mesh is empty")
+            batch = mesh_batches.setdefault(
+                layer_id, {"vertices": [], "faces": [], "count": 0}
+            )
+            vertex_offset = len(batch["vertices"])
+            batch["vertices"].extend(
+                (float(point[0]), float(point[1]), float(point[2]))
+                for point in source_vertices
+            )
+            batch["faces"].extend(
+                tuple(vertex_offset + int(index) for index in face)
+                for face in source_faces
+            )
+            batch["count"] += 1
+            continue
+
+        if geometry_type in curve_types:
+            batch = curve_batches.get(layer_id)
+            if batch is None:
+                curve_data = bpy.data.curves.new(
+                    "classiCAD.curves-proxy." + layer_id, "CURVE"
+                )
+                curve_data.dimensions = "3D"
+                curve_data.resolution_u = 16
+                batch = {"data": curve_data, "count": 0}
+                curve_batches[layer_id] = batch
+            if add_curve_record_to_group(batch["data"], record):
+                batch["count"] += 1
+            else:
+                fallback_records.append(record)
+            continue
+
+        fallback_records.append(record)
+
+    for layer_id, batch in mesh_batches.items():
+        mesh = bpy.data.meshes.new("classiCAD.surface-proxy." + layer_id)
+        mesh.from_pydata(batch["vertices"], [], batch["faces"])
+        mesh.update()
+        obj = bpy.data.objects.new("classiCAD.surface-proxy." + layer_id, mesh)
+        obj["classiCAD_layer_id"] = layer_id
+        obj["classiCAD_proxy_geometry"] = "NurbsSurface and NurbsSolid"
+        obj["classiCAD_proxy_object_count"] = batch["count"]
+        obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
+        layer_collections[layer_id].objects.link(obj)
+
+    for layer_id, batch in curve_batches.items():
+        if not batch["data"].splines:
+            bpy.data.curves.remove(batch["data"])
+            continue
+        obj = bpy.data.objects.new(
+            "classiCAD.curves-proxy." + layer_id, batch["data"]
+        )
+        obj["classiCAD_layer_id"] = layer_id
+        obj["classiCAD_proxy_geometry"] = "NurbsCurves"
+        obj["classiCAD_proxy_object_count"] = batch["count"]
+        obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
+        layer_collections[layer_id].objects.link(obj)
+
+    for record in fallback_records:
+        add_scene_object(
+            layer_collections,
+            record,
+            surface_display_meshes.get(str(record["id"])),
+        )
+
+
 def create_project(document, destination_path):
     # Use the user's saved Blender startup UI (workspaces and screen layout),
     # but create an empty scene for the classiCAD project.
@@ -664,12 +787,18 @@ def create_project(document, destination_path):
         root_collection.children.link(collection)
         layer_collections[layer_id] = collection
 
-    for record in document.get("objects", []):
-        add_scene_object(
-            layer_collections,
-            record,
-            surface_display_meshes.get(str(record["id"])),
+    object_records = document.get("objects", [])
+    if len(object_records) >= 1000:
+        create_grouped_scene_objects(
+            layer_collections, object_records, surface_display_meshes
         )
+    else:
+        for record in object_records:
+            add_scene_object(
+                layer_collections,
+                record,
+                surface_display_meshes.get(str(record["id"])),
+            )
 
     result = bpy.ops.wm.save_as_mainfile(
         filepath=os.path.abspath(destination_path),

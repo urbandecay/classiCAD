@@ -90,6 +90,47 @@ required when R4/R5/R10 introduce revision-based invalidation, prepared
 geometry, or renderer changes; unmeasured runtime improvements must not be
 claimed in R12.
 
+## R4 large-document batch insert/remove
+
+The transaction benchmark compares the former per-object `insertObject()` /
+`removeObject()` path with `insertObjects()` / `removeObjects()`. Both include
+transaction snapshot and commit. Every run begins with 16,344 objects and
+inserts or removes 16,344 degree-3 Bezier NURBS curves. The fixture is
+synthetic; it tests document container and layer-membership work, not NURBS
+surface tessellation, viewport drawing, input latency, or the user's real
+surface/solid mix. Deletion removes the appended copies in document order, so
+the repeated path includes its repeated layer rebuilds and container shifts.
+Each row summarizes three full-operation samples from the currently configured
+Release build. No paired run of the old source revision was performed, so this
+is a path-to-path comparison rather than a before/after build comparison.
+
+| Operation | Repeated per-object median / p95 | Batched median / p95 | Median speedup |
+|---|---:|---:|---:|
+| Insert 16,344 curves | 3,231.85 / 3,240.61 ms | 25.586 / 33.603 ms | 126.3x |
+| Delete 16,344 curves | 26,349.6 / 26,961.9 ms | 24.629 / 34.619 ms | 1,069.9x |
+
+The opt-in benchmark can load `.vignola`/`.blend` projects or an app session
+JSON snapshot and reports the loaded object count before timing.
+
+### App session snapshot, 16,344 objects
+
+A session snapshot contained 8,160 NURBS surfaces, 4,096 NURBS solids, 4,072
+polygons, and 16 arcs. Three transaction-plus-commit samples on that snapshot
+measured:
+
+| Operation | Repeated per-object median / p95 | Batched median / p95 | Median speedup |
+|---|---:|---:|---:|
+| Insert 16,344 objects | 3,487.17 / 3,487.20 ms | 31.491 / 31.827 ms | 110.7x |
+| Delete 16,344 objects | 25,871.3 / 27,775.0 ms | 30.209 / 30.369 ms | 856.4x |
+
+This measures document insert/delete and history commit only. It does not
+measure viewport movement, drawing, or saving. Run the same test on a saved
+project with:
+`QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_runtime_benchmark --document-batch-only /path/to/scene.vignola`.
+The full build and dependency audit passed, all 11 CTest suites passed in
+325.71 seconds, and `git diff --check` passed. An offscreen startup smoke was
+not run because the user's unsaved classiCAD session remained open.
+
 ## R5b focused microbenchmark
 
 The optional `CLASSICAD_BUILD_BENCHMARKS` target builds
@@ -143,3 +184,30 @@ clipped or invalid projections keep the existing query path.
 These are synthetic service timings, not application frame or user-input
 latencies. They support adding this conservative per-curve filter; they do not
 establish CPU/GPU redraw performance or justify a maintained spatial index.
+
+## Large capped-solid group movement
+
+The group-movement regression used 512 capped-cylinder solids and a
+1280x720 viewport. The legacy CPU path rebuilt per-object display geometry and
+combined depth geometry on every edit. The retained path keeps immutable
+prepared meshes and GPU buffers, applies world placement offsets while
+drawing, reuses depth data, and skips snap candidates for fully selected
+objects. Convex affine flat caps now use a boundary fan instead of a dense
+trimmed grid; constant linear extrusion walls sample only their curved
+direction. Exact NURBS surfaces and UV trims remain the geometry source.
+
+| Measurement | Before final cap optimization | Current |
+|---|---:|---:|
+| CPU mesh rebuild + depth combine, median | 758.474 ms | 136.180 ms |
+| Retained-mesh move + frame + depth key, median | 0.916 ms | 0.907 ms |
+| All-selected snap query, median | 0.0108 ms | 0.0099 ms |
+| Native GL group-move frame, median / p95 | 21.018 / 24.058 ms | 5.187 / 5.946 ms |
+| Meshes regenerated during move | 0 | 0 |
+
+The native GL timing includes model edit, frame construction, strokes, depth,
+grid, and `glFinish`. It excludes Qt overlays and event-loop latency. These
+figures show this 512-solid synthetic selection staying below a 16.7 ms frame
+budget in this particular run; they do not define a universal object limit.
+Surface trim complexity, visible isocurves, view, GPU, and overlays all affect
+the count at which a real scene begins to feel slow. The benchmark is opt-in
+through `classicad_viewport_runtime_benchmark --solid-move-only 512`.

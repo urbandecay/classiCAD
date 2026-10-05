@@ -13,6 +13,9 @@ namespace classiCAD {
 // existing samples without evaluating the surface again. Both caches are bounded.
 class SurfaceTessellationCache final {
 public:
+    static bool translationOffset(const NurbsSurface3D &source,
+                                  const NurbsSurface3D &target,
+                                  Point3D *offset);
     QSharedPointer<const PreparedNurbsSurfaceTessellation> acquire(
         ObjectId objectId,
         quint64 geometryRevision,

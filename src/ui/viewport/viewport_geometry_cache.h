@@ -24,6 +24,9 @@ public:
 private:
     struct Entry {
         quint64 geometryRevision = 0;
+        quint64 preparedGeometryRevision = 0;
+        Shape sourceShape;
+        Point3D offset;
         QSharedPointer<const ViewportDepthGeometry> geometry;
     };
 

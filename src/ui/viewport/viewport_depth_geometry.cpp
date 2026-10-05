@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <limits>
 
 namespace classiCAD {
 namespace {
@@ -226,6 +228,34 @@ void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
     }
 }
 
+bool straightWire(const QVector<Point3D> &points)
+{
+    if (points.size() < 3) return false;
+    const auto &start = points.first();
+    const auto &end = points.last();
+    const Point3D axis{end.x - start.x, end.y - start.y, end.z - start.z};
+    const double squaredLength = axis.x * axis.x + axis.y * axis.y + axis.z * axis.z;
+    if (squaredLength == 0) return false;
+    const double tolerance = 256 * std::numeric_limits<double>::epsilon() *
+        std::max({1.0, std::abs(start.x), std::abs(start.y), std::abs(start.z),
+                  std::abs(end.x), std::abs(end.y), std::abs(end.z)});
+    double previous = 0;
+    for (int i = 1; i + 1 < points.size(); ++i) {
+        const auto &point = points[i];
+        const Point3D delta{point.x - start.x, point.y - start.y, point.z - start.z};
+        const double parameter = (delta.x * axis.x + delta.y * axis.y +
+                                  delta.z * axis.z) / squaredLength;
+        const Point3D cross{delta.y * axis.z - delta.z * axis.y,
+                            delta.z * axis.x - delta.x * axis.z,
+                            delta.x * axis.y - delta.y * axis.x};
+        const double crossSquared = cross.x * cross.x + cross.y * cross.y + cross.z * cross.z;
+        if (!std::isfinite(parameter) || parameter < previous || parameter > 1 ||
+            crossSquared > tolerance * tolerance * squaredLength) return false;
+        previous = parameter;
+    }
+    return true;
+}
+
 void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                                  ViewportDepthGeometry *geometry,
                                  const SurfaceTessellationCache *cache = nullptr,
@@ -249,19 +279,24 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
         return;
     }
     int wireSegmentCount = 0;
+    QVector<int> wireSteps;
     for (const PreparedNurbsSurfaceTessellation::Polyline &polyline :
          tessellation->wireframe()) {
-        wireSegmentCount += std::max(
-            0, static_cast<int>(polyline.points.size()) - 1);
+        const int segments = std::max(0, int(polyline.points.size()) - 1);
+        const bool straight = straightWire(polyline.points);
+        wireSteps.append(straight ? segments : 1);
+        wireSegmentCount += straight ? 1 : segments;
     }
     geometry->lineVertices.reserve(geometry->lineVertices.size() +
                                    wireSegmentCount * 2);
     geometry->preciseLineVertices.reserve(
         geometry->preciseLineVertices.size() + wireSegmentCount * 2);
+    int wireIndex = 0;
     for (const PreparedNurbsSurfaceTessellation::Polyline &polyline :
          tessellation->wireframe()) {
-        for (int index = 1; index < polyline.points.size(); ++index) {
-            const Point3D &start = polyline.points[index - 1];
+        const int step = wireSteps[wireIndex++];
+        for (int index = step; index < polyline.points.size(); index += step) {
+            const Point3D &start = polyline.points[index - step];
             const Point3D &end = polyline.points[index];
             geometry->lineVertices.append(asVector(start));
             geometry->lineVertices.append(asVector(end));
@@ -394,12 +429,28 @@ ViewportDepthGeometry buildViewportDepthGeometry(
 
 ViewportDepthGeometry buildViewportDepthGeometry(
     const QVector<ViewportRenderObject> &visibleSceneShapes,
-    const SurfaceTessellationCache *surfaceTessellationCache)
+    const SurfaceTessellationCache *surfaceTessellationCache,
+    bool applyOffsets)
 {
     ViewportDepthGeometry geometry;
     for (const ViewportRenderObject &entry : visibleSceneShapes) {
         if (entry.preparedDepthGeometry) {
-            const ViewportDepthGeometry &prepared = *entry.preparedDepthGeometry;
+            ViewportDepthGeometry prepared = *entry.preparedDepthGeometry;
+            const Point3D &offset = entry.preparedGeometryOffset;
+            if (applyOffsets && (offset.x != 0 || offset.y != 0 || offset.z != 0)) {
+                const QVector3D gpuOffset(offset.x, offset.y, offset.z);
+                for (auto *vertices : {&prepared.lineVertices, &prepared.pointVertices,
+                                       &prepared.surfaceVertices}) {
+                    for (auto &point : *vertices) {
+                        point += gpuOffset;
+                    }
+                }
+                for (auto &point : prepared.preciseLineVertices) {
+                    point.x += offset.x;
+                    point.y += offset.y;
+                    point.z += offset.z;
+                }
+            }
             geometry.lineVertices += prepared.lineVertices;
             geometry.preciseLineVertices += prepared.preciseLineVertices;
             geometry.pointVertices += prepared.pointVertices;
@@ -501,7 +552,8 @@ QByteArray viewportDepthGeometryCacheKey(
 }
 
 QByteArray viewportDepthGeometryCacheKey(
-    const QVector<ViewportRenderObject> &visibleSceneShapes)
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
+    bool includeOffsets)
 {
     bool allCacheable = true;
     QByteArray payload;
@@ -513,7 +565,13 @@ QByteArray viewportDepthGeometryCacheKey(
             allCacheable = false;
             break;
         }
-        stream << quint64(entry.objectId.value()) << entry.geometryRevision;
+        stream << quint64(entry.objectId.value())
+               << (entry.preparedGeometryRevision != 0
+                       ? entry.preparedGeometryRevision : entry.geometryRevision);
+        if (includeOffsets) {
+            stream << entry.preparedGeometryOffset.x << entry.preparedGeometryOffset.y
+                   << entry.preparedGeometryOffset.z;
+        }
     }
     if (allCacheable) {
         return QCryptographicHash::hash(payload, QCryptographicHash::Sha256);

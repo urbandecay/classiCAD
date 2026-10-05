@@ -13,14 +13,20 @@
 #include "tools/point_extrude_tool.h"
 #include "tools/tool_context.h"
 #include "ui/viewport/viewport_depth_geometry.h"
+#include "ui/viewport/viewport_geometry_cache.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "ui/viewport/viewport_render_frame.h"
 #include "ui/viewport/viewport_scene_renderer.h"
+#include "ui/viewport/blender_grid_renderer.h"
 
 #include <QApplication>
 #include <QDebug>
 #include <QImage>
 #include <QPainter>
+#include <QOffscreenSurface>
+#include <QOpenGLContext>
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLFunctions_3_3_Core>
 
 using namespace classiCAD;
 namespace {
@@ -32,6 +38,85 @@ bool check(bool value, const char *message)
 {
     if (!value) qCritical() << message;
     return value;
+}
+
+bool nativePlacement(const ViewportRenderObject &object,
+                     const ViewportTransform &camera, const QSize &size)
+{
+    QSurfaceFormat format;
+    format.setVersion(3, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    QOpenGLContext context;
+    context.setFormat(format);
+    if (!context.create()) {
+        return QGuiApplication::platformName() == QStringLiteral("offscreen") ||
+               check(false, "native placement context creation");
+    }
+    QOffscreenSurface surface;
+    surface.setFormat(context.format());
+    surface.create();
+    if (!context.makeCurrent(&surface)) return check(false, "native placement surface");
+    bool passed = true;
+    {
+        QOpenGLFunctions_3_3_Core functions;
+        passed &= check(functions.initializeOpenGLFunctions(), "native placement functions");
+        QOpenGLFramebufferObjectFormat framebufferFormat;
+        framebufferFormat.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+        QOpenGLFramebufferObject framebuffer(size, framebufferFormat);
+        ViewportSceneRenderer renderer;
+        auto fresh = object;
+        fresh.preparedDepthGeometry = QSharedPointer<ViewportDepthGeometry>::create(
+            buildViewportDepthGeometry(object.shape));
+        fresh.preparedGeometryRevision = fresh.geometryRevision;
+        fresh.preparedGeometryOffset = {};
+        const auto draw = [&](const ViewportRenderObject &entry) {
+            framebuffer.bind();
+            functions.glClearColor(0, 0, 0, 1);
+            functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            ViewportSceneStroke stroke;
+            passed &= check(makeViewportSceneStrokes(entry, true, &stroke) &&
+                            renderer.draw({stroke}, camera, size, 1),
+                            "native translated solid stroke draw");
+            functions.glFinish();
+            auto image = framebuffer.toImage();
+            framebuffer.release();
+            return image;
+        };
+        const auto cachedImage = draw(object);
+        const auto freshImage = draw(fresh);
+        int differences = 0;
+        int painted = 0;
+        for (int y = 0; y < size.height(); ++y) {
+            for (int x = 0; x < size.width(); ++x) {
+                differences += cachedImage.pixel(x, y) != freshImage.pixel(x, y);
+                painted += cachedImage.pixelColor(x, y) != QColor(Qt::black);
+            }
+        }
+        passed &= check(painted > 0 && differences < 200,
+                        "GPU translation must match fresh geometry within float raster roundoff");
+        BlenderGridRenderer depthRenderer;
+        framebuffer.bind();
+        passed &= check(depthRenderer.renderToCurrentFramebuffer(
+            camera, size, 1, {object}, 10, {}), "native depth renderer initialization");
+        Point3D picked;
+        const Point3D topCenter{object.preparedGeometryOffset.x + 1,
+                              object.preparedGeometryOffset.y + 2, 5};
+        QPointF screen;
+        camera.worldPointToScreen(topCenter, size, &screen);
+        passed &= check(depthRenderer.pickScenePoint(screen, camera, size, 1, {object}, &picked) &&
+                        std::abs(picked.z - 5) < 0.05,
+                        "GPU depth must follow the translated cap");
+        // Reuse the same buffers with a new placement and check the depth again.
+        auto shifted = object;
+        shifted.preparedGeometryOffset.x += 2;
+        camera.worldPointToScreen({topCenter.x + 2, topCenter.y, topCenter.z}, size, &screen);
+        passed &= check(depthRenderer.pickScenePoint(screen, camera, size, 1, {shifted}, &picked) &&
+                        std::abs(picked.z - 5) < 0.05,
+                        "GPU cached depth must update placement without reuploading vertices");
+        framebuffer.release();
+    }
+    context.doneCurrent();
+    return passed;
 }
 }
 
@@ -131,6 +216,40 @@ int main(int argc, char **argv)
                         cache.acquire(id,1,faces[0],0) == baseMesh, "solid face caches cannot alias");
     const auto depth = buildViewportDepthGeometry(solid);
     passed &= check(!depth.lineVertices.isEmpty() && !depth.surfaceVertices.isEmpty(), "all solid faces render and occlude");
+    PreparedNurbsSurfaceTessellation wallMesh;
+    PreparedNurbsSurfaceTessellation capMesh;
+    passed &= check(capMesh.prepare(faces[0]) && capMesh.triangles().size() <= 256,
+                    "convex flat caps must use their boundary instead of a dense interior grid");
+    double capArea = 0;
+    for (const auto &triangle : capMesh.triangles()) {
+        const auto &a = capMesh.vertices()[triangle[0]];
+        const auto &b = capMesh.vertices()[triangle[1]];
+        const auto &c = capMesh.vertices()[triangle[2]];
+        const double area = ((b.x - a.x) * (c.y - a.y) -
+                             (b.y - a.y) * (c.x - a.x)) * 0.5;
+        passed &= check(area >= 0, "convex cap triangles must retain UV orientation");
+        capArea += area;
+    }
+    passed &= check(std::abs(capArea - 9 * 3.141592653589793) < 0.01,
+                    "convex cap triangles must cover the circular boundary accurately");
+    PreparedNurbsSurfaceTessellation holeMesh;
+    passed &= check(holeMesh.prepare(holedFace) && holeMesh.triangles().size() > 256,
+                    "holed caps must retain trim-aware triangulation");
+    passed &= check(wallMesh.prepare(faces[2]) && wallMesh.triangles().size() == 96 &&
+                        wallMesh.vertices().size() == 98,
+                    "linear extrusion walls must retain curved samples without redundant V rows");
+    for (int u = 0; u < 49; ++u) {
+        const auto &base = wallMesh.vertices()[u * 2];
+        const auto &top = wallMesh.vertices()[u * 2 + 1];
+        passed &= check(near({top.x - base.x, top.y - base.y, top.z - base.z},
+                            solid.nurbsSolid.displacement),
+                        "reduced wall mesh must preserve its exact extrusion vector");
+    }
+    auto varyingWall = faces[2];
+    varyingWall.controlPoints[3].x += 0.5;
+    PreparedNurbsSurfaceTessellation varyingMesh;
+    passed &= check(varyingMesh.prepare(varyingWall) && varyingMesh.triangles().size() > 96,
+                    "a varying ruled wall must keep the full surface tessellation path");
     ViewportTransform transform;
     transform.setViewPreset(ViewportViewPreset::Top);
     CurveHitTester hitTester(&cache);
@@ -153,6 +272,79 @@ int main(int argc, char **argv)
         for (int x=0; x<image.width(); ++x)
             if (image.pixelColor(x,y) != QColor(Qt::black)) { drawn=true; break; }
     passed &= check(drawn,"solid CPU fallback rendering");
+
+    // A group move must retain immutable meshes and carry placement separately.
+    // Exceed the face-cache capacity to catch regeneration hidden by small scenes.
+    Document group;
+    for (int i = 0; i < 64; ++i) {
+        Shape placed = solid;
+        translateShapeGeometry(&placed, {double(i % 8) * 12, double(i / 8) * 12}, frame);
+        group.append(placed);
+    }
+    const auto stationaryId = group.append(solid);
+    SurfaceTessellationCache groupSurfaceCache;
+    ViewportGeometryCache groupGeometryCache;
+    auto initialFrame = buildViewportRenderFrame(group, transform, size, {});
+    groupGeometryCache.prepareFrame(&initialFrame, &groupSurfaceCache);
+    const auto initialBufferKey = viewportDepthGeometryCacheKey(initialFrame.objects, false);
+    const auto initialPlacementKey = viewportDepthGeometryCacheKey(initialFrame.objects);
+    for (int step = 1; step <= 3; ++step) {
+        for (int i = 0; i < 64; ++i) {
+            group.mutateGeometry(group.objectIdAt(i), [&](Shape &shape) {
+                translateShapeGeometry(&shape, {2, -1}, frame);
+                return true;
+            });
+        }
+        auto movedFrame = buildViewportRenderFrame(group, transform, size, {});
+        groupGeometryCache.prepareFrame(&movedFrame, &groupSurfaceCache);
+        for (int i = 0; i < 64; ++i) {
+            const auto &moved = movedFrame.objects[i];
+            ViewportSceneStroke movingStroke;
+            passed &= check(moved.preparedDepthGeometry == initialFrame.objects[i].preparedDepthGeometry &&
+                near(moved.preparedGeometryOffset, {step * 2.0, step * -1.0, 0}) &&
+                makeViewportSceneStrokes(moved, true, &movingStroke) &&
+                near(movingStroke.worldOffset, moved.preparedGeometryOffset) &&
+                movingStroke.geometryRevision == initialFrame.objects[i].geometryRevision,
+                "large group translation must retain mesh identity and stable GPU keys");
+        }
+        passed &= check(movedFrame.find(stationaryId)->preparedDepthGeometry ==
+                            initialFrame.find(stationaryId)->preparedDepthGeometry &&
+                        viewportDepthGeometryCacheKey(movedFrame.objects, false) == initialBufferKey &&
+                        viewportDepthGeometryCacheKey(movedFrame.objects) != initialPlacementKey,
+                        "translation must retain buffer keys while invalidating placed raster geometry");
+        const auto &first = movedFrame.objects.first();
+        const auto expanded = buildViewportDepthGeometry(QVector<ViewportRenderObject>{first});
+        const auto fresh = buildViewportDepthGeometry(first.shape);
+        passed &= check(expanded.preciseLineVertices.size() == fresh.preciseLineVertices.size() &&
+            near(expanded.preciseLineVertices.first(), fresh.preciseLineVertices.first()),
+            "placed depth geometry must match the translated exact solid");
+        QImage cachedImage(size, QImage::Format_ARGB32_Premultiplied);
+        QImage freshImage(size, QImage::Format_ARGB32_Premultiplied);
+        cachedImage.fill(Qt::black);
+        freshImage.fill(Qt::black);
+        QPainter cachedPainter(&cachedImage);
+        renderer.drawShape(cachedPainter, first.shape, size, false, false, false,
+            QColor(Qt::white), {}, 0, first.objectId, first.geometryRevision,
+            first.preparedDepthGeometry.data(), first.preparedGeometryOffset);
+        cachedPainter.end();
+        QPainter freshPainter(&freshImage);
+        renderer.drawShape(freshPainter, first.shape, size, false, false, false,
+            QColor(Qt::white), {}, 0, first.objectId, first.geometryRevision, &fresh);
+        freshPainter.end();
+        passed &= check(cachedImage == freshImage,
+                        "CPU fallback must draw translated cached meshes at the correct position");
+        if (step == 3) passed &= nativePlacement(first, transform, size);
+    }
+    group.mutateGeometry(group.objectIdAt(0), [](Shape &shape) {
+        shape.nurbsSolid.displacement.z += 1;
+        return true;
+    });
+    auto deformedFrame = buildViewportRenderFrame(group, transform, size, {});
+    groupGeometryCache.prepareFrame(&deformedFrame, &groupSurfaceCache);
+    passed &= check(deformedFrame.objects[0].preparedDepthGeometry !=
+                        initialFrame.objects[0].preparedDepthGeometry &&
+                    near(deformedFrame.objects[0].preparedGeometryOffset, {}),
+                    "a changed extrusion vector must rebuild the mesh and reset placement");
 
     Document document;
     Shape sourceFace;

@@ -36,7 +36,8 @@ public:
                    qreal layerLineWeightMm = 0.0,
                    ObjectId shapeObjectId = ObjectId::invalid(),
                    quint64 geometryRevision = 0,
-                   const ViewportDepthGeometry *preparedGeometry = nullptr) const;
+                   const ViewportDepthGeometry *preparedGeometry = nullptr,
+                   const Point3D &preparedOffset = {}) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
@@ -50,7 +51,8 @@ public:
                           const QSize &viewportSize,
                           ObjectId objectId = ObjectId::invalid(),
                           quint64 geometryRevision = 0,
-                          const ViewportDepthGeometry *preparedGeometry = nullptr) const;
+                          const ViewportDepthGeometry *preparedGeometry = nullptr,
+                          const Point3D &preparedOffset = {}) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,

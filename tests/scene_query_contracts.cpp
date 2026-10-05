@@ -5,6 +5,7 @@
 #include "services/hit_testing/projected_curve_bounds.h"
 #include "services/hit_testing/selection_box_query.h"
 #include "services/sampling/curve_sampler.h"
+#include "services/snapping/snap_engine.h"
 #include "services/viewport/viewport_transform.h"
 
 #include <QDebug>
@@ -156,5 +157,48 @@ int main()
                                                      viewportSize,
                                                      &clippedBounds),
                     "clipped control points must fail open to the existing narrow phase");
+    Document snapScene;
+    QVector<int> movingIndices;
+    for (int i = 0; i < 256; ++i) {
+        Shape point;
+        point.geometryType = GeometryType::Point;
+        point.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        point.points = {{double(i - 128) * 4, 0}};
+        snapScene.append(point);
+        movingIndices.append(i);
+    }
+    SnapEngine snapEngine;
+    SnapSettings snapSettings;
+    snapSettings.enabled = true;
+    snapSettings.endpoint = true;
+    snapSettings.midpoint = snapSettings.center = snapSettings.intersection = false;
+    snapSettings.perpendicular = snapSettings.tangent = snapSettings.near = false;
+    snapSettings.controlPoint = false;
+    snapEngine.setSettings(snapSettings);
+    passed &= check(!snapEngine.findDragSnap(snapScene, movingIndices, transform,
+                                             viewportSize).isValid(),
+                    "moving the whole scene must have no stationary snap target");
+    Shape targetPoint;
+    targetPoint.geometryType = GeometryType::Point;
+    targetPoint.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+    const QPointF snapDelta = transform.screenToWorld(cursor + QPointF(3, 0), viewportSize);
+    targetPoint.points = {snapDelta};
+    snapScene.append(targetPoint);
+    const auto dragSnap = snapEngine.findDragSnap(snapScene, movingIndices, transform,
+                                                 viewportSize);
+    passed &= check(dragSnap.isValid() && dragSnap.targetShapeIndex == 256 &&
+                        std::abs(dragSnap.sourcePoint.x()) < 1.0e-9 &&
+                        std::abs(dragSnap.translation.x() - snapDelta.x()) < 1.0e-9,
+                    "large-selection spatial buckets must retain the nearest endpoint snap");
+    snapScene.mutateGeometry(snapScene.objectIdAt(256), [](Shape &point) {
+        point.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 5);
+        return true;
+    });
+    const auto spatialSnap = snapEngine.findDragSnap(snapScene, movingIndices, transform,
+                                                    viewportSize);
+    passed &= check(spatialSnap.isValid() && spatialSnap.hasWorldTranslation &&
+                        std::abs(spatialSnap.worldTranslation.x - snapDelta.x()) < 1.0e-9 &&
+                        std::abs(spatialSnap.worldTranslation.z - 5) < 1.0e-9,
+                    "large-selection spatial buckets must preserve the target's world depth");
     return passed ? 0 : 1;
 }

@@ -65,6 +65,10 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
     if (vertexArray_.isCreated()) {
         vertexArray_.destroy();
     }
+    if (matcapTexture_ != 0) {
+        glDeleteTextures(1, &matcapTexture_);
+        matcapTexture_ = 0;
+    }
     program_.removeAllShaders();
 }
 
@@ -105,6 +109,9 @@ bool ViewportSurfaceRenderer::initialize()
         uniform vec3 uViewUp;
         uniform vec3 uViewFacing;
         uniform bool uPerspective;
+        uniform int uLightingMode;
+        uniform sampler2DArray uMatcapTexture;
+        uniform bool uMatcapAvailable;
         uniform vec3 uLightDirection[4];
         uniform vec3 uLightDiffuse[4];
         uniform vec3 uLightSpecular[4];
@@ -199,6 +206,19 @@ bool ViewportSurfaceRenderer::initialize()
             return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
         }
 
+        vec2 workbenchMatcapUv(vec3 incident, vec3 normal)
+        {
+            float a = 1.0 / (1.0 + incident.z);
+            float b = -incident.x * incident.y * a;
+            vec3 basis1 = vec3(1.0 - incident.x * incident.x * a,
+                               b,
+                               -incident.x);
+            vec3 basis2 = vec3(b,
+                               1.0 - incident.y * incident.y * a,
+                               -incident.y);
+            return vec2(dot(basis1, normal), dot(basis2, normal)) * 0.496 + 0.5;
+        }
+
         void main()
         {
             vec3 normal = normalize(vNormalView);
@@ -211,11 +231,19 @@ bool ViewportSurfaceRenderer::initialize()
                                           dot(incidentWorld, uViewUp),
                                           dot(incidentWorld, uViewFacing)));
             }
-            vec3 color = workbenchStudioLighting(uBaseColor.rgb,
-                                                 uRoughness,
-                                                 uMetallic,
-                                                 normal,
-                                                 incident);
+            vec3 color = uBaseColor.rgb;
+            if (uLightingMode == 0) {
+                color = workbenchStudioLighting(uBaseColor.rgb,
+                                                uRoughness,
+                                                uMetallic,
+                                                normal,
+                                                incident);
+            } else if (uLightingMode == 1 && uMatcapAvailable) {
+                vec2 uv = workbenchMatcapUv(incident, normal);
+                vec3 diffuse = texture(uMatcapTexture, vec3(uv, 0.0)).rgb;
+                vec3 specular = texture(uMatcapTexture, vec3(uv, 1.0)).rgb;
+                color = diffuse * uBaseColor.rgb + specular;
+            }
             color = sceneLinearToSrgb(color);
             fragmentColor = vec4(color,
                                  uBaseColor.a);
@@ -310,6 +338,47 @@ void ViewportSurfaceRenderer::prepareGeometry(
         ranges_.append({first, count, object.preparedGeometryOffset,
                         object.selected});
     }
+}
+
+bool ViewportSurfaceRenderer::ensureMatcapTexture(const QString &presetName)
+{
+    if (matcapTexture_ != 0 && matcapTextureName_ == presetName) {
+        return true;
+    }
+    QImage diffuseImage = workbenchMatcapDiffuseImage(presetName);
+    QImage specularImage = workbenchMatcapSpecularImage(presetName);
+    if (diffuseImage.isNull() || specularImage.isNull() ||
+        diffuseImage.size() != specularImage.size()) {
+        return false;
+    }
+    diffuseImage = diffuseImage.convertToFormat(QImage::Format_RGBA8888)
+                       .mirrored(false, true);
+    specularImage = specularImage.convertToFormat(QImage::Format_RGBA8888)
+                        .mirrored(false, true);
+    QByteArray texturePixels;
+    texturePixels.reserve(static_cast<qsizetype>(diffuseImage.sizeInBytes() +
+                                                 specularImage.sizeInBytes()));
+    texturePixels.append(reinterpret_cast<const char *>(diffuseImage.constBits()),
+                         static_cast<qsizetype>(diffuseImage.sizeInBytes()));
+    texturePixels.append(reinterpret_cast<const char *>(specularImage.constBits()),
+                         static_cast<qsizetype>(specularImage.sizeInBytes()));
+
+    GLint previousBinding = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousBinding);
+    if (matcapTexture_ == 0) {
+        glGenTextures(1, &matcapTexture_);
+    }
+    glBindTexture(GL_TEXTURE_2D_ARRAY, matcapTexture_);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_SRGB8_ALPHA8,
+                 diffuseImage.width(), diffuseImage.height(), 2, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, texturePixels.constData());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, static_cast<GLuint>(previousBinding));
+    matcapTextureName_ = presetName;
+    return matcapTexture_ != 0;
 }
 
 bool ViewportSurfaceRenderer::draw(
@@ -410,13 +479,22 @@ bool ViewportSurfaceRenderer::draw(
         program_.setUniformValue("uPerspective",
                                  transform.isPerspectiveEnabled());
         const WorkbenchStudioLighting &lighting =
-            defaultWorkbenchStudioLighting();
+            settings.hasCustomStudioLighting
+                ? settings.customStudioLighting
+                : workbenchStudioLightingPreset(settings.studioLightPreset);
+        const WorkbenchStudioLighting viewLighting =
+            workbenchStudioLightingForView(
+                lighting, settings.studioLightRotationDegrees,
+                settings.worldSpaceLighting, asVector(
+                    Point3D{viewRight.x, viewRight.y, viewRight.z}),
+                asVector(Point3D{viewUp.x, viewUp.y, viewUp.z}),
+                asVector(Point3D{viewFacing.x, viewFacing.y, viewFacing.z}));
         QVector3D lightDirections[4];
         QVector3D lightDiffuse[4];
         QVector3D lightSpecular[4];
         float lightWrap[4];
         for (int index = 0; index < 4; ++index) {
-            const WorkbenchStudioLight &light = lighting.lights[index];
+            const WorkbenchStudioLight &light = viewLighting.lights[index];
             lightDirections[index] = light.enabled
                                          ? light.direction
                                          : QVector3D(1.0f, 0.0f, 0.0f);
@@ -438,6 +516,26 @@ bool ViewportSurfaceRenderer::draw(
         program_.setUniformValue("uRoughness", 161.0f / 255.0f);
         program_.setUniformValue("uMetallic", 0.0f);
         program_.setUniformValue("uUseSpecular", lighting.useSpecular);
+        const int lightingMode = settings.lightingMode == ViewportLightingMode::Studio
+                                     ? 0
+                                     : settings.lightingMode == ViewportLightingMode::MatCap
+                                           ? 1
+                                           : 2;
+        program_.setUniformValue("uLightingMode", lightingMode);
+        const bool matcapAvailable =
+            settings.lightingMode == ViewportLightingMode::MatCap &&
+            ensureMatcapTexture(settings.matcapPreset);
+        program_.setUniformValue("uMatcapAvailable", matcapAvailable);
+        GLint previousActiveTexture = GL_TEXTURE0;
+        GLint previousTextureBinding = 0;
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+        if (matcapAvailable) {
+            glActiveTexture(GL_TEXTURE0);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,
+                          &previousTextureBinding);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, matcapTexture_);
+            program_.setUniformValue("uMatcapTexture", 0);
+        }
         vertexArray_.bind();
         vertexBuffer_.bind();
         if (geometryDirty_) {
@@ -476,6 +574,11 @@ bool ViewportSurfaceRenderer::draw(
         vertexBuffer_.release();
         vertexArray_.release();
         program_.release();
+        if (matcapAvailable) {
+            glBindTexture(GL_TEXTURE_2D_ARRAY,
+                          static_cast<GLuint>(previousTextureBinding));
+            glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        }
     }
 
     glColorMask(previousColorMask[0], previousColorMask[1],

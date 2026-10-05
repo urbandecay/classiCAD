@@ -188,6 +188,7 @@ set(CLASSICAD_VIEWPORT_SHARED_SOURCES
     src/ui/viewport/viewport_overlay.cpp
     src/ui/viewport/blender_navigation_icons.qrc
     src/ui/viewport/blender_shading_icons.qrc
+    src/ui/viewport/blender_workbench_lighting.qrc
 )
 
 set(CLASSICAD_VIEWPORT_ADAPTER_SUPPORT_SOURCES

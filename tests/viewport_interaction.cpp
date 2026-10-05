@@ -17,6 +17,8 @@
 #include <QElapsedTimer>
 #include <QDir>
 #include <QEventLoop>
+#include <QFrame>
+#include <QLabel>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QOpenGLContext>
@@ -24,6 +26,8 @@
 #include <QPainter>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QToolButton>
+#include <QSlider>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -324,6 +328,63 @@ int main(int argc, char **argv)
     viewport->resize(interactionViewportSize);
     viewport->show();
     application.processEvents();
+
+    auto *shadingPopover = viewport->findChild<QFrame *>(
+        QStringLiteral("ViewportShadingPopover"));
+    auto *studioModeButton = viewport->findChild<QToolButton *>(
+        QStringLiteral("LightingModeStudio"));
+    auto *matcapModeButton = viewport->findChild<QToolButton *>(
+        QStringLiteral("LightingModeMatCap"));
+    auto *flatModeButton = viewport->findChild<QToolButton *>(
+        QStringLiteral("LightingModeFlat"));
+    auto *worldLightingButton = viewport->findChild<QToolButton *>(
+        QStringLiteral("WorldSpaceLighting"));
+    auto *rotationSlider = viewport->findChild<QSlider *>(
+        QStringLiteral("StudioLightRotation"));
+    auto *rotationLabel = viewport->findChild<QLabel *>(
+        QStringLiteral("StudioLightRotationValue"));
+    const QPoint shadingSettingsPosition(viewport->width() - 21,
+                                         viewport->height() - 23);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress,
+              shadingSettingsPosition, Qt::LeftButton, Qt::LeftButton,
+              Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease,
+              shadingSettingsPosition, Qt::LeftButton, Qt::NoButton,
+              Qt::NoModifier);
+    application.processEvents();
+    passed &= check(shadingPopover != nullptr && shadingPopover->isVisible() &&
+                        studioModeButton != nullptr && matcapModeButton != nullptr &&
+                        flatModeButton != nullptr && worldLightingButton != nullptr &&
+                        rotationSlider != nullptr && rotationLabel != nullptr,
+                    "viewport shading popover must open with Lighting mode, world-space, and rotation controls");
+    if (shadingPopover != nullptr && studioModeButton != nullptr &&
+        matcapModeButton != nullptr && flatModeButton != nullptr &&
+        worldLightingButton != nullptr && rotationSlider != nullptr &&
+        rotationLabel != nullptr) {
+        passed &= check(studioModeButton->isChecked() &&
+                            !rotationSlider->isEnabled(),
+                        "Studio lighting must be the initial mode and its rotation must wait for world-space lighting");
+        matcapModeButton->click();
+        passed &= check(matcapModeButton->isChecked(),
+                        "MatCap mode button must select MatCap shading");
+        flatModeButton->click();
+        passed &= check(flatModeButton->isChecked(),
+                        "Flat mode button must select unlit solid shading");
+        studioModeButton->click();
+        worldLightingButton->click();
+        passed &= check(worldLightingButton->isChecked() &&
+                            rotationSlider->isEnabled(),
+                        "world-space lighting toggle must enable Studio Light rotation");
+        rotationSlider->setValue(90);
+        passed &= check(rotationSlider->value() == 90 &&
+                            rotationLabel->text() == QStringLiteral("90°"),
+                        "Studio Light rotation slider and degree readout must update together");
+        worldLightingButton->click();
+        passed &= check(!worldLightingButton->isChecked() &&
+                            !rotationSlider->isEnabled(),
+                        "camera-following lighting must disable the rotation slider");
+        shadingPopover->hide();
+    }
 
     passed &= check(viewport->viewportAntiAliasingSamples() == 8,
                     "viewport anti-aliasing must default to the saved Blender 8x setting");

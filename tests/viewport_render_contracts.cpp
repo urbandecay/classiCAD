@@ -85,9 +85,61 @@ int main(int argc, char *argv[])
                         std::abs(roundTripColor.z() - 0.8f) < 1.0e-5f,
                     "solid NURBS shading must use Workbench's studio rig and convert face colors through scene-linear space");
 
+    const WorkbenchStudioLighting basicStudioLight =
+        workbenchStudioLightingPreset(QStringLiteral("Basic"));
+    const QImage basicGreyDiffuse =
+        workbenchMatcapDiffuseImage(QStringLiteral("basic_grey"));
+    const QImage basicGreySpecular =
+        workbenchMatcapSpecularImage(QStringLiteral("basic_grey"));
+    const QImage bronzeDiffuse =
+        workbenchMatcapDiffuseImage(QStringLiteral("metal_bronze"));
+    const QImage bronzeSpecular =
+        workbenchMatcapSpecularImage(QStringLiteral("metal_bronze"));
+    const QStringList matcapPresets = workbenchMatcapPresets();
+    const bool allMatcapLayersLoaded = std::all_of(
+        matcapPresets.cbegin(), matcapPresets.cend(),
+        [](const QString &preset) {
+            return !workbenchMatcapDiffuseImage(preset).isNull() &&
+                   !workbenchMatcapSpecularImage(preset).isNull();
+        });
+    const WorkbenchStudioLighting cameraFollowingRotatedLighting =
+        workbenchStudioLightingForView(
+            workbenchLighting, 90, false,
+            QVector3D(1.0f, 0.0f, 0.0f),
+            QVector3D(0.0f, 1.0f, 0.0f),
+            QVector3D(0.0f, 0.0f, 1.0f));
+    const WorkbenchStudioLighting worldRotatedLighting =
+        workbenchStudioLightingForView(
+            workbenchLighting, 90, true,
+            QVector3D(1.0f, 0.0f, 0.0f),
+            QVector3D(0.0f, 1.0f, 0.0f),
+            QVector3D(0.0f, 0.0f, 1.0f));
+    passed &= check(basicStudioLight.lights[0].enabled &&
+                        std::abs(basicStudioLight.lights[0].wrap - 0.1f) < 1.0e-6f &&
+                        !basicGreyDiffuse.isNull() &&
+                        !basicGreySpecular.isNull() &&
+                        allMatcapLayersLoaded &&
+                        basicGreyDiffuse.pixelColor(256, 256).red() > 100 &&
+                        bronzeDiffuse.pixelColor(256, 256).red() == 0 &&
+                        bronzeSpecular.pixelColor(256, 256).red() > 100 &&
+                        workbenchMatcapShade(
+                            QStringLiteral("metal_bronze"),
+                            QVector3D(0.8f, 0.8f, 0.8f),
+                            QVector3D(0.0f, 0.0f, 1.0f),
+                            QVector3D(0.0f, 0.0f, 1.0f)).x() > 0.2f &&
+                        std::abs(cameraFollowingRotatedLighting.lights[1].direction.x() -
+                                 workbenchLighting.lights[1].direction.x()) < 1.0e-6f &&
+                        std::abs(worldRotatedLighting.lights[1].direction.x() -
+                                 workbenchLighting.lights[1].direction.x()) > 0.1f,
+                    "Workbench Studio Light presets and diffuse/specular MatCap layers must load, with rotation applied only to world-space lighting");
+
     ViewportShadingSettings shading;
     passed &= check(shading.mode == ViewportShadingMode::Wireframe &&
-                        shading.xrayEnabled(),
+                        shading.xrayEnabled() &&
+                        shading.lightingMode == ViewportLightingMode::Studio &&
+                        shading.studioLightPreset == QStringLiteral("Default") &&
+                        !shading.worldSpaceLighting &&
+                        shading.studioLightRotationDegrees == 0,
                     "viewport must preserve through-visible wireframe as its initial mode");
     shading.toggleXray();
     passed &= check(!shading.xrayEnabled() && !shading.xrayWireframe &&
@@ -152,10 +204,19 @@ int main(int argc, char *argv[])
     ViewportShadingSettings solidShading;
     solidShading.mode = ViewportShadingMode::Solid;
     const RenderedSurface solidSurface = renderedSurface(solidShading);
+    ViewportShadingSettings matcapShading = solidShading;
+    matcapShading.lightingMode = ViewportLightingMode::MatCap;
+    matcapShading.matcapPreset = QStringLiteral("metal_bronze");
+    const RenderedSurface matcapSurface = renderedSurface(matcapShading);
     const QVector3D surfaceBaseLinear =
         workbenchDefaultSolidMaterialDiffuseColor();
     const QVector3D expectedCpuColor = workbenchSceneLinearToSrgb(
         workbenchStudioShade(surfaceBaseLinear,
+                             QVector3D(0.0f, 0.0f, 1.0f),
+                             QVector3D(0.0f, 0.0f, 1.0f)));
+    const QVector3D expectedMatcapColor = workbenchSceneLinearToSrgb(
+        workbenchMatcapShade(QStringLiteral("metal_bronze"),
+                             surfaceBaseLinear,
                              QVector3D(0.0f, 0.0f, 1.0f),
                              QVector3D(0.0f, 0.0f, 1.0f)));
     passed &= check(validateNurbsSurface(fillSurface) &&
@@ -167,8 +228,15 @@ int main(int argc, char *argv[])
                         std::abs(solidSurface.centerColor.greenF() -
                                  expectedCpuColor.y()) < 0.025f &&
                         std::abs(solidSurface.centerColor.blueF() -
-                                 expectedCpuColor.z()) < 0.025f,
-                    "solid viewport shading must rasterize NURBS face interiors beyond the wireframe isocurves");
+                                 expectedCpuColor.z()) < 0.025f &&
+                        matcapSurface.coveredPixels > wireframeSurface.coveredPixels * 3 &&
+                        std::abs(matcapSurface.centerColor.redF() -
+                                 expectedMatcapColor.x()) < 0.025f &&
+                        std::abs(matcapSurface.centerColor.greenF() -
+                                 expectedMatcapColor.y()) < 0.025f &&
+                        std::abs(matcapSurface.centerColor.blueF() -
+                                 expectedMatcapColor.z()) < 0.025f,
+                    "solid viewport shading must render NURBS faces with Workbench Studio and two-layer MatCap colors");
 
     QOpenGLContext context;
     context.setFormat(format);
@@ -187,7 +255,9 @@ int main(int argc, char *argv[])
             passed &= check(functions.initializeOpenGLFunctions(),
                             "NURBS solid display test must initialize OpenGL 3.3");
             QImage gpuImage;
+            QImage gpuMatcapImage;
             bool gpuDrawSucceeded = false;
+            bool gpuMatcapDrawSucceeded = false;
             const QSize glSize(160, 160);
             {
                 QOpenGLFramebufferObjectFormat framebufferFormat;
@@ -223,12 +293,23 @@ int main(int argc, char *argv[])
                         gpuSolidShading);
                     functions.glFinish();
                     gpuImage = framebuffer.toImage();
+
+                    ViewportShadingSettings gpuMatcapShading = gpuSolidShading;
+                    gpuMatcapShading.lightingMode = ViewportLightingMode::MatCap;
+                    gpuMatcapShading.matcapPreset = QStringLiteral("metal_bronze");
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    gpuMatcapDrawSucceeded = gpuSurfaceRenderer.draw(
+                        {surfaceObject}, gpuTransform, glSize, 1.0,
+                        gpuMatcapShading);
+                    functions.glFinish();
+                    gpuMatcapImage = framebuffer.toImage();
                     framebuffer.release();
                 }
             }
             context.doneCurrent();
             int gpuFacePixels = 0;
             bool gpuLightingMatchesWorkbench = false;
+            bool gpuMatcapMatchesWorkbench = false;
             if (!gpuImage.isNull()) {
                 for (int y = 0; y < gpuImage.height(); ++y) {
                     for (int x = 0; x < gpuImage.width(); ++x) {
@@ -253,10 +334,29 @@ int main(int argc, char *argv[])
                         channelTolerance &&
                     std::abs(gpuCenter.blueF() - expectedLighting.z()) <
                         channelTolerance;
+                const QVector3D expectedMatcap = workbenchSceneLinearToSrgb(
+                    workbenchMatcapShade(QStringLiteral("metal_bronze"),
+                                         linearBaseColor,
+                                         QVector3D(0.0f, 0.0f, 1.0f),
+                                         QVector3D(0.0f, 0.0f, 1.0f)));
+                const QColor gpuMatcapCenter = gpuMatcapImage.isNull()
+                    ? QColor()
+                    : gpuMatcapImage.pixelColor(80, 80);
+                gpuMatcapMatchesWorkbench =
+                    std::abs(gpuMatcapCenter.redF() - expectedMatcap.x()) <
+                        channelTolerance &&
+                    std::abs(gpuMatcapCenter.greenF() - expectedMatcap.y()) <
+                        channelTolerance &&
+                    std::abs(gpuMatcapCenter.blueF() - expectedMatcap.z()) <
+                        channelTolerance;
             }
             passed &= check(gpuDrawSucceeded && gpuFacePixels > 4000 &&
-                                gpuImage.pixelColor(80, 80).red() > 70 &&
-                                gpuLightingMatchesWorkbench,
+                            gpuImage.pixelColor(80, 80).red() > 70 &&
+                                gpuLightingMatchesWorkbench &&
+                                gpuMatcapDrawSucceeded &&
+                                !gpuMatcapImage.isNull() &&
+                                gpuMatcapImage.pixelColor(80, 80).red() > 70 &&
+                                gpuMatcapMatchesWorkbench,
                             "OpenGL solid shading must fill NURBS faces with Blender Workbench studio-light colors");
         }
     }

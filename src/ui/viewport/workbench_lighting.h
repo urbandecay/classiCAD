@@ -6,6 +6,14 @@
  * matches Blender's factory-startup "Default" studio light. */
 #pragma once
 
+#include <QFile>
+#include <QColor>
+#include <QHash>
+#include <QImage>
+#include <QRegularExpression>
+#include <QString>
+#include <QStringList>
+#include <QVector2D>
 #include <QVector3D>
 
 #include <array>
@@ -29,6 +37,10 @@ struct WorkbenchStudioLighting {
     QVector3D ambientColor;
     bool useSpecular = true;
 };
+
+inline const WorkbenchStudioLighting &defaultWorkbenchStudioLighting();
+inline QVector3D workbenchNormalize(const QVector3D &value,
+                                   const QVector3D &fallback);
 
 inline float workbenchSrgbToSceneLinear(float value)
 {
@@ -65,6 +77,232 @@ inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()
     // Blender's factory-startup material uses diffuse_color = (0.8, 0.8, 0.8).
     // This value is already scene-linear; it must not be decoded as sRGB.
     return {0.8f, 0.8f, 0.8f};
+}
+
+inline WorkbenchStudioLighting workbenchStudioLightingPreset(
+    const QString &presetName)
+{
+    if (presetName.compare(QStringLiteral("Default"),
+                           Qt::CaseInsensitive) == 0 ||
+        presetName.compare(QStringLiteral("Custom"),
+                           Qt::CaseInsensitive) == 0) {
+        return defaultWorkbenchStudioLighting();
+    }
+
+    static QHash<QString, WorkbenchStudioLighting> cache;
+    const QString key = presetName.toLower();
+    const auto cached = cache.constFind(key);
+    if (cached != cache.cend()) {
+        return cached.value();
+    }
+
+    WorkbenchStudioLighting lighting{};
+    QFile file(QStringLiteral(":/workbench-lighting/studio/%1.sl")
+                   .arg(presetName.toLower()));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return defaultWorkbenchStudioLighting();
+    }
+
+    const QRegularExpression lightExpression(
+        QStringLiteral(R"(^light\[(\d+)\]\.(flag|smooth|col|spec|vec)(?:\.([xyz]))?$)"));
+    const QRegularExpression ambientExpression(
+        QStringLiteral(R"(^light_ambient\.([xyz])$)"));
+    const auto assignComponent = [](QVector3D *vector,
+                                    QChar component,
+                                    float value) {
+        if (component == QLatin1Char('x')) {
+            vector->setX(value);
+        } else if (component == QLatin1Char('y')) {
+            vector->setY(value);
+        } else if (component == QLatin1Char('z')) {
+            vector->setZ(value);
+        }
+    };
+
+    while (!file.atEnd()) {
+        const QStringList fields = QString::fromUtf8(file.readLine())
+                                       .trimmed()
+                                       .split(QRegularExpression(QStringLiteral("\\s+")),
+                                              Qt::SkipEmptyParts);
+        if (fields.size() != 2) {
+            continue;
+        }
+        bool ok = false;
+        const float value = fields[1].toFloat(&ok);
+        if (!ok || !std::isfinite(value)) {
+            continue;
+        }
+        const QRegularExpressionMatch ambientMatch =
+            ambientExpression.match(fields[0]);
+        if (ambientMatch.hasMatch()) {
+            assignComponent(&lighting.ambientColor,
+                            ambientMatch.captured(1).at(0), value);
+            continue;
+        }
+        const QRegularExpressionMatch match = lightExpression.match(fields[0]);
+        if (!match.hasMatch()) {
+            continue;
+        }
+        const int index = match.captured(1).toInt();
+        if (index < 0 || index >= static_cast<int>(lighting.lights.size())) {
+            continue;
+        }
+        WorkbenchStudioLight &light = lighting.lights[static_cast<size_t>(index)];
+        const QString property = match.captured(2);
+        if (property == QStringLiteral("flag")) {
+            light.enabled = value != 0.0f;
+        } else if (property == QStringLiteral("smooth")) {
+            light.wrap = value;
+        } else if (match.captured(3).size() == 1) {
+            const QChar component = match.captured(3).at(0);
+            if (property == QStringLiteral("col")) {
+                assignComponent(&light.diffuseColor, component, value);
+            } else if (property == QStringLiteral("spec")) {
+                assignComponent(&light.specularColor, component, value);
+            } else if (property == QStringLiteral("vec")) {
+                assignComponent(&light.direction, component, value);
+            }
+        }
+    }
+
+    lighting.useSpecular = true;
+    cache.insert(key, lighting);
+    return lighting;
+}
+
+inline WorkbenchStudioLighting workbenchStudioLightingForView(
+    const WorkbenchStudioLighting &source,
+    int rotationDegrees,
+    bool worldSpace,
+    const QVector3D &viewRight,
+    const QVector3D &viewUp,
+    const QVector3D &viewFacing)
+{
+    WorkbenchStudioLighting lighting = source;
+    if (!worldSpace) {
+        // Blender only applies the Studio Light rotation when world-space
+        // lighting is enabled. Otherwise the rig follows the viewport and its
+        // stored view-space directions remain unchanged.
+        return lighting;
+    }
+    constexpr float degreesToRadians = 0.01745329251994329577f;
+    const float angle = -static_cast<float>(rotationDegrees) *
+                        degreesToRadians;
+    const float cosine = std::cos(angle);
+    const float sine = std::sin(angle);
+    for (WorkbenchStudioLight &light : lighting.lights) {
+        if (!light.enabled) {
+            continue;
+        }
+        const QVector3D rotated(
+            cosine * light.direction.x() - sine * light.direction.y(),
+            sine * light.direction.x() + cosine * light.direction.y(),
+            light.direction.z());
+        light.direction = QVector3D(
+            QVector3D::dotProduct(rotated, viewRight),
+            QVector3D::dotProduct(rotated, viewUp),
+            QVector3D::dotProduct(rotated, viewFacing));
+    }
+    return lighting;
+}
+
+inline QStringList workbenchMatcapPresets()
+{
+    return {QStringLiteral("basic_bright"),
+            QStringLiteral("basic_dark"),
+            QStringLiteral("basic_grey"),
+            QStringLiteral("basic_side"),
+            QStringLiteral("ceramic_dark"),
+            QStringLiteral("ceramic_lightbulb"),
+            QStringLiteral("clay_brown"),
+            QStringLiteral("clay_green"),
+            QStringLiteral("clay_studio"),
+            QStringLiteral("clay_warm"),
+            QStringLiteral("fullmetal"),
+            QStringLiteral("hard_surface_grey"),
+            QStringLiteral("hard_surface_red"),
+            QStringLiteral("metal_bronze"),
+            QStringLiteral("metal_carpaint"),
+            QStringLiteral("pearl"),
+            QStringLiteral("red_wax"),
+            QStringLiteral("resin"),
+            QStringLiteral("toon_dark"),
+            QStringLiteral("toon_light")};
+}
+
+inline QImage workbenchMatcapLayerImage(const QString &presetName,
+                                       const QString &layer)
+{
+    static QHash<QString, QImage> cache;
+    const QString key = presetName + QLatin1Char('/') + layer;
+    const auto cached = cache.constFind(key);
+    if (cached != cache.cend()) {
+        return cached.value();
+    }
+    QImage image(QStringLiteral(":/workbench-lighting/matcap/%1_%2.png")
+                     .arg(presetName, layer));
+    if (!image.isNull()) {
+        cache.insert(key, image);
+    }
+    return image;
+}
+
+inline QImage workbenchMatcapDiffuseImage(const QString &presetName)
+{
+    return workbenchMatcapLayerImage(presetName, QStringLiteral("diffuse"));
+}
+
+inline QImage workbenchMatcapSpecularImage(const QString &presetName)
+{
+    return workbenchMatcapLayerImage(presetName, QStringLiteral("specular"));
+}
+
+inline QVector2D workbenchMatcapUv(const QVector3D &sourceIncident,
+                                   const QVector3D &sourceNormal)
+{
+    const QVector3D incident = workbenchNormalize(sourceIncident,
+                                                   {0.0f, 0.0f, 1.0f});
+    const QVector3D normal = workbenchNormalize(sourceNormal,
+                                                 {0.0f, 0.0f, 1.0f});
+    const float a = 1.0f / (1.0f + incident.z());
+    const float b = -incident.x() * incident.y() * a;
+    const QVector3D basis1(1.0f - incident.x() * incident.x() * a,
+                           b,
+                           -incident.x());
+    const QVector3D basis2(b,
+                           1.0f - incident.y() * incident.y() * a,
+                           -incident.y());
+    return {QVector3D::dotProduct(basis1, normal) * 0.496f + 0.5f,
+            QVector3D::dotProduct(basis2, normal) * 0.496f + 0.5f};
+}
+
+inline QVector3D workbenchMatcapShade(const QString &presetName,
+                                      const QVector3D &baseColor,
+                                      const QVector3D &normal,
+                                      const QVector3D &incident)
+{
+    const QImage diffuseImage = workbenchMatcapDiffuseImage(presetName);
+    const QImage specularImage = workbenchMatcapSpecularImage(presetName);
+    if (diffuseImage.isNull() || specularImage.isNull()) {
+        return baseColor;
+    }
+    const QVector2D uv = workbenchMatcapUv(incident, normal);
+    const int x = std::clamp(qRound(uv.x() * (diffuseImage.width() - 1)),
+                             0, diffuseImage.width() - 1);
+    const int y = std::clamp(qRound((1.0f - uv.y()) *
+                                    (diffuseImage.height() - 1)),
+                             0, diffuseImage.height() - 1);
+    const QColor diffuseSample = diffuseImage.pixelColor(x, y);
+    const QColor specularSample = specularImage.pixelColor(x, y);
+    const QVector3D diffuse = workbenchSrgbToSceneLinear(
+        QVector3D(diffuseSample.redF(), diffuseSample.greenF(),
+                  diffuseSample.blueF()));
+    const QVector3D specular = workbenchSrgbToSceneLinear(
+        QVector3D(specularSample.redF(), specularSample.greenF(),
+                  specularSample.blueF()));
+    return {diffuse.x() * baseColor.x() + specular.x(),
+            diffuse.y() * baseColor.y() + specular.y(),
+            diffuse.z() * baseColor.z() + specular.z()};
 }
 
 inline const WorkbenchStudioLighting &defaultWorkbenchStudioLighting()

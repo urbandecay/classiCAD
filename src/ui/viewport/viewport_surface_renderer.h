@@ -9,6 +9,7 @@
 #include <QOpenGLFunctions_3_3_Core>
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
+#include <QString>
 
 namespace classiCAD {
 
@@ -46,12 +47,15 @@ private:
 
     bool initialize();
     void prepareGeometry(const QVector<ViewportRenderObject> &objects);
+    bool ensureMatcapTexture(const QString &presetName);
 
     QOpenGLShaderProgram program_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QVector<SurfaceVertex> vertices_;
     QVector<DrawRange> ranges_;
+    unsigned int matcapTexture_ = 0;
+    QString matcapTextureName_;
     QByteArray geometryKey_;
     bool geometryDirty_ = true;
     bool initializationAttempted_ = false;

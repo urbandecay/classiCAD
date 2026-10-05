@@ -69,30 +69,51 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QButtonGroup>
 #include <QBuffer>
+#include <QCheckBox>
+#include <QColorDialog>
 #include <QCursor>
 #include <QDateTime>
 #include <QDebug>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFormLayout>
+#include <QFrame>
 #include <QHash>
+#include <QGridLayout>
+#include <QHBoxLayout>
+#include <QGroupBox>
 #include <QInputDialog>
+#include <QLabel>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLineF>
 #include <QImageReader>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QPushButton>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QPixmap>
 #include <QRadialGradient>
 #include <QSettings>
+#include <QSignalBlocker>
+#include <QSlider>
 #include <QStringList>
+#include <QStyle>
 #include <QTextStream>
+#include <QToolButton>
 #include <QTimer>
+#include <QVBoxLayout>
+#include <QWidgetAction>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -107,11 +128,13 @@ constexpr qreal kDragSnapBreakawayPixels = 36.0;
 constexpr qreal kViewportShadingButtonSize = 20.0;
 constexpr qreal kViewportShadingButtonGap = 1.0;
 constexpr qreal kViewportShadingPanelPadding = 2.0;
+constexpr qreal kViewportShadingSettingsButtonWidth = 15.0;
 
 QRectF viewportShadingPanelRect(const QSize &size)
 {
     const qreal buttonWidth = kViewportShadingButtonSize * 3.0 +
-                              kViewportShadingButtonGap * 2.0;
+                              kViewportShadingButtonGap * 3.0 +
+                              kViewportShadingSettingsButtonWidth;
     const qreal width = buttonWidth + kViewportShadingPanelPadding * 2.0;
     const qreal height = kViewportShadingButtonSize +
                          kViewportShadingPanelPadding * 2.0;
@@ -129,6 +152,17 @@ QRectF viewportShadingButtonRect(const QSize &size, int index)
                                kViewportShadingButtonGap),
                   panel.top() + kViewportShadingPanelPadding,
                   kViewportShadingButtonSize,
+                  kViewportShadingButtonSize);
+}
+
+QRectF viewportShadingSettingsButtonRect(const QSize &size)
+{
+    const QRectF panel = viewportShadingPanelRect(size);
+    return QRectF(panel.left() + kViewportShadingPanelPadding +
+                      3.0 * (kViewportShadingButtonSize +
+                             kViewportShadingButtonGap),
+                  panel.top() + kViewportShadingPanelPadding,
+                  kViewportShadingSettingsButtonWidth,
                   kViewportShadingButtonSize);
 }
 
@@ -311,6 +345,7 @@ public:
         , zoom_(viewportTransform_.zoom())
     {
         configureCommandRouter();
+        setupShadingPopover();
         viewportTransform_.setGridSpacing(
             documentGridSpacingInMillimeters(document_.settings()));
         toolContext_.setShapeFactory(
@@ -2226,6 +2261,561 @@ protected:
         return frame;
     }
 
+    void setupShadingPopover()
+    {
+        shadingPopover_ = new QFrame(this, Qt::Popup | Qt::FramelessWindowHint);
+        shadingPopover_->setObjectName(QStringLiteral("ViewportShadingPopover"));
+        shadingPopover_->setFixedWidth(246);
+        shadingPopover_->setStyleSheet(QStringLiteral(
+            "QFrame#ViewportShadingPopover { background: #252525; color: #dedede; "
+            "border: 1px solid #111; }"
+            "QLabel { color: #d0d0d0; border: 0; }"
+            "QToolButton { color: #dedede; background: #3b3b3b; "
+            "border: 1px solid #303030; border-radius: 2px; padding: 2px; }"
+            "QToolButton:hover { background: #505050; }"
+            "QToolButton:checked { background: #4b79a8; border-color: #3d6e9e; }"
+            "QToolButton:disabled { color: #777; background: #303030; }"
+            "QSlider::groove:horizontal { background: #555; height: 4px; }"
+            "QSlider::handle:horizontal { background: #b8b8b8; width: 10px; "
+            "margin: -4px 0; border-radius: 5px; }"));
+
+        auto *layout = new QVBoxLayout(shadingPopover_);
+        layout->setContentsMargins(7, 6, 7, 7);
+        layout->setSpacing(5);
+
+        auto *heading = new QLabel(QString::fromUtf8("▾  Lighting"),
+                                   shadingPopover_);
+        heading->setObjectName(QStringLiteral("LightingHeading"));
+        layout->addWidget(heading);
+
+        auto *modeRow = new QWidget(shadingPopover_);
+        auto *modeLayout = new QHBoxLayout(modeRow);
+        modeLayout->setContentsMargins(0, 0, 0, 0);
+        modeLayout->setSpacing(1);
+        lightingModeGroup_ = new QButtonGroup(shadingPopover_);
+        lightingModeGroup_->setExclusive(true);
+        const QStringList modeNames{QStringLiteral("Studio"),
+                                    QStringLiteral("MatCap"),
+                                    QStringLiteral("Flat")};
+        for (int index = 0; index < modeNames.size(); ++index) {
+            auto *button = new QToolButton(modeRow);
+            button->setObjectName(QStringLiteral("LightingMode%1")
+                                      .arg(modeNames[index]));
+            button->setText(modeNames[index]);
+            button->setCheckable(true);
+            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            button->setFixedHeight(23);
+            lightingModeButtons_[index] = button;
+            lightingModeGroup_->addButton(button, index);
+            modeLayout->addWidget(button);
+        }
+        connect(lightingModeButtons_[0], &QToolButton::clicked,
+                this, [this] { setViewportLightingMode(ViewportLightingMode::Studio); });
+        connect(lightingModeButtons_[1], &QToolButton::clicked,
+                this, [this] { setViewportLightingMode(ViewportLightingMode::MatCap); });
+        connect(lightingModeButtons_[2], &QToolButton::clicked,
+                this, [this] { setViewportLightingMode(ViewportLightingMode::Flat); });
+        layout->addWidget(modeRow);
+
+        auto *previewFrame = new QFrame(shadingPopover_);
+        previewFrame->setObjectName(QStringLiteral("StudioLightPreviewFrame"));
+        previewFrame->setFixedHeight(72);
+        previewFrame->setStyleSheet(QStringLiteral(
+            "QFrame#StudioLightPreviewFrame { background: #202020; "
+            "border: 1px solid #373737; border-radius: 3px; }"));
+        auto *previewLayout = new QGridLayout(previewFrame);
+        previewLayout->setContentsMargins(3, 3, 3, 3);
+        previewLayout->setSpacing(0);
+        studioLightPreviewButton_ = new QToolButton(previewFrame);
+        studioLightPreviewButton_->setObjectName(QStringLiteral("StudioLightPreview"));
+        studioLightPreviewButton_->setAutoRaise(true);
+        studioLightPreviewButton_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        studioLightPreviewButton_->setIconSize(QSize(64, 64));
+        studioLightPreviewButton_->setSizePolicy(QSizePolicy::Expanding,
+                                                 QSizePolicy::Expanding);
+        studioLightPreviewButton_->setStyleSheet(
+            QStringLiteral("QToolButton { background: transparent; border: 0; }"));
+        previewLayout->addWidget(studioLightPreviewButton_, 0, 0);
+        connect(studioLightPreviewButton_, &QToolButton::clicked,
+                this, [this] { showLightingPresetMenu(); });
+
+        studioLightSettingsButton_ = new QToolButton(previewFrame);
+        studioLightSettingsButton_->setObjectName(
+            QStringLiteral("StudioLightSettings"));
+        studioLightSettingsButton_->setIcon(makeStudioLightSettingsIcon());
+        studioLightSettingsButton_->setIconSize(QSize(15, 15));
+        studioLightSettingsButton_->setToolTip(
+            QStringLiteral("Edit Studio Light settings"));
+        studioLightSettingsButton_->setFixedSize(22, 22);
+        studioLightSettingsButton_->setStyleSheet(QStringLiteral(
+            "QToolButton { color: #d0d0d0; background: #252525; "
+            "border: 0; padding: 0; font-size: 14px; }"
+            "QToolButton:hover { background: #484848; }"));
+        previewLayout->addWidget(studioLightSettingsButton_, 0, 0,
+                                 Qt::AlignTop | Qt::AlignRight);
+        connect(studioLightSettingsButton_, &QToolButton::clicked,
+                this, [this] { editStudioLightSettings(); });
+        layout->addWidget(previewFrame);
+
+        auto *rotationRow = new QWidget(shadingPopover_);
+        auto *rotationLayout = new QHBoxLayout(rotationRow);
+        rotationLayout->setContentsMargins(0, 0, 0, 0);
+        rotationLayout->setSpacing(5);
+        worldSpaceLightingButton_ = new QToolButton(rotationRow);
+        worldSpaceLightingButton_->setObjectName(
+            QStringLiteral("WorldSpaceLighting"));
+        worldSpaceLightingButton_->setCheckable(true);
+        worldSpaceLightingButton_->setFixedSize(21, 21);
+        worldSpaceLightingButton_->setToolTip(
+            QStringLiteral("World Space Lighting"));
+        worldSpaceLightingButton_->setIcon(makeWorldLightingIcon());
+        worldSpaceLightingButton_->setIconSize(QSize(15, 15));
+        rotationLayout->addWidget(worldSpaceLightingButton_);
+        connect(worldSpaceLightingButton_, &QToolButton::toggled,
+                this, [this](bool enabled) {
+                    viewportShadingSettings_.worldSpaceLighting = enabled;
+                    refreshShadingPopover();
+                    update();
+                });
+
+        studioLightRotationSlider_ = new QSlider(Qt::Horizontal, rotationRow);
+        studioLightRotationSlider_->setObjectName(
+            QStringLiteral("StudioLightRotation"));
+        studioLightRotationSlider_->setRange(0, 360);
+        studioLightRotationSlider_->setSingleStep(1);
+        studioLightRotationSlider_->setPageStep(15);
+        studioLightRotationSlider_->setToolTip(
+            QStringLiteral("Studio Light Rotation"));
+        rotationLayout->addWidget(studioLightRotationSlider_, 1);
+        connect(studioLightRotationSlider_, &QSlider::valueChanged,
+                this, [this](int degrees) {
+                    viewportShadingSettings_.studioLightRotationDegrees = degrees;
+                    if (studioLightRotationLabel_ != nullptr) {
+                        studioLightRotationLabel_->setText(
+                            QStringLiteral("%1°").arg(degrees));
+                    }
+                    updateStudioLightPreview();
+                    update();
+                });
+
+        studioLightRotationLabel_ = new QLabel(rotationRow);
+        studioLightRotationLabel_->setObjectName(
+            QStringLiteral("StudioLightRotationValue"));
+        studioLightRotationLabel_->setMinimumWidth(32);
+        studioLightRotationLabel_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        rotationLayout->addWidget(studioLightRotationLabel_);
+        layout->addWidget(rotationRow);
+
+        refreshShadingPopover();
+        shadingPopover_->hide();
+    }
+
+    static QIcon makeWorldLightingIcon()
+    {
+        QPixmap pixmap(20, 20);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(QColor(210, 210, 210), 1.2));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawEllipse(QRectF(2.5, 2.5, 15, 15));
+        painter.drawEllipse(QRectF(7, 2.5, 6, 15));
+        painter.drawLine(QPointF(3.2, 7.2), QPointF(16.8, 7.2));
+        painter.drawLine(QPointF(3.2, 12.8), QPointF(16.8, 12.8));
+        return QIcon(pixmap);
+    }
+
+    static QIcon makeStudioLightSettingsIcon()
+    {
+        QPixmap pixmap(20, 20);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QColor color(210, 210, 210);
+        painter.setPen(QPen(color, 1.5, Qt::SolidLine, Qt::RoundCap));
+        painter.setBrush(Qt::NoBrush);
+        constexpr qreal center = 10.0;
+        constexpr qreal pi = 3.14159265358979323846;
+        for (int tooth = 0; tooth < 8; ++tooth) {
+            const qreal angle = tooth * pi / 4.0;
+            const QPointF inner(center + std::cos(angle) * 6.0,
+                                center + std::sin(angle) * 6.0);
+            const QPointF outer(center + std::cos(angle) * 8.5,
+                                center + std::sin(angle) * 8.5);
+            painter.drawLine(inner, outer);
+        }
+        painter.drawEllipse(QRectF(4.5, 4.5, 11, 11));
+        painter.setBrush(QColor(37, 37, 37));
+        painter.drawEllipse(QRectF(8.0, 8.0, 4, 4));
+        return QIcon(pixmap);
+    }
+
+    QPixmap lightingPreviewPixmap(int size,
+                                  ViewportLightingMode mode,
+                                  const QString &studioPreset,
+                                  const QString &matcapPreset,
+                                  bool useCustomStudioLighting = true) const
+    {
+        QImage image(size, size, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        const float center = (size - 1) * 0.5f;
+        const float radius = size * 0.405f;
+        const QVector3D baseColor = workbenchDefaultSolidMaterialDiffuseColor();
+        WorkbenchStudioLighting lighting =
+            useCustomStudioLighting &&
+                    viewportShadingSettings_.hasCustomStudioLighting
+                ? viewportShadingSettings_.customStudioLighting
+                : workbenchStudioLightingPreset(studioPreset);
+        lighting = workbenchStudioLightingForView(
+            lighting,
+            viewportShadingSettings_.studioLightRotationDegrees,
+            viewportShadingSettings_.worldSpaceLighting,
+            QVector3D(1.0f, 0.0f, 0.0f),
+            QVector3D(0.0f, 1.0f, 0.0f),
+            QVector3D(0.0f, 0.0f, 1.0f));
+
+        for (int y = 0; y < size; ++y) {
+            QRgb *row = reinterpret_cast<QRgb *>(image.scanLine(y));
+            for (int x = 0; x < size; ++x) {
+                const float nx = (x - center) / radius;
+                const float ny = (center - y) / radius;
+                const float radiusSquared = nx * nx + ny * ny;
+                if (radiusSquared > 1.0f) {
+                    continue;
+                }
+                const QVector3D normal(nx, ny,
+                                       std::sqrt(std::max(0.0f,
+                                                          1.0f - radiusSquared)));
+                QVector3D color;
+                if (mode == ViewportLightingMode::Studio) {
+                    color = workbenchStudioShade(baseColor,
+                                                 normal,
+                                                 QVector3D(0.0f, 0.0f, 1.0f),
+                                                 161.0f / 255.0f,
+                                                 0.0f,
+                                                 lighting);
+                } else if (mode == ViewportLightingMode::MatCap) {
+                    color = workbenchMatcapShade(matcapPreset,
+                                                 QVector3D(1.0f, 1.0f, 1.0f),
+                                                 normal,
+                                                 QVector3D(0.0f, 0.0f, 1.0f));
+                } else {
+                    color = baseColor;
+                }
+                const QVector3D srgb = workbenchSceneLinearToSrgb(color);
+                row[x] = QColor::fromRgbF(std::clamp(srgb.x(), 0.0f, 1.0f),
+                                          std::clamp(srgb.y(), 0.0f, 1.0f),
+                                          std::clamp(srgb.z(), 0.0f, 1.0f),
+                                          1.0f).rgba();
+            }
+        }
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(QColor(25, 25, 25, 180), 0.7));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawEllipse(QRectF(center - radius, center - radius,
+                                   radius * 2.0f, radius * 2.0f));
+        return QPixmap::fromImage(image);
+    }
+
+    void updateStudioLightPreview()
+    {
+        if (studioLightPreviewButton_ == nullptr) {
+            return;
+        }
+        studioLightPreviewButton_->setIcon(QIcon(lightingPreviewPixmap(
+            96, viewportShadingSettings_.lightingMode,
+            viewportShadingSettings_.studioLightPreset,
+            viewportShadingSettings_.matcapPreset)));
+        studioLightPreviewButton_->setEnabled(
+            viewportShadingSettings_.lightingMode != ViewportLightingMode::Flat);
+        studioLightSettingsButton_->setVisible(
+            viewportShadingSettings_.lightingMode == ViewportLightingMode::Studio);
+    }
+
+    void refreshShadingPopover()
+    {
+        if (shadingPopover_ == nullptr) {
+            return;
+        }
+        const int selectedMode =
+            viewportShadingSettings_.lightingMode == ViewportLightingMode::Studio
+                ? 0
+                : viewportShadingSettings_.lightingMode == ViewportLightingMode::MatCap
+                      ? 1
+                      : 2;
+        for (int index = 0; index < 3; ++index) {
+            const QSignalBlocker blocker(lightingModeButtons_[index]);
+            lightingModeButtons_[index]->setChecked(index == selectedMode);
+        }
+        {
+            const QSignalBlocker blocker(worldSpaceLightingButton_);
+            worldSpaceLightingButton_->setChecked(
+                viewportShadingSettings_.worldSpaceLighting);
+        }
+        {
+            const QSignalBlocker blocker(studioLightRotationSlider_);
+            studioLightRotationSlider_->setValue(
+                viewportShadingSettings_.studioLightRotationDegrees);
+        }
+        studioLightRotationLabel_->setText(
+            QStringLiteral("%1°")
+                .arg(viewportShadingSettings_.studioLightRotationDegrees));
+        studioLightRotationSlider_->setEnabled(
+            viewportShadingSettings_.worldSpaceLighting &&
+            viewportShadingSettings_.lightingMode == ViewportLightingMode::Studio);
+        updateStudioLightPreview();
+    }
+
+    void setViewportLightingMode(ViewportLightingMode mode)
+    {
+        viewportShadingSettings_.lightingMode = mode;
+        refreshShadingPopover();
+        update();
+    }
+
+    void showShadingPopover()
+    {
+        if (shadingPopover_ == nullptr) {
+            return;
+        }
+        refreshShadingPopover();
+        shadingPopover_->adjustSize();
+        const QRectF button = viewportShadingSettingsButtonRect(size());
+        const QPoint globalTopRight = mapToGlobal(button.topRight().toPoint());
+        const QPoint globalBottomRight = mapToGlobal(button.bottomRight().toPoint());
+        QPoint position(globalBottomRight.x() - shadingPopover_->width(),
+                        globalTopRight.y() - shadingPopover_->height() - 5);
+        if (position.y() < 4) {
+            position.setY(globalBottomRight.y() + 5);
+        }
+        shadingPopover_->move(position);
+        shadingPopover_->show();
+        shadingPopover_->raise();
+        update();
+    }
+
+    void showLightingPresetMenu()
+    {
+        if (viewportShadingSettings_.lightingMode == ViewportLightingMode::Flat) {
+            return;
+        }
+        auto *menu = new QMenu(this);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        const bool studio = viewportShadingSettings_.lightingMode ==
+                            ViewportLightingMode::Studio;
+        const QStringList presets = studio
+            ? QStringList{QStringLiteral("Default"), QStringLiteral("Basic"),
+                          QStringLiteral("Outdoor"), QStringLiteral("Paint"),
+                          QStringLiteral("Rim"), QStringLiteral("Studio")}
+            : workbenchMatcapPresets();
+        for (const QString &preset : presets) {
+            const QString label = preset == QStringLiteral("Default")
+                                      ? preset
+                                      : QString(preset).replace(QLatin1Char('_'),
+                                                                QLatin1Char(' '));
+            QAction *action = menu->addAction(
+                QIcon(lightingPreviewPixmap(32,
+                                            studio ? ViewportLightingMode::Studio
+                                                   : ViewportLightingMode::MatCap,
+                                            studio ? preset : viewportShadingSettings_.studioLightPreset,
+                                            studio ? viewportShadingSettings_.matcapPreset
+                                                   : preset,
+                                            false)),
+                label);
+            action->setData(preset);
+            const QString activePreset = studio
+                ? (viewportShadingSettings_.hasCustomStudioLighting
+                       ? QStringLiteral("Custom")
+                       : viewportShadingSettings_.studioLightPreset)
+                : viewportShadingSettings_.matcapPreset;
+            action->setCheckable(true);
+            action->setChecked(preset.compare(activePreset,
+                                               Qt::CaseInsensitive) == 0);
+            connect(action, &QAction::triggered, this, [this, action, studio] {
+                const QString selected = action->data().toString();
+                if (studio) {
+                    viewportShadingSettings_.studioLightPreset = selected;
+                    viewportShadingSettings_.hasCustomStudioLighting = false;
+                } else {
+                    viewportShadingSettings_.matcapPreset = selected;
+                }
+                refreshShadingPopover();
+                update();
+            });
+        }
+        if (studio && viewportShadingSettings_.hasCustomStudioLighting) {
+            menu->addSeparator();
+            QAction *customAction = menu->addAction(QStringLiteral("Custom"));
+            customAction->setCheckable(true);
+            customAction->setChecked(true);
+            connect(customAction, &QAction::triggered, this, [this] {
+                viewportShadingSettings_.studioLightPreset =
+                    QStringLiteral("Custom");
+                viewportShadingSettings_.hasCustomStudioLighting = true;
+                refreshShadingPopover();
+                update();
+            });
+        }
+        const QPoint menuPosition = studioLightPreviewButton_->mapToGlobal(
+            QPoint(0, studioLightPreviewButton_->height()));
+        menu->popup(menuPosition);
+    }
+
+    static QColor studioLightColor(const QVector3D &linearColor)
+    {
+        const QVector3D srgb = workbenchSceneLinearToSrgb(linearColor);
+        return QColor::fromRgbF(std::clamp(srgb.x(), 0.0f, 1.0f),
+                                std::clamp(srgb.y(), 0.0f, 1.0f),
+                                std::clamp(srgb.z(), 0.0f, 1.0f));
+    }
+
+    void editStudioLightSettings()
+    {
+        WorkbenchStudioLighting lighting =
+            viewportShadingSettings_.hasCustomStudioLighting
+                ? viewportShadingSettings_.customStudioLighting
+                : workbenchStudioLightingPreset(
+                      viewportShadingSettings_.studioLightPreset);
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Studio Light Settings"));
+        dialog.setMinimumSize(370, 500);
+        auto *dialogLayout = new QVBoxLayout(&dialog);
+        auto *scrollArea = new QScrollArea(&dialog);
+        scrollArea->setWidgetResizable(true);
+        auto *content = new QWidget(scrollArea);
+        auto *contentLayout = new QVBoxLayout(content);
+        contentLayout->setContentsMargins(5, 5, 5, 5);
+
+        auto *globalForm = new QFormLayout;
+        auto *ambientButton = new QPushButton(QStringLiteral("Ambient"), content);
+        ambientButton->setStyleSheet(
+            QStringLiteral("background-color: %1").arg(
+                studioLightColor(lighting.ambientColor).name()));
+        connect(ambientButton, &QPushButton::clicked, &dialog,
+                [&lighting, ambientButton] {
+                    const QColor selected = QColorDialog::getColor(
+                        studioLightColor(lighting.ambientColor), ambientButton,
+                        QStringLiteral("Ambient Color"));
+                    if (selected.isValid()) {
+                        lighting.ambientColor = workbenchSrgbToSceneLinear(
+                            QVector3D(selected.redF(), selected.greenF(),
+                                      selected.blueF()));
+                        ambientButton->setStyleSheet(
+                            QStringLiteral("background-color: %1")
+                                .arg(selected.name()));
+                    }
+                });
+        globalForm->addRow(QStringLiteral("Ambient light"), ambientButton);
+        auto *specularCheck = new QCheckBox(QStringLiteral("Specular highlights"),
+                                            content);
+        specularCheck->setChecked(lighting.useSpecular);
+        globalForm->addRow(specularCheck);
+        contentLayout->addLayout(globalForm);
+
+        const auto makeColorButton = [&dialog](const QString &label,
+                                                QVector3D *color,
+                                                QWidget *parent) {
+            auto *button = new QPushButton(label, parent);
+            button->setStyleSheet(QStringLiteral("background-color: %1")
+                                      .arg(studioLightColor(*color).name()));
+            QObject::connect(button, &QPushButton::clicked, &dialog,
+                             [color, button, label] {
+                const QColor selected = QColorDialog::getColor(
+                    studioLightColor(*color), button, label);
+                if (selected.isValid()) {
+                    *color = workbenchSrgbToSceneLinear(
+                        QVector3D(selected.redF(), selected.greenF(),
+                                  selected.blueF()));
+                    button->setStyleSheet(QStringLiteral("background-color: %1")
+                                              .arg(selected.name()));
+                }
+            });
+            return button;
+        };
+
+        for (int index = 0; index < 4; ++index) {
+            WorkbenchStudioLight &light = lighting.lights[static_cast<size_t>(index)];
+            auto *group = new QGroupBox(QStringLiteral("Light %1").arg(index + 1),
+                                        content);
+            group->setCheckable(true);
+            group->setChecked(light.enabled);
+            QObject::connect(group, &QGroupBox::toggled, &dialog,
+                             [&light](bool enabled) { light.enabled = enabled; });
+            auto *form = new QFormLayout(group);
+            form->addRow(QStringLiteral("Diffuse"),
+                         makeColorButton(QStringLiteral("Choose color"),
+                                         &light.diffuseColor, group));
+            form->addRow(QStringLiteral("Specular"),
+                         makeColorButton(QStringLiteral("Choose color"),
+                                         &light.specularColor, group));
+
+            auto *directionRow = new QWidget(group);
+            auto *directionLayout = new QHBoxLayout(directionRow);
+            directionLayout->setContentsMargins(0, 0, 0, 0);
+            directionLayout->setSpacing(3);
+            const QStringList axisNames{QStringLiteral("X"), QStringLiteral("Y"),
+                                        QStringLiteral("Z")};
+            for (int axis = 0; axis < 3; ++axis) {
+                auto *axisLabel = new QLabel(axisNames[axis], directionRow);
+                auto *spin = new QDoubleSpinBox(directionRow);
+                spin->setRange(-1.0, 1.0);
+                spin->setSingleStep(0.05);
+                spin->setDecimals(3);
+                spin->setValue(axis == 0 ? light.direction.x()
+                                         : axis == 1 ? light.direction.y()
+                                                     : light.direction.z());
+                directionLayout->addWidget(axisLabel);
+                directionLayout->addWidget(spin, 1);
+                QObject::connect(spin,
+                                 qOverload<double>(&QDoubleSpinBox::valueChanged),
+                                 &dialog, [&light, axis](double value) {
+                    QVector3D direction = light.direction;
+                    if (axis == 0) {
+                        direction.setX(static_cast<float>(value));
+                    } else if (axis == 1) {
+                        direction.setY(static_cast<float>(value));
+                    } else {
+                        direction.setZ(static_cast<float>(value));
+                    }
+                    light.direction = direction;
+                });
+            }
+            form->addRow(QStringLiteral("Direction"), directionRow);
+            auto *wrapSpin = new QDoubleSpinBox(group);
+            wrapSpin->setRange(0.0, 1.0);
+            wrapSpin->setSingleStep(0.05);
+            wrapSpin->setDecimals(3);
+            wrapSpin->setValue(light.wrap);
+            QObject::connect(wrapSpin,
+                             qOverload<double>(&QDoubleSpinBox::valueChanged),
+                             &dialog, [&light](double value) {
+                light.wrap = static_cast<float>(value);
+            });
+            form->addRow(QStringLiteral("Wrap"), wrapSpin);
+            contentLayout->addWidget(group);
+        }
+        contentLayout->addStretch(1);
+        scrollArea->setWidget(content);
+        dialogLayout->addWidget(scrollArea, 1);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok |
+                                                 QDialogButtonBox::Cancel,
+                                             &dialog);
+        connect(buttons, &QDialogButtonBox::accepted,
+                &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected,
+                &dialog, &QDialog::reject);
+        dialogLayout->addWidget(buttons);
+        if (dialog.exec() == QDialog::Accepted) {
+            lighting.useSpecular = specularCheck->isChecked();
+            viewportShadingSettings_.customStudioLighting = lighting;
+            viewportShadingSettings_.hasCustomStudioLighting = true;
+            viewportShadingSettings_.studioLightPreset = QStringLiteral("Custom");
+            refreshShadingPopover();
+            update();
+        }
+    }
+
     void drawViewportShadingControls(QPainter &painter)
     {
         static const QPixmap xrayIcon(QStringLiteral(":/blender-shading/xray.png"));
@@ -2268,6 +2858,19 @@ protected:
             painter.drawPixmap(iconRect, *icons[index],
                                QRectF(icons[index]->rect()));
         }
+        const QRectF settingsButton = viewportShadingSettingsButtonRect(size());
+        const bool settingsHovered = shadingControlHover_ == 3;
+        painter.setPen(QPen(settingsHovered ? QColor(76, 142, 197, 255)
+                                            : QColor(42, 43, 45, 255),
+                            1.0));
+        painter.setBrush(shadingPopover_ != nullptr && shadingPopover_->isVisible()
+                             ? QColor(58, 126, 184, 255)
+                             : settingsHovered ? QColor(83, 85, 88, 255)
+                                               : QColor(60, 61, 63, 255));
+        painter.drawRoundedRect(settingsButton, 2.0, 2.0);
+        painter.setPen(QColor(220, 220, 220));
+        painter.drawText(settingsButton, Qt::AlignCenter,
+                         QString::fromUtf8("⌄"));
         painter.restore();
     }
 
@@ -2277,6 +2880,9 @@ protected:
             if (viewportShadingButtonRect(size(), index).contains(position)) {
                 return index;
             }
+        }
+        if (viewportShadingSettingsButtonRect(size()).contains(position)) {
+            return 3;
         }
         return -1;
     }
@@ -2289,6 +2895,10 @@ protected:
             viewportShadingSettings_.mode = ViewportShadingMode::Wireframe;
         } else if (index == 2) {
             viewportShadingSettings_.mode = ViewportShadingMode::Solid;
+        } else if (index == 3) {
+            showShadingPopover();
+            update();
+            return;
         } else {
             return;
         }
@@ -3884,7 +4494,8 @@ protected:
                 const QStringList tips{
                     QStringLiteral("X-Ray (Alt+Z)"),
                     QStringLiteral("Wireframe"),
-                    QStringLiteral("Solid")};
+                    QStringLiteral("Solid"),
+                    QStringLiteral("Viewport Shading Settings")};
                 setToolTip(tips[shadingControl]);
                 update();
             }
@@ -10548,6 +11159,14 @@ private:
     SnapEngine snapEngine_;
     ViewportRenderer viewportRenderer_;
     ViewportShadingSettings viewportShadingSettings_;
+    QFrame *shadingPopover_ = nullptr;
+    QButtonGroup *lightingModeGroup_ = nullptr;
+    std::array<QToolButton *, 3> lightingModeButtons_{};
+    QToolButton *studioLightPreviewButton_ = nullptr;
+    QToolButton *studioLightSettingsButton_ = nullptr;
+    QToolButton *worldSpaceLightingButton_ = nullptr;
+    QSlider *studioLightRotationSlider_ = nullptr;
+    QLabel *studioLightRotationLabel_ = nullptr;
     int shadingControlHover_ = -1;
     int shadingControlPressed_ = -1;
     BlenderGridRenderer blenderGridRenderer_;

@@ -1554,9 +1554,31 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                 QVector3D::dotProduct(incidentWorld, worldUp),
                                 QVector3D::dotProduct(incidentWorld, worldFacing)};
             }
-            const QVector3D shaded = workbenchSceneLinearToSrgb(
-                workbenchStudioShade(baseColorVector, normalView,
-                                     incidentView));
+            QVector3D shadedLinear = baseColorVector;
+            if (shadingSettings_.lightingMode ==
+                ViewportLightingMode::Studio) {
+                const WorkbenchStudioLighting &lighting =
+                    shadingSettings_.hasCustomStudioLighting
+                        ? shadingSettings_.customStudioLighting
+                        : workbenchStudioLightingPreset(
+                              shadingSettings_.studioLightPreset);
+                const WorkbenchStudioLighting viewLighting =
+                    workbenchStudioLightingForView(
+                        lighting,
+                        shadingSettings_.studioLightRotationDegrees,
+                        shadingSettings_.worldSpaceLighting,
+                        worldRight, worldUp, worldFacing);
+                shadedLinear = workbenchStudioShade(
+                    baseColorVector, normalView, incidentView, 161.0f / 255.0f,
+                    0.0f, viewLighting);
+            } else if (shadingSettings_.lightingMode ==
+                       ViewportLightingMode::MatCap) {
+                shadedLinear = workbenchMatcapShade(
+                    shadingSettings_.matcapPreset, baseColorVector,
+                    normalView, incidentView);
+            }
+            const QVector3D shaded =
+                workbenchSceneLinearToSrgb(shadedLinear);
             QColor color = baseColor;
             color.setRedF(std::clamp<qreal>(shaded.x(), 0.0, 1.0));
             color.setGreenF(std::clamp<qreal>(shaded.y(), 0.0, 1.0));

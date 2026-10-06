@@ -35,6 +35,15 @@ misread or implemented incorrectly.
   hovered object's stored workplane misses face alignment on solids. Their
   later stage behaviors still differ, so only share this initial face-plane
   behavior across modes.
+- The 1-point, 2-point (diameter), and 3-point circle tools use the same
+  visible-face normal for their initial drawing plane, then capture it at the
+  first point. Tangent-circle tools derive their plane from selected curves;
+  do not replace that source plane with the face under the cursor.
+- The shared `SurfaceDrawTool.update_initial_plane` behavior is also used by
+  the polygon, rectangle, ellipse, line construction, curve interpolate and
+  freehand, and Point by Arcs tools. Apply visible-face orientation only while
+  those tools are waiting for their first point. Preserve the selected-curve
+  frames and other explicit plane locks for the specialized line tools.
 - **`P` means a perpendicular drawing plane.** It must derive a 3D plane whose
   normal is perpendicular to the captured reference plane, then use that same
   frame for cursor projection, preview, and committed NURBS geometry. Rotating

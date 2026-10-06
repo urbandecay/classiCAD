@@ -761,6 +761,10 @@ public:
             rect().contains(lastMousePosition_)) {
             updateDrawingWorkPlaneFromHover(lastMousePosition_);
         }
+        if (usesHoveredFaceDrawingPlane(tool) &&
+            rect().contains(lastMousePosition_)) {
+            updateDrawingWorkPlaneFromHover(lastMousePosition_);
+        }
 
         if (tool == Tool::Select) {
             setCursor(Qt::ArrowCursor);
@@ -11133,6 +11137,60 @@ private:
         }
     }
 
+    static bool usesHoveredFaceDrawingPlane(ToolId tool)
+    {
+        if (isRectangleTool(tool) || isPolygonTool(tool) ||
+            isCircleConstructionTool(tool) || isEllipseTool(tool)) {
+            return true;
+        }
+        switch (tool) {
+        case Tool::Line:
+        case Tool::PerpendicularFromCurve:
+        case Tool::PerpendicularFromEdge:
+        case Tool::TangentFromCurve:
+        case Tool::TangentToTwoCurves:
+        case Tool::PerpendicularToTwoCurves:
+        case Tool::CurveInterpolate:
+        case Tool::CurveFreehand:
+        case Tool::PointByLine:
+        case Tool::PointByArcs:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool setWorkPlaneFromVisibleSurface(const QPointF &screenPosition)
+    {
+        Point3D facePoint;
+        Point3D faceNormal;
+        if (!curveHitTester_.hitTestVisibleSurface(
+                document_, screenPosition, viewportTransform_, size(),
+                &facePoint, &faceNormal)) {
+            return false;
+        }
+
+        const Point3D reference = std::abs(faceNormal.x) < 0.99
+                                      ? Point3D{1.0, 0.0, 0.0}
+                                      : Point3D{0.0, 1.0, 0.0};
+        const auto cross = [](const Point3D &first, const Point3D &second) {
+            return Point3D{
+                first.y * second.z - first.z * second.y,
+                first.z * second.x - first.x * second.z,
+                first.x * second.y - first.y * second.x};
+        };
+        const Point3D yAxis = cross(faceNormal, reference);
+        const Point3D xAxis = cross(yAxis, faceNormal);
+        const WorkPlaneFrame faceFrame = makeWorkPlaneFrameFromNormal(
+            facePoint, faceNormal, xAxis);
+        if (!isValidWorkPlaneFrame(faceFrame)) {
+            return false;
+        }
+
+        viewportTransform_.setWorkPlaneFrame(faceFrame);
+        return true;
+    }
+
     void updateDrawingWorkPlaneFromHover(const QPointF &screenPosition)
     {
         if (objectSelectionDragActive() || controlPointSelectionDragActive() ||
@@ -11202,6 +11260,11 @@ private:
         if (activeTool_ != Tool::Line && toolDrawingPlaneLocked_ &&
             isValidWorkPlaneFrame(toolDrawingFrame_)) {
             viewportTransform_.setWorkPlaneFrame(toolDrawingFrame_);
+            return;
+        }
+        if (usesHoveredFaceDrawingPlane(activeTool_) &&
+            pendingPoints_.isEmpty() &&
+            setWorkPlaneFromVisibleSurface(screenPosition)) {
             return;
         }
         if (activeTool_ == Tool::Arc &&

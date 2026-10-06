@@ -18,6 +18,12 @@ misread or implemented incorrectly.
 
 ## Geometry and input issues
 
+- A single Line drawing session must commit one connected object. If its
+  clicked world points occupy different planes, retain the planar NURBS runs
+  as components of one PolyCurve with their own frames. Committing each run
+  as a separate scene object lets selecting and dragging one edge tear the
+  path apart. Detect arbitrary planes through the clicked points too; checking
+  only the drawing plane and principal planes splits rotated planar loops.
 - **`P` means a perpendicular drawing plane.** It must derive a 3D plane whose
   normal is perpendicular to the captured reference plane, then use that same
   frame for cursor projection, preview, and committed NURBS geometry. Rotating

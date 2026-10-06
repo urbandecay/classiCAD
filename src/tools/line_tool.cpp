@@ -53,8 +53,8 @@ QString lengthUnitSuffix(DocumentLengthUnit unit)
     }
     return QStringLiteral("mm");
 }
-// Preserve the longest planar runs. Changing planes creates component curves
-// rather than storing nonplanar points in a NurbsCurve2D.
+// Preserve the longest planar runs as local component curves. The completed
+// drawing remains one object even when its components need different frames.
 QVector<Shape> planarRuns(const QVector<Point3D> &points,
                          const WorkPlaneFrame &preferredFrame)
 {
@@ -79,12 +79,27 @@ QVector<Shape> planarRuns(const QVector<Point3D> &points,
                              helper.y - direction.y * along,
                              helper.z - direction.z * along};
         }
-        const WorkPlaneFrame candidates[] = {
+        QVector<WorkPlaneFrame> candidates = {
             inherited,
             makeWorkPlaneFrame(WorkPlane::XY, points[first].z),
             makeWorkPlaneFrame(WorkPlane::XZ, points[first].y),
             makeWorkPlaneFrame(WorkPlane::YZ, points[first].x),
             makeWorkPlaneFrameFromNormal(points[first], segmentNormal, direction)};
+        // A snapped loop can occupy an arbitrary plane unrelated to the
+        // drawing frame or principal planes. Its first noncollinear point
+        // defines that plane; do not split a planar loop into loose edges.
+        for (int index = first + 2; index < points.size(); ++index) {
+            const Point3D bridge = subtract(points[index], points[first]);
+            const Point3D normal{
+                direction.y * bridge.z - direction.z * bridge.y,
+                direction.z * bridge.x - direction.x * bridge.z,
+                direction.x * bridge.y - direction.y * bridge.x};
+            if (length(normal) > 1.0e-8 * std::max<qreal>(1.0, length(bridge))) {
+                candidates.append(makeWorkPlaneFrameFromNormal(
+                    points[first], normal, direction));
+                break;
+            }
+        }
         int last = first;
         WorkPlaneFrame frame;
         for (const WorkPlaneFrame &candidate : candidates) {
@@ -350,7 +365,24 @@ void LineTool::cancel(ToolContext &context)
 void LineTool::commit(ToolContext &context)
 {
     const QVector<Shape> shapes = planarRuns(points_, drawingFrame_);
-    if (!shapes.isEmpty() && context.commitShapes(id(), shapes)) {
+    Shape connected;
+    if (!shapes.isEmpty()) {
+        connected = shapes.first();
+        if (shapes.size() > 1) {
+            connected.geometryType = GeometryType::PolyCurve;
+            connected.nurbs = {};
+            connected.points.clear();
+            for (const Point3D &point : points_) {
+                connected.points.append(worldPointToWorkPlaneFrame(
+                    point, connected.workPlaneFrame));
+            }
+            for (const Shape &component : shapes) {
+                connected.components.append(component.nurbs);
+                connected.componentWorkPlaneFrames.append(component.workPlaneFrame);
+            }
+        }
+    }
+    if (!shapes.isEmpty() && context.commitShape(id(), connected)) {
         status_.state = ToolLifecycleState::Completed;
         status_.text = QStringLiteral("Line committed");
     } else {

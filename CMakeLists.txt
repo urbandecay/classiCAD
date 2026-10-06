@@ -396,6 +396,9 @@ if (CLASSICAD_BUILD_TESTS)
     )
     add_test(NAME core_contracts COMMAND classicad_core_contracts_test)
     set_tests_properties(core_contracts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_test(NAME connected_line_loops
+        COMMAND classicad_core_contracts_test --connected-line-loops)
+    set_tests_properties(connected_line_loops PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     add_executable(classicad_solid_extrusion_contracts_test tests/solid_extrusion_contracts.cpp)
     classicad_configure_ui_target(classicad_solid_extrusion_contracts_test)

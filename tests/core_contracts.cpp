@@ -59,11 +59,130 @@ bool check(bool condition, const char *message)
     return condition;
 }
 
+bool connectedLineContracts()
+{
+    bool passed = true;
+    Document lineDocument;
+    SelectionModel lineSelection;
+    History lineHistory(lineDocument);
+    ViewportTransform lineTransform;
+    lineTransform.setViewPreset(ViewportViewPreset::Perspective);
+    CurveSampler lineSampler;
+    CurveHitTester lineHitTester;
+    SnapEngine lineSnaps;
+    ToolContext lineContext(lineDocument, lineSelection, lineHistory,
+                            lineTransform, lineSampler, lineHitTester, lineSnaps);
+    LineTool spatialLine;
+    const QSize viewportSize(640, 480);
+    const auto inputAt = [&](const Point3D &point, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        ToolInput input;
+        input.viewportSize = viewportSize;
+        input.workPlaneFrame = lineTransform.workPlaneFrame();
+        input.button = Qt::LeftButton;
+        input.modifiers = modifiers;
+        lineTransform.worldPointToScreen(point, viewportSize, &input.screenPosition);
+        lineTransform.screenToWorkPlane(input.screenPosition, viewportSize,
+                                        input.workPlaneFrame, &input.worldPosition);
+        input.rawWorldPosition = input.worldPosition;
+        return input;
+    };
+    lineContext.setShapeCommitter([&](ToolId, const Shape &shape) {
+        DocumentTransaction transaction = lineContext.beginTransaction();
+        return transaction.addShape(shape).isValid() &&
+               lineContext.commitTransaction(transaction);
+    });
+    const auto drawSnappedLoop = [&](const QVector<Point3D> &vertices) {
+        spatialLine.begin(lineContext);
+        for (const Point3D &vertex : vertices) {
+            ToolInput input = inputAt(vertex);
+            input.snapResult.type = SnapType::Endpoint;
+            input.snapResult.worldPoint = vertex;
+            input.snapResult.hasWorldPoint = true;
+            input.snapType = SnapType::Endpoint;
+            spatialLine.handleMousePress(input, lineContext);
+        }
+        ToolInput finish;
+        finish.button = Qt::RightButton;
+        spatialLine.handleMousePress(finish, lineContext);
+    };
+    const auto sameWorldPoint = [](const Point3D &a, const Point3D &b) {
+        return std::hypot(a.x - b.x, std::hypot(a.y - b.y, a.z - b.z)) < 1.0e-8;
+    };
+    const QVector<Point3D> tiltedLoop{{20.0, 30.0, 40.0},
+                                      {30.0, 40.0, 40.0},
+                                      {25.0, 45.0, 50.0},
+                                      {15.0, 35.0, 50.0},
+                                      {20.0, 30.0, 40.0}};
+    drawSnappedLoop(tiltedLoop);
+    bool tiltedLoopPreserved = lineDocument.size() == 1;
+    if (tiltedLoopPreserved) {
+        const Shape &shape = lineDocument[0];
+        tiltedLoopPreserved = shape.geometryType == GeometryType::Line &&
+                              validateNurbsCurve(shape.nurbs) &&
+                              shape.nurbs.controlPoints.size() == tiltedLoop.size();
+        for (int index = 0; tiltedLoopPreserved && index < tiltedLoop.size(); ++index) {
+            tiltedLoopPreserved &= sameWorldPoint(
+                shapePointToWorld(shape, shape.nurbs.controlPoints[index]),
+                tiltedLoop[index]);
+        }
+    }
+    passed &= check(tiltedLoopPreserved,
+                    "A snapped loop on an arbitrary plane must commit one closed NURBS object with unchanged world vertices");
+
+    const QVector<Point3D> spatialLoop{{0.0, 0.0, 0.0},
+                                       {10.0, 0.0, 0.0},
+                                       {10.0, 10.0, 10.0},
+                                       {0.0, 10.0, 0.0},
+                                       {0.0, 0.0, 0.0}};
+    drawSnappedLoop(spatialLoop);
+    bool connectedLoopPreserved = lineDocument.size() == 2;
+    if (connectedLoopPreserved) {
+        Shape moved;
+        connectedLoopPreserved = shapeFromJson(shapeToJson(lineDocument[1]), &moved) &&
+            moved.geometryType == GeometryType::PolyCurve &&
+            moved.components.size() > 1 &&
+            moved.componentWorkPlaneFrames.size() == moved.components.size() &&
+            translateShapeGeometry(&moved, QPointF(3.0, 4.0),
+                                   makeWorkPlaneFrame(WorkPlane::XY));
+        int vertexIndex = 0;
+        Point3D previousEnd;
+        for (int componentIndex = 0;
+             connectedLoopPreserved && componentIndex < moved.components.size();
+             ++componentIndex) {
+            const auto &curve = moved.components[componentIndex];
+            const WorkPlaneFrame frame = moved.componentWorkPlaneFrames[componentIndex];
+            connectedLoopPreserved &= validateNurbsCurve(curve);
+            for (int cv = 0; connectedLoopPreserved && cv < curve.controlPoints.size(); ++cv) {
+                const Point3D world = workPlaneFramePointToWorld(curve.controlPoints[cv], frame);
+                if (componentIndex > 0 && cv == 0) {
+                    connectedLoopPreserved &= sameWorldPoint(world, previousEnd);
+                    continue;
+                }
+                if (vertexIndex >= spatialLoop.size()) {
+                    connectedLoopPreserved = false;
+                    break;
+                }
+                const Point3D expected = spatialLoop[vertexIndex++];
+                connectedLoopPreserved &= sameWorldPoint(
+                    world, {expected.x + 3.0, expected.y + 4.0, expected.z});
+                previousEnd = world;
+            }
+        }
+        connectedLoopPreserved &= vertexIndex == spatialLoop.size();
+    }
+    passed &= check(connectedLoopPreserved,
+                    "A snapped loop spanning planes must commit one PolyCurve whose connected world vertices all move together");
+    return passed;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--connected-line-loops"))) {
+        return connectedLineContracts() ? 0 : 1;
+    }
     bool passed = true;
     passed &= check(!std::is_same_v<ToolId, GeometryType>,
                     "tool and geometry vocabularies must be distinct types");
@@ -3911,6 +4030,9 @@ int main(int argc, char **argv)
         passed &= check(std::abs(lockedPoint.x - 16.0) < 1.0e-8 &&
                             std::abs(lockedPoint.y - 6.0) < 1.0e-8,
                         "Line Shift must retain a free world direction while the cursor changes distance");
+
+
     }
+    passed &= connectedLineContracts();
     return passed ? 0 : 1;
 }

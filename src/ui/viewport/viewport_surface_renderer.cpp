@@ -870,7 +870,8 @@ bool ViewportSurfaceRenderer::draw(
     qreal devicePixelRatio,
     const ViewportShadingSettings &settings,
     bool previewOverlay,
-    bool clearDepth)
+    bool clearDepth,
+    bool selectionOverlay)
 {
     if (QOpenGLContext::currentContext() == nullptr || viewportSize.isEmpty() ||
         !initialize()) {
@@ -919,7 +920,16 @@ bool ViewportSurfaceRenderer::draw(
     } else {
         glDisable(GL_CULL_FACE);
     }
-    if (settings.mode == ViewportShadingMode::Wireframe &&
+    if (selectionOverlay) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    } else if (settings.mode == ViewportShadingMode::Wireframe &&
         !settings.xrayEnabled()) {
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
@@ -1195,7 +1205,8 @@ bool ViewportSurfaceRenderer::draw(
     }
 
     if (settings.mode == ViewportShadingMode::Solid &&
-        settings.outline && !previewOverlay && !settings.xrayEnabled() &&
+        settings.outline && !previewOverlay && !selectionOverlay &&
+        !settings.xrayEnabled() &&
         !vertices_.isEmpty()) {
         const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
         const QSize pixelSize(qRound(viewportSize.width() * dpr),

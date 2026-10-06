@@ -3715,6 +3715,7 @@ protected:
     void clearComponentSelections()
     {
         for (QSet<int> &selection : componentSelections_) selection.clear();
+        activeComponentIndex_ = -1;
     }
 
     int viewportShadingControlAt(const QPointF &position) const
@@ -3850,6 +3851,7 @@ protected:
                                      ? rasterScenePainter
                                      : painter;
         QVector<ViewportSceneStroke> gpuStrokes;
+        QVector<ViewportRenderObject> gpuVertexSelectedFaces;
         QVector<TransientPreviewStroke> gpuPreviewGeometry;
         QVector<TransientPreviewPicture> gpuPreviewPictures;
         gpuPreviewGeometry.reserve(duplicateTool_.previewShapes().size() +
@@ -3883,6 +3885,44 @@ protected:
                     !viewportShadingSettings_.xrayEnabled()) {
                     auto cage = QSharedPointer<ViewportDepthGeometry>::create(
                         selectedSurfaceCage(visibleShape));
+                    if (selected && componentSelectionObject_ == objectId &&
+                        componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                        !activeComponentSelection().isEmpty()) {
+                        const QVector<NurbsSurface3D> faces =
+                            shapeSurfaceFaces(visibleShape);
+                        for (const NurbsSurface3D &face : faces) {
+                            Shape faceShape;
+                            faceShape.geometryType = GeometryType::NurbsSurface;
+                            faceShape.nurbsSurface = face;
+                            const ViewportDepthGeometry faceCage =
+                                selectedSurfaceCage(faceShape);
+                            bool fullySelected = !faceCage.pointVertices.isEmpty();
+                            for (const QVector3D &point : faceCage.pointVertices) {
+                                int vertex = -1;
+                                for (int index = 0; index < cage->pointVertices.size(); ++index) {
+                                    if ((cage->pointVertices[index] - point).lengthSquared() <=
+                                        1.0e-12f) {
+                                        vertex = index;
+                                        break;
+                                    }
+                                }
+                                if (vertex < 0 ||
+                                    !activeComponentSelection().contains(vertex)) {
+                                    fullySelected = false;
+                                    break;
+                                }
+                            }
+                            if (fullySelected) {
+                                ViewportRenderObject selectedFace;
+                                selectedFace.shape = std::move(faceShape);
+                                selectedFace.objectId = objectId;
+                                selectedFace.placementTranslation =
+                                    renderObject.placementTranslation;
+                                selectedFace.selected = true;
+                                gpuVertexSelectedFaces.append(std::move(selectedFace));
+                            }
+                        }
+                    }
                     ViewportSceneStroke edgeCage;
                     edgeCage.shape = &visibleShape;
                     const bool hasComponentSelection =
@@ -3917,13 +3957,64 @@ protected:
 
                     if (selected && componentSelectionObject_ == objectId &&
                         !activeComponentSelection().isEmpty()) {
-                        ViewportDepthGeometry componentGeometry;
+                        const auto appendComponentStroke = [&](ViewportDepthGeometry geometry,
+                                                               const QColor &color,
+                                                               float width,
+                                                               float pointDiameter) {
+                            if (geometry.pointVertices.isEmpty() &&
+                                geometry.lineVertices.isEmpty()) return;
+                            ViewportSceneStroke stroke;
+                            stroke.shape = &visibleShape;
+                            stroke.color = color;
+                            stroke.width = width;
+                            stroke.pointDiameter = pointDiameter;
+                            stroke.editModeWire = true;
+                            stroke.objectId = objectId;
+                            stroke.geometryRevision = renderObject.geometryRevision;
+                            stroke.cacheableGeometry = renderObject.cacheable;
+                            stroke.worldOffset = renderObject.placementTranslation;
+                            stroke.preparedDepthGeometry =
+                                QSharedPointer<ViewportDepthGeometry>::create(
+                                    std::move(geometry));
+                            gpuStrokes.append(std::move(stroke));
+                        };
                         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
-                            for (int component : activeComponentSelection()) {
-                                if (component >= 0 && component < cage->pointVertices.size())
-                                    componentGeometry.pointVertices.append(cage->pointVertices[component]);
+                            ViewportDepthGeometry incidentEdges;
+                            const auto samePoint = [](const QVector3D &a,
+                                                      const QVector3D &b) {
+                                return (a - b).lengthSquared() <= 1.0e-12f;
+                            };
+                            for (int edge = 0; edge + 1 < cage->lineVertices.size(); edge += 2) {
+                                int a = -1, b = -1;
+                                for (int vertex = 0; vertex < cage->pointVertices.size(); ++vertex) {
+                                    if (samePoint(cage->pointVertices[vertex], cage->lineVertices[edge])) a = vertex;
+                                    if (samePoint(cage->pointVertices[vertex], cage->lineVertices[edge + 1])) b = vertex;
+                                }
+                                if (activeComponentSelection().contains(a) ||
+                                    activeComponentSelection().contains(b)) {
+                                    incidentEdges.lineVertices.append(cage->lineVertices[edge]);
+                                    incidentEdges.lineVertices.append(cage->lineVertices[edge + 1]);
+                                }
                             }
+                            appendComponentStroke(std::move(incidentEdges),
+                                                  QColor(QStringLiteral("#ff8a00")),
+                                                  1.0f, 0.0f);
+                            ViewportDepthGeometry selectedPoints;
+                            ViewportDepthGeometry activePoint;
+                            for (int component : activeComponentSelection()) {
+                                if (component < 0 || component >= cage->pointVertices.size()) continue;
+                                if (component == activeComponentIndex_)
+                                    activePoint.pointVertices.append(cage->pointVertices[component]);
+                                else
+                                    selectedPoints.pointVertices.append(cage->pointVertices[component]);
+                            }
+                            appendComponentStroke(std::move(selectedPoints),
+                                                  QColor(QStringLiteral("#ff8a00")),
+                                                  1.0f, 4.0f);
+                            appendComponentStroke(std::move(activePoint), Qt::white,
+                                                  1.0f, 4.0f);
                         } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
+                            ViewportDepthGeometry componentGeometry;
                             for (int component : activeComponentSelection()) {
                                 const int first = component * 2;
                                 if (first + 1 >= cage->lineVertices.size()) continue;
@@ -3932,7 +4023,11 @@ protected:
                                 componentGeometry.preciseLineVertices.append(cage->preciseLineVertices[first]);
                                 componentGeometry.preciseLineVertices.append(cage->preciseLineVertices[first + 1]);
                             }
+                            appendComponentStroke(std::move(componentGeometry),
+                                                  QColor(QStringLiteral("#ff8a00")),
+                                                  2.0f, 0.0f);
                         } else {
+                            ViewportDepthGeometry componentGeometry;
                             const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(visibleShape);
                             for (int component : activeComponentSelection()) {
                                 if (component < 0 || component >= faces.size()) continue;
@@ -3943,23 +4038,9 @@ protected:
                                 componentGeometry.lineVertices += faceCage.lineVertices;
                                 componentGeometry.preciseLineVertices += faceCage.preciseLineVertices;
                             }
-                        }
-                        if (!componentGeometry.pointVertices.isEmpty() ||
-                            !componentGeometry.lineVertices.isEmpty()) {
-                            ViewportSceneStroke componentStroke;
-                            componentStroke.shape = &visibleShape;
-                            componentStroke.color = QColor(QStringLiteral("#ff8a00"));
-                            componentStroke.width = 2.0f;
-                            componentStroke.pointDiameter = 9.0f;
-                            componentStroke.editModeWire = true;
-                            componentStroke.objectId = objectId;
-                            componentStroke.geometryRevision = renderObject.geometryRevision;
-                            componentStroke.cacheableGeometry = renderObject.cacheable;
-                            componentStroke.worldOffset = renderObject.placementTranslation;
-                            componentStroke.preparedDepthGeometry =
-                                QSharedPointer<ViewportDepthGeometry>::create(
-                                    std::move(componentGeometry));
-                            gpuStrokes.append(std::move(componentStroke));
+                            appendComponentStroke(std::move(componentGeometry),
+                                                  QColor(QStringLiteral("#ff8a00")),
+                                                  2.0f, 0.0f);
                         }
                     }
                 }
@@ -4544,6 +4625,16 @@ protected:
                                       renderFrame.viewportSize,
                                       devicePixelRatioF(),
                                       viewportShadingSettings_);
+            if (surfaceRenderer != nullptr && !gpuVertexSelectedFaces.isEmpty()) {
+                surfaceRenderer->draw(gpuVertexSelectedFaces,
+                                      renderFrame.camera,
+                                      renderFrame.viewportSize,
+                                      devicePixelRatioF(),
+                                      viewportShadingSettings_,
+                                      false,
+                                      false,
+                                      true);
+            }
             const bool sceneDrawn = sceneRenderer == nullptr ||
                                     sceneRenderer->draw(gpuStrokes,
                                                         renderFrame.camera,
@@ -5352,14 +5443,22 @@ protected:
                     !event->modifiers().testFlag(Qt::ShiftModifier)) {
                     if (componentSelectionObject_ != componentObject)
                         clearComponentSelections();
-                    else
+                    else {
                         activeComponentSelection().clear();
+                        activeComponentIndex_ = -1;
+                    }
                 }
                 componentSelectionObject_ = componentObject;
                 if (activeComponentSelection().contains(componentIndex)) {
                     activeComponentSelection().remove(componentIndex);
+                    if (activeComponentIndex_ == componentIndex) {
+                        activeComponentIndex_ = activeComponentSelection().isEmpty()
+                                                    ? -1
+                                                    : *activeComponentSelection().cbegin();
+                    }
                 } else {
                     activeComponentSelection().insert(componentIndex);
+                    activeComponentIndex_ = componentIndex;
                 }
                 update();
                 event->accept();
@@ -12756,6 +12855,7 @@ private:
     ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
     QSet<int> componentSelections_[3];
     ObjectId componentSelectionObject_ = ObjectId::invalid();
+    int activeComponentIndex_ = -1;
     std::unique_ptr<ApplicationSession> ownedSession_;
     ApplicationSession &session_;
     Document &document_;

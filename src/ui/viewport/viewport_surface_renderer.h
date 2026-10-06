@@ -28,7 +28,8 @@ public:
               qreal devicePixelRatio,
               const ViewportShadingSettings &settings,
               bool previewOverlay = false,
-              bool clearDepth = true);
+              bool clearDepth = true,
+              bool selectionOverlay = false);
 
 private:
     struct SurfaceVertex {

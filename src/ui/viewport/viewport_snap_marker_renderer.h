@@ -18,8 +18,16 @@ public:
               SnapType type,
               const QPointF &worldPoint,
               const QSize &viewportSize) const;
+    void drawWorld(QPainter &painter,
+                   SnapType type,
+                   const Point3D &worldPoint,
+                   const QSize &viewportSize) const;
 
 private:
+    void drawAtScreen(QPainter &painter,
+                      SnapType type,
+                      const QPointF &screenPoint) const;
+
     const ViewportTransform &transform_;
     bool labelsVisible_ = true;
 };

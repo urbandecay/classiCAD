@@ -3474,20 +3474,18 @@ protected:
                     continue;
                 }
 
-                const QVector<QPointF> controlPoints =
-                    controlPointsForShape(renderObject->shape);
+                const QVector<Point3D> controlPoints =
+                    controlPointWorldPositions(*renderObject);
                 for (int pointIndex = 0; pointIndex < controlPoints.size();
                      ++pointIndex) {
-                    const Point3D world = shapePointToWorld(
-                        renderObject->shape, controlPoints[pointIndex]);
                     const bool active = controlPointSelectionDragActive() &&
                                         objectId == selectedShapeIndex_ &&
                                         pointIndex == controlPointIndex_;
                     ViewportControlPointHandle handle;
                     handle.worldPosition = QVector3D(
-                        static_cast<float>(world.x),
-                        static_cast<float>(world.y),
-                        static_cast<float>(world.z));
+                        static_cast<float>(controlPoints[pointIndex].x),
+                        static_cast<float>(controlPoints[pointIndex].y),
+                        static_cast<float>(controlPoints[pointIndex].z));
                     handle.fillColor = active ? activeHandle : handleFill;
                     handle.outlineColor = active ? activeHandle : handleOutline;
                     // The old QPainter square is 8 logical pixels with a
@@ -4358,8 +4356,7 @@ protected:
                         renderFrame.find(objectId);
                     if (renderObject != nullptr) {
                         drawControlPoints(painter,
-                                          renderObject->shape,
-                                          shapeIndex,
+                                          *renderObject,
                                           !gpuControlPointsDrawn);
                     }
                 }
@@ -4460,7 +4457,7 @@ protected:
                 drawShape(painter, activeToolPreview.shape, true);
             }
             if (currentSnap_.isValid()) {
-                drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+                drawSnapMarker(painter, currentSnap_);
             }
         } else if (isEraseLikeTool(activeTool_)) {
             drawErasePreview(painter);
@@ -4481,7 +4478,7 @@ protected:
              activeTool_ == Tool::PointExtrude ||
              activeTool_ == Tool::Picture) &&
             currentSnap_.isValid()) {
-            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+            drawSnapMarker(painter, currentSnap_);
         }
         if ((objectSelectionDragActive() || controlPointSelectionDragActive()) &&
             currentDragSnap_.isValid()) {
@@ -4634,15 +4631,40 @@ protected:
                     const SnapResult baseSnap = findGrabBasePointSnap(rawWorldPosition);
                     if (baseSnap.isValid()) {
                         const QPointF cursorOffset = rawWorldPosition - baseSnap.point;
-                        grabTool_.acceptBasePoint(baseSnap.point, cursorOffset);
+                        const Point3D basePointWorld = baseSnap.hasWorldPoint
+                            ? baseSnap.worldPoint
+                            : workPlaneFramePointToWorld(
+                                  baseSnap.point,
+                                  viewportTransform_.workPlaneFrame());
+                        QPointF basePointScreen = worldToScreen(baseSnap.point);
+                        viewportTransform_.worldPointToScreen(
+                            basePointWorld, size(), &basePointScreen);
+                        const QPointF cursorOffsetScreen =
+                            screenPosition - basePointScreen;
+                        QPointF basePointDragPlane = baseSnap.point;
+                        viewportTransform_.screenToWorkPlaneUnclipped(
+                            basePointScreen,
+                            size(),
+                            viewportTransform_.workPlaneFrame(),
+                            &basePointDragPlane);
+                        grabTool_.acceptBasePoint(baseSnap.point,
+                                                  cursorOffset,
+                                                  basePointWorld,
+                                                  basePointDragPlane,
+                                                  cursorOffsetScreen);
                         grabAxisStartScreen_ = screenPosition;
                         currentSnap_ = baseSnap;
                         setCursor(Qt::SizeAllCursor);
                         DebugLog::instance().write(
-                            QStringLiteral("grab base-point selected type=%1 point=%2 offset=%3")
+                            QStringLiteral("grab base-point selected type=%1 point=%2 world=%3 offset=%4 offsetPx=%5")
                                 .arg(snapTypeName(baseSnap.type))
                                 .arg(pointText(grabTool_.basePoint()))
-                                .arg(pointText(cursorOffset)));
+                                .arg(QStringLiteral("(%1,%2,%3)")
+                                         .arg(basePointWorld.x, 0, 'g', 12)
+                                         .arg(basePointWorld.y, 0, 'g', 12)
+                                         .arg(basePointWorld.z, 0, 'g', 12))
+                                .arg(pointText(cursorOffset))
+                                .arg(pointText(cursorOffsetScreen)));
                     } else {
                         DebugLog::instance().write(
                             QStringLiteral("grab base-point click ignored no snap candidate"));
@@ -8357,13 +8379,25 @@ private:
         constexpr qreal snapRadiusPixels = 12.0;
         qreal bestDistance = snapRadiusPixels;
         for (const SnapCandidate &candidate : candidates) {
-            const QPointF candidateScreen = worldToScreen(candidate.point);
+            const Point3D candidateWorld = candidate.hasWorldPoint
+                ? candidate.worldPoint
+                : workPlaneFramePointToWorld(
+                      candidate.point, viewportTransform_.workPlaneFrame());
+            QPointF candidateScreen;
+            if (!viewportTransform_.worldPointToScreen(candidateWorld,
+                                                        size(),
+                                                        &candidateScreen)) {
+                continue;
+            }
             const qreal distance = std::hypot(candidateScreen.x() - cursorScreen.x(),
                                               candidateScreen.y() - cursorScreen.y());
             if (distance <= bestDistance) {
                 bestDistance = distance;
                 best.type = candidate.type;
-                best.point = candidate.point;
+                best.point = worldPointToWorkPlaneFrame(
+                    candidateWorld, viewportTransform_.workPlaneFrame());
+                best.worldPoint = candidateWorld;
+                best.hasWorldPoint = true;
             }
         }
         return best;
@@ -8751,6 +8785,40 @@ private:
     QVector<QPointF> controlPointsForShape(const Shape &shape) const
     {
         return curveHitTester_.controlPointsForShape(shape);
+    }
+
+    QVector<Point3D> controlPointWorldPositions(
+        const ViewportRenderObject &renderObject) const
+    {
+        const Shape &shape = renderObject.shape;
+        QVector<Point3D> positions;
+        if (shape.geometryType == GeometryType::PolyCurve) {
+            for (int componentIndex = 0;
+                 componentIndex < shape.components.size();
+                 ++componentIndex) {
+                const Shape::NurbsCurve2D &component =
+                    shape.components[componentIndex];
+                for (const QPointF &controlPoint : component.controlPoints) {
+                    positions.append(shapeComponentPointToWorld(
+                        shape, componentIndex, controlPoint));
+                }
+            }
+        } else {
+            const QVector<QPointF> controlPoints =
+                controlPointsForShape(shape);
+            positions.reserve(controlPoints.size());
+            for (const QPointF &controlPoint : controlPoints) {
+                positions.append(shapePointToWorld(shape, controlPoint));
+            }
+        }
+
+        const Point3D &offset = renderObject.placementTranslation;
+        for (Point3D &position : positions) {
+            position.x += offset.x;
+            position.y += offset.y;
+            position.z += offset.z;
+        }
+        return positions;
     }
 
     QVector<int> controlPointShapeIndices() const
@@ -10314,6 +10382,9 @@ private:
         grabTool_.restoreSourceGeometry(document_);
         QPointF totalDelta;
         QPointF freeDestination;
+        Point3D worldSnapDelta;
+        bool worldSnapDeltaValid = false;
+        Point3D appliedWorldDelta;
         if (dragAxisLock_ == DragAxisLock::Z) {
             Point3D startAxisPosition;
             Point3D currentAxisPosition;
@@ -10340,8 +10411,15 @@ private:
             return;
         }
         if (grabTool_.hasBasePoint()) {
-            const QPointF destinationCursor =
+            QPointF destinationCursor =
                 rawCursorWorld_ - grabTool_.cursorOffset();
+            const QPointF destinationScreen =
+                screenPosition - grabTool_.cursorOffsetScreen();
+            viewportTransform_.screenToWorkPlaneUnclipped(
+                destinationScreen,
+                size(),
+                viewportTransform_.workPlaneFrame(),
+                &destinationCursor);
             currentSnap_ = findGrabDestinationSnap(destinationCursor);
             const QPointF destination = currentSnap_.isValid()
                                             ? currentSnap_.point
@@ -10349,7 +10427,27 @@ private:
             cursorWorld_ = destination;
             lastWorldPosition_ = destination;
             freeDestination = destinationCursor;
-            totalDelta = destination - grabTool_.basePoint();
+            const QPointF freeFrameDelta =
+                destinationCursor - grabTool_.basePointDragPlane();
+            totalDelta = currentSnap_.isValid()
+                             ? destination - grabTool_.basePoint()
+                             : freeFrameDelta;
+            if (currentSnap_.isValid() && currentSnap_.hasWorldPoint) {
+                const Point3D &baseWorld = grabTool_.basePointWorld();
+                worldSnapDelta = {
+                    currentSnap_.worldPoint.x - baseWorld.x,
+                    currentSnap_.worldPoint.y - baseWorld.y,
+                    currentSnap_.worldPoint.z - baseWorld.z};
+                worldSnapDeltaValid = true;
+                const WorkPlaneFrame &frame = viewportTransform_.workPlaneFrame();
+                totalDelta = {
+                    worldSnapDelta.x * frame.xAxis.x +
+                        worldSnapDelta.y * frame.xAxis.y +
+                        worldSnapDelta.z * frame.xAxis.z,
+                    worldSnapDelta.x * frame.yAxis.x +
+                        worldSnapDelta.y * frame.yAxis.y +
+                        worldSnapDelta.z * frame.yAxis.z};
+            }
         } else {
             if (dragAxisLock_ == DragAxisLock::None &&
                 grabViewPlaneAnchorValid_) {
@@ -10388,8 +10486,27 @@ private:
             totalDelta = rawCursorWorld_ - grabTool_.startWorldPosition();
         }
         QPointF delta = constrainDragDelta(totalDelta);
+        bool snapBlockedByAxisLock = false;
+        if (worldSnapDeltaValid && dragAxisLock_ != DragAxisLock::None) {
+            const WorkPlaneFrame &frame = viewportTransform_.workPlaneFrame();
+            const auto dot = [](const Point3D &first, const Point3D &second) {
+                return first.x * second.x + first.y * second.y +
+                       first.z * second.z;
+            };
+            const qreal snapX = dot(worldSnapDelta, frame.xAxis);
+            const qreal snapY = dot(worldSnapDelta, frame.yAxis);
+            const qreal snapNormal = dot(worldSnapDelta, frame.normal);
+            constexpr qreal constraintTolerance = 1.0e-7;
+            snapBlockedByAxisLock =
+                std::abs(snapNormal) > constraintTolerance ||
+                (dragAxisLock_ == DragAxisLock::X &&
+                 std::abs(snapY) > constraintTolerance) ||
+                (dragAxisLock_ == DragAxisLock::Y &&
+                 std::abs(snapX) > constraintTolerance);
+        }
         if (grabTool_.hasBasePoint() && currentSnap_.isValid() &&
-            (!qFuzzyIsNull(delta.x() - totalDelta.x()) ||
+            (snapBlockedByAxisLock ||
+             !qFuzzyIsNull(delta.x() - totalDelta.x()) ||
              !qFuzzyIsNull(delta.y() - totalDelta.y()))) {
             // Do not show a snap marker for a destination the axis lock makes
             // impossible to reach. The cursor still projects onto the locked
@@ -10397,11 +10514,33 @@ private:
             currentSnap_ = SnapResult{};
             cursorWorld_ = freeDestination;
             lastWorldPosition_ = freeDestination;
-            totalDelta = freeDestination - grabTool_.basePoint();
+            totalDelta = freeDestination - grabTool_.basePointDragPlane();
             delta = constrainDragDelta(totalDelta);
+            worldSnapDeltaValid = false;
         }
-        if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+        if (worldSnapDeltaValid && currentSnap_.isValid()) {
+            appliedWorldDelta = worldSnapDelta;
+            translateShapesWorldDelta(dragIndices, appliedWorldDelta);
+            grabTool_.setMoved(!isZeroWorldDelta(appliedWorldDelta));
+        } else if (grabTool_.hasBasePoint()) {
+            const WorkPlaneFrame &frame = viewportTransform_.workPlaneFrame();
+            appliedWorldDelta = {
+                frame.xAxis.x * delta.x() + frame.yAxis.x * delta.y(),
+                frame.xAxis.y * delta.x() + frame.yAxis.y * delta.y(),
+                frame.xAxis.z * delta.x() + frame.yAxis.z * delta.y()};
+            if (!isZeroWorldDelta(appliedWorldDelta)) {
+                translateShapesWorldDelta(dragIndices, appliedWorldDelta);
+                grabTool_.setMoved(true);
+            } else {
+                grabTool_.setMoved(false);
+            }
+        } else if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
             translateShapes(dragIndices, delta);
+            const WorkPlaneFrame &frame = viewportTransform_.workPlaneFrame();
+            appliedWorldDelta = {
+                frame.xAxis.x * delta.x() + frame.yAxis.x * delta.y(),
+                frame.xAxis.y * delta.x() + frame.yAxis.y * delta.y(),
+                frame.xAxis.z * delta.x() + frame.yAxis.z * delta.y()};
             grabTool_.setMoved(true);
         } else {
             grabTool_.setMoved(false);
@@ -10464,13 +10603,22 @@ private:
         }
         setSelectionLastDragWorldPosition(rawCursorWorld_);
         DebugLog::instance().write(
-            QStringLiteral("grab move delta=%1 cursorWorld=%2 basePoint=%3 snap=%4 axisLock=%5")
+            QStringLiteral("grab move delta=%1 worldDelta=(%2,%3,%4) cursorWorld=%5 basePoint=%6 baseWorld=(%7,%8,%9) snap=%10 snapWorld=(%11,%12,%13) axisLock=%14")
                 .arg(pointText(delta))
+                .arg(appliedWorldDelta.x, 0, 'g', 12)
+                .arg(appliedWorldDelta.y, 0, 'g', 12)
+                .arg(appliedWorldDelta.z, 0, 'g', 12)
                 .arg(pointText(rawCursorWorld_))
                 .arg(grabTool_.hasBasePoint()
                          ? pointText(grabTool_.basePoint())
                          : QStringLiteral("none"))
+                .arg(grabTool_.basePointWorld().x, 0, 'g', 12)
+                .arg(grabTool_.basePointWorld().y, 0, 'g', 12)
+                .arg(grabTool_.basePointWorld().z, 0, 'g', 12)
                 .arg(snapTypeName(currentSnap_.type))
+                .arg(currentSnap_.worldPoint.x, 0, 'g', 12)
+                .arg(currentSnap_.worldPoint.y, 0, 'g', 12)
+                .arg(currentSnap_.worldPoint.z, 0, 'g', 12)
                 .arg(dragAxisLockName(dragAxisLock_)));
     }
 
@@ -10948,6 +11096,16 @@ private:
         viewportOverlay_.drawSnapMarker(painter, type, worldPoint, size());
     }
 
+    void drawSnapMarker(QPainter &painter, const SnapResult &snap)
+    {
+        if (snap.hasWorldPoint) {
+            viewportOverlay_.drawWorldSnapMarker(
+                painter, snap.type, snap.worldPoint, size());
+        } else {
+            drawSnapMarker(painter, snap.type, snap.point);
+        }
+    }
+
     void drawLineToolPreview(QPainter &painter, bool drawCurve = true)
     {
         if (activeTool_ == Tool::Line && !toolPreview_.worldPoints.isEmpty()) {
@@ -10956,7 +11114,7 @@ private:
                 toolPreview_.worldCursorPoint, cursorValid_, size(), drawCurve,
                 toolPreview_.workPlaneFrame);
             if (currentSnap_.isValid()) {
-                drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+                drawSnapMarker(painter, currentSnap_);
             }
             return;
         }
@@ -11318,7 +11476,7 @@ private:
                                                previewColor,
                                                !previewUsesSeparateFrame);
         } else if (currentSnap_.isValid()) {
-            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+            drawSnapMarker(painter, currentSnap_);
         }
         drawArcHudPanel(painter,
                         {toolPreview_.hudDimensionsLine,
@@ -11380,7 +11538,7 @@ private:
             if (cursorValid_) painter.drawEllipse(worldToScreen(cursorWorld_), 2.5, 2.5);
             painter.restore();
         }
-        if (currentSnap_.isValid()) drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+        if (currentSnap_.isValid()) drawSnapMarker(painter, currentSnap_);
         drawArcHudPanel(painter,
                         {toolPreview_.hudDimensionsLine,
                          toolPreview_.hudInstructionsLine},
@@ -11414,16 +11572,37 @@ private:
     }
 
     void drawControlPoints(QPainter &painter,
-                           const Shape &shape,
-                           int shapeIndex,
+                           const ViewportRenderObject &renderObject,
                            bool drawMarkers = true)
     {
+        Shape placedShape = renderObject.shape;
+        const Point3D &offset = renderObject.placementTranslation;
+        const auto addPlacement = [&offset](WorkPlaneFrame frame) {
+            frame.origin.x += offset.x;
+            frame.origin.y += offset.y;
+            frame.origin.z += offset.z;
+            return frame;
+        };
+        placedShape.workPlaneFrame =
+            addPlacement(shapeWorkPlaneFrame(renderObject.shape));
+        if (placedShape.geometryType == GeometryType::PolyCurve) {
+            placedShape.componentWorkPlaneFrames.resize(
+                placedShape.components.size());
+            for (int componentIndex = 0;
+                 componentIndex < placedShape.components.size();
+                 ++componentIndex) {
+                placedShape.componentWorkPlaneFrames[componentIndex] =
+                    addPlacement(shapeComponentWorkPlaneFrame(
+                        renderObject.shape, componentIndex));
+            }
+        }
+
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
-        viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
+        viewportTransform_.setWorkPlaneFrame(placedShape.workPlaneFrame);
         viewportOverlay_.drawControlPoints(painter,
-                                           shape,
+                                           placedShape,
                                            size(),
-                                           shapes_.objectIdAt(shapeIndex),
+                                           renderObject.objectId,
                                            selectedShapeIndex_,
                                            controlPointSelectionDragActive(),
                                            controlPointIndex_,
@@ -11571,7 +11750,7 @@ private:
                            frame, markerSize);
         }
         if (currentSnap_.isValid()) {
-            drawSnapMarker(painter, currentSnap_.type, currentSnap_.point);
+            drawSnapMarker(painter, currentSnap_);
         }
     }
 

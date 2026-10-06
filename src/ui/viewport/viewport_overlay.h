@@ -24,6 +24,10 @@ public:
                         SnapType type,
                         const QPointF &worldPoint,
                         const QSize &viewportSize) const;
+    void drawWorldSnapMarker(QPainter &painter,
+                             SnapType type,
+                             const Point3D &worldPoint,
+                             const QSize &viewportSize) const;
     void drawSelectionBox(QPainter &painter,
                           const QPointF &startScreen,
                           const QPointF &currentScreen) const;

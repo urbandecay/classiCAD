@@ -28,6 +28,14 @@ void ViewportOverlay::drawSnapMarker(QPainter &painter,
     snapMarkerRenderer_.draw(painter, type, worldPoint, viewportSize);
 }
 
+void ViewportOverlay::drawWorldSnapMarker(QPainter &painter,
+                                          SnapType type,
+                                          const Point3D &worldPoint,
+                                          const QSize &viewportSize) const
+{
+    snapMarkerRenderer_.drawWorld(painter, type, worldPoint, viewportSize);
+}
+
 void ViewportOverlay::drawSelectionBox(QPainter &painter,
                                        const QPointF &startScreen,
                                        const QPointF &currentScreen) const

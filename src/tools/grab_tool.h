@@ -18,7 +18,10 @@ public:
     bool enterBasePointMode(Document &document);
     void restoreSourceGeometry(Document &document) const;
     void acceptBasePoint(const QPointF &basePoint,
-                         const QPointF &cursorOffset);
+                         const QPointF &cursorOffset,
+                         const Point3D &basePointWorld,
+                         const QPointF &basePointDragPlane,
+                         const QPointF &cursorOffsetScreen);
     void setMoved(bool moved);
     void reset();
 
@@ -30,7 +33,10 @@ public:
     const Document::Snapshot &startSnapshot() const;
     QPointF startWorldPosition() const;
     QPointF basePoint() const;
+    Point3D basePointWorld() const;
+    QPointF basePointDragPlane() const;
     QPointF cursorOffset() const;
+    QPointF cursorOffsetScreen() const;
 
 private:
     bool active_ = false;
@@ -43,7 +49,10 @@ private:
     Document::Snapshot startSnapshot_;
     QPointF startWorldPosition_;
     QPointF basePoint_;
+    Point3D basePointWorld_;
+    QPointF basePointDragPlane_;
     QPointF cursorOffset_;
+    QPointF cursorOffsetScreen_;
 };
 
 } // namespace classiCAD

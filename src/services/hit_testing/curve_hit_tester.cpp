@@ -776,8 +776,31 @@ bool CurveHitTester::hitTestSelectedControlPoint(
             continue;
         }
         const Shape &shape = document[candidateShapeIndex];
+        const ObjectId objectId = document.objectIdAt(candidateShapeIndex);
+        const SceneObject *sceneObject = document.object(objectId);
+        const Point3D placement = sceneObject != nullptr
+                                      ? sceneObject->placementTranslation
+                                      : Point3D{};
+        const auto considerControlPoint = [&](const QPointF &controlPoint,
+                                              WorkPlaneFrame frame,
+                                              int candidateControlPointIndex) {
+            frame.origin.x += placement.x;
+            frame.origin.y += placement.y;
+            frame.origin.z += placement.z;
+            const QPointF screenPoint = transform.workPlaneToScreen(
+                controlPoint, viewportSize, frame);
+            const qreal distance = std::hypot(
+                screenPosition.x() - screenPoint.x(),
+                screenPosition.y() - screenPoint.y());
+            if (distance <= closestDistance) {
+                closestDistance = distance;
+                closestShapeIndex = candidateShapeIndex;
+                closestControlPointIndex = candidateControlPointIndex;
+            }
+        };
+
+        int globalIndex = 0;
         if (shape.geometryType == GeometryType::PolyCurve) {
-            int globalIndex = 0;
             for (int componentIndex = 0;
                  componentIndex < shape.components.size();
                  ++componentIndex) {
@@ -785,16 +808,7 @@ bool CurveHitTester::hitTestSelectedControlPoint(
                     shapeComponentWorkPlaneFrame(shape, componentIndex);
                 for (const QPointF &controlPoint :
                      shape.components[componentIndex].controlPoints) {
-                    const QPointF screenPoint = transform.workPlaneToScreen(
-                        controlPoint, viewportSize, frame);
-                    const qreal distance = std::hypot(
-                        screenPosition.x() - screenPoint.x(),
-                        screenPosition.y() - screenPoint.y());
-                    if (distance <= closestDistance) {
-                        closestDistance = distance;
-                        closestShapeIndex = candidateShapeIndex;
-                        closestControlPointIndex = globalIndex;
-                    }
+                    considerControlPoint(controlPoint, frame, globalIndex);
                     ++globalIndex;
                 }
             }
@@ -804,16 +818,9 @@ bool CurveHitTester::hitTestSelectedControlPoint(
         for (int candidateControlPointIndex = 0;
              candidateControlPointIndex < controlPoints.size();
              ++candidateControlPointIndex) {
-            const QPointF screenPoint =
-                transform.worldToScreen(controlPoints[candidateControlPointIndex],
-                                        viewportSize);
-            const qreal distance = std::hypot(screenPosition.x() - screenPoint.x(),
-                                              screenPosition.y() - screenPoint.y());
-            if (distance <= closestDistance) {
-                closestDistance = distance;
-                closestShapeIndex = candidateShapeIndex;
-                closestControlPointIndex = candidateControlPointIndex;
-            }
+            considerControlPoint(controlPoints[candidateControlPointIndex],
+                                 shapeWorkPlaneFrame(shape),
+                                 candidateControlPointIndex);
         }
     }
 

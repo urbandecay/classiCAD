@@ -26,8 +26,27 @@ void ViewportSnapMarkerRenderer::draw(QPainter &painter,
                                       const QPointF &worldPoint,
                                       const QSize &viewportSize) const
 {
+    drawAtScreen(painter, type,
+                 transform_.worldToScreen(worldPoint, viewportSize));
+}
+
+void ViewportSnapMarkerRenderer::drawWorld(QPainter &painter,
+                                           SnapType type,
+                                           const Point3D &worldPoint,
+                                           const QSize &viewportSize) const
+{
+    QPointF screenPoint;
+    if (!transform_.worldPointToScreen(worldPoint, viewportSize, &screenPoint)) {
+        return;
+    }
+    drawAtScreen(painter, type, screenPoint);
+}
+
+void ViewportSnapMarkerRenderer::drawAtScreen(QPainter &painter,
+                                              SnapType type,
+                                              const QPointF &snapScreen) const
+{
     painter.save();
-    const QPointF snapScreen = transform_.worldToScreen(worldPoint, viewportSize);
     const QColor snapColor(QStringLiteral("#63b5e8"));
     painter.setPen(QPen(snapColor, 2.0));
     painter.setBrush(Qt::NoBrush);

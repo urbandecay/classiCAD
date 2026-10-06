@@ -42,7 +42,11 @@ bool GrabTool::enterBasePointMode(Document &document)
     moved_ = false;
     pickingBasePoint_ = true;
     hasBasePoint_ = false;
+    basePoint_ = {};
+    basePointWorld_ = {};
+    basePointDragPlane_ = {};
     cursorOffset_ = {};
+    cursorOffsetScreen_ = {};
     return restored;
 }
 
@@ -62,13 +66,19 @@ void GrabTool::restoreSourceGeometry(Document &document) const
 }
 
 void GrabTool::acceptBasePoint(const QPointF &basePoint,
-                               const QPointF &cursorOffset)
+                               const QPointF &cursorOffset,
+                               const Point3D &basePointWorld,
+                               const QPointF &basePointDragPlane,
+                               const QPointF &cursorOffsetScreen)
 {
     if (!active_ || !pickingBasePoint_) {
         return;
     }
     basePoint_ = basePoint;
+    basePointWorld_ = basePointWorld;
+    basePointDragPlane_ = basePointDragPlane;
     cursorOffset_ = cursorOffset;
+    cursorOffsetScreen_ = cursorOffsetScreen;
     hasBasePoint_ = true;
     pickingBasePoint_ = false;
 }
@@ -90,7 +100,10 @@ void GrabTool::reset()
     startSnapshot_ = Document::Snapshot{};
     startWorldPosition_ = {};
     basePoint_ = {};
+    basePointWorld_ = {};
+    basePointDragPlane_ = {};
     cursorOffset_ = {};
+    cursorOffsetScreen_ = {};
 }
 
 bool GrabTool::isActive() const
@@ -133,9 +146,24 @@ QPointF GrabTool::basePoint() const
     return basePoint_;
 }
 
+Point3D GrabTool::basePointWorld() const
+{
+    return basePointWorld_;
+}
+
+QPointF GrabTool::basePointDragPlane() const
+{
+    return basePointDragPlane_;
+}
+
 QPointF GrabTool::cursorOffset() const
 {
     return cursorOffset_;
+}
+
+QPointF GrabTool::cursorOffsetScreen() const
+{
+    return cursorOffsetScreen_;
 }
 
 } // namespace classiCAD

@@ -169,6 +169,199 @@ bool cameraStateFromJson(const QJsonValue &value, ViewportCameraState *state)
     return true;
 }
 
+QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings)
+{
+    QJsonArray shadowDirection;
+    shadowDirection.append(settings.shadowDirection.x());
+    shadowDirection.append(settings.shadowDirection.y());
+    shadowDirection.append(settings.shadowDirection.z());
+
+    QJsonObject object;
+    object.insert(QStringLiteral("mode"), static_cast<int>(settings.mode));
+    object.insert(QStringLiteral("lightingMode"),
+                  static_cast<int>(settings.lightingMode));
+    object.insert(QStringLiteral("studioLightPreset"), settings.studioLightPreset);
+    object.insert(QStringLiteral("matcapPreset"), settings.matcapPreset);
+    object.insert(QStringLiteral("studioLightRotationDegrees"),
+                  settings.studioLightRotationDegrees);
+    object.insert(QStringLiteral("worldSpaceLighting"), settings.worldSpaceLighting);
+    object.insert(QStringLiteral("xray"), settings.xray);
+    object.insert(QStringLiteral("xrayWireframe"), settings.xrayWireframe);
+    object.insert(QStringLiteral("wireColorMode"),
+                  static_cast<int>(settings.wireColorMode));
+    object.insert(QStringLiteral("colorMode"),
+                  static_cast<int>(settings.colorMode));
+    object.insert(QStringLiteral("backgroundMode"),
+                  static_cast<int>(settings.backgroundMode));
+    object.insert(QStringLiteral("cavityType"),
+                  static_cast<int>(settings.cavityType));
+    object.insert(QStringLiteral("customColor"),
+                  settings.customColor.name(QColor::HexArgb));
+    object.insert(QStringLiteral("outlineColor"),
+                  settings.outlineColor.name(QColor::HexArgb));
+    object.insert(QStringLiteral("customBackgroundColor"),
+                  settings.customBackgroundColor.name(QColor::HexArgb));
+    object.insert(QStringLiteral("shadowDirection"), shadowDirection);
+    object.insert(QStringLiteral("backfaceCulling"), settings.backfaceCulling);
+    object.insert(QStringLiteral("outline"), settings.outline);
+    object.insert(QStringLiteral("specularLighting"), settings.specularLighting);
+    object.insert(QStringLiteral("shadows"), settings.shadows);
+    object.insert(QStringLiteral("depthOfField"), settings.depthOfField);
+    object.insert(QStringLiteral("cavity"), settings.cavity);
+    object.insert(QStringLiteral("xrayAlpha"), settings.xrayAlpha);
+    object.insert(QStringLiteral("shadowIntensity"), settings.shadowIntensity);
+    object.insert(QStringLiteral("shadowOffset"), settings.shadowOffset);
+    object.insert(QStringLiteral("shadowFocus"), settings.shadowFocus);
+    return object;
+}
+
+bool viewportShadingFromJson(const QJsonValue &value,
+                             ViewportShadingSettings *settings)
+{
+    if (settings == nullptr || !value.isObject()) {
+        return false;
+    }
+
+    const QJsonObject object = value.toObject();
+    const auto integer = [&object](const QString &key, int minimum,
+                                   int maximum, int *result) {
+        const QJsonValue value = object.value(key);
+        if (result == nullptr || !value.isDouble()) {
+            return false;
+        }
+        const double number = value.toDouble();
+        if (!std::isfinite(number) || std::floor(number) != number ||
+            number < minimum || number > maximum) {
+            return false;
+        }
+        *result = static_cast<int>(number);
+        return true;
+    };
+    const auto boolean = [&object](const QString &key, bool *result) {
+        const QJsonValue value = object.value(key);
+        if (result == nullptr || !value.isBool()) {
+            return false;
+        }
+        *result = value.toBool();
+        return true;
+    };
+    const auto number = [&object](const QString &key, qreal *result) {
+        const QJsonValue value = object.value(key);
+        if (result == nullptr || !value.isDouble()) {
+            return false;
+        }
+        const qreal parsed = value.toDouble();
+        if (!std::isfinite(parsed)) {
+            return false;
+        }
+        *result = parsed;
+        return true;
+    };
+    const auto color = [&object](const QString &key, QColor *result) {
+        const QJsonValue value = object.value(key);
+        if (result == nullptr || !value.isString()) {
+            return false;
+        }
+        const QColor parsed(value.toString());
+        if (!parsed.isValid()) {
+            return false;
+        }
+        *result = parsed;
+        return true;
+    };
+
+    ViewportShadingSettings restored;
+    int parsed = 0;
+    if (!integer(QStringLiteral("mode"), 0, 1, &parsed)) {
+        return false;
+    }
+    restored.mode = static_cast<ViewportShadingMode>(parsed);
+    if (!integer(QStringLiteral("lightingMode"), 0, 2, &parsed)) {
+        return false;
+    }
+    restored.lightingMode = static_cast<ViewportLightingMode>(parsed);
+    const QJsonValue studioPresetValue =
+        object.value(QStringLiteral("studioLightPreset"));
+    const QJsonValue matcapPresetValue =
+        object.value(QStringLiteral("matcapPreset"));
+    if (!studioPresetValue.isString() || !matcapPresetValue.isString() ||
+        studioPresetValue.toString().isEmpty() ||
+        matcapPresetValue.toString().isEmpty()) {
+        return false;
+    }
+    restored.studioLightPreset = studioPresetValue.toString();
+    restored.matcapPreset = matcapPresetValue.toString();
+    if (!integer(QStringLiteral("studioLightRotationDegrees"), -3600, 3600,
+                 &restored.studioLightRotationDegrees) ||
+        !boolean(QStringLiteral("worldSpaceLighting"),
+                 &restored.worldSpaceLighting) ||
+        !boolean(QStringLiteral("xray"), &restored.xray) ||
+        !boolean(QStringLiteral("xrayWireframe"), &restored.xrayWireframe) ||
+        !integer(QStringLiteral("wireColorMode"), 0, 2, &parsed)) {
+        return false;
+    }
+    restored.wireColorMode = static_cast<ViewportWireColorMode>(parsed);
+    if (!integer(QStringLiteral("colorMode"), 0, 5, &parsed)) {
+        return false;
+    }
+    restored.colorMode = static_cast<ViewportColorMode>(parsed);
+    if (!integer(QStringLiteral("backgroundMode"), 0, 2, &parsed)) {
+        return false;
+    }
+    restored.backgroundMode = static_cast<ViewportBackgroundMode>(parsed);
+    if (!integer(QStringLiteral("cavityType"), 0, 2, &parsed)) {
+        return false;
+    }
+    restored.cavityType = static_cast<ViewportCavityType>(parsed);
+    if (!color(QStringLiteral("customColor"), &restored.customColor) ||
+        !color(QStringLiteral("outlineColor"), &restored.outlineColor) ||
+        !color(QStringLiteral("customBackgroundColor"),
+               &restored.customBackgroundColor)) {
+        return false;
+    }
+
+    const QJsonValue shadowDirectionValue =
+        object.value(QStringLiteral("shadowDirection"));
+    if (!shadowDirectionValue.isArray()) {
+        return false;
+    }
+    const QJsonArray shadowDirection = shadowDirectionValue.toArray();
+    if (shadowDirection.size() != 3 || !shadowDirection[0].isDouble() ||
+        !shadowDirection[1].isDouble() || !shadowDirection[2].isDouble()) {
+        return false;
+    }
+    const qreal shadowX = shadowDirection[0].toDouble();
+    const qreal shadowY = shadowDirection[1].toDouble();
+    const qreal shadowZ = shadowDirection[2].toDouble();
+    if (!std::isfinite(shadowX) || !std::isfinite(shadowY) ||
+        !std::isfinite(shadowZ)) {
+        return false;
+    }
+    restored.shadowDirection = QVector3D(shadowX, shadowY, shadowZ);
+
+    if (!boolean(QStringLiteral("backfaceCulling"),
+                 &restored.backfaceCulling) ||
+        !boolean(QStringLiteral("outline"), &restored.outline) ||
+        !boolean(QStringLiteral("specularLighting"),
+                 &restored.specularLighting) ||
+        !boolean(QStringLiteral("shadows"), &restored.shadows) ||
+        !boolean(QStringLiteral("depthOfField"), &restored.depthOfField) ||
+        !boolean(QStringLiteral("cavity"), &restored.cavity) ||
+        !number(QStringLiteral("xrayAlpha"), &restored.xrayAlpha) ||
+        !number(QStringLiteral("shadowIntensity"),
+                &restored.shadowIntensity) ||
+        !number(QStringLiteral("shadowOffset"), &restored.shadowOffset) ||
+        !number(QStringLiteral("shadowFocus"), &restored.shadowFocus) ||
+        restored.xrayAlpha < 0.0 || restored.xrayAlpha > 1.0 ||
+        restored.shadowIntensity < 0.0 || restored.shadowIntensity > 1.0 ||
+        restored.shadowOffset < 0.0) {
+        return false;
+    }
+
+    *settings = std::move(restored);
+    return true;
+}
+
 bool fail(QString *errorMessage, const QString &message)
 {
     if (errorMessage != nullptr) {
@@ -190,7 +383,7 @@ bool SessionSerializer::write(const QString &path,
     }
 
     QJsonObject root;
-    root.insert(QStringLiteral("version"), 4);
+    root.insert(QStringLiteral("version"), 6);
     root.insert(QStringLiteral("zoom"), view.zoom);
     root.insert(QStringLiteral("pan"), pointToJson(view.pan));
     root.insert(QStringLiteral("document"), documentToJson(document));
@@ -223,6 +416,9 @@ bool SessionSerializer::write(const QString &path,
         root.insert(QStringLiteral("activeControlPoint"), controlPoint);
     }
     root.insert(QStringLiteral("controlPointsVisible"), view.controlPointsVisible);
+    root.insert(QStringLiteral("activeTool"), static_cast<int>(view.activeTool));
+    root.insert(QStringLiteral("viewportShading"),
+                viewportShadingToJson(view.shading));
 
     const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Compact);
     if (file.write(data) != data.size()) {
@@ -253,7 +449,7 @@ bool SessionSerializer::read(const QString &path,
 
     const QJsonObject root = json.object();
     const int version = root.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 4) {
+    if (version < 1 || version > 6) {
         return fail(errorMessage,
                     QStringLiteral("Unsupported update session version %1.").arg(version));
     }
@@ -355,6 +551,25 @@ bool SessionSerializer::read(const QString &path,
             return fail(errorMessage, QStringLiteral("Invalid control-point visibility."));
         }
         restored.view.controlPointsVisible = controlPointsValue.toBool();
+
+        if (version >= 5) {
+            const QJsonValue activeToolValue =
+                root.value(QStringLiteral("activeTool"));
+            const int activeToolId = activeToolValue.toInt(-1);
+            const ToolId activeTool = static_cast<ToolId>(activeToolId);
+            if (!activeToolValue.isDouble() ||
+                activeToolValue.toDouble() != activeToolId ||
+                toolName(activeTool) == QStringLiteral("Unknown")) {
+                return fail(errorMessage, QStringLiteral("Invalid active tool."));
+            }
+            restored.view.activeTool = activeTool;
+        }
+
+        if (version >= 6 &&
+            !viewportShadingFromJson(root.value(QStringLiteral("viewportShading")),
+                                     &restored.view.shading)) {
+            return fail(errorMessage, QStringLiteral("Invalid viewport shading state."));
+        }
     }
 
     if (version >= 3) {

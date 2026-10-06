@@ -2201,8 +2201,8 @@ public:
         }
 
         setCursor(Qt::ArrowCursor);
-        notifyJoinStatus(QStringLiteral("Joined %1 curves into one PolyCurve")
-                             .arg(result.sourceObjectCount));
+        notifyJoinStatus(QStringLiteral("Joined %1 curve segments into one spline")
+                             .arg(result.componentCount));
         update();
         DebugLog::instance().write(QStringLiteral("applyJoin committed components=%1 shapes=%2 lineMerges=%3")
                                        .arg(result.componentCount)
@@ -2320,6 +2320,8 @@ public:
         view.primaryObjectId = selectedShapeIndex_;
         view.activeControlPoint = selection_.activeControlPoint();
         view.controlPointsVisible = controlPointsVisible_;
+        view.activeTool = activeTool_;
+        view.shading = viewportShadingSettings_;
 
         QString errorMessage;
         if (!SessionSerializer::write(path, document_, view, &errorMessage)) {
@@ -2330,14 +2332,17 @@ public:
         }
 
         DebugLog::instance().write(
-            QStringLiteral("saveUpdateSession path=%1 shapes=%2 layers=%3 version=4 preset=%4 perspective=%5 zoom=%6 pan=%7")
+            QStringLiteral("saveUpdateSession path=%1 shapes=%2 layers=%3 version=6 preset=%4 perspective=%5 zoom=%6 pan=%7 shading=%8")
                 .arg(path)
                 .arg(shapes_.size())
                 .arg(document_.layers().size())
                 .arg(static_cast<int>(viewportTransform_.viewPreset()))
                 .arg(viewportTransform_.isPerspectiveEnabled())
                 .arg(zoom_, 0, 'g', 17)
-                .arg(precisePointText(pan_)));
+                .arg(precisePointText(pan_))
+                .arg(viewportShadingSettings_.mode == ViewportShadingMode::Solid
+                         ? QStringLiteral("Solid")
+                         : QStringLiteral("Wireframe")));
         return true;
     }
 
@@ -2382,16 +2387,23 @@ public:
                     restored.view.activeControlPoint.index);
             }
             controlPointsVisible_ = restored.view.controlPointsVisible;
+            if (version >= 5) {
+                setTool(restored.view.activeTool);
+            }
+            if (version >= 6) {
+                viewportShadingSettings_ = restored.view.shading;
+                viewportRenderer_.setShadingSettings(viewportShadingSettings_);
+                refreshShadingPopover();
+            }
             notifyViewStateChanged();
         }
-        setCursor(Qt::ArrowCursor);
         update();
         emitCoordinateUpdate();
         notifyHistoryChanged();
         notifyLayersChanged();
 
         DebugLog::instance().write(
-            QStringLiteral("restoreUpdateSession path=%1 shapes=%2 layers=%3 version=%4 preset=%5 perspective=%6 zoom=%7 pan=%8")
+            QStringLiteral("restoreUpdateSession path=%1 shapes=%2 layers=%3 version=%4 preset=%5 perspective=%6 zoom=%7 pan=%8 shading=%9")
                 .arg(path)
                 .arg(shapes_.size())
                 .arg(document_.layers().size())
@@ -2399,7 +2411,10 @@ public:
                 .arg(static_cast<int>(viewportTransform_.viewPreset()))
                 .arg(viewportTransform_.isPerspectiveEnabled())
                 .arg(zoom_, 0, 'g', 17)
-                .arg(precisePointText(pan_)));
+                .arg(precisePointText(pan_))
+                .arg(viewportShadingSettings_.mode == ViewportShadingMode::Solid
+                         ? QStringLiteral("Solid")
+                         : QStringLiteral("Wireframe")));
         return true;
     }
 
@@ -10052,27 +10067,96 @@ private:
                         Shape::NurbsCurve2D &component = shape.components[componentIndex];
                         if (remaining < component.controlPoints.size()) {
                             const QPointF oldPoint = component.controlPoints[remaining];
-                            component.controlPoints[remaining] += delta;
+                            const WorkPlaneFrame componentFrame =
+                                shapeComponentWorkPlaneFrame(shape, componentIndex);
+                            const Point3D oldWorldPoint =
+                                workPlaneFramePointToWorld(oldPoint, componentFrame);
+                            const QPointF newPoint = oldPoint + delta;
+                            const Point3D newWorldPoint =
+                                workPlaneFramePointToWorld(newPoint, componentFrame);
+
                             const qreal seamTolerance = joinEndpointTolerance();
-                            if (remaining == 0 && componentIndex > 0) {
-                                Shape::NurbsCurve2D &previous =
-                                    shape.components[componentIndex - 1];
-                                if (!previous.controlPoints.isEmpty() &&
-                                    std::hypot(previous.controlPoints.last().x() - oldPoint.x(),
-                                               previous.controlPoints.last().y() - oldPoint.y()) <=
-                                        seamTolerance) {
-                                    previous.controlPoints.last() += delta;
-                                }
-                            }
-                            if (remaining == component.controlPoints.size() - 1 &&
-                                componentIndex + 1 < shape.components.size()) {
-                                Shape::NurbsCurve2D &next =
-                                    shape.components[componentIndex + 1];
-                                if (!next.controlPoints.isEmpty() &&
-                                    std::hypot(next.controlPoints.first().x() - oldPoint.x(),
-                                               next.controlPoints.first().y() - oldPoint.y()) <=
-                                        seamTolerance) {
-                                    next.controlPoints.first() += delta;
+                            const auto worldDistance = [](const Point3D &first,
+                                                          const Point3D &second) {
+                                return std::hypot(
+                                    std::hypot(first.x - second.x,
+                                               first.y - second.y),
+                                    first.z - second.z);
+                            };
+                            QPointF componentStart;
+                            QPointF componentEnd;
+                            const bool hasEndpoints =
+                                (remaining == 0 ||
+                                 remaining == component.controlPoints.size() - 1) &&
+                                nurbsCurveEndpoints(component,
+                                                   &componentStart,
+                                                   &componentEnd);
+                            const bool movesJoinedEndpoint = hasEndpoints &&
+                                ((remaining == 0 &&
+                                  worldDistance(
+                                      oldWorldPoint,
+                                      workPlaneFramePointToWorld(componentStart,
+                                                                 componentFrame)) <=
+                                      seamTolerance) ||
+                                 (remaining == component.controlPoints.size() - 1 &&
+                                 worldDistance(
+                                      oldWorldPoint,
+                                      workPlaneFramePointToWorld(componentEnd,
+                                                                 componentFrame)) <=
+                                      seamTolerance));
+                            component.controlPoints[remaining] = newPoint;
+                            if (movesJoinedEndpoint) {
+                                for (int otherIndex = 0;
+                                     otherIndex < shape.components.size();
+                                     ++otherIndex) {
+                                    if (otherIndex == componentIndex) {
+                                        continue;
+                                    }
+                                    Shape::NurbsCurve2D &other =
+                                        shape.components[otherIndex];
+                                    if (other.controlPoints.isEmpty()) {
+                                        continue;
+                                    }
+                                    const WorkPlaneFrame otherFrame =
+                                        shapeComponentWorkPlaneFrame(shape,
+                                                                     otherIndex);
+                                    QPointF otherStart;
+                                    QPointF otherEnd;
+                                    if (!nurbsCurveEndpoints(other,
+                                                             &otherStart,
+                                                             &otherEnd)) {
+                                        continue;
+                                    }
+                                    const int otherLastIndex =
+                                        other.controlPoints.size() - 1;
+                                    const auto moveMatchingEndpoint =
+                                        [&](int controlPointIndex,
+                                            const QPointF &curveEndpoint) {
+                                            const Point3D endpointWorld =
+                                                workPlaneFramePointToWorld(
+                                                    curveEndpoint, otherFrame);
+                                            const Point3D controlPointWorld =
+                                                workPlaneFramePointToWorld(
+                                                    other.controlPoints[
+                                                        controlPointIndex],
+                                                    otherFrame);
+                                            if (worldDistance(oldWorldPoint,
+                                                              endpointWorld) <=
+                                                    seamTolerance &&
+                                                worldDistance(endpointWorld,
+                                                              controlPointWorld) <=
+                                                    seamTolerance) {
+                                                other.controlPoints[
+                                                    controlPointIndex] =
+                                                    worldPointToWorkPlaneFrame(
+                                                        newWorldPoint, otherFrame);
+                                            }
+                                        };
+                                    moveMatchingEndpoint(0, otherStart);
+                                    if (otherLastIndex != 0) {
+                                        moveMatchingEndpoint(otherLastIndex,
+                                                             otherEnd);
+                                    }
                                 }
                             }
                             shape.points = polyCurvePoints(shape.components);
@@ -10364,17 +10448,29 @@ private:
             return;
         }
 
+        const bool viewPlaneGrab = !grabTool_.hasBasePoint() &&
+                                   dragAxisLock_ == DragAxisLock::None &&
+                                   grabViewPlaneAnchorValid_;
+        bool viewPlaneSnapBreakaway = false;
+        Point3D viewPlaneSnapCorrection;
         if (dragSnapLocked_) {
-            const QPointF cursorScreen = worldToScreen(rawCursorWorld_);
-            const QPointF snapScreen = worldToScreen(dragSnapCursorWorld_);
-            const qreal cursorDistanceFromSnap =
-                std::hypot(cursorScreen.x() - snapScreen.x(),
-                           cursorScreen.y() - snapScreen.y());
+            const QPointF snapScreen = viewPlaneGrab &&
+                                               dragSnapViewPlaneAnchorValid_
+                                           ? selectionDragSnapScreen_
+                                           : worldToScreen(dragSnapCursorWorld_);
+            const qreal cursorDistanceFromSnap = std::hypot(
+                screenPosition.x() - snapScreen.x(),
+                screenPosition.y() - snapScreen.y());
             if (cursorDistanceFromSnap <= kDragSnapBreakawayPixels) {
                 return;
             }
+            viewPlaneSnapBreakaway = viewPlaneGrab;
+            if (viewPlaneSnapBreakaway && currentDragSnap_.hasWorldTranslation) {
+                viewPlaneSnapCorrection = currentDragSnap_.worldTranslation;
+            }
             dragSnapLocked_ = false;
             currentDragSnap_ = DragSnapResult{};
+            dragSnapViewPlaneAnchorValid_ = false;
         }
 
         // Restore only the moving objects. Restoring the whole document here
@@ -10461,8 +10557,12 @@ private:
                         destination.x - grabViewPlaneStartWorld_.x,
                         destination.y - grabViewPlaneStartWorld_.y,
                         destination.z - grabViewPlaneStartWorld_.z};
-                    if (!isZeroWorldDelta(worldDelta)) {
-                        translateShapesWorldDelta(dragIndices, worldDelta);
+                    Point3D appliedDelta{
+                        worldDelta.x + viewPlaneSnapCorrection.x,
+                        worldDelta.y + viewPlaneSnapCorrection.y,
+                        worldDelta.z + viewPlaneSnapCorrection.z};
+                    if (!isZeroWorldDelta(appliedDelta)) {
+                        translateShapesWorldDelta(dragIndices, appliedDelta);
                         grabTool_.setMoved(true);
                     } else {
                         grabTool_.setMoved(false);
@@ -10471,14 +10571,33 @@ private:
                     currentDragSnap_ = DragSnapResult{};
                     setSelectionLastDragWorldPosition(rawCursorWorld_);
                     DebugLog::instance().write(
-                        QStringLiteral("grab view-plane delta=(%1,%2,%3) cursorScreen=%4 pivot=(%5,%6,%7)")
-                            .arg(worldDelta.x, 0, 'g', 12)
-                            .arg(worldDelta.y, 0, 'g', 12)
-                            .arg(worldDelta.z, 0, 'g', 12)
+                        QStringLiteral("grab view-plane delta=(%1,%2,%3) snap=%4 cursorScreen=%5 pivot=(%6,%7,%8)")
+                            .arg(appliedDelta.x, 0, 'g', 12)
+                            .arg(appliedDelta.y, 0, 'g', 12)
+                            .arg(appliedDelta.z, 0, 'g', 12)
+                            .arg(viewPlaneSnapBreakaway
+                                     ? QStringLiteral("breakaway")
+                                     : QStringLiteral("none"))
                             .arg(pointText(screenPosition))
                             .arg(grabViewPlaneFrame_.origin.x, 0, 'g', 12)
                             .arg(grabViewPlaneFrame_.origin.y, 0, 'g', 12)
                             .arg(grabViewPlaneFrame_.origin.z, 0, 'g', 12));
+                    if (!viewPlaneSnapBreakaway) {
+                        currentDragSnap_ = findDragSnap(dragIndices);
+                        if (currentDragSnap_.isValid()) {
+                            applyObjectDragSnap(dragIndices, currentDragSnap_);
+                            dragSnapLocked_ = true;
+                            dragSnapCursorWorld_ = rawCursorWorld_;
+                            dragSnapViewPlaneWorld_ = destination;
+                            selectionDragSnapScreen_ = screenPosition;
+                            dragSnapViewPlaneAnchorValid_ = true;
+                            DebugLog::instance().write(
+                                QStringLiteral("grab view-plane snap=%1 source=%2 target=%3")
+                                    .arg(snapTypeName(currentDragSnap_.type))
+                                    .arg(pointText(currentDragSnap_.sourcePoint))
+                                    .arg(pointText(currentDragSnap_.targetPoint)));
+                        }
+                    }
                     return;
                 }
             }

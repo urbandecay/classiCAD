@@ -2,7 +2,9 @@
 
 #include "core/document/document.h"
 #include "core/document/selection_model.h"
+#include "core/tool_id.h"
 #include "services/viewport/viewport_transform.h"
+#include "ui/viewport/viewport_shading.h"
 
 #include <QString>
 
@@ -20,6 +22,8 @@ struct UpdateSessionViewState {
     ObjectId primaryObjectId = ObjectId::invalid();
     ControlPointReference activeControlPoint;
     bool controlPointsVisible = false;
+    ToolId activeTool = ToolId::Select;
+    ViewportShadingSettings shading;
 };
 
 struct RestoredUpdateSession {

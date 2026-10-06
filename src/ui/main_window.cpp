@@ -99,7 +99,26 @@ public:
 
     bool restoreUpdateSession(const QString &path)
     {
-        if (viewport_ == nullptr || !viewport_->restoreUpdateSession(path)) {
+        if (viewport_ == nullptr) {
+            statusBar()->showMessage(QStringLiteral("Update session could not be restored"), 8000);
+            return false;
+        }
+
+        UpdateSessionWindowState windowState;
+        QString windowStateError;
+        const bool hasWindowState =
+            updateController_.readWindowState(path, &windowState,
+                                              &windowStateError);
+        if (!hasWindowState && !windowStateError.isEmpty()) {
+            DebugLog::instance().write(
+                QStringLiteral("restoreUpdateWindowGeometry read failed path=%1 error=%2")
+                    .arg(path, windowStateError));
+        }
+
+        suppressDirtyTracking_ = true;
+        const bool sessionRestored = viewport_->restoreUpdateSession(path);
+        suppressDirtyTracking_ = false;
+        if (!sessionRestored) {
             statusBar()->showMessage(QStringLiteral("Update session could not be restored"), 8000);
             return false;
         }
@@ -107,9 +126,10 @@ public:
         if (controlPointsButton_ != nullptr) {
             controlPointsButton_->setChecked(viewport_->controlPointsVisible());
         }
-        UpdateSessionWindowState windowState;
-        QString windowStateError;
-        if (updateController_.readWindowState(path, &windowState, &windowStateError)) {
+        if (hasWindowState) {
+            currentProjectPath_ = windowState.projectPath;
+            documentModified_ = windowState.documentModified;
+            updateWindowTitle();
             if (!windowState.windowGeometry.isEmpty() &&
                 !restoreGeometry(windowState.windowGeometry)) {
                 DebugLog::instance().write(
@@ -122,10 +142,16 @@ public:
                     splitter->restoreState(windowState.workspaceSplitterState);
                 }
             }
-        } else if (!windowStateError.isEmpty()) {
-            DebugLog::instance().write(
-                QStringLiteral("restoreUpdateWindowGeometry read failed path=%1 error=%2")
-                    .arg(path, windowStateError));
+            if (!windowState.workspaceName.isEmpty()) {
+                const auto workspaceButtons =
+                    findChildren<QToolButton *>(QStringLiteral("workspaceButton"));
+                for (QToolButton *button : workspaceButtons) {
+                    if (button->text() == windowState.workspaceName) {
+                        button->setChecked(true);
+                        break;
+                    }
+                }
+            }
         }
 
         QFile::remove(path);
@@ -400,6 +426,16 @@ private:
         if (QSplitter *splitter =
                 findChild<QSplitter *>(QStringLiteral("workspaceSplitter"))) {
             windowState.workspaceSplitterState = splitter->saveState();
+        }
+        windowState.projectPath = currentProjectPath_;
+        windowState.documentModified = documentModified_;
+        const auto workspaceButtons =
+            findChildren<QToolButton *>(QStringLiteral("workspaceButton"));
+        for (QToolButton *button : workspaceButtons) {
+            if (button->isChecked()) {
+                windowState.workspaceName = button->text();
+                break;
+            }
         }
 
         UpdateController::Callbacks callbacks;
@@ -909,7 +945,7 @@ private:
 
         bar->addSeparator();
         updateAction_ = new QAction(QStringLiteral("Update"), this);
-        updateAction_->setToolTip(QStringLiteral("Rebuild and restart classiCAD, preserving the current scene"));
+        updateAction_->setToolTip(QStringLiteral("Restart classiCAD, preserving the current scene"));
         connect(updateAction_, &QAction::triggered, this, [this]() {
             updateApplication();
         });

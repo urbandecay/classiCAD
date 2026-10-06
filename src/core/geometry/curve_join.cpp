@@ -10,6 +10,128 @@
 #include <utility>
 
 namespace classiCAD {
+namespace {
+
+qreal pointDistance(const QPointF &first, const QPointF &second)
+{
+    return std::hypot(first.x() - second.x(), first.y() - second.y());
+}
+
+qreal pointDistance(const Point3D &first, const Point3D &second)
+{
+    return std::hypot(std::hypot(first.x - second.x,
+                                 first.y - second.y),
+                      first.z - second.z);
+}
+
+qreal pointPrecision(const QPointF &first, const QPointF &second)
+{
+    const qreal scale = std::max({qreal(1.0), std::abs(first.x()),
+                                  std::abs(first.y()), std::abs(second.x()),
+                                  std::abs(second.y())});
+    return std::max<qreal>(1.0e-10, scale * 1.0e-12);
+}
+
+qreal pointPrecision(const Point3D &first, const Point3D &second)
+{
+    const qreal scale = std::max({qreal(1.0), std::abs(first.x),
+                                  std::abs(first.y), std::abs(first.z),
+                                  std::abs(second.x), std::abs(second.y),
+                                  std::abs(second.z)});
+    return std::max<qreal>(1.0e-10, scale * 1.0e-12);
+}
+
+bool closePlanarLoopSeam(QVector<NurbsCurve2D> *components,
+                         bool shouldClose)
+{
+    if (!shouldClose) {
+        return components != nullptr;
+    }
+    if (components == nullptr || components->size() < 2) {
+        return false;
+    }
+    NurbsCurve2D &last = components->last();
+    if (last.controlPoints.isEmpty()) {
+        return false;
+    }
+
+    QPointF firstStart;
+    QPointF lastEnd;
+    if (!nurbsCurveEndpoints(components->first(), &firstStart, nullptr) ||
+        !nurbsCurveEndpoints(last, nullptr, &lastEnd)) {
+        return false;
+    }
+    const qreal gap = pointDistance(firstStart, lastEnd);
+    const qreal precision = pointPrecision(firstStart, lastEnd);
+    if (gap <= precision) {
+        return true;
+    }
+
+    const int endpointControlPoint = last.controlPoints.size() - 1;
+    if (pointDistance(last.controlPoints[endpointControlPoint], lastEnd) >
+        precision) {
+        return false;
+    }
+    last.controlPoints[endpointControlPoint] = firstStart;
+
+    QPointF verifiedEnd;
+    return nurbsCurveEndpoints(last, nullptr, &verifiedEnd) &&
+           pointDistance(firstStart, verifiedEnd) <= precision * 10.0;
+}
+
+bool closeWorldLoopSeam(QVector<NurbsCurve2D> *components,
+                        QVector<WorkPlaneFrame> *frames,
+                        bool shouldClose)
+{
+    if (!shouldClose) {
+        return components != nullptr && frames != nullptr &&
+               components->size() == frames->size();
+    }
+    if (components == nullptr || frames == nullptr ||
+        components->size() != frames->size() || components->size() < 2) {
+        return false;
+    }
+    NurbsCurve2D &last = components->last();
+    if (last.controlPoints.isEmpty()) {
+        return false;
+    }
+
+    QPointF firstStart;
+    QPointF lastEnd;
+    if (!nurbsCurveEndpoints(components->first(), &firstStart, nullptr) ||
+        !nurbsCurveEndpoints(last, nullptr, &lastEnd)) {
+        return false;
+    }
+    const Point3D firstWorld = workPlaneFramePointToWorld(
+        firstStart, frames->first());
+    const Point3D lastWorld = workPlaneFramePointToWorld(
+        lastEnd, frames->last());
+    const qreal gap = pointDistance(firstWorld, lastWorld);
+    const qreal precision = pointPrecision(firstWorld, lastWorld);
+    if (gap <= precision) {
+        return true;
+    }
+
+    const int endpointControlPoint = last.controlPoints.size() - 1;
+    const Point3D endpointControlPointWorld = workPlaneFramePointToWorld(
+        last.controlPoints[endpointControlPoint], frames->last());
+    if (pointDistance(endpointControlPointWorld, lastWorld) > precision) {
+        return false;
+    }
+    last.controlPoints[endpointControlPoint] = worldPointToWorkPlaneFrame(
+        firstWorld, frames->last());
+
+    QPointF verifiedEnd;
+    if (!nurbsCurveEndpoints(last, nullptr, &verifiedEnd)) {
+        return false;
+    }
+    return pointDistance(firstWorld,
+                         workPlaneFramePointToWorld(verifiedEnd,
+                                                    frames->last())) <=
+           precision * 10.0;
+}
+
+} // namespace
 
 bool orderConnectedNurbsCurves(const QVector<NurbsCurve2D> &input,
                               QVector<NurbsCurve2D> *ordered,
@@ -421,6 +543,17 @@ bool closeConnectedNurbsCurveGaps(QVector<NurbsCurve2D> *components,
         return false;
     }
 
+    bool shouldCloseLoop = false;
+    if (components->size() > 1) {
+        QPointF firstStart;
+        QPointF lastEnd;
+        if (!nurbsCurveEndpoints(components->first(), &firstStart, nullptr) ||
+            !nurbsCurveEndpoints(components->last(), nullptr, &lastEnd)) {
+            return false;
+        }
+        shouldCloseLoop = pointDistance(firstStart, lastEnd) <= tolerance;
+    }
+
     for (int index = 0; index + 1 < components->size(); ++index) {
         QPointF previousEnd;
         QPointF nextStart;
@@ -436,7 +569,7 @@ bool closeConnectedNurbsCurveGaps(QVector<NurbsCurve2D> *components,
             controlPoint += delta;
         }
     }
-    return true;
+    return closePlanarLoopSeam(components, shouldCloseLoop);
 }
 
 bool connectedNurbsCurvesAreContinuous(
@@ -467,6 +600,22 @@ bool closeConnectedNurbsCurveGapsInWorld(
         components->size() != frames->size()) {
         return false;
     }
+
+    bool shouldCloseLoop = false;
+    if (components->size() > 1) {
+        QPointF firstStart;
+        QPointF lastEnd;
+        if (!nurbsCurveEndpoints(components->first(), &firstStart, nullptr) ||
+            !nurbsCurveEndpoints(components->last(), nullptr, &lastEnd)) {
+            return false;
+        }
+        const Point3D firstWorld = workPlaneFramePointToWorld(
+            firstStart, frames->first());
+        const Point3D lastWorld = workPlaneFramePointToWorld(
+            lastEnd, frames->last());
+        shouldCloseLoop = pointDistance(firstWorld, lastWorld) <= tolerance;
+    }
+
     for (int index = 0; index + 1 < components->size(); ++index) {
         QPointF previousEnd;
         QPointF nextStart;
@@ -490,7 +639,7 @@ bool closeConnectedNurbsCurveGapsInWorld(
         nextFrame.origin.y += delta.y;
         nextFrame.origin.z += delta.z;
     }
-    return true;
+    return closeWorldLoopSeam(components, frames, shouldCloseLoop);
 }
 
 bool connectedNurbsCurvesAreContinuousInWorld(

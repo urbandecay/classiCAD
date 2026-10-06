@@ -19,22 +19,15 @@ UpdateController::UpdateController(QObject *parent)
 {
 }
 
-UpdateController::~UpdateController()
-{
-    if (process_ != nullptr && process_->state() != QProcess::NotRunning) {
-        process_->disconnect(this);
-        process_->kill();
-        process_->waitForFinished(1000);
-    }
-}
+UpdateController::~UpdateController() = default;
 
 bool UpdateController::isRunning() const
 {
-    return process_ != nullptr;
+    return restarting_;
 }
 
 bool UpdateController::start(const QString &executablePath,
-                             const QString &buildDirectory,
+                             const QString &workingDirectory,
                              const SessionSaver &saveSession,
                              const UpdateSessionWindowState &windowState,
                              const Callbacks &callbacks,
@@ -67,84 +60,28 @@ bool UpdateController::start(const QString &executablePath,
         return false;
     }
 
-    auto *process = new QProcess(this);
-    process_ = process;
-    process->setWorkingDirectory(buildDirectory);
-
-    const auto failUpdate = [this, process, sessionPath, callbacks](const QString &message) {
-        fail(process, sessionPath, callbacks, message);
-    };
-    connect(process,
-            &QProcess::errorOccurred,
-            this,
-            [process, failUpdate](QProcess::ProcessError error) {
-                if (error == QProcess::FailedToStart) {
-                    failUpdate(QStringLiteral("Could not start cmake: %1")
-                                   .arg(process->errorString()));
-                }
-            });
-    connect(process,
-            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
-            this,
-            [this,
-             process,
-             sessionPath,
-             executablePath,
-             buildDirectory,
-             saveSession,
-             windowState,
-             callbacks,
-             failUpdate](int exitCode, QProcess::ExitStatus exitStatus) {
-                if (process_ != process) {
-                    return;
-                }
-                const QString output =
-                    QString::fromLocal8Bit(process->readAllStandardOutput() +
-                                            process->readAllStandardError())
-                        .trimmed();
-                if (!output.isEmpty()) {
-                    DebugLog::instance().write(
-                        QStringLiteral("update build output: %1").arg(output));
-                }
-                if (exitStatus != QProcess::NormalExit || exitCode != 0) {
-                    failUpdate(QStringLiteral("Build exited with code %1").arg(exitCode));
-                    return;
-                }
-
-                QString handoffError;
-                if (!saveSession(sessionPath) ||
-                    !writeWindowState(sessionPath, windowState, &handoffError)) {
-                    failUpdate(QStringLiteral("Could not preserve the current view: %1")
-                                   .arg(handoffError));
-                    return;
-                }
-
-                const QStringList arguments{QStringLiteral("--update-session"), sessionPath};
-                if (!QProcess::startDetached(executablePath,
-                                             arguments,
-                                             buildDirectory)) {
-                    failUpdate(QStringLiteral("Could not restart classiCAD."));
-                    return;
-                }
-
-                process_ = nullptr;
-                process->deleteLater();
-                if (callbacks.finished) {
-                    callbacks.finished(true, QStringLiteral("Update complete — restarting classiCAD"));
-                }
-                if (callbacks.restarting) {
-                    callbacks.restarting();
-                }
-            });
-
     if (callbacks.status) {
-        callbacks.status(QStringLiteral("Updating classiCAD — rebuilding…"));
+        callbacks.status(QStringLiteral("Restarting classiCAD…"));
     }
-    process->start(QStringLiteral("cmake"),
-                   QStringList{QStringLiteral("--build"),
-                               buildDirectory,
-                               QStringLiteral("--target"),
-                               QStringLiteral("classiCAD")});
+    const QStringList arguments{QStringLiteral("--update-session"), sessionPath};
+    if (!QProcess::startDetached(executablePath, arguments, workingDirectory)) {
+        QFile::remove(sessionPath);
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Could not restart classiCAD.");
+        }
+        return false;
+    }
+
+    restarting_ = true;
+    DebugLog::instance().write(
+        QStringLiteral("restart handoff launched executable=%1 session=%2")
+            .arg(executablePath, sessionPath));
+    if (callbacks.finished) {
+        callbacks.finished(true, QStringLiteral("Restarting classiCAD"));
+    }
+    if (callbacks.restarting) {
+        callbacks.restarting();
+    }
     return true;
 }
 
@@ -180,6 +117,20 @@ bool UpdateController::readWindowState(const QString &sessionPath,
     restored.workspaceSplitterState =
         QByteArray::fromBase64(
             root.value(QStringLiteral("workspaceSplitterState")).toString().toLatin1());
+    const QJsonValue projectPath = root.value(QStringLiteral("projectPath"));
+    const QJsonValue workspaceName = root.value(QStringLiteral("workspaceName"));
+    const QJsonValue documentModified = root.value(QStringLiteral("documentModified"));
+    if ((!projectPath.isUndefined() && !projectPath.isString()) ||
+        (!workspaceName.isUndefined() && !workspaceName.isString()) ||
+        (!documentModified.isUndefined() && !documentModified.isBool())) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Invalid saved window session state.");
+        }
+        return false;
+    }
+    restored.projectPath = projectPath.toString();
+    restored.workspaceName = workspaceName.toString();
+    restored.documentModified = documentModified.toBool();
     *state = restored;
     return true;
 }
@@ -210,6 +161,9 @@ bool UpdateController::writeWindowState(const QString &sessionPath,
                 QString::fromLatin1(state.windowGeometry.toBase64()));
     root.insert(QStringLiteral("workspaceSplitterState"),
                 QString::fromLatin1(state.workspaceSplitterState.toBase64()));
+    root.insert(QStringLiteral("projectPath"), state.projectPath);
+    root.insert(QStringLiteral("workspaceName"), state.workspaceName);
+    root.insert(QStringLiteral("documentModified"), state.documentModified);
     document.setObject(root);
 
     QSaveFile output(sessionPath);
@@ -227,22 +181,6 @@ bool UpdateController::writeWindowState(const QString &sessionPath,
         return false;
     }
     return true;
-}
-
-void UpdateController::fail(QProcess *process,
-                            const QString &sessionPath,
-                            const Callbacks &callbacks,
-                            const QString &message)
-{
-    if (process_ != process) {
-        return;
-    }
-    process_ = nullptr;
-    QFile::remove(sessionPath);
-    process->deleteLater();
-    if (callbacks.finished) {
-        callbacks.finished(false, message);
-    }
 }
 
 } // namespace classiCAD

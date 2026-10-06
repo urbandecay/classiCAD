@@ -6,16 +6,17 @@
 
 #include <functional>
 
-class QProcess;
-
 namespace classiCAD {
 
 struct UpdateSessionWindowState {
     QByteArray windowGeometry;
     QByteArray workspaceSplitterState;
+    QString projectPath;
+    QString workspaceName;
+    bool documentModified = false;
 };
 
-// Coordinates the build and restart handoff while leaving dialogs and status
+// Coordinates the restart handoff while leaving dialogs and status
 // presentation to MainWindow.
 class UpdateController final : public QObject {
 public:
@@ -32,7 +33,7 @@ public:
 
     bool isRunning() const;
     bool start(const QString &executablePath,
-               const QString &buildDirectory,
+               const QString &workingDirectory,
                const SessionSaver &saveSession,
                const UpdateSessionWindowState &windowState,
                const Callbacks &callbacks,
@@ -46,12 +47,8 @@ private:
     bool writeWindowState(const QString &sessionPath,
                           const UpdateSessionWindowState &state,
                           QString *errorMessage) const;
-    void fail(QProcess *process,
-              const QString &sessionPath,
-              const Callbacks &callbacks,
-              const QString &message);
 
-    QProcess *process_ = nullptr;
+    bool restarting_ = false;
 };
 
 } // namespace classiCAD

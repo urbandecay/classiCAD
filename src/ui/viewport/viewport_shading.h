@@ -55,7 +55,9 @@ enum class ViewportCavityType {
 // Blender keeps wireframe X-Ray separate from the solid X-Ray setting. The
 // initial wireframe state mirrors classiCAD's existing through-visible view.
 struct ViewportShadingSettings {
-    ViewportShadingMode mode = ViewportShadingMode::Wireframe;
+    // Solid is the useful modeling default: scene surfaces occlude geometry
+    // behind them. Wireframe remains available as an explicit viewport mode.
+    ViewportShadingMode mode = ViewportShadingMode::Solid;
     ViewportLightingMode lightingMode = ViewportLightingMode::Studio;
     QString studioLightPreset = QStringLiteral("Default");
     QString matcapPreset = QStringLiteral("basic_grey");

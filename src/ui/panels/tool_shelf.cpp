@@ -144,7 +144,7 @@ ToolShelf::ToolShelf(ToolShelfCallbacks callbacks, QWidget *parent)
 
     auto *joinButton = makeActionButton(
         QStringLiteral("Join\nSplines"),
-        QStringLiteral("Join connected lines and curves into a component-preserving PolyCurve"),
+        QStringLiteral("Join connected lines and curves into one continuous spline"),
         layout);
     connect(joinButton, &QToolButton::clicked, this, [this]() {
         if (callbacks_.joinRequested) callbacks_.joinRequested();

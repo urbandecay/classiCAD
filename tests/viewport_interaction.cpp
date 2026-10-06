@@ -304,9 +304,83 @@ QString openGlRendererName(ViewportGpuSurface *surface)
 
 } // namespace
 
+bool verifyVertexComponentSelection(QApplication &application)
+{
+    bool passed = true;
+    const QSize interactionViewportSize(640, 480);
+    const auto orangePixels = [](const QImage &image) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor color = image.pixelColor(x, y);
+                count += color.red() > 140 && color.green() > 65 &&
+                         color.green() < color.red() &&
+                         color.blue() < color.green();
+            }
+        }
+        return count;
+    };
+    if (QApplication::platformName() == QStringLiteral("xcb")) {
+        QTemporaryDir directory;
+        Document source;
+        Shape face;
+        face.geometryType = GeometryType::NurbsSurface;
+        face.nurbsSurface.controlVertexCountU = 2;
+        face.nurbsSurface.controlVertexCountV = 2;
+        face.nurbsSurface.controlPoints = {{-8, -8, 0}, {-8, 8, 0},
+                                          {8, -8, 0}, {8, 8, 0}};
+        face.nurbsSurface.weights = {1, 1, 1, 1};
+        face.nurbsSurface.knotsU = {0, 1};
+        face.nurbsSurface.knotsV = {0, 1};
+        source.append(face);
+        QString error;
+        const QString path = directory.filePath(QStringLiteral("vertex-selection.vignola"));
+        std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+        probe->resize(interactionViewportSize);
+        probe->show();
+        passed &= check(saveVignolaDocument(path, source, &error) &&
+                            probe->loadVignolaDocument(path, &error),
+                        "vertex-selection fixture must load");
+        probe->setViewPreset(ViewportViewPreset::Top);
+        passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Top),
+                        "vertex-selection camera must settle");
+        probe->setTool(ToolId::Select);
+        ViewportTransform projection;
+        projection.setViewPreset(ViewportViewPreset::Top);
+        QPointF first, opposite, edgeMiddle, center;
+        projection.worldPointToScreen({-8, -8, 0}, interactionViewportSize, &first);
+        projection.worldPointToScreen({8, 8, 0}, interactionViewportSize, &opposite);
+        projection.worldPointToScreen({0, -8, 0}, interactionViewportSize, &edgeMiddle);
+        projection.worldPointToScreen({0, 0, 0}, interactionViewportSize, &center);
+        const QRect edgeRegion(edgeMiddle.toPoint() - QPoint(6, 6), QSize(13, 13));
+        const auto clickCorner = [&](const QPointF &corner) {
+            const QPointF delta = center - corner;
+            const QPointF click = corner + delta * (2.0 / std::hypot(delta.x(), delta.y()));
+            sendMouse(probe.get(), QEvent::MouseButtonPress, click,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            sendMouse(probe.get(), QEvent::MouseButtonRelease, click,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            application.processEvents();
+        };
+        clickCorner(first);
+        const int selectedEdgePixels = orangePixels(captureViewport(probe.get()).copy(edgeRegion));
+        passed &= check(selectedEdgePixels > 5,
+                        "selecting a vertex must retain its orange incident-edge overlay");
+        clickCorner(opposite);
+        passed &= check(orangePixels(captureViewport(probe.get()).copy(edgeRegion)) <
+                            selectedEdgePixels / 2,
+                        "selecting another vertex must replace the cached component overlay");
+    }
+
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_VERTEX_SELECTION_ONLY")) {
+        return verifyVertexComponentSelection(application) ? 0 : 1;
+    }
     bool passed = true;
 
     const QSize interactionViewportSize(640, 480);
@@ -2417,6 +2491,8 @@ int main(int argc, char **argv)
             }
         }
     }
+
+    passed &= verifyVertexComponentSelection(application);
 
     return passed ? 0 : 1;
 }

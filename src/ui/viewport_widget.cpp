@@ -98,6 +98,7 @@
 #include <QLineF>
 #include <QImageReader>
 #include <QKeyEvent>
+#include <QMap>
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
@@ -3896,7 +3897,7 @@ protected:
                             faceShape.nurbsSurface = face;
                             const ViewportDepthGeometry faceCage =
                                 selectedSurfaceCage(faceShape);
-                            bool fullySelected = !faceCage.pointVertices.isEmpty();
+                            bool fullySelected = faceCage.pointVertices.size() >= 3;
                             for (const QVector3D &point : faceCage.pointVertices) {
                                 int vertex = -1;
                                 for (int index = 0; index < cage->pointVertices.size(); ++index) {
@@ -3963,6 +3964,26 @@ protected:
                                                                float pointDiameter) {
                             if (geometry.pointVertices.isEmpty() &&
                                 geometry.lineVertices.isEmpty()) return;
+                            QByteArray geometryKeyBytes;
+                            QDataStream geometryKeyStream(&geometryKeyBytes,
+                                                          QIODevice::WriteOnly);
+                            geometryKeyStream << quint32(geometry.pointVertices.size());
+                            for (const QVector3D &point : geometry.pointVertices) {
+                                geometryKeyStream << point.x() << point.y() << point.z();
+                            }
+                            geometryKeyStream << quint32(geometry.lineVertices.size());
+                            for (const QVector3D &point : geometry.lineVertices) {
+                                geometryKeyStream << point.x() << point.y() << point.z();
+                            }
+                            quint64 dynamicGeometryRevision = 1469598103934665603ULL;
+                            for (const char byte : geometryKeyBytes) {
+                                dynamicGeometryRevision ^=
+                                    static_cast<unsigned char>(byte);
+                                dynamicGeometryRevision *= 1099511628211ULL;
+                            }
+                            dynamicGeometryRevision ^=
+                                renderObject.geometryRevision * 1099511628211ULL;
+                            if (dynamicGeometryRevision == 0) dynamicGeometryRevision = 1;
                             ViewportSceneStroke stroke;
                             stroke.shape = &visibleShape;
                             stroke.color = color;
@@ -3970,7 +3991,7 @@ protected:
                             stroke.pointDiameter = pointDiameter;
                             stroke.editModeWire = true;
                             stroke.objectId = objectId;
-                            stroke.geometryRevision = renderObject.geometryRevision;
+                            stroke.geometryRevision = dynamicGeometryRevision;
                             stroke.cacheableGeometry = renderObject.cacheable;
                             stroke.worldOffset = renderObject.placementTranslation;
                             stroke.preparedDepthGeometry =
@@ -3979,11 +4000,105 @@ protected:
                             gpuStrokes.append(std::move(stroke));
                         };
                         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
-                            ViewportDepthGeometry incidentEdges;
                             const auto samePoint = [](const QVector3D &a,
                                                       const QVector3D &b) {
                                 return (a - b).lengthSquared() <= 1.0e-12f;
                             };
+                            QVector<QVector3D> vertexNormals(cage->pointVertices.size());
+                            for (const NurbsSurface3D &face :
+                                 shapeSurfaceFaces(visibleShape)) {
+                                Shape faceShape;
+                                faceShape.geometryType = GeometryType::NurbsSurface;
+                                faceShape.nurbsSurface = face;
+                                const ViewportDepthGeometry faceCage =
+                                    selectedSurfaceCage(faceShape);
+                                const QVector<QVector3D> faceVertices =
+                                    faceCage.pointVertices;
+                                QVector3D faceNormal;
+                                for (int a = 0; a < faceVertices.size() &&
+                                                faceNormal.isNull(); ++a) {
+                                    for (int b = a + 1; b < faceVertices.size() &&
+                                                    faceNormal.isNull(); ++b) {
+                                        for (int c = b + 1; c < faceVertices.size(); ++c) {
+                                            faceNormal = QVector3D::crossProduct(
+                                                faceVertices[b] - faceVertices[a],
+                                                faceVertices[c] - faceVertices[a]);
+                                            if (faceNormal.lengthSquared() > 1.0e-12f) {
+                                                faceNormal.normalize();
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (!faceNormal.isNull()) {
+                                    for (const QVector3D &point : faceVertices) {
+                                        for (int vertex = 0;
+                                             vertex < cage->pointVertices.size(); ++vertex) {
+                                            if (samePoint(point, cage->pointVertices[vertex])) {
+                                                vertexNormals[vertex] += faceNormal;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            for (QVector3D &normal : vertexNormals) {
+                                if (!normal.isNull()) normal.normalize();
+                            }
+                            const QVector3D viewDirection(
+                                float(renderFrame.camera.viewDirection().x),
+                                float(renderFrame.camera.viewDirection().y),
+                                float(renderFrame.camera.viewDirection().z));
+                            const Point3D cameraPosition =
+                                renderFrame.camera.cameraPosition(renderFrame.viewportSize);
+                            const QColor selectedVertexColor(QStringLiteral("#ff7a00"));
+                            const QColor selectedEdgeColor(QStringLiteral("#ff9900"));
+                            const QColor wireEditColor(Qt::black);
+                            const QColor editMiddleColor(
+                                qRound(selectedVertexColor.red() * 0.65 +
+                                       wireEditColor.red() * 0.35),
+                                qRound(selectedVertexColor.green() * 0.65 +
+                                       wireEditColor.green() * 0.35),
+                                qRound(selectedVertexColor.blue() * 0.65 +
+                                       wireEditColor.blue() * 0.35));
+                            const auto blenderFacingColor = [&](const QVector3D &normal,
+                                                                const QVector3D &edgeCenter,
+                                                                const QColor &baseColor) {
+                                if (normal.isNull())
+                                    return baseColor;
+                                QVector3D pointToView = -viewDirection;
+                                if (renderFrame.camera.isPerspectiveEnabled()) {
+                                    const QVector3D worldCenter = edgeCenter + QVector3D(
+                                        float(renderObject.placementTranslation.x),
+                                        float(renderObject.placementTranslation.y),
+                                        float(renderObject.placementTranslation.z));
+                                    pointToView = worldCenter - QVector3D(
+                                        float(cameraPosition.x), float(cameraPosition.y),
+                                        float(cameraPosition.z));
+                                }
+                                if (pointToView.isNull()) return baseColor;
+                                const float facing = 1.0f - std::abs(
+                                    QVector3D::dotProduct(normal.normalized(),
+                                                         pointToView.normalized())) * 0.2f;
+                                const auto blendChannel = [facing](qreal middleValue,
+                                                                   qreal selectedValue) {
+                                    const float middle = std::pow(float(middleValue),
+                                                                  1.0f / 2.2f);
+                                    const float selected = std::pow(float(selectedValue),
+                                                                    1.0f / 2.2f);
+                                    return std::pow(middle * (1.0f - facing) +
+                                                        selected * facing,
+                                                    2.2f);
+                                };
+                                // Match Blender's enabled edit Fresnel blend:
+                                // face-facing wire colors soften toward a neutral gray.
+                                QColor result;
+                                result.setRgbF(blendChannel(editMiddleColor.redF(), baseColor.redF()),
+                                               blendChannel(editMiddleColor.greenF(), baseColor.greenF()),
+                                               blendChannel(editMiddleColor.blueF(), baseColor.blueF()));
+                                return result;
+                            };
+                            QMap<QRgb, ViewportDepthGeometry> fadedEdges;
                             for (int edge = 0; edge + 1 < cage->lineVertices.size(); edge += 2) {
                                 int a = -1, b = -1;
                                 for (int vertex = 0; vertex < cage->pointVertices.size(); ++vertex) {
@@ -3992,27 +4107,47 @@ protected:
                                 }
                                 if (activeComponentSelection().contains(a) ||
                                     activeComponentSelection().contains(b)) {
-                                    incidentEdges.lineVertices.append(cage->lineVertices[edge]);
-                                    incidentEdges.lineVertices.append(cage->lineVertices[edge + 1]);
+                                    constexpr int fadeSteps = 12;
+                                    for (int step = 0; step < fadeSteps; ++step) {
+                                        const float t0 = float(step) / fadeSteps;
+                                        const float t1 = float(step + 1) / fadeSteps;
+                                        const float tm = (t0 + t1) * 0.5f;
+                                        QVector3D normal = vertexNormals[a] * (1.0f - tm) +
+                                                           vertexNormals[b] * tm;
+                                        if (!normal.isNull()) normal.normalize();
+                                        const QVector3D first = cage->lineVertices[edge] * (1.0f - t0) +
+                                                                cage->lineVertices[edge + 1] * t0;
+                                        const QVector3D second = cage->lineVertices[edge] * (1.0f - t1) +
+                                                                 cage->lineVertices[edge + 1] * t1;
+                                        const QVector3D center = (first + second) * 0.5f;
+                                        const QColor color = blenderFacingColor(
+                                            normal, center, selectedEdgeColor);
+                                        ViewportDepthGeometry &geometry = fadedEdges[color.rgba()];
+                                        geometry.lineVertices << first << second;
+                                    }
                                 }
                             }
-                            appendComponentStroke(std::move(incidentEdges),
-                                                  QColor(QStringLiteral("#ff8a00")),
-                                                  1.0f, 0.0f);
-                            ViewportDepthGeometry selectedPoints;
-                            ViewportDepthGeometry activePoint;
+                            for (auto it = fadedEdges.begin(); it != fadedEdges.end(); ++it) {
+                                appendComponentStroke(std::move(it.value()),
+                                                      QColor::fromRgba(it.key()),
+                                                      1.0f, 0.0f);
+                            }
+                            QMap<QRgb, ViewportDepthGeometry> fadedPoints;
                             for (int component : activeComponentSelection()) {
                                 if (component < 0 || component >= cage->pointVertices.size()) continue;
-                                if (component == activeComponentIndex_)
-                                    activePoint.pointVertices.append(cage->pointVertices[component]);
-                                else
-                                    selectedPoints.pointVertices.append(cage->pointVertices[component]);
+                                const QVector3D &point = cage->pointVertices[component];
+                                const QColor baseColor = component == activeComponentIndex_
+                                                             ? QColor(Qt::white)
+                                                             : selectedVertexColor;
+                                const QColor color = blenderFacingColor(
+                                    vertexNormals[component], point, baseColor);
+                                fadedPoints[color.rgba()].pointVertices.append(point);
                             }
-                            appendComponentStroke(std::move(selectedPoints),
-                                                  QColor(QStringLiteral("#ff8a00")),
-                                                  1.0f, 4.0f);
-                            appendComponentStroke(std::move(activePoint), Qt::white,
-                                                  1.0f, 4.0f);
+                            for (auto it = fadedPoints.begin(); it != fadedPoints.end(); ++it) {
+                                appendComponentStroke(std::move(it.value()),
+                                                      QColor::fromRgba(it.key()),
+                                                      1.0f, 4.0f);
+                            }
                         } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
                             ViewportDepthGeometry componentGeometry;
                             for (int component : activeComponentSelection()) {
@@ -4619,8 +4754,18 @@ protected:
                     }
                 }
             }
+            QVector<ViewportRenderObject> surfaceDrawObjects = visibleShapes;
+            if (!activeComponentSelection().isEmpty()) {
+                for (ViewportRenderObject &object : surfaceDrawObjects) {
+                    if (object.objectId == componentSelectionObject_) {
+                        // Suppress the object tint only in the surface pass.
+                        // Component overlays still need the real selection state.
+                        object.selected = false;
+                    }
+                }
+            }
             const bool surfacesDrawn = surfaceRenderer == nullptr ||
-                surfaceRenderer->draw(visibleShapes,
+                surfaceRenderer->draw(surfaceDrawObjects,
                                       renderFrame.camera,
                                       renderFrame.viewportSize,
                                       devicePixelRatioF(),

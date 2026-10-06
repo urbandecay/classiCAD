@@ -29,6 +29,11 @@ misread or implemented incorrectly.
   normals for solids; use the visible surface hit and its oriented face normal
   to place the compass frame, then keep that frame fixed through the rotate
   stages.
+- Arc One Point also follows the visible face normal under the cursor before
+  its first pivot click, then locks the selected frame for the rest of the arc.
+  Resolving only the hovered object's workplane misses this behavior on solid
+  faces. Keep this port scoped to One Point; the other Arc modes have different
+  stage and plane-lock behavior.
 - **`P` means a perpendicular drawing plane.** It must derive a 3D plane whose
   normal is perpendicular to the captured reference plane, then use that same
   frame for cursor projection, preview, and committed NURBS geometry. Rotating

@@ -754,6 +754,11 @@ public:
 
         refreshCursorConstraint();
 
+        if (tool == Tool::Arc && arcState().mode == ArcMode::OnePoint &&
+            rect().contains(lastMousePosition_)) {
+            updateDrawingWorkPlaneFromHover(lastMousePosition_);
+        }
+
         if (tool == Tool::Select) {
             setCursor(Qt::ArrowCursor);
         } else {
@@ -961,6 +966,10 @@ public:
         resetArcPreviewTracking();
         resetArcInputState();
         currentSnap_ = SnapResult{};
+        if (activeTool_ == Tool::Arc && mode == ArcMode::OnePoint &&
+            rect().contains(lastMousePosition_)) {
+            updateDrawingWorkPlaneFromHover(lastMousePosition_);
+        }
         DebugLog::instance().write(QStringLiteral("setArcMode mode=%1")
                                        .arg(arcModeName(arcState().mode)));
         update();
@@ -11189,6 +11198,37 @@ private:
             isValidWorkPlaneFrame(toolDrawingFrame_)) {
             viewportTransform_.setWorkPlaneFrame(toolDrawingFrame_);
             return;
+        }
+        if (activeTool_ == Tool::Arc &&
+            arcState().mode == ArcMode::OnePoint &&
+            arcTool_.inputStage() == ArcInputStage::FirstPoint) {
+            // Arc One Point uses the add-on's face-oriented compass until its
+            // pivot click. Object workplanes lose the individual face normal
+            // on solids, so use the visible face hit just as Rotate does.
+            Point3D facePoint;
+            Point3D faceNormal;
+            if (curveHitTester_.hitTestVisibleSurface(
+                    document_, screenPosition, viewportTransform_, size(),
+                    &facePoint, &faceNormal)) {
+                const Point3D reference = std::abs(faceNormal.x) < 0.99
+                                              ? Point3D{1.0, 0.0, 0.0}
+                                              : Point3D{0.0, 1.0, 0.0};
+                const auto cross = [](const Point3D &first,
+                                      const Point3D &second) {
+                    return Point3D{
+                        first.y * second.z - first.z * second.y,
+                        first.z * second.x - first.x * second.z,
+                        first.x * second.y - first.y * second.x};
+                };
+                const Point3D yAxis = cross(faceNormal, reference);
+                const Point3D xAxis = cross(yAxis, faceNormal);
+                const WorkPlaneFrame faceFrame = makeWorkPlaneFrameFromNormal(
+                    facePoint, faceNormal, xAxis);
+                if (isValidWorkPlaneFrame(faceFrame)) {
+                    viewportTransform_.setWorkPlaneFrame(faceFrame);
+                    return;
+                }
+            }
         }
         const bool unlockedPointInput =
             (activeTool_ == Tool::PointByLine ||

@@ -3824,7 +3824,9 @@ protected:
                                                         renderFrame.camera,
                                                         renderFrame.viewportSize,
                                                         devicePixelRatioF(),
-                                                        !viewportShadingSettings_.xrayEnabled(),
+                                                        !viewportShadingSettings_.xrayEnabled() ||
+                                                            viewportShadingSettings_.mode ==
+                                                                ViewportShadingMode::Solid,
                                                         viewportShadingSettings_.xrayEnabled()
                                                             ? viewportShadingSettings_.xrayAlpha
                                                             : 1.0);

@@ -878,6 +878,56 @@ bool ViewportSurfaceRenderer::draw(
         glDisable(GL_DEPTH_TEST);
     }
 
+    // Solid X-Ray keeps the faces translucent, but their depth still defines
+    // which scene strokes are behind a surface. Without this depth-only pass,
+    // the later stroke pass draws back edges through every face.
+    const bool xraySurfaceDepthAvailable =
+        settings.mode == ViewportShadingMode::Solid &&
+        settings.xrayEnabled() && !previewOverlay && !vertices_.isEmpty();
+    if (xraySurfaceDepthAvailable) {
+        const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+        glViewport(0, 0, qRound(viewportSize.width() * dpr),
+                   qRound(viewportSize.height() * dpr));
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+
+        vertexArray_.bind();
+        vertexBuffer_.bind();
+        if (geometryDirty_) {
+            vertexBuffer_.allocate(vertices_.constData(),
+                                   vertices_.size() *
+                                       static_cast<int>(sizeof(SurfaceVertex)));
+            geometryDirty_ = false;
+        }
+        shadowProgram_.bind();
+        shadowProgram_.setUniformValue(
+            "uShadowViewProjection",
+            viewportViewProjection(transform, viewportSize));
+        for (const DrawRange &range : ranges_) {
+            if (range.count <= 0) {
+                continue;
+            }
+            shadowProgram_.setUniformValue(
+                "uWorldOffset",
+                QVector3D(static_cast<float>(range.offset.x),
+                          static_cast<float>(range.offset.y),
+                          static_cast<float>(range.offset.z)));
+            glDrawArrays(GL_TRIANGLES, range.first, range.count);
+        }
+        shadowProgram_.release();
+        vertexBuffer_.release();
+        vertexArray_.release();
+
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+    }
+
     const bool drawColor = settings.mode == ViewportShadingMode::Solid;
     if (!vertices_.isEmpty() &&
         (drawColor || !settings.xrayEnabled())) {
@@ -1068,7 +1118,7 @@ bool ViewportSurfaceRenderer::draw(
                                 std::max<qreal>(devicePixelRatio, 1.0)),
                    qRound(viewportSize.height() *
                           std::max<qreal>(devicePixelRatio, 1.0)));
-        if (settings.xrayEnabled()) {
+        if (settings.xrayEnabled() && !xraySurfaceDepthAvailable) {
             glDisable(GL_DEPTH_TEST);
         } else {
             glEnable(GL_DEPTH_TEST);

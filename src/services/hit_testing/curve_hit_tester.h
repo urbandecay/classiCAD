@@ -64,6 +64,15 @@ public:
                              const QSize &viewportSize,
                              Point3D *worldPoint) const;
 
+    // Ray-hit the nearest visible NurbsSurface/NurbsSolid face and return its
+    // world-space point and oriented face normal.
+    bool hitTestVisibleSurface(const Document &document,
+                               const QPointF &screenPosition,
+                               const ViewportTransform &transform,
+                               const QSize &viewportSize,
+                               Point3D *worldPoint,
+                               Point3D *worldNormal) const;
+
     QVector<QPointF> controlPointsForShape(const Shape &shape) const;
 
     bool hitTestSelectedControlPoint(

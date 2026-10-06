@@ -1486,6 +1486,7 @@ public:
             rotateToolPreferences_.angleSnapStrengthDegrees);
         rotateTool_.beginSelection(validSelection,
                                    rotateToolPreferences_.angleSnapEnabled);
+        updateDrawingWorkPlaneFromHover(QPointF(lastMousePosition_));
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
         update();
@@ -11140,6 +11141,35 @@ private:
                 isValidWorkPlaneFrame(rotateState().prePivotPlaneFrame)) {
                 viewportTransform_.setWorkPlaneFrame(rotateState().prePivotPlaneFrame);
                 return;
+            }
+
+            // The add-on's shared one-point tool updates its plane normal
+            // from the face hit under the cursor until the pivot is clicked.
+            // An object's stored workplane cannot represent individual solid
+            // faces, so resolve the visible tessellated face here first.
+            Point3D facePoint;
+            Point3D faceNormal;
+            if (curveHitTester_.hitTestVisibleSurface(
+                    document_, screenPosition, viewportTransform_, size(),
+                    &facePoint, &faceNormal)) {
+                const Point3D reference = std::abs(faceNormal.x) < 0.99
+                                              ? Point3D{1.0, 0.0, 0.0}
+                                              : Point3D{0.0, 1.0, 0.0};
+                const auto cross = [](const Point3D &first,
+                                      const Point3D &second) {
+                    return Point3D{
+                        first.y * second.z - first.z * second.y,
+                        first.z * second.x - first.x * second.z,
+                        first.x * second.y - first.y * second.x};
+                };
+                const Point3D yAxis = cross(faceNormal, reference);
+                const Point3D xAxis = cross(yAxis, faceNormal);
+                const WorkPlaneFrame faceFrame = makeWorkPlaneFrameFromNormal(
+                    facePoint, faceNormal, xAxis);
+                if (isValidWorkPlaneFrame(faceFrame)) {
+                    viewportTransform_.setWorkPlaneFrame(faceFrame);
+                    return;
+                }
             }
 
             DrawingPlaneResolutionRequest request =

@@ -24,6 +24,11 @@ misread or implemented incorrectly.
   as a separate scene object lets selecting and dragging one edge tear the
   path apart. Detect arbitrary planes through the clicked points too; checking
   only the drawing plane and principal planes splits rotated planar loops.
+- Rotate's one-point compass follows the visible face normal under the cursor
+  until its pivot is clicked. Object-level workplanes do not carry per-face
+  normals for solids; use the visible surface hit and its oriented face normal
+  to place the compass frame, then keep that frame fixed through the rotate
+  stages.
 - **`P` means a perpendicular drawing plane.** It must derive a 3D plane whose
   normal is perpendicular to the captured reference plane, then use that same
   frame for cursor projection, preview, and committed NURBS geometry. Rotating

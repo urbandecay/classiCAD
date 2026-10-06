@@ -5,6 +5,7 @@
 
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/nurbs_surface.h"
+#include "core/geometry/nurbs_solid.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
 #include "services/dimensions/dimension_layout.h"
 #include "services/hit_testing/projected_curve_bounds.h"
@@ -91,7 +92,8 @@ bool screenPointOnSurfaceTriangle(const QPointF &screenPosition,
                                   const Point3D &worldOffset,
                                   const ViewportTransform &transform,
                                   const QSize &viewportSize,
-                                  Point3D *worldPoint)
+                                  Point3D *worldPoint,
+                                  Point3D *worldNormal = nullptr)
 {
     if (worldPoint == nullptr) {
         return false;
@@ -135,6 +137,9 @@ bool screenPointOnSurfaceTriangle(const QPointF &screenPosition,
     }
     normal = {normal.x / normalLength, normal.y / normalLength,
               normal.z / normalLength};
+    if (worldNormal != nullptr) {
+        *worldNormal = normal;
+    }
     const Point3D yAxis{normal.y * xAxis.z - normal.z * xAxis.y,
                         normal.z * xAxis.x - normal.x * xAxis.z,
                         normal.x * xAxis.y - normal.y * xAxis.x};
@@ -1155,6 +1160,95 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
             nearestDepth = depth;
             nearestScreenDistance = screenDistance;
             found = true;
+        }
+    }
+    return found;
+}
+
+bool CurveHitTester::hitTestVisibleSurface(
+    const Document &document,
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    Point3D *worldPoint,
+    Point3D *worldNormal) const
+{
+    if (worldPoint == nullptr || worldNormal == nullptr) {
+        return false;
+    }
+
+    qreal nearestDepth = -std::numeric_limits<qreal>::infinity();
+    bool found = false;
+    for (int objectIndex = 0; objectIndex < document.size(); ++objectIndex) {
+        const ObjectId objectId = document.objectIdAt(objectIndex);
+        if (!document.isObjectVisible(objectId)) {
+            continue;
+        }
+        const Shape &shape = document[objectIndex];
+        if (shape.geometryType != GeometryType::NurbsSurface &&
+            shape.geometryType != GeometryType::NurbsSolid) {
+            continue;
+        }
+
+        const SceneObject *sceneObject = document.object(objectId);
+        const Point3D worldOffset = sceneObject != nullptr
+                                        ? sceneObject->placementTranslation
+                                        : Point3D{};
+        const QVector<NurbsSurface3D> faces =
+            shape.geometryType == GeometryType::NurbsSurface
+                ? QVector<NurbsSurface3D>{shape.nurbsSurface}
+                : shapeSurfaceFaces(shape);
+        for (int faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+            const NurbsSurface3D &surface = faces[faceIndex];
+            QRectF projectedBounds;
+            if (!projectedNurbsSurfaceControlHullBounds(
+                    surface, transform, viewportSize, worldOffset,
+                    &projectedBounds) ||
+                !projectedBounds.adjusted(-1.0, -1.0, 1.0, 1.0)
+                     .contains(screenPosition)) {
+                continue;
+            }
+
+            PreparedNurbsSurfaceTessellation localTessellation;
+            QSharedPointer<const PreparedNurbsSurfaceTessellation>
+                cachedTessellation;
+            const PreparedNurbsSurfaceTessellation *mesh = nullptr;
+            if (surfaceTessellationCache_ != nullptr && objectId.isValid()) {
+                cachedTessellation = surfaceTessellationCache_->acquire(
+                    objectId, document.objectGeometryRevision(objectId),
+                    surface, faceIndex);
+                mesh = cachedTessellation.data();
+            } else if (localTessellation.prepare(surface)) {
+                mesh = &localTessellation;
+            }
+            if (mesh == nullptr) {
+                continue;
+            }
+
+            const bool reverseFace =
+                shape.geometryType == GeometryType::NurbsSolid &&
+                nurbsSolidFaceReversed(shape.nurbsSolid, faceIndex);
+            for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
+                 mesh->triangles()) {
+                Point3D candidate;
+                Point3D normal;
+                if (!screenPointOnSurfaceTriangle(
+                        screenPosition, *mesh, triangle, worldOffset,
+                        transform, viewportSize, &candidate, &normal)) {
+                    continue;
+                }
+                if (reverseFace) {
+                    normal = {-normal.x, -normal.y, -normal.z};
+                }
+                const qreal depth = transform.worldDirectionToView(candidate)
+                                        .towardCamera;
+                if (std::isfinite(depth) && (!found || depth > nearestDepth)) {
+                    *worldPoint = candidate;
+                    *worldNormal = normal;
+                    nearestDepth = depth;
+                    found = true;
+                }
+            }
         }
     }
     return found;

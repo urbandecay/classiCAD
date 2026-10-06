@@ -50,12 +50,63 @@ Point3D multiply(const Point3D &point, qreal scalar)
     return {point.x * scalar, point.y * scalar, point.z * scalar};
 }
 
+qreal distance(const Point3D &first, const Point3D &second)
+{
+    return std::hypot(std::hypot(first.x - second.x,
+                                 first.y - second.y),
+                      first.z - second.z);
+}
+
 QVector4D colorVector(const QColor &color, qreal opacity)
 {
     return {static_cast<float>(color.redF()),
             static_cast<float>(color.greenF()),
             static_cast<float>(color.blueF()),
             static_cast<float>(color.alphaF() * opacity)};
+}
+
+struct ProjectionClipRange {
+    qreal nearPlane = 0.01;
+    qreal farPlane = 1000.0;
+    qreal orthographicEyeDistance = 1000.0;
+};
+
+ProjectionClipRange projectionClipRange(const ViewportTransform &transform,
+                                       const QSize &viewportSize)
+{
+    const ViewportCameraState camera = transform.cameraState();
+    const ViewportCameraPreferences preferences = transform.cameraPreferences();
+    ProjectionClipRange range;
+    range.nearPlane = preferences.clipStart;
+    range.farPlane = preferences.clipEnd;
+    if (camera.perspective) {
+        // Keep depth precision stable as the user zooms out. The stored clip
+        // end still controls navigation range, but using it directly here can
+        // produce a near/far ratio of billions and make adjacent surfaces
+        // indistinguishable in the depth buffer.
+        const qreal viewDistance = std::max(
+            distance(transform.cameraPosition(viewportSize),
+                     transform.viewTarget()),
+            preferences.clipStart * 2.0);
+        range.nearPlane = std::max(preferences.clipStart,
+                                   viewDistance * 0.001);
+        range.farPlane = std::max(
+            {viewDistance * 2.0,
+             range.nearPlane * 2.0,
+             std::min(preferences.clipEnd, viewDistance * 10.0)});
+        return range;
+    }
+
+    // Orthographic projection does not depend on eye distance. Keep its depth
+    // volume centered on the view target instead of moving the eye out to a
+    // possibly enormous user clip-end value.
+    range.orthographicEyeDistance = std::min(
+        preferences.clipEnd,
+        std::max<qreal>(1000.0, camera.gridViewDistance));
+    range.nearPlane = preferences.clipStart;
+    range.farPlane = std::max(range.orthographicEyeDistance * 2.0,
+                              range.nearPlane * 2.0);
+    return range;
 }
 
 QMatrix4x4 viewProjection(const ViewportTransform &transform,
@@ -67,9 +118,12 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
     const Point3D outward = transform.viewDirection();
     const Point3D up = transform.viewUp();
     const Point3D target = transform.viewTarget();
+    const ProjectionClipRange clipRange =
+        projectionClipRange(transform, viewportSize);
     Point3D eye = transform.cameraPosition(viewportSize);
     if (!camera.perspective) {
-        eye = add(target, multiply(outward, cameraPreferences.clipEnd));
+        eye = add(target, multiply(outward,
+                                   clipRange.orthographicEyeDistance));
     }
     if (renderCameraPosition != nullptr) {
         *renderCameraPosition = eye;
@@ -86,17 +140,16 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
                                         cameraPreferences.focalLengthMillimeters /
                                         (kViewportSensorWidthMillimeters *
                                          kBlenderViewportProjectionZoom);
-        const qreal nearPlane = cameraPreferences.clipStart;
-        const qreal halfWidth = viewportSize.width() * nearPlane /
+        const qreal halfWidth = viewportSize.width() * clipRange.nearPlane /
                                 (2.0 * focalLengthPixels);
-        const qreal halfHeight = viewportSize.height() * nearPlane /
+        const qreal halfHeight = viewportSize.height() * clipRange.nearPlane /
                                  (2.0 * focalLengthPixels);
         projection.frustum(-halfWidth,
                            halfWidth,
                            -halfHeight,
                            halfHeight,
-                           nearPlane,
-                           cameraPreferences.clipEnd);
+                           clipRange.nearPlane,
+                           clipRange.farPlane);
     } else {
         const qreal zoom = std::max<qreal>(
             transform.viewScalePixelsPerWorldUnit(viewportSize), 1.0e-8);
@@ -104,8 +157,8 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
                          viewportSize.width() / (2.0 * zoom),
                          -viewportSize.height() / (2.0 * zoom),
                          viewportSize.height() / (2.0 * zoom),
-                         cameraPreferences.clipStart,
-                         2.0 * cameraPreferences.clipEnd);
+                         clipRange.nearPlane,
+                         clipRange.farPlane);
     }
     return projection * view;
 }
@@ -844,6 +897,8 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
         planeOrigin));
     const QVector3D normal = asVector(planeNormal);
     const QVector3D planeBase = asVector(planeOrigin);
+    const ProjectionClipRange clipRange =
+        projectionClipRange(transform, viewportSize);
     Point3D renderCamera;
     const QMatrix4x4 matrix = gridViewProjection(transform,
                                                  viewportSize,
@@ -881,13 +936,15 @@ bool BlenderGridRenderer::drawGrid(const ViewportTransform &transform,
                              static_cast<float>(gridLevel.levelFraction));
     program_.setUniformValue("uGridLineCount", gridLineCount);
     program_.setUniformValue("uViewportSize", logicalViewport);
-    const qreal axisHalfExtent = perspective
-        ? transform.cameraPreferences().clipEnd
+    const qreal gridHalfExtent = perspective
+        ? clipRange.farPlane
         : 2.0 * std::max(viewportSize.width(), viewportSize.height()) /
               std::max<qreal>(
                   transform.viewScalePixelsPerWorldUnit(viewportSize), 1.0e-8);
     program_.setUniformValue("uFarClipDistance",
-                             static_cast<float>(axisHalfExtent));
+                             static_cast<float>(gridHalfExtent));
+    program_.setUniformValue("uGridHalfExtent",
+                             static_cast<float>(gridHalfExtent));
     program_.setUniformValue("uGridColor",
                              colorVector(appearance.gridColor, appearance.opacity));
     program_.setUniformValue("uGridEmphasisColor",

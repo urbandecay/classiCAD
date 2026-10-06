@@ -30,6 +30,7 @@ uniform int uPerspective;
 uniform int uIteration;
 uniform float uZoom;
 uniform vec2 uViewportSize;
+uniform float uGridHalfExtent;
 
 out vec2 vGridCoord;
 out vec3 vWorldPosition;
@@ -127,6 +128,33 @@ float stepSizeForLevel(int lineLevel)
     return uStepBase * pow(10.0, float(levelIndex - uBaseStepIndex));
 }
 
+bool gridLineCoveredByHigherLevel(LineData line, float lineStep)
+{
+    if (line.level >= 2) {
+        return false;
+    }
+    int levelIndex = clamp(uBaseStepIndex + line.level - 1,
+                           0,
+                           max(uStepCount - 1, 0));
+    if (levelIndex >= uStepCount - 1) {
+        return false;
+    }
+
+    // Blender drops a fine line when a coarser level already draws that
+    // coordinate. This prevents nested LOD lines from stacking into dark,
+    // choppy marks as the grid shrinks on screen.
+    float higherStep = uStepBase *
+                       pow(10.0, float(levelIndex + 1 - uBaseStepIndex));
+    float lineCoordinate = abs(line.P[1 - line.axis] * lineStep);
+    float higherLineIndex = lineCoordinate / higherStep;
+    return abs(higherLineIndex - round(higherLineIndex)) < 1.0e-4;
+}
+
+void discardGridVertex()
+{
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+}
+
 vec2 screenPosition(vec4 clipPosition)
 {
     return (clipPosition.xy / clipPosition.w * 0.5 + 0.5) * uViewportSize;
@@ -147,6 +175,21 @@ void main()
                             : vec2(0.0);
     vec2 rawPosition = line.P;
     vec2 position = offset + stepSize * line.P;
+    if (uMode == 0) {
+        if (gridLineCoveredByHigherLevel(line, stepSize)) {
+            discardGridVertex();
+            return;
+        }
+        vec2 clipMin = offset - vec2(uGridHalfExtent);
+        vec2 clipMax = offset + vec2(uGridHalfExtent);
+        float fixedCoordinate = position[1 - line.axis];
+        if (fixedCoordinate < clipMin[1 - line.axis] ||
+            fixedCoordinate > clipMax[1 - line.axis]) {
+            discardGridVertex();
+            return;
+        }
+        position = clamp(position, clipMin, clipMax);
+    }
 
     vGridCoord = rawPosition / halfLines;
     vEmphasis = clamp(float(line.level) - uLevelFraction, 0.0, 1.0);
@@ -191,6 +234,11 @@ void main()
                                              pairedStep)
                             : vec2(0.0);
     vec2 pairedPosition = pairedOffset + pairedStep * pairedLine.P;
+    if (uMode == 0) {
+        pairedPosition = clamp(pairedPosition,
+                               pairedOffset - vec2(uGridHalfExtent),
+                               pairedOffset + vec2(uGridHalfExtent));
+    }
     vec3 pairedAxisDirection = globalAxisDirection(pairedLine.axis);
     float pairedAxisCenter = dot(uCameraPosition - uGridOrigin,
                                  pairedAxisDirection);

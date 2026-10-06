@@ -266,6 +266,7 @@ struct TransientPreviewStroke {
     bool dashed = false;
     bool pointOutline = false;
     Point3D worldOffset;
+    bool opaqueSurface = false;
 };
 
 struct TransientPreviewPicture {
@@ -3669,7 +3670,7 @@ protected:
                 : QColor(QStringLiteral("#d28b45"));
         if (sceneRenderer != nullptr && previewRenderer != nullptr) {
             const auto addPreviewShape =
-                [&gpuPreviewGeometry](const Shape &shape,
+                [&gpuPreviewGeometry, this](const Shape &shape,
                                      const QColor &color,
                                      float width,
                                      bool controlGuide,
@@ -3701,7 +3702,8 @@ protected:
                     }
                     gpuPreviewGeometry.append(
                         {shape, color, width, controlGuide, pointDiameter,
-                         dashed, pointOutline, worldOffset});
+                         dashed, pointOutline, worldOffset,
+                         activeTool_ == Tool::PointExtrude});
                     return true;
                 };
 
@@ -4049,6 +4051,8 @@ protected:
         gpuPreviewStrokes.reserve(gpuPreviewGeometry.size());
         QVector<ViewportRenderObject> gpuPreviewSurfaceObjects;
         gpuPreviewSurfaceObjects.reserve(gpuPreviewGeometry.size());
+        QVector<ViewportRenderObject> gpuOpaquePreviewSurfaceObjects;
+        gpuOpaquePreviewSurfaceObjects.reserve(gpuPreviewGeometry.size());
         for (const TransientPreviewStroke &preview : gpuPreviewGeometry) {
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 (preview.shape.geometryType == GeometryType::NurbsSurface ||
@@ -4059,11 +4063,21 @@ protected:
                 surfaceObject.preparedGeometryOffset = preview.worldOffset;
                 surfaceObject.cacheable = false;
                 surfaceObject.selected = false;
+                const Layer *previewLayer =
+                    document_.layer(document_.activeLayerId());
+                if (previewLayer != nullptr) {
+                    surfaceObject.layerColor = previewLayer->color;
+                }
                 surfaceObject.preparedDepthGeometry =
                     QSharedPointer<ViewportDepthGeometry>::create(
                         buildViewportDepthGeometry(surfaceObject,
                                                    &surfaceTessellationCache_));
-                gpuPreviewSurfaceObjects.append(std::move(surfaceObject));
+                if (preview.opaqueSurface) {
+                    gpuOpaquePreviewSurfaceObjects.append(
+                        std::move(surfaceObject));
+                } else {
+                    gpuPreviewSurfaceObjects.append(std::move(surfaceObject));
+                }
                 continue;
             }
             gpuPreviewStrokes.append({&preview.shape,
@@ -4110,6 +4124,7 @@ protected:
                                                         arcHudPanelWidth)
                                       : QImage{};
         bool gpuPreviewRendered = false;
+        bool gpuOpaqueExtrudePreviewRendered = false;
         bool gpuArcOverlayRendered = false;
         QVector<const Shape *> failedScenePicturePreviews;
         if (nativeRenderer != nullptr) {
@@ -4186,6 +4201,17 @@ protected:
                                      viewportShadingSettings_,
                                      true,
                                      false);
+            }
+            if (surfaceRenderer != nullptr &&
+                !gpuOpaquePreviewSurfaceObjects.isEmpty()) {
+                gpuOpaqueExtrudePreviewRendered = surfaceRenderer->draw(
+                    gpuOpaquePreviewSurfaceObjects,
+                    renderFrame.camera,
+                    renderFrame.viewportSize,
+                    devicePixelRatioF(),
+                    viewportShadingSettings_,
+                    false,
+                    false);
             }
             gpuPreviewRendered = previewRenderer != nullptr &&
                                  previewRenderer->draw(gpuPreviewStrokes,
@@ -4407,8 +4433,17 @@ protected:
                                !gpuActiveToolPreview || !gpuPreviewRendered);
         } else if (activeTool_ == Tool::PointExtrude) {
             for (const Shape &previewShape : activeToolPreview.shapes) {
-                if (previewShape.geometryType == GeometryType::NurbsSurface ||
-                    !gpuActiveToolPreview || !gpuPreviewRendered) {
+                const bool surfacePreview =
+                    previewShape.geometryType == GeometryType::NurbsSurface ||
+                    previewShape.geometryType == GeometryType::NurbsSolid;
+                if (surfacePreview && !gpuOpaqueExtrudePreviewRendered) {
+                    const Layer *previewLayer =
+                        document_.layer(document_.activeLayerId());
+                    drawShape(painter, previewShape, false, false, false,
+                              previewLayer != nullptr ? previewLayer->color
+                                                      : QColor());
+                } else if (!surfacePreview &&
+                           (!gpuActiveToolPreview || !gpuPreviewRendered)) {
                     drawShape(painter, previewShape, true, false, false,
                               arcPreviewColor);
                 }

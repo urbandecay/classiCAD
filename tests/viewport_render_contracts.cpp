@@ -486,11 +486,16 @@ int main(int argc, char *argv[])
                 const QVector3D selectedOrange = workbenchSrgbToSceneLinear(
                     QVector3D(1.0f, 163.0f / 255.0f, 0.0f));
                 const auto selectedFaceColor = [&selectedOrange](
-                                                   const QVector3D &baseLinear) {
-                    const QVector3D selectedLinear =
-                        baseLinear * (204.0f / 255.0f) +
+                                                   const QVector3D &sceneLinear) {
+                    const QVector3D baseDisplaySrgb =
+                        workbenchSceneLinearToAgxSrgb(sceneLinear);
+                    const QVector3D baseDisplayLinear =
+                        workbenchSrgbToSceneLinear(baseDisplaySrgb);
+                    const QVector3D selectedDisplayLinear =
+                        baseDisplayLinear * (204.0f / 255.0f) +
                         selectedOrange * (51.0f / 255.0f);
-                    return workbenchSceneLinearToAgxSrgb(selectedLinear);
+                    return workbenchSceneLinearToSrgb(
+                        selectedDisplayLinear);
                 };
                 const QVector3D expectedFront =
                     selectedFaceColor(unselectedFrontLinear);

@@ -254,6 +254,14 @@ bool ViewportSurfaceRenderer::initialize()
             return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
         }
 
+        vec3 srgbToDisplayLinear(vec3 color)
+        {
+            color = max(color, vec3(0.0));
+            vec3 low = color / 12.92;
+            vec3 high = pow((color + 0.055) / 1.055, vec3(2.4));
+            return mix(high, low, lessThanEqual(color, vec3(0.04045)));
+        }
+
         vec3 sceneLinearToAgxSrgb(vec3 color)
         {
             if (!uAgxDisplayAvailable) {
@@ -327,13 +335,15 @@ bool ViewportSurfaceRenderer::initialize()
                 color *= mix(1.0, visibility,
                              clamp(uShadowIntensity, 0.0, 1.0));
             }
-            // Blender converts its sRGB theme color to linear and applies the
-            // face tint before the final view transform.
-            if (uEditModeSelected) {
-                color = mix(color, uEditSelectionColor,
-                            uEditSelectionMix);
-            }
             color = sceneLinearToAgxSrgb(color);
+            // Blender composites Edit Mode overlays after the view transform,
+            // in linear display space.
+            if (uEditModeSelected) {
+                vec3 displayLinear = srgbToDisplayLinear(color);
+                color = sceneLinearToSrgb(
+                    mix(displayLinear, uEditSelectionColor,
+                        uEditSelectionMix));
+            }
             fragmentColor = vec4(color,
                                  uBaseColor.a);
         }
@@ -1098,7 +1108,8 @@ bool ViewportSurfaceRenderer::draw(
         program_.setUniformValue("uShadowMap", 2);
         // Blender 5.2's 3D View face_select color is #FFA300 with alpha 0x33.
         const QColor editSelectionColor(QStringLiteral("#ffa300"));
-        // Theme colors are stored as sRGB bytes but the overlay blend is linear.
+        // Theme colors are sRGB; Blender's overlay framebuffer blends in
+        // linear display space after the view transform.
         const QVector3D editSelectionLinear = workbenchSrgbToSceneLinear(
             QVector3D(editSelectionColor.redF(), editSelectionColor.greenF(),
                       editSelectionColor.blueF()));

@@ -477,26 +477,33 @@ int main(int argc, char *argv[])
                     QVector3D(0.0f, 0.0f, 1.0f));
                 const QVector3D rightNormal = viewNormal(
                     QVector3D(1.0f, 0.0f, 0.0f));
-                const QVector3D unselectedFront = workbenchSceneLinearToAgxSrgb(
-                    workbenchStudioShade(linearBaseColor, frontNormal,
-                                         incidentView));
-                const QVector3D unselectedTop = workbenchSceneLinearToAgxSrgb(
-                    workbenchStudioShade(linearBaseColor, topNormal,
-                                         incidentView));
-                const QVector3D unselectedRight = workbenchSceneLinearToAgxSrgb(
-                    workbenchStudioShade(linearBaseColor, rightNormal,
-                                         incidentView));
-                const QVector3D selectedOrange(1.0f, 163.0f / 255.0f, 0.0f);
+                const QVector3D unselectedFrontLinear = workbenchStudioShade(
+                    linearBaseColor, frontNormal, incidentView);
+                const QVector3D unselectedTopLinear = workbenchStudioShade(
+                    linearBaseColor, topNormal, incidentView);
+                const QVector3D unselectedRightLinear = workbenchStudioShade(
+                    linearBaseColor, rightNormal, incidentView);
+                const QVector3D selectedOrange = workbenchSrgbToSceneLinear(
+                    QVector3D(1.0f, 163.0f / 255.0f, 0.0f));
                 const auto selectedFaceColor = [&selectedOrange](
-                                                   const QVector3D &base) {
-                    return base * (204.0f / 255.0f) +
-                           selectedOrange * (51.0f / 255.0f);
+                                                   const QVector3D &baseLinear) {
+                    const QVector3D selectedLinear =
+                        baseLinear * (204.0f / 255.0f) +
+                        selectedOrange * (51.0f / 255.0f);
+                    return workbenchSceneLinearToAgxSrgb(selectedLinear);
                 };
                 const QVector3D expectedFront =
-                    selectedFaceColor(unselectedFront);
-                const QVector3D expectedTop = selectedFaceColor(unselectedTop);
+                    selectedFaceColor(unselectedFrontLinear);
+                const QVector3D expectedTop =
+                    selectedFaceColor(unselectedTopLinear);
                 const QVector3D expectedRight =
-                    selectedFaceColor(unselectedRight);
+                    selectedFaceColor(unselectedRightLinear);
+                const QVector3D unselectedFront =
+                    workbenchSceneLinearToAgxSrgb(unselectedFrontLinear);
+                const QVector3D unselectedTop =
+                    workbenchSceneLinearToAgxSrgb(unselectedTopLinear);
+                const QVector3D unselectedRight =
+                    workbenchSceneLinearToAgxSrgb(unselectedRightLinear);
                 const QColor gpuFront = sampleCubeFace({0.0, -1.0, 0.0});
                 const QColor gpuFrontNearCrease = sampleCubeFace(
                     {0.95, -1.0, 0.0});
@@ -564,10 +571,9 @@ int main(int argc, char *argv[])
                 gpuBackfaceCullingKeepsOutwardFaces =
                     bottomFacePixels > 4000;
                 const QVector3D expectedMatcap = selectedFaceColor(
-                    workbenchSceneLinearToAgxSrgb(
-                        workbenchMatcapShade(QStringLiteral("metal_bronze"),
-                                             linearBaseColor,
-                                             frontNormal, incidentView)));
+                    workbenchMatcapShade(QStringLiteral("metal_bronze"),
+                                         linearBaseColor, frontNormal,
+                                         incidentView));
                 const QPoint frontPixel = pixelForWorldPoint(
                     {0.0, -1.0, 0.0});
                 const QColor gpuMatcapCenter = gpuMatcapImage.isNull()

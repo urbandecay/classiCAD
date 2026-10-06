@@ -327,11 +327,13 @@ bool ViewportSurfaceRenderer::initialize()
                 color *= mix(1.0, visibility,
                              clamp(uShadowIntensity, 0.0, 1.0));
             }
-            color = sceneLinearToAgxSrgb(color);
+            // Blender converts its sRGB theme color to linear and applies the
+            // face tint before the final view transform.
             if (uEditModeSelected) {
                 color = mix(color, uEditSelectionColor,
                             uEditSelectionMix);
             }
+            color = sceneLinearToAgxSrgb(color);
             fragmentColor = vec4(color,
                                  uBaseColor.a);
         }
@@ -1096,10 +1098,13 @@ bool ViewportSurfaceRenderer::draw(
         program_.setUniformValue("uShadowMap", 2);
         // Blender 5.2's 3D View face_select color is #FFA300 with alpha 0x33.
         const QColor editSelectionColor(QStringLiteral("#ffa300"));
-        program_.setUniformValue(
-            "uEditSelectionColor",
+        // Theme colors are stored as sRGB bytes but the overlay blend is linear.
+        const QVector3D editSelectionLinear = workbenchSrgbToSceneLinear(
             QVector3D(editSelectionColor.redF(), editSelectionColor.greenF(),
                       editSelectionColor.blueF()));
+        program_.setUniformValue(
+            "uEditSelectionColor",
+            editSelectionLinear);
         program_.setUniformValue("uEditSelectionMix", 51.0f / 255.0f);
         vertexArray_.bind();
         vertexBuffer_.bind();

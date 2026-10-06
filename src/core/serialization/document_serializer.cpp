@@ -186,6 +186,9 @@ bool documentFromJson(const QJsonValue &value,
                 setError(errorMessage, QStringLiteral("layer color is missing"));
                 return false;
             }
+            // Keep the version-1 file default stable when the current default
+            // for newly created layers changes.
+            layer.color = QColor(QStringLiteral("#d28b45"));
         } else {
             if (!colorValue.isString()) {
                 setError(errorMessage, QStringLiteral("invalid layer color"));

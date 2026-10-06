@@ -56,6 +56,7 @@
 #include "input_helpers.h"
 #include "input/tool_input_translator.h"
 #include "viewport/blender_grid_renderer.h"
+#include "viewport/viewport_shading.h"
 #include "viewport/navigation_controller.h"
 #include "viewport/viewport_control_point_renderer.h"
 #include "viewport/viewport_gpu_surface.h"
@@ -3267,11 +3268,11 @@ protected:
                      ObjectId::invalid(),
                      false,
                      1.0f,
-                     QColor(QStringLiteral("#5da9e9"))});
+                     viewportSelectionColor()});
                 if (selected) {
                     ViewportSceneStroke outlineStroke{
                         &gpuPreviewPictures.back().frame,
-                        QColor(QStringLiteral("#5da9e9")),
+                        viewportSelectionColor(),
                         1.5f,
                         false};
                     outlineStroke.objectId = objectId;
@@ -3295,10 +3296,10 @@ protected:
                      ObjectId::invalid(),
                      false,
                      1.0f,
-                     QColor(QStringLiteral("#5da9e9"))});
+                     viewportSelectionColor()});
                 ViewportSceneStroke outlineStroke{
                     &gpuPreviewPictures.back().frame,
-                    QColor(QStringLiteral("#5da9e9")),
+                    viewportSelectionColor(),
                     1.5f,
                     false};
                 outlineStroke.objectId = objectId;
@@ -3910,7 +3911,7 @@ protected:
                 for (const ViewportSceneStroke &stroke : gpuStrokes) {
                     if (stroke.shape != nullptr && !stroke.controlGuide) {
                         drawShape(painter, *stroke.shape, false,
-                                  stroke.color == QColor(QStringLiteral("#5da9e9")),
+                                  stroke.color == viewportSelectionColor(),
                                   true, stroke.color, QString(), 0.0,
                                   ObjectId::invalid(), 0, nullptr,
                                   stroke.worldOffset);

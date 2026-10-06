@@ -53,6 +53,7 @@ private:
         int first = 0;
         int count = 0;
         Point3D offset;
+        bool selected = false;
     };
 
     struct SilhouetteEdge {

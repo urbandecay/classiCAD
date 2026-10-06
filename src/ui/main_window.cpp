@@ -942,7 +942,7 @@ private:
             swatch.fill(color);
             layerColorCombo_->addItem(QIcon(swatch), name, color);
         };
-        addColorOption(QStringLiteral("ByLayer"), QColor(QStringLiteral("#d28b45")));
+        addColorOption(QStringLiteral("ByLayer"), QColor(QStringLiteral("#000000")));
         addColorOption(QStringLiteral("Red"), QColor(QStringLiteral("#ff3030")));
         addColorOption(QStringLiteral("Yellow"), QColor(QStringLiteral("#f0d030")));
         addColorOption(QStringLiteral("Green"), QColor(QStringLiteral("#40c060")));

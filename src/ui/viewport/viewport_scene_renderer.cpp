@@ -10,6 +10,7 @@
 #include "line_type_style.h"
 #include "viewport_depth_geometry.h"
 #include "viewport_render_frame.h"
+#include "viewport_shading.h"
 
 #include <QImage>
 #include <QDebug>
@@ -385,10 +386,10 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
 
     *sceneStroke = {
         &shape,
-        highlighted ? QColor(QStringLiteral("#5da9e9"))
+        highlighted ? viewportSelectionColor()
                     : object.layerColor.isValid()
                           ? object.layerColor
-                          : QColor(QStringLiteral("#d28b45")),
+                          : QColor(QStringLiteral("#000000")),
         static_cast<float>(highlighted ? 3.5 : storedWidth),
         false,
         geometryType == GeometryType::Point

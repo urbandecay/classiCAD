@@ -14,7 +14,7 @@ namespace classiCAD {
 struct Layer {
     LayerId id = LayerId::invalid();
     QString name;
-    QColor color = QColor(QStringLiteral("#d28b45"));
+    QColor color = QColor(QStringLiteral("#000000"));
     QString lineType = QStringLiteral("Continuous");
     qreal lineWeightMm = 0.0;
     QString description;

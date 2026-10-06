@@ -38,7 +38,7 @@ struct ViewportLayerInfo {
     bool locked = false;
     bool active = false;
     int objectCount = 0;
-    QColor color = QColor(QStringLiteral("#d28b45"));
+    QColor color = QColor(QStringLiteral("#000000"));
     QString lineType = QStringLiteral("Continuous");
     qreal lineWeightMm = 0.0;
     QString description;

@@ -9,6 +9,11 @@
 
 namespace classiCAD {
 
+inline QColor viewportSelectionColor()
+{
+    return QColor(QStringLiteral("#ff8a00"));
+}
+
 enum class ViewportShadingMode {
     Wireframe,
     Solid,

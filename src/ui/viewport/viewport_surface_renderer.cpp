@@ -440,6 +440,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                             object.layerColor,
                             object.objectId.value()});
             outlineRanges_[index].offset = object.preparedGeometryOffset;
+            outlineRanges_[index].selected = object.selected;
         }
         return;
     }
@@ -540,7 +541,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
         outlineRanges_.append({outlineFirst,
                                static_cast<int>(outlineVertices_.size()) -
                                    outlineFirst,
-                               object.preparedGeometryOffset});
+                               object.preparedGeometryOffset,
+                               object.selected});
         silhouetteEdges_.append(std::move(objectSilhouetteEdges));
     }
 }
@@ -1110,8 +1112,12 @@ bool ViewportSurfaceRenderer::draw(
         glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     }
 
+    const bool hasSelectedSurface = std::any_of(
+        ranges_.cbegin(), ranges_.cend(), [](const DrawRange &range) {
+            return range.selected && range.count > 0;
+        });
     if (settings.mode == ViewportShadingMode::Solid &&
-        (settings.outline || settings.cavity) &&
+        (settings.outline || settings.cavity || hasSelectedSurface) &&
         !previewOverlay &&
         (!outlineVertices_.isEmpty() || !silhouetteEdges_.isEmpty())) {
         glViewport(0, 0, qRound(viewportSize.width() *
@@ -1175,7 +1181,7 @@ bool ViewportSurfaceRenderer::draw(
             }
             frameOutlineRanges.append(
                 {first, static_cast<int>(frameOutlineVertices.size()) - first,
-                 baseRange.offset});
+                 baseRange.offset, baseRange.selected});
         }
         if (frameOutlineVertices.isEmpty()) {
             glLineWidth(previousLineWidth);
@@ -1198,19 +1204,26 @@ bool ViewportSurfaceRenderer::draw(
         outlineColor.setAlphaF(settings.xrayEnabled()
                                    ? std::clamp<qreal>(settings.xrayAlpha, 0.0, 1.0)
                                    : settings.outline ? 1.0 : 0.22);
-        outlineProgram_.setUniformValue(
-            "uOutlineColor",
-            QVector4D(outlineColor.redF(), outlineColor.greenF(),
-                      outlineColor.blueF(), outlineColor.alphaF()));
         outlineVertexArray_.bind();
         outlineVertexBuffer_.bind();
         const qreal outlineWidth = settings.outline ? 1.0 : 1.5;
-        glLineWidth(static_cast<GLfloat>(std::max<qreal>(dpr * outlineWidth,
-                                                         1.0)));
         for (const OutlineRange &range : frameOutlineRanges) {
             if (range.count <= 0) {
                 continue;
             }
+            if (!range.selected && !settings.outline && !settings.cavity) {
+                continue;
+            }
+            const QColor rangeColor = range.selected
+                                          ? viewportSelectionColor()
+                                          : outlineColor;
+            outlineProgram_.setUniformValue(
+                "uOutlineColor",
+                QVector4D(rangeColor.redF(), rangeColor.greenF(),
+                          rangeColor.blueF(),
+                          range.selected ? 1.0f : rangeColor.alphaF()));
+            glLineWidth(static_cast<GLfloat>(std::max<qreal>(
+                dpr * (range.selected ? 2.0 : outlineWidth), 1.0)));
             outlineProgram_.setUniformValue(
                 "uWorldOffset",
                 QVector3D(static_cast<float>(range.offset.x),

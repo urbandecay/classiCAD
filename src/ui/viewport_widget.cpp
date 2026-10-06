@@ -756,7 +756,8 @@ public:
 
         if (tool == Tool::Arc &&
             (arcState().mode == ArcMode::OnePoint ||
-             arcState().mode == ArcMode::TwoPoint) &&
+             arcState().mode == ArcMode::TwoPoint ||
+             arcState().mode == ArcMode::ThreePoint) &&
             rect().contains(lastMousePosition_)) {
             updateDrawingWorkPlaneFromHover(lastMousePosition_);
         }
@@ -969,7 +970,8 @@ public:
         resetArcInputState();
         currentSnap_ = SnapResult{};
         if (activeTool_ == Tool::Arc &&
-            (mode == ArcMode::OnePoint || mode == ArcMode::TwoPoint) &&
+            (mode == ArcMode::OnePoint || mode == ArcMode::TwoPoint ||
+             mode == ArcMode::ThreePoint) &&
             rect().contains(lastMousePosition_)) {
             updateDrawingWorkPlaneFromHover(lastMousePosition_);
         }
@@ -11204,11 +11206,12 @@ private:
         }
         if (activeTool_ == Tool::Arc &&
             (arcState().mode == ArcMode::OnePoint ||
-             arcState().mode == ArcMode::TwoPoint) &&
+             arcState().mode == ArcMode::TwoPoint ||
+             arcState().mode == ArcMode::ThreePoint) &&
             arcTool_.inputStage() == ArcInputStage::FirstPoint) {
-            // One- and Two-Point arcs use the add-on's face-oriented drawing
-            // plane before the first endpoint. Object workplanes lose the
-            // individual face normal on solids, so use the visible face hit.
+            // Arc modes orient their drawing plane to the hovered face before
+            // the first endpoint. Object workplanes lose the individual face
+            // normal on solids, so use the visible face hit.
             Point3D facePoint;
             Point3D faceNormal;
             if (curveHitTester_.hitTestVisibleSurface(

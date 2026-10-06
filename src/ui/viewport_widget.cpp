@@ -1672,6 +1672,195 @@ public:
         return center;
     }
 
+    bool makeSelectionViewPlaneFrame(const QVector<ObjectId> &objectIds,
+                                     const QPointF &screenPosition,
+                                     WorkPlaneFrame *frame,
+                                     Point3D *screenPointWorld) const
+    {
+        if (frame == nullptr || screenPointWorld == nullptr) {
+            return false;
+        }
+        const Point3D pivot = grabSelectionPivotWorld(objectIds);
+        const Point3D viewDirection = viewportTransform_.viewDirection();
+        const Point3D viewUp = viewportTransform_.viewUp();
+        const Point3D viewRight{
+            viewUp.y * viewDirection.z - viewUp.z * viewDirection.y,
+            viewUp.z * viewDirection.x - viewUp.x * viewDirection.z,
+            viewUp.x * viewDirection.y - viewUp.y * viewDirection.x};
+        *frame = makeWorkPlaneFrameFromNormal(pivot, viewDirection, viewRight);
+        QPointF coordinates;
+        if (!isValidWorkPlaneFrame(*frame) ||
+            !viewportTransform_.screenToWorkPlaneUnclipped(
+                screenPosition, size(), *frame, &coordinates)) {
+            return false;
+        }
+        *screenPointWorld = workPlaneFramePointToWorld(coordinates, *frame);
+        return std::isfinite(screenPointWorld->x) &&
+               std::isfinite(screenPointWorld->y) &&
+               std::isfinite(screenPointWorld->z);
+    }
+
+    void beginSelectionViewPlaneDrag(const QVector<ObjectId> &objectIds,
+                                     const QPointF &screenPosition)
+    {
+        selectionDragViewPlaneAnchorValid_ = makeSelectionViewPlaneFrame(
+            objectIds, screenPosition, &selectionDragViewPlaneFrame_,
+            &selectionDragLastViewPlaneWorld_);
+        selectionDragCurrentViewPlaneWorld_ = selectionDragLastViewPlaneWorld_;
+        selectionDragLastScreenPosition_ = screenPosition;
+        dragSnapViewPlaneAnchorValid_ = false;
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        nearDragFreeSourcePointValid_ = false;
+        dragAxisLock_ = DragAxisLock::None;
+    }
+
+    bool updateSelectionViewPlaneDrag(const QPointF &screenPosition,
+                                      Point3D *worldDelta)
+    {
+        if (worldDelta == nullptr || !selectionDragViewPlaneAnchorValid_) {
+            return false;
+        }
+        QPointF coordinates;
+        if (!viewportTransform_.screenToWorkPlaneUnclipped(
+                screenPosition, size(), selectionDragViewPlaneFrame_,
+                &coordinates)) {
+            return false;
+        }
+        const Point3D current = workPlaneFramePointToWorld(
+            coordinates, selectionDragViewPlaneFrame_);
+        *worldDelta = {current.x - selectionDragLastViewPlaneWorld_.x,
+                       current.y - selectionDragLastViewPlaneWorld_.y,
+                       current.z - selectionDragLastViewPlaneWorld_.z};
+        selectionDragLastViewPlaneWorld_ = current;
+        selectionDragCurrentViewPlaneWorld_ = current;
+        selectionDragLastScreenPosition_ = screenPosition;
+        return std::isfinite(worldDelta->x) && std::isfinite(worldDelta->y) &&
+               std::isfinite(worldDelta->z);
+    }
+
+    QPointF projectWorldDeltaToWorkPlane(const Point3D &worldDelta) const
+    {
+        const WorkPlaneFrame &frame = viewportTransform_.workPlaneFrame();
+        return QPointF(worldDelta.x * frame.xAxis.x +
+                           worldDelta.y * frame.xAxis.y +
+                           worldDelta.z * frame.xAxis.z,
+                       worldDelta.x * frame.yAxis.x +
+                           worldDelta.y * frame.yAxis.y +
+                           worldDelta.z * frame.yAxis.z);
+    }
+
+    void translateSelectionDrag(const QVector<ObjectId> &objectIds,
+                                const QPointF &workPlaneDelta,
+                                const Point3D &worldDelta,
+                                bool useViewPlaneDelta)
+    {
+        if (useViewPlaneDelta) {
+            translateShapesWorldDelta(objectIds, worldDelta);
+        } else {
+            translateShapes(objectIds, workPlaneDelta);
+        }
+    }
+
+    void updateSelectionObjectDragWithoutWorkPlane(
+        const QVector<ObjectId> &objectIds,
+        const QPointF &screenPosition)
+    {
+        if (!objectSelectionDragActive() || objectIds.isEmpty()) {
+            return;
+        }
+        if (!selectionDragStarted()) {
+            constexpr qreal dragStartThresholdPixels = 4.0;
+            const QPointF screenDelta =
+                screenPosition - selectionDragStartScreenPosition();
+            if (std::hypot(screenDelta.x(), screenDelta.y()) <
+                dragStartThresholdPixels) {
+                return;
+            }
+            setSelectionDragStarted(true);
+        }
+
+        Point3D mouseWorldDelta;
+        if (!updateSelectionViewPlaneDrag(screenPosition, &mouseWorldDelta)) {
+            return;
+        }
+        if (dragAxisLock_ != DragAxisLock::None) {
+            if (dragAxisLock_ == DragAxisLock::Z) {
+                updateWorldZAxisDrag(objectIds, screenPosition);
+            } else {
+                const WorkPlaneFrame &frame =
+                    viewportTransform_.workPlaneFrame();
+                const Point3D axis = dragAxisLock_ == DragAxisLock::X
+                                         ? frame.xAxis
+                                         : frame.yAxis;
+                const qreal distance = mouseWorldDelta.x * axis.x +
+                                       mouseWorldDelta.y * axis.y +
+                                       mouseWorldDelta.z * axis.z;
+                const Point3D axisDelta{axis.x * distance,
+                                        axis.y * distance,
+                                        axis.z * distance};
+                if (!isZeroWorldDelta(axisDelta)) {
+                    beginDragHistory();
+                    translateShapesWorldDelta(objectIds, axisDelta);
+                }
+                currentDragSnap_ = DragSnapResult{};
+                dragSnapLocked_ = false;
+                dragSnapViewPlaneAnchorValid_ = false;
+                setSelectionLastDragWorldPosition(rawCursorWorld_);
+            }
+            return;
+        }
+
+        Point3D moveDelta = mouseWorldDelta;
+        if (dragSnapLocked_ && currentDragSnap_.type != SnapType::Near) {
+            const qreal snapDistance = std::hypot(
+                screenPosition.x() - selectionDragSnapScreen_.x(),
+                screenPosition.y() - selectionDragSnapScreen_.y());
+            if (snapDistance <= kDragSnapBreakawayPixels) {
+                return;
+            }
+            moveDelta = {selectionDragCurrentViewPlaneWorld_.x -
+                             dragSnapViewPlaneWorld_.x,
+                         selectionDragCurrentViewPlaneWorld_.y -
+                             dragSnapViewPlaneWorld_.y,
+                         selectionDragCurrentViewPlaneWorld_.z -
+                             dragSnapViewPlaneWorld_.z};
+            dragSnapLocked_ = false;
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapViewPlaneAnchorValid_ = false;
+            nearDragFreeSourcePointValid_ = false;
+        } else if (dragSnapLocked_ && currentDragSnap_.type == SnapType::Near) {
+            // Near snaps are workplane rails. When the drawing workplane is
+            // edge-on, release that rail and keep the pointer's view-plane
+            // motion continuous.
+            dragSnapLocked_ = false;
+            currentDragSnap_ = DragSnapResult{};
+            dragSnapViewPlaneAnchorValid_ = false;
+            nearDragFreeSourcePointValid_ = false;
+        }
+        if (isZeroWorldDelta(moveDelta)) {
+            return;
+        }
+
+        beginDragHistory();
+        translateShapesWorldDelta(objectIds, moveDelta);
+        currentDragSnap_ = objectIds.size() > 1
+                               ? findDragSnap(objectIds)
+                               : findDragSnap(objectIds.first());
+        if (currentDragSnap_.isValid()) {
+            applyObjectDragSnap(objectIds, currentDragSnap_);
+            dragSnapLocked_ = true;
+            dragSnapViewPlaneWorld_ = selectionDragCurrentViewPlaneWorld_;
+            selectionDragSnapScreen_ = screenPosition;
+            dragSnapViewPlaneAnchorValid_ = true;
+            dragSnapCursorWorld_ = rawCursorWorld_;
+        }
+        setSelectionLastDragWorldPosition(rawCursorWorld_);
+        update();
+        emitCoordinateUpdate();
+    }
+
     bool beginGrab()
     {
         if (!selectionShortcutsAvailable()) {
@@ -1704,25 +1893,9 @@ public:
             return false;
         }
         grabAxisStartScreen_ = localCursor;
-        const Point3D pivot = grabSelectionPivotWorld(validSelection);
-        const Point3D viewDirection = viewportTransform_.viewDirection();
-        const Point3D viewUp = viewportTransform_.viewUp();
-        const Point3D viewRight{
-            viewUp.y * viewDirection.z - viewUp.z * viewDirection.y,
-            viewUp.z * viewDirection.x - viewUp.x * viewDirection.z,
-            viewUp.x * viewDirection.y - viewUp.y * viewDirection.x};
-        grabViewPlaneFrame_ = makeWorkPlaneFrameFromNormal(
-            pivot, viewDirection, viewRight);
-        QPointF startViewPlaneCoordinates;
-        grabViewPlaneAnchorValid_ =
-            isValidWorkPlaneFrame(grabViewPlaneFrame_) &&
-            viewportTransform_.screenToWorkPlaneUnclipped(
-                localCursor, size(), grabViewPlaneFrame_,
-                &startViewPlaneCoordinates);
-        if (grabViewPlaneAnchorValid_) {
-            grabViewPlaneStartWorld_ = workPlaneFramePointToWorld(
-                startViewPlaneCoordinates, grabViewPlaneFrame_);
-        }
+        grabViewPlaneAnchorValid_ = makeSelectionViewPlaneFrame(
+            validSelection, localCursor, &grabViewPlaneFrame_,
+            &grabViewPlaneStartWorld_);
         if (!selectedShapeIndex_.isValid() || !validSelection.contains(selectedShapeIndex_)) {
             selection_.setPrimaryObjectId(validSelection.back());
         }
@@ -4379,7 +4552,8 @@ protected:
         if (!worldPositionValid && event->button() == Qt::LeftButton &&
             event->button() != navigationController_.panButton() &&
             !(activeTool_ == Tool::Line && !pendingPoints_.isEmpty()) &&
-            activeTool_ != Tool::PointExtrude) {
+            activeTool_ != Tool::PointExtrude &&
+            activeTool_ != Tool::Select) {
             event->ignore();
             return;
         }
@@ -4697,6 +4871,8 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton && activeTool_ == Tool::Select) {
+            selectionDragViewPlaneAnchorValid_ = false;
+            dragSnapViewPlaneAnchorValid_ = false;
             rawCursorWorld_ = rawWorldPosition;
             cursorWorld_ = rawWorldPosition;
             lastWorldPosition_ = rawWorldPosition;
@@ -4708,6 +4884,10 @@ protected:
                 selectionTool->dispatchMousePress(translatedInput,
                                                   toolContext_) ==
                     InteractionTool::EventResult::Handled) {
+                if (objectSelectionDragActive()) {
+                    beginSelectionViewPlaneDrag(
+                        selectionDraggedObjectIds(), screenPosition);
+                }
                 update();
                 emitCoordinateUpdate();
             }
@@ -4910,16 +5090,19 @@ protected:
                                                   &rawCursorWorld_)) {
             cursorValid_ = false;
             currentSnap_ = SnapResult{};
-            if (activeTool_ == Tool::Select && objectSelectionDragActive() &&
-                selectionDragStarted()) {
+            if (activeTool_ == Tool::Select && objectSelectionDragActive()) {
                 const QVector<ObjectId> dragIndices =
                     selectionDraggedObjectIds().isEmpty()
                         ? QVector<ObjectId>{selectedShapeIndex_}
                         : selectionDraggedObjectIds();
                 if (grabTool_.isActive()) {
                     updateGrabPosition(dragIndices, screenPosition);
-                } else if (dragAxisLock_ == DragAxisLock::Z) {
+                } else if (selectionDragStarted() &&
+                           dragAxisLock_ == DragAxisLock::Z) {
                     updateWorldZAxisDrag(dragIndices, screenPosition);
+                } else {
+                    updateSelectionObjectDragWithoutWorkPlane(dragIndices,
+                                                              screenPosition);
                 }
             }
             if (activeToolController_ != nullptr &&
@@ -5188,12 +5371,30 @@ protected:
                 const bool groupDrag = dragIndices.size() > 1;
                 const QPointF previousDragCursorWorld =
                     selectionLastDragWorldPosition();
+                const QPointF previousViewPlaneScreen =
+                    selectionDragLastScreenPosition_;
+                Point3D viewPlaneWorldDelta;
+                const bool hasViewPlaneDelta =
+                    updateSelectionViewPlaneDrag(screenPosition,
+                                                 &viewPlaneWorldDelta);
+                const bool useViewPlaneDelta =
+                    hasViewPlaneDelta &&
+                    selectionDragViewPlaneAnchorValid_ &&
+                    dragAxisLock_ == DragAxisLock::None;
                 const QPointF cursorStepScreen =
-                    screenPosition - worldToScreen(previousDragCursorWorld);
-                const QPointF rawDelta = rawCursorWorld_ -
-                                         selectionLastDragWorldPosition();
+                    selectionDragViewPlaneAnchorValid_
+                        ? screenPosition - previousViewPlaneScreen
+                        : screenPosition -
+                              worldToScreen(previousDragCursorWorld);
+                const QPointF rawDelta = useViewPlaneDelta
+                    ? projectWorldDeltaToWorkPlane(viewPlaneWorldDelta)
+                    : rawCursorWorld_ - previousDragCursorWorld;
                 const QPointF delta = constrainDragDelta(rawDelta);
-                if (!qFuzzyIsNull(rawDelta.x()) || !qFuzzyIsNull(rawDelta.y())) {
+                const bool hasMovement = useViewPlaneDelta
+                    ? !isZeroWorldDelta(viewPlaneWorldDelta)
+                    : !qFuzzyIsNull(rawDelta.x()) ||
+                          !qFuzzyIsNull(rawDelta.y());
+                if (hasMovement) {
                     qint64 snapEvaluationMicroseconds = -1;
                     if (dragAxisLock_ != DragAxisLock::None) {
                         if (dragAxisLock_ == DragAxisLock::Z) {
@@ -5207,6 +5408,7 @@ protected:
                         // move remains exactly on the chosen world axis.
                         currentDragSnap_ = DragSnapResult{};
                         dragSnapLocked_ = false;
+                        dragSnapViewPlaneAnchorValid_ = false;
                     } else {
                         if (dragSnapLocked_ && currentDragSnap_.type == SnapType::Near) {
                             // Track the snapped point on the moving selection, not
@@ -5228,7 +5430,9 @@ protected:
                             const int nearTargetComponentIndex =
                                 currentDragSnap_.targetComponentIndex;
                             beginDragHistory();
-                            translateShapes(dragIndices, delta);
+                            translateSelectionDrag(dragIndices, delta,
+                                                   viewPlaneWorldDelta,
+                                                   useViewPlaneDelta);
                             QElapsedTimer snapTimer;
                             snapTimer.start();
                             // A Near lock must not mask a more specific target
@@ -5241,6 +5445,12 @@ protected:
                                 currentDragSnap_ = specificDragSnap;
                                 applyObjectDragSnap(dragIndices, specificDragSnap);
                                 dragSnapCursorWorld_ = rawCursorWorld_;
+                                if (useViewPlaneDelta) {
+                                    dragSnapViewPlaneWorld_ =
+                                        selectionDragCurrentViewPlaneWorld_;
+                                    selectionDragSnapScreen_ = screenPosition;
+                                    dragSnapViewPlaneAnchorValid_ = true;
+                                }
                                 nearDragFreeSourcePointValid_ = false;
                                 DebugLog::instance().write(
                                     QStringLiteral("selection drag near-promoted snap=%1 source=%2 target=%3")
@@ -5274,15 +5484,18 @@ protected:
                                                 freeSourcePoint - movedSourcePoint);
                                 currentDragSnap_ = DragSnapResult{};
                                 dragSnapLocked_ = false;
+                                dragSnapViewPlaneAnchorValid_ = false;
                                 nearDragFreeSourcePointValid_ = false;
                             }
                         } else {
-                            const qreal cursorDistanceFromSnap =
-                                std::hypot(
-                                    screenPosition.x() -
-                                        worldToScreen(dragSnapCursorWorld_).x(),
-                                    screenPosition.y() -
-                                        worldToScreen(dragSnapCursorWorld_).y());
+                            const QPointF snapScreen =
+                                useViewPlaneDelta &&
+                                        dragSnapViewPlaneAnchorValid_
+                                    ? selectionDragSnapScreen_
+                                    : worldToScreen(dragSnapCursorWorld_);
+                            const qreal cursorDistanceFromSnap = std::hypot(
+                                screenPosition.x() - snapScreen.x(),
+                                screenPosition.y() - snapScreen.y());
 
                             if (dragSnapLocked_ &&
                                 cursorDistanceFromSnap <=
@@ -5297,18 +5510,35 @@ protected:
                             } else if (dragSnapLocked_) {
                                 // Release from the snap using the complete cursor movement
                                 // since the snap was acquired, so the line leaves cleanly.
-                                const QPointF detachDelta = rawCursorWorld_ - dragSnapCursorWorld_;
                                 beginDragHistory();
-                                translateShapes(dragIndices, detachDelta);
+                                if (useViewPlaneDelta &&
+                                    dragSnapViewPlaneAnchorValid_) {
+                                    const Point3D detachDelta{
+                                        selectionDragCurrentViewPlaneWorld_.x -
+                                            dragSnapViewPlaneWorld_.x,
+                                        selectionDragCurrentViewPlaneWorld_.y -
+                                            dragSnapViewPlaneWorld_.y,
+                                        selectionDragCurrentViewPlaneWorld_.z -
+                                            dragSnapViewPlaneWorld_.z};
+                                    translateShapesWorldDelta(dragIndices,
+                                                              detachDelta);
+                                } else {
+                                    const QPointF detachDelta =
+                                        rawCursorWorld_ - dragSnapCursorWorld_;
+                                    translateShapes(dragIndices, detachDelta);
+                                }
                                 currentDragSnap_ = DragSnapResult{};
                                 dragSnapLocked_ = false;
+                                dragSnapViewPlaneAnchorValid_ = false;
                                 DebugLog::instance().write(
                                     QStringLiteral("selection drag snap-breakaway shape=%1 cursorDistance=%2")
                                         .arg(selectedIndex)
                                         .arg(cursorDistanceFromSnap, 0, 'f', 2));
                             } else {
                                 beginDragHistory();
-                                translateShapes(dragIndices, delta);
+                                translateSelectionDrag(dragIndices, delta,
+                                                       viewPlaneWorldDelta,
+                                                       useViewPlaneDelta);
                                 QElapsedTimer snapTimer;
                                 snapTimer.start();
                                 currentDragSnap_ = groupDrag
@@ -5320,6 +5550,12 @@ protected:
                                     applyObjectDragSnap(dragIndices, currentDragSnap_);
                                     dragSnapLocked_ = true;
                                     dragSnapCursorWorld_ = rawCursorWorld_;
+                                    if (useViewPlaneDelta) {
+                                        dragSnapViewPlaneWorld_ =
+                                            selectionDragCurrentViewPlaneWorld_;
+                                        selectionDragSnapScreen_ = screenPosition;
+                                        dragSnapViewPlaneAnchorValid_ = true;
+                                    }
                                     nearDragFreeSourcePointValid_ =
                                         currentDragSnap_.type == SnapType::Near;
                                     if (nearDragFreeSourcePointValid_) {
@@ -5725,6 +5961,7 @@ protected:
             }
             currentDragSnap_ = DragSnapResult{};
             dragSnapLocked_ = false;
+            dragSnapViewPlaneAnchorValid_ = false;
             if (grabTool_.isActive()) {
                 updateGrabPosition(selectionDraggedObjectIds().isEmpty()
                                        ? QVector<ObjectId>{selectedShapeIndex_}
@@ -6468,6 +6705,10 @@ private:
     void clearSelectionDragState()
     {
         controlPointDragFrameValid_ = false;
+        selectionDragViewPlaneFrame_ = WorkPlaneFrame{};
+        selectionDragViewPlaneAnchorValid_ = false;
+        dragSnapViewPlaneAnchorValid_ = false;
+        nearDragFreeSourcePointValid_ = false;
         if (SelectTool *selectTool = selectionToolController()) {
             selectTool->clearDragState();
         }
@@ -11644,6 +11885,14 @@ private:
     WorkPlaneFrame grabViewPlaneFrame_;
     Point3D grabViewPlaneStartWorld_;
     bool grabViewPlaneAnchorValid_ = false;
+    WorkPlaneFrame selectionDragViewPlaneFrame_;
+    Point3D selectionDragLastViewPlaneWorld_;
+    Point3D selectionDragCurrentViewPlaneWorld_;
+    QPointF selectionDragLastScreenPosition_;
+    bool selectionDragViewPlaneAnchorValid_ = false;
+    Point3D dragSnapViewPlaneWorld_;
+    QPointF selectionDragSnapScreen_;
+    bool dragSnapViewPlaneAnchorValid_ = false;
     Point3D dragAxisLastPosition_;
     bool dragAxisPositionValid_ = false;
     WorkPlaneFrame controlPointDragFrame_;

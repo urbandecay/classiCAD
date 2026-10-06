@@ -128,7 +128,7 @@ float stepSizeForLevel(int lineLevel)
     return uStepBase * pow(10.0, float(levelIndex - uBaseStepIndex));
 }
 
-bool gridLineCoveredByHigherLevel(LineData line, float lineStep)
+bool gridLineCoveredByHigherLevel(LineData line, vec2 position)
 {
     if (line.level >= 2) {
         return false;
@@ -145,7 +145,10 @@ bool gridLineCoveredByHigherLevel(LineData line, float lineStep)
     // choppy marks as the grid shrinks on screen.
     float higherStep = uStepBase *
                        pow(10.0, float(levelIndex + 1 - uBaseStepIndex));
-    float lineCoordinate = abs(line.P[1 - line.axis] * lineStep);
+    // Match Blender: test the final, camera-offset coordinate after the line
+    // has been placed. Testing only its unshifted index can hide a line that
+    // does not actually coincide with a coarser line as the view moves.
+    float lineCoordinate = abs(position[1 - line.axis]);
     float higherLineIndex = lineCoordinate / higherStep;
     return abs(higherLineIndex - round(higherLineIndex)) < 1.0e-4;
 }
@@ -176,7 +179,7 @@ void main()
     vec2 rawPosition = line.P;
     vec2 position = offset + stepSize * line.P;
     if (uMode == 0) {
-        if (gridLineCoveredByHigherLevel(line, stepSize)) {
+        if (gridLineCoveredByHigherLevel(line, position)) {
             discardGridVertex();
             return;
         }

@@ -379,6 +379,7 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
         (geometryType == GeometryType::Bezier ||
          geometryType == GeometryType::Nurbs)) {
         *controlGuide = {&shape, QColor(QStringLiteral("#8aa7c7")), 1.0f, true};
+        controlGuide->editModeWire = true;
         controlGuide->objectId = object.objectId;
         controlGuide->geometryRevision = object.geometryRevision;
         controlGuide->cacheableGeometry = object.cacheable;
@@ -396,6 +397,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
             ? (highlighted ? 10.0f : 9.0f)
             : 0.0f};
     sceneStroke->objectId = object.objectId;
+    sceneStroke->editModeWire = geometryType == GeometryType::NurbsSurface ||
+                                geometryType == GeometryType::NurbsSolid;
     sceneStroke->geometryRevision = object.preparedGeometryRevision != 0
         ? object.preparedGeometryRevision : object.geometryRevision;
     sceneStroke->cacheableGeometry = object.cacheable;
@@ -604,7 +607,9 @@ bool ViewportSceneRenderer::draw(
     const QSize &viewportSize,
     qreal devicePixelRatio,
     bool depthTest,
-    qreal opacity)
+    qreal opacity,
+    bool smoothOverlayWires,
+    bool smoothEditModeWires)
 {
     if (strokes.isEmpty()) {
         strokeGeometryKeys_.clear();
@@ -823,6 +828,10 @@ bool ViewportSceneRenderer::draw(
             glDrawArrays(GL_POINTS, range.first, range.second);
         } else {
             const float widthPixels = stroke.width * float(dpr);
+            const bool smoothWire = stroke.editModeWire
+                                        ? smoothEditModeWires
+                                        : smoothOverlayWires;
+            boundProgram->setUniformValue("uSmoothWire", smoothWire ? 1 : 0);
             const ViewportSceneStrokePattern pattern =
                 viewportSceneStrokePattern(stroke, widthPixels);
             int count = range.second;
@@ -835,6 +844,7 @@ bool ViewportSceneRenderer::draw(
                     const auto nextRange = strokeRanges_[last + 1];
                     if (next.pointDiameter > 0 || next.color != stroke.color ||
                         next.width != stroke.width || nextRange.first != range.first + count ||
+                        next.editModeWire != stroke.editModeWire ||
                         QVector3D(next.worldOffset.x, next.worldOffset.y, next.worldOffset.z) != offset ||
                         viewportSceneStrokePattern(next, widthPixels).style !=
                             ViewportSceneLineStyle::Solid) break;

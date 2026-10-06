@@ -9,6 +9,7 @@ uniform float uPatternPeriod;
 uniform float uPatternOnLength;
 uniform int uPatternSegmentCount;
 uniform float uPatternSegments[8];
+uniform int uSmoothWire;
 flat in float vLength;
 flat in float gPatternOffsetPixels;
 noperspective in vec2 vStrokePosition;
@@ -73,6 +74,12 @@ void main()
     }
     if (coverage <= 0.0) {
         discard;
+    }
+    if (uSmoothWire == 0) {
+        coverage = coverage >= 0.5 ? 1.0 : 0.0;
+        if (coverage <= 0.0) {
+            discard;
+        }
     }
     fragmentColor = vec4(uColor.rgb, uColor.a * coverage);
 }

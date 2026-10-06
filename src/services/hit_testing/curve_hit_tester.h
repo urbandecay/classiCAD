@@ -71,7 +71,9 @@ public:
                                const ViewportTransform &transform,
                                const QSize &viewportSize,
                                Point3D *worldPoint,
-                               Point3D *worldNormal) const;
+                               Point3D *worldNormal,
+                               int *faceIndex = nullptr,
+                               int *shapeIndex = nullptr) const;
 
     QVector<QPointF> controlPointsForShape(const Shape &shape) const;
 

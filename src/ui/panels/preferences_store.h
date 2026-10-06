@@ -32,6 +32,7 @@ void saveCameraPreferences(const ViewportCameraPreferences &preferences);
 void saveNavigationPreferences(const ViewportNavigationPreferences &preferences);
 void saveRotateToolPreferences(const RotateToolPreferences &preferences);
 void saveViewportAaSamplesPreference(int samples);
+void saveSmoothWirePreferences(bool overlay, bool editMode);
 void saveOrthoPreference(bool enabled);
 void saveOsnapEnabledPreference(bool enabled);
 void saveSnapModesPreference(const StoredPreferences &preferences);

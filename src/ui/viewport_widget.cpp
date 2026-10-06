@@ -86,6 +86,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QHash>
+#include <QSet>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
@@ -132,6 +133,21 @@ constexpr qreal kViewportShadingButtonSize = 20.0;
 constexpr qreal kViewportShadingButtonGap = 1.0;
 constexpr qreal kViewportShadingPanelPadding = 2.0;
 constexpr qreal kViewportShadingSettingsButtonWidth = 15.0;
+constexpr qreal kComponentModeButtonSize = 24.0;
+constexpr qreal kComponentModeButtonGap = 2.0;
+
+enum class ComponentSelectionMode { Vertex, Edge, Face };
+
+QRectF componentModeButtonRect(const QSize &size, int index)
+{
+    const qreal left = 12.0;
+    const qreal bottom = 12.0;
+    const qreal panelHeight = kComponentModeButtonSize + 8.0;
+    const qreal x = left + 4.0 + index *
+                    (kComponentModeButtonSize + kComponentModeButtonGap);
+    return QRectF(x, size.height() - bottom - panelHeight + 4.0,
+                  kComponentModeButtonSize, kComponentModeButtonSize);
+}
 
 QRectF viewportShadingPanelRect(const QSize &size)
 {
@@ -695,7 +711,9 @@ public:
             });
         toolContext_.setSelectionInteractionCallbacks(
             [this](const QPointF &screenPosition, bool includeControlPoint) {
-                if (includeControlPoint && controlPointsVisible_) {
+                if (includeControlPoint &&
+                    (controlPointsVisible_ ||
+                     componentSelectionMode_ == ComponentSelectionMode::Vertex)) {
                     int shapeIndex = -1;
                     int controlPointIndex = -1;
                     if (hitTestSelectedControlPoint(screenPosition,
@@ -1378,6 +1396,18 @@ public:
         if (gpuSurface_ != nullptr) {
             gpuSurface_->setAntiAliasingSamples(samples);
         }
+        update();
+    }
+
+    bool smoothWiresOverlay() const override { return smoothWiresOverlay_; }
+    bool smoothWiresEditMode() const override { return smoothWiresEditMode_; }
+
+    void setSmoothWirePreferences(bool overlay, bool editMode) override
+    {
+        if (smoothWiresOverlay_ == overlay && smoothWiresEditMode_ == editMode)
+            return;
+        smoothWiresOverlay_ = overlay;
+        smoothWiresEditMode_ = editMode;
         update();
     }
 
@@ -3599,6 +3629,68 @@ protected:
         painter.restore();
     }
 
+    void drawComponentModeControls(QPainter &painter)
+    {
+        const QRectF panel(8.0, size().height() - 44.0, 94.0, 36.0);
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(QColor(20, 21, 23, 245), 1.0));
+        painter.setBrush(QColor(31, 32, 34, 248));
+        painter.drawRoundedRect(panel, 3.0, 3.0);
+        for (int index = 0; index < 3; ++index) {
+            const QRectF button = componentModeButtonRect(size(), index);
+            const bool active = static_cast<int>(componentSelectionMode_) == index;
+            painter.setPen(QPen(active ? QColor(76, 142, 197) : QColor(42, 43, 45), 1.0));
+            painter.setBrush(active ? QColor(58, 126, 184) : QColor(60, 61, 63));
+            painter.drawRoundedRect(button, 2.0, 2.0);
+            const QPointF c = button.center();
+            painter.setPen(QPen(QColor(245, 245, 245), 1.4));
+            if (index == 0) {
+                painter.setBrush(QColor(245, 245, 245));
+                painter.drawEllipse(c + QPointF(0, -4), 2.2, 2.2);
+                painter.drawEllipse(c + QPointF(-5, 4), 2.2, 2.2);
+                painter.drawEllipse(c + QPointF(5, 4), 2.2, 2.2);
+            } else if (index == 1) {
+                painter.drawLine(c + QPointF(-6, 4), c + QPointF(5, -4));
+                painter.setBrush(QColor(245, 245, 245));
+                painter.drawEllipse(c + QPointF(-6, 4), 1.8, 1.8);
+                painter.drawEllipse(c + QPointF(5, -4), 1.8, 1.8);
+            } else {
+                QPolygonF icon{c + QPointF(-6, -4), c + QPointF(6, -4),
+                               c + QPointF(4, 5), c + QPointF(-4, 5)};
+                painter.setBrush(QColor(245, 245, 245, 90));
+                painter.drawPolygon(icon);
+            }
+        }
+        painter.restore();
+    }
+
+    int componentModeControlAt(const QPointF &position) const
+    {
+        for (int i = 0; i < 3; ++i) {
+            if (componentModeButtonRect(size(), i).contains(position)) return i;
+        }
+        return -1;
+    }
+
+    void setComponentSelectionMode(ComponentSelectionMode mode)
+    {
+        if (componentSelectionMode_ == mode) return;
+        componentSelectionMode_ = mode;
+        controlPointsVisible_ = mode == ComponentSelectionMode::Vertex;
+        update();
+    }
+
+    QSet<int> &activeComponentSelection()
+    {
+        return componentSelections_[static_cast<int>(componentSelectionMode_)];
+    }
+
+    void clearComponentSelections()
+    {
+        for (QSet<int> &selection : componentSelections_) selection.clear();
+    }
+
     int viewportShadingControlAt(const QPointF &position) const
     {
         for (int index = 0; index < 3; ++index) {
@@ -3654,7 +3746,9 @@ protected:
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
         const ToolPreview &activeToolPreview = renderFrame.activeToolPreview;
         QVector<ViewportControlPointHandle> gpuControlPointHandles;
-        if (controlPointsVisible_ && controlPointRenderer != nullptr) {
+        if ((controlPointsVisible_ ||
+             componentSelectionMode_ == ComponentSelectionMode::Vertex) &&
+            controlPointRenderer != nullptr) {
             const QColor handleOutline(QStringLiteral("#77b7e6"));
             const QColor handleFill(QStringLiteral("#263b4b"));
             const QColor activeHandle(QStringLiteral("#f0a45a"));
@@ -3765,10 +3859,14 @@ protected:
                         selectedSurfaceCage(visibleShape));
                     ViewportSceneStroke edgeCage;
                     edgeCage.shape = &visibleShape;
-                    edgeCage.color = selected
+                    const bool hasComponentSelection =
+                        selected && componentSelectionObject_ == objectId &&
+                        !activeComponentSelection().isEmpty();
+                    edgeCage.color = selected && !hasComponentSelection
                                          ? viewportSelectionColor()
                                          : QColor(20, 20, 20);
                     edgeCage.width = 1.0f;
+                    edgeCage.editModeWire = true;
                     edgeCage.objectId = objectId;
                     edgeCage.geometryRevision = renderObject.geometryRevision;
                     edgeCage.cacheableGeometry = renderObject.cacheable;
@@ -3777,16 +3875,67 @@ protected:
                     gpuStrokes.append(std::move(edgeCage));
                     ViewportSceneStroke vertexCage;
                     vertexCage.shape = &visibleShape;
-                    vertexCage.color = selected
+                    vertexCage.color = selected && !hasComponentSelection
                                            ? QColor(QStringLiteral("#ff7a00"))
                                            : QColor(12, 12, 12);
-                    vertexCage.pointDiameter = 4.0f;
+                    vertexCage.pointDiameter =
+                        componentSelectionMode_ == ComponentSelectionMode::Vertex
+                            ? 4.0f : 0.0f;
+                    vertexCage.editModeWire = true;
                     vertexCage.objectId = objectId;
                     vertexCage.geometryRevision = renderObject.geometryRevision;
                     vertexCage.cacheableGeometry = renderObject.cacheable;
                     vertexCage.worldOffset = renderObject.placementTranslation;
-                    vertexCage.preparedDepthGeometry = std::move(cage);
+                    vertexCage.preparedDepthGeometry = cage;
                     gpuStrokes.append(std::move(vertexCage));
+
+                    if (selected && componentSelectionObject_ == objectId &&
+                        !activeComponentSelection().isEmpty()) {
+                        ViewportDepthGeometry componentGeometry;
+                        if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                            for (int component : activeComponentSelection()) {
+                                if (component >= 0 && component < cage->pointVertices.size())
+                                    componentGeometry.pointVertices.append(cage->pointVertices[component]);
+                            }
+                        } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
+                            for (int component : activeComponentSelection()) {
+                                const int first = component * 2;
+                                if (first + 1 >= cage->lineVertices.size()) continue;
+                                componentGeometry.lineVertices.append(cage->lineVertices[first]);
+                                componentGeometry.lineVertices.append(cage->lineVertices[first + 1]);
+                                componentGeometry.preciseLineVertices.append(cage->preciseLineVertices[first]);
+                                componentGeometry.preciseLineVertices.append(cage->preciseLineVertices[first + 1]);
+                            }
+                        } else {
+                            const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(visibleShape);
+                            for (int component : activeComponentSelection()) {
+                                if (component < 0 || component >= faces.size()) continue;
+                                Shape faceShape;
+                                faceShape.geometryType = GeometryType::NurbsSurface;
+                                faceShape.nurbsSurface = faces[component];
+                                const ViewportDepthGeometry faceCage = selectedSurfaceCage(faceShape);
+                                componentGeometry.lineVertices += faceCage.lineVertices;
+                                componentGeometry.preciseLineVertices += faceCage.preciseLineVertices;
+                            }
+                        }
+                        if (!componentGeometry.pointVertices.isEmpty() ||
+                            !componentGeometry.lineVertices.isEmpty()) {
+                            ViewportSceneStroke componentStroke;
+                            componentStroke.shape = &visibleShape;
+                            componentStroke.color = QColor(QStringLiteral("#ff8a00"));
+                            componentStroke.width = 2.0f;
+                            componentStroke.pointDiameter = 9.0f;
+                            componentStroke.editModeWire = true;
+                            componentStroke.objectId = objectId;
+                            componentStroke.geometryRevision = renderObject.geometryRevision;
+                            componentStroke.cacheableGeometry = renderObject.cacheable;
+                            componentStroke.worldOffset = renderObject.placementTranslation;
+                            componentStroke.preparedDepthGeometry =
+                                QSharedPointer<ViewportDepthGeometry>::create(
+                                    std::move(componentGeometry));
+                            gpuStrokes.append(std::move(componentStroke));
+                        }
+                    }
                 }
                 continue;
             }
@@ -4379,7 +4528,9 @@ protected:
                                                                 ViewportShadingMode::Solid,
                                                         viewportShadingSettings_.xrayEnabled()
                                                             ? viewportShadingSettings_.xrayAlpha
-                                                            : 1.0);
+                                                            : 1.0,
+                                                        smoothWiresOverlay_,
+                                                        smoothWiresEditMode_);
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 renderFrame.camera, renderFrame.viewportSize,
                 devicePixelRatioF(),
@@ -4742,6 +4893,7 @@ protected:
         navigationGizmo_.draw(
             painter, size(), navigationController_.hoverPosition());
         drawViewportShadingControls(painter);
+        drawComponentModeControls(painter);
     }
 
     void mousePressEvent(QMouseEvent *event) override
@@ -4749,6 +4901,13 @@ protected:
         navigationController_.stopAnimation();
         const QPointF screenPosition = eventPosition(event);
         if (event->button() == Qt::LeftButton) {
+            const int componentMode = componentModeControlAt(screenPosition);
+            if (componentMode >= 0) {
+                setComponentSelectionMode(
+                    static_cast<ComponentSelectionMode>(componentMode));
+                event->accept();
+                return;
+            }
             const int shadingControl = viewportShadingControlAt(screenPosition);
             if (shadingControl >= 0) {
                 shadingControlPressed_ = shadingControl;
@@ -5152,6 +5311,35 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton && activeTool_ == Tool::Select) {
+            int componentShapeIndex = -1;
+            const int componentIndex = hitTestComponent(screenPosition,
+                                                       &componentShapeIndex);
+            if (componentIndex >= 0 && componentShapeIndex >= 0) {
+                const ObjectId componentObject =
+                    shapes_.objectIdAt(componentShapeIndex);
+                if (!selection_.contains(componentObject)) {
+                    selection_.setObjectIds({componentObject}, componentObject);
+                } else {
+                    selection_.setPrimaryObjectId(componentObject);
+                }
+                if (componentSelectionObject_ != componentObject ||
+                    !event->modifiers().testFlag(Qt::ShiftModifier)) {
+                    if (componentSelectionObject_ != componentObject)
+                        clearComponentSelections();
+                    else
+                        activeComponentSelection().clear();
+                }
+                componentSelectionObject_ = componentObject;
+                if (activeComponentSelection().contains(componentIndex)) {
+                    activeComponentSelection().remove(componentIndex);
+                } else {
+                    activeComponentSelection().insert(componentIndex);
+                }
+                update();
+                event->accept();
+                return;
+            }
+            clearComponentSelections();
             selectionDragViewPlaneAnchorValid_ = false;
             dragSnapViewPlaneAnchorValid_ = false;
             rawCursorWorld_ = rawWorldPosition;
@@ -6140,6 +6328,15 @@ protected:
         if (!event->isAutoRepeat() && event->key() == Qt::Key_Z &&
             event->modifiers().testFlag(Qt::AltModifier)) {
             activateViewportShadingControl(0);
+            event->accept();
+            return;
+        }
+        if (activeTool_ == Tool::Select && !event->isAutoRepeat() &&
+            event->modifiers() == Qt::NoModifier &&
+            (event->key() == Qt::Key_1 || event->key() == Qt::Key_2 ||
+             event->key() == Qt::Key_3)) {
+            setComponentSelectionMode(static_cast<ComponentSelectionMode>(
+                event->key() - Qt::Key_1));
             event->accept();
             return;
         }
@@ -9076,6 +9273,66 @@ private:
                                                            size(),
                                                            shapeIndex,
                                                            controlPointIndex);
+    }
+
+    int hitTestComponent(const QPointF &screenPosition, int *shapeIndexOut)
+    {
+        if (shapeIndexOut != nullptr) *shapeIndexOut = -1;
+        const int shapeIndex = hitTestShape(screenPosition);
+        if (shapeIndex < 0 || shapeIndex >= shapes_.size()) return -1;
+        const Shape &shape = shapes_[shapeIndex];
+        if (shape.geometryType != GeometryType::NurbsSolid &&
+            shape.geometryType != GeometryType::NurbsSurface) return -1;
+        const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+        const SceneObject *object = document_.object(objectId);
+        const Point3D offset = object != nullptr ? object->placementTranslation : Point3D{};
+        if (componentSelectionMode_ == ComponentSelectionMode::Face) {
+            Point3D point, normal;
+            int faceIndex = -1;
+            int faceShapeIndex = -1;
+            if (!curveHitTester_.hitTestVisibleSurface(document_, screenPosition,
+                                                       viewportTransform_, size(),
+                                                       &point, &normal, &faceIndex,
+                                                       &faceShapeIndex) ||
+                faceShapeIndex != shapeIndex) return -1;
+            if (shape.geometryType == GeometryType::NurbsSurface && faceIndex > 0) return -1;
+            if (shapeIndexOut != nullptr) *shapeIndexOut = shapeIndex;
+            return faceIndex;
+        }
+        ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+        qreal bestDistance = 10.0;
+        int bestIndex = -1;
+        if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+            for (int i = 0; i < cage.pointVertices.size(); ++i) {
+                Point3D point{cage.pointVertices[i].x() + offset.x,
+                              cage.pointVertices[i].y() + offset.y,
+                              cage.pointVertices[i].z() + offset.z};
+                QPointF projected;
+                if (!viewportTransform_.worldPointToScreen(point, size(), &projected)) continue;
+                const qreal distance = QLineF(projected, screenPosition).length();
+                if (distance < bestDistance) { bestDistance = distance; bestIndex = i; }
+            }
+        } else {
+            for (int i = 0; i + 1 < cage.preciseLineVertices.size(); i += 2) {
+                const Point3D &a0 = cage.preciseLineVertices[i];
+                const Point3D &b0 = cage.preciseLineVertices[i + 1];
+                Point3D a{a0.x + offset.x, a0.y + offset.y, a0.z + offset.z};
+                Point3D b{b0.x + offset.x, b0.y + offset.y, b0.z + offset.z};
+                QPointF sa, sb;
+                if (!viewportTransform_.worldPointToScreen(a, size(), &sa) ||
+                    !viewportTransform_.worldPointToScreen(b, size(), &sb)) continue;
+                QLineF segment(sa, sb);
+                const qreal length2 = segment.dx()*segment.dx() + segment.dy()*segment.dy();
+                const qreal t = length2 > 1.0e-12
+                    ? std::clamp(((screenPosition.x()-sa.x())*segment.dx() +
+                                  (screenPosition.y()-sa.y())*segment.dy()) / length2, 0.0, 1.0)
+                    : 0.0;
+                const qreal distance = QLineF(screenPosition, segment.pointAt(t)).length();
+                if (distance < bestDistance) { bestDistance = distance; bestIndex = i / 2; }
+            }
+        }
+        if (bestIndex >= 0 && shapeIndexOut != nullptr) *shapeIndexOut = shapeIndex;
+        return bestIndex;
     }
 
     int hitTestShape(const QPointF &screenPosition) const
@@ -12450,6 +12707,11 @@ private:
     ToolId activeTool_ = ToolId::Select;
     ToolId repeatTool_ = ToolId::Select;
     bool controlPointsVisible_ = false;
+    bool smoothWiresOverlay_ = true;
+    bool smoothWiresEditMode_ = true;
+    ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
+    QSet<int> componentSelections_[3];
+    ObjectId componentSelectionObject_ = ObjectId::invalid();
     std::unique_ptr<ApplicationSession> ownedSession_;
     ApplicationSession &session_;
     Document &document_;

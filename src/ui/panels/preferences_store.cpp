@@ -160,6 +160,10 @@ StoredPreferences loadStoredPreferences()
                                        requestedAaSamples == 8
                                    ? requestedAaSamples
                                    : 0;
+    dialog.smoothWiresOverlay = settings.value(
+        QStringLiteral("viewport/smoothWiresOverlay"), true).toBool();
+    dialog.smoothWiresEditMode = settings.value(
+        QStringLiteral("viewport/smoothWiresEditMode"), true).toBool();
 
     stored.orthoEnabled =
         settings.value(QStringLiteral("modeling/orthoEnabled"), false).toBool();
@@ -289,6 +293,14 @@ void saveViewportAaSamplesPreference(int samples)
 {
     writeSettings([samples](QSettings &settings) {
         settings.setValue(QStringLiteral("system/viewportAaSamples"), samples);
+    });
+}
+
+void saveSmoothWirePreferences(bool overlay, bool editMode)
+{
+    writeSettings([overlay, editMode](QSettings &settings) {
+        settings.setValue(QStringLiteral("viewport/smoothWiresOverlay"), overlay);
+        settings.setValue(QStringLiteral("viewport/smoothWiresEditMode"), editMode);
     });
 }
 

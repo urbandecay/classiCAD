@@ -37,6 +37,8 @@ public:
                                const ViewportNavigationPreferences &navigationPreferences,
                                const RotateToolPreferences &rotateToolPreferences,
                                int viewportAaSamples,
+                               bool smoothWiresOverlay,
+                               bool smoothWiresEditMode,
                                QWidget *parent = nullptr)
         : QDialog(parent)
     {
@@ -83,7 +85,10 @@ public:
                                                      smoothCurveDisplay,
                                                      gridAppearance,
                                                      cameraPreferences,
-                                                     rotateToolPreferences));
+                                                     rotateToolPreferences,
+                                                     viewportAaSamples,
+                                                     smoothWiresOverlay,
+                                                     smoothWiresEditMode));
             } else if (category == QStringLiteral("Dimensions")) {
                 pages_->addWidget(createDimensionPage(architecturalDimensionFont));
             } else if (category == QStringLiteral("Navigation")) {
@@ -91,7 +96,7 @@ public:
             } else if (category == QStringLiteral("Keymap")) {
                 pages_->addWidget(createKeymapPage(panButton));
             } else if (category == QStringLiteral("System")) {
-                pages_->addWidget(createSystemPage(viewportAaSamples));
+                pages_->addWidget(createSystemPage());
             } else {
                 pages_->addWidget(createPlaceholderPage(category));
             }
@@ -187,6 +192,16 @@ public:
     int viewportAaSamples() const
     {
         return viewportAaCombo_->currentData().toInt();
+    }
+
+    bool smoothWiresOverlay() const
+    {
+        return smoothWiresOverlayCheckBox_->isChecked();
+    }
+
+    bool smoothWiresEditMode() const
+    {
+        return smoothWiresEditModeCheckBox_->isChecked();
     }
 
 private:
@@ -332,7 +347,10 @@ private:
                                 bool smoothCurveDisplay,
                                 const BlenderGridAppearance &gridAppearance,
                                 const ViewportCameraPreferences &cameraPreferences,
-                                const RotateToolPreferences &rotateToolPreferences)
+                                const RotateToolPreferences &rotateToolPreferences,
+                                int viewportAaSamples,
+                                bool smoothWiresOverlay,
+                                bool smoothWiresEditMode)
     {
         gridAppearance_ = gridAppearance;
         rotateToolPreferences_ = rotateToolPreferences;
@@ -346,6 +364,29 @@ private:
         auto *title = new QLabel(QStringLiteral("Viewport"));
         title->setObjectName(QStringLiteral("preferencesTitle"));
         layout->addWidget(title);
+
+        auto *qualityBox = new QGroupBox(QStringLiteral("Quality"));
+        auto *qualityLayout = new QFormLayout(qualityBox);
+        viewportAaCombo_ = new QComboBox;
+        viewportAaCombo_->addItem(QStringLiteral("Off"), 0);
+        viewportAaCombo_->addItem(QStringLiteral("2 Samples"), 2);
+        viewportAaCombo_->addItem(QStringLiteral("4 Samples"), 4);
+        viewportAaCombo_->addItem(QStringLiteral("8 Samples"), 8);
+        viewportAaCombo_->setCurrentIndex(viewportAaCombo_->findData(viewportAaSamples));
+        viewportAaCombo_->setObjectName(QStringLiteral("viewportAntiAliasingPreference"));
+        qualityLayout->addRow(QStringLiteral("Viewport Anti-Aliasing"), viewportAaCombo_);
+        smoothWiresOverlayCheckBox_ = new QCheckBox(QStringLiteral("Overlay"));
+        smoothWiresOverlayCheckBox_->setChecked(smoothWiresOverlay);
+        smoothWiresOverlayCheckBox_->setObjectName(
+            QStringLiteral("smoothWiresOverlayPreference"));
+        qualityLayout->addRow(QStringLiteral("Smooth Wires"),
+                              smoothWiresOverlayCheckBox_);
+        smoothWiresEditModeCheckBox_ = new QCheckBox(QStringLiteral("Edit Mode"));
+        smoothWiresEditModeCheckBox_->setChecked(smoothWiresEditMode);
+        smoothWiresEditModeCheckBox_->setObjectName(
+            QStringLiteral("smoothWiresEditModePreference"));
+        qualityLayout->addRow(QString(), smoothWiresEditModeCheckBox_);
+        layout->addWidget(qualityBox);
 
         auto *feedbackBox = new QGroupBox(QStringLiteral("Snap Feedback"));
         auto *feedbackLayout = new QVBoxLayout(feedbackBox);
@@ -709,7 +750,7 @@ private:
         return page;
     }
 
-    QWidget *createSystemPage(int viewportAaSamples)
+    QWidget *createSystemPage()
     {
         auto *page = new QWidget;
         auto *layout = new QVBoxLayout(page);
@@ -720,16 +761,8 @@ private:
         title->setObjectName(QStringLiteral("preferencesTitle"));
         layout->addWidget(title);
 
-        auto *viewportBox = new QGroupBox(QStringLiteral("Viewport"));
+        auto *viewportBox = new QGroupBox(QStringLiteral("Graphics Backend"));
         auto *viewportLayout = new QFormLayout(viewportBox);
-        viewportAaCombo_ = new QComboBox;
-        viewportAaCombo_->addItem(QStringLiteral("Off"), 0);
-        viewportAaCombo_->addItem(QStringLiteral("2×"), 2);
-        viewportAaCombo_->addItem(QStringLiteral("4×"), 4);
-        viewportAaCombo_->addItem(QStringLiteral("8×"), 8);
-        viewportAaCombo_->setCurrentIndex(viewportAaCombo_->findData(viewportAaSamples));
-        viewportAaCombo_->setObjectName(QStringLiteral("viewportAntiAliasingPreference"));
-        viewportLayout->addRow(QStringLiteral("Anti-aliasing"), viewportAaCombo_);
 
         auto *backend = new QLabel(QStringLiteral(
             "OpenGL shader viewport; Qt rendering is used automatically if OpenGL is unavailable."));
@@ -737,12 +770,6 @@ private:
         viewportLayout->addRow(QStringLiteral("Graphics backend"), backend);
         layout->addWidget(viewportBox);
 
-        auto *hint = new QLabel(QStringLiteral(
-            "8× is the saved viewport anti-aliasing setting from your Blender preferences. "
-            "If the GPU cannot provide that sample count, the viewport falls back to single-sample rendering."));
-        hint->setObjectName(QStringLiteral("preferencesHint"));
-        hint->setWordWrap(true);
-        layout->addWidget(hint);
         layout->addStretch(1);
         return page;
     }
@@ -776,6 +803,8 @@ private:
     QComboBox *zoomMethodCombo_ = nullptr;
     QComboBox *zoomAxisCombo_ = nullptr;
     QComboBox *viewportAaCombo_ = nullptr;
+    QCheckBox *smoothWiresOverlayCheckBox_ = nullptr;
+    QCheckBox *smoothWiresEditModeCheckBox_ = nullptr;
 };
 
 } // namespace
@@ -797,6 +826,8 @@ bool showPreferencesDialog(QWidget *parent,
                              initialValues.navigationPreferences,
                              initialValues.rotateToolPreferences,
                              initialValues.viewportAaSamples,
+                             initialValues.smoothWiresOverlay,
+                             initialValues.smoothWiresEditMode,
                              parent);
     if (dialog.exec() != QDialog::Accepted) {
         return false;
@@ -812,6 +843,8 @@ bool showPreferencesDialog(QWidget *parent,
     selectedValues->navigationPreferences = dialog.navigationPreferences();
     selectedValues->rotateToolPreferences = dialog.rotateToolPreferences();
     selectedValues->viewportAaSamples = dialog.viewportAaSamples();
+    selectedValues->smoothWiresOverlay = dialog.smoothWiresOverlay();
+    selectedValues->smoothWiresEditMode = dialog.smoothWiresEditMode();
     return true;
 }
 

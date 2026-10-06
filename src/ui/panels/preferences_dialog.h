@@ -16,6 +16,8 @@ struct PreferencesDialogValues {
     ViewportNavigationPreferences navigationPreferences;
     RotateToolPreferences rotateToolPreferences;
     int viewportAaSamples = 0;
+    bool smoothWiresOverlay = true;
+    bool smoothWiresEditMode = true;
 };
 
 // Returns true when the user accepts the dialog and writes the selected values.

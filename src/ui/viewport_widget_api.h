@@ -105,6 +105,9 @@ public:
         const ViewportNavigationPreferences &preferences) = 0;
     virtual int viewportAntiAliasingSamples() const = 0;
     virtual void setViewportAntiAliasingSamples(int samples) = 0;
+    virtual bool smoothWiresOverlay() const = 0;
+    virtual bool smoothWiresEditMode() const = 0;
+    virtual void setSmoothWirePreferences(bool overlay, bool editMode) = 0;
     virtual void setArchitecturalDimensionFont(bool enabled) = 0;
     virtual void setPanButton(Qt::MouseButton button) = 0;
     virtual Qt::MouseButton panButton() const = 0;

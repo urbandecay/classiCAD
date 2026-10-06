@@ -1820,6 +1820,8 @@ private:
             viewport_->setRotateToolPreferences(RotateToolPreferences{});
         }
         viewport_->setViewportAntiAliasingSamples(preferences.viewportAaSamples);
+        viewport_->setSmoothWirePreferences(preferences.smoothWiresOverlay,
+                                            preferences.smoothWiresEditMode);
         viewport_->setArchitecturalDimensionFont(
             preferences.architecturalDimensionFont);
 
@@ -1856,6 +1858,8 @@ private:
         initialValues.navigationPreferences = viewport_->navigationPreferences();
         initialValues.rotateToolPreferences = viewport_->rotateToolPreferences();
         initialValues.viewportAaSamples = viewport_->viewportAntiAliasingSamples();
+        initialValues.smoothWiresOverlay = viewport_->smoothWiresOverlay();
+        initialValues.smoothWiresEditMode = viewport_->smoothWiresEditMode();
 
         PreferencesDialogValues selectedValues;
         if (!showPreferencesDialog(this, initialValues, &selectedValues)) {
@@ -1870,6 +1874,8 @@ private:
         applyNavigationPreferences(selectedValues.navigationPreferences, true);
         applyRotateToolPreferences(selectedValues.rotateToolPreferences, true);
         applyViewportAntiAliasingSamples(selectedValues.viewportAaSamples, true);
+        applySmoothWirePreferences(selectedValues.smoothWiresOverlay,
+                                   selectedValues.smoothWiresEditMode, true);
     }
 
     void openDocumentGridSettings()
@@ -1970,6 +1976,13 @@ private:
         if (save) {
             saveViewportAaSamplesPreference(samples);
         }
+    }
+
+    void applySmoothWirePreferences(bool overlay, bool editMode, bool save)
+    {
+        if (viewport_ == nullptr) return;
+        viewport_->setSmoothWirePreferences(overlay, editMode);
+        if (save) saveSmoothWirePreferences(overlay, editMode);
     }
 
     void applySnapLabelsVisible(bool visible, bool save)

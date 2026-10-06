@@ -62,6 +62,7 @@ struct ViewportSceneStroke {
     float pointDiameter = 0.0f;
     bool dashed = false;
     bool pointOutline = false;
+    bool editModeWire = false;
     ViewportSceneLineStyle lineStyle = ViewportSceneLineStyle::Solid;
     float linePatternScale = 1.0f;
     std::array<float, 8> linePatternSegmentsWidthUnits{};
@@ -156,7 +157,9 @@ public:
               const QSize &viewportSize,
               qreal devicePixelRatio,
               bool depthTest = false,
-              qreal opacity = 1.0);
+              qreal opacity = 1.0,
+              bool smoothOverlayWires = true,
+              bool smoothEditModeWires = true);
     bool drawArcToolOverlay(const ViewportTransform &transform,
                             const QSize &viewportSize,
                             qreal devicePixelRatio,

@@ -1171,7 +1171,9 @@ bool CurveHitTester::hitTestVisibleSurface(
     const ViewportTransform &transform,
     const QSize &viewportSize,
     Point3D *worldPoint,
-    Point3D *worldNormal) const
+    Point3D *worldNormal,
+    int *hitFaceIndex,
+    int *hitShapeIndex) const
 {
     if (worldPoint == nullptr || worldNormal == nullptr) {
         return false;
@@ -1245,6 +1247,12 @@ bool CurveHitTester::hitTestVisibleSurface(
                 if (std::isfinite(depth) && (!found || depth > nearestDepth)) {
                     *worldPoint = candidate;
                     *worldNormal = normal;
+                    if (hitFaceIndex != nullptr) {
+                        *hitFaceIndex = faceIndex;
+                    }
+                    if (hitShapeIndex != nullptr) {
+                        *hitShapeIndex = objectIndex;
+                    }
                     nearestDepth = depth;
                     found = true;
                 }

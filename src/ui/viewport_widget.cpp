@@ -1552,6 +1552,126 @@ public:
         return true;
     }
 
+    bool grabObjectWorldBoundsCenter(ObjectId objectId,
+                                     Point3D *center) const
+    {
+        if (center == nullptr) {
+            return false;
+        }
+        const SceneObject *sceneObject = document_.object(objectId);
+        if (sceneObject == nullptr) {
+            return false;
+        }
+
+        const Shape &shape = sceneObject->geometry;
+        const Point3D placement = sceneObject->placementTranslation;
+        QVector<Point3D> worldPoints;
+        const auto isFiniteWorldPoint = [](const Point3D &point) {
+            return std::isfinite(point.x) && std::isfinite(point.y) &&
+                   std::isfinite(point.z);
+        };
+        const auto appendWorldPoint = [&](const Point3D &point) {
+            if (isFiniteWorldPoint(point)) {
+                worldPoints.append(point);
+            }
+        };
+        const auto appendLocalPoint = [&](const QPointF &point,
+                                          const WorkPlaneFrame &frame) {
+            Point3D world = workPlaneFramePointToWorld(point, frame);
+            world.x += placement.x;
+            world.y += placement.y;
+            world.z += placement.z;
+            appendWorldPoint(world);
+        };
+        const auto appendSurfacePoints = [&](const NurbsSurface3D &surface) {
+            for (const Point3D &point : surface.controlPoints) {
+                appendWorldPoint({point.x + placement.x,
+                                  point.y + placement.y,
+                                  point.z + placement.z});
+            }
+        };
+
+        if (shape.geometryType == GeometryType::NurbsSurface) {
+            appendSurfacePoints(shape.nurbsSurface);
+        } else if (shape.geometryType == GeometryType::NurbsSolid) {
+            appendSurfacePoints(shape.nurbsSolid.baseSurface);
+            for (const Point3D &point : shape.nurbsSolid.baseSurface.controlPoints) {
+                appendWorldPoint({point.x + shape.nurbsSolid.displacement.x +
+                                      placement.x,
+                                  point.y + shape.nurbsSolid.displacement.y +
+                                      placement.y,
+                                  point.z + shape.nurbsSolid.displacement.z +
+                                      placement.z});
+            }
+        } else {
+            const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+            for (const QPointF &point : shape.points) {
+                appendLocalPoint(point, frame);
+            }
+            for (const QPointF &point : shape.nurbs.controlPoints) {
+                appendLocalPoint(point, frame);
+            }
+            for (int componentIndex = 0;
+                 componentIndex < shape.components.size(); ++componentIndex) {
+                const WorkPlaneFrame componentFrame =
+                    shapeComponentWorkPlaneFrame(shape, componentIndex);
+                for (const QPointF &point :
+                     shape.components[componentIndex].controlPoints) {
+                    appendLocalPoint(point, componentFrame);
+                }
+            }
+        }
+
+        if (worldPoints.isEmpty()) {
+            WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+            frame.origin.x += placement.x;
+            frame.origin.y += placement.y;
+            frame.origin.z += placement.z;
+            appendWorldPoint(frame.origin);
+        }
+        if (worldPoints.isEmpty()) {
+            return false;
+        }
+
+        Point3D minimum = worldPoints.first();
+        Point3D maximum = minimum;
+        for (const Point3D &point : worldPoints) {
+            minimum.x = std::min(minimum.x, point.x);
+            minimum.y = std::min(minimum.y, point.y);
+            minimum.z = std::min(minimum.z, point.z);
+            maximum.x = std::max(maximum.x, point.x);
+            maximum.y = std::max(maximum.y, point.y);
+            maximum.z = std::max(maximum.z, point.z);
+        }
+        *center = {(minimum.x + maximum.x) * 0.5,
+                   (minimum.y + maximum.y) * 0.5,
+                   (minimum.z + maximum.z) * 0.5};
+        return isFiniteWorldPoint(*center);
+    }
+
+    Point3D grabSelectionPivotWorld(const QVector<ObjectId> &objectIds) const
+    {
+        Point3D center{};
+        int centerCount = 0;
+        for (const ObjectId objectId : objectIds) {
+            Point3D objectCenter;
+            if (!grabObjectWorldBoundsCenter(objectId, &objectCenter)) {
+                continue;
+            }
+            center.x += objectCenter.x;
+            center.y += objectCenter.y;
+            center.z += objectCenter.z;
+            ++centerCount;
+        }
+        if (centerCount > 0) {
+            const qreal inverseCount = 1.0 / centerCount;
+            center.x *= inverseCount;
+            center.y *= inverseCount;
+            center.z *= inverseCount;
+        }
+        return center;
+    }
+
     bool beginGrab()
     {
         if (!selectionShortcutsAvailable()) {
@@ -1584,6 +1704,25 @@ public:
             return false;
         }
         grabAxisStartScreen_ = localCursor;
+        const Point3D pivot = grabSelectionPivotWorld(validSelection);
+        const Point3D viewDirection = viewportTransform_.viewDirection();
+        const Point3D viewUp = viewportTransform_.viewUp();
+        const Point3D viewRight{
+            viewUp.y * viewDirection.z - viewUp.z * viewDirection.y,
+            viewUp.z * viewDirection.x - viewUp.x * viewDirection.z,
+            viewUp.x * viewDirection.y - viewUp.y * viewDirection.x};
+        grabViewPlaneFrame_ = makeWorkPlaneFrameFromNormal(
+            pivot, viewDirection, viewRight);
+        QPointF startViewPlaneCoordinates;
+        grabViewPlaneAnchorValid_ =
+            isValidWorkPlaneFrame(grabViewPlaneFrame_) &&
+            viewportTransform_.screenToWorkPlaneUnclipped(
+                localCursor, size(), grabViewPlaneFrame_,
+                &startViewPlaneCoordinates);
+        if (grabViewPlaneAnchorValid_) {
+            grabViewPlaneStartWorld_ = workPlaneFramePointToWorld(
+                startViewPlaneCoordinates, grabViewPlaneFrame_);
+        }
         if (!selectedShapeIndex_.isValid() || !validSelection.contains(selectedShapeIndex_)) {
             selection_.setPrimaryObjectId(validSelection.back());
         }
@@ -6708,6 +6847,9 @@ private:
     void resetGrabInteraction()
     {
         grabTool_.reset();
+        grabViewPlaneFrame_ = WorkPlaneFrame{};
+        grabViewPlaneStartWorld_ = {};
+        grabViewPlaneAnchorValid_ = false;
     }
 
     void resetDuplicateInteraction()
@@ -9933,6 +10075,39 @@ private:
             freeDestination = destinationCursor;
             totalDelta = destination - grabTool_.basePoint();
         } else {
+            if (dragAxisLock_ == DragAxisLock::None &&
+                grabViewPlaneAnchorValid_) {
+                QPointF destinationCoordinates;
+                if (viewportTransform_.screenToWorkPlaneUnclipped(
+                        screenPosition, size(), grabViewPlaneFrame_,
+                        &destinationCoordinates)) {
+                    const Point3D destination = workPlaneFramePointToWorld(
+                        destinationCoordinates, grabViewPlaneFrame_);
+                    const Point3D worldDelta{
+                        destination.x - grabViewPlaneStartWorld_.x,
+                        destination.y - grabViewPlaneStartWorld_.y,
+                        destination.z - grabViewPlaneStartWorld_.z};
+                    if (!isZeroWorldDelta(worldDelta)) {
+                        translateShapesWorldDelta(dragIndices, worldDelta);
+                        grabTool_.setMoved(true);
+                    } else {
+                        grabTool_.setMoved(false);
+                    }
+                    currentSnap_ = SnapResult{};
+                    currentDragSnap_ = DragSnapResult{};
+                    setSelectionLastDragWorldPosition(rawCursorWorld_);
+                    DebugLog::instance().write(
+                        QStringLiteral("grab view-plane delta=(%1,%2,%3) cursorScreen=%4 pivot=(%5,%6,%7)")
+                            .arg(worldDelta.x, 0, 'g', 12)
+                            .arg(worldDelta.y, 0, 'g', 12)
+                            .arg(worldDelta.z, 0, 'g', 12)
+                            .arg(pointText(screenPosition))
+                            .arg(grabViewPlaneFrame_.origin.x, 0, 'g', 12)
+                            .arg(grabViewPlaneFrame_.origin.y, 0, 'g', 12)
+                            .arg(grabViewPlaneFrame_.origin.z, 0, 'g', 12));
+                    return;
+                }
+            }
             currentSnap_ = SnapResult{};
             totalDelta = rawCursorWorld_ - grabTool_.startWorldPosition();
         }
@@ -11466,6 +11641,9 @@ private:
     quint64 dragSnapTraceSequence_ = 0;
     DragAxisLock dragAxisLock_ = DragAxisLock::None;
     QPointF grabAxisStartScreen_;
+    WorkPlaneFrame grabViewPlaneFrame_;
+    Point3D grabViewPlaneStartWorld_;
+    bool grabViewPlaneAnchorValid_ = false;
     Point3D dragAxisLastPosition_;
     bool dragAxisPositionValid_ = false;
     WorkPlaneFrame controlPointDragFrame_;

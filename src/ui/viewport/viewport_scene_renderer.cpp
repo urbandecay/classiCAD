@@ -798,6 +798,11 @@ bool ViewportSceneRenderer::draw(
                 nextProgram->setUniformValue(
                     "uViewportSize",
                     QVector2D(pixelSize.width(), pixelSize.height()));
+                // Scene curves should win depth ties against coplanar surface
+                // outlines. The small clip-space bias removes dark edge
+                // fringes without making curves visible through surfaces.
+                nextProgram->setUniformValue(
+                    "uDepthBias", depthTest ? 1.0e-5f : 0.0f);
             }
             boundProgram = nextProgram;
         }

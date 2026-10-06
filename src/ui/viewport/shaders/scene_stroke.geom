@@ -7,6 +7,7 @@ layout(triangle_strip, max_vertices = 4) out;
 
 uniform vec2 uViewportSize;
 uniform float uWidth;
+uniform float uDepthBias;
 flat out float vLength;
 flat out float gPatternOffsetPixels;
 noperspective out vec2 vStrokePosition;
@@ -48,18 +49,22 @@ void main()
     vStrokePosition = vec2(-radius, radius);
     gl_Position = a + vec4((normal - tangent) * radius * 2.0 /
                                 uViewportSize * a.w, 0.0, 0.0);
+    gl_Position.z -= uDepthBias * gl_Position.w;
     EmitVertex();
     vStrokePosition = vec2(-radius, -radius);
     gl_Position = a + vec4((-normal - tangent) * radius * 2.0 /
                                 uViewportSize * a.w, 0.0, 0.0);
+    gl_Position.z -= uDepthBias * gl_Position.w;
     EmitVertex();
     vStrokePosition = vec2(lengthPixels + radius, radius);
     gl_Position = b + vec4((normal + tangent) * radius * 2.0 /
                                 uViewportSize * b.w, 0.0, 0.0);
+    gl_Position.z -= uDepthBias * gl_Position.w;
     EmitVertex();
     vStrokePosition = vec2(lengthPixels + radius, -radius);
     gl_Position = b + vec4((-normal + tangent) * radius * 2.0 /
                                 uViewportSize * b.w, 0.0, 0.0);
+    gl_Position.z -= uDepthBias * gl_Position.w;
     EmitVertex();
     EndPrimitive();
 }

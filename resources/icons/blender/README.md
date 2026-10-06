@@ -15,5 +15,11 @@ Source files:
 - `xray.svg` and `xray.png` (X-Ray shading control)
 - `shading_wire.svg` and `shading_wire.png` (Wireframe shading control)
 - `shading_solid.svg` and `shading_solid.png` (Solid shading control)
+- `selection_vertex.svg` and `selection_vertex.png` (Vertex Select mode)
+- `selection_edge.svg` and `selection_edge.png` (Edge Select mode)
+- `selection_face.svg` and `selection_face.png` (Face Select mode)
 
-Source repository: https://github.com/blender/blender/tree/v4.5.0/release/datafiles/icons_svg
+The selection-mode artwork is sourced from Blender 4.5.0's `vertexsel.svg`,
+`edgesel.svg`, and `facesel.svg`. Their PNG files are rasterizations of those
+source SVGs. Source repository:
+https://github.com/blender/blender/tree/v4.5.0/release/datafiles/icons_svg

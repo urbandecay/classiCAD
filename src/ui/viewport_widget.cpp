@@ -133,20 +133,56 @@ constexpr qreal kViewportShadingButtonSize = 20.0;
 constexpr qreal kViewportShadingButtonGap = 1.0;
 constexpr qreal kViewportShadingPanelPadding = 2.0;
 constexpr qreal kViewportShadingSettingsButtonWidth = 15.0;
-constexpr qreal kComponentModeButtonSize = 24.0;
-constexpr qreal kComponentModeButtonGap = 2.0;
+constexpr qreal kComponentModeButtonSize = kViewportShadingButtonSize;
+constexpr qreal kComponentModeButtonGap = kViewportShadingButtonGap;
 
 enum class ComponentSelectionMode { Vertex, Edge, Face };
 
+QRectF componentModePanelRect(const QSize &size)
+{
+    const qreal width = kComponentModeButtonSize * 3.0 +
+                        kComponentModeButtonGap * 2.0 +
+                        kViewportShadingPanelPadding * 2.0;
+    const qreal height = kComponentModeButtonSize +
+                         kViewportShadingPanelPadding * 2.0;
+    return QRectF(8.0, size.height() - 12.0 - height, width, height);
+}
+
 QRectF componentModeButtonRect(const QSize &size, int index)
 {
-    const qreal left = 12.0;
-    const qreal bottom = 12.0;
-    const qreal panelHeight = kComponentModeButtonSize + 8.0;
-    const qreal x = left + 4.0 + index *
+    const QRectF panel = componentModePanelRect(size);
+    const qreal x = panel.left() + kViewportShadingPanelPadding + index *
                     (kComponentModeButtonSize + kComponentModeButtonGap);
-    return QRectF(x, size.height() - bottom - panelHeight + 4.0,
+    return QRectF(x, panel.top() + kViewportShadingPanelPadding,
                   kComponentModeButtonSize, kComponentModeButtonSize);
+}
+
+const QPixmap &blenderSelectionModeIcon(int mode, bool active)
+{
+    // Retain the pixmaps across frames, just like the shading toolbar icons.
+    // Destroying temporary pixmaps during an OpenGL paint invalidates textures
+    // while Qt still has their bindings cached for the remaining draws.
+    static const std::array<QPixmap, 6> icons = [] {
+        const std::array<QString, 3> paths{
+            QStringLiteral(":/blender-shading/selection_vertex.png"),
+            QStringLiteral(":/blender-shading/selection_edge.png"),
+            QStringLiteral(":/blender-shading/selection_face.png")};
+        std::array<QPixmap, 6> result;
+        for (int state = 0; state < 2; ++state) {
+            for (int index = 0; index < 3; ++index) {
+                QImage image(paths[index]);
+                image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                QPainter tint(&image);
+                tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+                tint.fillRect(image.rect(), state ? QColor(235, 239, 246)
+                                                 : QColor(205, 205, 205));
+                tint.end();
+                result[state * 3 + index] = QPixmap::fromImage(std::move(image));
+            }
+        }
+        return result;
+    }();
+    return icons[(active ? 3 : 0) + mode];
 }
 
 QRectF viewportShadingPanelRect(const QSize &size)
@@ -3631,7 +3667,7 @@ protected:
 
     void drawComponentModeControls(QPainter &painter)
     {
-        const QRectF panel(8.0, size().height() - 44.0, 94.0, 36.0);
+        const QRectF panel = componentModePanelRect(size());
         painter.save();
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setPen(QPen(QColor(20, 21, 23, 245), 1.0));
@@ -3640,27 +3676,17 @@ protected:
         for (int index = 0; index < 3; ++index) {
             const QRectF button = componentModeButtonRect(size(), index);
             const bool active = static_cast<int>(componentSelectionMode_) == index;
-            painter.setPen(QPen(active ? QColor(76, 142, 197) : QColor(42, 43, 45), 1.0));
-            painter.setBrush(active ? QColor(58, 126, 184) : QColor(60, 61, 63));
+            const bool hovered = index == componentModeHover_;
+            painter.setPen(QPen(active ? QColor(76, 142, 197, 255)
+                                      : QColor(42, 43, 45, 255), 1.0));
+            painter.setBrush(active ? QColor(58, 126, 184, 255)
+                                    : hovered ? QColor(83, 85, 88, 255)
+                                              : QColor(60, 61, 63, 255));
             painter.drawRoundedRect(button, 2.0, 2.0);
-            const QPointF c = button.center();
-            painter.setPen(QPen(QColor(245, 245, 245), 1.4));
-            if (index == 0) {
-                painter.setBrush(QColor(245, 245, 245));
-                painter.drawEllipse(c + QPointF(0, -4), 2.2, 2.2);
-                painter.drawEllipse(c + QPointF(-5, 4), 2.2, 2.2);
-                painter.drawEllipse(c + QPointF(5, 4), 2.2, 2.2);
-            } else if (index == 1) {
-                painter.drawLine(c + QPointF(-6, 4), c + QPointF(5, -4));
-                painter.setBrush(QColor(245, 245, 245));
-                painter.drawEllipse(c + QPointF(-6, 4), 1.8, 1.8);
-                painter.drawEllipse(c + QPointF(5, -4), 1.8, 1.8);
-            } else {
-                QPolygonF icon{c + QPointF(-6, -4), c + QPointF(6, -4),
-                               c + QPointF(4, 5), c + QPointF(-4, 5)};
-                painter.setBrush(QColor(245, 245, 245, 90));
-                painter.drawPolygon(icon);
-            }
+            const QRectF iconRect(button.center().x() - 8.0,
+                                  button.center().y() - 8.0, 16.0, 16.0);
+            const QPixmap &icon = blenderSelectionModeIcon(index, active);
+            if (!icon.isNull()) painter.drawPixmap(iconRect, icon, icon.rect());
         }
         painter.restore();
     }
@@ -5492,6 +5518,24 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
+        const int componentMode = componentModeControlAt(screenPosition);
+        if (componentMode >= 0) {
+            if (componentMode != componentModeHover_) {
+                componentModeHover_ = componentMode;
+                const QStringList tips{QStringLiteral("Vertex Select (1)"),
+                                       QStringLiteral("Edge Select (2)"),
+                                       QStringLiteral("Face Select (3)")};
+                setToolTip(tips[componentMode]);
+                update();
+            }
+            event->accept();
+            return;
+        }
+        if (componentModeHover_ >= 0) {
+            componentModeHover_ = -1;
+            setToolTip(QString());
+            update();
+        }
         const int shadingControl = viewportShadingControlAt(screenPosition);
         if (shadingControlPressed_ >= 0) {
             if (shadingControl != shadingControlHover_) {
@@ -12751,6 +12795,7 @@ private:
     QLabel *shadowIntensityLabel_ = nullptr;
     QCheckBox *depthOfFieldCheck_ = nullptr;
     QCheckBox *cavityCheck_ = nullptr;
+    int componentModeHover_ = -1;
     int shadingControlHover_ = -1;
     int shadingControlPressed_ = -1;
     BlenderGridRenderer blenderGridRenderer_;

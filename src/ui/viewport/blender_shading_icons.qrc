@@ -3,5 +3,8 @@
         <file alias="xray.png">../../../resources/icons/blender/xray.png</file>
         <file alias="shading_wire.png">../../../resources/icons/blender/shading_wire.png</file>
         <file alias="shading_solid.png">../../../resources/icons/blender/shading_solid.png</file>
+        <file alias="selection_vertex.png">../../../resources/icons/blender/selection_vertex.png</file>
+        <file alias="selection_edge.png">../../../resources/icons/blender/selection_edge.png</file>
+        <file alias="selection_face.png">../../../resources/icons/blender/selection_face.png</file>
     </qresource>
 </RCC>

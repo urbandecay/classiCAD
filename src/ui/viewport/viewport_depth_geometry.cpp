@@ -305,9 +305,14 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
             geometry->preciseLineVertices.append(end);
         }
     }
-    // Keep NURBS corners hard while smoothing the smaller normal changes
-    // produced by tessellating a curved patch.
-    constexpr float smoothCreaseCosine = 0.70710678f;
+    // A degree-one swept profile is a set of planar panels. Keep each profile
+    // knot as a hard edge; curved surfaces still smooth tessellation normals.
+    const bool piecewiseLinearExtrusion =
+        surface.degreeU == 1 && surface.degreeV == 1 &&
+        surface.controlVertexCountV == 2 && surface.trimLoops.isEmpty();
+    const float smoothCreaseCosine = piecewiseLinearExtrusion
+                                         ? 0.99999f
+                                         : 0.70710678f;
     const auto normalizedNormal = [](const QVector3D &value,
                                      const QVector3D &fallback) {
         const float lengthSquared = value.lengthSquared();

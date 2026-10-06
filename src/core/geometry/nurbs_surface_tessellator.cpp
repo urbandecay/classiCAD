@@ -353,18 +353,47 @@ bool PreparedNurbsSurfaceTessellation::prepare(
         }
     }
     if (linearExtrusion) {
-        for (int u = 0; u <= options.gridCount; ++u) {
-            const qreal parameter = uStart + (uEnd - uStart) * u / options.gridCount;
+        // Uniform sampling can step across an internal NURBS knot. For a
+        // piecewise-linear profile that bridges the corner with a diagonal
+        // triangle, while the adjacent cap follows the exact trim curve.
+        // Sample each nonzero knot span separately so every profile corner
+        // becomes an exact mesh row shared by its neighboring panels.
+        const QVector<double> fullKnotsU =
+            expandedNurbsSurfaceKnotVector(surface.knotsU);
+        QVector<qreal> uSamples;
+        for (int spanIndex = surface.degreeU;
+             spanIndex < surface.controlVertexCountU;
+             ++spanIndex) {
+            const qreal spanStart = fullKnotsU[spanIndex];
+            const qreal spanEnd = fullKnotsU[spanIndex + 1];
+            if (spanEnd <= spanStart) {
+                continue;
+            }
+            const int subdivisions = std::max(
+                1, static_cast<int>(std::ceil(
+                       options.gridCount * (spanEnd - spanStart) /
+                       (uEnd - uStart))));
+            for (int sampleIndex = 0; sampleIndex < subdivisions;
+                 ++sampleIndex) {
+                uSamples.append(spanStart +
+                                (spanEnd - spanStart) * sampleIndex /
+                                    subdivisions);
+            }
+        }
+        uSamples.append(uEnd);
+        int previousRow = -1;
+        for (const qreal parameter : uSamples) {
+            const int row = vertices_.size();
             for (const qreal v : {vStart, vEnd}) {
                 Point3D point;
                 if (!surfaceEvaluator.evaluate(parameter, v, &point)) return false;
                 vertices_.append(point);
             }
-            if (u > 0) {
-                const int first = (u - 1) * 2;
-                triangles_.append({first, first + 2, first + 3});
-                triangles_.append({first, first + 3, first + 1});
+            if (previousRow >= 0) {
+                triangles_.append({previousRow, row, row + 1});
+                triangles_.append({previousRow, row + 1, previousRow + 1});
             }
+            previousRow = row;
         }
         valid_ = !triangles_.isEmpty();
         return valid_;

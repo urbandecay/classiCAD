@@ -159,14 +159,45 @@ QVector<QPointF> sampleNurbsSurfaceTrimLoop(const NurbsSurfaceTrimLoop &loop,
     if (!nurbsParameterDomain(loop.curve, &start, &end)) {
         return points;
     }
-    points.reserve(sampleCount);
-    for (int index = 0; index < sampleCount; ++index) {
-        const qreal parameter = start + (end - start) * index / sampleCount;
-        QPointF point;
-        if (!evaluateNurbsPoint(loop.curve, parameter, &point)) {
-            return {};
+    const QVector<double> fullKnots = expandedNurbsKnotVector(loop.curve);
+    struct KnotSpan {
+        qreal start = 0.0;
+        qreal end = 0.0;
+        int subdivisions = 1;
+    };
+    QVector<KnotSpan> spans;
+    spans.reserve(loop.curve.controlPoints.size() - loop.curve.degree);
+    for (int spanIndex = loop.curve.degree;
+         spanIndex < loop.curve.controlPoints.size();
+         ++spanIndex) {
+        const qreal spanStart = fullKnots[spanIndex];
+        const qreal spanEnd = fullKnots[spanIndex + 1];
+        if (spanEnd <= spanStart) {
+            continue;
         }
-        points.append(point);
+        const int subdivisions = std::max(
+            1, static_cast<int>(std::ceil(
+                   sampleCount * (spanEnd - spanStart) / (end - start))));
+        spans.append({spanStart, spanEnd, subdivisions});
+    }
+    if (spans.isEmpty()) {
+        return points;
+    }
+    int totalSamples = 0;
+    for (const KnotSpan &span : spans) {
+        totalSamples += span.subdivisions;
+    }
+    points.reserve(totalSamples);
+    for (const KnotSpan &span : spans) {
+        for (int index = 0; index < span.subdivisions; ++index) {
+            const qreal parameter = span.start +
+                (span.end - span.start) * index / span.subdivisions;
+            QPointF point;
+            if (!evaluateNurbsPoint(loop.curve, parameter, &point)) {
+                return {};
+            }
+            points.append(point);
+        }
     }
     return points;
 }

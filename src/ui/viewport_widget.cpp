@@ -754,7 +754,9 @@ public:
 
         refreshCursorConstraint();
 
-        if (tool == Tool::Arc && arcState().mode == ArcMode::OnePoint &&
+        if (tool == Tool::Arc &&
+            (arcState().mode == ArcMode::OnePoint ||
+             arcState().mode == ArcMode::TwoPoint) &&
             rect().contains(lastMousePosition_)) {
             updateDrawingWorkPlaneFromHover(lastMousePosition_);
         }
@@ -966,7 +968,8 @@ public:
         resetArcPreviewTracking();
         resetArcInputState();
         currentSnap_ = SnapResult{};
-        if (activeTool_ == Tool::Arc && mode == ArcMode::OnePoint &&
+        if (activeTool_ == Tool::Arc &&
+            (mode == ArcMode::OnePoint || mode == ArcMode::TwoPoint) &&
             rect().contains(lastMousePosition_)) {
             updateDrawingWorkPlaneFromHover(lastMousePosition_);
         }
@@ -11200,11 +11203,12 @@ private:
             return;
         }
         if (activeTool_ == Tool::Arc &&
-            arcState().mode == ArcMode::OnePoint &&
+            (arcState().mode == ArcMode::OnePoint ||
+             arcState().mode == ArcMode::TwoPoint) &&
             arcTool_.inputStage() == ArcInputStage::FirstPoint) {
-            // Arc One Point uses the add-on's face-oriented compass until its
-            // pivot click. Object workplanes lose the individual face normal
-            // on solids, so use the visible face hit just as Rotate does.
+            // One- and Two-Point arcs use the add-on's face-oriented drawing
+            // plane before the first endpoint. Object workplanes lose the
+            // individual face normal on solids, so use the visible face hit.
             Point3D facePoint;
             Point3D faceNormal;
             if (curveHitTester_.hitTestVisibleSurface(

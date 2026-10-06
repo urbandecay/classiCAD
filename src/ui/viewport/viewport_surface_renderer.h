@@ -49,41 +49,30 @@ private:
         quint64 objectSeed = 0;
     };
 
-    struct OutlineRange {
-        int first = 0;
-        int count = 0;
-        Point3D offset;
-        bool selected = false;
-    };
-
-    struct SilhouetteEdge {
-        QVector3D start;
-        QVector3D end;
-        QVector3D firstNormal;
-        QVector3D secondNormal;
-    };
-
     bool initialize();
     void prepareGeometry(const QVector<ViewportRenderObject> &objects);
     bool renderShadowMap(const ViewportTransform &transform,
                          const QSize &viewportSize,
                          const ViewportShadingSettings &settings);
     bool ensureShadowMap();
+    bool ensureObjectIdFramebuffer(const QSize &pixelSize);
     bool ensureMatcapTexture(const QString &presetName);
     bool ensureAgxDisplayTexture();
 
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram outlineProgram_;
+    QOpenGLShaderProgram objectIdProgram_;
     QOpenGLShaderProgram shadowProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject outlineVertexArray_;
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
-    QOpenGLBuffer outlineVertexBuffer_{QOpenGLBuffer::VertexBuffer};
+    GLuint objectIdFramebuffer_ = 0;
+    GLuint objectIdTexture_ = 0;
+    GLuint objectIdDepthStencil_ = 0;
+    QSize objectIdFramebufferSize_;
+    bool objectIdFramebufferAttempted_ = false;
     QVector<SurfaceVertex> vertices_;
-    QVector<QVector3D> outlineVertices_;
     QVector<DrawRange> ranges_;
-    QVector<OutlineRange> outlineRanges_;
-    QVector<QVector<SilhouetteEdge>> silhouetteEdges_;
     unsigned int matcapTexture_ = 0;
     unsigned int agxDisplayTexture_ = 0;
     unsigned int shadowTexture_ = 0;

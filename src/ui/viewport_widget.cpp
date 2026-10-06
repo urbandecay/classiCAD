@@ -22,6 +22,7 @@
 #include "../core/geometry/curve_subdivision.h"
 #include "../core/geometry/geometry_transform.h"
 #include "../core/geometry/nurbs_surface_factory.h"
+#include "../core/geometry/nurbs_surface_evaluator.h"
 #include "../core/geometry/shape_mapping.h"
 #include "../core/geometry/work_plane.h"
 #include "../core/history/history.h"
@@ -253,6 +254,166 @@ QString precisePoint3DText(const Point3D &point)
         .arg(point.x, 0, 'g', 12)
         .arg(point.y, 0, 'g', 12)
         .arg(point.z, 0, 'g', 12);
+}
+
+ViewportDepthGeometry selectedSurfaceCage(const Shape &shape)
+{
+    ViewportDepthGeometry geometry;
+    const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(shape);
+    QVector<Point3D> uniquePoints;
+    const auto appendSegment = [&geometry, &uniquePoints](const Point3D &a,
+                                                           const Point3D &b) {
+        const auto close = [](const Point3D &lhs, const Point3D &rhs) {
+            const double dx = lhs.x - rhs.x;
+            const double dy = lhs.y - rhs.y;
+            const double dz = lhs.z - rhs.z;
+            return dx * dx + dy * dy + dz * dz <= 1.0e-16;
+        };
+        for (int i = 0; i + 1 < geometry.preciseLineVertices.size(); i += 2) {
+            const Point3D &first = geometry.preciseLineVertices[i];
+            const Point3D &second = geometry.preciseLineVertices[i + 1];
+            if ((close(first, a) && close(second, b)) ||
+                (close(first, b) && close(second, a))) {
+                return;
+            }
+        }
+        geometry.preciseLineVertices.append(a);
+        geometry.preciseLineVertices.append(b);
+        geometry.lineVertices.append(QVector3D(float(a.x), float(a.y), float(a.z)));
+        geometry.lineVertices.append(QVector3D(float(b.x), float(b.y), float(b.z)));
+    };
+    const auto appendVertex = [&geometry, &uniquePoints](const Point3D &point) {
+        const auto close = [](const Point3D &lhs, const Point3D &rhs) {
+            const double dx = lhs.x - rhs.x;
+            const double dy = lhs.y - rhs.y;
+            const double dz = lhs.z - rhs.z;
+            return dx * dx + dy * dy + dz * dz <= 1.0e-16;
+        };
+        if (std::none_of(uniquePoints.cbegin(), uniquePoints.cend(),
+                         [&point, &close](const Point3D &existing) {
+                             return close(point, existing);
+                         })) {
+            uniquePoints.append(point);
+            geometry.pointVertices.append(QVector3D(float(point.x),
+                                                    float(point.y),
+                                                    float(point.z)));
+        }
+    };
+    for (const NurbsSurface3D &face : faces) {
+        PreparedNurbsSurfaceEvaluator evaluator;
+        if (!evaluator.prepare(face)) {
+            continue;
+        }
+        QVector<QVector<QPointF>> boundaries;
+        QVector<QPointF> topologyVertices;
+        if (!face.trimLoops.isEmpty()) {
+            for (const NurbsSurfaceTrimLoop &loop : face.trimLoops) {
+                if (loop.curve.degree == 1) {
+                    boundaries.append(loop.curve.controlPoints);
+                } else {
+                    boundaries.append(sampleNurbsSurfaceTrimLoop(loop, 64));
+                }
+                topologyVertices += loop.curve.controlPoints;
+            }
+        } else {
+            qreal u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+            if (!evaluator.parameterDomains(&u0, &u1, &v0, &v1)) {
+                continue;
+            }
+            QVector<double> uBreaks;
+            QVector<double> vBreaks;
+            const auto appendKnotBreaks = [](const QVector<double> &knots,
+                                             qreal start,
+                                             qreal end,
+                                             QVector<double> *breaks) {
+                for (double knot : knots) {
+                    if (knot >= start - 1.0e-10 &&
+                        knot <= end + 1.0e-10 &&
+                        (breaks->isEmpty() ||
+                         std::abs(breaks->last() - knot) > 1.0e-10)) {
+                        breaks->append(knot);
+                    }
+                }
+                if (breaks->isEmpty() || std::abs(breaks->first() - start) > 1.0e-10) {
+                    breaks->prepend(start);
+                }
+                if (std::abs(breaks->last() - end) > 1.0e-10) {
+                    breaks->append(end);
+                }
+            };
+            if (face.degreeU == 1 && face.degreeV == 1) {
+                appendKnotBreaks(expandedNurbsSurfaceKnotVector(face.knotsU),
+                                 u0, u1, &uBreaks);
+                appendKnotBreaks(expandedNurbsSurfaceKnotVector(face.knotsV),
+                                 v0, v1, &vBreaks);
+                for (double u : uBreaks) {
+                    for (double v : vBreaks) {
+                        Point3D point;
+                        if (evaluator.evaluate(u, v, &point)) {
+                            appendVertex(point);
+                        }
+                    }
+                }
+                for (double u : uBreaks) {
+                    Point3D previous;
+                    if (!evaluator.evaluate(u, vBreaks.first(), &previous)) {
+                        continue;
+                    }
+                    for (int i = 1; i < vBreaks.size(); ++i) {
+                        Point3D current;
+                        if (evaluator.evaluate(u, vBreaks[i], &current)) {
+                            appendSegment(previous, current);
+                            previous = current;
+                        }
+                    }
+                }
+                for (double v : vBreaks) {
+                    Point3D previous;
+                    if (!evaluator.evaluate(uBreaks.first(), v, &previous)) {
+                        continue;
+                    }
+                    for (int i = 1; i < uBreaks.size(); ++i) {
+                        Point3D current;
+                        if (evaluator.evaluate(uBreaks[i], v, &current)) {
+                            appendSegment(previous, current);
+                            previous = current;
+                        }
+                    }
+                }
+                continue;
+            }
+            QVector<QPointF> rectangle;
+            rectangle << QPointF(u0, v0) << QPointF(u1, v0)
+                      << QPointF(u1, v1) << QPointF(u0, v1);
+            boundaries.append(rectangle);
+            topologyVertices += rectangle;
+        }
+        for (const QVector<QPointF> &boundary : boundaries) {
+            if (boundary.size() < 2) {
+                continue;
+            }
+            Point3D previous;
+            if (!evaluator.evaluate(boundary.first().x(), boundary.first().y(),
+                                    &previous)) {
+                continue;
+            }
+            for (int i = 1; i <= boundary.size(); ++i) {
+                Point3D current;
+                const QPointF uv = boundary[i % boundary.size()];
+                if (evaluator.evaluate(uv.x(), uv.y(), &current)) {
+                    appendSegment(previous, current);
+                    previous = current;
+                }
+            }
+        }
+        for (const QPointF &uv : topologyVertices) {
+            Point3D point;
+            if (evaluator.evaluate(uv.x(), uv.y(), &point)) {
+                appendVertex(point);
+            }
+        }
+    }
+    return geometry;
 }
 
 } // namespace
@@ -3598,6 +3759,35 @@ protected:
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 (geometryType == GeometryType::NurbsSurface ||
                  geometryType == GeometryType::NurbsSolid)) {
+                if (sceneRenderer != nullptr &&
+                    !viewportShadingSettings_.xrayEnabled()) {
+                    auto cage = QSharedPointer<ViewportDepthGeometry>::create(
+                        selectedSurfaceCage(visibleShape));
+                    ViewportSceneStroke edgeCage;
+                    edgeCage.shape = &visibleShape;
+                    edgeCage.color = selected
+                                         ? viewportSelectionColor()
+                                         : QColor(20, 20, 20);
+                    edgeCage.width = 1.0f;
+                    edgeCage.objectId = objectId;
+                    edgeCage.geometryRevision = renderObject.geometryRevision;
+                    edgeCage.cacheableGeometry = renderObject.cacheable;
+                    edgeCage.worldOffset = renderObject.placementTranslation;
+                    edgeCage.preparedDepthGeometry = cage;
+                    gpuStrokes.append(std::move(edgeCage));
+                    ViewportSceneStroke vertexCage;
+                    vertexCage.shape = &visibleShape;
+                    vertexCage.color = selected
+                                           ? QColor(QStringLiteral("#ff7a00"))
+                                           : QColor(12, 12, 12);
+                    vertexCage.pointDiameter = 4.0f;
+                    vertexCage.objectId = objectId;
+                    vertexCage.geometryRevision = renderObject.geometryRevision;
+                    vertexCage.cacheableGeometry = renderObject.cacheable;
+                    vertexCage.worldOffset = renderObject.placementTranslation;
+                    vertexCage.preparedDepthGeometry = std::move(cage);
+                    gpuStrokes.append(std::move(vertexCage));
+                }
                 continue;
             }
             if (sceneRenderer != nullptr && previewRenderer != nullptr &&

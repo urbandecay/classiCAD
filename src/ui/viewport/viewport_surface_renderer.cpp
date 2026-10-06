@@ -17,9 +17,7 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <limits>
-#include <map>
 
 namespace classiCAD {
 namespace {
@@ -69,9 +67,6 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
     if (vertexBuffer_.isCreated()) {
         vertexBuffer_.destroy();
     }
-    if (outlineVertexBuffer_.isCreated()) {
-        outlineVertexBuffer_.destroy();
-    }
     if (outlineVertexArray_.isCreated()) {
         outlineVertexArray_.destroy();
     }
@@ -94,8 +89,21 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         glDeleteFramebuffers(1, &shadowFramebuffer_);
         shadowFramebuffer_ = 0;
     }
+    if (objectIdFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &objectIdFramebuffer_);
+        objectIdFramebuffer_ = 0;
+    }
+    if (objectIdDepthStencil_ != 0) {
+        glDeleteRenderbuffers(1, &objectIdDepthStencil_);
+        objectIdDepthStencil_ = 0;
+    }
+    if (objectIdTexture_ != 0) {
+        glDeleteTextures(1, &objectIdTexture_);
+        objectIdTexture_ = 0;
+    }
     program_.removeAllShaders();
     outlineProgram_.removeAllShaders();
+    objectIdProgram_.removeAllShaders();
     shadowProgram_.removeAllShaders();
 }
 
@@ -135,6 +143,9 @@ bool ViewportSurfaceRenderer::initialize()
         in vec3 vWorldPosition;
         in vec4 vShadowPosition;
         uniform vec4 uBaseColor;
+        uniform bool uEditModeSelected;
+        uniform vec3 uEditSelectionColor;
+        uniform float uEditSelectionMix;
         uniform vec3 uCameraPosition;
         uniform vec3 uViewRight;
         uniform vec3 uViewUp;
@@ -317,12 +328,16 @@ bool ViewportSurfaceRenderer::initialize()
                              clamp(uShadowIntensity, 0.0, 1.0));
             }
             color = sceneLinearToAgxSrgb(color);
+            if (uEditModeSelected) {
+                color = mix(color, uEditSelectionColor,
+                            uEditSelectionMix);
+            }
             fragmentColor = vec4(color,
                                  uBaseColor.a);
         }
     )glsl";
 
-    static constexpr const char *outlineVertexShader = R"glsl(
+    static constexpr const char *objectIdVertexShader = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPosition;
         uniform mat4 uViewProjection;
@@ -333,11 +348,54 @@ bool ViewportSurfaceRenderer::initialize()
                           vec4(aPosition + uWorldOffset, 1.0);
         }
     )glsl";
+    static constexpr const char *objectIdFragmentShader = R"glsl(
+        #version 330 core
+        uniform uint uObjectId;
+        layout(location = 0) out uint fragmentObjectId;
+        void main() { fragmentObjectId = uObjectId; }
+    )glsl";
+    static constexpr const char *outlineVertexShader = R"glsl(
+        #version 330 core
+        void main()
+        {
+            vec2 positions[3] = vec2[3](vec2(-1.0, -1.0),
+                                         vec2(3.0, -1.0),
+                                         vec2(-1.0, 3.0));
+            gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
+        }
+    )glsl";
     static constexpr const char *outlineFragmentShader = R"glsl(
         #version 330 core
+        uniform usampler2D uObjectIdBuffer;
         uniform vec4 uOutlineColor;
-        out vec4 fragmentColor;
-        void main() { fragmentColor = uOutlineColor; }
+        uniform vec4 uSelectionColor;
+        uniform int uPixelOffset;
+        layout(location = 0) out vec4 fragmentColor;
+        void main()
+        {
+            ivec2 size = textureSize(uObjectIdBuffer, 0);
+            ivec2 pixel = ivec2(gl_FragCoord.xy);
+            ivec2 dx = ivec2(uPixelOffset, 0);
+            ivec2 dy = ivec2(0, uPixelOffset);
+            uint centerId = texelFetch(uObjectIdBuffer, pixel, 0).r;
+            uvec4 adjacentIds = uvec4(
+                texelFetch(uObjectIdBuffer, clamp(pixel + dx, ivec2(0), size - 1), 0).r,
+                texelFetch(uObjectIdBuffer, clamp(pixel - dx, ivec2(0), size - 1), 0).r,
+                texelFetch(uObjectIdBuffer, clamp(pixel + dy, ivec2(0), size - 1), 0).r,
+                texelFetch(uObjectIdBuffer, clamp(pixel - dy, ivec2(0), size - 1), 0).r);
+            float opacity = 1.0 - dot(vec4(equal(uvec4(centerId), adjacentIds)),
+                                     vec4(0.25));
+            if (opacity <= 0.0) {
+                discard;
+            }
+            const uint selectedBit = 0x80000000u;
+            bool selected = (centerId & selectedBit) != 0u;
+            for (int index = 0; index < 4; ++index) {
+                selected = selected || ((adjacentIds[index] & selectedBit) != 0u);
+            }
+            vec4 color = selected ? uSelectionColor : uOutlineColor;
+            fragmentColor = vec4(color.rgb, color.a * opacity);
+        }
     )glsl";
     static constexpr const char *shadowVertexShader = R"glsl(
         #version 330 core
@@ -360,19 +418,26 @@ bool ViewportSurfaceRenderer::initialize()
         !program_.addShaderFromSourceCode(QOpenGLShader::Vertex, vertexShader) ||
         !program_.addShaderFromSourceCode(QOpenGLShader::Fragment, fragmentShader) ||
         !program_.link() || !vertexArray_.create() || !vertexBuffer_.create() ||
+        !objectIdProgram_.addShaderFromSourceCode(QOpenGLShader::Vertex,
+                                                  objectIdVertexShader) ||
+        !objectIdProgram_.addShaderFromSourceCode(QOpenGLShader::Fragment,
+                                                  objectIdFragmentShader) ||
+        !objectIdProgram_.link() ||
         !outlineProgram_.addShaderFromSourceCode(QOpenGLShader::Vertex,
                                                  outlineVertexShader) ||
         !outlineProgram_.addShaderFromSourceCode(QOpenGLShader::Fragment,
                                                  outlineFragmentShader) ||
         !outlineProgram_.link() || !outlineVertexArray_.create() ||
-        !outlineVertexBuffer_.create() ||
         !shadowProgram_.addShaderFromSourceCode(QOpenGLShader::Vertex,
                                                 shadowVertexShader) ||
         !shadowProgram_.addShaderFromSourceCode(QOpenGLShader::Fragment,
                                                 shadowFragmentShader) ||
         !shadowProgram_.link()) {
-        qWarning().noquote() << "Viewport NURBS surface shader setup failed:"
-                             << program_.log();
+        qWarning().noquote()
+            << "Viewport shader setup failed. Surface:" << program_.log()
+            << "Object ID:" << objectIdProgram_.log()
+            << "Outline:" << outlineProgram_.log()
+            << "Shadow:" << shadowProgram_.log();
         return false;
     }
 
@@ -387,13 +452,6 @@ bool ViewportSurfaceRenderer::initialize()
     vertexBuffer_.release();
     vertexArray_.release();
 
-    outlineVertexArray_.bind();
-    outlineVertexBuffer_.bind();
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(QVector3D),
-                          reinterpret_cast<const void *>(0));
-    outlineVertexBuffer_.release();
-    outlineVertexArray_.release();
     initialized_ = true;
     return true;
 }
@@ -420,7 +478,6 @@ void ViewportSurfaceRenderer::prepareGeometry(
     ranges_.clear();
     ranges_.reserve(objects.size());
     if (!changed) {
-        outlineRanges_.resize(objects.size());
         for (int index = 0; index < objects.size(); ++index) {
             const ViewportRenderObject &object = objects[index];
             const ViewportDepthGeometry *geometry =
@@ -439,8 +496,6 @@ void ViewportSurfaceRenderer::prepareGeometry(
                             object.selected,
                             object.layerColor,
                             object.objectId.value()});
-            outlineRanges_[index].offset = object.preparedGeometryOffset;
-            outlineRanges_[index].selected = object.selected;
         }
         return;
     }
@@ -448,25 +503,6 @@ void ViewportSurfaceRenderer::prepareGeometry(
     geometryKey_ = std::move(key);
     geometryDirty_ = true;
     vertices_.clear();
-    outlineVertices_.clear();
-    outlineRanges_.clear();
-    silhouetteEdges_.clear();
-    outlineRanges_.reserve(objects.size());
-    silhouetteEdges_.reserve(objects.size());
-    struct EdgeInfo {
-        QVector3D start;
-        QVector3D end;
-        QVector3D firstNormal;
-        QVector3D secondNormal;
-        int count = 0;
-        bool sharp = false;
-    };
-    const auto vertexBytes = [](const QVector3D &point) {
-        const float coordinates[3] = {point.x(), point.y(), point.z()};
-        QByteArray bytes(static_cast<int>(sizeof(coordinates)), Qt::Uninitialized);
-        std::memcpy(bytes.data(), coordinates, sizeof(coordinates));
-        return bytes;
-    };
     for (const ViewportRenderObject &object : objects) {
         const ViewportDepthGeometry *geometry =
             hasNurbsSurfaceGeometry(object)
@@ -487,63 +523,6 @@ void ViewportSurfaceRenderer::prepareGeometry(
         ranges_.append({first, count, object.preparedGeometryOffset,
                         object.selected, object.layerColor,
                         object.objectId.value()});
-
-        const int outlineFirst = outlineVertices_.size();
-        QVector<SilhouetteEdge> objectSilhouetteEdges;
-        if (geometry != nullptr) {
-            std::map<QByteArray, EdgeInfo> edges;
-            for (int index = 0; index + 2 < count; index += 3) {
-                const QVector3D &a = geometry->surfaceVertices[index];
-                const QVector3D &b = geometry->surfaceVertices[index + 1];
-                const QVector3D &c = geometry->surfaceVertices[index + 2];
-                const QVector3D faceNormal = QVector3D::crossProduct(b - a,
-                                                                     c - a)
-                                                 .normalized();
-                const QVector3D points[] = {a, b, c};
-                for (int edgeIndex = 0; edgeIndex < 3; ++edgeIndex) {
-                    const QVector3D &start = points[edgeIndex];
-                    const QVector3D &end = points[(edgeIndex + 1) % 3];
-                    const QByteArray startKey = vertexBytes(start);
-                    const QByteArray endKey = vertexBytes(end);
-                    const bool ordered = startKey < endKey;
-                    const QByteArray edgeKey = ordered
-                        ? startKey + endKey
-                        : endKey + startKey;
-                    EdgeInfo &edge = edges[edgeKey];
-                    if (edge.count == 0) {
-                        edge.start = ordered ? start : end;
-                        edge.end = ordered ? end : start;
-                        edge.firstNormal = faceNormal;
-                    } else {
-                        if (edge.count == 1) {
-                            edge.secondNormal = faceNormal;
-                        }
-                        if (QVector3D::dotProduct(edge.firstNormal,
-                                                  faceNormal) < 0.75f) {
-                            edge.sharp = true;
-                        }
-                    }
-                    ++edge.count;
-                }
-            }
-            for (const auto &entry : edges) {
-                const EdgeInfo &edge = entry.second;
-                if (edge.count == 1 || edge.sharp) {
-                    outlineVertices_.append(edge.start);
-                    outlineVertices_.append(edge.end);
-                } else if (edge.count == 2) {
-                    objectSilhouetteEdges.append(
-                        {edge.start, edge.end, edge.firstNormal,
-                         edge.secondNormal});
-                }
-            }
-        }
-        outlineRanges_.append({outlineFirst,
-                               static_cast<int>(outlineVertices_.size()) -
-                                   outlineFirst,
-                               object.preparedGeometryOffset,
-                               object.selected});
-        silhouetteEdges_.append(std::move(objectSilhouetteEdges));
     }
 }
 
@@ -589,6 +568,86 @@ bool ViewportSurfaceRenderer::ensureShadowMap()
         shadowTexture_ = 0;
     }
     return complete;
+}
+
+bool ViewportSurfaceRenderer::ensureObjectIdFramebuffer(
+    const QSize &pixelSize)
+{
+    if (objectIdFramebufferAttempted_ &&
+        objectIdFramebufferSize_ == pixelSize) {
+        return objectIdFramebuffer_ != 0;
+    }
+
+    if (objectIdFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &objectIdFramebuffer_);
+        objectIdFramebuffer_ = 0;
+    }
+    if (objectIdDepthStencil_ != 0) {
+        glDeleteRenderbuffers(1, &objectIdDepthStencil_);
+        objectIdDepthStencil_ = 0;
+    }
+    if (objectIdTexture_ != 0) {
+        glDeleteTextures(1, &objectIdTexture_);
+        objectIdTexture_ = 0;
+    }
+
+    objectIdFramebufferAttempted_ = true;
+    objectIdFramebufferSize_ = pixelSize;
+
+    GLint previousFramebuffer = 0;
+    GLint previousRenderbuffer = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &previousRenderbuffer);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    glGenTextures(1, &objectIdTexture_);
+    glBindTexture(GL_TEXTURE_2D, objectIdTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI,
+                 pixelSize.width(), pixelSize.height(), 0,
+                 GL_RED_INTEGER, GL_UNSIGNED_INT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenRenderbuffers(1, &objectIdDepthStencil_);
+    glBindRenderbuffer(GL_RENDERBUFFER, objectIdDepthStencil_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8,
+                          pixelSize.width(), pixelSize.height());
+
+    glGenFramebuffers(1, &objectIdFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, objectIdFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, objectIdTexture_, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                              GL_RENDERBUFFER, objectIdDepthStencil_);
+    const GLenum colorAttachment = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &colorAttachment);
+    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+
+    glBindFramebuffer(GL_FRAMEBUFFER,
+                      static_cast<GLuint>(previousFramebuffer));
+    glBindRenderbuffer(GL_RENDERBUFFER,
+                       static_cast<GLuint>(previousRenderbuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        qWarning() << "Object-ID outline framebuffer is incomplete; status:"
+                   << Qt::hex << status;
+        glDeleteFramebuffers(1, &objectIdFramebuffer_);
+        glDeleteRenderbuffers(1, &objectIdDepthStencil_);
+        glDeleteTextures(1, &objectIdTexture_);
+        objectIdFramebuffer_ = 0;
+        objectIdDepthStencil_ = 0;
+        objectIdTexture_ = 0;
+        return false;
+    }
+    return true;
 }
 
 bool ViewportSurfaceRenderer::renderShadowMap(
@@ -819,7 +878,6 @@ bool ViewportSurfaceRenderer::draw(
     GLint previousBlendEquationRgb = GL_FUNC_ADD;
     GLint previousBlendEquationAlpha = GL_FUNC_ADD;
     GLint previousProgram = 0;
-    GLfloat previousLineWidth = 1.0f;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
     glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
@@ -830,7 +888,6 @@ bool ViewportSurfaceRenderer::draw(
     glGetIntegerv(GL_BLEND_EQUATION_RGB, &previousBlendEquationRgb);
     glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &previousBlendEquationAlpha);
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
-    glGetFloatv(GL_LINE_WIDTH, &previousLineWidth);
 
     if (clearDepth) {
         glDepthMask(GL_TRUE);
@@ -1037,6 +1094,13 @@ bool ViewportSurfaceRenderer::draw(
             glBindTexture(GL_TEXTURE_2D, shadowTexture_);
         }
         program_.setUniformValue("uShadowMap", 2);
+        // Blender 5.2's 3D View face_select color is #FFA300 with alpha 0x33.
+        const QColor editSelectionColor(QStringLiteral("#ffa300"));
+        program_.setUniformValue(
+            "uEditSelectionColor",
+            QVector3D(editSelectionColor.redF(), editSelectionColor.greenF(),
+                      editSelectionColor.blueF()));
+        program_.setUniformValue("uEditSelectionMix", 51.0f / 255.0f);
         vertexArray_.bind();
         vertexBuffer_.bind();
         if (geometryDirty_) {
@@ -1055,6 +1119,8 @@ bool ViewportSurfaceRenderer::draw(
                                    static_cast<float>(range.offset.y),
                                    static_cast<float>(range.offset.z));
             program_.setUniformValue("uWorldOffset", offset);
+            program_.setUniformValue("uEditModeSelected",
+                                     range.selected && !previewOverlay);
             const QColor baseColor = previewOverlay
                                          ? QColor(QStringLiteral("#d89a4e"))
                                          : settings.colorMode ==
@@ -1112,129 +1178,103 @@ bool ViewportSurfaceRenderer::draw(
         glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     }
 
-    const bool hasSelectedSurface = std::any_of(
-        ranges_.cbegin(), ranges_.cend(), [](const DrawRange &range) {
-            return range.selected && range.count > 0;
-        });
     if (settings.mode == ViewportShadingMode::Solid &&
-        (settings.outline || settings.cavity || hasSelectedSurface) &&
-        !previewOverlay &&
-        (!outlineVertices_.isEmpty() || !silhouetteEdges_.isEmpty())) {
-        glViewport(0, 0, qRound(viewportSize.width() *
-                                std::max<qreal>(devicePixelRatio, 1.0)),
-                   qRound(viewportSize.height() *
-                          std::max<qreal>(devicePixelRatio, 1.0)));
-        if (settings.xrayEnabled() && !xraySurfaceDepthAvailable) {
-            glDisable(GL_DEPTH_TEST);
-        } else {
-            glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_LEQUAL);
-        }
-        glDepthMask(GL_FALSE);
-        glDisable(GL_CULL_FACE);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        QVector<QVector3D> frameOutlineVertices;
-        QVector<OutlineRange> frameOutlineRanges;
-        frameOutlineRanges.reserve(outlineRanges_.size());
-        const Point3D cameraPosition = transform.cameraPosition(viewportSize);
-        const QVector3D orthographicTowardCamera = workbenchNormalize(
-            QVector3D(-static_cast<float>(transform.viewDirection().x),
-                      -static_cast<float>(transform.viewDirection().y),
-                      -static_cast<float>(transform.viewDirection().z)),
-            QVector3D(0.0f, 0.0f, 1.0f));
-        for (int objectIndex = 0; objectIndex < outlineRanges_.size();
-             ++objectIndex) {
-            const OutlineRange &baseRange = outlineRanges_[objectIndex];
-            const int first = frameOutlineVertices.size();
-            for (int vertexIndex = baseRange.first;
-                 vertexIndex < baseRange.first + baseRange.count;
-                 ++vertexIndex) {
-                frameOutlineVertices.append(outlineVertices_[vertexIndex]);
-            }
-            if (objectIndex < silhouetteEdges_.size()) {
-                const QVector3D offset(static_cast<float>(baseRange.offset.x),
-                                       static_cast<float>(baseRange.offset.y),
-                                       static_cast<float>(baseRange.offset.z));
-                for (const SilhouetteEdge &edge : silhouetteEdges_[objectIndex]) {
-                    const QVector3D midpoint =
-                        (edge.start + edge.end) * 0.5f + offset;
-                    const QVector3D towardCamera = transform.isPerspectiveEnabled()
-                        ? workbenchNormalize(
-                              QVector3D(static_cast<float>(cameraPosition.x),
-                                        static_cast<float>(cameraPosition.y),
-                                        static_cast<float>(cameraPosition.z)) -
-                                  midpoint,
-                              orthographicTowardCamera)
-                        : orthographicTowardCamera;
-                    const bool firstFacing =
-                        QVector3D::dotProduct(edge.firstNormal,
-                                              towardCamera) >= 0.0f;
-                    const bool secondFacing =
-                        QVector3D::dotProduct(edge.secondNormal,
-                                              towardCamera) >= 0.0f;
-                    if (firstFacing != secondFacing) {
-                        frameOutlineVertices.append(edge.start);
-                        frameOutlineVertices.append(edge.end);
-                    }
-                }
-            }
-            frameOutlineRanges.append(
-                {first, static_cast<int>(frameOutlineVertices.size()) - first,
-                 baseRange.offset, baseRange.selected});
-        }
-        if (frameOutlineVertices.isEmpty()) {
-            glLineWidth(previousLineWidth);
-        } else {
-            outlineVertexArray_.bind();
-            outlineVertexBuffer_.bind();
-            outlineVertexBuffer_.allocate(
-                frameOutlineVertices.constData(),
-                frameOutlineVertices.size() *
-                    static_cast<int>(sizeof(QVector3D)));
-            outlineVertexBuffer_.release();
-            outlineVertexArray_.release();
+        settings.outline && !previewOverlay && !settings.xrayEnabled() &&
+        !vertices_.isEmpty()) {
         const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
-        outlineProgram_.bind();
-        outlineProgram_.setUniformValue(
-            "uViewProjection", viewportViewProjection(transform, viewportSize));
-        QColor outlineColor = settings.outline
-                                  ? settings.outlineColor
-                                  : QColor(Qt::black);
-        outlineColor.setAlphaF(settings.xrayEnabled()
-                                   ? std::clamp<qreal>(settings.xrayAlpha, 0.0, 1.0)
-                                   : settings.outline ? 1.0 : 0.22);
-        outlineVertexArray_.bind();
-        outlineVertexBuffer_.bind();
-        const qreal outlineWidth = settings.outline ? 1.0 : 1.5;
-        for (const OutlineRange &range : frameOutlineRanges) {
-            if (range.count <= 0) {
-                continue;
+        const QSize pixelSize(qRound(viewportSize.width() * dpr),
+                              qRound(viewportSize.height() * dpr));
+        if (ensureObjectIdFramebuffer(pixelSize)) {
+            GLint previousFramebuffer = 0;
+            GLint previousViewport[4] = {0, 0, 0, 0};
+            GLint previousActiveTexture = GL_TEXTURE0;
+            GLint previousTextureBinding = 0;
+            glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+            glGetIntegerv(GL_VIEWPORT, previousViewport);
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, objectIdFramebuffer_);
+            glViewport(0, 0, pixelSize.width(), pixelSize.height());
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glDepthMask(GL_TRUE);
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LESS);
+            glDisable(GL_BLEND);
+            if (settings.backfaceCulling) {
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_BACK);
+            } else {
+                glDisable(GL_CULL_FACE);
             }
-            if (!range.selected && !settings.outline && !settings.cavity) {
-                continue;
+            const GLuint emptyId = 0;
+            glClearBufferuiv(GL_COLOR, 0, &emptyId);
+            glClearDepth(1.0);
+            glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+            objectIdProgram_.bind();
+            const GLint objectIdUniformLocation =
+                objectIdProgram_.uniformLocation("uObjectId");
+            objectIdProgram_.setUniformValue(
+                "uViewProjection", viewportViewProjection(transform, viewportSize));
+            vertexArray_.bind();
+            vertexBuffer_.bind();
+            for (int rangeIndex = 0; rangeIndex < ranges_.size(); ++rangeIndex) {
+                const DrawRange &range = ranges_[rangeIndex];
+                if (range.count <= 0) {
+                    continue;
+                }
+                GLuint objectId = static_cast<GLuint>(rangeIndex + 1) &
+                                  0x7fffffffu;
+                if (range.selected) {
+                    objectId |= 0x80000000u;
+                }
+                glUniform1ui(objectIdUniformLocation, objectId);
+                objectIdProgram_.setUniformValue(
+                    "uWorldOffset",
+                    QVector3D(static_cast<float>(range.offset.x),
+                              static_cast<float>(range.offset.y),
+                              static_cast<float>(range.offset.z)));
+                glDrawArrays(GL_TRIANGLES, range.first, range.count);
             }
-            const QColor rangeColor = range.selected
-                                          ? viewportSelectionColor()
-                                          : outlineColor;
+            vertexBuffer_.release();
+            vertexArray_.release();
+            objectIdProgram_.release();
+
+            glBindFramebuffer(GL_FRAMEBUFFER,
+                              static_cast<GLuint>(previousFramebuffer));
+            glViewport(previousViewport[0], previousViewport[1],
+                       previousViewport[2], previousViewport[3]);
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glDisable(GL_CULL_FACE);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+            glActiveTexture(GL_TEXTURE0);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBinding);
+            glBindTexture(GL_TEXTURE_2D, objectIdTexture_);
+
+            outlineProgram_.bind();
+            outlineProgram_.setUniformValue("uObjectIdBuffer", 0);
             outlineProgram_.setUniformValue(
                 "uOutlineColor",
-                QVector4D(rangeColor.redF(), rangeColor.greenF(),
-                          rangeColor.blueF(),
-                          range.selected ? 1.0f : rangeColor.alphaF()));
-            glLineWidth(static_cast<GLfloat>(std::max<qreal>(
-                dpr * (range.selected ? 2.0 : outlineWidth), 1.0)));
+                QVector4D(settings.outlineColor.redF(),
+                          settings.outlineColor.greenF(),
+                          settings.outlineColor.blueF(), 1.0f));
+            const QColor selectionColor = viewportSelectionColor();
             outlineProgram_.setUniformValue(
-                "uWorldOffset",
-                QVector3D(static_cast<float>(range.offset.x),
-                          static_cast<float>(range.offset.y),
-                          static_cast<float>(range.offset.z)));
-            glDrawArrays(GL_LINES, range.first, range.count);
-        }
-        outlineVertexBuffer_.release();
-        outlineVertexArray_.release();
-        outlineProgram_.release();
-        glLineWidth(previousLineWidth);
+                "uSelectionColor",
+                QVector4D(selectionColor.redF(), selectionColor.greenF(),
+                          selectionColor.blueF(), 1.0f));
+            outlineProgram_.setUniformValue(
+                "uPixelOffset", std::max(1, qRound(dpr)));
+            outlineVertexArray_.bind();
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            outlineVertexArray_.release();
+            outlineProgram_.release();
+            glBindTexture(GL_TEXTURE_2D,
+                          static_cast<GLuint>(previousTextureBinding));
+            glActiveTexture(static_cast<GLenum>(previousActiveTexture));
         }
     }
 

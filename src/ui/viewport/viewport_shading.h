@@ -11,7 +11,8 @@ namespace classiCAD {
 
 inline QColor viewportSelectionColor()
 {
-    return QColor(QStringLiteral("#ff8a00"));
+    // Blender's default 3D View edge-selection theme color.
+    return QColor(QStringLiteral("#ff9900"));
 }
 
 enum class ViewportShadingMode {

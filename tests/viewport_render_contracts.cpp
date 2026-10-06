@@ -148,8 +148,8 @@ int main(int argc, char *argv[])
                     "Workbench Studio Light presets and diffuse/specular MatCap layers must load, with rotation applied only to world-space lighting");
 
     ViewportShadingSettings shading;
-    passed &= check(shading.mode == ViewportShadingMode::Wireframe &&
-                        shading.xrayEnabled() &&
+    passed &= check(shading.mode == ViewportShadingMode::Solid &&
+                        !shading.xrayEnabled() &&
                         shading.lightingMode == ViewportLightingMode::Studio &&
                         shading.studioLightPreset == QStringLiteral("Default") &&
                         !shading.worldSpaceLighting &&
@@ -161,22 +161,30 @@ int main(int argc, char *argv[])
                         !shading.depthOfField && !shading.cavity &&
                         std::abs(shading.xrayAlpha - 0.5) < 1.0e-9 &&
                         std::abs(shading.shadowIntensity - 0.5) < 1.0e-9,
-                    "viewport must preserve through-visible wireframe as its initial mode");
-    shading.toggleXray();
-    passed &= check(!shading.xrayEnabled() && !shading.xrayWireframe &&
-                        !shading.xray,
-                    "wireframe X-Ray toggle must update its independent setting");
-    shading.mode = ViewportShadingMode::Solid;
-    passed &= check(!shading.xrayEnabled(),
-                    "solid mode must use its own X-Ray setting");
+                    "viewport must preserve the solid initial mode and independent X-Ray defaults");
     shading.toggleXray();
     passed &= check(shading.xrayEnabled() && shading.xray &&
+                        shading.xrayWireframe,
+                    "solid X-Ray toggle must update only its own setting");
+    shading.mode = ViewportShadingMode::Wireframe;
+    passed &= check(shading.xrayEnabled(),
+                    "wireframe mode must restore its independent X-Ray setting");
+    shading.toggleXray();
+    passed &= check(!shading.xrayEnabled() && shading.xray &&
                         !shading.xrayWireframe,
-                    "solid X-Ray toggle must preserve wireframe X-Ray state");
+                    "wireframe X-Ray toggle must preserve solid X-Ray state");
+    shading.mode = ViewportShadingMode::Solid;
+    passed &= check(shading.xrayEnabled() && shading.xray &&
+                        !shading.xrayWireframe,
+                    "solid mode must restore its own X-Ray state");
     shading.xrayAlpha = 1.0;
     passed &= check(!shading.xrayEnabled(),
                     "solid X-Ray at full opacity must resolve as normal depth-tested drawing");
     shading.xrayAlpha = 0.5;
+    shading.toggleXray();
+    passed &= check(!shading.xrayEnabled() && !shading.xray &&
+                        !shading.xrayWireframe,
+                    "solid X-Ray toggle must preserve wireframe X-Ray state");
     shading.mode = ViewportShadingMode::Wireframe;
     passed &= check(!shading.xrayEnabled(),
                     "returning to wireframe must restore its X-Ray state");
@@ -307,6 +315,7 @@ int main(int argc, char *argv[])
                             "NURBS solid display test must initialize OpenGL 3.3");
             QImage gpuImage;
             QImage gpuWithoutOutlineImage;
+            QImage gpuUnselectedOutlineImage;
             QImage gpuBottomImage;
             QImage gpuShadowImage;
             QImage gpuMatcapImage;
@@ -364,6 +373,14 @@ int main(int argc, char *argv[])
                     functions.glFinish();
                     gpuWithoutOutlineImage = framebuffer.toImage();
 
+                    surfaceObject.selected = false;
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    gpuSurfaceRenderer.draw({surfaceObject}, gpuTransform,
+                                            glSize, 1.0, gpuSolidShading);
+                    functions.glFinish();
+                    gpuUnselectedOutlineImage = framebuffer.toImage();
+                    surfaceObject.selected = true;
+
                     ViewportTransform bottomTransform;
                     bottomTransform.zoom() = gpuTransform.zoom();
                     bottomTransform.setViewDirection({4.0, -6.0, -4.0});
@@ -403,6 +420,7 @@ int main(int argc, char *argv[])
             bool gpuCubeFaceVisible = false;
             bool gpuMatcapMatchesWorkbench = false;
             bool gpuOutlineRendered = false;
+            bool gpuUnselectedFaceColorPreserved = false;
             bool gpuBackfaceCullingKeepsOutwardFaces = false;
             if (!gpuImage.isNull()) {
                 for (int y = 0; y < gpuImage.height(); ++y) {
@@ -459,15 +477,26 @@ int main(int argc, char *argv[])
                     QVector3D(0.0f, 0.0f, 1.0f));
                 const QVector3D rightNormal = viewNormal(
                     QVector3D(1.0f, 0.0f, 0.0f));
-                const QVector3D expectedFront = workbenchSceneLinearToAgxSrgb(
+                const QVector3D unselectedFront = workbenchSceneLinearToAgxSrgb(
                     workbenchStudioShade(linearBaseColor, frontNormal,
                                          incidentView));
-                const QVector3D expectedTop = workbenchSceneLinearToAgxSrgb(
+                const QVector3D unselectedTop = workbenchSceneLinearToAgxSrgb(
                     workbenchStudioShade(linearBaseColor, topNormal,
                                          incidentView));
-                const QVector3D expectedRight = workbenchSceneLinearToAgxSrgb(
+                const QVector3D unselectedRight = workbenchSceneLinearToAgxSrgb(
                     workbenchStudioShade(linearBaseColor, rightNormal,
                                          incidentView));
+                const QVector3D selectedOrange(1.0f, 163.0f / 255.0f, 0.0f);
+                const auto selectedFaceColor = [&selectedOrange](
+                                                   const QVector3D &base) {
+                    return base * (204.0f / 255.0f) +
+                           selectedOrange * (51.0f / 255.0f);
+                };
+                const QVector3D expectedFront =
+                    selectedFaceColor(unselectedFront);
+                const QVector3D expectedTop = selectedFaceColor(unselectedTop);
+                const QVector3D expectedRight =
+                    selectedFaceColor(unselectedRight);
                 const QColor gpuFront = sampleCubeFace({0.0, -1.0, 0.0});
                 const QColor gpuFrontNearCrease = sampleCubeFace(
                     {0.95, -1.0, 0.0});
@@ -488,29 +517,41 @@ int main(int argc, char *argv[])
                 // Reference values sampled from Blender 5.2.2's Workbench
                 // render of the factory cube at this same camera angle.
                 const bool lightingMatchesBlender =
-                    matchesColor(QColor(138, 139, 139), expectedFront) &&
-                    matchesColor(QColor(142, 144, 145), expectedTop) &&
-                    matchesColor(QColor(53, 50, 50), expectedRight);
+                    matchesColor(QColor(138, 139, 139), unselectedFront) &&
+                    matchesColor(QColor(142, 144, 145), unselectedTop) &&
+                    matchesColor(QColor(53, 50, 50), unselectedRight);
                 gpuLightingMatchesWorkbench = lightingMatchesBlender &&
                     matchesColor(gpuFront, expectedFront) &&
                     matchesColor(gpuFrontNearCrease, expectedFront) &&
                     matchesColor(gpuTop, expectedTop) &&
                     matchesColor(gpuRight, expectedRight);
+                gpuUnselectedFaceColorPreserved =
+                    matchesColor(gpuUnselectedOutlineImage.pixelColor(
+                                     pixelForWorldPoint({0.0, -1.0, 0.0})),
+                                 unselectedFront) &&
+                    matchesColor(gpuUnselectedOutlineImage.pixelColor(
+                                     pixelForWorldPoint({0.0, 0.0, 1.0})),
+                                 unselectedTop) &&
+                    matchesColor(gpuUnselectedOutlineImage.pixelColor(
+                                     pixelForWorldPoint({1.0, 0.0, 0.0})),
+                                 unselectedRight);
                 gpuCubeFaceVisible = gpuFront.isValid() &&
                                      gpuFront.red() > 70;
-                const auto countNearBlack = [](const QImage &image) {
+                const auto countChangedPixels = [](const QImage &withOutline,
+                                                   const QImage &withoutOutline) {
                     int count = 0;
-                    for (int y = 0; y < image.height(); ++y) {
-                        for (int x = 0; x < image.width(); ++x) {
-                            const QColor pixel = image.pixelColor(x, y);
-                            count += pixel.red() < 20 && pixel.green() < 20 &&
-                                     pixel.blue() < 20;
+                    for (int y = 0; y < withOutline.height(); ++y) {
+                        for (int x = 0; x < withOutline.width(); ++x) {
+                            count += withOutline.pixel(x, y) !=
+                                     withoutOutline.pixel(x, y);
                         }
                     }
                     return count;
                 };
-                gpuOutlineRendered = countNearBlack(gpuImage) > 100 &&
-                                     countNearBlack(gpuWithoutOutlineImage) == 0;
+                gpuOutlineRendered =
+                    countChangedPixels(gpuImage, gpuWithoutOutlineImage) > 100 &&
+                    countChangedPixels(gpuUnselectedOutlineImage,
+                                       gpuWithoutOutlineImage) > 100;
                 int bottomFacePixels = 0;
                 for (int y = 0; y < gpuBottomImage.height(); ++y) {
                     for (int x = 0; x < gpuBottomImage.width(); ++x) {
@@ -522,10 +563,11 @@ int main(int argc, char *argv[])
                 }
                 gpuBackfaceCullingKeepsOutwardFaces =
                     bottomFacePixels > 4000;
-                const QVector3D expectedMatcap = workbenchSceneLinearToAgxSrgb(
-                    workbenchMatcapShade(QStringLiteral("metal_bronze"),
-                                         linearBaseColor,
-                                         frontNormal, incidentView));
+                const QVector3D expectedMatcap = selectedFaceColor(
+                    workbenchSceneLinearToAgxSrgb(
+                        workbenchMatcapShade(QStringLiteral("metal_bronze"),
+                                             linearBaseColor,
+                                             frontNormal, incidentView)));
                 const QPoint frontPixel = pixelForWorldPoint(
                     {0.0, -1.0, 0.0});
                 const QColor gpuMatcapCenter = gpuMatcapImage.isNull()
@@ -543,6 +585,7 @@ int main(int argc, char *argv[])
             passed &= check(gpuDrawSucceeded && gpuFacePixels > 4000 &&
                             gpuCubeFaceVisible &&
                                 gpuLightingMatchesWorkbench &&
+                                gpuUnselectedFaceColorPreserved &&
                                 gpuMatcapDrawSucceeded &&
                                 !gpuMatcapImage.isNull() &&
                                 gpuMatcapMatchesWorkbench &&

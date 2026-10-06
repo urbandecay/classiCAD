@@ -793,6 +793,8 @@ private:
 
         QAction *pointExtrudeAction =
             editMenu->addAction(QStringLiteral("Extrude"));
+        pointExtrudeAction->setShortcut(QKeySequence(Qt::Key_E));
+        pointExtrudeAction->setShortcutContext(Qt::WindowShortcut);
         connect(pointExtrudeAction, &QAction::triggered, this, [this]() {
             startPointExtrude();
         });
@@ -818,7 +820,8 @@ private:
         });
 
         eraseAction_ = editMenu->addAction(QStringLiteral("Erase"));
-        eraseAction_->setShortcut(QKeySequence(Qt::Key_E));
+        eraseAction_->setShortcuts(QList<QKeySequence>{
+            QKeySequence(QStringLiteral("E, R"))});
         eraseAction_->setShortcutContext(Qt::WindowShortcut);
         connect(eraseAction_, &QAction::triggered, this, [this]() {
             activateEraseTool();

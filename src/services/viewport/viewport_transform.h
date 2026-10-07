@@ -99,7 +99,7 @@ struct ViewportCameraState {
 
 class ViewportTransform final {
 public:
-    ViewportTransform() = default;
+    ViewportTransform();
 
     qreal zoom() const;
     qreal &zoom();

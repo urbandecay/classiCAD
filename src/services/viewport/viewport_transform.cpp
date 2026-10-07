@@ -79,6 +79,9 @@ namespace {
 
 constexpr qreal kViewportSensorWidthMillimeters = 36.0;
 constexpr qreal kViewportReferenceDistance = 60.0;
+constexpr qreal kBlenderStartupViewDistance = 18.38804817199707;
+constexpr qreal kBlenderStartupViewZoom =
+    kViewportReferenceDistance / kBlenderStartupViewDistance;
 // Keep orthographic navigation independent of camera clip settings. This
 // preserves the default 10,000-unit zoom-out range that a 1,000-unit clip end
 // previously happened to provide.
@@ -307,6 +310,12 @@ Vec3 cross(const Vec3 &first, const Vec3 &second)
 }
 
 } // namespace
+
+ViewportTransform::ViewportTransform()
+    : zoom_(kBlenderStartupViewZoom),
+      gridViewDistance_(kBlenderStartupViewDistance)
+{
+}
 
 qreal ViewportTransform::zoom() const
 {
@@ -1099,13 +1108,13 @@ void ViewportTransform::panByPixels(const QPointF &delta,
 
 void ViewportTransform::resetView()
 {
-    zoom_ = std::clamp(1.0,
+    zoom_ = std::clamp(kBlenderStartupViewZoom,
                        minimumOrthographicZoom(gridSpacing_),
                        maximumViewZoom(cameraPreferences_, gridSpacing_));
     pan_ = {};
     orbitPivot_ = {};
     gridViewDistance_ = std::clamp(
-        kViewportReferenceDistance,
+        kBlenderStartupViewDistance,
         minimumViewDistance(gridSpacing_),
         maximumOrthographicViewDistance(gridSpacing_));
     orbitPivotLocked_ = false;

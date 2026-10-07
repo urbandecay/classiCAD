@@ -12,6 +12,8 @@ uniform float uPatternSegments[8];
 uniform int uSmoothWire;
 flat in float vLength;
 flat in float gPatternOffsetPixels;
+flat in vec4 gStartColor;
+flat in vec4 gEndColor;
 noperspective in vec2 vStrokePosition;
 out vec4 fragmentColor;
 
@@ -95,5 +97,9 @@ void main()
             discard;
         }
     }
-    fragmentColor = vec4(uColor.rgb, uColor.a * coverage);
+    float edgeParameter = clamp(vStrokePosition.x / max(vLength, 0.001),
+                                0.0, 1.0);
+    vec4 edgeColor = mix(gStartColor, gEndColor, edgeParameter);
+    fragmentColor = vec4(uColor.rgb * edgeColor.rgb,
+                         uColor.a * edgeColor.a * coverage);
 }

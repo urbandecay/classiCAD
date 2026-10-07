@@ -444,6 +444,9 @@ ViewportSceneRenderer::~ViewportSceneRenderer()
         if (patternOffsetBuffer_.isCreated()) {
             patternOffsetBuffer_.destroy();
         }
+        if (lineColorBuffer_.isCreated()) {
+            lineColorBuffer_.destroy();
+        }
         if (vertexArray_.isCreated()) {
             vertexArray_.destroy();
         }
@@ -501,7 +504,8 @@ bool ViewportSceneRenderer::initialize()
             QOpenGLShader::Fragment,
             QStringLiteral(":/classiCAD/shaders/scene_point.frag")) ||
         !pointProgram_.link() || !vertexArray_.create() ||
-        !vertexBuffer_.create() || !patternOffsetBuffer_.create()) {
+        !vertexBuffer_.create() || !patternOffsetBuffer_.create() ||
+        !lineColorBuffer_.create()) {
         qWarning().noquote() << "Viewport scene stroke shader setup failed:"
                              << program_.log() << pointProgram_.log();
         return false;
@@ -615,6 +619,7 @@ bool ViewportSceneRenderer::draw(
         strokeGeometryKeys_.clear();
         strokeRanges_.clear();
         cachedVertices_.clear();
+        cachedLineColors_.clear();
         cachedPatternOffsets_.clear();
         return true;
     }
@@ -639,6 +644,11 @@ bool ViewportSceneRenderer::draw(
             keyStream << quint8(0);
         }
         keyStream << quint8(stroke.controlGuide ? 1 : 0);
+        keyStream << quint8(stroke.pointDiameter > 0.0f ? 1 : 0);
+        keyStream << quint32(stroke.lineVertexColors.size());
+        for (const QVector4D &color : stroke.lineVertexColors) {
+            keyStream << color.x() << color.y() << color.z() << color.w();
+        }
         geometryKeys.append(std::move(key));
     }
     const bool geometryChanged = geometryKeys != strokeGeometryKeys_;
@@ -646,6 +656,7 @@ bool ViewportSceneRenderer::draw(
         strokeGeometryKeys_ = geometryKeys;
         strokeRanges_.clear();
         cachedVertices_.clear();
+        cachedLineColors_.clear();
         cachedPatternOffsets_.clear();
         strokeRanges_.reserve(strokes.size());
         for (int strokeIndex = 0; strokeIndex < strokes.size(); ++strokeIndex) {
@@ -672,6 +683,15 @@ bool ViewportSceneRenderer::draw(
             const int first = cachedVertices_.size();
             if (vertices != nullptr) {
                 cachedVertices_ += *vertices;
+                if (stroke.pointDiameter <= 0.0f &&
+                    stroke.lineVertexColors.size() == vertices->size()) {
+                    cachedLineColors_ += stroke.lineVertexColors;
+                } else {
+                    for (int vertex = 0; vertex < vertices->size(); ++vertex) {
+                        cachedLineColors_.append(
+                            QVector4D(1.0f, 1.0f, 1.0f, 1.0f));
+                    }
+                }
             }
             strokeRanges_.append(
                 {first, cachedVertices_.size() - first});
@@ -784,6 +804,18 @@ bool ViewportSceneRenderer::draw(
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, sizeof(float), nullptr);
     patternOffsetBuffer_.release();
+    if (geometryChanged) {
+        lineColorBuffer_.bind();
+        lineColorBuffer_.allocate(
+            cachedLineColors_.constData(),
+            static_cast<int>(cachedLineColors_.size() * sizeof(QVector4D)));
+        lineColorBuffer_.release();
+    }
+    lineColorBuffer_.bind();
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE,
+                          sizeof(QVector4D), nullptr);
+    lineColorBuffer_.release();
     QOpenGLShaderProgram *boundProgram = nullptr;
     for (int index = 0; index < strokes.size(); ++index) {
         const ViewportSceneStroke &stroke = strokes[index];

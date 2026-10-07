@@ -19,6 +19,7 @@
 #include <QSize>
 #include <QVector>
 #include <QVector3D>
+#include <QVector4D>
 
 #include <algorithm>
 #include <array>
@@ -67,6 +68,10 @@ struct ViewportSceneStroke {
     float linePatternScale = 1.0f;
     std::array<float, 8> linePatternSegmentsWidthUnits{};
     int linePatternSegmentCount = 0;
+    // Optional color multiplier per GL_LINES endpoint. White preserves the
+    // stroke's uniform color; varying endpoint colors produce Blender-style
+    // edit-wire fades along a whole edge.
+    QVector<QVector4D> lineVertexColors;
     ObjectId objectId = ObjectId::invalid();
     quint64 geometryRevision = 0;
     bool cacheableGeometry = false;
@@ -201,6 +206,7 @@ private:
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer overlayVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLBuffer patternOffsetBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer lineColorBuffer_{QOpenGLBuffer::VertexBuffer};
     QOpenGLVertexArrayObject pictureVertexArray_;
     QOpenGLBuffer pictureVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     QHash<qint64, PictureTexture> pictureTextures_;
@@ -208,6 +214,7 @@ private:
     QVector<QByteArray> strokeGeometryKeys_;
     QVector<QPair<int, int>> strokeRanges_;
     QVector<QVector3D> cachedVertices_;
+    QVector<QVector4D> cachedLineColors_;
     QVector<float> cachedPatternOffsets_;
     bool initializationAttempted_ = false;
     bool initialized_ = false;

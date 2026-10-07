@@ -4149,7 +4149,8 @@ protected:
                         const auto appendComponentStroke = [&](ViewportDepthGeometry geometry,
                                                                const QColor &color,
                                                                float width,
-                                                               float pointDiameter) {
+                                                               float pointDiameter,
+                                                               QVector<QVector4D> lineVertexColors) {
                             if (geometry.pointVertices.isEmpty() &&
                                 geometry.lineVertices.isEmpty()) return;
                             QByteArray geometryKeyBytes;
@@ -4177,6 +4178,7 @@ protected:
                             stroke.color = color;
                             stroke.width = width;
                             stroke.pointDiameter = pointDiameter;
+                            stroke.lineVertexColors = std::move(lineVertexColors);
                             stroke.editModeWire = true;
                             stroke.objectId = objectId;
                             stroke.geometryRevision = dynamicGeometryRevision;
@@ -4191,7 +4193,10 @@ protected:
                             const QColor selectedVertexColor(QStringLiteral("#ff7a00"));
                             const QColor selectedEdgeColor(QStringLiteral("#ff9900"));
                             const QColor wireEditColor(Qt::black);
-                            QMap<QRgb, ViewportDepthGeometry> fadedEdges;
+                            const auto strokeColor = [](const QColor &color) {
+                                return QVector4D(color.redF(), color.greenF(),
+                                                 color.blueF(), color.alphaF());
+                            };
                             for (int edge = 0; edge + 1 < cage->lineVertices.size(); edge += 2) {
                                 const auto samePoint = [](const QVector3D &a,
                                                           const QVector3D &b) {
@@ -4210,26 +4215,18 @@ protected:
                                                               ? selectedEdgeColor : wireEditColor;
                                 const QColor lastColor = activeComponentSelection().contains(b)
                                                              ? selectedEdgeColor : wireEditColor;
-                                constexpr int fadeSteps = 16;
-                                for (int step = 0; step < fadeSteps; ++step) {
-                                    const float t0 = float(step) / fadeSteps;
-                                    const float t1 = float(step + 1) / fadeSteps;
-                                    const float tm = (t0 + t1) * 0.5f;
-                                    QColor color;
-                                    color.setRgbF(firstColor.redF() * (1.0f - tm) + lastColor.redF() * tm,
-                                                  firstColor.greenF() * (1.0f - tm) + lastColor.greenF() * tm,
-                                                  firstColor.blueF() * (1.0f - tm) + lastColor.blueF() * tm);
-                                    const QVector3D first = cage->lineVertices[edge] * (1.0f - t0) +
-                                                            cage->lineVertices[edge + 1] * t0;
-                                    const QVector3D second = cage->lineVertices[edge] * (1.0f - t1) +
-                                                             cage->lineVertices[edge + 1] * t1;
-                                    fadedEdges[color.rgba()].lineVertices << first << second;
+                                ViewportDepthGeometry fadedEdge;
+                                fadedEdge.lineVertices << cage->lineVertices[edge]
+                                                       << cage->lineVertices[edge + 1];
+                                if (edge + 1 < cage->preciseLineVertices.size()) {
+                                    fadedEdge.preciseLineVertices
+                                        << cage->preciseLineVertices[edge]
+                                        << cage->preciseLineVertices[edge + 1];
                                 }
-                            }
-                            for (auto it = fadedEdges.begin(); it != fadedEdges.end(); ++it) {
-                                appendComponentStroke(std::move(it.value()),
-                                                      QColor::fromRgba(it.key()),
-                                                      1.0f, 0.0f);
+                                appendComponentStroke(
+                                    std::move(fadedEdge), QColor(Qt::white),
+                                    1.0f, 0.0f,
+                                    {strokeColor(firstColor), strokeColor(lastColor)});
                             }
                             QMap<QRgb, ViewportDepthGeometry> fadedPoints;
                             for (int component : activeComponentSelection()) {
@@ -4243,7 +4240,7 @@ protected:
                             for (auto it = fadedPoints.begin(); it != fadedPoints.end(); ++it) {
                                 appendComponentStroke(std::move(it.value()),
                                                       QColor::fromRgba(it.key()),
-                                                      1.0f, 4.0f);
+                                                      1.0f, 4.0f, {});
                             }
                         } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
                             ViewportDepthGeometry componentGeometry;
@@ -4257,7 +4254,7 @@ protected:
                             }
                             appendComponentStroke(std::move(componentGeometry),
                                                   QColor(QStringLiteral("#ff8a00")),
-                                                  2.0f, 0.0f);
+                                                  2.0f, 0.0f, {});
                         } else {
                             ViewportDepthGeometry componentGeometry;
                             const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(visibleShape);
@@ -4272,7 +4269,7 @@ protected:
                             }
                             appendComponentStroke(std::move(componentGeometry),
                                                   QColor(QStringLiteral("#ff8a00")),
-                                                  2.0f, 0.0f);
+                                                  2.0f, 0.0f, {});
                         }
                     }
                 }

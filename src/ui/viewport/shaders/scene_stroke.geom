@@ -10,13 +10,18 @@ uniform float uWidth;
 uniform float uDepthBias;
 flat out float vLength;
 flat out float gPatternOffsetPixels;
+flat out vec4 gStartColor;
+flat out vec4 gEndColor;
 noperspective out vec2 vStrokePosition;
 in float vPatternOffsetPixels[];
+in vec4 vEndpointColor[];
 
 void main()
 {
     vec4 a = gl_in[0].gl_Position;
     vec4 b = gl_in[1].gl_Position;
+    vec4 colorA = vEndpointColor[0];
+    vec4 colorB = vEndpointColor[1];
     float nearA = a.z + a.w;
     float nearB = b.z + b.w;
     if (nearA < 0.0 && nearB < 0.0) {
@@ -25,13 +30,17 @@ void main()
     float patternOffset = vPatternOffsetPixels[0];
     if (nearA < 0.0) {
         vec4 originalA = a;
-        a = mix(a, b, nearA / (nearA - nearB));
+        float clipT = nearA / (nearA - nearB);
+        a = mix(a, b, clipT);
+        colorA = mix(colorA, colorB, clipT);
         if (originalA.w > 0.0 && a.w > 0.0) {
             patternOffset += length((a.xy / a.w - originalA.xy / originalA.w) *
                                     (0.5 * uViewportSize));
         }
     } else if (nearB < 0.0) {
-        b = mix(b, a, nearB / (nearB - nearA));
+        float clipT = nearB / (nearB - nearA);
+        b = mix(b, a, clipT);
+        colorB = mix(colorB, colorA, clipT);
     }
     if (a.w <= 0.0 || b.w <= 0.0) {
         return;
@@ -46,21 +55,35 @@ void main()
     float radius = uWidth * 0.5 + 1.0;
     vLength = lengthPixels;
     gPatternOffsetPixels = patternOffset;
+    gStartColor = colorA;
+    gEndColor = colorB;
     vStrokePosition = vec2(-radius, radius);
     gl_Position = a + vec4((normal - tangent) * radius * 2.0 /
                                 uViewportSize * a.w, 0.0, 0.0);
     gl_Position.z -= uDepthBias * gl_Position.w;
     EmitVertex();
+    vLength = lengthPixels;
+    gPatternOffsetPixels = patternOffset;
+    gStartColor = colorA;
+    gEndColor = colorB;
     vStrokePosition = vec2(-radius, -radius);
     gl_Position = a + vec4((-normal - tangent) * radius * 2.0 /
                                 uViewportSize * a.w, 0.0, 0.0);
     gl_Position.z -= uDepthBias * gl_Position.w;
     EmitVertex();
+    vLength = lengthPixels;
+    gPatternOffsetPixels = patternOffset;
+    gStartColor = colorA;
+    gEndColor = colorB;
     vStrokePosition = vec2(lengthPixels + radius, radius);
     gl_Position = b + vec4((normal + tangent) * radius * 2.0 /
                                 uViewportSize * b.w, 0.0, 0.0);
     gl_Position.z -= uDepthBias * gl_Position.w;
     EmitVertex();
+    vLength = lengthPixels;
+    gPatternOffsetPixels = patternOffset;
+    gStartColor = colorA;
+    gEndColor = colorB;
     vStrokePosition = vec2(lengthPixels + radius, -radius);
     gl_Position = b + vec4((-normal + tangent) * radius * 2.0 /
                                 uViewportSize * b.w, 0.0, 0.0);

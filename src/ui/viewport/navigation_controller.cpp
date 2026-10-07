@@ -11,6 +11,9 @@
 namespace classiCAD {
 namespace {
 
+constexpr qint64 rightPanActivationDelayMs = 110;
+constexpr qreal panDragThresholdPixels = 3.0;
+
 qreal directionDot(const Point3D &first, const Point3D &second)
 {
     return first.x * second.x + first.y * second.y + first.z * second.z;
@@ -285,6 +288,13 @@ bool NavigationController::handlePanPress(Qt::MouseButton button,
     }
 
     panning_ = true;
+    delayedRightPan_ = configuredPanButton && button == Qt::RightButton;
+    panMotionApplied_ = false;
+    if (delayedRightPan_) {
+        panPressTimer_.start();
+    } else {
+        panPressTimer_.invalidate();
+    }
     if (middleMouseNavigation) {
         // Blender-style navigation: MMB orbits; Shift+MMB pans.
         orbiting_ = !modifiers.testFlag(Qt::ShiftModifier);
@@ -312,8 +322,44 @@ bool NavigationController::handlePanMove(const QPointF &screenPosition,
     const QPoint current = screenPosition.toPoint();
     const QPoint delta = current - lastPosition_.toPoint();
     const QPoint totalDelta = current - panStartPosition_;
-    if (std::hypot(totalDelta.x(), totalDelta.y()) >= 3.0) {
+    if (std::hypot(totalDelta.x(), totalDelta.y()) >= panDragThresholdPixels) {
         panMoved_ = true;
+    }
+    if (delayedRightPan_) {
+        const bool activationDelayPending = panPressTimer_.isValid() &&
+            panPressTimer_.elapsed() < rightPanActivationDelayMs;
+        if (activationDelayPending) {
+            // Ignore motion during the short click-recognition window so a
+            // click cannot nudge the view; start dragging from the latest
+            // pointer position once the delay has elapsed.
+            lastPosition_ = current;
+            panMotionApplied_ = true;
+            return true;
+        }
+        if (!panMoved_) {
+            return true;
+        }
+        const QPointF appliedDelta = panMotionApplied_
+                                         ? QPointF(delta)
+                                         : QPointF(current - panStartPosition_);
+        panMotionApplied_ = true;
+        if (orbiting_) {
+            const ViewportViewPreset previousPreset = transform_.viewPreset();
+            const bool previousPerspective = transform_.isPerspectiveEnabled();
+            if (transform_.navigationPreferences().orbitMethod ==
+                ViewportOrbitMethod::Trackball) {
+                transform_.orbitToPosition(screenPosition, viewportSize);
+            } else {
+                transform_.orbitByPixels(appliedDelta);
+            }
+            notifyCameraModeChanged(previousPreset, previousPerspective);
+        } else {
+            transform_.panByPixels(appliedDelta, viewportSize);
+        }
+        lastPosition_ = current;
+        requestUpdate();
+        notifyCoordinatesChanged();
+        return true;
     }
     if (orbiting_) {
         const ViewportViewPreset previousPreset = transform_.viewPreset();
@@ -344,6 +390,9 @@ bool NavigationController::finishPointerRelease(Qt::MouseButton button)
         }
         panning_ = false;
         orbiting_ = false;
+        delayedRightPan_ = false;
+        panMotionApplied_ = false;
+        panPressTimer_.invalidate();
         host_.setCursor(idleCursor());
         ended = true;
     }

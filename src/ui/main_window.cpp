@@ -1117,26 +1117,6 @@ private:
                 statusBar()->showMessage(QStringLiteral("Select mode"));
             }
         };
-        viewportCallbacks.toolRepeated = [this](ToolId tool) {
-            if (tool == Tool::Scale && scaleToolButton_ != nullptr) {
-                scaleToolButton_->setChecked(true);
-            }
-            if (isDimensionTool(tool) && dimensionToolButton_ != nullptr) {
-                dimensionToolButton_->setChecked(true);
-            }
-            if ((tool == Tool::TangentFromCurve ||
-                 tool == Tool::PerpendicularFromCurve) &&
-                lineToolButton_ != nullptr) {
-                lineToolButton_->setChecked(true);
-            }
-            for (QToolButton *button : toolShelf_->toolButtons()) {
-                if (button->toolTip() == toolName(tool)) {
-                    button->setChecked(true);
-                    break;
-                }
-            }
-            statusBar()->showMessage(QStringLiteral("Repeated tool: %1").arg(toolName(tool)));
-        };
         workspaceSplitter->addWidget(viewport_);
         workspaceSplitter->addWidget(createRightPanel());
         workspaceSplitter->setStretchFactor(0, 1);
@@ -2004,7 +1984,7 @@ private:
             savePanButtonPreference(button);
             statusBar()->showMessage(
                 button == Qt::RightButton
-                    ? QStringLiteral("Right mouse pans; Shift+right mouse orbits.")
+                    ? QStringLiteral("Right-click selects; right-drag pans; Shift+right-drag orbits.")
                     : QStringLiteral("Middle mouse orbits; Shift+middle mouse pans."));
         }
     }
@@ -2013,7 +1993,7 @@ private:
     {
         if (toolShelf_ != nullptr && viewport_ != nullptr) {
             const QString alternatePan = viewport_->panButton() == Qt::RightButton
-                                             ? QStringLiteral("\n\nRMB\nAlternate pan")
+                                             ? QStringLiteral("\n\nRMB click\nSelect\n\nRMB drag\nAlternate pan")
                                              : QString();
             toolShelf_->setHelpText(QStringLiteral(
                                         "LMB\nDraw\n\nMMB\nOrbit\n\nShift+MMB\nPan%1\n\nWheel\nZoom")

@@ -900,7 +900,6 @@ public:
             pendingPictureImage_ = QImage();
             pendingPictureImageData_.clear();
             pendingPicturePath_.clear();
-            repeatTool_ = Tool::Select;
         }
         if (activeToolController_ != nullptr && activeToolController_->id() != tool) {
             activeToolController_->cancel(toolContext_);
@@ -941,7 +940,6 @@ public:
         }
 
         if (tool != Tool::Select) {
-            repeatTool_ = tool;
             if (!isEraseLikeTool(tool) && tool != Tool::Rotate &&
                 tool != Tool::Scale && tool != Tool::Mirror) {
                 if (tool != Tool::PointCenter && tool != Tool::PointExtrude) {
@@ -1142,40 +1140,6 @@ public:
                                        .arg(shapes_.size())
                                        .arg(history_.undoCount())
                                        .arg(history_.redoCount()));
-    }
-
-    void repeatLastTool()
-    {
-        if (repeatTool_ == Tool::Select) {
-            DebugLog::instance().write(QStringLiteral("repeatTool ignored no-last-tool"));
-            return;
-        }
-
-        const ToolId tool = repeatTool_;
-        DebugLog::instance().write(QStringLiteral("repeatTool tool=%1")
-                                       .arg(toolName(tool)));
-        if (tool == Tool::Rotate) {
-            if (beginRotate() && toolRepeated_) {
-                toolRepeated_(tool);
-            }
-            return;
-        }
-        if (tool == Tool::Scale) {
-            if (beginScale(scaleState().mode) && toolRepeated_) {
-                toolRepeated_(tool);
-            }
-            return;
-        }
-        if (tool == Tool::Mirror) {
-            if (beginMirror() && toolRepeated_) {
-                toolRepeated_(tool);
-            }
-            return;
-        }
-        setTool(tool);
-        if (toolRepeated_) {
-            toolRepeated_(tool);
-        }
     }
 
     ToolId activeTool() const
@@ -5241,6 +5205,24 @@ protected:
         drawComponentModeControls(painter);
     }
 
+    void dispatchSyntheticMouseEvent(QEvent::Type type,
+                                     const QPointF &position,
+                                     Qt::MouseButton button,
+                                     Qt::MouseButtons buttons,
+                                     Qt::KeyboardModifiers modifiers)
+    {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        QMouseEvent translated(type, position, position, button, buttons, modifiers);
+#else
+        QMouseEvent translated(type, position, button, buttons, modifiers);
+#endif
+        if (type == QEvent::MouseButtonPress) {
+            mousePressEvent(&translated);
+        } else if (type == QEvent::MouseButtonRelease) {
+            mouseReleaseEvent(&translated);
+        }
+    }
+
     void mousePressEvent(QMouseEvent *event) override
     {
         navigationController_.stopAnimation();
@@ -5265,6 +5247,20 @@ protected:
         }
         if (event->button() == Qt::LeftButton &&
             navigationController_.handleGizmoPress(screenPosition, size())) {
+            event->accept();
+            return;
+        }
+        if (event->button() == Qt::RightButton &&
+            navigationController_.panButton() != Qt::RightButton &&
+            activeTool_ == Tool::Select && !grabTool_.isActive() &&
+            !duplicateTool_.isActive() && !subdivisionTool_.isActive() &&
+            !joinTool_.isActive()) {
+            rightButtonSelectionGestureActive_ = true;
+            dispatchSyntheticMouseEvent(QEvent::MouseButtonPress,
+                                        screenPosition,
+                                        Qt::LeftButton,
+                                        Qt::LeftButton,
+                                        event->modifiers());
             event->accept();
             return;
         }
@@ -6537,6 +6533,17 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent *event) override
     {
+        if (event->button() == Qt::RightButton &&
+            rightButtonSelectionGestureActive_) {
+            rightButtonSelectionGestureActive_ = false;
+            dispatchSyntheticMouseEvent(QEvent::MouseButtonRelease,
+                                        eventPosition(event),
+                                        Qt::LeftButton,
+                                        Qt::NoButton,
+                                        event->modifiers());
+            event->accept();
+            return;
+        }
         if (event->button() == Qt::LeftButton &&
             shadingControlPressed_ >= 0) {
             const int pressed = shadingControlPressed_;
@@ -6556,20 +6563,20 @@ protected:
             return;
         }
 
-        const bool repeatToolOnRelease =
+        const bool rightPanClickSelect =
             navigationController_.isPanning() &&
             event->button() == navigationController_.panButton() &&
-            event->button() != Qt::MiddleButton &&
+            event->button() == Qt::RightButton &&
             !navigationController_.panMoved() &&
-            activeTool_ == Tool::Select && repeatTool_ != Tool::Select;
+            activeTool_ == Tool::Select;
 
-        DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 panMoved=%4 draggingBefore=%5 repeat=%6")
+        DebugLog::instance().write(QStringLiteral("mouseRelease button=%1 screen=%2 panningBefore=%3 panMoved=%4 draggingBefore=%5 clickSelect=%6")
                                        .arg(inputButtonName(event->button()))
                                        .arg(pointText(eventPosition(event)))
                                        .arg(navigationController_.isPanning())
                                        .arg(navigationController_.panMoved())
                                        .arg(objectSelectionDragActive())
-                                       .arg(repeatToolOnRelease));
+                                       .arg(rightPanClickSelect));
         if (grabTool_.isActive()) {
             return;
         }
@@ -6583,9 +6590,19 @@ protected:
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-pan-orbit"));
         }
 
-        if (repeatToolOnRelease) {
-            DebugLog::instance().write(QStringLiteral("mouseRelease branch=repeat-tool"));
-            repeatLastTool();
+        if (rightPanClickSelect) {
+            dispatchSyntheticMouseEvent(QEvent::MouseButtonPress,
+                                        eventPosition(event),
+                                        Qt::LeftButton,
+                                        Qt::LeftButton,
+                                        event->modifiers());
+            dispatchSyntheticMouseEvent(QEvent::MouseButtonRelease,
+                                        eventPosition(event),
+                                        Qt::LeftButton,
+                                        Qt::NoButton,
+                                        event->modifiers());
+            event->accept();
+            return;
         }
 
         if (eraseTool_.strokeActive() && event->button() == Qt::LeftButton) {
@@ -7238,7 +7255,6 @@ private:
         subdivisionTool_.finish();
         lineCommandActive_ = false;
         activeTool_ = Tool::Select;
-        repeatTool_ = Tool::Select;
     }
 
     void updateSnapEngineSettings()
@@ -13223,7 +13239,7 @@ private:
 
     static constexpr int maxSubdivisionSections = 10000;
     ToolId activeTool_ = ToolId::Select;
-    ToolId repeatTool_ = ToolId::Select;
+    bool rightButtonSelectionGestureActive_ = false;
     bool controlPointsVisible_ = false;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;

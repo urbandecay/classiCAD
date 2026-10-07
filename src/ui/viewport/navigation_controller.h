@@ -4,6 +4,7 @@
 #include "navigation_gizmo.h"
 
 #include <QMouseEvent>
+#include <QElapsedTimer>
 #include <QPoint>
 #include <QPointF>
 #include <QSize>
@@ -101,6 +102,7 @@ private:
     QPointF hoverPosition_{-1000.0, -1000.0};
     QPointF pressPosition_;
     QPointF lastPosition_;
+    QElapsedTimer panPressTimer_;
     BlenderNavigationHit pressHit_;
     BlenderNavigationAction pressedAction_ = BlenderNavigationAction::None;
     Qt::MouseButton panButton_ = Qt::MiddleButton;
@@ -109,6 +111,8 @@ private:
     bool panning_ = false;
     bool orbiting_ = false;
     bool panMoved_ = false;
+    bool delayedRightPan_ = false;
+    bool panMotionApplied_ = false;
 };
 
 } // namespace classiCAD

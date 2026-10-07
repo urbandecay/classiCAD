@@ -294,3 +294,20 @@ misread or implemented incorrectly.
 - Point Center exits on its one-shot click or a finish key even when there is
   no valid fitted point. Edge Center stays active after a left-click without a
   midpoint, but Enter/Space/right-click exits even when no point is available.
+
+## Blender linked-selection port findings
+
+- Blender's mesh `L` picker selects the connected island reached from the
+  visible vertex, edge, or face under the cursor according to the active
+  component mode; `Shift+L` removes that picked island. Mesh faces connect
+  through shared edges. Blender curve `L` selects the control points connected
+  to the control point nearest the cursor. The app stores solid faces as
+  independent NURBS patches with duplicated boundary CVs, so object identity
+  alone is not a valid island query; walk face boundaries and match shared
+  edges. Keep the app's endpoint-only vertex display when CP Points is off,
+  while allowing linked selection to include hidden interior CVs so Grab moves
+  the selected spline as one connected unit.
+- [ ] Check linked pick in vertex, edge, and face modes on the cube, with
+  overlapping disconnected surfaces, a connected PolyCurve, and a spline
+  whose interior control points are hidden. Check visible-depth and X-ray
+  picking, `Shift+L` removal, and additive selection.

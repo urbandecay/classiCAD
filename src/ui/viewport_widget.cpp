@@ -2199,12 +2199,15 @@ public:
         }
 
         surfaceControlPointGrabTargets_.clear();
+        curveControlPointGrabTargets_.clear();
         QVector<ObjectId> selected = selectedShapeIndices_;
         if (selectedShapeIndex_.isValid() && !selected.contains(selectedShapeIndex_))
             selected.append(selectedShapeIndex_);
 
         QVector<ObjectId> validSelection;
         QVector<QVector3D> selectedWorldVertices;
+        QVector<QVector3D> selectedCurveVertices;
+        QVector<ObjectId> selectedCurveObjects;
         bool hasSelectedSurfaceComponents = false;
         if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
             componentSelectionMode_ == ComponentSelectionMode::Edge) {
@@ -2213,12 +2216,37 @@ public:
                 const SceneObject *object = document_.object(objectId);
                 const QSet<int> &components = componentSelectionForObject(objectId);
                 if (shape == nullptr || object == nullptr || components.isEmpty() ||
-                    !document_.isObjectEditable(objectId) ||
-                    (shape->geometryType != GeometryType::NurbsSurface &&
-                     shape->geometryType != GeometryType::NurbsSolid)) continue;
-                const ViewportDepthGeometry cage = selectedSurfaceCage(*shape);
+                    !document_.isObjectEditable(objectId)) {
+                    continue;
+                }
                 const Point3D offset = object->placementTranslation;
-                const QVector3D placement(float(offset.x), float(offset.y), float(offset.z));
+                if (shape->geometryType != GeometryType::NurbsSurface &&
+                    shape->geometryType != GeometryType::NurbsSolid) {
+                    if (componentSelectionMode_ != ComponentSelectionMode::Vertex) {
+                        continue;
+                    }
+                    QSet<int> targets;
+                    for (const auto &endpoint :
+                         curveEndpointVertices(*shape, offset)) {
+                        if (components.contains(endpoint.first)) {
+                            targets.insert(endpoint.first);
+                            selectedCurveVertices.append(QVector3D(
+                                float(endpoint.second.x),
+                                float(endpoint.second.y),
+                                float(endpoint.second.z)));
+                        }
+                    }
+                    if (!targets.isEmpty()) {
+                        curveControlPointGrabTargets_.insert(objectId.value(),
+                                                             targets);
+                        selectedCurveObjects.append(objectId);
+                    }
+                    continue;
+                }
+
+                const ViewportDepthGeometry cage = selectedSurfaceCage(*shape);
+                const QVector3D placement(float(offset.x), float(offset.y),
+                                          float(offset.z));
                 if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                     for (int vertex : components) {
                         if (vertex >= 0 && vertex < cage.pointVertices.size())
@@ -2275,16 +2303,23 @@ public:
                     validSelection.append(objectId);
                 }
             }
-            if (validSelection.isEmpty()) {
-                DebugLog::instance().write(
-                    QStringLiteral("beginGrab: selected component has no editable NURBS control vertex"));
-                return false;
+        }
+        for (const ObjectId objectId : selectedCurveObjects) {
+            if (!validSelection.contains(objectId)) {
+                validSelection.append(objectId);
             }
-        } else {
+        }
+        if (!hasSelectedSurfaceComponents && selectedCurveObjects.isEmpty()) {
             for (const ObjectId objectId : selected) {
                 if (document_.isObjectEditable(objectId) &&
                     !validSelection.contains(objectId)) validSelection.append(objectId);
             }
+        }
+        if (validSelection.isEmpty() &&
+            (hasSelectedSurfaceComponents || !selectedCurveObjects.isEmpty())) {
+            DebugLog::instance().write(
+                QStringLiteral("beginGrab: selected component has no editable control vertex"));
+            return false;
         }
         if (validSelection.isEmpty()) {
             DebugLog::instance().write(QStringLiteral("beginGrab ignored no editable selection"));
@@ -2306,8 +2341,10 @@ public:
         grabViewPlaneAnchorValid_ = makeSelectionViewPlaneFrame(
             validSelection, localCursor, &grabViewPlaneFrame_,
             &grabViewPlaneStartWorld_);
-        if (!selectedWorldVertices.isEmpty()) {
-            const QVector3D vertex = selectedWorldVertices.first();
+        if (!selectedWorldVertices.isEmpty() ||
+            !selectedCurveVertices.isEmpty()) {
+            const QVector3D vertex = !selectedWorldVertices.isEmpty()
+                ? selectedWorldVertices.first() : selectedCurveVertices.first();
             grabViewPlaneFrame_ = makeWorkPlaneFrameFromNormal(
                 {vertex.x(), vertex.y(), vertex.z()},
                 viewportTransform_.viewDirection(), viewportTransform_.viewUp());
@@ -2334,7 +2371,8 @@ public:
         update();
         DebugLog::instance().write(QStringLiteral("beginGrab shapes=%1")
                                        .arg(grabTool_.objectIds().size()));
-        if (!surfaceControlPointGrabTargets_.isEmpty()) {
+        if (!surfaceControlPointGrabTargets_.isEmpty() ||
+            !curveControlPointGrabTargets_.isEmpty()) {
             for (const ObjectId objectId : grabTool_.objectIds()) {
                 const Shape *shape = document_.shape(objectId);
                 if (shape == nullptr) {
@@ -2372,7 +2410,7 @@ public:
     void beginGrabBasePointMode()
     {
         if (!grabTool_.isActive() ||
-            !surfaceControlPointGrabTargets_.isEmpty()) {
+            hasComponentGrabTargets()) {
             return;
         }
 
@@ -2420,7 +2458,7 @@ public:
             document_.restoreSnapshot(grabTool_.startSnapshot());
             notifyLayersChanged();
         }
-        if (!surfaceControlPointGrabTargets_.isEmpty()) {
+        if (hasComponentGrabTargets()) {
             componentSelections_[0] = grabOriginalVertexSelections_;
             activeComponentIndices_[0] = grabOriginalActiveVertex_;
         }
@@ -4206,21 +4244,46 @@ protected:
                     continue;
                 }
 
-                const QVector<Point3D> points = showCurveEndpointVertices
-                    ? curveVertexWorldPositions(*renderObject)
-                    : controlPointWorldPositions(*renderObject);
-                for (int pointIndex = 0; pointIndex < points.size(); ++pointIndex) {
+                const QVector<QPair<int, Point3D>> endpointVertices =
+                    showCurveEndpointVertices
+                        ? curveEndpointVertices(renderObject->shape,
+                                                renderObject->placementTranslation)
+                        : QVector<QPair<int, Point3D>>{};
+                const QVector<Point3D> controlPoints =
+                    showCurveEndpointVertices
+                        ? QVector<Point3D>{}
+                        : controlPointWorldPositions(*renderObject);
+                const int pointCount = showCurveEndpointVertices
+                                           ? endpointVertices.size()
+                                           : controlPoints.size();
+                for (int pointIndex = 0; pointIndex < pointCount; ++pointIndex) {
+                    const int componentIndex = showCurveEndpointVertices
+                        ? endpointVertices[pointIndex].first : pointIndex;
+                    const Point3D &worldPoint = showCurveEndpointVertices
+                        ? endpointVertices[pointIndex].second
+                        : controlPoints[pointIndex];
                     const bool active = controlPointSelectionDragActive() &&
                                         objectId == selectedShapeIndex_ &&
                                         pointIndex == controlPointIndex_;
                     ViewportControlPointHandle handle;
                     handle.worldPosition = QVector3D(
-                        static_cast<float>(points[pointIndex].x),
-                        static_cast<float>(points[pointIndex].y),
-                        static_cast<float>(points[pointIndex].z));
+                        static_cast<float>(worldPoint.x),
+                        static_cast<float>(worldPoint.y),
+                        static_cast<float>(worldPoint.z));
                     if (showCurveEndpointVertices) {
-                        handle.fillColor = QColor(12, 12, 12);
-                        handle.outlineColor = QColor(12, 12, 12);
+                        const bool selected =
+                            componentSelectionForObject(objectId).contains(
+                                componentIndex);
+                        const bool activeVertex = selected &&
+                            componentSelectionObject_ == objectId &&
+                            activeComponentIndices_[static_cast<int>(
+                                ComponentSelectionMode::Vertex)] == componentIndex;
+                        const QColor vertexColor = activeVertex
+                            ? QColor(Qt::white)
+                            : selected ? QColor(QStringLiteral("#ff7a00"))
+                                       : QColor(12, 12, 12);
+                        handle.fillColor = vertexColor;
+                        handle.outlineColor = vertexColor;
                         handle.diameterPixels = 4.0f;
                         handle.outlineWidthPixels = 0.0f;
                         handle.shape = ViewportControlPointShape::Circle;
@@ -5665,11 +5728,23 @@ protected:
                 }
                 painter.setPen(Qt::NoPen);
                 painter.setBrush(QColor(12, 12, 12));
-                for (const Point3D &point :
-                     curveVertexWorldPositions(*renderObject)) {
+                for (const auto &endpoint : curveEndpointVertices(
+                         renderObject->shape,
+                         renderObject->placementTranslation)) {
+                    const bool selected =
+                        componentSelectionForObject(renderObject->objectId)
+                            .contains(endpoint.first);
+                    const bool active = selected &&
+                        componentSelectionObject_ == renderObject->objectId &&
+                        activeComponentIndices_[static_cast<int>(
+                            ComponentSelectionMode::Vertex)] == endpoint.first;
+                    painter.setBrush(active ? QColor(Qt::white)
+                                    : selected
+                                        ? QColor(QStringLiteral("#ff7a00"))
+                                        : QColor(12, 12, 12));
                     QPointF screenPoint;
                     if (viewportTransform_.worldPointToScreen(
-                            point, size(), &screenPoint)) {
+                            endpoint.second, size(), &screenPoint)) {
                         painter.drawEllipse(screenPoint, 2.0, 2.0);
                     }
                 }
@@ -8587,7 +8662,9 @@ private:
                                     ComponentSelectionMode::Edge
                             ? curveSampler_.curvesForShape(candidateShape)
                             : QVector<Shape::NurbsCurve2D>{};
-                    if (!surfaceObject && edgeCurves.isEmpty()) {
+                    if (!surfaceObject &&
+                        componentSelectionMode_ != ComponentSelectionMode::Vertex &&
+                        edgeCurves.isEmpty()) {
                         continue;
                     }
                     const SceneObject *sceneObject = document_.object(candidateId);
@@ -8597,6 +8674,40 @@ private:
                     QSet<int> candidateComponents;
 
                     if (!surfaceObject) {
+                        if (componentSelectionMode_ ==
+                            ComponentSelectionMode::Vertex) {
+                            for (const auto &endpoint :
+                                 curveEndpointVertices(candidateShape, offset)) {
+                                QPointF projected;
+                                if (!viewportTransform_.worldPointToScreen(
+                                        endpoint.second, size(), &projected) ||
+                                    !selectionBox.contains(projected)) {
+                                    continue;
+                                }
+                                candidateComponents.insert(endpoint.first);
+                                if (!viewportShadingSettings_.xrayEnabled()) {
+                                    ViewportComponentPickCandidate pickCandidate;
+                                    pickCandidate.first = endpoint.second;
+                                    pickCandidate.second = endpoint.second;
+                                    pickCandidate.componentIndex = endpoint.first;
+                                    pickCandidate.shapeIndex = index;
+                                    vertexPickCandidates.append(pickCandidate);
+                                }
+                            }
+                            if (!candidateComponents.isEmpty()) {
+                                if (!boxedComponentsByObject.contains(
+                                        candidateId.value())) {
+                                    boxedObjects.append(candidateId);
+                                }
+                                QSet<int> &boxed =
+                                    boxedComponentsByObject[candidateId.value()];
+                                for (int component : candidateComponents) {
+                                    boxed.insert(component);
+                                }
+                            }
+                            continue;
+                        }
+
                         const auto segmentIntersectsSelectionBox =
                             [&selectionBox](const QLineF &segment) {
                                 if (selectionBox.contains(segment.p1()) ||
@@ -9146,9 +9257,16 @@ private:
     {
         grabTool_.reset();
         surfaceControlPointGrabTargets_.clear();
+        curveControlPointGrabTargets_.clear();
         grabViewPlaneFrame_ = WorkPlaneFrame{};
         grabViewPlaneStartWorld_ = {};
         grabViewPlaneAnchorValid_ = false;
+    }
+
+    bool hasComponentGrabTargets() const
+    {
+        return !surfaceControlPointGrabTargets_.isEmpty() ||
+               !curveControlPointGrabTargets_.isEmpty();
     }
 
     void resetDuplicateInteraction()
@@ -10876,46 +10994,62 @@ private:
         return indices;
     }
 
-    QVector<Point3D> curveVertexWorldPositions(
-        const ViewportRenderObject &renderObject) const
+    QVector<QPair<int, Point3D>> curveEndpointVertices(
+        const Shape &shape, const Point3D &worldOffset) const
     {
-        const Shape &shape = renderObject.shape;
-        QVector<Point3D> positions;
+        QVector<QPair<int, Point3D>> endpoints;
+        switch (shape.geometryType) {
+        case GeometryType::Line:
+        case GeometryType::Arc:
+        case GeometryType::Bezier:
+        case GeometryType::Nurbs:
+        case GeometryType::Rectangle:
+        case GeometryType::Circle:
+        case GeometryType::PolyCurve:
+        case GeometryType::Ellipse:
+        case GeometryType::Polygon:
+            break;
+        default:
+            return endpoints;
+        }
+
         const auto appendEndpoints = [&](const QVector<QPointF> &controlPoints,
-                                         WorkPlaneFrame frame) {
+                                         WorkPlaneFrame frame,
+                                         int firstControlPointIndex) {
             if (controlPoints.isEmpty()) {
                 return;
             }
-            frame.origin.x += renderObject.placementTranslation.x;
-            frame.origin.y += renderObject.placementTranslation.y;
-            frame.origin.z += renderObject.placementTranslation.z;
-            const Point3D first = workPlaneFramePointToWorld(
-                controlPoints.first(), frame);
-            const Point3D last = workPlaneFramePointToWorld(
-                controlPoints.last(), frame);
-            positions.append(first);
-            const qreal dx = last.x - first.x;
-            const qreal dy = last.y - first.y;
-            const qreal dz = last.z - first.z;
-            if (dx * dx + dy * dy + dz * dz > 1.0e-16) {
-                positions.append(last);
+            frame.origin.x += worldOffset.x;
+            frame.origin.y += worldOffset.y;
+            frame.origin.z += worldOffset.z;
+            endpoints.append({firstControlPointIndex,
+                workPlaneFramePointToWorld(controlPoints.first(), frame)});
+            const QPointF delta = controlPoints.last() - controlPoints.first();
+            if (controlPoints.size() > 1 &&
+                QPointF::dotProduct(delta, delta) > 1.0e-16) {
+                endpoints.append({firstControlPointIndex +
+                                      controlPoints.size() - 1,
+                    workPlaneFramePointToWorld(controlPoints.last(), frame)});
             }
         };
 
         if (shape.geometryType == GeometryType::PolyCurve) {
+            int firstControlPointIndex = 0;
             for (int componentIndex = 0;
                  componentIndex < shape.components.size();
                  ++componentIndex) {
-                appendEndpoints(shape.components[componentIndex].controlPoints,
-                                shapeComponentWorkPlaneFrame(shape,
-                                                             componentIndex));
+                const QVector<QPointF> &controlPoints =
+                    shape.components[componentIndex].controlPoints;
+                appendEndpoints(controlPoints,
+                    shapeComponentWorkPlaneFrame(shape, componentIndex),
+                    firstControlPointIndex);
+                firstControlPointIndex += controlPoints.size();
             }
         } else {
             appendEndpoints(controlPointsForShape(shape),
-                            shapeWorkPlaneFrame(shape));
+                            shapeWorkPlaneFrame(shape), 0);
         }
-
-        return positions;
+        return endpoints;
     }
 
     bool hitTestSelectedControlPoint(const QPointF &screenPosition,
@@ -11314,6 +11448,46 @@ private:
                 shape.geometryType == GeometryType::NurbsSolid ||
                 shape.geometryType == GeometryType::NurbsSurface;
             if (!surfaceObject) {
+                const SceneObject *curveObject = document_.object(objectId);
+                const Point3D offset = curveObject != nullptr
+                                           ? curveObject->placementTranslation
+                                           : Point3D{};
+                if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                    const auto endpoints = curveEndpointVertices(shape, offset);
+                    qreal endpointScale = 1.0;
+                    if (!endpoints.isEmpty()) {
+                        const Point3D origin = endpoints.first().second;
+                        for (const auto &endpoint : endpoints) {
+                            const qreal dx = endpoint.second.x - origin.x;
+                            const qreal dy = endpoint.second.y - origin.y;
+                            const qreal dz = endpoint.second.z - origin.z;
+                            endpointScale = qMax(endpointScale,
+                                std::sqrt(dx * dx + dy * dy + dz * dz));
+                        }
+                    }
+                    const qreal endpointDepthTolerance =
+                        qMax(1.0e-5, endpointScale * 1.0e-2);
+                    for (const auto &endpoint : endpoints) {
+                        QPointF projected;
+                        if (!projectPickPoint(endpoint.second, &projected) ||
+                            (xray && !insideViewport(projected))) {
+                            continue;
+                        }
+                        PendingComponent candidate;
+                        candidate.shapeIndex = shapeIndex;
+                        candidate.componentIndex = endpoint.first;
+                        candidate.curve = true;
+                        candidate.first = endpoint.second;
+                        candidate.closestWorldPoint = endpoint.second;
+                        candidate.closestScreenPoint = projected;
+                        candidate.distance =
+                            std::abs(projected.x() - pickPosition.x()) +
+                            std::abs(projected.y() - pickPosition.y());
+                        candidate.depthTolerance = endpointDepthTolerance;
+                        pending.append(candidate);
+                    }
+                    continue;
+                }
                 if (componentSelectionMode_ != ComponentSelectionMode::Edge) {
                     continue;
                 }
@@ -11322,10 +11496,6 @@ private:
                 if (curves.isEmpty()) {
                     continue;
                 }
-                const SceneObject *curveObject = document_.object(objectId);
-                const Point3D offset = curveObject != nullptr
-                                           ? curveObject->placementTranslation
-                                           : Point3D{};
                 for (int curveIndex = 0; curveIndex < curves.size(); ++curveIndex) {
                     const Shape::NurbsCurve2D &curve = curves[curveIndex];
                     WorkPlaneFrame frame =
@@ -13039,7 +13209,7 @@ private:
 
     void translateShapes(const QVector<ObjectId> &objectIds, const QPointF &delta)
     {
-        if (grabTool_.isActive() && !surfaceControlPointGrabTargets_.isEmpty()) {
+        if (grabTool_.isActive() && hasComponentGrabTargets()) {
             const WorkPlaneFrame &frame = viewportTransform_.workPlaneFrame();
             translateShapesWorldDelta(objectIds, {
                 frame.xAxis.x * delta.x() + frame.yAxis.x * delta.y(),
@@ -13139,6 +13309,130 @@ private:
         setSelectionLastDragWorldPosition(rawCursorWorld_);
     }
 
+    void translateCurveControlPointTargets(ObjectId objectId,
+                                           const QSet<int> &targetIndices,
+                                           const Point3D &worldDelta)
+    {
+        const SceneObject *sceneObject = document_.object(objectId);
+        const Point3D offset = sceneObject != nullptr
+                                   ? sceneObject->placementTranslation
+                                   : Point3D{};
+        document_.mutateGeometry(objectId, [&](Shape &shape) {
+            QVector<Point3D> selectedWorldPoints;
+            const auto collectTargets = [&](const QVector<QPointF> &points,
+                                            const WorkPlaneFrame &frame,
+                                            int firstIndex) {
+                for (int index = 0; index < points.size(); ++index) {
+                    if (!targetIndices.contains(firstIndex + index)) {
+                        continue;
+                    }
+                    Point3D world = workPlaneFramePointToWorld(points[index], frame);
+                    world.x += offset.x;
+                    world.y += offset.y;
+                    world.z += offset.z;
+                    bool duplicate = false;
+                    for (const Point3D &existing : selectedWorldPoints) {
+                        const qreal dx = world.x - existing.x;
+                        const qreal dy = world.y - existing.y;
+                        const qreal dz = world.z - existing.z;
+                        if (dx * dx + dy * dy + dz * dz <= 1.0e-12) {
+                            duplicate = true;
+                            break;
+                        }
+                    }
+                    if (!duplicate) {
+                        selectedWorldPoints.append(world);
+                    }
+                }
+            };
+
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                int firstIndex = 0;
+                for (int componentIndex = 0;
+                     componentIndex < shape.components.size();
+                     ++componentIndex) {
+                    const auto &component = shape.components[componentIndex];
+                    collectTargets(component.controlPoints,
+                        shapeComponentWorkPlaneFrame(shape, componentIndex),
+                        firstIndex);
+                    firstIndex += component.controlPoints.size();
+                }
+            } else {
+                QVector<QPointF> points = shape.nurbs.controlPoints.isEmpty()
+                    ? shape.points : shape.nurbs.controlPoints;
+                if (shape.geometryType == GeometryType::Rectangle &&
+                    shape.nurbs.controlPoints.isEmpty()) {
+                    points = rectangleVertices(shape);
+                }
+                collectTargets(points, shapeWorkPlaneFrame(shape), 0);
+            }
+            if (selectedWorldPoints.isEmpty()) {
+                return false;
+            }
+
+            bool changed = false;
+            const auto moveMatchingPoints = [&](QVector<QPointF> *points,
+                                                const WorkPlaneFrame &frame) {
+                if (points == nullptr) {
+                    return;
+                }
+                for (QPointF &point : *points) {
+                    Point3D world = workPlaneFramePointToWorld(point, frame);
+                    world.x += offset.x;
+                    world.y += offset.y;
+                    world.z += offset.z;
+                    bool selected = false;
+                    for (const Point3D &target : selectedWorldPoints) {
+                        const qreal dx = world.x - target.x;
+                        const qreal dy = world.y - target.y;
+                        const qreal dz = world.z - target.z;
+                        if (dx * dx + dy * dy + dz * dz <= 1.0e-12) {
+                            selected = true;
+                            break;
+                        }
+                    }
+                    if (!selected) {
+                        continue;
+                    }
+                    const Point3D localWorld{
+                        world.x + worldDelta.x - offset.x,
+                        world.y + worldDelta.y - offset.y,
+                        world.z + worldDelta.z - offset.z};
+                    point = worldPointToWorkPlaneFrame(localWorld, frame);
+                    changed = true;
+                }
+            };
+
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                for (int componentIndex = 0;
+                     componentIndex < shape.components.size();
+                     ++componentIndex) {
+                    moveMatchingPoints(
+                        &shape.components[componentIndex].controlPoints,
+                        shapeComponentWorkPlaneFrame(shape, componentIndex));
+                }
+                if (changed) {
+                    shape.points = polyCurvePoints(shape.components);
+                }
+            } else if (!shape.nurbs.controlPoints.isEmpty()) {
+                moveMatchingPoints(&shape.nurbs.controlPoints,
+                                   shapeWorkPlaneFrame(shape));
+                if (changed &&
+                    (shape.geometryType == GeometryType::Line ||
+                     shape.geometryType == GeometryType::Bezier ||
+                     shape.geometryType == GeometryType::Nurbs)) {
+                    shape.points = shape.nurbs.controlPoints;
+                } else if (changed &&
+                           shape.geometryType == GeometryType::Rectangle) {
+                    shape.points = rectangleVertices(shape);
+                }
+            } else {
+                moveMatchingPoints(&shape.points, shapeWorkPlaneFrame(shape));
+            }
+            return changed;
+        });
+    }
+
     void translateShapesWorldDelta(const QVector<ObjectId> &objectIds,
                                    const Point3D &worldDelta)
     {
@@ -13146,8 +13440,15 @@ private:
             return;
         }
 
-        if (grabTool_.isActive() && !surfaceControlPointGrabTargets_.isEmpty()) {
+        if (grabTool_.isActive() && hasComponentGrabTargets()) {
             for (const ObjectId objectId : objectIds) {
+                const auto curveTargets =
+                    curveControlPointGrabTargets_.constFind(objectId.value());
+                if (curveTargets != curveControlPointGrabTargets_.cend()) {
+                    translateCurveControlPointTargets(objectId, *curveTargets,
+                                                      worldDelta);
+                    continue;
+                }
                 const auto targets = surfaceControlPointGrabTargets_.constFind(objectId.value());
                 if (targets == surfaceControlPointGrabTargets_.cend()) continue;
                 const Shape *sourceShape = document_.shape(objectId);
@@ -13370,9 +13671,8 @@ private:
 
         // Restore only the moving objects. Restoring the whole document here
         // invalidates every stationary object's render and query caches.
-        grabTool_.restoreSourceGeometry(
-            document_, !surfaceControlPointGrabTargets_.isEmpty());
-        if (!surfaceControlPointGrabTargets_.isEmpty()) {
+        grabTool_.restoreSourceGeometry(document_, hasComponentGrabTargets());
+        if (hasComponentGrabTargets()) {
             componentSelections_[0] = grabOriginalVertexSelections_;
             activeComponentIndices_[0] = grabOriginalActiveVertex_;
         }
@@ -13490,7 +13790,7 @@ private:
                             .arg(grabViewPlaneFrame_.origin.y, 0, 'g', 12)
                             .arg(grabViewPlaneFrame_.origin.z, 0, 'g', 12)
                             .arg(grabUpdateTimer.nsecsElapsed() / 1000));
-                    if (!viewPlaneSnapBreakaway && surfaceControlPointGrabTargets_.isEmpty()) {
+                    if (!viewPlaneSnapBreakaway && !hasComponentGrabTargets()) {
                         currentDragSnap_ = findDragSnap(dragIndices);
                         if (currentDragSnap_.isValid()) {
                             applyObjectDragSnap(dragIndices, currentDragSnap_);
@@ -15161,6 +15461,7 @@ private:
     ComponentPickCycleState componentPickCycleStates_[3];
     QHash<quint64, QSet<int>> componentSelections_[3];
     QHash<quint64, QSet<int>> surfaceControlPointGrabTargets_;
+    QHash<quint64, QSet<int>> curveControlPointGrabTargets_;
     QHash<quint64, QSet<int>> grabOriginalVertexSelections_;
     int grabOriginalActiveVertex_ = -1;
     ObjectId componentSelectionObject_ = ObjectId::invalid();

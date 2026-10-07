@@ -248,6 +248,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
     vertexParameters_.clear();
     triangles_.clear();
     wireframe_.clear();
+    basisGrid_ = PreparedNurbsSurfaceBasisGrid{};
     valid_ = false;
     strategy_ = Strategy::Failed;
     if (options.gridCount < 1 ||
@@ -588,9 +589,29 @@ bool PreparedNurbsSurfaceTessellation::prepare(
     if (stats != nullptr) {
         stats->genericGridMicroseconds = genericGridTimer.nsecsElapsed() / 1000;
     }
+    if (!prepareControlPointBasisGrid(surface)) {
+        strategy_ = Strategy::Failed;
+        return false;
+    }
     valid_ = true;
     strategy_ = Strategy::GenericGrid;
     return true;
+}
+
+bool PreparedNurbsSurfaceTessellation::prepareControlPointBasisGrid(
+    const NurbsSurface3D &surface)
+{
+    if (vertexParameters_.size() != vertices_.size()) {
+        return false;
+    }
+    QVector<QPointF> sampleParameters = vertexParameters_;
+    for (const Polyline &line : wireframe_) {
+        if (line.parameters.size() != line.points.size()) {
+            return false;
+        }
+        sampleParameters += line.parameters;
+    }
+    return basisGrid_.prepare(surface, sampleParameters);
 }
 
 bool PreparedNurbsSurfaceTessellation::updateControlPointPositions(
@@ -598,7 +619,8 @@ bool PreparedNurbsSurfaceTessellation::updateControlPointPositions(
     PreparedNurbsSurfaceTessellation *result) const
 {
     if (result == nullptr || !valid_ || strategy_ != Strategy::GenericGrid ||
-        vertexParameters_.size() != vertices_.size()) {
+        !validateNurbsSurface(surface) ||
+        vertexParameters_.size() != vertices_.size() || !basisGrid_.isValid()) {
         return false;
     }
     for (const Polyline &line : wireframe_) {
@@ -607,15 +629,18 @@ bool PreparedNurbsSurfaceTessellation::updateControlPointPositions(
         }
     }
 
-    PreparedNurbsSurfaceEvaluator evaluator;
-    if (!evaluator.prepare(surface)) {
+    int expectedSampleCount = vertices_.size();
+    for (const Polyline &line : wireframe_) {
+        expectedSampleCount += line.points.size();
+    }
+    if (basisGrid_.sampleCount() != expectedSampleCount) {
         return false;
     }
+
     PreparedNurbsSurfaceTessellation updated = *this;
-    for (int i = 0; i < vertexParameters_.size(); ++i) {
-        const QPointF &parameter = vertexParameters_[i];
-        if (!evaluator.evaluate(parameter.x(), parameter.y(),
-                                &updated.vertices_[i])) {
+    int sampleIndex = 0;
+    for (Point3D &point : updated.vertices_) {
+        if (!basisGrid_.evaluate(surface, sampleIndex++, &point)) {
             return false;
         }
     }
@@ -624,9 +649,8 @@ bool PreparedNurbsSurfaceTessellation::updateControlPointPositions(
         Polyline &updatedLine = updated.wireframe_[lineIndex];
         for (int pointIndex = 0; pointIndex < sourceLine.parameters.size();
              ++pointIndex) {
-            const QPointF &parameter = sourceLine.parameters[pointIndex];
-            if (!evaluator.evaluate(parameter.x(), parameter.y(),
-                                    &updatedLine.points[pointIndex])) {
+            if (!basisGrid_.evaluate(surface, sampleIndex++,
+                                     &updatedLine.points[pointIndex])) {
                 return false;
             }
         }
@@ -669,6 +693,12 @@ PreparedNurbsSurfaceTessellation PreparedNurbsSurfaceTessellation::translated(
 const QVector<Point3D> &PreparedNurbsSurfaceTessellation::vertices() const
 {
     return vertices_;
+}
+
+const QVector<QPointF> &
+PreparedNurbsSurfaceTessellation::vertexParameters() const
+{
+    return vertexParameters_;
 }
 
 const QVector<PreparedNurbsSurfaceTessellation::Triangle> &

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nurbs_surface.h"
+#include "nurbs_surface_evaluator.h"
 
 #include <array>
 #include <QtGlobal>
@@ -51,14 +52,18 @@ public:
     Strategy strategy() const;
     PreparedNurbsSurfaceTessellation translated(const Point3D &offset) const;
     const QVector<Point3D> &vertices() const;
+    const QVector<QPointF> &vertexParameters() const;
     const QVector<Triangle> &triangles() const;
     const QVector<Polyline> &wireframe() const;
 
 private:
+    bool prepareControlPointBasisGrid(const NurbsSurface3D &surface);
+
     QVector<Point3D> vertices_;
     QVector<QPointF> vertexParameters_;
     QVector<Triangle> triangles_;
     QVector<Polyline> wireframe_;
+    PreparedNurbsSurfaceBasisGrid basisGrid_;
     bool valid_ = false;
     Strategy strategy_ = Strategy::Unprepared;
 };

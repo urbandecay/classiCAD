@@ -204,6 +204,181 @@ void benchmarkMovingCylinder()
               << preview << " ms; checksum=" << checksum << '\n';
 }
 
+NurbsSurface3D makeBenchmarkTrimmedFace()
+{
+    const auto boundary = makeDegreeOneNurbs({
+        {-1.0, -1.0}, {1.0, -1.0}, {1.0, 1.0}, {-1.0, 1.0}, {-1.0, -1.0}});
+    NurbsSurface3D surface;
+    if (!makeNurbsPlanarFillSurface(boundary,
+                                   makeWorkPlaneFrame(WorkPlane::XY),
+                                   &surface)) {
+        return {};
+    }
+    return surface;
+}
+
+NurbsSurface3D deformBenchmarkFace(const NurbsSurface3D &source, int frame)
+{
+    NurbsSurface3D result = source;
+    // Move one corner control point as a Grab drag would. The trim stays fixed
+    // in UV, while the authoritative patch deforms underneath it.
+    result.controlPoints[3].z += frame * 0.0025;
+    result.controlPoints[3].x += frame * 0.0007;
+    return result;
+}
+
+bool samePoint(const Point3D &a, const Point3D &b, double tolerance)
+{
+    return std::abs(a.x - b.x) <= tolerance &&
+           std::abs(a.y - b.y) <= tolerance &&
+           std::abs(a.z - b.z) <= tolerance;
+}
+
+bool sameTessellation(const PreparedNurbsSurfaceTessellation &a,
+                      const PreparedNurbsSurfaceTessellation &b)
+{
+    constexpr double tolerance = 1.0e-10;
+    if (a.vertices().size() != b.vertices().size() ||
+        a.triangles() != b.triangles() ||
+        a.wireframe().size() != b.wireframe().size()) {
+        return false;
+    }
+    for (int i = 0; i < a.vertices().size(); ++i) {
+        if (!samePoint(a.vertices()[i], b.vertices()[i], tolerance)) {
+            return false;
+        }
+    }
+    for (int lineIndex = 0; lineIndex < a.wireframe().size(); ++lineIndex) {
+        const auto &first = a.wireframe()[lineIndex];
+        const auto &second = b.wireframe()[lineIndex];
+        if (first.points.size() != second.points.size()) {
+            return false;
+        }
+        for (int pointIndex = 0; pointIndex < first.points.size(); ++pointIndex) {
+            if (!samePoint(first.points[pointIndex], second.points[pointIndex],
+                           tolerance)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool benchmarkMovingTrimmedFace()
+{
+    const NurbsSurface3D base = makeBenchmarkTrimmedFace();
+    if (!validateNurbsSurface(base)) {
+        std::cerr << "Failed to create trimmed planar face benchmark\n";
+        return false;
+    }
+
+    constexpr ObjectId objectId = ObjectId::fromValue(42);
+    SurfaceTessellationCache cache;
+    if (cache.acquire(objectId, 1, base).isNull()) {
+        std::cerr << "Failed to prepare trimmed planar face cache\n";
+        return false;
+    }
+    // The first deformation changes the affine face into a curved patch and
+    // establishes its generic tessellation. Later frames measure the Blender-
+    // style precomputed-basis update path.
+    if (cache.acquire(objectId, 2, deformBenchmarkFace(base, 1)).isNull()) {
+        std::cerr << "Failed to initialize deformed trimmed face cache\n";
+        return false;
+    }
+
+    const NurbsSurface3D checkSurface = deformBenchmarkFace(base, 8);
+    SurfaceTessellationCache::AcquisitionStats checkStats;
+    const auto cachedCheck = cache.acquire(objectId, 9, checkSurface, 0,
+                                           &checkStats);
+    PreparedNurbsSurfaceTessellation rebuiltCheck;
+    if (cachedCheck.isNull() ||
+        checkStats.path != SurfaceTessellationCache::AcquisitionStats::Path::TopologyHit ||
+        !rebuiltCheck.prepare(checkSurface) ||
+        !sameTessellation(*cachedCheck, rebuiltCheck)) {
+        std::cerr << "Prepared-basis face update did not match a fresh rebuild\n";
+        return false;
+    }
+
+    constexpr int frames = 60;
+    double checksum = 0.0;
+    const double rebuildMilliseconds = medianMilliseconds(5, [&]() {
+        for (int frame = 1; frame <= frames; ++frame) {
+            PreparedNurbsSurfaceTessellation tessellation;
+            if (tessellation.prepare(deformBenchmarkFace(base, frame))) {
+                checksum += tessellation.vertices().size();
+            }
+        }
+    });
+
+    // Reproduce the previous cache-update algorithm for an apples-to-apples
+    // comparison: prepare the surface evaluator, then reevaluate every saved
+    // mesh and wireframe UV sample on each drag frame.
+    const double previousEvaluatorMilliseconds = medianMilliseconds(5, [&]() {
+        for (int frame = 1; frame <= frames; ++frame) {
+            const NurbsSurface3D moved = deformBenchmarkFace(base, frame);
+            PreparedNurbsSurfaceEvaluator evaluator;
+            if (!evaluator.prepare(moved)) {
+                continue;
+            }
+            for (const QPointF &parameter : cachedCheck->vertexParameters()) {
+                Point3D point;
+                if (evaluator.evaluate(parameter.x(), parameter.y(), &point)) {
+                    checksum += point.z;
+                }
+            }
+            for (const auto &line : cachedCheck->wireframe()) {
+                for (const QPointF &parameter : line.parameters) {
+                    Point3D point;
+                    if (evaluator.evaluate(parameter.x(), parameter.y(), &point)) {
+                        checksum += point.z;
+                    }
+                }
+            }
+        }
+    });
+
+    quint64 revision = 100;
+    const double cachedMilliseconds = medianMilliseconds(7, [&]() {
+        for (int frame = 1; frame <= frames; ++frame) {
+            const auto tessellation = cache.acquire(
+                objectId, revision++, deformBenchmarkFace(base, frame));
+            if (!tessellation.isNull()) {
+                checksum += tessellation->vertices().size();
+            }
+        }
+    });
+    std::cout << "Trimmed single face, one CV moving over " << frames
+              << " frames: full rebuild=" << rebuildMilliseconds << " ms; "
+              << "previous per-sample evaluator=" << previousEvaluatorMilliseconds
+              << " ms; prepared Blender-style U/V basis cache="
+              << cachedMilliseconds << " ms; update speedup="
+              << previousEvaluatorMilliseconds / cachedMilliseconds
+              << "x (" << rebuildMilliseconds / cachedMilliseconds
+              << "x vs full rebuild); fresh-rebuild geometry match=passed; checksum="
+              << checksum << '\n';
+
+    const NurbsSurface3D rationalBase = makeSurface(12);
+    SurfaceTessellationCache rationalCache;
+    const auto rationalOriginal = rationalCache.acquire(objectId, 1,
+                                                        rationalBase);
+    NurbsSurface3D rationalMoved = rationalBase;
+    rationalMoved.controlPoints[0].z += 0.37;
+    SurfaceTessellationCache::AcquisitionStats rationalStats;
+    const auto rationalUpdated = rationalCache.acquire(objectId, 2,
+        rationalMoved, 0, &rationalStats);
+    PreparedNurbsSurfaceTessellation rationalRebuilt;
+    if (rationalOriginal.isNull() || rationalUpdated.isNull() ||
+        rationalStats.path != SurfaceTessellationCache::AcquisitionStats::Path::TopologyHit ||
+        !rationalRebuilt.prepare(rationalMoved) ||
+        !sameTessellation(*rationalUpdated, rationalRebuilt)) {
+        std::cerr << "Prepared-basis rational surface update did not match a fresh rebuild\n";
+        return false;
+    }
+    std::cout << "Rational multi-span 12x12 patch deformation: "
+              << "fresh-rebuild geometry match=passed\n";
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -212,5 +387,5 @@ int main()
         benchmarkSurface(controlPointCount);
     }
     benchmarkMovingCylinder();
-    return 0;
+    return benchmarkMovingTrimmedFace() ? 0 : 1;
 }

@@ -23,6 +23,7 @@
 #include "../core/geometry/geometry_transform.h"
 #include "../core/geometry/nurbs_surface_factory.h"
 #include "../core/geometry/nurbs_surface_evaluator.h"
+#include "../core/geometry/nurbs_solid.h"
 #include "../core/geometry/shape_mapping.h"
 #include "../core/geometry/work_plane.h"
 #include "../core/history/history.h"
@@ -3889,9 +3890,100 @@ protected:
                     if (selected && componentSelectionObject_ == objectId &&
                         componentSelectionMode_ == ComponentSelectionMode::Vertex &&
                         !activeComponentSelection().isEmpty()) {
-                        const QVector<NurbsSurface3D> faces =
-                            shapeSurfaceFaces(visibleShape);
-                        for (const NurbsSurface3D &face : faces) {
+                        QVector<NurbsSurface3D> selectableFaces;
+                        if (geometryType == GeometryType::NurbsSolid) {
+                            const QVector<NurbsSurface3D> solidFaces =
+                                shapeSurfaceFaces(visibleShape);
+                            if (solidFaces.size() >= 2) {
+                                selectableFaces.append(solidFaces[0]);
+                                selectableFaces.append(solidFaces[1]);
+                            }
+
+                            // A swept boundary loop is stored as one exact
+                            // NURBS wall, but its degree-one knot spans are
+                            // separate planar edit faces, like Blender's
+                            // individual sides of a cube.
+                            WorkPlaneFrame baseFrame;
+                            qreal u0 = 0.0;
+                            qreal u1 = 0.0;
+                            qreal v0 = 0.0;
+                            qreal v1 = 0.0;
+                            const NurbsSurface3D &base =
+                                visibleShape.nurbsSolid.baseSurface;
+                            if (nurbsSolidBaseFrame(base, &baseFrame) &&
+                                nurbsSurfaceParameterDomains(
+                                    base, &u0, &u1, &v0, &v1)) {
+                                const Point3D uAxis{
+                                    base.controlPoints[2].x - base.controlPoints[0].x,
+                                    base.controlPoints[2].y - base.controlPoints[0].y,
+                                    base.controlPoints[2].z - base.controlPoints[0].z};
+                                const Point3D vAxis{
+                                    base.controlPoints[1].x - base.controlPoints[0].x,
+                                    base.controlPoints[1].y - base.controlPoints[0].y,
+                                    base.controlPoints[1].z - base.controlPoints[0].z};
+                                QVector<NurbsSurfaceTrimLoop> boundaryLoops =
+                                    base.trimLoops;
+                                if (boundaryLoops.isEmpty()) {
+                                    NurbsSurfaceTrimLoop perimeter;
+                                    perimeter.curve.degree = 1;
+                                    perimeter.curve.order = 2;
+                                    perimeter.curve.controlPoints = {
+                                        {u0, v0}, {u1, v0}, {u1, v1},
+                                        {u0, v1}, {u0, v0}};
+                                    perimeter.curve.weights = {1, 1, 1, 1, 1};
+                                    perimeter.curve.knots = {0, 1, 2, 3, 4};
+                                    boundaryLoops.append(std::move(perimeter));
+                                }
+                                for (const NurbsSurfaceTrimLoop &loop :
+                                     boundaryLoops) {
+                                    const NurbsCurve2D &boundary = loop.curve;
+                                    if (boundary.degree != 1 ||
+                                        boundary.controlPoints.size() < 3) {
+                                        continue;
+                                    }
+                                    for (int index = 0;
+                                         index + 1 < boundary.controlPoints.size();
+                                         ++index) {
+                                        const auto toFramePoint =
+                                            [&](const QPointF &uv) {
+                                                const qreal a =
+                                                    (uv.x() - u0) / (u1 - u0);
+                                                const qreal b =
+                                                    (uv.y() - v0) / (v1 - v0);
+                                                const Point3D world{
+                                                    baseFrame.origin.x + a * uAxis.x +
+                                                        b * vAxis.x,
+                                                    baseFrame.origin.y + a * uAxis.y +
+                                                        b * vAxis.y,
+                                                    baseFrame.origin.z + a * uAxis.z +
+                                                        b * vAxis.z};
+                                                return worldPointToWorkPlaneFrame(
+                                                    world, baseFrame);
+                                            };
+                                        NurbsCurve2D segment;
+                                        segment.degree = 1;
+                                        segment.order = 2;
+                                        segment.controlPoints = {
+                                            toFramePoint(
+                                                boundary.controlPoints[index]),
+                                            toFramePoint(
+                                                boundary.controlPoints[index + 1])};
+                                        segment.weights = {1.0, 1.0};
+                                        segment.knots = {0.0, 1.0};
+                                        NurbsSurface3D panel;
+                                        if (makeNurbsExtrusionSurface(
+                                                segment, baseFrame,
+                                                visibleShape.nurbsSolid.displacement,
+                                                &panel)) {
+                                            selectableFaces.append(std::move(panel));
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            selectableFaces = shapeSurfaceFaces(visibleShape);
+                        }
+                        for (const NurbsSurface3D &face : selectableFaces) {
                             Shape faceShape;
                             faceShape.geometryType = GeometryType::NurbsSurface;
                             faceShape.nurbsSurface = face;
@@ -3919,6 +4011,102 @@ protected:
                                 selectedFace.objectId = objectId;
                                 selectedFace.placementTranslation =
                                     renderObject.placementTranslation;
+                                selectedFace.preparedGeometryOffset =
+                                    renderObject.preparedGeometryOffset;
+                                ViewportDepthGeometry selectionGeometry;
+                                const bool sweptPanel =
+                                    geometryType == GeometryType::NurbsSolid &&
+                                    face.trimLoops.isEmpty() &&
+                                    face.controlVertexCountU == 2 &&
+                                    face.controlVertexCountV == 2 &&
+                                    face.controlPoints.size() == 4;
+                                const ViewportDepthGeometry *sourceGeometry =
+                                    renderObject.preparedDepthGeometry.data();
+                                if (sweptPanel && sourceGeometry != nullptr &&
+                                    sourceGeometry->surfaceVertices.size() ==
+                                        sourceGeometry->surfaceNormals.size()) {
+                                    const QVector3D origin = QVector3D(
+                                        float(face.controlPoints[0].x),
+                                        float(face.controlPoints[0].y),
+                                        float(face.controlPoints[0].z));
+                                    const QVector3D panelU = QVector3D(
+                                        float(face.controlPoints[2].x -
+                                              face.controlPoints[0].x),
+                                        float(face.controlPoints[2].y -
+                                              face.controlPoints[0].y),
+                                        float(face.controlPoints[2].z -
+                                              face.controlPoints[0].z));
+                                    const QVector3D panelV = QVector3D(
+                                        float(face.controlPoints[1].x -
+                                              face.controlPoints[0].x),
+                                        float(face.controlPoints[1].y -
+                                              face.controlPoints[0].y),
+                                        float(face.controlPoints[1].z -
+                                              face.controlPoints[0].z));
+                                    const float uu = QVector3D::dotProduct(
+                                        panelU, panelU);
+                                    const float vv = QVector3D::dotProduct(
+                                        panelV, panelV);
+                                    const QVector3D panelNormal =
+                                        QVector3D::crossProduct(panelU, panelV)
+                                            .normalized();
+                                    const float spatialTolerance =
+                                        std::max(std::sqrt(uu), std::sqrt(vv)) *
+                                        1.0e-5f;
+                                    const auto insidePanel =
+                                        [&](const QVector3D &point) {
+                                            const QVector3D relative = point - origin;
+                                            const float u =
+                                                QVector3D::dotProduct(relative,
+                                                                     panelU) / uu;
+                                            const float v =
+                                                QVector3D::dotProduct(relative,
+                                                                     panelV) / vv;
+                                            const float planeDistance =
+                                                std::abs(QVector3D::dotProduct(
+                                                    relative, panelNormal));
+                                            constexpr float parameterTolerance =
+                                                1.0e-5f;
+                                            return planeDistance <= spatialTolerance &&
+                                                u >= -parameterTolerance &&
+                                                u <= 1.0f + parameterTolerance &&
+                                                v >= -parameterTolerance &&
+                                                v <= 1.0f + parameterTolerance;
+                                        };
+                                    if (uu > 1.0e-20f && vv > 1.0e-20f &&
+                                        panelNormal.lengthSquared() > 0.5f) {
+                                        for (int triangle = 0;
+                                             triangle + 2 <
+                                                 sourceGeometry->surfaceVertices.size();
+                                             triangle += 3) {
+                                            const QVector3D &a =
+                                                sourceGeometry->surfaceVertices[triangle];
+                                            const QVector3D &b =
+                                                sourceGeometry->surfaceVertices[triangle + 1];
+                                            const QVector3D &c =
+                                                sourceGeometry->surfaceVertices[triangle + 2];
+                                            if (!insidePanel(a) || !insidePanel(b) ||
+                                                !insidePanel(c)) {
+                                                continue;
+                                            }
+                                            selectionGeometry.surfaceVertices
+                                                << a << b << c;
+                                            selectionGeometry.surfaceNormals
+                                                << sourceGeometry->surfaceNormals[triangle]
+                                                << sourceGeometry->surfaceNormals[triangle + 1]
+                                                << sourceGeometry->surfaceNormals[triangle + 2];
+                                        }
+                                    }
+                                }
+                                if (!sweptPanel &&
+                                    selectionGeometry.surfaceVertices.isEmpty()) {
+                                    selectionGeometry = buildViewportDepthGeometry(
+                                        selectedFace,
+                                        &surfaceTessellationCache_);
+                                }
+                                selectedFace.preparedDepthGeometry =
+                                    QSharedPointer<ViewportDepthGeometry>::create(
+                                        std::move(selectionGeometry));
                                 selectedFace.selected = true;
                                 gpuVertexSelectedFaces.append(std::move(selectedFace));
                             }

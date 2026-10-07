@@ -2369,6 +2369,23 @@ public:
         if (!grabTool_.begin(document_, validSelection, rawCursorWorld_)) {
             return false;
         }
+        grabAxisAnchorWorld_ = grabSelectionPivotWorld(validSelection);
+        const QVector<QVector3D> &axisAnchorPoints =
+            !selectedWorldVertices.isEmpty()
+                ? selectedWorldVertices
+                : selectedCurveVertices;
+        if (!axisAnchorPoints.isEmpty()) {
+            grabAxisAnchorWorld_ = {};
+            for (const QVector3D &point : axisAnchorPoints) {
+                grabAxisAnchorWorld_.x += point.x();
+                grabAxisAnchorWorld_.y += point.y();
+                grabAxisAnchorWorld_.z += point.z();
+            }
+            const qreal inverseCount = 1.0 / axisAnchorPoints.size();
+            grabAxisAnchorWorld_.x *= inverseCount;
+            grabAxisAnchorWorld_.y *= inverseCount;
+            grabAxisAnchorWorld_.z *= inverseCount;
+        }
         grabOriginalVertexSelections_ = componentSelections_[0];
         grabOriginalActiveVertex_ = activeComponentIndices_[0];
         grabAxisStartScreen_ = localCursor;
@@ -6135,6 +6152,7 @@ protected:
                                                   basePointDragPlane,
                                                   cursorOffsetScreen);
                         grabAxisStartScreen_ = screenPosition;
+                        grabAxisAnchorWorld_ = basePointWorld;
                         currentSnap_ = baseSnap;
                         setCursor(Qt::SizeAllCursor);
                         DebugLog::instance().write(
@@ -9302,6 +9320,7 @@ private:
         grabTool_.reset();
         surfaceControlPointGrabTargets_.clear();
         curveControlPointGrabTargets_.clear();
+        grabAxisAnchorWorld_ = {};
         grabViewPlaneFrame_ = WorkPlaneFrame{};
         grabViewPlaneStartWorld_ = {};
         grabViewPlaneAnchorValid_ = false;
@@ -13527,17 +13546,173 @@ private:
                qFuzzyIsNull(delta.z);
     }
 
+    bool blenderGrabAxisDelta(const QPointF &screenPosition,
+                              const Point3D &axis,
+                              Point3D *worldDelta) const
+    {
+        if (worldDelta == nullptr || !grabViewPlaneAnchorValid_) {
+            return false;
+        }
+
+        QPointF startOnViewPlane;
+        QPointF currentOnViewPlane;
+        if (!viewportTransform_.screenToWorkPlaneUnclipped(
+                grabAxisStartScreen_, size(), grabViewPlaneFrame_,
+                &startOnViewPlane) ||
+            !viewportTransform_.screenToWorkPlaneUnclipped(
+                screenPosition, size(), grabViewPlaneFrame_,
+                &currentOnViewPlane)) {
+            return false;
+        }
+
+        const QPointF viewPlaneDelta = currentOnViewPlane - startOnViewPlane;
+        const WorkPlaneFrame &frame = grabViewPlaneFrame_;
+        const Point3D in{
+            frame.xAxis.x * viewPlaneDelta.x() +
+                frame.yAxis.x * viewPlaneDelta.y(),
+            frame.xAxis.y * viewPlaneDelta.x() +
+                frame.yAxis.y * viewPlaneDelta.y(),
+            frame.xAxis.z * viewPlaneDelta.x() +
+                frame.yAxis.z * viewPlaneDelta.y()};
+        const qreal inputLengthSquared = in.x * in.x + in.y * in.y + in.z * in.z;
+        if (inputLengthSquared <= 1.0e-24) {
+            *worldDelta = {};
+            return true;
+        }
+
+        const qreal axisLength = std::sqrt(axis.x * axis.x + axis.y * axis.y +
+                                           axis.z * axis.z);
+        if (!std::isfinite(axisLength) || axisLength <= 1.0e-12) {
+            return false;
+        }
+        const Point3D unitAxis{axis.x / axisLength, axis.y / axisLength,
+                               axis.z / axisLength};
+
+        // Blender's axisProjection uses the view and transform center to
+        // derive a mouse displacement along the constrained world axis.
+        Point3D center = grabAxisAnchorWorld_;
+        const Point3D viewDirection = viewportTransform_.viewDirection();
+        Point3D eye = viewportTransform_.cameraPosition(size());
+        if (!viewportTransform_.isPerspectiveEnabled()) {
+            const Point3D target = viewportTransform_.viewTarget();
+            const qreal viewDistance = std::max(
+                1.0, viewportTransform_.cameraState().gridViewDistance);
+            eye = {target.x - viewDirection.x * viewDistance,
+                   target.y - viewDirection.y * viewDistance,
+                   target.z - viewDirection.z * viewDistance};
+        }
+        Point3D viewFromCenter{center.x - eye.x, center.y - eye.y,
+                               center.z - eye.z};
+        qreal centerDepth = viewFromCenter.x * viewDirection.x +
+                            viewFromCenter.y * viewDirection.y +
+                            viewFromCenter.z * viewDirection.z;
+        centerDepth = std::abs(centerDepth);
+        if (centerDepth < 1.0) {
+            const qreal correction = 1.0 - centerDepth;
+            center.x += viewDirection.x * correction;
+            center.y += viewDirection.y * correction;
+            center.z += viewDirection.z * correction;
+            viewFromCenter = {center.x - eye.x, center.y - eye.y,
+                              center.z - eye.z};
+        }
+        if (!viewportTransform_.isPerspectiveEnabled()) {
+            viewFromCenter = viewDirection;
+        }
+        const qreal viewLength = std::sqrt(viewFromCenter.x * viewFromCenter.x +
+                                           viewFromCenter.y * viewFromCenter.y +
+                                           viewFromCenter.z * viewFromCenter.z);
+        if (!std::isfinite(viewLength) || viewLength <= 1.0e-12) {
+            return false;
+        }
+        const Point3D view = {viewFromCenter.x / viewLength,
+                              viewFromCenter.y / viewLength,
+                              viewFromCenter.z / viewLength};
+
+        const auto dot = [](const Point3D &a, const Point3D &b) {
+            return a.x * b.x + a.y * b.y + a.z * b.z;
+        };
+        const auto cross = [](const Point3D &a, const Point3D &b) {
+            return Point3D{a.y * b.z - a.z * b.y,
+                           a.z * b.x - a.x * b.z,
+                           a.x * b.y - a.y * b.x};
+        };
+        const qreal alignment = std::clamp(std::abs(dot(unitAxis, view)),
+                                           0.0, 1.0);
+        const qreal angle = std::acos(alignment);
+        if (angle < qDegreesToRadians(5.0)) {
+            // Blender keeps an axis usable when it points almost at the
+            // camera by using vertical mouse movement with a quadratic gain.
+            const Point3D viewUp = viewportTransform_.viewUp();
+            qreal factor = 2.0 * dot(viewUp, in);
+            factor = std::copysign(factor * factor, factor);
+            *worldDelta = {-unitAxis.x * factor, -unitAxis.y * factor,
+                           -unitAxis.z * factor};
+            return true;
+        }
+
+        Point3D projectionPlane = cross(view, unitAxis);
+        const qreal planeLength = std::sqrt(
+            projectionPlane.x * projectionPlane.x +
+            projectionPlane.y * projectionPlane.y +
+            projectionPlane.z * projectionPlane.z);
+        if (planeLength <= 1.0e-12) {
+            return false;
+        }
+        projectionPlane = {projectionPlane.x / planeLength,
+                           projectionPlane.y / planeLength,
+                           projectionPlane.z / planeLength};
+        const qreal projectedAmount = dot(in, projectionPlane);
+        const Point3D projected{in.x - projectionPlane.x * projectedAmount,
+                                in.y - projectionPlane.y * projectedAmount,
+                                in.z - projectionPlane.z * projectedAmount};
+        const Point3D viewRayPoint{center.x + projected.x,
+                                   center.y + projected.y,
+                                   center.z + projected.z};
+        Point3D rayDirection;
+        if (viewportTransform_.isPerspectiveEnabled()) {
+            const Point3D eye = viewportTransform_.cameraPosition(size());
+            rayDirection = {viewRayPoint.x - eye.x, viewRayPoint.y - eye.y,
+                            viewRayPoint.z - eye.z};
+        } else {
+            rayDirection = viewportTransform_.viewDirection();
+        }
+        const qreal rayLength = std::sqrt(rayDirection.x * rayDirection.x +
+                                          rayDirection.y * rayDirection.y +
+                                          rayDirection.z * rayDirection.z);
+        if (!std::isfinite(rayLength) || rayLength <= 1.0e-12) {
+            return false;
+        }
+        rayDirection = {rayDirection.x / rayLength, rayDirection.y / rayLength,
+                        rayDirection.z / rayLength};
+
+        const Point3D centerToRay{viewRayPoint.x - center.x,
+                                  viewRayPoint.y - center.y,
+                                  viewRayPoint.z - center.z};
+        const qreal rayAxisAlignment = dot(unitAxis, rayDirection);
+        const qreal denominator = 1.0 - rayAxisAlignment * rayAxisAlignment;
+        if (denominator <= 1.0e-12) {
+            return false;
+        }
+        const qreal alongAxis =
+            (dot(unitAxis, centerToRay) -
+             rayAxisAlignment * dot(rayDirection, centerToRay)) / denominator;
+        *worldDelta = {unitAxis.x * alongAxis, unitAxis.y * alongAxis,
+                       unitAxis.z * alongAxis};
+        return std::isfinite(worldDelta->x) && std::isfinite(worldDelta->y) &&
+               std::isfinite(worldDelta->z);
+    }
+
     bool worldZAxisPositionAtScreen(const QPointF &screenPosition,
-                                   Point3D *axisPosition) const
+                                    Point3D *axisPosition,
+                                    const Point3D &axisOrigin = {}) const
     {
         if (axisPosition == nullptr) {
             return false;
         }
-        constexpr Point3D worldOrigin{};
         constexpr Point3D worldZAxis{0.0, 0.0, 1.0};
         if (viewportTransform_.screenToWorldAxis(screenPosition,
                                                  size(),
-                                                 worldOrigin,
+                                                 axisOrigin,
                                                  worldZAxis,
                                                  axisPosition)) {
             return true;
@@ -13557,7 +13732,7 @@ private:
         if (!std::isfinite(z)) {
             return false;
         }
-        *axisPosition = {0.0, 0.0, z};
+        *axisPosition = {axisOrigin.x, axisOrigin.y, axisOrigin.z + z};
         return true;
     }
 
@@ -13956,20 +14131,18 @@ private:
         Point3D worldSnapDelta;
         bool worldSnapDeltaValid = false;
         Point3D appliedWorldDelta;
-        if (dragAxisLock_ == DragAxisLock::Z) {
-            Point3D startAxisPosition;
-            Point3D currentAxisPosition;
+        if (dragAxisLock_ != DragAxisLock::None) {
+            const Point3D axis = dragAxisLock_ == DragAxisLock::X
+                                     ? Point3D{1.0, 0.0, 0.0}
+                                 : dragAxisLock_ == DragAxisLock::Y
+                                     ? Point3D{0.0, 1.0, 0.0}
+                                     : Point3D{0.0, 0.0, 1.0};
+            Point3D axisWorldDelta;
             currentSnap_ = SnapResult{};
-            if (worldZAxisPositionAtScreen(grabAxisStartScreen_,
-                                           &startAxisPosition) &&
-                worldZAxisPositionAtScreen(screenPosition,
-                                           &currentAxisPosition)) {
-                const Point3D worldDelta{
-                    currentAxisPosition.x - startAxisPosition.x,
-                    currentAxisPosition.y - startAxisPosition.y,
-                    currentAxisPosition.z - startAxisPosition.z};
-                if (!isZeroWorldDelta(worldDelta)) {
-                    translateShapesWorldDelta(dragIndices, worldDelta);
+            if (blenderGrabAxisDelta(screenPosition, axis, &axisWorldDelta)) {
+                appliedWorldDelta = axisWorldDelta;
+                if (!isZeroWorldDelta(axisWorldDelta)) {
+                    translateShapesWorldDelta(dragIndices, axisWorldDelta);
                     grabTool_.setMoved(true);
                 } else {
                     grabTool_.setMoved(false);
@@ -13982,8 +14155,19 @@ private:
             static quint64 zGrabUpdateSequence = 0;
             if (++zGrabUpdateSequence % 10 == 0) {
                 DebugLog::instance().write(
-                    QStringLiteral("[grab-perf] update mode=%1 axis=z elapsedUs=%2")
+                    QStringLiteral("[grab-perf] update mode=%1 axis=%2 anchor=(%3,%4,%5) delta=(%6,%7,%8) elapsedUs=%9")
                         .arg(componentModeDiagnosticName(componentSelectionMode_))
+                        .arg(dragAxisLock_ == DragAxisLock::X
+                                 ? QStringLiteral("x")
+                             : dragAxisLock_ == DragAxisLock::Y
+                                 ? QStringLiteral("y")
+                                 : QStringLiteral("z"))
+                        .arg(grabAxisAnchorWorld_.x, 0, 'g', 12)
+                        .arg(grabAxisAnchorWorld_.y, 0, 'g', 12)
+                        .arg(grabAxisAnchorWorld_.z, 0, 'g', 12)
+                        .arg(appliedWorldDelta.x, 0, 'g', 12)
+                        .arg(appliedWorldDelta.y, 0, 'g', 12)
+                        .arg(appliedWorldDelta.z, 0, 'g', 12)
                         .arg(grabUpdateTimer.nsecsElapsed() / 1000));
             }
             return;
@@ -15837,6 +16021,7 @@ private:
     quint64 dragSnapTraceSequence_ = 0;
     DragAxisLock dragAxisLock_ = DragAxisLock::None;
     QPointF grabAxisStartScreen_;
+    Point3D grabAxisAnchorWorld_;
     WorkPlaneFrame grabViewPlaneFrame_;
     Point3D grabViewPlaneStartWorld_;
     bool grabViewPlaneAnchorValid_ = false;

@@ -3851,7 +3851,8 @@ protected:
                     auto cage = QSharedPointer<ViewportDepthGeometry>::create(
                         selectedSurfaceCage(visibleShape));
                     if (selected && componentSelectionObject_ == objectId &&
-                        componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                        (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
+                         componentSelectionMode_ == ComponentSelectionMode::Edge) &&
                         !activeComponentSelection().isEmpty()) {
                         QVector<NurbsSurface3D> selectableFaces;
                         if (geometryType == GeometryType::NurbsSolid) {
@@ -3952,20 +3953,59 @@ protected:
                             faceShape.nurbsSurface = face;
                             const ViewportDepthGeometry faceCage =
                                 selectedSurfaceCage(faceShape);
-                            bool fullySelected = faceCage.pointVertices.size() >= 3;
-                            for (const QVector3D &point : faceCage.pointVertices) {
-                                int vertex = -1;
-                                for (int index = 0; index < cage->pointVertices.size(); ++index) {
-                                    if ((cage->pointVertices[index] - point).lengthSquared() <=
-                                        1.0e-12f) {
-                                        vertex = index;
+                            const bool vertexMode =
+                                componentSelectionMode_ ==
+                                ComponentSelectionMode::Vertex;
+                            bool fullySelected = vertexMode
+                                ? faceCage.pointVertices.size() >= 3
+                                : faceCage.preciseLineVertices.size() >= 6;
+                            if (vertexMode) {
+                                for (const QVector3D &point : faceCage.pointVertices) {
+                                    int vertex = -1;
+                                    for (int index = 0;
+                                         index < cage->pointVertices.size(); ++index) {
+                                        if ((cage->pointVertices[index] - point)
+                                                .lengthSquared() <= 1.0e-12f) {
+                                            vertex = index;
+                                            break;
+                                        }
+                                    }
+                                    if (vertex < 0 ||
+                                        !activeComponentSelection().contains(vertex)) {
+                                        fullySelected = false;
                                         break;
                                     }
                                 }
-                                if (vertex < 0 ||
-                                    !activeComponentSelection().contains(vertex)) {
-                                    fullySelected = false;
-                                    break;
+                            } else {
+                                for (int faceEdge = 0;
+                                     fullySelected &&
+                                     faceEdge + 1 <
+                                         faceCage.preciseLineVertices.size();
+                                     faceEdge += 2) {
+                                    const QVector3D &faceA =
+                                        faceCage.lineVertices[faceEdge];
+                                    const QVector3D &faceB =
+                                        faceCage.lineVertices[faceEdge + 1];
+                                    int edgeIndex = -1;
+                                    for (int edge = 0;
+                                         edge * 2 + 1 < cage->lineVertices.size();
+                                         ++edge) {
+                                        const QVector3D &a =
+                                            cage->lineVertices[edge * 2];
+                                        const QVector3D &b =
+                                            cage->lineVertices[edge * 2 + 1];
+                                        if (((a - faceA).lengthSquared() <= 1.0e-12f &&
+                                             (b - faceB).lengthSquared() <= 1.0e-12f) ||
+                                            ((a - faceB).lengthSquared() <= 1.0e-12f &&
+                                             (b - faceA).lengthSquared() <= 1.0e-12f)) {
+                                            edgeIndex = edge;
+                                            break;
+                                        }
+                                    }
+                                    if (edgeIndex < 0 ||
+                                        !activeComponentSelection().contains(edgeIndex)) {
+                                        fullySelected = false;
+                                    }
                                 }
                             }
                             if (fullySelected) {
@@ -5689,7 +5729,8 @@ protected:
                 return;
             }
             const int hitShapeIndex = hitTestShape(screenPosition);
-            if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+            if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
+                componentSelectionMode_ == ComponentSelectionMode::Edge) {
                 ObjectId boxObject = componentSelectionObject_;
                 if (!boxObject.isValid() || objectIndex(boxObject) < 0) {
                     boxObject = selectedShapeIndex_;
@@ -5703,9 +5744,9 @@ protected:
                     boxShapeIndex >= 0 &&
                     (shapes_[boxShapeIndex].geometryType == GeometryType::NurbsSurface ||
                      shapes_[boxShapeIndex].geometryType == GeometryType::NurbsSolid);
-                // In vertex mode every remaining click/drag is routed through
-                // component selection. With no active object, the box finish
-                // searches eligible surface cages for the enclosed vertices.
+                // Vertex and edge modes route every remaining click/drag
+                // through component selection. With no active object, the box
+                // finish searches eligible surface cages for enclosed items.
                 componentBoxSelectionActive_ = true;
                 componentBoxSelectionObject_ = isSurfaceObject
                                                    ? boxObject
@@ -7873,7 +7914,7 @@ private:
             componentBoxStartedOnBlank_ = false;
             if (moved) {
                 ObjectId matchedObjectId = ObjectId::invalid();
-                QSet<int> boxedVertices;
+                QSet<int> boxedComponents;
                 for (int index = 0; index < shapes_.size(); ++index) {
                     const ObjectId candidateId = shapes_.objectIdAt(index);
                     if (requestedObjectId.isValid() &&
@@ -7895,7 +7936,7 @@ private:
                                                : Point3D{};
                     const ViewportDepthGeometry cage =
                         selectedSurfaceCage(shapes_[index]);
-                    QSet<int> candidateVertices;
+                    QSet<int> candidateComponents;
                     qreal cageScale = 1.0;
                     if (!cage.pointVertices.isEmpty()) {
                         const QVector3D origin = cage.pointVertices.first();
@@ -7903,18 +7944,9 @@ private:
                             cageScale = qMax(cageScale, qreal((cagePoint - origin).length()));
                     }
                     const qreal depthTolerance = qMax(1.0e-5, cageScale * 1.0e-5);
-                    for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
-                        const QVector3D &point = cage.pointVertices[vertex];
-                        QPointF projected;
-                        const Point3D worldPoint{
-                            point.x() + offset.x, point.y() + offset.y,
-                            point.z() + offset.z};
-                        if (!viewportTransform_.worldPointToScreen(
-                                worldPoint, size(), &projected) ||
-                            !selectionBox.contains(projected)) {
-                            continue;
-                        }
-                        if (!viewportShadingSettings_.xrayEnabled()) {
+                    const auto visibleComponentPoint =
+                        [&](const Point3D &worldPoint, const QPointF &projected) {
+                            if (viewportShadingSettings_.xrayEnabled()) return true;
                             Point3D visiblePoint;
                             Point3D visibleNormal;
                             int visibleShapeIndex = -1;
@@ -7923,25 +7955,102 @@ private:
                                     &visiblePoint, &visibleNormal, nullptr,
                                     &visibleShapeIndex) ||
                                 visibleShapeIndex != index) {
-                                continue;
+                                return false;
                             }
-                            const qreal vertexDepth =
+                            const qreal componentDepth =
                                 viewportTransform_.worldDirectionToView(worldPoint)
                                     .towardCamera;
                             const qreal surfaceDepth =
                                 viewportTransform_.worldDirectionToView(visiblePoint)
                                     .towardCamera;
-                            if (!std::isfinite(vertexDepth) ||
-                                !std::isfinite(surfaceDepth) ||
-                                std::abs(vertexDepth - surfaceDepth) > depthTolerance) {
+                            return std::isfinite(componentDepth) &&
+                                   std::isfinite(surfaceDepth) &&
+                                   std::abs(componentDepth - surfaceDepth) <=
+                                       depthTolerance;
+                        };
+                    if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                        for (int vertex = 0;
+                             vertex < cage.pointVertices.size(); ++vertex) {
+                            const QVector3D &point = cage.pointVertices[vertex];
+                            const Point3D worldPoint{
+                                point.x() + offset.x, point.y() + offset.y,
+                                point.z() + offset.z};
+                            QPointF projected;
+                            if (!viewportTransform_.worldPointToScreen(
+                                    worldPoint, size(), &projected) ||
+                                !selectionBox.contains(projected) ||
+                                !visibleComponentPoint(worldPoint, projected)) {
                                 continue;
                             }
+                            candidateComponents.insert(vertex);
                         }
-                        candidateVertices.insert(vertex);
+                    } else {
+                        const auto segmentIntersectsSelectionBox =
+                            [&selectionBox](const QLineF &segment) {
+                                if (selectionBox.contains(segment.p1()) ||
+                                    selectionBox.contains(segment.p2())) {
+                                    return true;
+                                }
+                                const QPointF corners[] = {
+                                    selectionBox.topLeft(), selectionBox.topRight(),
+                                    selectionBox.bottomRight(), selectionBox.bottomLeft()};
+                                for (int side = 0; side < 4; ++side) {
+                                    QPointF intersection;
+                                    const QLineF boundary(corners[side],
+                                                         corners[(side + 1) % 4]);
+                                    if (segment.intersects(
+                                            boundary, &intersection) ==
+                                        QLineF::BoundedIntersection) {
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            };
+                        for (int edge = 0;
+                             edge * 2 + 1 < cage.preciseLineVertices.size();
+                             ++edge) {
+                            const Point3D &a = cage.preciseLineVertices[edge * 2];
+                            const Point3D &b = cage.preciseLineVertices[edge * 2 + 1];
+                            const Point3D worldA{a.x + offset.x, a.y + offset.y,
+                                                 a.z + offset.z};
+                            const Point3D worldB{b.x + offset.x, b.y + offset.y,
+                                                 b.z + offset.z};
+                            QPointF screenA;
+                            QPointF screenB;
+                            if (!viewportTransform_.worldPointToScreen(
+                                    worldA, size(), &screenA) ||
+                                !viewportTransform_.worldPointToScreen(
+                                    worldB, size(), &screenB)) {
+                                continue;
+                            }
+                            const QLineF screenEdge(screenA, screenB);
+                            const bool intersectsBox =
+                                segmentIntersectsSelectionBox(screenEdge);
+                            const bool selectedByBox = crossingSelection
+                                                           ? intersectsBox
+                                                           : selectionBox.contains(screenA) &&
+                                                                 selectionBox.contains(screenB);
+                            if (!selectedByBox) continue;
+                            bool visible = true;
+                            if (!viewportShadingSettings_.xrayEnabled()) {
+                                for (qreal t : {0.25, 0.5, 0.75}) {
+                                    const Point3D sample{
+                                        worldA.x + (worldB.x - worldA.x) * t,
+                                        worldA.y + (worldB.y - worldA.y) * t,
+                                        worldA.z + (worldB.z - worldA.z) * t};
+                                    const QPointF projected = screenEdge.pointAt(t);
+                                    if (!visibleComponentPoint(sample, projected)) {
+                                        visible = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (visible) candidateComponents.insert(edge);
+                        }
                     }
-                    if (!candidateVertices.isEmpty()) {
+                    if (!candidateComponents.isEmpty()) {
                         matchedObjectId = candidateId;
-                        boxedVertices = std::move(candidateVertices);
+                        boxedComponents = std::move(candidateComponents);
                         break;
                     }
                 }
@@ -7955,9 +8064,9 @@ private:
                         selection_.setPrimaryObjectId(matchedObjectId);
                     }
                     componentSelectionObject_ = matchedObjectId;
-                    for (int vertex : boxedVertices)
-                        activeComponentSelection().insert(vertex);
-                    activeComponentIndex_ = *boxedVertices.cbegin();
+                    for (int component : boxedComponents)
+                        activeComponentSelection().insert(component);
+                    activeComponentIndex_ = *boxedComponents.cbegin();
                 } else if (!additive) {
                     clearComponentSelections();
                     componentSelectionObject_ = ObjectId::invalid();

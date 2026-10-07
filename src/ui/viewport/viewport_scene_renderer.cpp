@@ -835,12 +835,12 @@ bool ViewportSceneRenderer::draw(
                 nextProgram->setUniformValue(
                     "uViewportSize",
                     QVector2D(pixelSize.width(), pixelSize.height()));
-                // Scene curves should win depth ties against coplanar surface
-                // outlines. The small clip-space bias removes dark edge
-                // fringes without making curves visible through surfaces.
-                nextProgram->setUniformValue(
-                    "uDepthBias", depthTest ? 1.0e-5f : 0.0f);
             }
+            // Move edit wires and component points a tiny amount toward the
+            // camera so equal-depth surface pixels do not hide their overlays.
+            // Disable the bias in the through-surface X-Ray pass.
+            nextProgram->setUniformValue(
+                "uDepthBias", depthTest ? 1.0e-5f : 0.0f);
             boundProgram = nextProgram;
         }
         boundProgram->setUniformValue(

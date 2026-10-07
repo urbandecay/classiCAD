@@ -8046,16 +8046,22 @@ private:
                                                            : selectionBox.contains(screenA) &&
                                                                  selectionBox.contains(screenB);
                             if (!selectedByBox) continue;
-                            bool visible = true;
-                            if (!viewportShadingSettings_.xrayEnabled()) {
+                            bool visible = viewportShadingSettings_.xrayEnabled();
+                            if (!visible) {
+                                // Check interior edge points against their
+                                // actual perspective projections. Projecting
+                                // the edge in screen space with the same t is
+                                // only correct for orthographic views.
                                 for (qreal t : {0.25, 0.5, 0.75}) {
                                     const Point3D sample{
                                         worldA.x + (worldB.x - worldA.x) * t,
                                         worldA.y + (worldB.y - worldA.y) * t,
                                         worldA.z + (worldB.z - worldA.z) * t};
-                                    const QPointF projected = screenEdge.pointAt(t);
-                                    if (!visibleComponentPoint(sample, projected)) {
-                                        visible = false;
+                                    QPointF projected;
+                                    if (viewportTransform_.worldPointToScreen(
+                                            sample, size(), &projected) &&
+                                        visibleComponentPoint(sample, projected)) {
+                                        visible = true;
                                         break;
                                     }
                                 }
@@ -8081,7 +8087,9 @@ private:
                     componentSelectionObject_ = matchedObjectId;
                     for (int component : boxedComponents)
                         activeComponentSelection().insert(component);
-                    activeComponentIndex() = *boxedComponents.cbegin();
+                    // Box selection has no active component. Keep every
+                    // boxed vertex or edge in the normal selection color.
+                    activeComponentIndex() = -1;
                 } else if (!additive) {
                     clearComponentSelections();
                     componentSelectionObject_ = ObjectId::invalid();

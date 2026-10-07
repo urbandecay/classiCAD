@@ -366,6 +366,16 @@ QJsonObject shapeToJson(const Shape &shape)
         solid.insert(QStringLiteral("displacement"), QJsonArray{
             shape.nurbsSolid.displacement.x, shape.nurbsSolid.displacement.y,
             shape.nurbsSolid.displacement.z});
+        if (!shape.nurbsSolid.boundaryFaces.isEmpty()) {
+            QJsonArray faces;
+            QJsonArray reversed;
+            for (const NurbsSurface3D &face : shape.nurbsSolid.boundaryFaces)
+                faces.append(nurbsSurfaceToJson(face));
+            for (bool value : shape.nurbsSolid.boundaryFaceReversed)
+                reversed.append(value);
+            solid.insert(QStringLiteral("boundaryFaces"), faces);
+            solid.insert(QStringLiteral("boundaryFaceReversed"), reversed);
+        }
         object.insert(QStringLiteral("nurbsSolid"), solid);
     }
     object.insert(QStringLiteral("workPlane"), static_cast<int>(shape.workPlane));
@@ -525,6 +535,19 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
                                   &nurbsSolid.baseSurface)) return false;
         nurbsSolid.displacement = {offset[0].toDouble(), offset[1].toDouble(),
                                     offset[2].toDouble()};
+        if (solid.contains(QStringLiteral("boundaryFaces"))) {
+            if (!solid.value(QStringLiteral("boundaryFaces")).isArray() ||
+                !solid.value(QStringLiteral("boundaryFaceReversed")).isArray()) return false;
+            for (const QJsonValue &value : solid.value(QStringLiteral("boundaryFaces")).toArray()) {
+                NurbsSurface3D face;
+                if (!nurbsSurfaceFromJson(value, &face)) return false;
+                nurbsSolid.boundaryFaces.append(face);
+            }
+            for (const QJsonValue &value : solid.value(QStringLiteral("boundaryFaceReversed")).toArray()) {
+                if (!value.isBool()) return false;
+                nurbsSolid.boundaryFaceReversed.append(value.toBool());
+            }
+        }
         if (!validateNurbsSolid(nurbsSolid)) return false;
     }
     if (geometryType == GeometryType::Picture) {

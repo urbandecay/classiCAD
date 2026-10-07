@@ -15,6 +15,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QCursor>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QDir>
@@ -544,9 +545,212 @@ bool verifyVertexComponentSelection(QApplication &application)
     return passed;
 }
 
+bool verifySurfaceVertexGrab(QApplication &application)
+{
+    bool passed = true;
+    const auto nearPoint = [](const Point3D &a, const Point3D &b) {
+        return std::hypot(a.x-b.x, std::hypot(a.y-b.y, a.z-b.z)) < 1.0e-6;
+    };
+    QTemporaryDir directory;
+    QString error;
+    const QString path = directory.filePath(QStringLiteral("corner-grab.vignola"));
+    Shape plane;
+    plane.geometryType = GeometryType::NurbsSurface;
+    plane.nurbsSurface.controlVertexCountU = 2;
+    plane.nurbsSurface.controlVertexCountV = 2;
+    plane.nurbsSurface.controlPoints = {{-8,-8,-8},{-8,8,-8},{8,-8,-8},{8,8,-8}};
+    plane.nurbsSurface.weights = {1,1,1,1};
+    plane.nurbsSurface.knotsU = {0,1};
+    plane.nurbsSurface.knotsV = {0,1};
+    Shape cube;
+    cube.geometryType = GeometryType::NurbsSolid;
+    passed &= check(makeNurbsExtrusionSolid(plane.nurbsSurface, {0,0,16}, &cube.nurbsSolid),
+                    "corner-grab cube fixture must be valid");
+    Shape adjoining = plane;
+    adjoining.nurbsSurface.controlPoints = {{-8,-8,8},{-8,-16,8},{-16,-8,8},{-16,-16,8}};
+    Document source;
+    source.append(cube);
+    source.append(adjoining);
+    std::unique_ptr<ViewportWidgetApi> probe(createViewportWidget());
+    const QSize viewportSize(640,480);
+    probe->resize(viewportSize);
+    probe->show();
+    application.processEvents();
+    passed &= check(saveVignolaDocument(path, source, &error) &&
+                    probe->loadVignolaDocument(path, &error), "corner-grab fixture must load");
+    probe->setOsnapEnabled(false);
+    probe->setViewPreset(ViewportViewPreset::Top);
+    passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Top),
+                    "corner-grab camera must settle");
+    ViewportTransform camera;
+    camera.setCameraPreferences(probe->cameraPreferences());
+    camera.setViewPreset(ViewportViewPreset::Top);
+    const Point3D corner{-8,-8,8};
+    QPointF start;
+    camera.worldPointToScreen(corner, viewportSize, &start);
+    sendMouse(probe.get(), QEvent::MouseButtonPress, start,
+              Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    sendMouse(probe.get(), QEvent::MouseButtonRelease, start,
+              Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+    QCursor::setPos(probe->mapToGlobal(start.toPoint()));
+    const auto key = [&](int code, Qt::KeyboardModifiers mods = Qt::NoModifier) {
+        QKeyEvent event(QEvent::KeyPress, code, mods);
+        QApplication::sendEvent(probe.get(), &event);
+    };
+    key(Qt::Key_G);
+    Document started;
+    passed &= check(probe->saveVignolaDocument(path, &error) &&
+                    loadVignolaDocument(path, &started, &error) && started.size() == 2 &&
+                    started.objects()[0].geometry.nurbsSolid.boundaryFaces.isEmpty() &&
+                    validateNurbsSolid(started.objects()[0].geometry.nurbsSolid),
+                    "pressing G alone must keep the cube unchanged and visible");
+    key(Qt::Key_Z);
+    const QPointF destination = start + QPointF(0,-20);
+    sendMouse(probe.get(), QEvent::MouseMove, destination,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    Document first;
+    passed &= check(probe->saveVignolaDocument(path, &error) &&
+                    loadVignolaDocument(path, &first, &error), "G preview must remain serializable");
+    for (int i = 0; i < 4; ++i)
+        sendMouse(probe.get(), QEvent::MouseMove, destination,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    Document repeated;
+    passed &= check(probe->saveVignolaDocument(path, &error) &&
+                    loadVignolaDocument(path, &repeated, &error) && repeated.size() == 2,
+                    "repeated G preview must retain both connected objects");
+    if (first.size() == 2 && repeated.size() == 2) {
+        const auto firstFaces = shapeSurfaceFaces(first.objects()[0].geometry);
+        const auto repeatedFaces = shapeSurfaceFaces(repeated.objects()[0].geometry);
+        passed &= check(firstFaces.size() == 6 && repeatedFaces.size() == 6,
+                        "G on a cube corner must materialize six visible NURBS faces");
+        if (firstFaces.size() == 6 && repeatedFaces.size() == 6) {
+            const Point3D moved = repeatedFaces[1].controlPoints[0];
+            passed &= check(!nearPoint(moved, corner) &&
+                            nearPoint(firstFaces[1].controlPoints[0], moved),
+                            "repeated mouse events must not accumulate vertex displacement");
+            int changed = 0;
+            auto baseline = cube.nurbsSolid;
+            materializeNurbsSolidBoundary(&baseline);
+            for (int f = 0; f < 6; ++f) {
+                for (int p = 0; p < 4; ++p) {
+                    const Point3D original = baseline.boundaryFaces[f].controlPoints[p];
+                    const Point3D actual = repeatedFaces[f].controlPoints[p];
+                    if (nearPoint(original, corner)) {
+                        ++changed;
+                        passed &= check(nearPoint(actual, moved), "all adjoining faces must share the moved corner");
+                    } else {
+                        passed &= check(nearPoint(actual, original), "every unselected cube corner must remain fixed");
+                    }
+                }
+            }
+            passed &= check(changed == 3 && nearPoint(
+                repeated.objects()[1].geometry.nurbsSurface.controlPoints[0], moved),
+                "shared corner on a separate NURBS surface must deform with the cube");
+            for (int p = 1; p < 4; ++p)
+                passed &= check(nearPoint(repeated.objects()[1].geometry.nurbsSurface.controlPoints[p],
+                                         adjoining.nurbsSurface.controlPoints[p]),
+                                "unselected standalone surface control points must stay fixed");
+            ViewportRenderObject visible;
+            visible.shape = repeated.objects()[0].geometry;
+            passed &= check(!buildViewportDepthGeometry(visible).surfaceVertices.isEmpty(),
+                            "G preview must continue to render its solid faces");
+            application.processEvents();
+            const QImage previewImage = captureViewport(probe.get());
+            saveGridCapture(QStringLiteral("corner-grab-cube-preview"), previewImage);
+            passed &= check(medianNeutralGray(previewImage, QPoint(320,240), 4) > 70,
+                            "native G preview must show the cube's filled surface rather than empty background");
+        }
+    }
+    key(Qt::Key_Escape);
+    Document cancelled;
+    passed &= check(probe->saveVignolaDocument(path, &error) &&
+                    loadVignolaDocument(path, &cancelled, &error) && cancelled.size() == 2 &&
+                    cancelled.objects()[0].geometry.nurbsSolid.boundaryFaces.isEmpty() &&
+                    nearPoint(cancelled.objects()[1].geometry.nurbsSurface.controlPoints[0], corner),
+                    "Escape must restore every connected surface and the extrusion seed");
+    QCursor::setPos(probe->mapToGlobal(start.toPoint()));
+    key(Qt::Key_G);
+    sendMouse(probe.get(), QEvent::MouseMove, destination,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+    saveGridCapture(QStringLiteral("corner-grab-free-preview"), captureViewport(probe.get()));
+    sendMouse(probe.get(), QEvent::MouseButtonPress, destination,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(probe.get(), QEvent::MouseButtonRelease, destination,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    Document committed;
+    passed &= check(probe->saveVignolaDocument(path, &error) &&
+                    loadVignolaDocument(path, &committed, &error) && committed.size() == 2,
+                    "plain G drag must commit both connected surface objects");
+    if (committed.size() == 2) {
+        const auto faces = shapeSurfaceFaces(committed.objects()[0].geometry);
+        passed &= check(faces.size() == 6 &&
+                        !nearPoint(faces[1].controlPoints[0], corner) &&
+                        nearPoint(faces[0].controlPoints[0], cube.nurbsSolid.baseSurface.controlPoints[0]) &&
+                        nearPoint(faces[1].controlPoints[0],
+                                  committed.objects()[1].geometry.nurbsSurface.controlPoints[0]),
+                        "plain G must move only the shared corner and leave its opposite cap vertex fixed");
+    }
+    passed &= check(probe->executeCommand(ViewportCommand::Undo).accepted,
+                    "connected corner edit must create an undo operation");
+    Document undone;
+    passed &= check(probe->saveVignolaDocument(path, &error) &&
+                    loadVignolaDocument(path, &undone, &error) && undone.size() == 2 &&
+                    undone.objects()[0].geometry.nurbsSolid.boundaryFaces.isEmpty() &&
+                    nearPoint(undone.objects()[1].geometry.nurbsSurface.controlPoints[0], corner),
+                    "Undo must restore the whole connected corner edit in one operation");
+    Document planeOnly;
+    for (Point3D &point : plane.nurbsSurface.controlPoints) point.z = 0;
+    planeOnly.append(plane);
+    passed &= check(saveVignolaDocument(path, planeOnly, &error) &&
+                    probe->loadVignolaDocument(path, &error), "standalone plane fixture must load");
+    probe->setViewPreset(ViewportViewPreset::Top);
+    passed &= check(waitForViewPreset(probe.get(), ViewportViewPreset::Top),
+                    "standalone plane camera must settle");
+    sendMouse(probe.get(), QEvent::MouseButtonPress, start,
+              Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    sendMouse(probe.get(), QEvent::MouseButtonRelease, start,
+              Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+    QCursor::setPos(probe->mapToGlobal(start.toPoint()));
+    key(Qt::Key_G);
+    key(Qt::Key_Z);
+    for (int i = 0; i < 3; ++i)
+        sendMouse(probe.get(), QEvent::MouseMove, destination,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    Document bentPlane;
+    passed &= check(probe->saveVignolaDocument(path, &error) &&
+                    loadVignolaDocument(path, &bentPlane, &error) && bentPlane.size() == 1,
+                    "standalone plane vertex drag must remain serializable");
+    if (bentPlane.size() == 1) {
+        const SceneObject &object = bentPlane.objects()[0];
+        passed &= check(!nearPoint(object.geometry.nurbsSurface.controlPoints[0],
+                                  plane.nurbsSurface.controlPoints[0]) &&
+                        nearPoint(object.placementTranslation, {}),
+                        "G must deform the standalone surface control point without translating its object");
+        for (int p = 1; p < 4; ++p)
+            passed &= check(nearPoint(object.geometry.nurbsSurface.controlPoints[p],
+                                     plane.nurbsSurface.controlPoints[p]),
+                            "unselected standalone plane vertices must stay fixed");
+        ViewportRenderObject visible;
+        visible.shape = object.geometry;
+        passed &= check(!buildViewportDepthGeometry(visible).surfaceVertices.isEmpty(),
+                        "nonplanar deformed standalone surface must remain drawable");
+        application.processEvents();
+        const QImage previewImage = captureViewport(probe.get());
+        saveGridCapture(QStringLiteral("corner-grab-plane-preview"), previewImage);
+        passed &= check(medianNeutralGray(previewImage, QPoint(320,240), 4) > 70,
+                        "native G preview must show the deformed standalone surface");
+    }
+    key(Qt::Key_Escape);
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_SURFACE_VERTEX_GRAB_ONLY"))
+        return verifySurfaceVertexGrab(application) ? 0 : 1;
     if (qEnvironmentVariableIsSet("CLASSICAD_VERTEX_SELECTION_ONLY")) {
         return verifyVertexComponentSelection(application) ? 0 : 1;
     }

@@ -165,6 +165,41 @@ int main(int argc, char **argv)
                         nurbsSolidFaces(rectangularSolid).size()==3,
                     "untrimmed rectangular plane must close with a perimeter wall");
     auto holedFace = face;
+    {
+        Shape edited;
+        edited.geometryType = GeometryType::NurbsSolid;
+        edited.nurbsSolid = rectangularSolid;
+        passed &= check(materializeNurbsSolidBoundary(&edited.nurbsSolid) &&
+                            edited.nurbsSolid.boundaryFaces.size() == 6,
+                        "rectangular extrusion must preserve six exact editable faces");
+        const auto before = edited.nurbsSolid.boundaryFaces;
+        const Point3D corner = before[1].controlPoints[0];
+        const Point3D moved{corner.x + 0.3, corner.y - 0.2, corner.z + 0.8};
+        int affected = 0;
+        for (auto &patch : edited.nurbsSolid.boundaryFaces) {
+            for (Point3D &point : patch.controlPoints) {
+                if (near(point, corner)) { point = moved; ++affected; }
+            }
+        }
+        passed &= check(affected == 3 && validateNurbsSolid(edited.nurbsSolid),
+                        "one cube corner must deform all three adjoining faces and stay closed");
+        passed &= check(near(edited.nurbsSolid.boundaryFaces[0].controlPoints[0],
+                             before[0].controlPoints[0]),
+                        "opposite cap corner must stay fixed during a vertex edit");
+        ViewportRenderObject object;
+        object.shape = edited;
+        passed &= check(!buildViewportDepthGeometry(object).surfaceVertices.isEmpty(),
+                        "deformed nonplanar NURBS solid must remain visible");
+        Shape roundtrip;
+        passed &= check(shapeFromJson(shapeToJson(edited), &roundtrip) &&
+                            roundtrip.nurbsSolid.boundaryFaces.size() == 6 &&
+                            near(roundtrip.nurbsSolid.boundaryFaces[1].controlPoints[0], moved),
+                        "native save/reload must preserve the edited NURBS faces");
+        rotateShapeGeometry(&roundtrip, {}, {0,1,0}, 0.4);
+        passed &= check(validateNurbsSolid(roundtrip.nurbsSolid) &&
+                            !near(roundtrip.nurbsSolid.boundaryFaces[1].controlPoints[0], moved),
+                        "transforms must update authoritative edited faces");
+    }
     NurbsSurfaceTrimLoop hole;
     hole.isHole = true;
     hole.curve = face.trimLoops.first().curve;

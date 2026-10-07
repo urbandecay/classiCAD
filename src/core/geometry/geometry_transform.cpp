@@ -13,6 +13,17 @@ bool transformSpatialGeometry(Shape *shape, const Map &map)
 {
     NurbsSurface3D &surface = shapeBaseSurface(*shape);
     if (!validateNurbsSurface(surface)) return false;
+    const auto handedness = [](const NurbsExtrusionSolid3D &solid) {
+        const auto &cv = solid.baseSurface.controlPoints;
+        if (cv.size() < 4) return 0.0;
+        const Point3D u{cv[2].x-cv[0].x, cv[2].y-cv[0].y, cv[2].z-cv[0].z};
+        const Point3D v{cv[1].x-cv[0].x, cv[1].y-cv[0].y, cv[1].z-cv[0].z};
+        const Point3D &d = solid.displacement;
+        return (u.y*v.z-u.z*v.y)*d.x + (u.z*v.x-u.x*v.z)*d.y +
+               (u.x*v.y-u.y*v.x)*d.z;
+    };
+    const qreal before = shape->geometryType == GeometryType::NurbsSolid
+                             ? handedness(shape->nurbsSolid) : 0.0;
     if (shape->geometryType == GeometryType::NurbsSolid) {
         const Point3D origin = surface.controlPoints.first();
         const Point3D offset = shape->nurbsSolid.displacement;
@@ -22,6 +33,15 @@ bool transformSpatialGeometry(Shape *shape, const Map &map)
         shape->nurbsSolid.displacement = {end.x-start.x, end.y-start.y, end.z-start.z};
     }
     for (Point3D &point : surface.controlPoints) point = map(point);
+    if (shape->geometryType == GeometryType::NurbsSolid) {
+        for (NurbsSurface3D &face : shape->nurbsSolid.boundaryFaces)
+            for (Point3D &point : face.controlPoints) point = map(point);
+        if ((before < 0.0) != (handedness(shape->nurbsSolid) < 0.0)) {
+            for (int i = 0; i < shape->nurbsSolid.boundaryFaceReversed.size(); ++i)
+                shape->nurbsSolid.boundaryFaceReversed[i] =
+                    !shape->nurbsSolid.boundaryFaceReversed[i];
+        }
+    }
     return true;
 }
 
@@ -135,6 +155,13 @@ bool bakeShapePlacementTranslation(Shape *shape,
         point.y += translation.y;
         point.z += translation.z;
     }
+    for (NurbsSurface3D &face : shape->nurbsSolid.boundaryFaces) {
+        for (Point3D &point : face.controlPoints) {
+            point.x += translation.x;
+            point.y += translation.y;
+            point.z += translation.z;
+        }
+    }
     return true;
 }
 
@@ -187,6 +214,13 @@ bool translateShapeGeometry(Shape *shape,
             point.x += worldDelta.x;
             point.y += worldDelta.y;
             point.z += worldDelta.z;
+        }
+        for (NurbsSurface3D &face : shape->nurbsSolid.boundaryFaces) {
+            for (Point3D &point : face.controlPoints) {
+                point.x += worldDelta.x;
+                point.y += worldDelta.y;
+                point.z += worldDelta.z;
+            }
         }
     }
     return true;

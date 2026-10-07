@@ -4,13 +4,20 @@
 
 namespace classiCAD {
 
-// Closed translational extrusion of an affine planar face. The two caps share
-// the exact UV trims of baseSurface; one ruled wall closes every trim loop.
+// Initially a closed translational extrusion of an affine planar face.
+// Supported corner edits materialize an authoritative connected boundary of
+// exact bilinear NURBS patches (see CONNECTED_SURFACE_VERTEX_EDITING.md).
 // Face tessellations are derived display data, never solid geometry.
 struct NurbsExtrusionSolid3D {
     NurbsSurface3D baseSurface;
     Point3D displacement;
+    // Once a shared corner is edited, these exact connected NURBS patches
+    // are authoritative. The original extrusion remains the construction seed.
+    QVector<NurbsSurface3D> boundaryFaces;
+    QVector<bool> boundaryFaceReversed;
 };
+
+bool materializeNurbsSolidBoundary(NurbsExtrusionSolid3D *solid);
 
 bool nurbsSolidBaseFrame(const NurbsSurface3D &surface, WorkPlaneFrame *frame);
 bool validateNurbsSolid(const NurbsExtrusionSolid3D &solid);

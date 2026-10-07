@@ -4,6 +4,8 @@
 #include "nurbs_surface_factory.h"
 
 #include <cmath>
+#include <QLineF>
+#include <QSet>
 
 namespace classiCAD {
 namespace {
@@ -46,6 +48,39 @@ bool nurbsSolidBaseFrame(const NurbsSurface3D &surface, WorkPlaneFrame *frame)
 
 bool validateNurbsSolid(const NurbsExtrusionSolid3D &solid)
 {
+    if (!solid.boundaryFaces.isEmpty()) {
+        if (solid.boundaryFaceReversed.size() != solid.boundaryFaces.size())
+            return false;
+        struct Edge { Point3D a; Point3D b; int count = 1; };
+        QVector<Edge> edges;
+        const auto close = [](const Point3D &a, const Point3D &b) {
+            return length(subtract(a, b)) < 1.0e-7;
+        };
+        for (const NurbsSurface3D &face : solid.boundaryFaces) {
+            if (!validateNurbsSurface(face) || face.rational ||
+                face.degreeU != 1 || face.degreeV != 1 ||
+                face.controlVertexCountU != 2 || face.controlVertexCountV != 2 ||
+                !face.trimLoops.isEmpty()) return false;
+            const int perimeter[] = {0, 2, 3, 1, 0};
+            for (int i = 0; i < 4; ++i) {
+                const Point3D a = face.controlPoints[perimeter[i]];
+                const Point3D b = face.controlPoints[perimeter[i + 1]];
+                if (close(a, b)) return false;
+                bool found = false;
+                for (Edge &edge : edges) {
+                    if ((close(a, edge.a) && close(b, edge.b)) ||
+                        (close(a, edge.b) && close(b, edge.a))) {
+                        ++edge.count;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) edges.append({a, b, 1});
+            }
+        }
+        for (const Edge &edge : edges) if (edge.count != 2) return false;
+        return !edges.isEmpty();
+    }
     WorkPlaneFrame frame;
     if (!nurbsSolidBaseFrame(solid.baseSurface, &frame) ||
         !std::isfinite(solid.displacement.x) ||
@@ -66,7 +101,7 @@ bool makeNurbsExtrusionSolid(const NurbsSurface3D &surface,
                              const Point3D &displacement,
                              NurbsExtrusionSolid3D *solid)
 {
-    const NurbsExtrusionSolid3D result{surface, displacement};
+    const NurbsExtrusionSolid3D result{surface, displacement, {}, {}};
     if (solid == nullptr || !validateNurbsSolid(result)) return false;
     *solid = result;
     return true;
@@ -74,6 +109,10 @@ bool makeNurbsExtrusionSolid(const NurbsSurface3D &surface,
 
 bool nurbsSolidFaceReversed(const NurbsExtrusionSolid3D &solid, int faceIndex)
 {
+    if (!solid.boundaryFaces.isEmpty()) {
+        return faceIndex >= 0 && faceIndex < solid.boundaryFaceReversed.size()
+                   ? solid.boundaryFaceReversed[faceIndex] : false;
+    }
     const int wallCount = solid.baseSurface.trimLoops.isEmpty()
                               ? 1 : solid.baseSurface.trimLoops.size();
     if (faceIndex < 0 || faceIndex >= 2 + wallCount) return false;
@@ -97,6 +136,7 @@ bool nurbsSolidFaceReversed(const NurbsExtrusionSolid3D &solid, int faceIndex)
 QVector<NurbsSurface3D> nurbsSolidFaces(const NurbsExtrusionSolid3D &solid)
 {
     if (!validateNurbsSolid(solid)) return {};
+    if (!solid.boundaryFaces.isEmpty()) return solid.boundaryFaces;
     const NurbsSurface3D &base = solid.baseSurface;
     NurbsSurface3D top = base;
     for (Point3D &p : top.controlPoints) {
@@ -136,6 +176,59 @@ QVector<NurbsSurface3D> nurbsSolidFaces(const NurbsExtrusionSolid3D &solid)
         faces.append(wall);
     }
     return faces;
+}
+
+bool materializeNurbsSolidBoundary(NurbsExtrusionSolid3D *solid)
+{
+    if (solid == nullptr || !validateNurbsSolid(*solid)) return false;
+    if (!solid->boundaryFaces.isEmpty()) return true;
+    const QVector<NurbsSurface3D> derived = nurbsSolidFaces(*solid);
+    NurbsExtrusionSolid3D candidate = *solid;
+    for (int faceIndex = 0; faceIndex < derived.size(); ++faceIndex) {
+        NurbsSurface3D face = derived[faceIndex];
+        const bool reversed = nurbsSolidFaceReversed(*solid, faceIndex);
+        if (faceIndex < 2) {
+            // Only a rectangular parameter-domain trim can be removed
+            // exactly. Other trims need a more general boundary topology.
+            qreal u0, u1, v0, v1;
+            if (!nurbsSurfaceParameterDomains(face, &u0, &u1, &v0, &v1)) return false;
+            if (!face.trimLoops.isEmpty()) {
+                if (face.trimLoops.size() != 1 || face.trimLoops[0].isHole ||
+                    face.trimLoops[0].curve.degree != 1) return false;
+                const auto &points = face.trimLoops[0].curve.controlPoints;
+                const QVector<QPointF> corners{{u0,v0},{u1,v0},{u1,v1},{u0,v1}};
+                QSet<int> seen;
+                for (const QPointF &point : points) {
+                    int match = -1;
+                    for (int i = 0; i < corners.size(); ++i)
+                        if (QLineF(point, corners[i]).length() < 1.0e-9) match = i;
+                    if (match < 0) return false;
+                    seen.insert(match);
+                }
+                if (seen.size() != 4) return false;
+                face.trimLoops.clear();
+            }
+            candidate.boundaryFaces.append(face);
+            candidate.boundaryFaceReversed.append(reversed);
+        } else {
+            if (face.rational || face.degreeU != 1 || face.degreeV != 1 ||
+                face.controlVertexCountV != 2 || !face.trimLoops.isEmpty()) return false;
+            for (int u = 0; u + 1 < face.controlVertexCountU; ++u) {
+                NurbsSurface3D panel = face;
+                panel.controlVertexCountU = 2;
+                panel.controlPoints = {face.controlPoints[u * 2],
+                    face.controlPoints[u * 2 + 1], face.controlPoints[u * 2 + 2],
+                    face.controlPoints[u * 2 + 3]};
+                panel.weights = {1,1,1,1};
+                panel.knotsU = {face.knotsU[u], face.knotsU[u + 1]};
+                candidate.boundaryFaces.append(panel);
+                candidate.boundaryFaceReversed.append(reversed);
+            }
+        }
+    }
+    if (!validateNurbsSolid(candidate)) return false;
+    *solid = std::move(candidate);
+    return true;
 }
 
 } // namespace classiCAD

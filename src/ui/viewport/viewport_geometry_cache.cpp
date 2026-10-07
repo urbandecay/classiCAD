@@ -36,7 +36,9 @@ void ViewportGeometryCache::prepareFrame(
             cached->geometryRevision != object.geometryRevision &&
             cached->sourceShape.geometryType == object.shape.geometryType &&
             (object.shape.geometryType == GeometryType::NurbsSurface ||
-             object.shape.geometryType == GeometryType::NurbsSolid)) {
+             (object.shape.geometryType == GeometryType::NurbsSolid &&
+              object.shape.nurbsSolid.boundaryFaces.isEmpty() &&
+              cached->sourceShape.nurbsSolid.boundaryFaces.isEmpty()))) {
             const bool solid = object.shape.geometryType == GeometryType::NurbsSolid;
             const Point3D &before = cached->sourceShape.nurbsSolid.displacement;
             const Point3D &after = object.shape.nurbsSolid.displacement;

@@ -203,6 +203,20 @@ misread or implemented incorrectly.
 
 ## Point tool port findings
 
+- A cube corner edit cannot mutate the affine extrusion base: its single-CV
+  deformation fails `nurbsSolidBaseFrame` and removes every derived face from
+  rendering. Use the explicit connected bilinear boundary contract in
+  `CONNECTED_SURFACE_VERTEX_EDITING.md`; move all face occurrences of the
+  selected corner, keeping the other cap corner fixed.
+- Component Grab must capture adjoining editable surface objects, restore all
+  source control nets before each total-distance preview, and bypass the
+  whole-object translation/snap-source path. Translation-cache reuse based
+  only on the extrusion seed is invalid once explicit boundary faces exist.
+- [x] Native right-click/G free and Z-axis corner moves: all adjoining face
+  occurrences and a separate connected surface follow the selected corner;
+  other corners remain fixed. Repeated events, save/reload, framebuffer
+  visibility, Escape and atomic Undo pass. Standalone plane deformation passes.
+
 - Face extrusion extends the existing Extrude tool. Both the public command's
   source filter and the controller must accept planar faces; updating only the
   controller leaves the command unable to start. Faces default to their normal,
@@ -220,6 +234,9 @@ misread or implemented incorrectly.
 - Mixed point/curve previews must draw surface previews even when edge
   previews succeeded on the GPU; one global GPU-preview flag must not suppress
   geometry that uses the painter path.
+- Solid-shaded surface and face-extrusion previews need a wire cage in the
+  preview stroke pass. The fill-only preview path skipped that pass, so the
+  outline appeared only after committing the extrusion.
 - Keep the shared Extrude HUD valid for both source types. The old hardcoded
   instruction referred only to selected points and overflowed the viewport.
 - [x] Verify curve-only and mixed Extrude selections, visible previews,

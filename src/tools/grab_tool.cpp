@@ -50,11 +50,13 @@ bool GrabTool::enterBasePointMode(Document &document)
     return restored;
 }
 
-void GrabTool::restoreSourceGeometry(Document &document) const
+void GrabTool::restoreSourceGeometry(Document &document,
+                                     bool restoreSurfaceGeometry) const
 {
     for (int i = 0; i < objectIds_.size(); ++i) {
         const GeometryType type = sourceGeometry_[i].geometryType;
-        if (type != GeometryType::NurbsSurface && type != GeometryType::NurbsSolid) {
+        if (restoreSurfaceGeometry ||
+            (type != GeometryType::NurbsSurface && type != GeometryType::NurbsSolid)) {
             document.mutateGeometry(objectIds_[i], [this, i](Shape &geometry) {
                 geometry = sourceGeometry_[i];
                 return true;

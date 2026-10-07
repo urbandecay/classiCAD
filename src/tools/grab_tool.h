@@ -16,7 +16,8 @@ public:
                const QVector<ObjectId> &selectedObjectIds,
                const QPointF &startWorldPosition);
     bool enterBasePointMode(Document &document);
-    void restoreSourceGeometry(Document &document) const;
+    void restoreSourceGeometry(Document &document,
+                               bool restoreSurfaceGeometry = false) const;
     void acceptBasePoint(const QPointF &basePoint,
                          const QPointF &cursorOffset,
                          const Point3D &basePointWorld,

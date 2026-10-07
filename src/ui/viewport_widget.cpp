@@ -3691,6 +3691,67 @@ protected:
     void setComponentSelectionMode(ComponentSelectionMode mode)
     {
         if (componentSelectionMode_ == mode) return;
+
+        // Blender carries the selected mesh elements across component-mode
+        // changes. In particular, switching Edge -> Vertex selects the two
+        // endpoints of each selected edge. The per-mode selection caches are
+        // useful while drawing, but retaining an old vertex cache here can
+        // make an unrelated earlier selection reappear (even as a whole face).
+        if (componentSelectionMode_ == ComponentSelectionMode::Edge &&
+            mode == ComponentSelectionMode::Vertex) {
+            const QHash<quint64, QSet<int>> selectedEdges =
+                componentSelections_[static_cast<int>(ComponentSelectionMode::Edge)];
+            auto &selectedVertices =
+                componentSelections_[static_cast<int>(ComponentSelectionMode::Vertex)];
+            selectedVertices.clear();
+            int activeVertex = -1;
+
+            for (auto objectIt = selectedEdges.cbegin();
+                 objectIt != selectedEdges.cend(); ++objectIt) {
+                const ObjectId objectId = ObjectId::fromValue(objectIt.key());
+                const int shapeIndex = document_.indexOf(objectId);
+                if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                    continue;
+                }
+                const Shape &shape = shapes_[shapeIndex];
+                if (shape.geometryType != GeometryType::NurbsSolid &&
+                    shape.geometryType != GeometryType::NurbsSurface) {
+                    continue;
+                }
+
+                const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+                QSet<int> &vertices = selectedVertices[objectIt.key()];
+                const int activeEdge = activeComponentIndices_[
+                    static_cast<int>(ComponentSelectionMode::Edge)];
+                for (int edgeIndex : objectIt.value()) {
+                    const int first = edgeIndex * 2;
+                    if (edgeIndex < 0 || first + 1 >= cage.lineVertices.size()) {
+                        continue;
+                    }
+                    int endpointIndices[2] = {-1, -1};
+                    for (int endpoint = 0; endpoint < 2; ++endpoint) {
+                        const QVector3D &position = cage.lineVertices[first + endpoint];
+                        for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
+                            if ((cage.pointVertices[vertex] - position).lengthSquared() <=
+                                1.0e-12f) {
+                                endpointIndices[endpoint] = vertex;
+                                vertices.insert(vertex);
+                                break;
+                            }
+                        }
+                    }
+                    if (edgeIndex == activeEdge && endpointIndices[0] >= 0) {
+                        activeVertex = endpointIndices[0];
+                    }
+                }
+                if (vertices.isEmpty()) {
+                    selectedVertices.remove(objectIt.key());
+                }
+            }
+            activeComponentIndices_[static_cast<int>(ComponentSelectionMode::Vertex)] =
+                activeVertex;
+        }
+
         componentSelectionMode_ = mode;
         controlPointsVisible_ = mode == ComponentSelectionMode::Vertex;
         update();

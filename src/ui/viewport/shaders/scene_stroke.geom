@@ -8,6 +8,9 @@ layout(triangle_strip, max_vertices = 4) out;
 uniform vec2 uViewportSize;
 uniform float uWidth;
 uniform float uDepthBias;
+uniform int uEditModeWire;
+uniform int uSmoothWire;
+smooth out vec4 gEdgeColor;
 flat out float vLength;
 flat out float gPatternOffsetPixels;
 flat out vec4 gStartColor;
@@ -52,6 +55,31 @@ void main()
     }
     vec2 tangent = screenDelta / lengthPixels;
     vec2 normal = vec2(-tangent.y, tangent.x);
+    if (uEditModeWire != 0) {
+        // Blender expands along the minor screen axis, with no end caps.
+        float halfSize = uWidth * 0.5 + (uSmoothWire != 0 ? 0.5 : 0.0);
+        vec2 offset = abs(screenDelta.x) > abs(screenDelta.y)
+                          ? vec2(0.0, halfSize) : vec2(halfSize, 0.0);
+        for (int endpoint = 0; endpoint < 2; ++endpoint) {
+            for (int side = 0; side < 2; ++side) {
+                float sign = side == 0 ? 1.0 : -1.0;
+                vec4 position = endpoint == 0 ? a : b;
+                vLength = lengthPixels;
+                gPatternOffsetPixels = patternOffset;
+                gStartColor = colorA;
+                gEndColor = colorB;
+                gEdgeColor = endpoint == 0 ? colorA : colorB;
+                vStrokePosition = vec2(float(endpoint) * lengthPixels,
+                                       sign * halfSize);
+                gl_Position = position + vec4(sign * offset * 2.0 /
+                                                uViewportSize * position.w, 0.0, 0.0);
+                gl_Position.z -= uDepthBias * gl_Position.w;
+                EmitVertex();
+            }
+        }
+        EndPrimitive();
+        return;
+    }
     float radius = uWidth * 0.5 + 1.0;
     vLength = lengthPixels;
     gPatternOffsetPixels = patternOffset;

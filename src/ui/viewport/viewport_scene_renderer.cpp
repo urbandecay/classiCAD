@@ -864,6 +864,7 @@ bool ViewportSceneRenderer::draw(
                                         ? smoothEditModeWires
                                         : smoothOverlayWires;
             boundProgram->setUniformValue("uSmoothWire", smoothWire ? 1 : 0);
+            boundProgram->setUniformValue("uEditModeWire", stroke.editModeWire ? 1 : 0);
             const ViewportSceneStrokePattern pattern =
                 viewportSceneStrokePattern(stroke, widthPixels);
             int count = range.second;

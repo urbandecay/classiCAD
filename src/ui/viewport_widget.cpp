@@ -4127,6 +4127,24 @@ protected:
                     edgeCage.cacheableGeometry = renderObject.cacheable;
                     edgeCage.worldOffset = renderObject.placementTranslation;
                     edgeCage.preparedDepthGeometry = cage;
+                    if (hasComponentSelection &&
+                        componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                        edgeCage.color = Qt::white;
+                        for (const QVector3D &endpoint : cage->lineVertices) {
+                            bool endpointSelected = false;
+                            for (int vertex = 0; vertex < cage->pointVertices.size(); ++vertex) {
+                                if ((cage->pointVertices[vertex] - endpoint).lengthSquared() <= 1.0e-12f &&
+                                    activeComponentSelection().contains(vertex)) {
+                                    endpointSelected = true;
+                                    break;
+                                }
+                            }
+                            const QColor color = endpointSelected
+                                ? QColor(QStringLiteral("#ff9900")) : QColor(Qt::black);
+                            edgeCage.lineVertexColors.append(QVector4D(
+                                color.redF(), color.greenF(), color.blueF(), 1.0f));
+                        }
+                    }
                     gpuStrokes.append(std::move(edgeCage));
                     ViewportSceneStroke vertexCage;
                     vertexCage.shape = &visibleShape;
@@ -4142,7 +4160,8 @@ protected:
                     vertexCage.cacheableGeometry = renderObject.cacheable;
                     vertexCage.worldOffset = renderObject.placementTranslation;
                     vertexCage.preparedDepthGeometry = cage;
-                    gpuStrokes.append(std::move(vertexCage));
+                    if (vertexCage.pointDiameter > 0.0f)
+                        gpuStrokes.append(std::move(vertexCage));
 
                     if (selected && componentSelectionObject_ == objectId &&
                         !activeComponentSelection().isEmpty()) {
@@ -4191,43 +4210,6 @@ protected:
                         };
                         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                             const QColor selectedVertexColor(QStringLiteral("#ff7a00"));
-                            const QColor selectedEdgeColor(QStringLiteral("#ff9900"));
-                            const QColor wireEditColor(Qt::black);
-                            const auto strokeColor = [](const QColor &color) {
-                                return QVector4D(color.redF(), color.greenF(),
-                                                 color.blueF(), color.alphaF());
-                            };
-                            for (int edge = 0; edge + 1 < cage->lineVertices.size(); edge += 2) {
-                                const auto samePoint = [](const QVector3D &a,
-                                                          const QVector3D &b) {
-                                    return (a - b).lengthSquared() <= 1.0e-12f;
-                                };
-                                int a = -1, b = -1;
-                                for (int vertex = 0; vertex < cage->pointVertices.size(); ++vertex) {
-                                    if (samePoint(cage->pointVertices[vertex], cage->lineVertices[edge])) a = vertex;
-                                    if (samePoint(cage->pointVertices[vertex], cage->lineVertices[edge + 1])) b = vertex;
-                                }
-                                if (a < 0 || b < 0 ||
-                                    (!activeComponentSelection().contains(a) &&
-                                     !activeComponentSelection().contains(b))) continue;
-
-                                const QColor firstColor = activeComponentSelection().contains(a)
-                                                              ? selectedEdgeColor : wireEditColor;
-                                const QColor lastColor = activeComponentSelection().contains(b)
-                                                             ? selectedEdgeColor : wireEditColor;
-                                ViewportDepthGeometry fadedEdge;
-                                fadedEdge.lineVertices << cage->lineVertices[edge]
-                                                       << cage->lineVertices[edge + 1];
-                                if (edge + 1 < cage->preciseLineVertices.size()) {
-                                    fadedEdge.preciseLineVertices
-                                        << cage->preciseLineVertices[edge]
-                                        << cage->preciseLineVertices[edge + 1];
-                                }
-                                appendComponentStroke(
-                                    std::move(fadedEdge), QColor(Qt::white),
-                                    1.0f, 0.0f,
-                                    {strokeColor(firstColor), strokeColor(lastColor)});
-                            }
                             QMap<QRgb, ViewportDepthGeometry> fadedPoints;
                             for (int component : activeComponentSelection()) {
                                 if (component < 0 || component >= cage->pointVertices.size()) continue;

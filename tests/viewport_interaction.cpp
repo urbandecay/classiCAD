@@ -313,7 +313,9 @@ bool verifyVertexComponentSelection(QApplication &application)
         for (int y = 0; y < image.height(); ++y) {
             for (int x = 0; x < image.width(); ++x) {
                 const QColor color = image.pixelColor(x, y);
-                count += color.red() > 140 && color.green() > 65 &&
+                // A half-selected edge interpolates orange toward black;
+                // its midpoint is intentionally below full-selection brightness.
+                count += color.red() > 95 && color.green() > 45 &&
                          color.green() < color.red() &&
                          color.blue() < color.green();
             }
@@ -353,23 +355,44 @@ bool verifyVertexComponentSelection(QApplication &application)
         projection.worldPointToScreen({0, -8, 0}, interactionViewportSize, &edgeMiddle);
         projection.worldPointToScreen({0, 0, 0}, interactionViewportSize, &center);
         const QRect edgeRegion(edgeMiddle.toPoint() - QPoint(6, 6), QSize(13, 13));
-        const auto clickCorner = [&](const QPointF &corner) {
+        const auto clickCorner = [&](const QPointF &corner,
+                                     Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
             const QPointF delta = center - corner;
             const QPointF click = corner + delta * (2.0 / std::hypot(delta.x(), delta.y()));
             sendMouse(probe.get(), QEvent::MouseButtonPress, click,
-                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                      Qt::LeftButton, Qt::LeftButton, modifiers);
             sendMouse(probe.get(), QEvent::MouseButtonRelease, click,
-                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                      Qt::LeftButton, Qt::NoButton, modifiers);
             application.processEvents();
         };
         clickCorner(first);
-        const int selectedEdgePixels = orangePixels(captureViewport(probe.get()).copy(edgeRegion));
+        const QImage selectedVertexImage = captureViewport(probe.get());
+        saveGridCapture(QStringLiteral("vertex-selection-single"), selectedVertexImage);
+        const int selectedEdgePixels = orangePixels(selectedVertexImage.copy(edgeRegion));
         passed &= check(selectedEdgePixels > 5,
                         "selecting a vertex must retain its orange incident-edge overlay");
         clickCorner(opposite);
         passed &= check(orangePixels(captureViewport(probe.get()).copy(edgeRegion)) <
                             selectedEdgePixels / 2,
                         "selecting another vertex must replace the cached component overlay");
+        clickCorner(first);
+        QPointF adjacent;
+        projection.worldPointToScreen({8, -8, 0}, interactionViewportSize, &adjacent);
+        clickCorner(adjacent, Qt::ShiftModifier);
+        const QImage selectedEdgeImage = captureViewport(probe.get());
+        saveGridCapture(QStringLiteral("vertex-selection-complete-edge"), selectedEdgeImage);
+        const auto edgeRed = [&](const QImage &image) {
+            int red = 0;
+            for (int x = edgeRegion.left(); x <= edgeRegion.right(); ++x) {
+                int brightest = 0;
+                for (int y = edgeRegion.top(); y <= edgeRegion.bottom(); ++y)
+                    brightest = std::max(brightest, image.pixelColor(x, y).red());
+                red += brightest;
+            }
+            return red;
+        };
+        passed &= check(edgeRed(selectedEdgeImage) > edgeRed(selectedVertexImage) + 300,
+                        "selecting both edge endpoints must produce a continuous brighter edge");
     }
 
     return passed;

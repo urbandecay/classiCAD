@@ -10,6 +10,8 @@ uniform float uPatternOnLength;
 uniform int uPatternSegmentCount;
 uniform float uPatternSegments[8];
 uniform int uSmoothWire;
+uniform int uEditModeWire;
+smooth in vec4 gEdgeColor;
 flat in float vLength;
 flat in float gPatternOffsetPixels;
 flat in vec4 gStartColor;
@@ -99,7 +101,8 @@ void main()
     }
     float edgeParameter = clamp(vStrokePosition.x / max(vLength, 0.001),
                                 0.0, 1.0);
-    vec4 edgeColor = mix(gStartColor, gEndColor, edgeParameter);
+    vec4 edgeColor = uEditModeWire != 0 ? gEdgeColor
+                                       : mix(gStartColor, gEndColor, edgeParameter);
     fragmentColor = vec4(uColor.rgb * edgeColor.rgb,
                          uColor.a * edgeColor.a * coverage);
 }

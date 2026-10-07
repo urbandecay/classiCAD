@@ -73,7 +73,9 @@ public:
                                Point3D *worldPoint,
                                Point3D *worldNormal,
                                int *faceIndex = nullptr,
-                               int *shapeIndex = nullptr) const;
+                               int *shapeIndex = nullptr,
+                               const QVector<int> &excludedShapeIndices = {},
+                               bool backfaceCulling = false) const;
 
     QVector<QPointF> controlPointsForShape(const Shape &shape) const;
 

@@ -3,7 +3,10 @@
 #include "core/document/shape.h"
 #include "snap_types.h"
 
+#include <QHash>
 #include <QSize>
+
+#include <functional>
 
 namespace classiCAD {
 
@@ -24,12 +27,21 @@ struct SnapSettings {
 
 class SnapEngine final {
 public:
+    using OcclusionPlaneQuery = std::function<bool(
+        const QPointF &screenPosition,
+        const QVector<int> &excludedShapeIndices,
+        Point3D *worldPoint,
+        Point3D *worldNormal)>;
+
     SnapResult findSpatialSnapPoint(const Document &document,
                                     const QPointF &screenPosition,
                                     const Point3D *anchor,
                                     const ViewportTransform &transform,
                                     const QSize &viewportSize,
-                                    const QVector<Point3D> &previewPoints = {}) const;
+                                    const QVector<Point3D> &previewPoints = {},
+                                    const QVector<int> &excludedShapeIndices = {},
+                                    bool forceEnabled = false,
+                                    bool includeTangentCandidates = true) const;
     bool findAxisIntersectionWithHoveredEdge(const Document &document,
                                              const QPointF &screenPosition,
                                              const Point3D &axisOrigin,
@@ -41,6 +53,7 @@ public:
                                              qreal snapRadiusPixels = 12.0) const;
     void setSettings(const SnapSettings &settings);
     const SnapSettings &settings() const;
+    void setOcclusionPlaneQuery(OcclusionPlaneQuery query);
 
     QVector<SnapCandidate> snapCandidatesForShape(
         const Shape &shape,
@@ -126,6 +139,21 @@ public:
         const QSize &viewportSize) const;
 
 private:
+    struct OcclusionPlane {
+        Point3D point;
+        Point3D normal;
+        bool valid = false;
+    };
+    using OcclusionPlaneCache = QHash<QPoint, OcclusionPlane>;
+
+    OcclusionPlane occlusionPlaneAt(
+        const QPointF &screenPosition,
+        const QVector<int> &excludedShapeIndices = {},
+        OcclusionPlaneCache *cache = nullptr) const;
+    bool pointPassesOcclusionPlane(const Point3D &worldPoint,
+                                   const OcclusionPlane &plane,
+                                   const ViewportTransform &transform) const;
+
     QVector<QPointF> rectangleVertices(const Shape &shape) const;
     bool subdivisionCurve(const Shape &shape, Shape::NurbsCurve2D *curve) const;
     bool nurbsCurveEndpoints(const Shape::NurbsCurve2D &curve,
@@ -161,6 +189,7 @@ private:
                                 QPointF *point) const;
 
     SnapSettings settings_;
+    OcclusionPlaneQuery occlusionPlaneQuery_;
 };
 
 } // namespace classiCAD

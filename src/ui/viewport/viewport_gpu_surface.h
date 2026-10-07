@@ -51,6 +51,14 @@ public:
         const QVector<ViewportRenderObject> &visibleSceneShapes,
         const QVector<ViewportComponentPickCandidate> &candidates,
         int *candidateIndex);
+    bool pickComponentElementsInRect(
+        const QRectF &selectionRect,
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        const QVector<ViewportRenderObject> &visibleSceneShapes,
+        const QVector<ViewportComponentPickCandidate> &candidates,
+        bool depthTest,
+        QVector<int> *candidateIndices);
 
 protected:
     void paintGL() override;

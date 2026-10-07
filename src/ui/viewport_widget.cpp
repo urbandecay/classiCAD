@@ -589,6 +589,22 @@ public:
         , controlPointIndex_(selection_.activeControlPoint().index)
         , zoom_(viewportTransform_.zoom())
     {
+        snapEngine_.setOcclusionPlaneQuery(
+            [this](const QPointF &screenPosition,
+                   const QVector<int> &excludedShapeIndices,
+                   Point3D *worldPoint,
+                   Point3D *worldNormal) {
+                if (viewportShadingSettings_.mode ==
+                        ViewportShadingMode::Wireframe ||
+                    viewportShadingSettings_.xrayEnabled()) {
+                    return false;
+                }
+                return curveHitTester_.hitTestVisibleSurface(
+                    document_, screenPosition, viewportTransform_, size(),
+                    worldPoint, worldNormal, nullptr, nullptr,
+                    excludedShapeIndices,
+                    viewportShadingSettings_.backfaceCulling);
+            });
         configureCommandRouter();
         setupShadingPopover();
         viewportTransform_.setGridSpacing(
@@ -5372,11 +5388,15 @@ protected:
 #else
         QMouseEvent translated(type, position, button, buttons, modifiers);
 #endif
+        const bool previousSyntheticSelectionInput =
+            syntheticSelectionInput_;
+        syntheticSelectionInput_ = button == Qt::LeftButton;
         if (type == QEvent::MouseButtonPress) {
             mousePressEvent(&translated);
         } else if (type == QEvent::MouseButtonRelease) {
             mouseReleaseEvent(&translated);
         }
+        syntheticSelectionInput_ = previousSyntheticSelectionInput;
     }
 
     void mousePressEvent(QMouseEvent *event) override
@@ -5420,7 +5440,9 @@ protected:
             event->accept();
             return;
         }
-        updateDrawingWorkPlaneFromHover(screenPosition);
+        if (!grabTool_.isActive()) {
+            updateDrawingWorkPlaneFromHover(screenPosition);
+        }
         if (activeTool_ == Tool::Arc &&
             arcTool_.inputStage() == ArcInputStage::Complete &&
             arcState().mode != ArcMode::OnePoint) {
@@ -5508,26 +5530,30 @@ protected:
             cursorValid_ = true;
             if (event->button() == Qt::LeftButton) {
                 if (grabTool_.isPickingBasePoint()) {
-                    const SnapResult baseSnap = findGrabBasePointSnap(rawWorldPosition);
+                    const SnapResult baseSnap = findGrabBasePointSnap(screenPosition);
                     if (baseSnap.isValid()) {
-                        const QPointF cursorOffset = rawWorldPosition - baseSnap.point;
                         const Point3D basePointWorld = baseSnap.hasWorldPoint
                             ? baseSnap.worldPoint
                             : workPlaneFramePointToWorld(
                                   baseSnap.point,
                                   viewportTransform_.workPlaneFrame());
-                        QPointF basePointScreen = worldToScreen(baseSnap.point);
+                        const QPointF basePoint = worldPointToWorkPlaneFrame(
+                            basePointWorld, viewportTransform_.workPlaneFrame());
+                        QPointF basePointScreen = screenPosition;
                         viewportTransform_.worldPointToScreen(
                             basePointWorld, size(), &basePointScreen);
                         const QPointF cursorOffsetScreen =
                             screenPosition - basePointScreen;
-                        QPointF basePointDragPlane = baseSnap.point;
+                        QPointF basePointDragPlane = basePoint;
                         viewportTransform_.screenToWorkPlaneUnclipped(
                             basePointScreen,
                             size(),
                             viewportTransform_.workPlaneFrame(),
                             &basePointDragPlane);
-                        grabTool_.acceptBasePoint(baseSnap.point,
+                        const QPointF cursorOffset = worldPositionValid
+                            ? rawWorldPosition - basePointDragPlane
+                            : QPointF{};
+                        grabTool_.acceptBasePoint(basePoint,
                                                   cursorOffset,
                                                   basePointWorld,
                                                   basePointDragPlane,
@@ -5807,7 +5833,31 @@ protected:
             return;
         }
 
-        if (event->button() == Qt::LeftButton && activeTool_ == Tool::Select) {
+        if (event->button() == Qt::LeftButton &&
+            activeTool_ == Tool::Select && !syntheticSelectionInput_) {
+            const int hitShapeIndex = hitTestShape(screenPosition);
+            if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
+                componentSelectionMode_ == ComponentSelectionMode::Edge) {
+                // Keep left-drag marquee selection, but don't select the
+                // component under a plain left click.
+                leftSelectionBoxStartedOnObject_ = false;
+                componentBoxSelectionActive_ = true;
+                componentBoxSelectionObject_ = ObjectId::invalid();
+                componentBoxStartedOnBlank_ = hitShapeIndex < 0;
+            } else {
+                // Object mode still supports box selection from any point.
+                // A plain click on geometry leaves the current selection alone.
+                leftSelectionBoxStartedOnObject_ = hitShapeIndex >= 0;
+            }
+            beginSelectionBox(
+                screenPosition,
+                event->modifiers().testFlag(Qt::ShiftModifier));
+            event->accept();
+            return;
+        }
+
+        if (event->button() == Qt::LeftButton &&
+            activeTool_ == Tool::Select && syntheticSelectionInput_) {
             int componentShapeIndex = -1;
             const int componentIndex = hitTestComponent(screenPosition,
                                                        &componentShapeIndex);
@@ -6088,7 +6138,9 @@ protected:
             return;
         }
         eraseTool_.setCursorScreenPosition(screenPosition);
-        updateDrawingWorkPlaneFromHover(screenPosition);
+        if (!grabTool_.isActive()) {
+            updateDrawingWorkPlaneFromHover(screenPosition);
+        }
         if (activeTool_ == Tool::Arc &&
             arcTool_.inputStage() == ArcInputStage::Complete &&
             arcState().mode != ArcMode::OnePoint) {
@@ -6099,6 +6151,27 @@ protected:
                    !(arcState().mode == ArcMode::TwoPoint &&
                      arcState().perpendicularPlaneActive)) {
             restoreArcChordReferencePlaneForEndpointPick();
+        }
+        if (grabTool_.isActive() && grabTool_.isPickingBasePoint()) {
+            QPointF rawPosition;
+            const bool hasRawPosition =
+                viewportTransform_.screenToWorkPlaneUnclipped(
+                    screenPosition, size(), viewportTransform_.workPlaneFrame(),
+                    &rawPosition);
+            rawCursorWorld_ = hasRawPosition ? rawPosition : QPointF{};
+            currentSnap_ = findGrabBasePointSnap(screenPosition);
+            if (currentSnap_.isValid() && currentSnap_.hasWorldPoint) {
+                cursorWorld_ = worldPointToWorkPlaneFrame(
+                    currentSnap_.worldPoint, viewportTransform_.workPlaneFrame());
+                cursorValid_ = true;
+            } else {
+                cursorWorld_ = rawCursorWorld_;
+                cursorValid_ = hasRawPosition;
+            }
+            lastWorldPosition_ = cursorWorld_;
+            update();
+            emitCoordinateUpdate();
+            return;
         }
         const WorkPlaneFrame cursorWorkPlaneFrame =
             controlPointSelectionDragActive() && controlPointDragFrameValid_
@@ -6241,8 +6314,12 @@ protected:
         }
 
         if (grabTool_.isActive() && grabTool_.isPickingBasePoint()) {
-            currentSnap_ = findGrabBasePointSnap(rawCursorWorld_);
-            cursorWorld_ = currentSnap_.isValid() ? currentSnap_.point : rawCursorWorld_;
+            currentSnap_ = findGrabBasePointSnap(screenPosition);
+            cursorWorld_ = currentSnap_.isValid() && currentSnap_.hasWorldPoint
+                               ? worldPointToWorkPlaneFrame(
+                                     currentSnap_.worldPoint,
+                                     viewportTransform_.workPlaneFrame())
+                               : rawCursorWorld_;
             lastWorldPosition_ = cursorWorld_;
             update();
             emitCoordinateUpdate();
@@ -7798,6 +7875,7 @@ private:
 
     void resetSelectionBoxState()
     {
+        leftSelectionBoxStartedOnObject_ = false;
         if (SelectTool *selectTool = selectionToolController()) {
             selectTool->cancelSelectionBox();
         }
@@ -8006,6 +8084,7 @@ private:
                            selectionBox.height() >= 3.0;
         const bool additive = selectTool->selectionBoxAdditive();
         if (componentBoxSelectionActive_) {
+            leftSelectionBoxStartedOnObject_ = false;
             const ObjectId requestedObjectId = componentBoxSelectionObject_;
             componentBoxSelectionActive_ = false;
             componentBoxSelectionObject_ = ObjectId::invalid();
@@ -8019,6 +8098,7 @@ private:
             if (moved) {
                 QHash<quint64, QSet<int>> boxedComponentsByObject;
                 QVector<ObjectId> boxedObjects;
+                QVector<ViewportComponentPickCandidate> vertexPickCandidates;
                 for (int index = 0; index < shapes_.size(); ++index) {
                     const ObjectId candidateId = shapes_.objectIdAt(index);
                     if (requestedObjectId.isValid() &&
@@ -8239,32 +8319,50 @@ private:
                         for (const QVector3D &cagePoint : cage.pointVertices)
                             cageScale = qMax(cageScale, qreal((cagePoint - origin).length()));
                     }
-                    const qreal depthTolerance = qMax(1.0e-5, cageScale * 1.0e-5);
+                    // Match component click picking: the visible-surface query
+                    // triangulates the display mesh, so a vertex projected onto
+                    // a triangle edge needs a small pixel and depth tolerance.
+                    const qreal depthTolerance = qMax(1.0e-5, cageScale * 1.0e-2);
                     const auto visibleComponentPoint =
                         [&](const Point3D &worldPoint, const QPointF &projected) {
                             if (viewportShadingSettings_.xrayEnabled()) return true;
-                            Point3D visiblePoint;
-                            Point3D visibleNormal;
-                            int visibleShapeIndex = -1;
-                            if (!curveHitTester_.hitTestVisibleSurface(
-                                    document_, projected, viewportTransform_, size(),
-                                    &visiblePoint, &visibleNormal, nullptr,
-                                    &visibleShapeIndex) ||
-                                visibleShapeIndex != index) {
-                                return false;
-                            }
                             const qreal componentDepth =
                                 viewportTransform_.worldDirectionToView(worldPoint)
                                     .towardCamera;
-                            const qreal surfaceDepth =
-                                viewportTransform_.worldDirectionToView(visiblePoint)
-                                    .towardCamera;
-                            return std::isfinite(componentDepth) &&
-                                   std::isfinite(surfaceDepth) &&
-                                   std::abs(componentDepth - surfaceDepth) <=
-                                       depthTolerance;
+                            if (!std::isfinite(componentDepth)) return false;
+                            // Vertices often project exactly onto a tessellation
+                            // edge. Probe the surrounding pixel centers as click
+                            // picking does, then keep only samples at the
+                            // vertex's depth on the same object.
+                            for (qreal yOffset : {-1.0, 0.0, 1.0}) {
+                                for (qreal xOffset : {-1.0, 0.0, 1.0}) {
+                                    Point3D visiblePoint;
+                                    Point3D visibleNormal;
+                                    int visibleShapeIndex = -1;
+                                    if (!curveHitTester_.hitTestVisibleSurface(
+                                            document_,
+                                            projected + QPointF(xOffset, yOffset),
+                                            viewportTransform_, size(),
+                                            &visiblePoint, &visibleNormal, nullptr,
+                                            &visibleShapeIndex) ||
+                                        visibleShapeIndex != index) {
+                                        continue;
+                                    }
+                                    const qreal surfaceDepth =
+                                        viewportTransform_.worldDirectionToView(
+                                            visiblePoint).towardCamera;
+                                    if (std::isfinite(surfaceDepth) &&
+                                        std::abs(componentDepth - surfaceDepth) <=
+                                            depthTolerance) {
+                                        return true;
+                                    }
+                                }
+                            }
+                            return false;
                         };
                     if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                        const QRectF vertexPickBounds =
+                            selectionBox.adjusted(-2.0, -2.0, 2.0, 2.0);
                         for (int vertex = 0;
                              vertex < cage.pointVertices.size(); ++vertex) {
                             const QVector3D &point = cage.pointVertices[vertex];
@@ -8273,8 +8371,18 @@ private:
                                 point.z() + offset.z};
                             QPointF projected;
                             if (!viewportTransform_.worldPointToScreen(
-                                    worldPoint, size(), &projected) ||
-                                !selectionBox.contains(projected) ||
+                                    worldPoint, size(), &projected)) {
+                                continue;
+                            }
+                            if (!viewportShadingSettings_.xrayEnabled() &&
+                                vertexPickBounds.contains(projected)) {
+                                ViewportComponentPickCandidate pickCandidate;
+                                pickCandidate.first = worldPoint;
+                                pickCandidate.componentIndex = vertex;
+                                pickCandidate.shapeIndex = index;
+                                vertexPickCandidates.append(pickCandidate);
+                            }
+                            if (!selectionBox.contains(projected) ||
                                 !visibleComponentPoint(worldPoint, projected)) {
                                 continue;
                             }
@@ -8362,6 +8470,37 @@ private:
                     }
                 }
 
+                if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                    !viewportShadingSettings_.xrayEnabled() &&
+                    gpuSurface_ != nullptr && !vertexPickCandidates.isEmpty()) {
+                    QVector<int> pickedVertexCandidates;
+                    const ViewportRenderFrame renderFrame = viewportRenderFrame();
+                    if (gpuSurface_->pickComponentElementsInRect(
+                            selectionBox, renderFrame.camera,
+                            renderFrame.viewportSize, renderFrame.objects,
+                            vertexPickCandidates, true,
+                            &pickedVertexCandidates)) {
+                        boxedComponentsByObject.clear();
+                        boxedObjects.clear();
+                        for (int candidateIndex : pickedVertexCandidates) {
+                            if (candidateIndex < 0 ||
+                                candidateIndex >= vertexPickCandidates.size()) {
+                                continue;
+                            }
+                            const ViewportComponentPickCandidate &candidate =
+                                vertexPickCandidates[candidateIndex];
+                            const ObjectId objectId =
+                                shapes_.objectIdAt(candidate.shapeIndex);
+                            if (!boxedComponentsByObject.contains(
+                                    objectId.value())) {
+                                boxedObjects.append(objectId);
+                            }
+                            boxedComponentsByObject[objectId.value()].insert(
+                                candidate.componentIndex);
+                        }
+                    }
+                }
+
                 if (!boxedComponentsByObject.isEmpty()) {
                     if (!additive) {
                         clearComponentSelections();
@@ -8397,6 +8536,16 @@ private:
             emitCoordinateUpdate();
             return;
         }
+        if (!moved && leftSelectionBoxStartedOnObject_) {
+            leftSelectionBoxStartedOnObject_ = false;
+            selectTool->cancelSelectionBox();
+            resetTrimSelectionBox();
+            setCursor(joinTool_.isActive() ? Qt::CrossCursor : Qt::ArrowCursor);
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+        leftSelectionBoxStartedOnObject_ = false;
         QVector<ObjectId> boxSelection;
         if (moved) {
             for (int index = 0; index < shapes_.size(); ++index) {
@@ -9801,7 +9950,7 @@ private:
         return selectedIndices;
     }
 
-    SnapResult findGrabBasePointSnap(const QPointF &rawPoint) const
+    SnapResult findGrabBasePointSnap(const QPointF &screenPosition) const
     {
         QVector<int> excludedShapeIndices;
         const QVector<int> selectedIndices = grabSelectedShapeIndices();
@@ -9810,12 +9959,14 @@ private:
                 excludedShapeIndices.append(shapeIndex);
             }
         }
-        const QVector<SnapCandidate> candidates =
-            snapEngine_.snapCandidatesForScene(document_,
-                                               excludedShapeIndices,
-                                               viewportTransform_,
-                                               size());
-        return closestSnapCandidate(rawPoint, candidates);
+        return snapEngine_.findSpatialSnapPoint(document_,
+                                                screenPosition,
+                                                nullptr,
+                                                viewportTransform_,
+                                                size(),
+                                                {},
+                                                excludedShapeIndices,
+                                                true);
     }
 
     QVector<int> duplicateSourceShapeIndices() const
@@ -9870,7 +10021,7 @@ private:
                                          !selectedLine);
     }
 
-    SnapResult findGrabDestinationSnap(const QPointF &rawPoint) const
+    SnapResult findGrabDestinationSnap(const QPointF &screenPosition) const
     {
         const QVector<int> selectedIndices = grabSelectedShapeIndices();
         bool selectedLine = false;
@@ -9881,15 +10032,16 @@ private:
                 break;
             }
         }
-        return snapEngine_.findSnapPoint(document_,
-                                         rawPoint,
-                                         true,
-                                         QVector<QPointF>{grabTool_.basePoint()},
-                                         viewportTransform_,
-                                         size(),
-                                         selectedIndices,
-                                         true,
-                                         !selectedLine);
+        const Point3D basePointWorld = grabTool_.basePointWorld();
+        return snapEngine_.findSpatialSnapPoint(document_,
+                                                screenPosition,
+                                                &basePointWorld,
+                                                viewportTransform_,
+                                                size(),
+                                                {},
+                                                selectedIndices,
+                                                true,
+                                                !selectedLine);
     }
 
     DragSnapResult findDragSnap(ObjectId selectedObjectId,
@@ -12509,7 +12661,7 @@ private:
                 size(),
                 viewportTransform_.workPlaneFrame(),
                 &destinationCursor);
-            currentSnap_ = findGrabDestinationSnap(destinationCursor);
+            currentSnap_ = findGrabDestinationSnap(destinationScreen);
             const QPointF destination = currentSnap_.isValid()
                                             ? currentSnap_.point
                                             : destinationCursor;
@@ -14233,6 +14385,8 @@ private:
     static constexpr int maxSubdivisionSections = 10000;
     ToolId activeTool_ = ToolId::Select;
     bool rightButtonSelectionGestureActive_ = false;
+    bool syntheticSelectionInput_ = false;
+    bool leftSelectionBoxStartedOnObject_ = false;
     bool controlPointsVisible_ = false;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;

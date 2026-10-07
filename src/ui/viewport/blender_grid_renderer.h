@@ -18,6 +18,7 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLTextureBlitter>
 #include <QOpenGLVertexArrayObject>
+#include <QRectF>
 #include <QSurfaceFormat>
 #include <QSize>
 #include <QMatrix4x4>
@@ -72,6 +73,15 @@ public:
         const QVector<ViewportRenderObject> &visibleSceneShapes,
         const QVector<ViewportComponentPickCandidate> &candidates,
         int *candidateIndex);
+    bool pickComponentElementsInRect(
+        const QRectF &selectionRect,
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const QVector<ViewportRenderObject> &visibleSceneShapes,
+        const QVector<ViewportComponentPickCandidate> &candidates,
+        bool depthTest,
+        QVector<int> *candidateIndices);
     void setSurfaceTessellationCache(
         const SurfaceTessellationCache *surfaceTessellationCache);
     void setAntiAliasingSamples(int samples);

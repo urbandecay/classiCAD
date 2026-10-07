@@ -10,6 +10,7 @@
 #include <QColor>
 #include <QDebug>
 #include <QMatrix4x4>
+#include <QSet>
 #include <QVector2D>
 #include <QVector3D>
 #include <QVector4D>
@@ -999,6 +1000,236 @@ bool BlenderGridRenderer::pickComponentElement(
     if (hitId > 0 && hitId <= candidates.size()) {
         *candidateIndex = hitId - 1;
     }
+    return true;
+}
+
+bool BlenderGridRenderer::pickComponentElementsInRect(
+    const QRectF &selectionRect,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
+    const QVector<ViewportComponentPickCandidate> &candidates,
+    bool depthTest,
+    QVector<int> *candidateIndices)
+{
+    if (candidateIndices != nullptr) {
+        candidateIndices->clear();
+    }
+    if (candidateIndices == nullptr || viewportSize.isEmpty() ||
+        QOpenGLContext::currentContext() == nullptr || !usingWidgetContext_ ||
+        !initialized_ || candidates.isEmpty()) {
+        return false;
+    }
+
+    updateSceneDepthGeometry(visibleSceneShapes);
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    const QSize pixelSize(qRound(viewportSize.width() * dpr),
+                          qRound(viewportSize.height() * dpr));
+    const QRectF box = selectionRect.normalized();
+    if (box.right() < 0.0 || box.bottom() < 0.0 ||
+        box.left() >= viewportSize.width() ||
+        box.top() >= viewportSize.height()) {
+        return true;
+    }
+    if (pickFramebuffer_ == nullptr || pickFramebuffer_->size() != pixelSize) {
+        QOpenGLFramebufferObjectFormat format;
+        format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+        format.setInternalTextureFormat(GL_RGBA8);
+        format.setSamples(0);
+        pickFramebuffer_ = std::make_unique<QOpenGLFramebufferObject>(pixelSize,
+                                                                      format);
+    }
+    if (pickFramebuffer_ == nullptr || !pickFramebuffer_->isValid()) {
+        pickFramebuffer_.reset();
+        return false;
+    }
+
+    struct PickVertex {
+        float x;
+        float y;
+        float z;
+        std::uint8_t color[4];
+    };
+    QVector<PickVertex> vertices;
+    vertices.reserve(candidates.size());
+    for (int index = 0; index < candidates.size(); ++index) {
+        const ViewportComponentPickCandidate &candidate = candidates[index];
+        if (candidate.edge) {
+            continue;
+        }
+        PickVertex vertex{};
+        vertex.x = static_cast<float>(candidate.first.x);
+        vertex.y = static_cast<float>(candidate.first.y);
+        vertex.z = static_cast<float>(candidate.first.z);
+        const quint32 id = static_cast<quint32>(index) + 1u;
+        vertex.color[0] = static_cast<std::uint8_t>(id & 0xffu);
+        vertex.color[1] = static_cast<std::uint8_t>((id >> 8u) & 0xffu);
+        vertex.color[2] = static_cast<std::uint8_t>((id >> 16u) & 0xffu);
+        vertex.color[3] = static_cast<std::uint8_t>((id >> 24u) & 0xffu);
+        vertices.append(vertex);
+    }
+    if (vertices.isEmpty()) {
+        return true;
+    }
+
+    GLint previousFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousProgram = 0;
+    GLint previousVertexArray = 0;
+    GLint previousArrayBuffer = 0;
+    GLint previousDepthFunction = GL_LESS;
+    GLint previousScissorBox[4] = {};
+    GLfloat previousClearColor[4] = {};
+    GLdouble previousClearDepth = 1.0;
+    GLfloat previousPointSize = 1.0f;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    GLboolean previousDepthMask = GL_TRUE;
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousScissorTest = glIsEnabled(GL_SCISSOR_TEST);
+    const GLboolean previousCullFace = glIsEnabled(GL_CULL_FACE);
+    const GLboolean previousDither = glIsEnabled(GL_DITHER);
+    const GLboolean previousProgramPointSize = glIsEnabled(GL_PROGRAM_POINT_SIZE);
+    const GLboolean previousFramebufferSrgb = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetIntegerv(GL_SCISSOR_BOX, previousScissorBox);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, previousClearColor);
+    glGetDoublev(GL_DEPTH_CLEAR_VALUE, &previousClearDepth);
+    glGetFloatv(GL_POINT_SIZE, &previousPointSize);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    const auto restoreState = [&]() {
+        glBindFramebuffer(GL_FRAMEBUFFER,
+                          static_cast<GLuint>(previousFramebuffer));
+        glViewport(previousViewport[0], previousViewport[1],
+                   previousViewport[2], previousViewport[3]);
+        glUseProgram(static_cast<GLuint>(previousProgram));
+        glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+        glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(previousArrayBuffer));
+        glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+        glPointSize(previousPointSize);
+        glClearColor(previousClearColor[0], previousClearColor[1],
+                     previousClearColor[2], previousClearColor[3]);
+        glClearDepth(previousClearDepth);
+        glColorMask(previousColorMask[0], previousColorMask[1],
+                    previousColorMask[2], previousColorMask[3]);
+        glDepthMask(previousDepthMask);
+        if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+        else glDisable(GL_DEPTH_TEST);
+        if (previousBlend) glEnable(GL_BLEND);
+        else glDisable(GL_BLEND);
+        if (previousScissorTest) {
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(previousScissorBox[0], previousScissorBox[1],
+                      previousScissorBox[2], previousScissorBox[3]);
+        } else {
+            glDisable(GL_SCISSOR_TEST);
+        }
+        if (previousCullFace) glEnable(GL_CULL_FACE);
+        else glDisable(GL_CULL_FACE);
+        if (previousDither) glEnable(GL_DITHER);
+        else glDisable(GL_DITHER);
+        if (previousProgramPointSize) glEnable(GL_PROGRAM_POINT_SIZE);
+        else glDisable(GL_PROGRAM_POINT_SIZE);
+        if (previousFramebufferSrgb) glEnable(GL_FRAMEBUFFER_SRGB);
+        else glDisable(GL_FRAMEBUFFER_SRGB);
+    };
+
+    if (!pickFramebuffer_->bind()) {
+        restoreState();
+        return false;
+    }
+    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DITHER);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClearDepth(1.0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    if (depthTest && sceneDepthSurfaceVertexCount_ > 0) {
+        drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr, true);
+    }
+    if (!componentPickProgram_.bind()) {
+        restoreState();
+        return false;
+    }
+    {
+        QOpenGLVertexArrayObject::Binder vaoBinder(&componentPickVertexArray_);
+        componentPickVertexBuffer_.bind();
+        componentPickVertexBuffer_.allocate(
+            vertices.constData(),
+            vertices.size() * static_cast<int>(sizeof(PickVertex)));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE, sizeof(PickVertex),
+            reinterpret_cast<const void *>(offsetof(PickVertex, x)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PickVertex),
+            reinterpret_cast<const void *>(offsetof(PickVertex, color)));
+        componentPickProgram_.setUniformValue(
+            "uViewProjection", viewProjection(transform, viewportSize, nullptr));
+        componentPickProgram_.setUniformValue(
+            "uPointSize", static_cast<float>(4.0 * dpr));
+        if (depthTest) {
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+        } else {
+            glDisable(GL_DEPTH_TEST);
+        }
+        glDepthMask(GL_FALSE);
+        glDisable(GL_BLEND);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glEnable(GL_PROGRAM_POINT_SIZE);
+        glDrawArrays(GL_POINTS, 0, vertices.size());
+        componentPickVertexBuffer_.release();
+        componentPickProgram_.release();
+    }
+
+    const int left = std::clamp(int(std::floor(box.left() * dpr)),
+                                0, pixelSize.width() - 1);
+    const int top = std::clamp(int(std::floor(box.top() * dpr)),
+                               0, pixelSize.height() - 1);
+    const int right = std::clamp(int(std::ceil(box.right() * dpr)),
+                                 0, pixelSize.width() - 1);
+    const int bottom = std::clamp(int(std::ceil(box.bottom() * dpr)),
+                                  0, pixelSize.height() - 1);
+    if (right >= left && bottom >= top) {
+        const int readWidth = right - left + 1;
+        const int readHeight = bottom - top + 1;
+        QVector<std::uint8_t> ids(readWidth * readHeight * 4, 0);
+        glReadPixels(left, pixelSize.height() - 1 - bottom,
+                     readWidth, readHeight, GL_RGBA, GL_UNSIGNED_BYTE,
+                     ids.data());
+        QSet<int> foundIndices;
+        for (int pixel = 0; pixel < readWidth * readHeight; ++pixel) {
+            const int byteIndex = pixel * 4;
+            const quint32 id =
+                quint32(ids[byteIndex]) |
+                (quint32(ids[byteIndex + 1]) << 8u) |
+                (quint32(ids[byteIndex + 2]) << 16u) |
+                (quint32(ids[byteIndex + 3]) << 24u);
+            if (id > 0 && id <= static_cast<quint32>(candidates.size())) {
+                foundIndices.insert(static_cast<int>(id) - 1);
+            }
+        }
+        candidateIndices->reserve(foundIndices.size());
+        for (int index : foundIndices) {
+            candidateIndices->append(index);
+        }
+        std::sort(candidateIndices->begin(), candidateIndices->end());
+    }
+    restoreState();
     return true;
 }
 

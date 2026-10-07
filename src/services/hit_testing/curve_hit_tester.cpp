@@ -1173,7 +1173,9 @@ bool CurveHitTester::hitTestVisibleSurface(
     Point3D *worldPoint,
     Point3D *worldNormal,
     int *hitFaceIndex,
-    int *hitShapeIndex) const
+    int *hitShapeIndex,
+    const QVector<int> &excludedShapeIndices,
+    bool backfaceCulling) const
 {
     if (worldPoint == nullptr || worldNormal == nullptr) {
         return false;
@@ -1181,12 +1183,58 @@ bool CurveHitTester::hitTestVisibleSurface(
 
     qreal nearestDepth = -std::numeric_limits<qreal>::infinity();
     bool found = false;
+    const Point3D viewDirection = transform.viewDirection();
     for (int objectIndex = 0; objectIndex < document.size(); ++objectIndex) {
         const ObjectId objectId = document.objectIdAt(objectIndex);
-        if (!document.isObjectVisible(objectId)) {
+        if (excludedShapeIndices.contains(objectIndex) ||
+            !document.isObjectVisible(objectId)) {
             continue;
         }
         const Shape &shape = document[objectIndex];
+        if (shape.geometryType == GeometryType::Picture) {
+            const SceneObject *sceneObject = document.object(objectId);
+            WorkPlaneFrame placedFrame = shapeWorkPlaneFrame(shape);
+            if (sceneObject != nullptr) {
+                placedFrame.origin.x += sceneObject->placementTranslation.x;
+                placedFrame.origin.y += sceneObject->placementTranslation.y;
+                placedFrame.origin.z += sceneObject->placementTranslation.z;
+            }
+            QPointF localPoint;
+            if (!transform.screenToWorkPlane(screenPosition,
+                                             viewportSize,
+                                             placedFrame,
+                                             &localPoint)) {
+                continue;
+            }
+            const QPolygonF polygon(pictureFrameCorners(shape));
+            if (polygon.size() < 3 ||
+                !polygon.containsPoint(localPoint, Qt::OddEvenFill)) {
+                continue;
+            }
+            const Point3D candidate =
+                workPlaneFramePointToWorld(localPoint, placedFrame);
+            if (backfaceCulling &&
+                (placedFrame.normal.x * viewDirection.x +
+                 placedFrame.normal.y * viewDirection.y +
+                 placedFrame.normal.z * viewDirection.z) <= 0.0) {
+                continue;
+            }
+            const qreal depth = transform.worldDirectionToView(candidate)
+                                    .towardCamera;
+            if (std::isfinite(depth) && (!found || depth > nearestDepth)) {
+                *worldPoint = candidate;
+                *worldNormal = placedFrame.normal;
+                if (hitFaceIndex != nullptr) {
+                    *hitFaceIndex = 0;
+                }
+                if (hitShapeIndex != nullptr) {
+                    *hitShapeIndex = objectIndex;
+                }
+                nearestDepth = depth;
+                found = true;
+            }
+            continue;
+        }
         if (shape.geometryType != GeometryType::NurbsSurface &&
             shape.geometryType != GeometryType::NurbsSolid) {
             continue;
@@ -1241,6 +1289,12 @@ bool CurveHitTester::hitTestVisibleSurface(
                 }
                 if (reverseFace) {
                     normal = {-normal.x, -normal.y, -normal.z};
+                }
+                if (backfaceCulling &&
+                    (normal.x * viewDirection.x +
+                     normal.y * viewDirection.y +
+                     normal.z * viewDirection.z) <= 0.0) {
+                    continue;
                 }
                 const qreal depth = transform.worldDirectionToView(candidate)
                                         .towardCamera;

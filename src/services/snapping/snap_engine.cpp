@@ -115,6 +115,16 @@ Point3D candidateWorldPoint(const SnapCandidate &candidate,
                : workPlaneFramePointToWorld(candidate.point, fallbackFrame);
 }
 
+qreal dotPoint3D(const Point3D &first, const Point3D &second)
+{
+    return first.x * second.x + first.y * second.y + first.z * second.z;
+}
+
+Point3D subtractPoint3D(const Point3D &first, const Point3D &second)
+{
+    return {first.x - second.x, first.y - second.y, first.z - second.z};
+}
+
 QVector<Point3D> nurbsSurfaceCorners(const NurbsSurface3D &surface,
                                      const Point3D &worldOffset = {})
 {
@@ -241,6 +251,78 @@ void SnapEngine::setSettings(const SnapSettings &settings)
 const SnapSettings &SnapEngine::settings() const
 {
     return settings_;
+}
+
+void SnapEngine::setOcclusionPlaneQuery(OcclusionPlaneQuery query)
+{
+    occlusionPlaneQuery_ = std::move(query);
+}
+
+SnapEngine::OcclusionPlane SnapEngine::occlusionPlaneAt(
+    const QPointF &screenPosition,
+    const QVector<int> &excludedShapeIndices,
+    OcclusionPlaneCache *cache) const
+{
+    const QPoint cacheKey(qRound(screenPosition.x()),
+                          qRound(screenPosition.y()));
+    if (cache != nullptr) {
+        const auto cached = cache->constFind(cacheKey);
+        if (cached != cache->cend()) {
+            return *cached;
+        }
+    }
+    OcclusionPlane plane;
+    plane.valid = occlusionPlaneQuery_ &&
+                  occlusionPlaneQuery_(screenPosition,
+                                       excludedShapeIndices,
+                                       &plane.point,
+                                       &plane.normal);
+    if (cache != nullptr) {
+        cache->insert(cacheKey, plane);
+    }
+    return plane;
+}
+
+bool SnapEngine::pointPassesOcclusionPlane(
+    const Point3D &worldPoint,
+    const OcclusionPlane &plane,
+    const ViewportTransform &transform) const
+{
+    if (!plane.valid) {
+        return true;
+    }
+
+    const qreal normalLength = std::sqrt(dotPoint3D(plane.normal,
+                                                    plane.normal));
+    if (!std::isfinite(normalLength) || normalLength <= 1.0e-15) {
+        return true;
+    }
+    Point3D normal{plane.normal.x / normalLength,
+                   plane.normal.y / normalLength,
+                   plane.normal.z / normalLength};
+    const Point3D viewDirection = transform.viewDirection();
+    if (dotPoint3D(normal, viewDirection) < 0.0) {
+        normal = {-normal.x, -normal.y, -normal.z};
+    }
+
+    // Blender clips snap candidates against the visible surface's plane,
+    // offset by a depth-scaled epsilon. Keep the same half-space rule while
+    // accounting for double precision coordinates in CAD-sized scenes.
+    const qreal signedDistance = dotPoint3D(
+        subtractPoint3D(worldPoint, plane.point), normal);
+    const qreal worldDepth =
+        transform.worldDirectionToView(worldPoint).towardCamera;
+    const qreal planeDepth =
+        transform.worldDirectionToView(plane.point).towardCamera;
+    const qreal coordinateScale = std::max<qreal>(
+        {1.0, std::abs(worldPoint.x), std::abs(worldPoint.y),
+         std::abs(worldPoint.z), std::abs(plane.point.x),
+         std::abs(plane.point.y), std::abs(plane.point.z)});
+    const qreal tolerance = std::max<qreal>(
+        {1.0e-7,
+         std::max(std::abs(worldDepth), std::abs(planeDepth)) * 1.0e-5,
+         std::numeric_limits<qreal>::epsilon() * coordinateScale * 64.0});
+    return std::isfinite(signedDistance) && signedDistance >= -tolerance;
 }
 
 QVector<QPointF> SnapEngine::rectangleVertices(const Shape &shape) const
@@ -1146,6 +1228,7 @@ SnapResult SnapEngine::findEdgeCenterSnapPoint(
     if (!settings_.enabled || viewportSize.isEmpty()) {
         return best;
     }
+    const OcclusionPlane occlusionPlane = occlusionPlaneAt(screenPosition);
     constexpr qreal snapRadiusPixels = 12.0;
     qreal bestDistance = snapRadiusPixels;
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
@@ -1165,7 +1248,10 @@ SnapResult SnapEngine::findEdgeCenterSnapPoint(
             }
             const qreal distance = std::hypot(candidateScreen.x() - screenPosition.x(),
                                               candidateScreen.y() - screenPosition.y());
-            if (distance <= bestDistance) {
+            if (distance <= bestDistance &&
+                pointPassesOcclusionPlane(worldPoint,
+                                          occlusionPlane,
+                                          transform)) {
                 bestDistance = distance;
                 best.type = SnapType::Midpoint;
                 best.point = transform.screenToWorld(candidateScreen, viewportSize);
@@ -2291,10 +2377,15 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
                                            const Point3D *anchor,
                                            const ViewportTransform &transform,
                                            const QSize &viewportSize,
-                                           const QVector<Point3D> &previewPoints) const
+                                           const QVector<Point3D> &previewPoints,
+                                           const QVector<int> &excludedShapeIndices,
+                                           bool forceEnabled,
+                                           bool includeTangentCandidates) const
 {
     SnapResult best;
-    if (!settings_.enabled || viewportSize.isEmpty()) return best;
+    if ((!settings_.enabled && !forceEnabled) || viewportSize.isEmpty()) return best;
+    const OcclusionPlane occlusionPlane =
+        occlusionPlaneAt(screenPosition, excludedShapeIndices);
     qreal bestDistance = 12.0;
     int bestPriority = -1;
     const auto considerWorld = [&](SnapType type, const Point3D &world) {
@@ -2302,6 +2393,10 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
         if (!transform.worldPointToScreen(world, viewportSize, &screen)) return;
         const qreal distance = std::hypot(screen.x() - screenPosition.x(),
                                           screen.y() - screenPosition.y());
+        if (distance > 12.0 ||
+            !pointPassesOcclusionPlane(world, occlusionPlane, transform)) {
+            return;
+        }
         const int priority = type == SnapType::Near ? 0 : 1;
         if (distance <= 12.0 && (priority > bestPriority ||
             (priority == bestPriority && distance <= bestDistance))) {
@@ -2319,7 +2414,10 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
     QVector<PlaneScene> scenes;
     QHash<QByteArray, int> sceneByFrame;
     for (int index = 0; index < document.size(); ++index) {
-        if (!document.isObjectVisible(document.objectIdAt(index))) continue;
+        if (excludedShapeIndices.contains(index) ||
+            !document.isObjectVisible(document.objectIdAt(index))) {
+            continue;
+        }
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(document[index]);
         const SceneObject *sourceObject =
             document.object(document.objectIdAt(index));
@@ -2366,7 +2464,8 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
                         scene.document, localAnchor, localCursor, shapeTransform, viewportSize)) {
                     consider(candidate);
                 }
-                if (std::abs(signedDistanceFromWorkPlaneFrame(*anchor, frame)) <= 1.0e-8) {
+                if (includeTangentCandidates &&
+                    std::abs(signedDistanceFromWorkPlaneFrame(*anchor, frame)) <= 1.0e-8) {
                     for (const SnapCandidate &candidate : tangentCandidates(
                             scene.document, localAnchor, shapeTransform, viewportSize)) {
                         consider(candidate);
@@ -2391,7 +2490,8 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
             }
             const qreal distance = std::hypot(screen.x() - screenPosition.x(),
                                               screen.y() - screenPosition.y());
-            if (distance < 12.0 && distance < bestDistance) {
+            if (distance < 12.0 && distance < bestDistance &&
+                pointPassesOcclusionPlane(point, occlusionPlane, transform)) {
                 bestDistance = distance;
                 bestPriority = 1;
                 best.type = SnapType::Endpoint;
@@ -2618,6 +2718,8 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
     coplanarScene.replaceObjects(coplanarObjects);
 
     const QPointF cursorScreen = transform.worldToScreen(rawPoint, viewportSize);
+    const OcclusionPlane occlusionPlane =
+        occlusionPlaneAt(cursorScreen, excludedShapeIndices);
     constexpr qreal snapRadiusPixels = 12.0;
     constexpr qreal nearSnapRadiusPixels = 18.0;
     qreal bestDistance = snapRadiusPixels;
@@ -2640,6 +2742,9 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
                                           ? nearSnapRadiusPixels
                                           : snapRadiusPixels;
         if (distance <= candidateRadius &&
+            pointPassesOcclusionPlane(candidateWorld,
+                                      occlusionPlane,
+                                      transform) &&
             (priority > bestPriority ||
              (priority == bestPriority && distance <= bestDistance))) {
             bestDistance = distance;
@@ -2705,6 +2810,13 @@ DragSnapResult SnapEngine::findDragSnap(
 
     const QSet<int> selectedSet(selectedShapeIndices.cbegin(),
                                 selectedShapeIndices.cend());
+    OcclusionPlaneCache occlusionPlaneCache;
+    const auto targetPassesOcclusion = [&](const Point3D &worldPoint,
+                                           const QPointF &screenPoint) {
+        const OcclusionPlane plane = occlusionPlaneAt(
+            screenPoint, selectedShapeIndices, &occlusionPlaneCache);
+        return pointPassesOcclusionPlane(worldPoint, plane, transform);
+    };
     bool hasTarget = false;
     bool hasNearTarget = false;
     for (int index = 0; index < document.size(); ++index) {
@@ -2804,12 +2916,15 @@ DragSnapResult SnapEngine::findDragSnap(
                               int targetComponentIndex) {
         const QPointF sourceScreen = transform.worldToScreen(sourcePoint, viewportSize);
         const QPointF targetScreen = transform.worldToScreen(targetPoint, viewportSize);
+        const Point3D targetWorld = workPlaneFramePointToWorld(
+            targetPoint, transform.workPlaneFrame());
         const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
                                            targetScreen.y() - sourceScreen.y());
         // As in point snapping, Near is a fallback: an enabled, specific
         // target such as Endpoint wins whenever it is within snap range.
         const int priority = type == SnapType::Near ? 0 : 1;
         if (distance <= snapRadiusPixels &&
+            targetPassesOcclusion(targetWorld, targetScreen) &&
             (priority > bestPriority ||
              (priority == bestPriority && distance <= bestDistance))) {
             bestDistance = distance;
@@ -2950,6 +3065,7 @@ DragSnapResult SnapEngine::findDragSnap(
                 target, shapeWorkPlaneFrame(targetShape));
             QPointF targetScreen;
             if (!transform.worldPointToScreen(targetWorld, viewportSize, &targetScreen)) continue;
+            if (!targetPassesOcclusion(targetWorld, targetScreen)) continue;
             for (const int sourceIndex : spatialSources.nearby(targetScreen)) {
                 const auto &source = worldSources[sourceIndex];
                 const auto &sourceScreen = sourceScreens[sourceIndex];
@@ -3014,6 +3130,24 @@ DragSnapResult SnapEngine::trackNearDragSnap(
     }
 
     const SnapCandidate &target = targets.first();
+    const Point3D targetWorld = target.hasWorldPoint
+                                    ? target.worldPoint
+                                    : workPlaneFramePointToWorld(
+                                          target.point,
+                                          transform.workPlaneFrame());
+    QPointF targetScreen;
+    if (!transform.worldPointToScreen(targetWorld,
+                                      viewportSize,
+                                      &targetScreen)) {
+        return result;
+    }
+    const OcclusionPlane occlusionPlane =
+        occlusionPlaneAt(targetScreen, selectedShapeIndices);
+    if (!pointPassesOcclusionPlane(targetWorld,
+                                   occlusionPlane,
+                                   transform)) {
+        return result;
+    }
     result.type = SnapType::Near;
     result.sourcePoint = sourcePoint;
     result.targetPoint = target.point;
@@ -3081,6 +3215,7 @@ DragSnapResult SnapEngine::findControlPointSnap(
     constexpr qreal snapRadiusPixels = 20.0;
     qreal bestDistance = snapRadiusPixels;
     int bestPriority = -1;
+    OcclusionPlaneCache occlusionPlaneCache;
 
     const auto consider = [&](SnapType type,
                               const Point3D &targetWorld,
@@ -3094,6 +3229,13 @@ DragSnapResult SnapEngine::findControlPointSnap(
         }
         const qreal distance = std::hypot(targetScreen.x() - sourceScreen.x(),
                                           targetScreen.y() - sourceScreen.y());
+        if (distance <= snapRadiusPixels) {
+            const OcclusionPlane plane = occlusionPlaneAt(
+                targetScreen, {}, &occlusionPlaneCache);
+            if (!pointPassesOcclusionPlane(targetWorld, plane, transform)) {
+                return;
+            }
+        }
         QPointF targetInSourcePlane;
         if (!transform.screenToWorkPlane(targetScreen,
                                          viewportSize,

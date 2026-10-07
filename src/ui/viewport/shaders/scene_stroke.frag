@@ -11,6 +11,7 @@ uniform int uPatternSegmentCount;
 uniform float uPatternSegments[8];
 uniform int uSmoothWire;
 uniform int uEditModeWire;
+uniform int uLinearDisplayBlend;
 smooth in vec4 gEdgeColor;
 flat in float vLength;
 flat in float gPatternOffsetPixels;
@@ -18,6 +19,13 @@ flat in vec4 gStartColor;
 flat in vec4 gEndColor;
 noperspective in vec2 vStrokePosition;
 out vec4 fragmentColor;
+
+vec3 srgbToLinear(vec3 color)
+{
+    vec3 low = color / 12.92;
+    vec3 high = pow((color + 0.055) / 1.055, vec3(2.4));
+    return mix(high, low, lessThanEqual(color, vec3(0.04045)));
+}
 
 void main()
 {
@@ -103,6 +111,9 @@ void main()
                                 0.0, 1.0);
     vec4 edgeColor = uEditModeWire != 0 ? gEdgeColor
                                        : mix(gStartColor, gEndColor, edgeParameter);
-    fragmentColor = vec4(uColor.rgb * edgeColor.rgb,
+    vec3 strokeColor = uLinearDisplayBlend != 0
+                           ? srgbToLinear(uColor.rgb)
+                           : uColor.rgb;
+    fragmentColor = vec4(strokeColor * edgeColor.rgb,
                          uColor.a * edgeColor.a * coverage);
 }

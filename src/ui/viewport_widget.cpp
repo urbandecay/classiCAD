@@ -4278,7 +4278,7 @@ protected:
                         selected && !objectComponentSelection.isEmpty();
                     edgeCage.color = selected && !hasComponentSelection
                                          ? viewportSelectionColor()
-                                         : QColor(20, 20, 20);
+                                         : QColor(Qt::black);
                     edgeCage.width = 1.0f;
                     edgeCage.editModeWire = true;
                     edgeCage.objectId = objectId;

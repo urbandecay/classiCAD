@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "viewport_gpu_surface.h"
 
+#include <QColorSpace>
 #include <QGuiApplication>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
@@ -18,9 +19,13 @@ ViewportGpuSurface::ViewportGpuSurface(QWidget *parent)
     , controlPointRenderer_(std::make_unique<ViewportControlPointRenderer>())
     , surfaceRenderer_(std::make_unique<ViewportSurfaceRenderer>())
 {
+    // Surface shading writes display-sRGB values; edit wires need Blender's
+    // linear-light blending for their antialiased coverage.
+    setTextureFormat(GL_SRGB8_ALPHA8);
     QSurfaceFormat format = QSurfaceFormat::defaultFormat();
     format.setVersion(3, 3);
     format.setProfile(QSurfaceFormat::CoreProfile);
+    format.setColorSpace(QColorSpace(QColorSpace::SRgb));
     format.setDepthBufferSize(24);
     format.setSamples(4);
     setFormat(format);

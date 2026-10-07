@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
+#include <utility>
 
 using namespace classiCAD;
 
@@ -323,6 +324,7 @@ int main(int argc, char *argv[])
             bool gpuMatcapDrawSucceeded = false;
             bool gpuBottomDrawSucceeded = false;
             bool gpuShadowDrawSucceeded = false;
+            bool gpuWireLinearBlendMatches = false;
             const QSize glSize(640, 480);
             ViewportTransform gpuTransform;
             gpuTransform.zoom() = 17.28;
@@ -412,6 +414,76 @@ int main(int argc, char *argv[])
                     functions.glFinish();
                     gpuMatcapImage = framebuffer.toImage();
                     framebuffer.release();
+                }
+            }
+            {
+                QOpenGLFramebufferObjectFormat wireFramebufferFormat;
+                wireFramebufferFormat.setAttachment(
+                    QOpenGLFramebufferObject::CombinedDepthStencil);
+                wireFramebufferFormat.setInternalTextureFormat(GL_SRGB8_ALPHA8);
+                QOpenGLFramebufferObject wireFramebuffer(
+                    glSize, wireFramebufferFormat);
+                passed &= check(wireFramebuffer.isValid(),
+                                "edit-wire color test must allocate an sRGB framebuffer");
+                if (wireFramebuffer.isValid()) {
+                    ViewportTransform wireTransform;
+                    wireTransform.zoom() = 32.0;
+                    wireTransform.setViewPreset(ViewportViewPreset::Top);
+                    QPointF firstWorld;
+                    QPointF secondWorld;
+                    const bool linePointsValid =
+                        wireTransform.screenToWorkPlane(
+                            QPointF(80.0, 240.0), glSize, WorkPlane::XY, 0.0,
+                            &firstWorld) &&
+                        wireTransform.screenToWorkPlane(
+                            QPointF(560.0, 240.0), glSize, WorkPlane::XY, 0.0,
+                            &secondWorld);
+                    ViewportDepthGeometry wireGeometry;
+                    if (linePointsValid) {
+                        wireGeometry.lineVertices = {
+                            QVector3D(float(firstWorld.x()),
+                                      float(firstWorld.y()), 0.0f),
+                            QVector3D(float(secondWorld.x()),
+                                      float(secondWorld.y()), 0.0f)};
+                    }
+                    ViewportSceneStroke editWire;
+                    editWire.color = Qt::black;
+                    editWire.width = 1.0f;
+                    editWire.editModeWire = true;
+                    editWire.preparedDepthGeometry =
+                        QSharedPointer<ViewportDepthGeometry>::create(
+                            std::move(wireGeometry));
+                    ViewportSceneRenderer wireRenderer;
+                    wireFramebuffer.bind();
+                    functions.glViewport(0, 0, glSize.width(), glSize.height());
+                    functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                    GLint wireColorEncoding = GL_LINEAR;
+                    functions.glGetFramebufferAttachmentParameteriv(
+                        GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                        GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING,
+                        &wireColorEncoding);
+                    functions.glClearColor(128.0f / 255.0f,
+                                           128.0f / 255.0f,
+                                           128.0f / 255.0f, 1.0f);
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    const bool wireDrawSucceeded = linePointsValid &&
+                        wireRenderer.draw({editWire}, wireTransform, glSize,
+                                          1.0, false, 1.0, true, true);
+                    functions.glFinish();
+                    // Read the encoded attachment directly; toImage() applies
+                    // a Qt color-space conversion to sRGB framebuffer values.
+                    unsigned char wireRawPixel[4] = {};
+                    functions.glReadPixels(300, 239, 1, 1, GL_RGBA,
+                                          GL_UNSIGNED_BYTE, wireRawPixel);
+                    gpuWireLinearBlendMatches =
+                        wireColorEncoding == GL_SRGB &&
+                        wireRawPixel[0] >= 82 && wireRawPixel[0] <= 105 &&
+                        wireRawPixel[0] == wireRawPixel[1] &&
+                        wireRawPixel[1] == wireRawPixel[2];
+                    passed &= check(wireDrawSucceeded &&
+                                        gpuWireLinearBlendMatches,
+                                    "smooth edit-wire coverage must blend in linear display space on an sRGB target");
+                    wireFramebuffer.release();
                 }
             }
             context.doneCurrent();

@@ -759,6 +759,18 @@ bool ViewportSceneRenderer::draw(
     GLint previousBlendDestinationAlpha = GL_ZERO;
     GLint previousBlendEquationRgb = GL_FUNC_ADD;
     GLint previousBlendEquationAlpha = GL_FUNC_ADD;
+    const GLboolean previousFramebufferSrgb = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+    GLint drawFramebuffer = 0;
+    GLint framebufferColorEncoding = GL_LINEAR;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+    if (drawFramebuffer != 0) {
+        glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING,
+            &framebufferColorEncoding);
+    }
+    const bool linearDisplayBlendAvailable =
+        drawFramebuffer != 0 && framebufferColorEncoding == GL_SRGB;
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
     glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSourceRgb);
@@ -843,6 +855,9 @@ bool ViewportSceneRenderer::draw(
                 "uDepthBias", depthTest ? 1.0e-5f : 0.0f);
             boundProgram = nextProgram;
         }
+        if (stroke.pointDiameter > 0.0f) {
+            glDisable(GL_FRAMEBUFFER_SRGB);
+        }
         boundProgram->setUniformValue(
             "uWorldOffset", QVector3D(stroke.worldOffset.x,
                                        stroke.worldOffset.y,
@@ -863,8 +878,17 @@ bool ViewportSceneRenderer::draw(
             const bool smoothWire = stroke.editModeWire
                                         ? smoothEditModeWires
                                         : smoothOverlayWires;
+            const bool linearDisplayBlend =
+                stroke.editModeWire && linearDisplayBlendAvailable;
+            if (linearDisplayBlend) {
+                glEnable(GL_FRAMEBUFFER_SRGB);
+            } else {
+                glDisable(GL_FRAMEBUFFER_SRGB);
+            }
             boundProgram->setUniformValue("uSmoothWire", smoothWire ? 1 : 0);
             boundProgram->setUniformValue("uEditModeWire", stroke.editModeWire ? 1 : 0);
+            boundProgram->setUniformValue("uLinearDisplayBlend",
+                                          linearDisplayBlend ? 1 : 0);
             const ViewportSceneStrokePattern pattern =
                 viewportSceneStrokePattern(stroke, widthPixels);
             int count = range.second;
@@ -925,6 +949,11 @@ bool ViewportSceneRenderer::draw(
                         static_cast<GLenum>(previousBlendDestinationRgb),
                         static_cast<GLenum>(previousBlendSourceAlpha),
                         static_cast<GLenum>(previousBlendDestinationAlpha));
+    if (previousFramebufferSrgb) {
+        glEnable(GL_FRAMEBUFFER_SRGB);
+    } else {
+        glDisable(GL_FRAMEBUFFER_SRGB);
+    }
     return true;
 }
 

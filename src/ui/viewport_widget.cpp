@@ -317,6 +317,108 @@ QString precisePoint3DText(const Point3D &point)
         .arg(point.z, 0, 'g', 12);
 }
 
+QString componentModeDiagnosticName(ComponentSelectionMode mode)
+{
+    switch (mode) {
+    case ComponentSelectionMode::Vertex:
+        return QStringLiteral("vertex");
+    case ComponentSelectionMode::Edge:
+        return QStringLiteral("edge");
+    case ComponentSelectionMode::Face:
+        return QStringLiteral("face");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString geometryTypeDiagnosticName(GeometryType type)
+{
+    switch (type) {
+    case GeometryType::NurbsSurface:
+        return QStringLiteral("nurbs-surface");
+    case GeometryType::NurbsSolid:
+        return QStringLiteral("nurbs-solid");
+    default:
+        return QStringLiteral("other");
+    }
+}
+
+QString tessellationPathDiagnosticName(
+    SurfaceTessellationCache::AcquisitionStats::Path path)
+{
+    using Path = SurfaceTessellationCache::AcquisitionStats::Path;
+    switch (path) {
+    case Path::RevisionHit:
+        return QStringLiteral("revision-hit");
+    case Path::TranslationHit:
+        return QStringLiteral("translation-hit");
+    case Path::TopologyHit:
+        return QStringLiteral("topology-hit");
+    case Path::Rebuilt:
+        return QStringLiteral("rebuilt");
+    case Path::Failed:
+        return QStringLiteral("failed");
+    case Path::None:
+        return QStringLiteral("direct");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString tessellationStrategyDiagnosticName(
+    PreparedNurbsSurfaceTessellation::Strategy strategy)
+{
+    using Strategy = PreparedNurbsSurfaceTessellation::Strategy;
+    switch (strategy) {
+    case Strategy::AffinePlane:
+        return QStringLiteral("affine-plane");
+    case Strategy::LinearExtrusion:
+        return QStringLiteral("linear-extrusion");
+    case Strategy::GenericGrid:
+        return QStringLiteral("generic-grid");
+    case Strategy::Failed:
+        return QStringLiteral("failed");
+    case Strategy::Unprepared:
+        return QStringLiteral("unprepared");
+    }
+    return QStringLiteral("unknown");
+}
+
+struct SurfaceDiagnosticCounts {
+    int faces = 0;
+    int controlPoints = 0;
+};
+
+SurfaceDiagnosticCounts surfaceDiagnosticCounts(const Shape &shape)
+{
+    if (shape.geometryType == GeometryType::NurbsSurface) {
+        return {1, int(shape.nurbsSurface.controlPoints.size())};
+    }
+    if (shape.geometryType != GeometryType::NurbsSolid) {
+        return {};
+    }
+    if (!shape.nurbsSolid.boundaryFaces.isEmpty()) {
+        SurfaceDiagnosticCounts counts;
+        counts.faces = int(shape.nurbsSolid.boundaryFaces.size());
+        for (const NurbsSurface3D &face : shape.nurbsSolid.boundaryFaces) {
+            counts.controlPoints += int(face.controlPoints.size());
+        }
+        return counts;
+    }
+
+    const NurbsSurface3D &base = shape.nurbsSolid.baseSurface;
+    const int wallCount = std::max(1, int(base.trimLoops.size()));
+    SurfaceDiagnosticCounts counts;
+    counts.faces = 2 + wallCount;
+    counts.controlPoints = 2 * int(base.controlPoints.size());
+    if (base.trimLoops.isEmpty()) {
+        counts.controlPoints += 10; // The derived rectangular wall has five CV pairs.
+    } else {
+        for (const NurbsSurfaceTrimLoop &loop : base.trimLoops) {
+            counts.controlPoints += 2 * int(loop.curve.controlPoints.size());
+        }
+    }
+    return counts;
+}
+
 ViewportDepthGeometry selectedSurfaceCage(const Shape &shape)
 {
     ViewportDepthGeometry geometry;
@@ -2103,29 +2205,43 @@ public:
 
         QVector<ObjectId> validSelection;
         QVector<QVector3D> selectedWorldVertices;
-        bool hasSelectedSurfaceVertices = false;
-        if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+        bool hasSelectedSurfaceComponents = false;
+        if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
+            componentSelectionMode_ == ComponentSelectionMode::Edge) {
             for (const ObjectId objectId : selected) {
                 const Shape *shape = document_.shape(objectId);
                 const SceneObject *object = document_.object(objectId);
-                const QSet<int> &vertices = componentSelectionForObject(objectId);
-                if (shape == nullptr || object == nullptr || vertices.isEmpty() ||
+                const QSet<int> &components = componentSelectionForObject(objectId);
+                if (shape == nullptr || object == nullptr || components.isEmpty() ||
                     !document_.isObjectEditable(objectId) ||
                     (shape->geometryType != GeometryType::NurbsSurface &&
                      shape->geometryType != GeometryType::NurbsSolid)) continue;
-                hasSelectedSurfaceVertices = true;
                 const ViewportDepthGeometry cage = selectedSurfaceCage(*shape);
                 const Point3D offset = object->placementTranslation;
                 const QVector3D placement(float(offset.x), float(offset.y), float(offset.z));
-                for (int vertex : vertices) {
-                    if (vertex >= 0 && vertex < cage.pointVertices.size())
-                        selectedWorldVertices.append(cage.pointVertices[vertex] + placement);
+                if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                    for (int vertex : components) {
+                        if (vertex >= 0 && vertex < cage.pointVertices.size())
+                            selectedWorldVertices.append(cage.pointVertices[vertex] + placement);
+                    }
+                } else {
+                    // An edge grab moves both ends together. Expanding the edge
+                    // to its world-space endpoints lets the same connected-CV
+                    // lookup used for vertex grabs deform every adjoining face.
+                    for (int edge : components) {
+                        const int first = edge * 2;
+                        if (edge < 0 || first + 1 >= cage.lineVertices.size())
+                            continue;
+                        selectedWorldVertices.append(cage.lineVertices[first] + placement);
+                        selectedWorldVertices.append(cage.lineVertices[first + 1] + placement);
+                    }
                 }
             }
+            hasSelectedSurfaceComponents = !selectedWorldVertices.isEmpty();
         }
-        if (hasSelectedSurfaceVertices) {
-            // Capture all occurrences of the selected world vertex, including
-            // adjoining editable surface objects and all faces of a solid.
+        if (hasSelectedSurfaceComponents) {
+            // Capture all occurrences of selected component endpoints,
+            // including adjoining editable surface objects and solid faces.
             for (int objectIndex = 0; objectIndex < document_.size(); ++objectIndex) {
                 const ObjectId objectId = document_.objectIdAt(objectIndex);
                 const SceneObject *object = document_.object(objectId);
@@ -2161,7 +2277,7 @@ public:
             }
             if (validSelection.isEmpty()) {
                 DebugLog::instance().write(
-                    QStringLiteral("beginGrab: selected vertex has no editable NURBS control vertex"));
+                    QStringLiteral("beginGrab: selected component has no editable NURBS control vertex"));
                 return false;
             }
         } else {
@@ -2218,6 +2334,38 @@ public:
         update();
         DebugLog::instance().write(QStringLiteral("beginGrab shapes=%1")
                                        .arg(grabTool_.objectIds().size()));
+        if (!surfaceControlPointGrabTargets_.isEmpty()) {
+            for (const ObjectId objectId : grabTool_.objectIds()) {
+                const Shape *shape = document_.shape(objectId);
+                if (shape == nullptr) {
+                    continue;
+                }
+                Shape diagnosticShape = *shape;
+                if (diagnosticShape.geometryType == GeometryType::NurbsSolid) {
+                    materializeNurbsSolidBoundary(&diagnosticShape.nurbsSolid);
+                }
+                const QVector<NurbsSurface3D> faces =
+                    shapeSurfaceFaces(diagnosticShape);
+                int controlPointCount = 0;
+                for (const NurbsSurface3D &face : faces) {
+                    controlPointCount += face.controlPoints.size();
+                }
+                const auto targets =
+                    surfaceControlPointGrabTargets_.constFind(objectId.value());
+                const int targetCount =
+                    targets == surfaceControlPointGrabTargets_.cend()
+                        ? 0 : targets->size();
+                DebugLog::instance().write(
+                    QStringLiteral("[grab-perf] begin object=%1 type=%2 mode=%3 selectedComponents=%4 faces=%5 controlPoints=%6 targetControlPoints=%7")
+                        .arg(objectId.value())
+                        .arg(geometryTypeDiagnosticName(shape->geometryType))
+                        .arg(componentModeDiagnosticName(componentSelectionMode_))
+                        .arg(componentSelectionForObject(objectId).size())
+                        .arg(faces.size())
+                        .arg(controlPointCount)
+                        .arg(targetCount));
+            }
+        }
         return true;
     }
 
@@ -2916,7 +3064,75 @@ protected:
         }
         ViewportRenderFrame frame =
             buildViewportRenderFrame(document_, viewportTransform_, size(), input);
-        viewportGeometryCache_.prepareFrame(&frame, &surfaceTessellationCache_);
+        ViewportGeometryCache::BuildObserver buildObserver;
+        if (grabTool_.isActive() &&
+            !surfaceControlPointGrabTargets_.isEmpty()) {
+            buildObserver = [this](const ViewportRenderObject &object,
+                                   const ViewportDepthGeometry &geometry,
+                                   qint64 elapsedMicroseconds) {
+                if (object.shape.geometryType != GeometryType::NurbsSurface &&
+                    object.shape.geometryType != GeometryType::NurbsSolid) {
+                    return;
+                }
+                static QHash<quint64, qint64> lastMeshLogMilliseconds;
+                const qint64 nowMilliseconds =
+                    QDateTime::currentMSecsSinceEpoch();
+                const quint64 objectKey = object.objectId.value();
+                if (nowMilliseconds -
+                        lastMeshLogMilliseconds.value(objectKey, 0) < 150) {
+                    return;
+                }
+                lastMeshLogMilliseconds.insert(objectKey, nowMilliseconds);
+                const SurfaceDiagnosticCounts counts =
+                    surfaceDiagnosticCounts(object.shape);
+                QStringList faceStages;
+                for (const ViewportDepthGeometry::SurfaceBuildTiming &stage :
+                     geometry.surfaceBuildTimings) {
+                    faceStages.append(
+                        QStringLiteral("face%1{degree=%2/%3,cv=%4x%5,trim=%6,algorithm=%7,cache=%8,samples=%9,triangles=%10,wire=%11,acquireUs=%12,prepareUs=%13,topologyUpdateUs=%14,evalSetupUs=%15,trimSetupUs=%16,isocurveUs=%17,trimWireUs=%18,gridUs=%19,gridCells=%20,gridSplits=%21,boundaryTests=%22,wireUs=%23,normalsUs=%24,expandUs=%25}")
+                            .arg(stage.faceIndex)
+                            .arg(stage.degreeU)
+                            .arg(stage.degreeV)
+                            .arg(stage.controlVertexCountU)
+                            .arg(stage.controlVertexCountV)
+                            .arg(stage.trimLoopCount)
+                            .arg(tessellationStrategyDiagnosticName(
+                                stage.tessellationStrategy))
+                            .arg(tessellationPathDiagnosticName(stage.cachePath))
+                            .arg(stage.sampledVertexCount)
+                            .arg(stage.triangleCount)
+                            .arg(stage.wireSegmentCount)
+                            .arg(stage.acquisitionMicroseconds)
+                            .arg(stage.tessellationPrepareMicroseconds)
+                            .arg(stage.topologyUpdateMicroseconds)
+                            .arg(stage.preparation.evaluatorPrepareMicroseconds)
+                            .arg(stage.preparation.trimPrepareMicroseconds)
+                            .arg(stage.preparation.isocurveMicroseconds)
+                            .arg(stage.preparation.trimBoundaryWireMicroseconds)
+                            .arg(stage.preparation.genericGridMicroseconds)
+                            .arg(stage.preparation.genericGridCellVisits)
+                            .arg(stage.preparation.genericGridSubdivisions)
+                            .arg(stage.preparation.trimBoundarySegmentTests)
+                            .arg(stage.wireframeMicroseconds)
+                            .arg(stage.normalPreparationMicroseconds)
+                            .arg(stage.triangleExpansionMicroseconds));
+                }
+                DebugLog::instance().write(
+                    QStringLiteral("[grab-perf] viewport-mesh object=%1 type=%2 revision=%3 faces=%4 controlPoints=%5 expandedTriangleVertices=%6 triangles=%7 wireSegments=%8 buildUs=%9 faceStages=[%10]")
+                        .arg(object.objectId.value())
+                        .arg(geometryTypeDiagnosticName(object.shape.geometryType))
+                        .arg(object.geometryRevision)
+                        .arg(counts.faces)
+                        .arg(counts.controlPoints)
+                        .arg(geometry.surfaceVertices.size())
+                        .arg(geometry.surfaceVertices.size() / 3)
+                        .arg(geometry.lineVertices.size() / 2)
+                        .arg(elapsedMicroseconds)
+                        .arg(faceStages.join(QLatin1Char(';'))));
+            };
+        }
+        viewportGeometryCache_.prepareFrame(&frame, &surfaceTessellationCache_,
+                                            buildObserver);
         return frame;
     }
 
@@ -3947,6 +4163,12 @@ protected:
                        ViewportControlPointRenderer *controlPointRenderer,
                        ViewportSurfaceRenderer *surfaceRenderer)
     {
+        const bool traceComponentGrab = grabTool_.isActive() &&
+                                        !surfaceControlPointGrabTargets_.isEmpty();
+        QElapsedTimer viewportPaintTimer;
+        if (traceComponentGrab) {
+            viewportPaintTimer.start();
+        }
         invalidateEraseGeometryCacheForView();
         if (nativeRenderer != nullptr) {
             nativeRenderer->setSurfaceTessellationCache(
@@ -5577,6 +5799,16 @@ protected:
             painter, size(), navigationController_.hoverPosition());
         drawViewportShadingControls(painter);
         drawComponentModeControls(painter);
+        if (traceComponentGrab) {
+            static quint64 paintSequence = 0;
+            ++paintSequence;
+            if (paintSequence % 10 == 0) {
+                DebugLog::instance().write(
+                    QStringLiteral("[grab-perf] viewport-paint sequence=%1 elapsedUs=%2")
+                        .arg(paintSequence)
+                        .arg(viewportPaintTimer.nsecsElapsed() / 1000));
+            }
+        }
     }
 
     void dispatchSyntheticMouseEvent(QEvent::Type type,
@@ -12726,20 +12958,39 @@ private:
             for (const ObjectId objectId : objectIds) {
                 const auto targets = surfaceControlPointGrabTargets_.constFind(objectId.value());
                 if (targets == surfaceControlPointGrabTargets_.cend()) continue;
-                document_.mutateGeometry(objectId, [&](Shape &shape) {
+                const Shape *sourceShape = document_.shape(objectId);
+                const GeometryType sourceType = sourceShape == nullptr
+                    ? GeometryType::Point : sourceShape->geometryType;
+                int faceCount = 0;
+                int controlPointCount = 0;
+                int movedControlPointCount = 0;
+                qint64 materializeMicroseconds = 0;
+                qint64 validationMicroseconds = 0;
+                qint64 selectionRemapMicroseconds = 0;
+                QElapsedTimer mutationTimer;
+                mutationTimer.start();
+                const bool mutated = document_.mutateGeometry(objectId, [&](Shape &shape) {
                     Shape candidate = shape;
                     if (candidate.geometryType == GeometryType::NurbsSolid) {
-                        if (!materializeNurbsSolidBoundary(&candidate.nurbsSolid)) return false;
+                        QElapsedTimer materializeTimer;
+                        materializeTimer.start();
+                        const bool materialized =
+                            materializeNurbsSolidBoundary(&candidate.nurbsSolid);
+                        materializeMicroseconds = materializeTimer.nsecsElapsed() / 1000;
+                        if (!materialized) return false;
                     } else if (candidate.geometryType != GeometryType::NurbsSurface) {
                         return false;
                     }
                     int index = 0;
                     const auto moveFace = [&](NurbsSurface3D &face) {
+                        ++faceCount;
                         for (Point3D &point : face.controlPoints) {
+                            ++controlPointCount;
                             if (targets->contains(index)) {
                                 point.x += worldDelta.x;
                                 point.y += worldDelta.y;
                                 point.z += worldDelta.z;
+                                ++movedControlPointCount;
                             }
                             ++index;
                         }
@@ -12747,13 +12998,24 @@ private:
                     if (candidate.geometryType == GeometryType::NurbsSolid) {
                         for (NurbsSurface3D &face : candidate.nurbsSolid.boundaryFaces)
                             moveFace(face);
-                        if (!validateNurbsSolid(candidate.nurbsSolid)) return false;
+                        QElapsedTimer validationTimer;
+                        validationTimer.start();
+                        const bool valid = validateNurbsSolid(candidate.nurbsSolid);
+                        validationMicroseconds = validationTimer.nsecsElapsed() / 1000;
+                        if (!valid) return false;
                     } else {
                         moveFace(candidate.nurbsSurface);
-                        if (!validateNurbsSurface(candidate.nurbsSurface)) return false;
+                        QElapsedTimer validationTimer;
+                        validationTimer.start();
+                        const bool valid = validateNurbsSurface(candidate.nurbsSurface);
+                        validationMicroseconds = validationTimer.nsecsElapsed() / 1000;
+                        if (!valid) return false;
                     }
-                    if (selection_.contains(objectId) &&
+                    if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                        selection_.contains(objectId) &&
                         !componentSelectionForObject(objectId).isEmpty()) {
+                        QElapsedTimer selectionRemapTimer;
+                        selectionRemapTimer.start();
                         QVector<QVector3D> movedPoints;
                         int pointIndex = 0;
                         for (const NurbsSurface3D &face : shapeSurfaceFaces(candidate)) {
@@ -12772,10 +13034,35 @@ private:
                         componentSelectionForObject(objectId) = vertices;
                         if (componentSelectionObject_ == objectId)
                             activeComponentIndices_[0] = vertices.isEmpty() ? -1 : *vertices.cbegin();
+                        selectionRemapMicroseconds =
+                            selectionRemapTimer.nsecsElapsed() / 1000;
                     }
                     shape = std::move(candidate);
                     return true;
                 });
+                const qint64 mutationMicroseconds = mutationTimer.nsecsElapsed() / 1000;
+                static QHash<quint64, qint64> lastDeformLogMilliseconds;
+                const qint64 nowMilliseconds =
+                    QDateTime::currentMSecsSinceEpoch();
+                const quint64 objectKey = objectId.value();
+                if (nowMilliseconds -
+                        lastDeformLogMilliseconds.value(objectKey, 0) >= 150) {
+                    lastDeformLogMilliseconds.insert(objectKey, nowMilliseconds);
+                    DebugLog::instance().write(
+                        QStringLiteral("[grab-perf] deform object=%1 type=%2 ok=%3 faces=%4 controlPoints=%5 targetControlPoints=%6 movedControlPoints=%7 materializeUs=%8 validateUs=%9 selectionRemapUs=%10 mutateUs=%11 delta=%12")
+                            .arg(objectId.value())
+                            .arg(geometryTypeDiagnosticName(sourceType))
+                            .arg(mutated)
+                            .arg(faceCount)
+                            .arg(controlPointCount)
+                            .arg(targets->size())
+                            .arg(movedControlPointCount)
+                            .arg(materializeMicroseconds)
+                            .arg(validationMicroseconds)
+                            .arg(selectionRemapMicroseconds)
+                            .arg(mutationMicroseconds)
+                            .arg(precisePoint3DText(worldDelta)));
+                }
             }
             return;
         }
@@ -12861,6 +13148,8 @@ private:
         if (!grabTool_.isActive() || grabTool_.isPickingBasePoint()) {
             return;
         }
+        QElapsedTimer grabUpdateTimer;
+        grabUpdateTimer.start();
 
         const bool viewPlaneGrab = !grabTool_.hasBasePoint() &&
                                    dragAxisLock_ == DragAxisLock::None &&
@@ -12923,6 +13212,13 @@ private:
             }
             currentDragSnap_ = DragSnapResult{};
             setSelectionLastDragWorldPosition(rawCursorWorld_);
+            static quint64 zGrabUpdateSequence = 0;
+            if (++zGrabUpdateSequence % 10 == 0) {
+                DebugLog::instance().write(
+                    QStringLiteral("[grab-perf] update mode=%1 axis=z elapsedUs=%2")
+                        .arg(componentModeDiagnosticName(componentSelectionMode_))
+                        .arg(grabUpdateTimer.nsecsElapsed() / 1000));
+            }
             return;
         }
         if (grabTool_.hasBasePoint()) {
@@ -12990,7 +13286,7 @@ private:
                     currentDragSnap_ = DragSnapResult{};
                     setSelectionLastDragWorldPosition(rawCursorWorld_);
                     DebugLog::instance().write(
-                        QStringLiteral("grab view-plane delta=(%1,%2,%3) snap=%4 cursorScreen=%5 pivot=(%6,%7,%8)")
+                        QStringLiteral("grab view-plane delta=(%1,%2,%3) snap=%4 cursorScreen=%5 pivot=(%6,%7,%8) updateUs=%9")
                             .arg(appliedDelta.x, 0, 'g', 12)
                             .arg(appliedDelta.y, 0, 'g', 12)
                             .arg(appliedDelta.z, 0, 'g', 12)
@@ -13000,7 +13296,8 @@ private:
                             .arg(pointText(screenPosition))
                             .arg(grabViewPlaneFrame_.origin.x, 0, 'g', 12)
                             .arg(grabViewPlaneFrame_.origin.y, 0, 'g', 12)
-                            .arg(grabViewPlaneFrame_.origin.z, 0, 'g', 12));
+                            .arg(grabViewPlaneFrame_.origin.z, 0, 'g', 12)
+                            .arg(grabUpdateTimer.nsecsElapsed() / 1000));
                     if (!viewPlaneSnapBreakaway && surfaceControlPointGrabTargets_.isEmpty()) {
                         currentDragSnap_ = findDragSnap(dragIndices);
                         if (currentDragSnap_.isValid()) {
@@ -13141,7 +13438,7 @@ private:
         }
         setSelectionLastDragWorldPosition(rawCursorWorld_);
         DebugLog::instance().write(
-            QStringLiteral("grab move delta=%1 worldDelta=(%2,%3,%4) cursorWorld=%5 basePoint=%6 baseWorld=(%7,%8,%9) snap=%10 snapWorld=(%11,%12,%13) axisLock=%14")
+            QStringLiteral("grab move delta=%1 worldDelta=(%2,%3,%4) cursorWorld=%5 basePoint=%6 baseWorld=(%7,%8,%9) snap=%10 snapWorld=(%11,%12,%13) axisLock=%14 updateUs=%15")
                 .arg(pointText(delta))
                 .arg(appliedWorldDelta.x, 0, 'g', 12)
                 .arg(appliedWorldDelta.y, 0, 'g', 12)
@@ -13157,7 +13454,8 @@ private:
                 .arg(currentSnap_.worldPoint.x, 0, 'g', 12)
                 .arg(currentSnap_.worldPoint.y, 0, 'g', 12)
                 .arg(currentSnap_.worldPoint.z, 0, 'g', 12)
-                .arg(dragAxisLockName(dragAxisLock_)));
+                .arg(dragAxisLockName(dragAxisLock_))
+                .arg(grabUpdateTimer.nsecsElapsed() / 1000));
     }
 
     QPointF screenToWorld(const QPointF &screen) const

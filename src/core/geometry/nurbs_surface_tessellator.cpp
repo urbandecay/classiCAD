@@ -4,6 +4,7 @@
 #include "core/geometry/surface_trim_region.h"
 
 #include <QHash>
+#include <QElapsedTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -52,10 +53,14 @@ bool segmentIntersectsBounds(const QPointF &start,
 }
 
 bool trimBoundaryIntersects(const PreparedNurbsSurfaceTrimRegion &region,
-                            const ParameterBounds &bounds)
+                            const ParameterBounds &bounds,
+                            quint64 *segmentTestCount = nullptr)
 {
     for (const PreparedNurbsSurfaceTrimRegion::Loop &loop : region.loops()) {
         for (int index = 0; index < loop.points.size(); ++index) {
+            if (segmentTestCount != nullptr) {
+                ++*segmentTestCount;
+            }
             if (segmentIntersectsBounds(loop.points[index],
                                         loop.points[(index + 1) % loop.points.size()],
                                         bounds)) {
@@ -109,10 +114,7 @@ QVector<PreparedNurbsSurfaceTessellation::Polyline> clippedIsocurves(
             }
         }
         const qreal safeFraction = std::max<qreal>(0.0, lower - 1.0e-10);
-        const QPointF parameter = inside + (outside - inside) * safeFraction;
-        Point3D point;
-            evaluator.evaluate(parameter.x(), parameter.y(), &point);
-        return point;
+        return inside + (outside - inside) * safeFraction;
     };
 
     const auto appendFamily = [&](bool varyU) {
@@ -144,18 +146,33 @@ QVector<PreparedNurbsSurfaceTessellation::Polyline> clippedIsocurves(
                 const bool inside = evaluated && trimRegion.contains(parameter);
                 if (evaluated && previousEvaluated && inside != previousInside) {
                     if (previousInside) {
-                        current.points.append(boundaryInsidePoint(previousParameter,
-                                                                  parameter));
+                        const QPointF boundaryParameter =
+                            boundaryInsidePoint(previousParameter, parameter);
+                        Point3D boundaryPoint;
+                        if (evaluator.evaluate(boundaryParameter.x(),
+                                               boundaryParameter.y(),
+                                               &boundaryPoint)) {
+                            current.parameters.append(boundaryParameter);
+                            current.points.append(boundaryPoint);
+                        }
                         if (current.points.size() > 1) {
                             result.append(std::move(current));
                         }
                         current = Polyline{};
                     } else if (inside) {
-                        current.points.append(boundaryInsidePoint(parameter,
-                                                                  previousParameter));
+                        const QPointF boundaryParameter =
+                            boundaryInsidePoint(parameter, previousParameter);
+                        Point3D boundaryPoint;
+                        if (evaluator.evaluate(boundaryParameter.x(),
+                                               boundaryParameter.y(),
+                                               &boundaryPoint)) {
+                            current.parameters.append(boundaryParameter);
+                            current.points.append(boundaryPoint);
+                        }
                     }
                 }
                 if (inside) {
+                    current.parameters.append(parameter);
                     current.points.append(point);
                 } else if (current.points.size() > 1) {
                     result.append(std::move(current));
@@ -186,6 +203,7 @@ QVector<PreparedNurbsSurfaceTessellation::Polyline> sampledTrimBoundaries(
     for (const PreparedNurbsSurfaceTrimRegion::Loop &loop : trimRegion.loops()) {
         PreparedNurbsSurfaceTessellation::Polyline polyline;
         polyline.points.reserve(loop.points.size() + 1);
+        polyline.parameters.reserve(loop.points.size() + 1);
         for (const QPointF &parameter : loop.points) {
             Point3D point;
             if (!evaluator.evaluate(parameter.x(), parameter.y(), &point)) {
@@ -193,9 +211,11 @@ QVector<PreparedNurbsSurfaceTessellation::Polyline> sampledTrimBoundaries(
                 break;
             }
             polyline.points.append(point);
+            polyline.parameters.append(parameter);
         }
         if (polyline.points.size() >= 3) {
             polyline.points.append(polyline.points.first());
+            polyline.parameters.append(polyline.parameters.first());
             result.append(std::move(polyline));
         }
     }
@@ -206,17 +226,30 @@ QVector<PreparedNurbsSurfaceTessellation::Polyline> sampledTrimBoundaries(
 
 bool PreparedNurbsSurfaceTessellation::prepare(const NurbsSurface3D &surface)
 {
-    return prepare(surface, Options{});
+    return prepare(surface, Options{}, nullptr);
 }
 
 bool PreparedNurbsSurfaceTessellation::prepare(
     const NurbsSurface3D &surface,
     const Options &options)
 {
+    return prepare(surface, options, nullptr);
+}
+
+bool PreparedNurbsSurfaceTessellation::prepare(
+    const NurbsSurface3D &surface,
+    const Options &options,
+    PreparationStats *stats)
+{
+    if (stats != nullptr) {
+        *stats = {};
+    }
     vertices_.clear();
+    vertexParameters_.clear();
     triangles_.clear();
     wireframe_.clear();
     valid_ = false;
+    strategy_ = Strategy::Failed;
     if (options.gridCount < 1 ||
         options.gridCount > 256 || options.trimBoundaryDepth < 0 ||
         options.trimBoundaryDepth > 8 || options.isocurveCount < 1 ||
@@ -229,6 +262,10 @@ bool PreparedNurbsSurfaceTessellation::prepare(
     qreal vStart = 0.0;
     qreal vEnd = 0.0;
     PreparedNurbsSurfaceEvaluator surfaceEvaluator;
+    QElapsedTimer stageTimer;
+    if (stats != nullptr) {
+        stageTimer.start();
+    }
     if (!surfaceEvaluator.prepare(surface) ||
         !surfaceEvaluator.parameterDomains(&uStart,
                                           &uEnd,
@@ -236,9 +273,17 @@ bool PreparedNurbsSurfaceTessellation::prepare(
                                           &vEnd)) {
         return false;
     }
+    if (stats != nullptr) {
+        stats->evaluatorPrepareMicroseconds = stageTimer.nsecsElapsed() / 1000;
+        stageTimer.restart();
+    }
     PreparedNurbsSurfaceTrimRegion trimRegion;
     if (!trimRegion.prepare(surface, options.trimSamples)) {
         return false;
+    }
+    if (stats != nullptr) {
+        stats->trimPrepareMicroseconds = stageTimer.nsecsElapsed() / 1000;
+        stageTimer.restart();
     }
 
     wireframe_ = clippedIsocurves(surfaceEvaluator,
@@ -248,7 +293,14 @@ bool PreparedNurbsSurfaceTessellation::prepare(
                                   uEnd,
                                   vStart,
                                   vEnd);
+    if (stats != nullptr) {
+        stats->isocurveMicroseconds = stageTimer.nsecsElapsed() / 1000;
+        stageTimer.restart();
+    }
     wireframe_ += sampledTrimBoundaries(surfaceEvaluator, trimRegion);
+    if (stats != nullptr) {
+        stats->trimBoundaryWireMicroseconds = stageTimer.nsecsElapsed() / 1000;
+    }
 
     // An affine plane with one convex trim needs only boundary triangles.
     // Validate convexity against every edge so self-intersecting or concave
@@ -324,6 +376,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
                 triangles_.append({0, i, i + 1 < polygon.size() ? i + 1 : 1});
             }
             valid_ = true;
+            strategy_ = Strategy::AffinePlane;
             return true;
         }
     }
@@ -396,6 +449,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
             previousRow = row;
         }
         valid_ = !triangles_.isEmpty();
+        strategy_ = valid_ ? Strategy::LinearExtrusion : Strategy::Failed;
         return valid_;
     }
 
@@ -421,6 +475,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
         }
         const int vertexIndex = vertices_.size();
         vertices_.append(point);
+        vertexParameters_.append(parameter);
         vertexIndices.insert(key, vertexIndex);
         return vertexIndex;
     };
@@ -441,11 +496,18 @@ bool PreparedNurbsSurfaceTessellation::prepare(
         return true;
     };
 
+    QElapsedTimer genericGridTimer;
+    if (stats != nullptr) {
+        genericGridTimer.start();
+    }
     const auto tessellateCell = [&](auto &&self,
                                     int u0,
                                     int v0,
                                     int step,
                                     int depth) -> void {
+        if (stats != nullptr) {
+            ++stats->genericGridCellVisits;
+        }
         const int u1 = u0 + step;
         const int v1 = v0 + step;
         const QPointF p00 = parameterAt(u0, v0, meshGridSize,
@@ -467,7 +529,11 @@ bool PreparedNurbsSurfaceTessellation::prepare(
         const bool insideCenter = trimRegion.contains(center);
         const ParameterBounds bounds{p00.x(), p11.x(), p00.y(), p11.y()};
         const bool crossesBoundary = trimRegion.isTrimmed() &&
-                                     trimBoundaryIntersects(trimRegion, bounds);
+                                     trimBoundaryIntersects(
+                                         trimRegion, bounds,
+                                         stats != nullptr
+                                             ? &stats->trimBoundarySegmentTests
+                                             : nullptr);
         const bool allInside = inside00 && inside10 && inside11 && inside01 &&
                                insideCenter;
         const bool allOutside = !inside00 && !inside10 && !inside11 &&
@@ -481,6 +547,9 @@ bool PreparedNurbsSurfaceTessellation::prepare(
             return;
         }
         if (depth < options.trimBoundaryDepth && step > 1) {
+            if (stats != nullptr) {
+                ++stats->genericGridSubdivisions;
+            }
             const int halfStep = step / 2;
             self(self, u0, v0, halfStep, depth + 1);
             self(self, u0 + halfStep, v0, halfStep, depth + 1);
@@ -516,13 +585,65 @@ bool PreparedNurbsSurfaceTessellation::prepare(
                            0);
         }
     }
+    if (stats != nullptr) {
+        stats->genericGridMicroseconds = genericGridTimer.nsecsElapsed() / 1000;
+    }
     valid_ = true;
+    strategy_ = Strategy::GenericGrid;
+    return true;
+}
+
+bool PreparedNurbsSurfaceTessellation::updateControlPointPositions(
+    const NurbsSurface3D &surface,
+    PreparedNurbsSurfaceTessellation *result) const
+{
+    if (result == nullptr || !valid_ || strategy_ != Strategy::GenericGrid ||
+        vertexParameters_.size() != vertices_.size()) {
+        return false;
+    }
+    for (const Polyline &line : wireframe_) {
+        if (line.parameters.size() != line.points.size()) {
+            return false;
+        }
+    }
+
+    PreparedNurbsSurfaceEvaluator evaluator;
+    if (!evaluator.prepare(surface)) {
+        return false;
+    }
+    PreparedNurbsSurfaceTessellation updated = *this;
+    for (int i = 0; i < vertexParameters_.size(); ++i) {
+        const QPointF &parameter = vertexParameters_[i];
+        if (!evaluator.evaluate(parameter.x(), parameter.y(),
+                                &updated.vertices_[i])) {
+            return false;
+        }
+    }
+    for (int lineIndex = 0; lineIndex < wireframe_.size(); ++lineIndex) {
+        const Polyline &sourceLine = wireframe_[lineIndex];
+        Polyline &updatedLine = updated.wireframe_[lineIndex];
+        for (int pointIndex = 0; pointIndex < sourceLine.parameters.size();
+             ++pointIndex) {
+            const QPointF &parameter = sourceLine.parameters[pointIndex];
+            if (!evaluator.evaluate(parameter.x(), parameter.y(),
+                                    &updatedLine.points[pointIndex])) {
+                return false;
+            }
+        }
+    }
+    *result = std::move(updated);
     return true;
 }
 
 bool PreparedNurbsSurfaceTessellation::isValid() const
 {
     return valid_;
+}
+
+PreparedNurbsSurfaceTessellation::Strategy
+PreparedNurbsSurfaceTessellation::strategy() const
+{
+    return strategy_;
 }
 
 PreparedNurbsSurfaceTessellation PreparedNurbsSurfaceTessellation::translated(

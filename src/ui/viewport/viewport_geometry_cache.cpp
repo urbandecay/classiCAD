@@ -4,13 +4,14 @@
 
 #include "viewport_render_frame.h"
 
+#include <QElapsedTimer>
 #include <QSet>
 
 namespace classiCAD {
-
 void ViewportGeometryCache::prepareFrame(
     ViewportRenderFrame *frame,
-    const SurfaceTessellationCache *surfaceCache)
+    const SurfaceTessellationCache *surfaceCache,
+    const BuildObserver &buildObserver)
 {
     if (frame == nullptr) {
         return;
@@ -58,9 +59,18 @@ void ViewportGeometryCache::prepareFrame(
             entry.geometryRevision = object.geometryRevision;
             entry.preparedGeometryRevision = object.geometryRevision;
             entry.sourceShape = object.shape;
+            QElapsedTimer buildTimer;
+            if (buildObserver) {
+                buildTimer.start();
+            }
             entry.geometry =
                 QSharedPointer<ViewportDepthGeometry>::create(
-                    buildViewportDepthGeometry(object, surfaceCache));
+                    buildViewportDepthGeometry(object, surfaceCache,
+                                               bool(buildObserver)));
+            if (buildObserver) {
+                buildObserver(object, *entry.geometry,
+                              buildTimer.nsecsElapsed() / 1000);
+            }
             cached = entries_.insert(id, std::move(entry));
         }
         object.preparedDepthGeometry = cached->geometry;

@@ -6,6 +6,12 @@ world space including object placement; unrelated control vertices stay fixed.
 Each preview starts from the captured source geometry. Commit and cancel use
 one history snapshot for all affected objects.
 
+G in edge mode moves both endpoints of each selected surface edge by the same
+world-space displacement. Every coincident control vertex on connected
+editable surfaces follows either endpoint, so adjoining faces stay connected.
+Free movement and the existing axis constraints work through the same Grab
+interaction as vertex mode.
+
 An extrusion cannot describe an independently moved corner. Rectangular
 extrusion solids therefore materialize their exact caps and degree-one wall
 panels into `NurbsExtrusionSolid3D::boundaryFaces` on the first corner edit.

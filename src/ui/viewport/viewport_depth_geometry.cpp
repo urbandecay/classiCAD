@@ -11,6 +11,7 @@
 
 #include <QCryptographicHash>
 #include <QDataStream>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QIODevice>
 
@@ -262,22 +263,65 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                                  ObjectId objectId = ObjectId::invalid(),
                                  quint64 geometryRevision = 0,
                                  int faceIndex = 0,
-                                 bool reverseOrientation = false)
+                                 bool reverseOrientation = false,
+                                 bool collectBuildTimings = false)
 {
     if (geometry == nullptr) {
         return;
     }
+    ViewportDepthGeometry::SurfaceBuildTiming timing;
+    timing.faceIndex = faceIndex;
+    timing.degreeU = surface.degreeU;
+    timing.degreeV = surface.degreeV;
+    timing.controlVertexCountU = surface.controlVertexCountU;
+    timing.controlVertexCountV = surface.controlVertexCountV;
+    timing.trimLoopCount = int(surface.trimLoops.size());
+
     PreparedNurbsSurfaceTessellation localTessellation;
     QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
     const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+    SurfaceTessellationCache::AcquisitionStats acquisitionStats;
+    QElapsedTimer acquisitionTimer;
+    if (collectBuildTimings) {
+        acquisitionTimer.start();
+    }
     if (cache != nullptr) {
-        cachedTessellation = cache->acquire(objectId, geometryRevision, surface, faceIndex);
+        cachedTessellation = cache->acquire(
+            objectId, geometryRevision, surface, faceIndex,
+            collectBuildTimings ? &acquisitionStats : nullptr);
         tessellation = cachedTessellation.data();
     } else if (localTessellation.prepare(surface)) {
         tessellation = &localTessellation;
+        if (collectBuildTimings) {
+            acquisitionStats.prepareMicroseconds =
+                acquisitionTimer.nsecsElapsed() / 1000;
+        }
+    }
+    if (collectBuildTimings) {
+        timing.acquisitionMicroseconds = acquisitionTimer.nsecsElapsed() / 1000;
+        timing.tessellationPrepareMicroseconds =
+            acquisitionStats.prepareMicroseconds;
+        timing.topologyUpdateMicroseconds =
+            acquisitionStats.topologyUpdateMicroseconds;
+        timing.preparation = acquisitionStats.preparation;
+        timing.cachePath = acquisitionStats.path;
     }
     if (tessellation == nullptr) {
+        if (collectBuildTimings) {
+            timing.tessellationStrategy =
+                PreparedNurbsSurfaceTessellation::Strategy::Failed;
+            geometry->surfaceBuildTimings.append(timing);
+        }
         return;
+    }
+    timing.tessellationValid = tessellation->isValid();
+    timing.tessellationStrategy = tessellation->strategy();
+    timing.sampledVertexCount = tessellation->vertices().size();
+    timing.triangleCount = tessellation->triangles().size();
+
+    QElapsedTimer wireframeTimer;
+    if (collectBuildTimings) {
+        wireframeTimer.start();
     }
     int wireSegmentCount = 0;
     QVector<int> wireSteps;
@@ -305,6 +349,10 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
             geometry->preciseLineVertices.append(end);
         }
     }
+    timing.wireSegmentCount = wireSegmentCount;
+    if (collectBuildTimings) {
+        timing.wireframeMicroseconds = wireframeTimer.nsecsElapsed() / 1000;
+    }
     // A degree-one swept profile is a set of planar panels. Keep each profile
     // knot as a hard edge; curved surfaces still smooth tessellation normals.
     const bool piecewiseLinearExtrusion =
@@ -320,6 +368,10 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                    ? value / std::sqrt(lengthSquared)
                    : fallback;
     };
+    QElapsedTimer normalPreparationTimer;
+    if (collectBuildTimings) {
+        normalPreparationTimer.start();
+    }
     QVector<QVector3D> triangleNormals;
     triangleNormals.reserve(tessellation->triangles().size());
     QVector<QVector<int>> trianglesAtVertex(tessellation->vertices().size());
@@ -346,7 +398,15 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
         trianglesAtVertex[secondVertex].append(triangleIndex);
         trianglesAtVertex[thirdVertex].append(triangleIndex);
     }
+    if (collectBuildTimings) {
+        timing.normalPreparationMicroseconds =
+            normalPreparationTimer.nsecsElapsed() / 1000;
+    }
 
+    QElapsedTimer triangleExpansionTimer;
+    if (collectBuildTimings) {
+        triangleExpansionTimer.start();
+    }
     geometry->surfaceVertices.reserve(
         geometry->surfaceVertices.size() + tessellation->triangles().size() * 3);
     geometry->surfaceNormals.reserve(
@@ -382,6 +442,11 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
                                                              faceNormal));
         }
     }
+    if (collectBuildTimings) {
+        timing.triangleExpansionMicroseconds =
+            triangleExpansionTimer.nsecsElapsed() / 1000;
+        geometry->surfaceBuildTimings.append(timing);
+    }
 }
 
 void writeCurve(QDataStream &stream, const Shape::NurbsCurve2D &curve)
@@ -411,7 +476,8 @@ void appendShapeDepthGeometry(const Shape &shape,
                               ViewportDepthGeometry &geometry,
                               const SurfaceTessellationCache *surfaceCache = nullptr,
                               ObjectId objectId = ObjectId::invalid(),
-                              quint64 geometryRevision = 0)
+                              quint64 geometryRevision = 0,
+                              bool collectSurfaceBuildTimings = false)
 {
         if (isDimensionGeometryType(shape.geometryType)) {
             // Dimension text and leaders are viewport annotations, not scene
@@ -444,7 +510,8 @@ void appendShapeDepthGeometry(const Shape &shape,
                                             shape.geometryType ==
                                                     GeometryType::NurbsSolid &&
                                                 nurbsSolidFaceReversed(
-                                                    shape.nurbsSolid, index));
+                                                    shape.nurbsSolid, index),
+                                            collectSurfaceBuildTimings);
             }
             return;
         }
@@ -483,7 +550,8 @@ ViewportDepthGeometry buildViewportDepthGeometry(
 
 ViewportDepthGeometry buildViewportDepthGeometry(
     const ViewportRenderObject &sceneObject,
-    const SurfaceTessellationCache *surfaceTessellationCache)
+    const SurfaceTessellationCache *surfaceTessellationCache,
+    bool collectSurfaceBuildTimings)
 {
     ViewportDepthGeometry geometry;
     CurveSampler sampler;
@@ -496,7 +564,8 @@ ViewportDepthGeometry buildViewportDepthGeometry(
                              geometry,
                              surfaceTessellationCache,
                              useCache ? sceneObject.objectId : ObjectId::invalid(),
-                             useCache ? sceneObject.geometryRevision : 0);
+                             useCache ? sceneObject.geometryRevision : 0,
+                             collectSurfaceBuildTimings);
     return geometry;
 }
 

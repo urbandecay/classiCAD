@@ -216,6 +216,10 @@ misread or implemented incorrectly.
   occurrences and a separate connected surface follow the selected corner;
   other corners remain fixed. Repeated events, save/reload, framebuffer
   visibility, Escape and atomic Undo pass. Standalone plane deformation passes.
+- Edge-mode Grab uses the selected cage segment's two world-space endpoints
+  as the deformation targets. Preserve the edge selection during preview;
+  moving the endpoints must carry their coincident control vertices across
+  connected editable surfaces with one shared displacement.
 
 - Face extrusion extends the existing Extrude tool. Both the public command's
   source filter and the controller must accept planar faces; updating only the

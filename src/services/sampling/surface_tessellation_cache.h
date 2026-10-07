@@ -8,11 +8,26 @@
 
 namespace classiCAD {
 
-// Reuses immutable surface display geometry by object revision and by exact
-// surface shape up to translation. Moving objects and anonymous previews shift
-// existing samples without evaluating the surface again. Both caches are bounded.
+// Reuses immutable surface display geometry by object revision, translation,
+// and parameter topology. Rigid moves shift samples; control-point edits reuse
+// UV connectivity and reevaluate its world points. Both caches are bounded.
 class SurfaceTessellationCache final {
 public:
+    struct AcquisitionStats {
+        enum class Path {
+            None,
+            RevisionHit,
+            TranslationHit,
+            TopologyHit,
+            Rebuilt,
+            Failed
+        };
+        Path path = Path::None;
+        qint64 prepareMicroseconds = 0;
+        qint64 topologyUpdateMicroseconds = 0;
+        PreparedNurbsSurfaceTessellation::PreparationStats preparation;
+    };
+
     static bool translationOffset(const NurbsSurface3D &source,
                                   const NurbsSurface3D &target,
                                   Point3D *offset);
@@ -20,7 +35,8 @@ public:
         ObjectId objectId,
         quint64 geometryRevision,
         const NurbsSurface3D &surface,
-        int faceIndex = 0) const;
+        int faceIndex = 0,
+        AcquisitionStats *stats = nullptr) const;
 
     void clear();
     int size() const;
@@ -31,10 +47,12 @@ private:
         QSharedPointer<const PreparedNurbsSurfaceTessellation> tessellation;
     };
     QSharedPointer<const PreparedNurbsSurfaceTessellation> acquireTranslated(
-        const NurbsSurface3D &surface) const;
+        const NurbsSurface3D &surface,
+        AcquisitionStats *stats = nullptr) const;
     struct Entry {
         quint64 geometryRevision = 0;
         quint64 lastUse = 0;
+        NurbsSurface3D surface;
         QSharedPointer<const PreparedNurbsSurfaceTessellation> tessellation;
     };
 

@@ -7,6 +7,8 @@
 
 #include <QHash>
 
+#include <functional>
+
 namespace classiCAD {
 
 struct ViewportRenderFrame;
@@ -16,8 +18,14 @@ struct ViewportRenderFrame;
 // consume the same prepared geometry for a given object revision.
 class ViewportGeometryCache final {
 public:
+    using BuildObserver = std::function<void(
+        const ViewportRenderObject &,
+        const ViewportDepthGeometry &,
+        qint64 elapsedMicroseconds)>;
+
     void prepareFrame(ViewportRenderFrame *frame,
-                      const SurfaceTessellationCache *surfaceCache);
+                      const SurfaceTessellationCache *surfaceCache,
+                      const BuildObserver &buildObserver = {});
     void clear();
     int size() const noexcept { return entries_.size(); }
 

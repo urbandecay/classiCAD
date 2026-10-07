@@ -393,6 +393,36 @@ bool verifyVertexComponentSelection(QApplication &application)
         };
         passed &= check(edgeRed(selectedEdgeImage) > edgeRed(selectedVertexImage) + 300,
                         "selecting both edge endpoints must produce a continuous brighter edge");
+
+        QPointF oppositeEdgeMiddle;
+        projection.worldPointToScreen({0, 8, 0}, interactionViewportSize,
+                                      &oppositeEdgeMiddle);
+        const QRect oppositeEdgeRegion(
+            oppositeEdgeMiddle.toPoint() - QPoint(6, 6), QSize(13, 13));
+        const QPointF blankClick(500.0, 400.0);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, blankClick,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonRelease, blankClick,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        application.processEvents();
+        const QImage clearedImage = captureViewport(probe.get());
+        passed &= check(orangePixels(clearedImage.copy(edgeRegion)) == 0,
+                        "clicking empty space must clear the component selection");
+
+        const QPointF boxStart(240.0, 280.0);
+        const QPointF boxEnd(272.0, 310.0);
+        sendMouse(probe.get(), QEvent::MouseButtonPress, boxStart,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseMove, boxEnd,
+                  Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(probe.get(), QEvent::MouseButtonRelease, boxEnd,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        application.processEvents();
+        const QImage blankStartedBoxImage = captureViewport(probe.get());
+        passed &= check(orangePixels(blankStartedBoxImage.copy(edgeRegion)) > 0,
+                        "a box started in empty space must select the enclosed vertex");
+        passed &= check(orangePixels(blankStartedBoxImage.copy(oppositeEdgeRegion)) == 0,
+                        "a partial vertex box must not select the entire surface object");
     }
 
     return passed;

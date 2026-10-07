@@ -5700,21 +5700,19 @@ protected:
                     boxShapeIndex >= 0 &&
                     (shapes_[boxShapeIndex].geometryType == GeometryType::NurbsSurface ||
                      shapes_[boxShapeIndex].geometryType == GeometryType::NurbsSolid);
-                if (isSurfaceObject) {
-                    // Box selection belongs to the active solid even when
-                    // the drag starts in empty space beside it. Never let
-                    // this gesture fall through to object selection.
-                    componentBoxSelectionActive_ = true;
-                    componentBoxSelectionObject_ = boxObject;
-                    if (!selection_.contains(boxObject))
-                        selection_.setObjectIds({boxObject}, boxObject);
-                    componentSelectionObject_ = boxObject;
-                    beginSelectionBox(
-                        screenPosition,
-                        event->modifiers().testFlag(Qt::ShiftModifier));
-                    event->accept();
-                    return;
-                }
+                // In vertex mode every remaining click/drag is routed through
+                // component selection. With no active object, the box finish
+                // searches eligible surface cages for the enclosed vertices.
+                componentBoxSelectionActive_ = true;
+                componentBoxSelectionObject_ = isSurfaceObject
+                                                   ? boxObject
+                                                   : ObjectId::invalid();
+                componentBoxStartedOnBlank_ = hitShapeIndex < 0;
+                beginSelectionBox(
+                    screenPosition,
+                    event->modifiers().testFlag(Qt::ShiftModifier));
+                event->accept();
+                return;
             }
             if (hitShapeIndex >= 0 && hitShapeIndex < shapes_.size()) {
                 const GeometryType type = shapes_[hitShapeIndex].geometryType;
@@ -7840,37 +7838,108 @@ private:
                            selectionBox.height() >= 3.0;
         const bool additive = selectTool->selectionBoxAdditive();
         if (componentBoxSelectionActive_) {
-            const ObjectId objectId = componentBoxSelectionObject_;
+            const ObjectId requestedObjectId = componentBoxSelectionObject_;
             componentBoxSelectionActive_ = false;
             componentBoxSelectionObject_ = ObjectId::invalid();
             selectTool->cancelSelectionBox();
-            if (moved && objectId.isValid() && objectIndex(objectId) >= 0) {
-                const int index = objectIndex(objectId);
-                const SceneObject *sceneObject = document_.object(objectId);
-                const Point3D offset = sceneObject != nullptr
-                                           ? sceneObject->placementTranslation
-                                           : Point3D{};
-                const ViewportDepthGeometry cage =
-                    selectedSurfaceCage(shapes_[index]);
+            if (!moved && componentBoxStartedOnBlank_ && !additive) {
+                clearComponentSelections();
+                componentSelectionObject_ = ObjectId::invalid();
+                selection_.clear();
+            }
+            componentBoxStartedOnBlank_ = false;
+            if (moved) {
+                ObjectId matchedObjectId = ObjectId::invalid();
                 QSet<int> boxedVertices;
-                for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
-                    const QVector3D &point = cage.pointVertices[vertex];
-                    QPointF projected;
-                    if (viewportTransform_.worldPointToScreen(
-                            {point.x() + offset.x, point.y() + offset.y,
-                             point.z() + offset.z}, size(), &projected) &&
-                        selectionBox.contains(projected)) {
-                        boxedVertices.insert(vertex);
+                for (int index = 0; index < shapes_.size(); ++index) {
+                    const ObjectId candidateId = shapes_.objectIdAt(index);
+                    if (requestedObjectId.isValid() &&
+                        candidateId != requestedObjectId) {
+                        continue;
+                    }
+                    if (!document_.isObjectVisible(candidateId) ||
+                        !document_.isObjectEditable(candidateId)) {
+                        continue;
+                    }
+                    const GeometryType type = shapes_[index].geometryType;
+                    if (type != GeometryType::NurbsSolid &&
+                        type != GeometryType::NurbsSurface) {
+                        continue;
+                    }
+                    const SceneObject *sceneObject = document_.object(candidateId);
+                    const Point3D offset = sceneObject != nullptr
+                                               ? sceneObject->placementTranslation
+                                               : Point3D{};
+                    const ViewportDepthGeometry cage =
+                        selectedSurfaceCage(shapes_[index]);
+                    QSet<int> candidateVertices;
+                    qreal cageScale = 1.0;
+                    if (!cage.pointVertices.isEmpty()) {
+                        const QVector3D origin = cage.pointVertices.first();
+                        for (const QVector3D &cagePoint : cage.pointVertices)
+                            cageScale = qMax(cageScale, qreal((cagePoint - origin).length()));
+                    }
+                    const qreal depthTolerance = qMax(1.0e-5, cageScale * 1.0e-5);
+                    for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
+                        const QVector3D &point = cage.pointVertices[vertex];
+                        QPointF projected;
+                        const Point3D worldPoint{
+                            point.x() + offset.x, point.y() + offset.y,
+                            point.z() + offset.z};
+                        if (!viewportTransform_.worldPointToScreen(
+                                worldPoint, size(), &projected) ||
+                            !selectionBox.contains(projected)) {
+                            continue;
+                        }
+                        if (!viewportShadingSettings_.xrayEnabled()) {
+                            Point3D visiblePoint;
+                            Point3D visibleNormal;
+                            int visibleShapeIndex = -1;
+                            if (!curveHitTester_.hitTestVisibleSurface(
+                                    document_, projected, viewportTransform_, size(),
+                                    &visiblePoint, &visibleNormal, nullptr,
+                                    &visibleShapeIndex) ||
+                                visibleShapeIndex != index) {
+                                continue;
+                            }
+                            const qreal vertexDepth =
+                                viewportTransform_.worldDirectionToView(worldPoint)
+                                    .towardCamera;
+                            const qreal surfaceDepth =
+                                viewportTransform_.worldDirectionToView(visiblePoint)
+                                    .towardCamera;
+                            if (!std::isfinite(vertexDepth) ||
+                                !std::isfinite(surfaceDepth) ||
+                                std::abs(vertexDepth - surfaceDepth) > depthTolerance) {
+                                continue;
+                            }
+                        }
+                        candidateVertices.insert(vertex);
+                    }
+                    if (!candidateVertices.isEmpty()) {
+                        matchedObjectId = candidateId;
+                        boxedVertices = std::move(candidateVertices);
+                        break;
                     }
                 }
-                if (!additive) {
-                    activeComponentSelection().clear();
-                }
-                for (int vertex : boxedVertices)
-                    activeComponentSelection().insert(vertex);
-                if (!boxedVertices.isEmpty())
+
+                if (matchedObjectId.isValid()) {
+                    if (!additive || componentSelectionObject_ != matchedObjectId) {
+                        clearComponentSelections();
+                        selection_.setObjectIds({matchedObjectId}, matchedObjectId);
+                    } else {
+                        selection_.add(matchedObjectId);
+                        selection_.setPrimaryObjectId(matchedObjectId);
+                    }
+                    componentSelectionObject_ = matchedObjectId;
+                    for (int vertex : boxedVertices)
+                        activeComponentSelection().insert(vertex);
                     activeComponentIndex_ = *boxedVertices.cbegin();
-                componentSelectionObject_ = objectId;
+                } else if (!additive) {
+                    clearComponentSelections();
+                    componentSelectionObject_ = ObjectId::invalid();
+                    selection_.clear();
+                }
             }
             update();
             emitCoordinateUpdate();
@@ -13153,6 +13222,7 @@ private:
     bool smoothWiresEditMode_ = true;
     ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
     bool componentBoxSelectionActive_ = false;
+    bool componentBoxStartedOnBlank_ = false;
     ObjectId componentBoxSelectionObject_ = ObjectId::invalid();
     QSet<int> componentSelections_[3];
     ObjectId componentSelectionObject_ = ObjectId::invalid();

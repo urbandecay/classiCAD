@@ -308,7 +308,10 @@ bool NavigationController::handlePanPress(Qt::MouseButton button,
     panMoved_ = false;
     panStartPosition_ = screenPosition.toPoint();
     lastPosition_ = QPointF(screenPosition.toPoint());
-    host_.setCursor(Qt::ClosedHandCursor);
+    // A right press on the Select tool remains a click while the short
+    // right-pan activation window is pending. Keep its normal cursor until
+    // pointer motion actually activates the pan.
+    host_.setCursor(delayedRightPan_ ? idleCursor() : Qt::ClosedHandCursor);
     return true;
 }
 
@@ -339,6 +342,7 @@ bool NavigationController::handlePanMove(const QPointF &screenPosition,
         if (!panMoved_) {
             return true;
         }
+        host_.setCursor(Qt::ClosedHandCursor);
         const QPointF appliedDelta = panMotionApplied_
                                          ? QPointF(delta)
                                          : QPointF(current - panStartPosition_);

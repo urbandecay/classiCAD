@@ -140,6 +140,13 @@ constexpr qreal kComponentModeButtonGap = kViewportShadingButtonGap;
 
 enum class ComponentSelectionMode { Vertex, Edge, Face };
 
+struct ComponentPickCycleState {
+    bool valid = false;
+    QPointF position;
+    ObjectId object = ObjectId::invalid();
+    int componentIndex = -1;
+};
+
 QRectF componentModePanelRect(const QSize &size)
 {
     const qreal width = kComponentModeButtonSize * 3.0 +
@@ -5936,6 +5943,13 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
         const QPointF screenPosition = eventPosition(event);
+        const QPointF pickPosition(qRound(screenPosition.x()),
+                                   qRound(screenPosition.y()));
+        for (ComponentPickCycleState &cycleState : componentPickCycleStates_) {
+            if (cycleState.valid && cycleState.position != pickPosition) {
+                cycleState.valid = false;
+            }
+        }
         const int componentMode = componentModeControlAt(screenPosition);
         if (componentMode >= 0) {
             if (componentMode != componentModeHover_) {
@@ -9949,11 +9963,201 @@ private:
         // Widget mouse coordinates are already in logical pixels.
         constexpr qreal selectionRadiusPixels = 75.0;
         constexpr qreal selectedItemBiasPixels = 5.0;
+        constexpr qreal cycleThresholdPixels = 3.0;
         const bool xray = viewportShadingSettings_.xrayEnabled();
+        const QPointF pickPosition(qRound(screenPosition.x()),
+                                   qRound(screenPosition.y()));
+        const auto insideViewport = [this](const QPointF &point) {
+            return point.x() >= 0.0 && point.y() >= 0.0 &&
+                   point.x() < size().width() && point.y() < size().height();
+        };
+        const auto projectPickPoint = [&](const Point3D &point,
+                                          QPointF *projected) {
+            return xray
+                       ? viewportTransform_.worldPointToScreen(point, size(), projected)
+                       : viewportTransform_.worldPointToScreenUnclipped(
+                             point, size(), projected);
+        };
+        const auto clipXraySegment = [&](const Point3D &worldA,
+                                         const Point3D &worldB,
+                                         QPointF *screenA,
+                                         QPointF *screenB,
+                                         qreal *worldT0,
+                                         qreal *worldT1) {
+            qreal t0 = 0.0;
+            qreal t1 = 1.0;
+            const ViewportCameraPreferences preferences =
+                viewportTransform_.cameraPreferences();
+            const Point3D viewTarget = viewportTransform_.viewTarget();
+            const auto dot = [](const Point3D &a, const Point3D &b) {
+                return a.x * b.x + a.y * b.y + a.z * b.z;
+            };
+            const auto depthAt = [&](const Point3D &point) {
+                if (viewportTransform_.isPerspectiveEnabled()) {
+                    const Point3D eye = viewportTransform_.cameraPosition(size());
+                    const Point3D axis{viewTarget.x - eye.x,
+                                       viewTarget.y - eye.y,
+                                       viewTarget.z - eye.z};
+                    const qreal axisLength = std::sqrt(dot(axis, axis));
+                    if (axisLength <= 1.0e-12) {
+                        return std::numeric_limits<qreal>::quiet_NaN();
+                    }
+                    const Point3D fromEye{point.x - eye.x,
+                                          point.y - eye.y,
+                                          point.z - eye.z};
+                    return dot(fromEye, axis) / axisLength;
+                }
+                const Point3D viewDirection = viewportTransform_.viewDirection();
+                const Point3D fromTarget{point.x - viewTarget.x,
+                                         point.y - viewTarget.y,
+                                         point.z - viewTarget.z};
+                return preferences.clipEnd - dot(fromTarget, viewDirection);
+            };
+            const qreal depthA = depthAt(worldA);
+            const qreal depthB = depthAt(worldB);
+            if (!std::isfinite(depthA) || !std::isfinite(depthB)) {
+                return false;
+            }
+            const qreal depthDelta = depthB - depthA;
+            const auto clipDepthLower = [&](qreal limit) {
+                if (std::abs(depthDelta) <= 1.0e-12) return depthA >= limit;
+                const qreal crossing = (limit - depthA) / depthDelta;
+                if (depthDelta > 0.0) t0 = qMax(t0, crossing);
+                else t1 = qMin(t1, crossing);
+                return t0 <= t1;
+            };
+            const auto clipDepthUpper = [&](qreal limit) {
+                if (std::abs(depthDelta) <= 1.0e-12) return depthA <= limit;
+                const qreal crossing = (limit - depthA) / depthDelta;
+                if (depthDelta > 0.0) t1 = qMin(t1, crossing);
+                else t0 = qMax(t0, crossing);
+                return t0 <= t1;
+            };
+            if (!clipDepthLower(preferences.clipStart) ||
+                !clipDepthUpper(preferences.clipEnd)) {
+                return false;
+            }
+            t0 = std::clamp(t0, 0.0, 1.0);
+            t1 = std::clamp(t1, 0.0, 1.0);
+            if (t0 > t1) return false;
+            const auto interpolate = [](const Point3D &a,
+                                        const Point3D &b,
+                                        qreal t) {
+                return Point3D{a.x + (b.x - a.x) * t,
+                               a.y + (b.y - a.y) * t,
+                               a.z + (b.z - a.z) * t};
+            };
+            const Point3D clippedWorldA = interpolate(worldA, worldB, t0);
+            const Point3D clippedWorldB = interpolate(worldA, worldB, t1);
+            if (!viewportTransform_.worldPointToScreen(
+                    clippedWorldA, size(), screenA) ||
+                !viewportTransform_.worldPointToScreen(
+                    clippedWorldB, size(), screenB)) {
+                return false;
+            }
+
+            qreal screenT0 = 0.0;
+            qreal screenT1 = 1.0;
+            const QPointF direction = *screenB - *screenA;
+            const auto clipScreenBoundary = [&](qreal p, qreal q) {
+                if (std::abs(p) <= 1.0e-12) return q >= 0.0;
+                const qreal crossing = q / p;
+                if (p < 0.0) {
+                    if (crossing > screenT1) return false;
+                    screenT0 = qMax(screenT0, crossing);
+                } else {
+                    if (crossing < screenT0) return false;
+                    screenT1 = qMin(screenT1, crossing);
+                }
+                return true;
+            };
+            const qreal maxX = qMax(0, size().width() - 1);
+            const qreal maxY = qMax(0, size().height() - 1);
+            if (!clipScreenBoundary(-direction.x(), screenA->x()) ||
+                !clipScreenBoundary(direction.x(), maxX - screenA->x()) ||
+                !clipScreenBoundary(-direction.y(), screenA->y()) ||
+                !clipScreenBoundary(direction.y(), maxY - screenA->y()) ||
+                screenT0 > screenT1) {
+                return false;
+            }
+            const QPointF originalScreenA = *screenA;
+            *screenA = originalScreenA + direction * screenT0;
+            *screenB = originalScreenA + direction * screenT1;
+            *worldT0 = t0 + (t1 - t0) * screenT0;
+            *worldT1 = t0 + (t1 - t0) * screenT1;
+            return true;
+        };
+        struct PendingComponent {
+            int shapeIndex = -1;
+            int componentIndex = -1;
+            bool edge = false;
+            Point3D first;
+            Point3D second;
+            Point3D closestWorldPoint;
+            QPointF closestScreenPoint;
+            qreal distance = std::numeric_limits<qreal>::infinity();
+            qreal depthTolerance = 1.0e-5;
+        };
+        const auto chooseXrayCandidate = [&](const QVector<PendingComponent> &items) {
+            ComponentPickCycleState &cycleState = componentPickCycleStates_[
+                static_cast<int>(componentSelectionMode_)];
+            const bool cycle = cycleState.valid &&
+                               cycleState.position == pickPosition;
+            qreal bestActualDistance = selectionRadiusPixels;
+            int bestCandidate = -1;
+            int first = 0;
+            while (first < items.size()) {
+                const int shapeIndex = items[first].shapeIndex;
+                const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+                qreal bestBiasedDistance = bestActualDistance;
+                int shapeBest = -1;
+                int cycleCandidate = -1;
+                for (int index = first; index < items.size() &&
+                                          items[index].shapeIndex == shapeIndex;
+                     ++index) {
+                    const PendingComponent &candidate = items[index];
+                    const bool alreadySelected =
+                        componentSelectionObject_ == objectId &&
+                        activeComponentSelection().contains(candidate.componentIndex);
+                    const qreal biasedDistance = candidate.distance +
+                        (alreadySelected ? selectedItemBiasPixels : 0.0);
+                    if (cycle && cycleState.object == objectId &&
+                        candidate.componentIndex > cycleState.componentIndex &&
+                        biasedDistance < cycleThresholdPixels &&
+                        cycleCandidate < 0) {
+                        cycleCandidate = index;
+                    }
+                    if (biasedDistance < bestBiasedDistance) {
+                        bestBiasedDistance = biasedDistance;
+                        shapeBest = index;
+                    }
+                }
+                const int shapeCandidate = cycleCandidate >= 0
+                                               ? cycleCandidate
+                                               : shapeBest;
+                if (shapeCandidate >= 0 &&
+                    items[shapeCandidate].distance < bestActualDistance) {
+                    bestActualDistance = items[shapeCandidate].distance;
+                    bestCandidate = shapeCandidate;
+                }
+                while (first < items.size() &&
+                       items[first].shapeIndex == shapeIndex) {
+                    ++first;
+                }
+            }
+            if (bestCandidate < 0) {
+                return -1;
+            }
+            const PendingComponent &candidate = items[bestCandidate];
+            cycleState.valid = true;
+            cycleState.position = pickPosition;
+            cycleState.object = shapes_.objectIdAt(candidate.shapeIndex);
+            cycleState.componentIndex = candidate.componentIndex;
+            return bestCandidate;
+        };
         if (componentSelectionMode_ == ComponentSelectionMode::Face) {
             if (xray) {
-                qreal bestDistance = selectionRadiusPixels;
-                int bestFace = -1;
+                QVector<PendingComponent> faceCandidates;
                 for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
                     const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
                     if (!document_.isObjectVisible(objectId) ||
@@ -9989,25 +10193,29 @@ private:
                         center.y += offset.y;
                         center.z += offset.z;
                         QPointF projected;
-                        if (!viewportTransform_.worldPointToScreenUnclipped(
-                                center, size(), &projected)) {
+                        if (!viewportTransform_.worldPointToScreen(
+                                center, size(), &projected) ||
+                            !insideViewport(projected)) {
                             continue;
                         }
-                        const qreal distance =
-                            std::abs(projected.x() - screenPosition.x()) +
-                            std::abs(projected.y() - screenPosition.y());
-                        const bool alreadySelected =
-                            componentSelectionObject_ == objectId &&
-                            activeComponentSelection().contains(faceIndex);
-                        const qreal biasedDistance = distance +
-                            (alreadySelected ? selectedItemBiasPixels : 0.0);
-                        if (biasedDistance >= bestDistance) continue;
-                        bestDistance = biasedDistance;
-                        bestFace = faceIndex;
-                        if (shapeIndexOut != nullptr) *shapeIndexOut = shapeIndex;
+                        PendingComponent candidate;
+                        candidate.shapeIndex = shapeIndex;
+                        candidate.componentIndex = faceIndex;
+                        candidate.first = center;
+                        candidate.closestWorldPoint = center;
+                        candidate.closestScreenPoint = projected;
+                        candidate.distance =
+                            std::abs(projected.x() - pickPosition.x()) +
+                            std::abs(projected.y() - pickPosition.y());
+                        faceCandidates.append(candidate);
                     }
                 }
-                return bestFace;
+                const int picked = chooseXrayCandidate(faceCandidates);
+                if (picked < 0) return -1;
+                if (shapeIndexOut != nullptr) {
+                    *shapeIndexOut = faceCandidates[picked].shapeIndex;
+                }
+                return faceCandidates[picked].componentIndex;
             }
 
             Point3D point, normal;
@@ -10030,17 +10238,6 @@ private:
             return faceIndex;
         }
 
-        struct PendingComponent {
-            int shapeIndex = -1;
-            int componentIndex = -1;
-            bool edge = false;
-            Point3D first;
-            Point3D second;
-            Point3D closestWorldPoint;
-            QPointF closestScreenPoint;
-            qreal distance = std::numeric_limits<qreal>::infinity();
-            qreal depthTolerance = 1.0e-5;
-        };
         QVector<PendingComponent> pending;
 
         for (int shapeIndex = 0; shapeIndex < shapes_.size(); ++shapeIndex) {
@@ -10076,8 +10273,8 @@ private:
                                              sourcePoint.y() + offset.y,
                                              sourcePoint.z() + offset.z};
                     QPointF projectedPoint;
-                    if (!viewportTransform_.worldPointToScreenUnclipped(
-                            worldPoint, size(), &projectedPoint)) {
+                    if (!projectPickPoint(worldPoint, &projectedPoint) ||
+                        (xray && !insideViewport(projectedPoint))) {
                         continue;
                     }
                     PendingComponent candidate;
@@ -10087,8 +10284,8 @@ private:
                     candidate.closestWorldPoint = worldPoint;
                     candidate.closestScreenPoint = projectedPoint;
                     candidate.distance =
-                        std::abs(projectedPoint.x() - screenPosition.x()) +
-                        std::abs(projectedPoint.y() - screenPosition.y());
+                        std::abs(projectedPoint.x() - pickPosition.x()) +
+                        std::abs(projectedPoint.y() - pickPosition.y());
                     candidate.depthTolerance = depthTolerance;
                     pending.append(candidate);
                 }
@@ -10105,10 +10302,15 @@ private:
                                          second.z + offset.z};
                     QPointF screenA;
                     QPointF screenB;
-                    if (!viewportTransform_.worldPointToScreenUnclipped(
-                            worldA, size(), &screenA) ||
-                        !viewportTransform_.worldPointToScreenUnclipped(
-                            worldB, size(), &screenB)) {
+                    qreal segmentWorldT0 = 0.0;
+                    qreal segmentWorldT1 = 1.0;
+                    if (xray) {
+                        if (!clipXraySegment(worldA, worldB, &screenA, &screenB,
+                                             &segmentWorldT0, &segmentWorldT1)) {
+                            continue;
+                        }
+                    } else if (!projectPickPoint(worldA, &screenA) ||
+                               !projectPickPoint(worldB, &screenB)) {
                         continue;
                     }
                     const QPointF direction = screenB - screenA;
@@ -10116,7 +10318,7 @@ private:
                         direction, direction);
                     const qreal fraction = lengthSquared > 1.0e-12
                         ? std::clamp(QPointF::dotProduct(
-                                         screenPosition - screenA, direction) /
+                                         pickPosition - screenA, direction) /
                                          lengthSquared,
                                      0.0, 1.0)
                         : 0.0;
@@ -10129,19 +10331,29 @@ private:
                     candidate.second = worldB;
                     candidate.closestScreenPoint = projectedPoint;
                     candidate.distance =
-                        std::abs(projectedPoint.x() - screenPosition.x()) +
-                        std::abs(projectedPoint.y() - screenPosition.y());
+                        std::abs(projectedPoint.x() - pickPosition.x()) +
+                        std::abs(projectedPoint.y() - pickPosition.y());
+                    const qreal worldFraction = segmentWorldT0 +
+                        (segmentWorldT1 - segmentWorldT0) * fraction;
                     candidate.closestWorldPoint = {
-                        worldA.x + (worldB.x - worldA.x) * fraction,
-                        worldA.y + (worldB.y - worldA.y) * fraction,
-                        worldA.z + (worldB.z - worldA.z) * fraction};
+                        worldA.x + (worldB.x - worldA.x) * worldFraction,
+                        worldA.y + (worldB.y - worldA.y) * worldFraction,
+                        worldA.z + (worldB.z - worldA.z) * worldFraction};
                     candidate.depthTolerance = depthTolerance;
                     pending.append(candidate);
                 }
             }
         }
 
-        if (!xray && gpuSurface_ != nullptr && !pending.isEmpty()) {
+        if (xray) {
+            const int picked = chooseXrayCandidate(pending);
+            if (picked < 0) return -1;
+            if (shapeIndexOut != nullptr) {
+                *shapeIndexOut = pending[picked].shapeIndex;
+            }
+            return pending[picked].componentIndex;
+        }
+        if (gpuSurface_ != nullptr && !pending.isEmpty()) {
             QVector<ViewportComponentPickCandidate> pickCandidates;
             pickCandidates.reserve(pending.size());
             for (const PendingComponent &candidate : pending) {
@@ -13609,6 +13821,7 @@ private:
     bool componentBoxSelectionActive_ = false;
     bool componentBoxStartedOnBlank_ = false;
     ObjectId componentBoxSelectionObject_ = ObjectId::invalid();
+    ComponentPickCycleState componentPickCycleStates_[3];
     QSet<int> componentSelections_[3];
     ObjectId componentSelectionObject_ = ObjectId::invalid();
     int activeComponentIndices_[3] = {-1, -1, -1};

@@ -3752,6 +3752,58 @@ protected:
                 activeVertex;
         }
 
+        if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+            mode == ComponentSelectionMode::Edge) {
+            const QHash<quint64, QSet<int>> selectedVertices =
+                componentSelections_[static_cast<int>(ComponentSelectionMode::Vertex)];
+            auto &selectedEdges =
+                componentSelections_[static_cast<int>(ComponentSelectionMode::Edge)];
+            selectedEdges.clear();
+
+            for (auto objectIt = selectedVertices.cbegin();
+                 objectIt != selectedVertices.cend(); ++objectIt) {
+                const ObjectId objectId = ObjectId::fromValue(objectIt.key());
+                const int shapeIndex = document_.indexOf(objectId);
+                if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                    continue;
+                }
+                const Shape &shape = shapes_[shapeIndex];
+                if (shape.geometryType != GeometryType::NurbsSolid &&
+                    shape.geometryType != GeometryType::NurbsSurface) {
+                    continue;
+                }
+
+                const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+                QSet<int> &edges = selectedEdges[objectIt.key()];
+                for (int edgeIndex = 0;
+                     edgeIndex * 2 + 1 < cage.lineVertices.size();
+                     ++edgeIndex) {
+                    int endpointIndices[2] = {-1, -1};
+                    for (int endpoint = 0; endpoint < 2; ++endpoint) {
+                        const QVector3D &position =
+                            cage.lineVertices[edgeIndex * 2 + endpoint];
+                        for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
+                            if ((cage.pointVertices[vertex] - position).lengthSquared() <=
+                                1.0e-12f) {
+                                endpointIndices[endpoint] = vertex;
+                                break;
+                            }
+                        }
+                    }
+                    if (endpointIndices[0] >= 0 && endpointIndices[1] >= 0 &&
+                        objectIt.value().contains(endpointIndices[0]) &&
+                        objectIt.value().contains(endpointIndices[1])) {
+                        edges.insert(edgeIndex);
+                    }
+                }
+                if (edges.isEmpty()) {
+                    selectedEdges.remove(objectIt.key());
+                }
+            }
+            activeComponentIndices_[static_cast<int>(ComponentSelectionMode::Edge)] =
+                -1;
+        }
+
         componentSelectionMode_ = mode;
         controlPointsVisible_ = mode == ComponentSelectionMode::Vertex;
         update();

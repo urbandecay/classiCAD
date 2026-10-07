@@ -3883,8 +3883,7 @@ protected:
             if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
                 (geometryType == GeometryType::NurbsSurface ||
                  geometryType == GeometryType::NurbsSolid)) {
-                if (sceneRenderer != nullptr &&
-                    !viewportShadingSettings_.xrayEnabled()) {
+                if (sceneRenderer != nullptr) {
                     auto cage = QSharedPointer<ViewportDepthGeometry>::create(
                         selectedSurfaceCage(visibleShape));
                     if (selected && componentSelectionObject_ == objectId &&
@@ -4856,19 +4855,27 @@ protected:
                                       false,
                                       true);
             }
-            const bool sceneDrawn = sceneRenderer == nullptr ||
-                                    sceneRenderer->draw(gpuStrokes,
-                                                        renderFrame.camera,
-                                                        renderFrame.viewportSize,
-                                                        devicePixelRatioF(),
-                                                        !viewportShadingSettings_.xrayEnabled() ||
-                                                            viewportShadingSettings_.mode ==
-                                                                ViewportShadingMode::Solid,
-                                                        viewportShadingSettings_.xrayEnabled()
-                                                            ? viewportShadingSettings_.xrayAlpha
-                                                            : 1.0,
-                                                        smoothWiresOverlay_,
-                                                        smoothWiresEditMode_);
+            const bool xrayEnabled = viewportShadingSettings_.xrayEnabled();
+            bool sceneDrawn = sceneRenderer == nullptr;
+            if (sceneRenderer != nullptr && xrayEnabled) {
+                // Blender draws edit wires through X-Ray, fading the part
+                // behind the surface to half opacity, then draws visible
+                // wires at full opacity against the surface depth buffer.
+                const bool backWiresDrawn = sceneRenderer->draw(
+                    gpuStrokes, renderFrame.camera, renderFrame.viewportSize,
+                    devicePixelRatioF(), false, 0.5,
+                    smoothWiresOverlay_, smoothWiresEditMode_);
+                const bool frontWiresDrawn = sceneRenderer->draw(
+                    gpuStrokes, renderFrame.camera, renderFrame.viewportSize,
+                    devicePixelRatioF(), true, 1.0,
+                    smoothWiresOverlay_, smoothWiresEditMode_);
+                sceneDrawn = backWiresDrawn && frontWiresDrawn;
+            } else if (sceneRenderer != nullptr) {
+                sceneDrawn = sceneRenderer->draw(
+                    gpuStrokes, renderFrame.camera, renderFrame.viewportSize,
+                    devicePixelRatioF(), true, 1.0,
+                    smoothWiresOverlay_, smoothWiresEditMode_);
+            }
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 renderFrame.camera, renderFrame.viewportSize,
                 devicePixelRatioF(),

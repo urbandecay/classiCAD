@@ -423,6 +423,17 @@ bool verifyVertexComponentSelection(QApplication &application)
                         "a box started in empty space must select the enclosed vertex");
         passed &= check(orangePixels(blankStartedBoxImage.copy(oppositeEdgeRegion)) == 0,
                         "a partial vertex box must not select the entire surface object");
+        if (QCheckBox *xray = probe->findChild<QCheckBox *>(
+                QStringLiteral("SolidXRay"))) {
+            xray->setChecked(true);
+            application.processEvents();
+            const QImage xrayImage = captureViewport(probe.get());
+            saveGridCapture(QStringLiteral("vertex-selection-xray-wires"), xrayImage);
+            passed &= check(orangePixels(xrayImage.copy(edgeRegion)) > 0,
+                            "X-Ray must keep edit component edges visible over the surface");
+        } else {
+            passed &= check(false, "X-Ray control must be available in the viewport");
+        }
     }
 
     return passed;

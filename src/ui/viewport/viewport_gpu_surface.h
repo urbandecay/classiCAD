@@ -44,6 +44,13 @@ public:
                         const QSize &viewportSize,
                         const QVector<Shape> &visibleSceneShapes,
                         Point3D *worldPoint);
+    bool pickComponentElement(
+        const QPointF &screenPosition,
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        const QVector<ViewportRenderObject> &visibleSceneShapes,
+        const QVector<ViewportComponentPickCandidate> &candidates,
+        int *candidateIndex);
 
 protected:
     void paintGL() override;

@@ -110,6 +110,25 @@ bool ViewportGpuSurface::pickScenePoint(
     return picked;
 }
 
+bool ViewportGpuSurface::pickComponentElement(
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
+    const QVector<ViewportComponentPickCandidate> &candidates,
+    int *candidateIndex)
+{
+    if (!isValid() || candidateIndex == nullptr) {
+        return false;
+    }
+    makeCurrent();
+    const bool picked = gridRenderer_->pickComponentElement(
+        screenPosition, transform, viewportSize, devicePixelRatioF(),
+        visibleSceneShapes, candidates, candidateIndex);
+    doneCurrent();
+    return picked;
+}
+
 bool ViewportGpuSurface::pickScenePoint(
     const QPointF &screenPosition,
     const ViewportTransform &transform,

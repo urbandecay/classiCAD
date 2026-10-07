@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 
 namespace classiCAD {
@@ -215,8 +217,14 @@ BlenderGridRenderer::~BlenderGridRenderer()
         if (sceneDepthVertexBuffer_.isCreated()) {
             sceneDepthVertexBuffer_.destroy();
         }
+        if (componentPickVertexBuffer_.isCreated()) {
+            componentPickVertexBuffer_.destroy();
+        }
         if (sceneDepthVertexArray_.isCreated()) {
             sceneDepthVertexArray_.destroy();
+        }
+        if (componentPickVertexArray_.isCreated()) {
+            componentPickVertexArray_.destroy();
         }
         if (vertexArray_.isCreated()) {
             vertexArray_.destroy();
@@ -224,6 +232,7 @@ BlenderGridRenderer::~BlenderGridRenderer()
         program_.removeAllShaders();
         backgroundProgram_.removeAllShaders();
         sceneDepthProgram_.removeAllShaders();
+        componentPickProgram_.removeAllShaders();
         if (!usingWidgetContext_) {
             context_.doneCurrent();
         }
@@ -305,12 +314,28 @@ bool BlenderGridRenderer::initializeResources()
                              << sceneDepthProgram_.log();
         return false;
     }
+    if (!componentPickProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Vertex,
+            QStringLiteral(":/classiCAD/shaders/component_pick.vert")) ||
+        !componentPickProgram_.addShaderFromSourceFile(
+            QOpenGLShader::Fragment,
+            QStringLiteral(":/classiCAD/shaders/component_pick.frag")) ||
+        !componentPickProgram_.link()) {
+        qWarning().noquote() << "Viewport component-pick shader setup failed:"
+                             << componentPickProgram_.log();
+        return false;
+    }
     if (!vertexArray_.create()) {
         qWarning() << "Blender grid renderer: could not create vertex array";
         return false;
     }
     if (!sceneDepthVertexArray_.create() || !sceneDepthVertexBuffer_.create()) {
         qWarning() << "Blender grid renderer: could not create scene-depth buffers";
+        return false;
+    }
+    if (!componentPickVertexArray_.create() ||
+        !componentPickVertexBuffer_.create()) {
+        qWarning() << "Blender grid renderer: could not create component-pick buffers";
         return false;
     }
     initialized_ = true;
@@ -703,6 +728,280 @@ bool BlenderGridRenderer::pickScenePoint(
     return picked;
 }
 
+bool BlenderGridRenderer::pickComponentElement(
+    const QPointF &screenPosition,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
+    const QVector<ViewportComponentPickCandidate> &candidates,
+    int *candidateIndex)
+{
+    if (candidateIndex != nullptr) {
+        *candidateIndex = -1;
+    }
+    if (candidateIndex == nullptr || viewportSize.isEmpty() ||
+        QOpenGLContext::currentContext() == nullptr || !usingWidgetContext_ ||
+        !initialized_ || candidates.isEmpty()) {
+        return false;
+    }
+
+    updateSceneDepthGeometry(visibleSceneShapes);
+    if (sceneDepthSurfaceVertexCount_ == 0) {
+        return false;
+    }
+
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    const QSize pixelSize(qRound(viewportSize.width() * dpr),
+                          qRound(viewportSize.height() * dpr));
+    if (pickFramebuffer_ == nullptr || pickFramebuffer_->size() != pixelSize) {
+        QOpenGLFramebufferObjectFormat format;
+        format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+        format.setInternalTextureFormat(GL_RGBA8);
+        format.setSamples(0);
+        pickFramebuffer_ = std::make_unique<QOpenGLFramebufferObject>(pixelSize,
+                                                                      format);
+    }
+    if (pickFramebuffer_ == nullptr || !pickFramebuffer_->isValid()) {
+        pickFramebuffer_.reset();
+        return false;
+    }
+
+    struct PickVertex {
+        float x;
+        float y;
+        float z;
+        std::uint8_t color[4];
+    };
+    QVector<PickVertex> vertices;
+    vertices.reserve(candidates.size() * 2);
+    const auto appendVertex = [&vertices](const Point3D &point, quint32 id) {
+        PickVertex vertex{};
+        vertex.x = static_cast<float>(point.x);
+        vertex.y = static_cast<float>(point.y);
+        vertex.z = static_cast<float>(point.z);
+        vertex.color[0] = static_cast<std::uint8_t>(id & 0xffu);
+        vertex.color[1] = static_cast<std::uint8_t>((id >> 8u) & 0xffu);
+        vertex.color[2] = static_cast<std::uint8_t>((id >> 16u) & 0xffu);
+        vertex.color[3] = static_cast<std::uint8_t>((id >> 24u) & 0xffu);
+        vertices.append(vertex);
+    };
+    for (int index = 0; index < candidates.size(); ++index) {
+        const ViewportComponentPickCandidate &candidate = candidates[index];
+        if (candidate.edge) {
+            const quint32 id = static_cast<quint32>(index) + 1u;
+            appendVertex(candidate.first, id);
+            appendVertex(candidate.second, id);
+        }
+    }
+    const int lineVertexCount = vertices.size();
+    const int pointStart = lineVertexCount;
+    for (int index = 0; index < candidates.size(); ++index) {
+        const ViewportComponentPickCandidate &candidate = candidates[index];
+        if (!candidate.edge) {
+            appendVertex(candidate.first, static_cast<quint32>(index) + 1u);
+        }
+    }
+    const int pointVertexCount = vertices.size() - pointStart;
+    if (lineVertexCount == 0 && pointVertexCount == 0) {
+        return false;
+    }
+
+    GLint previousFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousProgram = 0;
+    GLint previousVertexArray = 0;
+    GLint previousArrayBuffer = 0;
+    GLint previousDepthFunction = GL_LESS;
+    GLint previousScissorBox[4] = {};
+    GLfloat previousClearColor[4] = {};
+    GLdouble previousClearDepth = 1.0;
+    GLfloat previousLineWidth = 1.0f;
+    GLfloat previousPointSize = 1.0f;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    GLboolean previousDepthMask = GL_TRUE;
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousScissorTest = glIsEnabled(GL_SCISSOR_TEST);
+    const GLboolean previousCullFace = glIsEnabled(GL_CULL_FACE);
+    const GLboolean previousDither = glIsEnabled(GL_DITHER);
+    const GLboolean previousProgramPointSize = glIsEnabled(GL_PROGRAM_POINT_SIZE);
+    const GLboolean previousFramebufferSrgb = glIsEnabled(GL_FRAMEBUFFER_SRGB);
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetIntegerv(GL_SCISSOR_BOX, previousScissorBox);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, previousClearColor);
+    glGetDoublev(GL_DEPTH_CLEAR_VALUE, &previousClearDepth);
+    glGetFloatv(GL_LINE_WIDTH, &previousLineWidth);
+    glGetFloatv(GL_POINT_SIZE, &previousPointSize);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    const auto restoreState = [&]() {
+        glBindFramebuffer(GL_FRAMEBUFFER,
+                          static_cast<GLuint>(previousFramebuffer));
+        glViewport(previousViewport[0], previousViewport[1],
+                   previousViewport[2], previousViewport[3]);
+        glUseProgram(static_cast<GLuint>(previousProgram));
+        glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+        glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(previousArrayBuffer));
+        glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+        glLineWidth(previousLineWidth);
+        glPointSize(previousPointSize);
+        glClearColor(previousClearColor[0], previousClearColor[1],
+                     previousClearColor[2], previousClearColor[3]);
+        glClearDepth(previousClearDepth);
+        glColorMask(previousColorMask[0], previousColorMask[1],
+                    previousColorMask[2], previousColorMask[3]);
+        glDepthMask(previousDepthMask);
+        if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+        else glDisable(GL_DEPTH_TEST);
+        if (previousBlend) glEnable(GL_BLEND);
+        else glDisable(GL_BLEND);
+        if (previousScissorTest) {
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(previousScissorBox[0], previousScissorBox[1],
+                      previousScissorBox[2], previousScissorBox[3]);
+        } else {
+            glDisable(GL_SCISSOR_TEST);
+        }
+        if (previousCullFace) glEnable(GL_CULL_FACE);
+        else glDisable(GL_CULL_FACE);
+        if (previousDither) glEnable(GL_DITHER);
+        else glDisable(GL_DITHER);
+        if (previousProgramPointSize) glEnable(GL_PROGRAM_POINT_SIZE);
+        else glDisable(GL_PROGRAM_POINT_SIZE);
+        if (previousFramebufferSrgb) glEnable(GL_FRAMEBUFFER_SRGB);
+        else glDisable(GL_FRAMEBUFFER_SRGB);
+    };
+
+    if (!pickFramebuffer_->bind()) {
+        restoreState();
+        return false;
+    }
+    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DITHER);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClearDepth(1.0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // Blender's solid-mode select engine first depth-tests the scene, then
+    // writes component IDs only where the corresponding edit element is visible.
+    drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr, true);
+    if (!componentPickProgram_.bind()) {
+        restoreState();
+        return false;
+    }
+    {
+        QOpenGLVertexArrayObject::Binder vaoBinder(&componentPickVertexArray_);
+        componentPickVertexBuffer_.bind();
+        componentPickVertexBuffer_.allocate(
+            vertices.constData(),
+            vertices.size() * static_cast<int>(sizeof(PickVertex)));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(
+            0, 3, GL_FLOAT, GL_FALSE, sizeof(PickVertex),
+            reinterpret_cast<const void *>(offsetof(PickVertex, x)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(
+            1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PickVertex),
+            reinterpret_cast<const void *>(offsetof(PickVertex, color)));
+        componentPickProgram_.setUniformValue(
+            "uViewProjection", viewProjection(transform, viewportSize, nullptr));
+        componentPickProgram_.setUniformValue(
+            "uPointSize", static_cast<float>(4.0 * dpr));
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glDepthMask(GL_FALSE);
+        glDisable(GL_BLEND);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        if (lineVertexCount > 0) {
+            GLfloat lineWidthRange[2] = {1.0f, 1.0f};
+            glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, lineWidthRange);
+            glLineWidth(std::clamp(static_cast<float>(2.0 * dpr),
+                                   lineWidthRange[0], lineWidthRange[1]));
+            glDrawArrays(GL_LINES, 0, lineVertexCount);
+        }
+        if (pointVertexCount > 0) {
+            glEnable(GL_PROGRAM_POINT_SIZE);
+            glDrawArrays(GL_POINTS, pointStart, pointVertexCount);
+        }
+        componentPickVertexBuffer_.release();
+        componentPickProgram_.release();
+    }
+
+    // Blender reads a square ID buffer outward from the cursor and reports
+    // the first component ID encountered by its square spiral.
+    constexpr int selectionRadiusLogicalPixels = 75;
+    const int radius = qRound(selectionRadiusLogicalPixels * dpr);
+    const int centerX = qRound(screenPosition.x() * dpr);
+    const int centerY = qRound(screenPosition.y() * dpr);
+    const int left = std::clamp(centerX - radius, 0, pixelSize.width() - 1);
+    const int top = std::clamp(centerY - radius, 0, pixelSize.height() - 1);
+    const int right = std::clamp(centerX + radius, 0, pixelSize.width() - 1);
+    const int bottom = std::clamp(centerY + radius, 0, pixelSize.height() - 1);
+    const int readWidth = right - left + 1;
+    const int readHeight = bottom - top + 1;
+    const int glBottom = pixelSize.height() - 1 - bottom;
+    QVector<std::uint8_t> ids(readWidth * readHeight * 4, 0);
+    glReadPixels(left, glBottom, readWidth, readHeight,
+                 GL_RGBA, GL_UNSIGNED_BYTE, ids.data());
+
+    const int centerColumn = centerX - left;
+    const int centerRow = bottom - centerY;
+    int hitId = 0;
+    const auto inspectPixel = [&](int x, int y) {
+        const int column = centerColumn + x;
+        const int row = centerRow - y;
+        if (column >= 0 && column < readWidth && row >= 0 && row < readHeight) {
+            const int byteIndex = (row * readWidth + column) * 4;
+            const quint32 id =
+                quint32(ids[byteIndex]) |
+                (quint32(ids[byteIndex + 1]) << 8u) |
+                (quint32(ids[byteIndex + 2]) << 16u) |
+                (quint32(ids[byteIndex + 3]) << 24u);
+            const int distance = std::abs(x) + std::abs(y);
+            if (id != 0 && distance < selectionRadiusLogicalPixels * dpr) {
+                hitId = static_cast<int>(id);
+                return true;
+            }
+        }
+        return false;
+    };
+    const int maximumRing = radius;
+    for (int ring = 0; ring <= maximumRing && hitId == 0; ++ring) {
+        if (ring == 0) {
+            inspectPixel(0, 0);
+            continue;
+        }
+        for (int x = -ring; x <= ring && hitId == 0; ++x) {
+            if (inspectPixel(x, -ring)) break;
+        }
+        for (int y = -ring + 1; y <= ring && hitId == 0; ++y) {
+            if (inspectPixel(ring, y)) break;
+        }
+        for (int x = ring - 1; x >= -ring && hitId == 0; --x) {
+            if (inspectPixel(x, ring)) break;
+        }
+        for (int y = ring - 1; y > -ring && hitId == 0; --y) {
+            if (inspectPixel(-ring, y)) break;
+        }
+    }
+    restoreState();
+    if (hitId > 0 && hitId <= candidates.size()) {
+        *candidateIndex = hitId - 1;
+    }
+    return true;
+}
+
 void BlenderGridRenderer::updateSceneDepthGeometry(
     const QVector<ViewportRenderObject> &visibleSceneShapes)
 {
@@ -752,7 +1051,8 @@ void BlenderGridRenderer::setSurfaceTessellationCache(
 void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,
                                          const ViewportTransform &transform,
                                          const QSize &viewportSize,
-                                         qreal devicePixelRatio)
+                                         qreal devicePixelRatio,
+                                         bool surfacesOnly)
 {
     if (geometry.lineVertices.isEmpty() && geometry.pointVertices.isEmpty() &&
         geometry.surfaceVertices.isEmpty()) {
@@ -800,7 +1100,11 @@ void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,
             glDisable(GL_PROGRAM_POINT_SIZE);
         }
     };
-    for (int primitive = 0; primitive < 3; ++primitive) {
+    const int firstPrimitive = surfacesOnly ? 1 : 0;
+    const int pastLastPrimitive = surfacesOnly ? 2 : 3;
+    for (int primitive = firstPrimitive;
+         primitive < pastLastPrimitive;
+         ++primitive) {
         const auto firstOf = [primitive](const DepthObjectRange &range) {
             return primitive == 0 ? range.lineFirst :
                    primitive == 1 ? range.surfaceFirst : range.pointFirst;

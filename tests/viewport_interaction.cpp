@@ -10,6 +10,7 @@
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/shape_mapping.h"
 #include "core/geometry/nurbs_surface_factory.h"
+#include "core/geometry/nurbs_solid.h"
 #include "core/serialization/blender_project_file.h"
 
 #include <QApplication>
@@ -423,8 +424,9 @@ bool verifyVertexComponentSelection(QApplication &application)
                         "a box started in empty space must select the enclosed vertex");
         passed &= check(orangePixels(blankStartedBoxImage.copy(oppositeEdgeRegion)) == 0,
                         "a partial vertex box must not select the entire surface object");
-        if (QCheckBox *xray = probe->findChild<QCheckBox *>(
-                QStringLiteral("SolidXRay"))) {
+        QCheckBox *xray = probe->findChild<QCheckBox *>(
+            QStringLiteral("SolidXRay"));
+        if (xray != nullptr) {
             xray->setChecked(true);
             application.processEvents();
             const QImage xrayImage = captureViewport(probe.get());
@@ -434,6 +436,109 @@ bool verifyVertexComponentSelection(QApplication &application)
         } else {
             passed &= check(false, "X-Ray control must be available in the viewport");
         }
+
+        const auto whitePixelsNear = [](const QImage &image,
+                                        const QPointF &position,
+                                        int radius) {
+            int count = 0;
+            const QPoint center = position.toPoint();
+            for (int y = std::max(0, center.y() - radius);
+                 y <= std::min(image.height() - 1, center.y() + radius); ++y) {
+                for (int x = std::max(0, center.x() - radius);
+                     x <= std::min(image.width() - 1, center.x() + radius); ++x) {
+                    const QColor color = image.pixelColor(x, y);
+                    count += color.red() > 245 && color.green() > 245 &&
+                             color.blue() > 245;
+                }
+            }
+            return count;
+        };
+        const auto clickAt = [&](const QPointF &position) {
+            sendMouse(probe.get(), QEvent::MouseButtonPress, position,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            sendMouse(probe.get(), QEvent::MouseButtonRelease, position,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+            application.processEvents();
+        };
+
+        if (xray != nullptr) {
+            xray->setChecked(false);
+            application.processEvents();
+        }
+        QKeyEvent vertexModeKey(QEvent::KeyPress, Qt::Key_1, Qt::NoModifier);
+        QApplication::sendEvent(probe.get(), &vertexModeKey);
+        clickAt(blankClick);
+        const QPointF outwardSigns(first.x() < center.x() ? -1.0 : 1.0,
+                                   first.y() < center.y() ? -1.0 : 1.0);
+        clickAt(first + QPointF(outwardSigns.x() * 30.0,
+                                outwardSigns.y() * 30.0));
+        const QImage radiusHitImage = captureViewport(probe.get());
+        passed &= check(whitePixelsNear(radiusHitImage, first, 4) > 0,
+                        "a vertex must select within Blender's 75 px Manhattan hit radius, even just outside the surface");
+        clickAt(blankClick);
+        clickAt(first + QPointF(outwardSigns.x() * 40.0,
+                                outwardSigns.y() * 40.0));
+        const QImage radiusMissImage = captureViewport(probe.get());
+        passed &= check(whitePixelsNear(radiusMissImage, first, 4) == 0,
+                        "a vertex outside Blender's 75 px Manhattan hit radius must not select");
+
+        Shape cube;
+        cube.geometryType = GeometryType::NurbsSolid;
+        cube.nurbsSolid.baseSurface = face.nurbsSurface;
+        for (Point3D &point : cube.nurbsSolid.baseSurface.controlPoints) {
+            point.z = -8.0;
+        }
+        passed &= check(makeNurbsExtrusionSolid(
+                            cube.nurbsSolid.baseSurface, {0.0, 0.0, 16.0},
+                            &cube.nurbsSolid),
+                        "visible-back-vertex fixture must create a closed cube");
+        Document cubeDocument;
+        cubeDocument.append(cube);
+        const QString cubePath = directory.filePath(
+            QStringLiteral("visible-back-vertex.vignola"));
+        passed &= check(saveVignolaDocument(cubePath, cubeDocument, &error) &&
+                            probe->loadVignolaDocument(cubePath, &error),
+                        "visible-back-vertex cube fixture must load");
+        probe->setViewPreset(ViewportViewPreset::Isometric);
+        passed &= check(waitForViewPreset(probe.get(),
+                                         ViewportViewPreset::Isometric),
+                        "visible-back-vertex camera must settle");
+        waitForViewportTransition();
+        ViewportTransform isometricProjection;
+        isometricProjection.setCameraPreferences(probe->cameraPreferences());
+        isometricProjection.setViewPreset(ViewportViewPreset::Isometric);
+        const Point3D topCorners[] = {{-8.0, -8.0, 8.0},
+                                      {-8.0, 8.0, 8.0},
+                                      {8.0, -8.0, 8.0},
+                                      {8.0, 8.0, 8.0}};
+        QPointF projectedTopCorners[4];
+        QPointF topCenter;
+        int backCornerIndex = 0;
+        qreal farthestCornerDepth = std::numeric_limits<qreal>::infinity();
+        for (int corner = 0; corner < 4; ++corner) {
+            passed &= check(isometricProjection.worldPointToScreen(
+                                topCorners[corner], interactionViewportSize,
+                                &projectedTopCorners[corner]),
+                            "cube top vertex must project into the isometric viewport");
+            topCenter += projectedTopCorners[corner] / 4.0;
+            const qreal depth = isometricProjection.worldDirectionToView(
+                topCorners[corner]).towardCamera;
+            if (depth < farthestCornerDepth) {
+                farthestCornerDepth = depth;
+                backCornerIndex = corner;
+            }
+        }
+        const QPointF backCorner = projectedTopCorners[backCornerIndex];
+        QPointF outward = backCorner - topCenter;
+        const qreal outwardLength = std::hypot(outward.x(), outward.y());
+        if (outwardLength > 1.0e-9) {
+            outward /= outwardLength;
+        }
+        clickAt(backCorner + outward * 24.0);
+        const QImage visibleBackVertexImage = captureViewport(probe.get());
+        passed &= check(whitePixelsNear(visibleBackVertexImage,
+                                        backCorner, 4) > 0,
+                        "a visible back-side cube vertex must remain selectable in solid mode");
     }
 
     return passed;

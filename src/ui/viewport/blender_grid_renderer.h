@@ -26,6 +26,14 @@
 
 namespace classiCAD {
 
+struct ViewportComponentPickCandidate {
+    Point3D first;
+    Point3D second;
+    int componentIndex = -1;
+    int shapeIndex = -1;
+    bool edge = false;
+};
+
 QMatrix4x4 viewportViewProjection(const ViewportTransform &transform,
                                    const QSize &viewportSize);
 
@@ -56,6 +64,14 @@ public:
                         qreal devicePixelRatio,
                         const QVector<ViewportRenderObject> &visibleSceneShapes,
                         Point3D *worldPoint);
+    bool pickComponentElement(
+        const QPointF &screenPosition,
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const QVector<ViewportRenderObject> &visibleSceneShapes,
+        const QVector<ViewportComponentPickCandidate> &candidates,
+        int *candidateIndex);
     void setSurfaceTessellationCache(
         const SurfaceTessellationCache *surfaceTessellationCache);
     void setAntiAliasingSamples(int samples);
@@ -74,7 +90,8 @@ private:
     void drawSceneDepth(const ViewportDepthGeometry &geometry,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,
-                        qreal devicePixelRatio);
+                        qreal devicePixelRatio,
+                        bool surfacesOnly = false);
     void uploadSceneDepthGeometry(const ViewportDepthGeometry &geometry);
     void updateSceneDepthGeometry(
         const QVector<ViewportRenderObject> &visibleSceneShapes);
@@ -93,9 +110,12 @@ private:
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram backgroundProgram_;
     QOpenGLShaderProgram sceneDepthProgram_;
+    QOpenGLShaderProgram componentPickProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject sceneDepthVertexArray_;
+    QOpenGLVertexArrayObject componentPickVertexArray_;
     QOpenGLBuffer sceneDepthVertexBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer componentPickVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     ViewportDepthGeometry cachedDepthGeometry_;
     struct DepthObjectRange {
         int lineFirst = 0;

@@ -6,6 +6,8 @@
         <file alias="viewport_background.frag">shaders/viewport_background.frag</file>
         <file alias="scene_depth.vert">shaders/scene_depth.vert</file>
         <file alias="scene_depth.frag">shaders/scene_depth.frag</file>
+        <file alias="component_pick.vert">shaders/component_pick.vert</file>
+        <file alias="component_pick.frag">shaders/component_pick.frag</file>
         <file alias="scene_stroke.vert">shaders/scene_stroke.vert</file>
         <file alias="scene_stroke.geom">shaders/scene_stroke.geom</file>
         <file alias="scene_stroke.frag">shaders/scene_stroke.frag</file>

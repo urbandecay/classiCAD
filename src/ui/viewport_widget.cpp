@@ -3678,10 +3678,15 @@ protected:
         return componentSelections_[static_cast<int>(componentSelectionMode_)];
     }
 
+    int &activeComponentIndex()
+    {
+        return activeComponentIndices_[static_cast<int>(componentSelectionMode_)];
+    }
+
     void clearComponentSelections()
     {
         for (QSet<int> &selection : componentSelections_) selection.clear();
-        activeComponentIndex_ = -1;
+        for (int &activeIndex : activeComponentIndices_) activeIndex = -1;
     }
 
     int viewportShadingControlAt(const QPointF &position) const
@@ -4217,7 +4222,7 @@ protected:
                             for (int component : activeComponentSelection()) {
                                 if (component < 0 || component >= cage->pointVertices.size()) continue;
                                 const QVector3D &point = cage->pointVertices[component];
-                                const QColor baseColor = component == activeComponentIndex_
+                                const QColor baseColor = component == activeComponentIndex()
                                                              ? QColor(Qt::white)
                                                              : selectedVertexColor;
                                 fadedPoints[baseColor.rgba()].pointVertices.append(point);
@@ -4228,18 +4233,28 @@ protected:
                                                       1.0f, 4.0f, {});
                             }
                         } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
-                            ViewportDepthGeometry componentGeometry;
+                            QMap<QRgb, ViewportDepthGeometry> selectedEdges;
                             for (int component : activeComponentSelection()) {
                                 const int first = component * 2;
                                 if (first + 1 >= cage->lineVertices.size()) continue;
-                                componentGeometry.lineVertices.append(cage->lineVertices[first]);
-                                componentGeometry.lineVertices.append(cage->lineVertices[first + 1]);
-                                componentGeometry.preciseLineVertices.append(cage->preciseLineVertices[first]);
-                                componentGeometry.preciseLineVertices.append(cage->preciseLineVertices[first + 1]);
+                                const QColor color = component == activeComponentIndex()
+                                                         ? QColor(Qt::white)
+                                                         : QColor(QStringLiteral("#ff7a00"));
+                                ViewportDepthGeometry &componentGeometry =
+                                    selectedEdges[color.rgba()];
+                                componentGeometry.lineVertices
+                                    << cage->lineVertices[first]
+                                    << cage->lineVertices[first + 1];
+                                componentGeometry.preciseLineVertices
+                                    << cage->preciseLineVertices[first]
+                                    << cage->preciseLineVertices[first + 1];
                             }
-                            appendComponentStroke(std::move(componentGeometry),
-                                                  QColor(QStringLiteral("#ff8a00")),
-                                                  2.0f, 0.0f, {});
+                            for (auto it = selectedEdges.begin();
+                                 it != selectedEdges.end(); ++it) {
+                                appendComponentStroke(std::move(it.value()),
+                                                      QColor::fromRgba(it.key()),
+                                                      2.0f, 0.0f, {});
+                            }
                         } else {
                             ViewportDepthGeometry componentGeometry;
                             const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(visibleShape);
@@ -5709,20 +5724,20 @@ protected:
                         clearComponentSelections();
                     else {
                         activeComponentSelection().clear();
-                        activeComponentIndex_ = -1;
+                        activeComponentIndex() = -1;
                     }
                 }
                 componentSelectionObject_ = componentObject;
                 if (activeComponentSelection().contains(componentIndex)) {
                     activeComponentSelection().remove(componentIndex);
-                    if (activeComponentIndex_ == componentIndex) {
-                        activeComponentIndex_ = activeComponentSelection().isEmpty()
-                                                    ? -1
-                                                    : *activeComponentSelection().cbegin();
+                    if (activeComponentIndex() == componentIndex) {
+                        activeComponentIndex() = activeComponentSelection().isEmpty()
+                                                     ? -1
+                                                     : *activeComponentSelection().cbegin();
                     }
                 } else {
                     activeComponentSelection().insert(componentIndex);
-                    activeComponentIndex_ = componentIndex;
+                    activeComponentIndex() = componentIndex;
                 }
                 update();
                 event->accept();
@@ -8066,7 +8081,7 @@ private:
                     componentSelectionObject_ = matchedObjectId;
                     for (int component : boxedComponents)
                         activeComponentSelection().insert(component);
-                    activeComponentIndex_ = *boxedComponents.cbegin();
+                    activeComponentIndex() = *boxedComponents.cbegin();
                 } else if (!additive) {
                     clearComponentSelections();
                     componentSelectionObject_ = ObjectId::invalid();
@@ -13358,7 +13373,7 @@ private:
     ObjectId componentBoxSelectionObject_ = ObjectId::invalid();
     QSet<int> componentSelections_[3];
     ObjectId componentSelectionObject_ = ObjectId::invalid();
-    int activeComponentIndex_ = -1;
+    int activeComponentIndices_[3] = {-1, -1, -1};
     std::unique_ptr<ApplicationSession> ownedSession_;
     ApplicationSession &session_;
     Document &document_;

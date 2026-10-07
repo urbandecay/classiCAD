@@ -4095,7 +4095,6 @@ protected:
         }
 
         componentSelectionMode_ = mode;
-        controlPointsVisible_ = mode == ComponentSelectionMode::Vertex;
         update();
     }
 
@@ -4186,13 +4185,17 @@ protected:
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
         const ToolPreview &activeToolPreview = renderFrame.activeToolPreview;
         QVector<ViewportControlPointHandle> gpuControlPointHandles;
-        if ((controlPointsVisible_ ||
-             componentSelectionMode_ == ComponentSelectionMode::Vertex) &&
+        const bool showCurveEndpointVertices =
+            componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+            !controlPointsVisible_;
+        if ((controlPointsVisible_ || showCurveEndpointVertices) &&
             controlPointRenderer != nullptr) {
             const QColor handleOutline(QStringLiteral("#77b7e6"));
             const QColor handleFill(QStringLiteral("#263b4b"));
             const QColor activeHandle(QStringLiteral("#f0a45a"));
-            for (const int shapeIndex : controlPointShapeIndices()) {
+            const QVector<int> displayShapeIndices =
+                curveDisplayShapeIndices();
+            for (const int shapeIndex : displayShapeIndices) {
                 if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
                     continue;
                 }
@@ -4203,25 +4206,33 @@ protected:
                     continue;
                 }
 
-                const QVector<Point3D> controlPoints =
-                    controlPointWorldPositions(*renderObject);
-                for (int pointIndex = 0; pointIndex < controlPoints.size();
-                     ++pointIndex) {
+                const QVector<Point3D> points = showCurveEndpointVertices
+                    ? curveVertexWorldPositions(*renderObject)
+                    : controlPointWorldPositions(*renderObject);
+                for (int pointIndex = 0; pointIndex < points.size(); ++pointIndex) {
                     const bool active = controlPointSelectionDragActive() &&
                                         objectId == selectedShapeIndex_ &&
                                         pointIndex == controlPointIndex_;
                     ViewportControlPointHandle handle;
                     handle.worldPosition = QVector3D(
-                        static_cast<float>(controlPoints[pointIndex].x),
-                        static_cast<float>(controlPoints[pointIndex].y),
-                        static_cast<float>(controlPoints[pointIndex].z));
-                    handle.fillColor = active ? activeHandle : handleFill;
-                    handle.outlineColor = active ? activeHandle : handleOutline;
-                    // The old QPainter square is 8 logical pixels with a
-                    // 1.5-pixel outline straddling its edges.
-                    handle.diameterPixels = 9.5f;
-                    handle.outlineWidthPixels = 1.5f;
-                    handle.shape = ViewportControlPointShape::Square;
+                        static_cast<float>(points[pointIndex].x),
+                        static_cast<float>(points[pointIndex].y),
+                        static_cast<float>(points[pointIndex].z));
+                    if (showCurveEndpointVertices) {
+                        handle.fillColor = QColor(12, 12, 12);
+                        handle.outlineColor = QColor(12, 12, 12);
+                        handle.diameterPixels = 4.0f;
+                        handle.outlineWidthPixels = 0.0f;
+                        handle.shape = ViewportControlPointShape::Circle;
+                    } else {
+                        handle.fillColor = active ? activeHandle : handleFill;
+                        handle.outlineColor = active ? activeHandle : handleOutline;
+                        // The old QPainter square is 8 logical pixels with a
+                        // 1.5-pixel outline straddling its edges.
+                        handle.diameterPixels = 9.5f;
+                        handle.outlineWidthPixels = 1.5f;
+                        handle.shape = ViewportControlPointShape::Square;
+                    }
                     gpuControlPointHandles.append(handle);
                 }
             }
@@ -5496,7 +5507,8 @@ protected:
                                                        renderFrame.camera,
                                                        renderFrame.viewportSize,
                                                        devicePixelRatioF());
-            if (controlPointsVisible_ && controlPointRenderer != nullptr) {
+            if ((controlPointsVisible_ || showCurveEndpointVertices) &&
+                controlPointRenderer != nullptr) {
                 gpuControlPointsDrawn = controlPointRenderer->draw(
                     gpuControlPointHandles, renderFrame.camera,
                     renderFrame.viewportSize,
@@ -5629,7 +5641,7 @@ protected:
         }
 
         if (controlPointsVisible_) {
-            for (const int shapeIndex : controlPointShapeIndices()) {
+            for (const int shapeIndex : curveDisplayShapeIndices()) {
                 if (shapeIndex >= 0 && shapeIndex < shapes_.size()) {
                     const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
                     const ViewportRenderObject *renderObject =
@@ -5638,6 +5650,27 @@ protected:
                         drawControlPoints(painter,
                                           *renderObject,
                                           !gpuControlPointsDrawn);
+                    }
+                }
+            }
+        } else if (showCurveEndpointVertices && !gpuControlPointsDrawn) {
+            for (const int shapeIndex : curveDisplayShapeIndices()) {
+                if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                    continue;
+                }
+                const ViewportRenderObject *renderObject = renderFrame.find(
+                    shapes_.objectIdAt(shapeIndex));
+                if (renderObject == nullptr) {
+                    continue;
+                }
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(QColor(12, 12, 12));
+                for (const Point3D &point :
+                     curveVertexWorldPositions(*renderObject)) {
+                    QPointF screenPoint;
+                    if (viewportTransform_.worldPointToScreen(
+                            point, size(), &screenPoint)) {
+                        painter.drawEllipse(screenPoint, 2.0, 2.0);
                     }
                 }
             }
@@ -10812,10 +10845,88 @@ private:
         return indices;
     }
 
+    QVector<int> curveDisplayShapeIndices() const
+    {
+        QVector<int> indices;
+        for (int index = 0; index < shapes_.size(); ++index) {
+            const GeometryType type = shapes_[index].geometryType;
+            switch (type) {
+            case GeometryType::Line:
+            case GeometryType::Arc:
+            case GeometryType::Bezier:
+            case GeometryType::Nurbs:
+            case GeometryType::Rectangle:
+            case GeometryType::Circle:
+            case GeometryType::PolyCurve:
+            case GeometryType::Ellipse:
+            case GeometryType::Polygon:
+                break;
+            default:
+                continue;
+            }
+
+            const ObjectId objectId = shapes_.objectIdAt(index);
+            if (document_.isObjectVisible(objectId) &&
+                document_.isObjectEditable(objectId) &&
+                !controlPointsForShape(shapes_[index]).isEmpty() &&
+                !indices.contains(index)) {
+                indices.append(index);
+            }
+        }
+        return indices;
+    }
+
+    QVector<Point3D> curveVertexWorldPositions(
+        const ViewportRenderObject &renderObject) const
+    {
+        const Shape &shape = renderObject.shape;
+        QVector<Point3D> positions;
+        const auto appendEndpoints = [&](const QVector<QPointF> &controlPoints,
+                                         WorkPlaneFrame frame) {
+            if (controlPoints.isEmpty()) {
+                return;
+            }
+            frame.origin.x += renderObject.placementTranslation.x;
+            frame.origin.y += renderObject.placementTranslation.y;
+            frame.origin.z += renderObject.placementTranslation.z;
+            const Point3D first = workPlaneFramePointToWorld(
+                controlPoints.first(), frame);
+            const Point3D last = workPlaneFramePointToWorld(
+                controlPoints.last(), frame);
+            positions.append(first);
+            const qreal dx = last.x - first.x;
+            const qreal dy = last.y - first.y;
+            const qreal dz = last.z - first.z;
+            if (dx * dx + dy * dy + dz * dz > 1.0e-16) {
+                positions.append(last);
+            }
+        };
+
+        if (shape.geometryType == GeometryType::PolyCurve) {
+            for (int componentIndex = 0;
+                 componentIndex < shape.components.size();
+                 ++componentIndex) {
+                appendEndpoints(shape.components[componentIndex].controlPoints,
+                                shapeComponentWorkPlaneFrame(shape,
+                                                             componentIndex));
+            }
+        } else {
+            appendEndpoints(controlPointsForShape(shape),
+                            shapeWorkPlaneFrame(shape));
+        }
+
+        return positions;
+    }
+
     bool hitTestSelectedControlPoint(const QPointF &screenPosition,
                                      int *shapeIndex,
                                      int *controlPointIndex) const
     {
+        if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+            !controlPointsVisible_) {
+            return hitTestSelectedCurveEndpoint(screenPosition, shapeIndex,
+                                                controlPointIndex);
+        }
         return curveHitTester_.hitTestSelectedControlPoint(document_,
                                                            controlPointShapeIndices(),
                                                            screenPosition,
@@ -10823,6 +10934,87 @@ private:
                                                            size(),
                                                            shapeIndex,
                                                            controlPointIndex);
+    }
+
+    bool hitTestSelectedCurveEndpoint(const QPointF &screenPosition,
+                                      int *shapeIndex,
+                                      int *controlPointIndex) const
+    {
+        constexpr qreal hitRadiusPixels = 10.0;
+        qreal closestDistance = hitRadiusPixels;
+        int closestShapeIndex = -1;
+        int closestControlPointIndex = -1;
+
+        for (const int candidateShapeIndex : controlPointShapeIndices()) {
+            if (candidateShapeIndex < 0 || candidateShapeIndex >= shapes_.size()) {
+                continue;
+            }
+            const Shape &shape = shapes_[candidateShapeIndex];
+            const ObjectId objectId = shapes_.objectIdAt(candidateShapeIndex);
+            const SceneObject *sceneObject = document_.object(objectId);
+            const Point3D offset = sceneObject != nullptr
+                                       ? sceneObject->placementTranslation
+                                       : Point3D{};
+            const auto considerEndpoint = [&](const QVector<QPointF> &points,
+                                              const WorkPlaneFrame &sourceFrame,
+                                              int globalIndex) {
+                if (points.isEmpty()) {
+                    return;
+                }
+                WorkPlaneFrame frame = sourceFrame;
+                frame.origin.x += offset.x;
+                frame.origin.y += offset.y;
+                frame.origin.z += offset.z;
+                const auto consider = [&](int pointIndex) {
+                    const Point3D worldPoint = workPlaneFramePointToWorld(
+                        points[pointIndex], frame);
+                    QPointF projected;
+                    if (!viewportTransform_.worldPointToScreen(
+                            worldPoint, size(), &projected)) {
+                        return;
+                    }
+                    const qreal distance = std::hypot(
+                        screenPosition.x() - projected.x(),
+                        screenPosition.y() - projected.y());
+                    if (distance <= closestDistance) {
+                        closestDistance = distance;
+                        closestShapeIndex = candidateShapeIndex;
+                        closestControlPointIndex = globalIndex + pointIndex;
+                    }
+                };
+                consider(0);
+                const QPointF delta = points.last() - points.first();
+                if (points.size() > 1 && QPointF::dotProduct(delta, delta) >
+                                              1.0e-16) {
+                    consider(points.size() - 1);
+                }
+            };
+
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                int globalIndex = 0;
+                for (int componentIndex = 0;
+                     componentIndex < shape.components.size();
+                     ++componentIndex) {
+                    const QVector<QPointF> &points =
+                        shape.components[componentIndex].controlPoints;
+                    considerEndpoint(points,
+                        shapeComponentWorkPlaneFrame(shape, componentIndex),
+                        globalIndex);
+                    globalIndex += points.size();
+                }
+            } else {
+                considerEndpoint(controlPointsForShape(shape),
+                                 shapeWorkPlaneFrame(shape), 0);
+            }
+        }
+
+        if (shapeIndex != nullptr) {
+            *shapeIndex = closestShapeIndex;
+        }
+        if (controlPointIndex != nullptr) {
+            *controlPointIndex = closestControlPointIndex;
+        }
+        return closestShapeIndex >= 0 && closestControlPointIndex >= 0;
     }
 
     int hitTestComponent(const QPointF &screenPosition, int *shapeIndexOut)

@@ -63,8 +63,22 @@ void main()
         float beyond = max(max(-vStrokePosition.x,
                                vStrokePosition.x - vLength), 0.0);
         float distanceFromStroke = length(vec2(beyond, vStrokePosition.y));
-        coverage = clamp(uWidth * 0.5 + 0.5 - distanceFromStroke,
-                         0.0, 1.0);
+        if (uSmoothWire != 0) {
+            // Match Blender's edit-wire coverage: estimate pixel coverage with
+            // a smoothstep over a circular pixel footprint instead of a linear
+            // one-pixel ramp. uWidth is the full stroke width here, so use its
+            // half-width for Blender's edge-size calculation.
+            const float inverseSqrtPi = 0.5641895835477563;
+            const float discRadius = inverseSqrtPi * 1.05;
+            const float smoothStart = 0.5 - discRadius;
+            const float smoothEnd = 0.5 + discRadius;
+            float edgeSize = uWidth * 0.5;
+            float edgeDistance = distanceFromStroke - max(edgeSize - 0.5, 0.0);
+            coverage = 1.0 - smoothstep(smoothStart, smoothEnd, edgeDistance);
+        } else {
+            coverage = clamp(uWidth * 0.5 + 0.5 - distanceFromStroke,
+                             0.0, 1.0);
+        }
         if (uLineStyle == 1 && uPatternPeriod > 0.0 &&
             mod(max(vStrokePosition.x + gPatternOffsetPixels, 0.0),
                 uPatternPeriod) >=

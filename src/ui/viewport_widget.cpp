@@ -5686,12 +5686,42 @@ protected:
                 return;
             }
             const int hitShapeIndex = hitTestShape(screenPosition);
+            if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                ObjectId boxObject = componentSelectionObject_;
+                if (!boxObject.isValid() || objectIndex(boxObject) < 0) {
+                    boxObject = selectedShapeIndex_;
+                }
+                if ((!boxObject.isValid() || objectIndex(boxObject) < 0) &&
+                    hitShapeIndex >= 0 && hitShapeIndex < shapes_.size()) {
+                    boxObject = shapes_.objectIdAt(hitShapeIndex);
+                }
+                const int boxShapeIndex = objectIndex(boxObject);
+                const bool isSurfaceObject =
+                    boxShapeIndex >= 0 &&
+                    (shapes_[boxShapeIndex].geometryType == GeometryType::NurbsSurface ||
+                     shapes_[boxShapeIndex].geometryType == GeometryType::NurbsSolid);
+                if (isSurfaceObject) {
+                    // Box selection belongs to the active solid even when
+                    // the drag starts in empty space beside it. Never let
+                    // this gesture fall through to object selection.
+                    componentBoxSelectionActive_ = true;
+                    componentBoxSelectionObject_ = boxObject;
+                    if (!selection_.contains(boxObject))
+                        selection_.setObjectIds({boxObject}, boxObject);
+                    componentSelectionObject_ = boxObject;
+                    beginSelectionBox(
+                        screenPosition,
+                        event->modifiers().testFlag(Qt::ShiftModifier));
+                    event->accept();
+                    return;
+                }
+            }
             if (hitShapeIndex >= 0 && hitShapeIndex < shapes_.size()) {
                 const GeometryType type = shapes_[hitShapeIndex].geometryType;
                 if (type == GeometryType::NurbsSurface ||
                     type == GeometryType::NurbsSolid) {
-                    // In component mode, a body hit with no matching
-                    // component must not fall through to object selection.
+                    // Edge and face mode do not convert empty body clicks to
+                    // object selection either; component hits are handled above.
                     event->accept();
                     return;
                 }
@@ -7809,6 +7839,43 @@ private:
                            selectionBox.width() >= 3.0 ||
                            selectionBox.height() >= 3.0;
         const bool additive = selectTool->selectionBoxAdditive();
+        if (componentBoxSelectionActive_) {
+            const ObjectId objectId = componentBoxSelectionObject_;
+            componentBoxSelectionActive_ = false;
+            componentBoxSelectionObject_ = ObjectId::invalid();
+            selectTool->cancelSelectionBox();
+            if (moved && objectId.isValid() && objectIndex(objectId) >= 0) {
+                const int index = objectIndex(objectId);
+                const SceneObject *sceneObject = document_.object(objectId);
+                const Point3D offset = sceneObject != nullptr
+                                           ? sceneObject->placementTranslation
+                                           : Point3D{};
+                const ViewportDepthGeometry cage =
+                    selectedSurfaceCage(shapes_[index]);
+                QSet<int> boxedVertices;
+                for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
+                    const QVector3D &point = cage.pointVertices[vertex];
+                    QPointF projected;
+                    if (viewportTransform_.worldPointToScreen(
+                            {point.x() + offset.x, point.y() + offset.y,
+                             point.z() + offset.z}, size(), &projected) &&
+                        selectionBox.contains(projected)) {
+                        boxedVertices.insert(vertex);
+                    }
+                }
+                if (!additive) {
+                    activeComponentSelection().clear();
+                }
+                for (int vertex : boxedVertices)
+                    activeComponentSelection().insert(vertex);
+                if (!boxedVertices.isEmpty())
+                    activeComponentIndex_ = *boxedVertices.cbegin();
+                componentSelectionObject_ = objectId;
+            }
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
         QVector<ObjectId> boxSelection;
         if (moved) {
             for (int index = 0; index < shapes_.size(); ++index) {
@@ -13085,6 +13152,8 @@ private:
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
     ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
+    bool componentBoxSelectionActive_ = false;
+    ObjectId componentBoxSelectionObject_ = ObjectId::invalid();
     QSet<int> componentSelections_[3];
     ObjectId componentSelectionObject_ = ObjectId::invalid();
     int activeComponentIndex_ = -1;

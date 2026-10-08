@@ -15,12 +15,14 @@ public:
     bool sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                           const ViewportTransform &transform,
                           const QSize &viewportSize,
-                          SampledNurbsCurve2D *sampled) const;
+                          SampledNurbsCurve2D *sampled,
+                          const Point3D &worldOffset = {}) const;
     bool sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                           const WorkPlaneFrame &workPlaneFrame,
                           const ViewportTransform &transform,
                           const QSize &viewportSize,
-                          SampledNurbsCurve2D *sampled) const;
+                          SampledNurbsCurve2D *sampled,
+                          const Point3D &worldOffset = {}) const;
 
     QVector<Shape::NurbsCurve2D> curvesForShape(const Shape &shape) const;
     QVector<EraseCurveSampleCache> sampleDocument(

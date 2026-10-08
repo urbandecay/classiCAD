@@ -70,15 +70,6 @@ ProjectedShapeBoundsResult queryProjectedShapeBounds(
     const QSize &viewportSize,
     const Point3D &worldOffset)
 {
-    QVector<QPointF> points = curveHitTester.controlPointsForShape(shape);
-    // Keep source points in the bounds even when a malformed or legacy NURBS
-    // control net does not contain those endpoint records.
-    for (const QPointF &point : shape.points) {
-        if (!points.contains(point)) {
-            points.append(point);
-        }
-    }
-
     qreal minX = 0.0;
     qreal maxX = 0.0;
     qreal minY = 0.0;
@@ -103,12 +94,46 @@ ProjectedShapeBoundsResult queryProjectedShapeBounds(
         }
     };
 
-    const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-    for (const QPointF &point : points) {
-        if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
-            continue;
+    const auto includeCurveControlHull = [&](const NurbsCurve3D &curve,
+                                             WorkPlaneFrame frame) {
+        if (!validateNurbsCurve(curve)) {
+            return;
         }
-        includeWorldPoint(workPlaneFramePointToWorld(point, frame));
+        frame.origin.x += worldOffset.x;
+        frame.origin.y += worldOffset.y;
+        frame.origin.z += worldOffset.z;
+        for (int index = 0; index < curve.controlPoints.size(); ++index) {
+            includeWorldPoint(workPlaneFramePointToWorld(
+                curve.controlPoints[index],
+                curve.dimension == 3 ? curve.normalCoordinates[index] : 0.0,
+                frame));
+        }
+    };
+    if (shape.geometryType == GeometryType::PolyCurve) {
+        for (int componentIndex = 0;
+             componentIndex < shape.components.size(); ++componentIndex) {
+            includeCurveControlHull(
+                shape.components[componentIndex],
+                shapeComponentWorkPlaneFrame(shape, componentIndex));
+        }
+    } else if (validateNurbsCurve(shape.nurbs)) {
+        includeCurveControlHull(shape.nurbs, shapeWorkPlaneFrame(shape));
+    } else {
+        WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        frame.origin.x += worldOffset.x;
+        frame.origin.y += worldOffset.y;
+        frame.origin.z += worldOffset.z;
+        QVector<QPointF> points = curveHitTester.controlPointsForShape(shape);
+        for (const QPointF &point : shape.points) {
+            if (!points.contains(point)) {
+                points.append(point);
+            }
+        }
+        for (const QPointF &point : points) {
+            if (std::isfinite(point.x()) && std::isfinite(point.y())) {
+                includeWorldPoint(workPlaneFramePointToWorld(point, frame));
+            }
+        }
     }
 
     for (const auto &face : shapeSurfaceFaces(shape)) {
@@ -163,7 +188,8 @@ SelectionBoxGeometryResult queryCurveOrPointSelectionBox(
                                                 frame,
                                                 viewportTransform,
                                                 viewportSize,
-                                                &controlHullBounds) &&
+                                                &controlHullBounds,
+                                                worldOffset) &&
                 !screenBoundsOverlap(controlHullBounds, hitRect)) {
                 if (!crossingSelection) {
                     return {true, false};
@@ -175,7 +201,8 @@ SelectionBoxGeometryResult queryCurveOrPointSelectionBox(
                                                 frame,
                                                 viewportTransform,
                                                 viewportSize,
-                                                &sampled)) {
+                                                &sampled,
+                                                worldOffset)) {
                 return {true, false};
             }
 

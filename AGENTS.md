@@ -2,8 +2,10 @@
 
 ## Curve and spline geometry
 
-Every committed curve or spline type must use the shared `Shape::NurbsCurve2D`
-representation and conform to Rhino/openNURBS conventions.
+Every committed curve or spline type must use the shared
+`Shape::NurbsCurve3D` representation and conform to Rhino/openNURBS
+conventions. Curves may remain planar or become spatial after control-point
+editing.
 
 - Store the curve dimension, degree, order, rational state, control vertices,
   weights, and knot array.
@@ -11,16 +13,30 @@ representation and conform to Rhino/openNURBS conventions.
 - Use Rhino's reduced knot-array convention: the knot count is
   `control_vertex_count + order - 2`; do not store the two redundant outer
   entries from the mathematical full knot vector.
-- Store rational curves as Euclidean 2D control-vertex positions plus weights
-  internally. `Shape::workPlaneFrame` maps those local coordinates to world
-  XYZ through an origin, orthonormal X/Y axes, and their right-handed normal.
-  Legacy records without a frame use `Shape::workPlane` and
-  `Shape::workPlaneOffset`, defaulting to XY at offset zero. When exporting to
-  Rhino/openNURBS, lift each CV to world `(x, y, z)` first, then write rational
-  homogeneous form `(weight * x, weight * y, weight * z, weight)`.
-- Curves may lie on any oriented plane but remain local `NurbsCurve2D` data.
-  Do not add nonplanar spatial curves or mesh geometry until their modeling and
-  interchange contracts are designed. The viewport resolves the drawing frame
+- Store control vertices as Euclidean local `(u, v, w)` coordinates plus
+  weights. `u` and `v` are stored in the existing 2D control-point array;
+  `w` is stored in a parallel normal-coordinate array for dimension-3 curves.
+  Dimension-2 legacy curves have no normal-coordinate array and mean `w = 0`.
+  `Shape::workPlaneFrame` maps `(u, v, w)` to world XYZ through an origin,
+  orthonormal X/Y axes, and their right-handed normal. Legacy records without a
+  frame use `Shape::workPlane` and `Shape::workPlaneOffset`, defaulting to XY at
+  offset zero. When exporting to Rhino/openNURBS, lift each CV to world
+  `(x, y, z)` first, then write rational homogeneous form
+  `(weight * x, weight * y, weight * z, weight)`.
+- New planar drawing tools create dimension-2 curves with `w = 0`. Moving a
+  control point away from the captured work plane promotes the curve to
+  dimension 3 and stores a normal coordinate for every CV. Its work-plane frame
+  remains the local coordinate frame; editing never projects CVs back onto the
+  plane. Old dimension-2 JSON and Rhino curves continue to load as `w = 0`.
+  Native JSON stores the normal-coordinate array only for dimension-3 curves.
+  Rhino import must preserve all three local coordinates after frame mapping.
+  Any future Rhino exporter must lift each CV to world XYZ before writing it.
+- Spatial curves are valid committed NURBS curves. Exact curve trimming,
+  transforms, evaluation, viewport display, picking, selection, snapping, and
+  duplication operate on all three coordinates. Planar fill and planar curve
+  intersection must reject dimension-3 input explicitly; they must never
+  silently flatten it.
+- The viewport resolves the drawing frame
   before sending input to a tool. Hovering a planar scene object inherits its
   frame. In empty space, drawing matches the add-on fallback within the
   supported planes: perspective uses world XY through the origin; fixed

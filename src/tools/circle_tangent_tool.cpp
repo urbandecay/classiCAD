@@ -814,6 +814,7 @@ bool isCircleTangentTarget(const Shape &shape)
     case GeometryType::AngularDimension:
     case GeometryType::Picture:
     case GeometryType::NurbsSurface:
+    case GeometryType::NurbsSolid:
         return false;
     }
     return false;
@@ -1071,7 +1072,7 @@ bool CircleTangentTool::collectTargetCurves(
 
     QVector<Shape::NurbsCurve2D> curves = context.curveSampler().curvesForShape(shape);
     for (const Shape::NurbsCurve2D &curve : curves) {
-        if (!validateNurbsCurve(curve)) {
+        if (!validateNurbsCurve(curve) || curve.dimension != 2) {
             continue;
         }
         QVector<qreal> spanBreaks;

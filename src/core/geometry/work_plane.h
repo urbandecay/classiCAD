@@ -22,9 +22,8 @@ struct Point3D {
     qreal z = 0.0;
 };
 
-// Curves stay as local 2D NURBS. A frame supplies the local XY basis and its
-// placement in world space, so drawing tools can share one plane-aware input
-// path without introducing a separate spatial-curve representation.
+// The frame maps local curve (u, v, w) coordinates into world XYZ. Planar
+// curves use w = 0; spatial curves store one w value per control vertex.
 struct WorkPlaneFrame {
     Point3D origin;
     Point3D xAxis{1.0, 0.0, 0.0};
@@ -52,8 +51,14 @@ WorkPlaneFrame makeWorkPlaneFrameFromNormal(const Point3D &origin,
 bool isValidWorkPlaneFrame(const WorkPlaneFrame &frame);
 Point3D workPlaneFramePointToWorld(const QPointF &point,
                                    const WorkPlaneFrame &frame);
+Point3D workPlaneFramePointToWorld(const QPointF &point,
+                                   qreal normalCoordinate,
+                                   const WorkPlaneFrame &frame);
 QPointF worldPointToWorkPlaneFrame(const Point3D &point,
                                    const WorkPlaneFrame &frame);
+QPointF worldPointToWorkPlaneFrame(const Point3D &point,
+                                   const WorkPlaneFrame &frame,
+                                   qreal *normalCoordinate);
 qreal signedDistanceFromWorkPlaneFrame(const Point3D &point,
                                        const WorkPlaneFrame &frame);
 bool workPlaneFramesMatch(const WorkPlaneFrame &first,

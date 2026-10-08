@@ -889,6 +889,25 @@ public:
                     if (hitTestSelectedControlPoint(screenPosition,
                                                     &shapeIndex,
                                                     &controlPointIndex)) {
+                        const Shape &shape = shapes_[shapeIndex];
+                        const QVector<QPointF> handles =
+                            controlPointsForShape(shape);
+                        DebugLog::instance().write(
+                            QStringLiteral("component pick mode=%1 object=%2 shapeIndex=%3 geometry=%4 screen=%5 handleIndex=%6 handleCount=%7 nurbsCvCount=%8 closedSeamAlias=%9")
+                                .arg(componentModeDiagnosticName(
+                                    componentSelectionMode_))
+                                .arg(shapes_.objectIdAt(shapeIndex).value())
+                                .arg(shapeIndex)
+                                .arg(geometryTypeName(shape.geometryType))
+                                .arg(precisePointText(screenPosition))
+                                .arg(controlPointIndex)
+                                .arg(handles.size())
+                                .arg(shape.nurbs.controlPoints.size())
+                                .arg(shape.geometryType == GeometryType::Rectangle &&
+                                             handles.size() == 4 &&
+                                             shape.nurbs.controlPoints.size() == 5
+                                         ? QStringLiteral("handle0<->cv4")
+                                         : QStringLiteral("none")));
                         return SelectionHit{shapes_.objectIdAt(shapeIndex),
                                             controlPointIndex};
                     }
@@ -915,8 +934,30 @@ public:
                 dragSnapLocked_ = false;
                 dragAxisLock_ = DragAxisLock::None;
                 if (gesture == SelectionGestureKind::BeginControlPointDrag) {
-                    controlPointDragFrame_ = controlPointWorkPlaneFrame(
-                        hit.objectId, hit.controlPointIndex);
+                    const Shape *dragShape = document_.shape(hit.objectId);
+                    const SceneObject *dragObject = document_.object(hit.objectId);
+                    const Point3D placement = dragObject != nullptr
+                                                  ? dragObject->placementTranslation
+                                                  : Point3D{};
+                    Point3D controlPointWorld;
+                    bool foundControlPoint = false;
+                    if (dragShape != nullptr) {
+                        for (const auto &entry : curveControlPointVertices(
+                                 *dragShape, placement)) {
+                            if (entry.first == hit.controlPointIndex) {
+                                controlPointWorld = entry.second;
+                                foundControlPoint = true;
+                                break;
+                            }
+                        }
+                    }
+                    controlPointDragFrame_ = foundControlPoint
+                        ? makeWorkPlaneFrameFromNormal(
+                              controlPointWorld,
+                              viewportTransform_.viewDirection(),
+                              viewportTransform_.viewUp())
+                        : controlPointWorkPlaneFrame(
+                              hit.objectId, hit.controlPointIndex);
                     controlPointDragFrameValid_ =
                         isValidWorkPlaneFrame(controlPointDragFrame_);
                     controlPointLastCursorScreen_ = input.screenPosition;
@@ -931,16 +972,9 @@ public:
                         setSelectionLastControlPointWorldPosition(
                             controlPointCursor);
                     }
-                    const Shape *dragShape = document_.shape(hit.objectId);
                     if (controlPointDragFrameValid_ && dragShape != nullptr &&
                         hit.controlPointIndex >= 0) {
-                        const QVector<QPointF> controlPoints =
-                            controlPointsForShape(*dragShape);
-                        if (hit.controlPointIndex < controlPoints.size()) {
-                            const Point3D controlPointWorld =
-                                workPlaneFramePointToWorld(
-                                    controlPoints[hit.controlPointIndex],
-                                    controlPointDragFrame_);
+                        if (foundControlPoint) {
                             QPointF controlPointScreen;
                             if (viewportTransform_.worldPointToScreen(
                                     controlPointWorld,
@@ -951,11 +985,22 @@ public:
                             }
                         }
                     }
+                    QStringList selectedComponentIndices;
+                    for (const int selectedIndex :
+                         componentSelectionForObject(hit.objectId)) {
+                        selectedComponentIndices.append(
+                            QString::number(selectedIndex));
+                    }
+                    selectedComponentIndices.sort();
                     setCursor(Qt::SizeAllCursor);
                     DebugLog::instance().write(
-                        QStringLiteral("control point drag start shape=%1 index=%2 world=%3")
+                        QStringLiteral("control point drag start shape=%1 index=%2 activeSelection=%3 selectedComponents=[%4] mode=%5 world=%6")
                             .arg(objectIndex(hit.objectId))
                             .arg(hit.controlPointIndex)
+                            .arg(selection_.activeControlPoint().index)
+                            .arg(selectedComponentIndices.join(QStringLiteral(",")))
+                            .arg(componentModeDiagnosticName(
+                                componentSelectionMode_))
                             .arg(pointText(selectionLastControlPointWorldPosition())));
                     return;
                 }
@@ -2005,6 +2050,24 @@ public:
             world.z += placement.z;
             appendWorldPoint(world);
         };
+        const auto appendCurveControlHull = [&] (
+                                               const Shape::NurbsCurve3D &curve,
+                                               const WorkPlaneFrame &sourceFrame) {
+            if (!validateNurbsCurve(curve)) {
+                return;
+            }
+            for (int index = 0; index < curve.controlPoints.size(); ++index) {
+                Point3D world = workPlaneFramePointToWorld(
+                    curve.controlPoints[index],
+                    curve.dimension == 3
+                        ? curve.normalCoordinates[index] : 0.0,
+                    sourceFrame);
+                world.x += placement.x;
+                world.y += placement.y;
+                world.z += placement.z;
+                appendWorldPoint(world);
+            }
+        };
         const auto appendSurfacePoints = [&](const NurbsSurface3D &surface) {
             for (const Point3D &point : surface.controlPoints) {
                 appendWorldPoint({point.x + placement.x,
@@ -2018,22 +2081,20 @@ public:
         } else if (shape.geometryType == GeometryType::NurbsSolid) {
             for (const NurbsSurface3D &face : shapeSurfaceFaces(shape))
                 appendSurfacePoints(face);
+        } else if (shape.geometryType == GeometryType::PolyCurve) {
+            for (int componentIndex = 0;
+                 componentIndex < shape.components.size();
+                 ++componentIndex) {
+                appendCurveControlHull(
+                    shape.components[componentIndex],
+                    shapeComponentWorkPlaneFrame(shape, componentIndex));
+            }
+        } else if (validateNurbsCurve(shape.nurbs)) {
+            appendCurveControlHull(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else {
             const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
             for (const QPointF &point : shape.points) {
                 appendLocalPoint(point, frame);
-            }
-            for (const QPointF &point : shape.nurbs.controlPoints) {
-                appendLocalPoint(point, frame);
-            }
-            for (int componentIndex = 0;
-                 componentIndex < shape.components.size(); ++componentIndex) {
-                const WorkPlaneFrame componentFrame =
-                    shapeComponentWorkPlaneFrame(shape, componentIndex);
-                for (const QPointF &point :
-                     shape.components[componentIndex].controlPoints) {
-                    appendLocalPoint(point, componentFrame);
-                }
             }
         }
 
@@ -2427,6 +2488,43 @@ public:
                 validSelection.append(objectId);
             }
         }
+        if (!selectedCurveVertices.isEmpty()) {
+            // Match surface grabs: coincident control vertices across
+            // editable geometry are one shared grab target.
+            for (int index = 0; index < document_.size(); ++index) {
+                const ObjectId objectId = document_.objectIdAt(index);
+                const Shape *shape = document_.shape(objectId);
+                const SceneObject *object = document_.object(objectId);
+                if (shape == nullptr || object == nullptr ||
+                    !document_.isObjectVisible(objectId) ||
+                    !document_.isObjectEditable(objectId) ||
+                    shape->geometryType == GeometryType::NurbsSurface ||
+                    shape->geometryType == GeometryType::NurbsSolid ||
+                    curveSampler_.curvesForShape(*shape).isEmpty()) {
+                    continue;
+                }
+                QSet<int> targets;
+                for (const auto &point : curveControlPointVertices(
+                         *shape, object->placementTranslation)) {
+                    const QVector3D world(float(point.second.x),
+                                          float(point.second.y),
+                                          float(point.second.z));
+                    for (const QVector3D &selectedPoint : selectedCurveVertices) {
+                        if ((world - selectedPoint).lengthSquared() <= 1.0e-12f) {
+                            targets.insert(point.first);
+                            break;
+                        }
+                    }
+                }
+                if (targets.isEmpty()) {
+                    continue;
+                }
+                curveControlPointGrabTargets_.insert(objectId.value(), targets);
+                if (!validSelection.contains(objectId)) {
+                    validSelection.append(objectId);
+                }
+            }
+        }
         if (!hasSelectedSurfaceComponents && selectedCurveObjects.isEmpty()) {
             for (const ObjectId objectId : selected) {
                 if (document_.isObjectEditable(objectId) &&
@@ -2707,6 +2805,158 @@ public:
             geometry.points = {QPointF(0.0, 0.0)};
             appendSnapshot(source, geometry);
         };
+        const auto appendCurvePoint = [&appendSnapshot](
+                                          const SceneObject &source,
+                                          const QPointF &localPoint,
+                                          qreal normalCoordinate,
+                                          WorkPlaneFrame frame) {
+            Shape geometry;
+            geometry.geometryType = GeometryType::Point;
+            frame.origin.x += frame.normal.x * normalCoordinate;
+            frame.origin.y += frame.normal.y * normalCoordinate;
+            frame.origin.z += frame.normal.z * normalCoordinate;
+            geometry.workPlaneFrame = frame;
+            geometry.points = {localPoint};
+            appendSnapshot(source, geometry);
+        };
+        const auto appendCurveObject = [&appendSnapshot](
+                                           const SceneObject &source,
+                                           const Shape::NurbsCurve3D &curve,
+                                           const WorkPlaneFrame &frame,
+                                           const Shape &sourceShape) {
+            Shape geometry;
+            geometry.geometryType = GeometryType::Nurbs;
+            geometry.workPlane = sourceShape.workPlane;
+            geometry.workPlaneOffset = sourceShape.workPlaneOffset;
+            geometry.workPlaneFrame = frame;
+            geometry.nurbs = curve;
+            geometry.points = curve.controlPoints;
+            appendSnapshot(source, geometry);
+        };
+        const auto duplicateSelectedCurvePoints = [&] (
+                const SceneObject &source,
+                const Shape &sourceShape,
+                const Shape::NurbsCurve3D &curve,
+                const WorkPlaneFrame &frame,
+                const QSet<int> &selectedPoints,
+                int selectablePointCount) {
+            QVector<int> validIndices;
+            validIndices.reserve(selectedPoints.size());
+            for (int index : selectedPoints) {
+                if (index >= 0 && index < curve.controlPoints.size()) {
+                    validIndices.append(index);
+                }
+            }
+            std::sort(validIndices.begin(), validIndices.end());
+            QVector<QVector<int>> runs;
+            for (const int index : validIndices) {
+                if (runs.isEmpty() || runs.last().last() + 1 != index) {
+                    runs.append(QVector<int>{index});
+                } else {
+                    runs.last().append(index);
+                }
+            }
+
+            if (runs.size() > 1 && !curve.controlPoints.isEmpty()) {
+                const int firstIndex = validIndices.isEmpty()
+                                           ? -1 : validIndices.first();
+                const int lastIndex = validIndices.isEmpty()
+                                          ? -1 : validIndices.last();
+                const qreal firstW = curve.dimension == 3
+                                         ? curve.normalCoordinates.first() : 0.0;
+                const qreal lastW = curve.dimension == 3
+                                        ? curve.normalCoordinates.last() : 0.0;
+                const Point3D firstWorld = workPlaneFramePointToWorld(
+                    curve.controlPoints.first(), firstW, frame);
+                const Point3D lastWorld = workPlaneFramePointToWorld(
+                    curve.controlPoints.last(), lastW, frame);
+                const qreal dx = firstWorld.x - lastWorld.x;
+                const qreal dy = firstWorld.y - lastWorld.y;
+                const qreal dz = firstWorld.z - lastWorld.z;
+                const bool closed = dx * dx + dy * dy + dz * dz <= 1.0e-12;
+                if (closed && firstIndex == 0 &&
+                    lastIndex == selectablePointCount - 1) {
+                    QVector<int> wrapped = runs.last();
+                    wrapped += runs.first();
+                    runs.removeLast();
+                    runs.removeFirst();
+                    runs.prepend(wrapped);
+                }
+            }
+
+            for (const QVector<int> &run : runs) {
+                QVector<QPointF> points;
+                QVector<double> normalCoordinates;
+                QVector<double> weights;
+                for (const int index : run) {
+                    const QPointF &point = curve.controlPoints[index];
+                    const qreal normalCoordinate = curve.dimension == 3
+                        ? curve.normalCoordinates[index] : 0.0;
+                    if (!points.isEmpty()) {
+                        const Point3D previous = workPlaneFramePointToWorld(
+                            points.last(),
+                            normalCoordinates.isEmpty()
+                                ? 0.0 : normalCoordinates.last(),
+                            frame);
+                        const Point3D current = workPlaneFramePointToWorld(
+                            point, normalCoordinate, frame);
+                        const qreal dx = previous.x - current.x;
+                        const qreal dy = previous.y - current.y;
+                        const qreal dz = previous.z - current.z;
+                        if (dx * dx + dy * dy + dz * dz <= 1.0e-12) {
+                            continue;
+                        }
+                    }
+                    points.append(point);
+                    if (curve.rational) {
+                        weights.append(curve.weights[index]);
+                    }
+                    if (curve.dimension == 3) {
+                        normalCoordinates.append(normalCoordinate);
+                    }
+                }
+
+                if (points.size() == 1) {
+                    appendCurvePoint(source, points.first(),
+                                     normalCoordinates.isEmpty()
+                                         ? 0.0 : normalCoordinates.first(),
+                                     frame);
+                } else if (points.size() >= 2) {
+                    Shape::NurbsCurve3D duplicated;
+                    duplicated.dimension = curve.dimension;
+                    duplicated.degree = std::min(
+                        curve.degree, static_cast<int>(points.size()) - 1);
+                    duplicated.order = duplicated.degree + 1;
+                    duplicated.rational = curve.rational;
+                    duplicated.controlPoints = points;
+                    if (duplicated.rational) {
+                        duplicated.weights = weights;
+                    } else {
+                        duplicated.weights.fill(1.0, points.size());
+                    }
+                    if (curve.dimension == 3) {
+                        duplicated.normalCoordinates = normalCoordinates;
+                    }
+                    const int domainEnd =
+                        duplicated.controlPoints.size() - duplicated.degree;
+                    QVector<double> fullKnots;
+                    fullKnots.reserve(duplicated.controlPoints.size() +
+                                      duplicated.degree + 1);
+                    for (int knot = 0; knot <= duplicated.degree; ++knot) {
+                        fullKnots.append(0.0);
+                    }
+                    for (int knot = 1; knot < domainEnd; ++knot) {
+                        fullKnots.append(knot);
+                    }
+                    for (int knot = 0; knot <= duplicated.degree; ++knot) {
+                        fullKnots.append(domainEnd);
+                    }
+                    duplicated.knots = fullKnots.mid(
+                        1, fullKnots.size() - 2);
+                    appendCurveObject(source, duplicated, frame, sourceShape);
+                }
+            }
+        };
 
         for (const ObjectId objectId : objectIds) {
             const SceneObject *source = document_.object(objectId);
@@ -2722,9 +2972,105 @@ public:
             const Shape &shape = source->geometry;
             if (shape.geometryType != GeometryType::NurbsSurface &&
                 shape.geometryType != GeometryType::NurbsSolid) {
-                // Curve control-point duplication has its own curve topology;
-                // retain the existing whole-object behavior for those shapes.
-                appendSnapshot(*source, shape);
+                const QSet<int> selectedComponents = selectedIt.value();
+                if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                    if (shape.geometryType == GeometryType::PolyCurve) {
+                        int firstControlPoint = 0;
+                        bool allControlPointsSelected = !shape.components.isEmpty();
+                        for (const Shape::NurbsCurve3D &component : shape.components) {
+                            for (int pointIndex = 0;
+                                 pointIndex < component.controlPoints.size();
+                                 ++pointIndex) {
+                                allControlPointsSelected = allControlPointsSelected &&
+                                    selectedComponents.contains(firstControlPoint +
+                                                                pointIndex);
+                            }
+                            firstControlPoint += component.controlPoints.size();
+                        }
+                        if (allControlPointsSelected) {
+                            appendSnapshot(*source, shape);
+                            continue;
+                        }
+
+                        firstControlPoint = 0;
+                        for (int componentIndex = 0;
+                             componentIndex < shape.components.size();
+                             ++componentIndex) {
+                            const Shape::NurbsCurve3D &component =
+                                shape.components[componentIndex];
+                            QSet<int> localSelection;
+                            for (int pointIndex = 0;
+                                 pointIndex < component.controlPoints.size();
+                                 ++pointIndex) {
+                                if (selectedComponents.contains(firstControlPoint +
+                                                                pointIndex)) {
+                                    localSelection.insert(pointIndex);
+                                }
+                            }
+                            if (localSelection.size() ==
+                                component.controlPoints.size()) {
+                                appendCurveObject(
+                                    *source, component,
+                                    shapeComponentWorkPlaneFrame(shape,
+                                                                 componentIndex),
+                                    shape);
+                            } else if (!localSelection.isEmpty()) {
+                                duplicateSelectedCurvePoints(
+                                    *source, shape, component,
+                                    shapeComponentWorkPlaneFrame(shape,
+                                                                 componentIndex),
+                                    localSelection,
+                                    component.controlPoints.size());
+                            }
+                            firstControlPoint += component.controlPoints.size();
+                        }
+                    } else {
+                        QVector<QPointF> selectablePoints =
+                            curveHitTester_.controlPointsForShape(shape);
+                        Shape::NurbsCurve3D curve = shape.nurbs;
+                        if (!validateNurbsCurve(curve) &&
+                            selectablePoints.size() >= 2) {
+                            curve = makeDegreeOneNurbs(selectablePoints);
+                        }
+                        if (!validateNurbsCurve(curve)) {
+                            appendSnapshot(*source, shape);
+                            continue;
+                        }
+                        const QSet<int> selectedControlPoints = selectedComponents;
+                        bool allControlPointsSelected =
+                            !selectablePoints.isEmpty();
+                        for (int pointIndex = 0;
+                             pointIndex < selectablePoints.size();
+                             ++pointIndex) {
+                            allControlPointsSelected =
+                                allControlPointsSelected &&
+                                selectedControlPoints.contains(pointIndex);
+                        }
+                        if (allControlPointsSelected) {
+                            appendSnapshot(*source, shape);
+                            continue;
+                        }
+                        duplicateSelectedCurvePoints(
+                            *source, shape, curve, shapeWorkPlaneFrame(shape),
+                            selectedControlPoints,
+                            selectablePoints.size());
+                    }
+                } else if (componentSelectionMode_ ==
+                           ComponentSelectionMode::Edge &&
+                           shape.geometryType == GeometryType::PolyCurve) {
+                    for (int componentIndex : selectedComponents) {
+                        if (componentIndex < 0 ||
+                            componentIndex >= shape.components.size()) {
+                            continue;
+                        }
+                        appendCurveObject(
+                            *source, shape.components[componentIndex],
+                            shapeComponentWorkPlaneFrame(shape, componentIndex),
+                            shape);
+                    }
+                } else {
+                    appendSnapshot(*source, shape);
+                }
                 continue;
             }
 
@@ -2885,6 +3231,35 @@ public:
                 points.reserve(cage.pointVertices.size());
                 for (const QVector3D &point : cage.pointVertices) {
                     points.append(duplicateCagePoint(point));
+                }
+            } else if (shape.geometryType == GeometryType::PolyCurve) {
+                for (int componentIndex = 0;
+                     componentIndex < shape.components.size();
+                     ++componentIndex) {
+                    const Shape::NurbsCurve3D &curve =
+                        shape.components[componentIndex];
+                    const WorkPlaneFrame frame =
+                        shapeComponentWorkPlaneFrame(shape, componentIndex);
+                    for (int pointIndex = 0;
+                         pointIndex < curve.controlPoints.size();
+                         ++pointIndex) {
+                        points.append(workPlaneFramePointToWorld(
+                            curve.controlPoints[pointIndex],
+                            curve.dimension == 3
+                                ? curve.normalCoordinates[pointIndex] : 0.0,
+                            frame));
+                    }
+                }
+            } else if (validateNurbsCurve(shape.nurbs)) {
+                const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+                for (int pointIndex = 0;
+                     pointIndex < shape.nurbs.controlPoints.size();
+                     ++pointIndex) {
+                    points.append(workPlaneFramePointToWorld(
+                        shape.nurbs.controlPoints[pointIndex],
+                        shape.nurbs.dimension == 3
+                            ? shape.nurbs.normalCoordinates[pointIndex] : 0.0,
+                        frame));
                 }
             } else {
                 const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
@@ -3527,10 +3902,69 @@ public:
         notifyHistoryChanged();
         notifyLayersChanged();
 
+        QStringList shapeSummaries;
+        int rectangleCount = 0;
+        int squareCount = 0;
+        for (int index = 0; index < shapes_.size(); ++index) {
+            const Shape &shape = shapes_[index];
+            QString summary = QStringLiteral("%1:%2(points=%3,cvs=%4)")
+                                  .arg(index)
+                                  .arg(geometryTypeName(shape.geometryType))
+                                  .arg(shape.points.size())
+                                  .arg(shape.nurbs.controlPoints.size());
+            if (!shape.nurbs.controlPoints.isEmpty()) {
+                QPointF curveStart;
+                QPointF curveEnd;
+                const bool hasEndpoints = nurbsCurveEndpoints(
+                    shape.nurbs, &curveStart, &curveEnd);
+                const bool closed = hasEndpoints &&
+                    std::hypot(curveStart.x() - curveEnd.x(),
+                               curveStart.y() - curveEnd.y()) <= 1.0e-8;
+                summary += QStringLiteral("(curve=degree-%1,order-%2,rational-%3,closed-%4,components=%5)")
+                               .arg(shape.nurbs.degree)
+                               .arg(shape.nurbs.order)
+                               .arg(shape.nurbs.rational ? QStringLiteral("yes")
+                                                        : QStringLiteral("no"))
+                               .arg(hasEndpoints
+                                        ? (closed ? QStringLiteral("yes")
+                                                  : QStringLiteral("no"))
+                                        : QStringLiteral("unknown"))
+                               .arg(shape.components.size());
+            }
+            if (shape.geometryType == GeometryType::Rectangle) {
+                ++rectangleCount;
+                if (shape.points.size() >= 4) {
+                    const auto edgeLength = [&shape](int from, int to) {
+                        const QPointF delta = shape.points[to] - shape.points[from];
+                        return std::hypot(delta.x(), delta.y());
+                    };
+                    const qreal a = edgeLength(0, 1);
+                    const qreal b = edgeLength(1, 2);
+                    const qreal c = edgeLength(2, 3);
+                    const qreal d = edgeLength(3, 0);
+                    const qreal scale = std::max({a, b, c, d, 1.0});
+                    const bool square = std::abs(a - b) <= scale * 1.0e-6 &&
+                                        std::abs(a - c) <= scale * 1.0e-6 &&
+                                        std::abs(a - d) <= scale * 1.0e-6;
+                    if (square) ++squareCount;
+                    summary += QStringLiteral("(edgeLengths=%1,%2,%3,%4,square=%5)")
+                                   .arg(a, 0, 'g', 6).arg(b, 0, 'g', 6)
+                                   .arg(c, 0, 'g', 6).arg(d, 0, 'g', 6)
+                                   .arg(square ? QStringLiteral("yes") : QStringLiteral("no"));
+                } else {
+                    summary += QStringLiteral("(square=unknown)");
+                }
+            }
+            shapeSummaries.append(summary);
+        }
+
         DebugLog::instance().write(
-            QStringLiteral("restoreUpdateSession path=%1 shapes=%2 layers=%3 version=%4 preset=%5 perspective=%6 zoom=%7 pan=%8 shading=%9")
+            QStringLiteral("restoreUpdateSession path=%1 shapes=%2 rectangles=%3 squares=%4 shapeDetails=[%5] layers=%6 version=%7 preset=%8 perspective=%9 zoom=%10 pan=%11 shading=%12")
                 .arg(path)
                 .arg(shapes_.size())
+                .arg(rectangleCount)
+                .arg(squareCount)
+                .arg(shapeSummaries.join(QStringLiteral("; ")))
                 .arg(document_.layers().size())
                 .arg(version)
                 .arg(static_cast<int>(viewportTransform_.viewPreset()))
@@ -4852,6 +5286,44 @@ protected:
         const ViewportRenderFrame renderFrame = viewportRenderFrame();
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
         const ToolPreview &activeToolPreview = renderFrame.activeToolPreview;
+        QStringList selectionRenderState;
+        for (const ViewportRenderObject &renderObject : visibleShapes) {
+            if (renderObject.shape.geometryType != GeometryType::Rectangle) {
+                continue;
+            }
+            const QSet<int> &selectedComponents =
+                componentSelectionForObject(renderObject.objectId);
+            QStringList selectedIndices;
+            for (const int index : selectedComponents) {
+                selectedIndices.append(QString::number(index));
+            }
+            selectedIndices.sort();
+            const int activeIndex = componentSelectionObject_ == renderObject.objectId
+                ? activeComponentIndex() : -1;
+            const QString highlightMode = !selectedComponents.isEmpty()
+                ? QStringLiteral("explicit-components")
+                : (renderObject.selected ? QStringLiteral("whole-object")
+                                         : QStringLiteral("unselected"));
+            selectionRenderState.append(
+                QStringLiteral("object=%1 shape=%2 objectSelected=%3 mode=%4 handleHighlightMode=%5 selectedComponents=[%6] activeComponent=%7 handles=%8 cvs=%9")
+                    .arg(renderObject.objectId.value())
+                    .arg(renderObject.objectIndex)
+                    .arg(renderObject.selected)
+                    .arg(componentModeDiagnosticName(componentSelectionMode_))
+                    .arg(highlightMode)
+                    .arg(selectedIndices.join(QStringLiteral(",")))
+                    .arg(activeIndex)
+                    .arg(controlPointsForShape(renderObject.shape).size())
+                    .arg(renderObject.shape.nurbs.controlPoints.size()));
+        }
+        const QString selectionRenderSignature = selectionRenderState.join(
+            QStringLiteral(";"));
+        if (selectionRenderSignature != lastSelectionRenderDiagnostic_) {
+            lastSelectionRenderDiagnostic_ = selectionRenderSignature;
+            DebugLog::instance().write(
+                QStringLiteral("rectangle selection render state=[%1]")
+                    .arg(selectionRenderSignature));
+        }
         QVector<ViewportControlPointHandle> gpuControlPointHandles;
         const bool showCurveEndpointVertices =
             componentSelectionMode_ == ComponentSelectionMode::Vertex &&
@@ -5544,11 +6016,35 @@ protected:
                     if (!objectComponentSelection.isEmpty()) {
                         const QVector<Shape::NurbsCurve2D> curves =
                             curveSampler_.curvesForShape(visibleShape);
+                        QSet<int> wireSelectedControlPoints =
+                            objectComponentSelection;
+                        if (visibleShape.geometryType == GeometryType::PolyCurve) {
+                            const auto controlPoints = curveControlPointVertices(
+                                visibleShape,
+                                renderObject.placementTranslation);
+                            QVector<Point3D> selectedWorldPoints;
+                            for (const auto &entry : controlPoints) {
+                                if (objectComponentSelection.contains(entry.first)) {
+                                    selectedWorldPoints.append(entry.second);
+                                }
+                            }
+                            for (const auto &entry : controlPoints) {
+                                for (const Point3D &selectedPoint : selectedWorldPoints) {
+                                    const qreal dx = entry.second.x - selectedPoint.x;
+                                    const qreal dy = entry.second.y - selectedPoint.y;
+                                    const qreal dz = entry.second.z - selectedPoint.z;
+                                    if (dx * dx + dy * dy + dz * dz <= 1.0e-12) {
+                                        wireSelectedControlPoints.insert(entry.first);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         ViewportDepthGeometry vertexSelectedWire;
                         QVector<QVector4D> vertexSelectedWireColors;
                         int firstControlPoint = 0;
                         const auto selectionInfluence =
-                            [&objectComponentSelection](
+                            [&wireSelectedControlPoints](
                                 const Shape::NurbsCurve2D &curve,
                                 int firstIndex,
                                 qreal parameter) {
@@ -5560,13 +6056,32 @@ protected:
                                                            &domainEnd)) {
                                     return qreal(0.0);
                                 }
+                                Point3D startPoint;
+                                Point3D endPoint;
+                                const bool hasEndpoints =
+                                    evaluateNurbsPoint3D(curve, domainStart,
+                                                        &startPoint) &&
+                                    evaluateNurbsPoint3D(curve, domainEnd,
+                                                        &endPoint);
+                                const qreal endpointDx = startPoint.x - endPoint.x;
+                                const qreal endpointDy = startPoint.y - endPoint.y;
+                                const qreal endpointDz = startPoint.z - endPoint.z;
+                                const bool closedCurve = hasEndpoints &&
+                                    endpointDx * endpointDx +
+                                            endpointDy * endpointDy +
+                                            endpointDz * endpointDz <= 1.0e-12;
                                 if (parameter <= domainStart + 1.0e-12) {
-                                    return objectComponentSelection.contains(firstIndex)
+                                    return (wireSelectedControlPoints.contains(firstIndex) ||
+                                            (closedCurve &&
+                                             wireSelectedControlPoints.contains(
+                                                 firstIndex + count - 1)))
                                         ? qreal(1.0) : qreal(0.0);
                                 }
                                 if (parameter >= domainEnd - 1.0e-12) {
-                                    return objectComponentSelection.contains(
-                                        firstIndex + count - 1)
+                                    return (wireSelectedControlPoints.contains(
+                                                firstIndex + count - 1) ||
+                                            (closedCurve &&
+                                             wireSelectedControlPoints.contains(firstIndex)))
                                         ? qreal(1.0) : qreal(0.0);
                                 }
                                 const QVector<double> knots =
@@ -5607,8 +6122,16 @@ protected:
                                         basis(basis, index, curve.degree,
                                               parameter) * weight;
                                     weightedTotal += contribution;
-                                    if (objectComponentSelection.contains(
-                                            firstIndex + index)) {
+                                    // Closed rectangles store the first CV again
+                                    // at the end to close the curve, but expose
+                                    // only the original CV as an editable handle.
+                                    const bool selectedControlPoint =
+                                        wireSelectedControlPoints.contains(
+                                            firstIndex + index) ||
+                                        (closedCurve && index == count - 1 &&
+                                         wireSelectedControlPoints.contains(
+                                             firstIndex));
+                                    if (selectedControlPoint) {
                                         weightedSelected += contribution;
                                     }
                                 }
@@ -5632,20 +6155,14 @@ protected:
                                     &sampled)) {
                                 for (int sample = 1;
                                      sample < sampled.parameters.size(); ++sample) {
-                                    QPointF localA;
-                                    QPointF localB;
-                                    if (!evaluateNurbsPoint(
-                                            curve, sampled.parameters[sample - 1],
-                                            &localA) ||
-                                        !evaluateNurbsPoint(
-                                            curve, sampled.parameters[sample],
-                                            &localB)) {
+                                    if (sample >= sampled.worldPoints.size() ||
+                                        sample >= sampled.screenPoints.size()) {
                                         continue;
                                     }
                                     const Point3D first =
-                                        workPlaneFramePointToWorld(localA, frame);
+                                        sampled.worldPoints[sample - 1];
                                     const Point3D second =
-                                        workPlaneFramePointToWorld(localB, frame);
+                                        sampled.worldPoints[sample];
                                     vertexSelectedWire.preciseLineVertices
                                         << first << second;
                                     vertexSelectedWire.lineVertices
@@ -5710,20 +6227,13 @@ protected:
                         }
                         for (int sample = 1;
                              sample < sampled.parameters.size(); ++sample) {
-                            QPointF localA;
-                            QPointF localB;
-                            if (!evaluateNurbsPoint(
-                                    curve, sampled.parameters[sample - 1],
-                                    &localA) ||
-                                !evaluateNurbsPoint(
-                                    curve, sampled.parameters[sample],
-                                    &localB)) {
+                            if (sample >= sampled.worldPoints.size()) {
                                 continue;
                             }
                             const Point3D first =
-                                workPlaneFramePointToWorld(localA, frame);
+                                sampled.worldPoints[sample - 1];
                             const Point3D second =
-                                workPlaneFramePointToWorld(localB, frame);
+                                sampled.worldPoints[sample];
                             selectedCurveEdges.preciseLineVertices
                                 << first << second;
                             selectedCurveEdges.lineVertices
@@ -7356,8 +7866,18 @@ protected:
             const int hitShapeIndex = hitTestShape(screenPosition);
             if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                 componentSelectionMode_ == ComponentSelectionMode::Edge) {
-                // Keep left-drag marquee selection, but don't select the
-                // component under a plain left click.
+                // Defer a component click until release so a real drag can
+                // still become a marquee selection.
+                pendingComponentClickShapeIndex_ = -1;
+                pendingComponentClickIndex_ = hitTestComponent(
+                    screenPosition, &pendingComponentClickShapeIndex_);
+                pendingComponentClickScreenPosition_ = screenPosition;
+                DebugLog::instance().write(
+                    QStringLiteral("component click candidate mode=%1 screen=%2 shape=%3 component=%4")
+                        .arg(componentModeDiagnosticName(componentSelectionMode_))
+                        .arg(precisePointText(screenPosition))
+                        .arg(pendingComponentClickShapeIndex_)
+                        .arg(pendingComponentClickIndex_));
                 leftSelectionBoxStartedOnObject_ = false;
                 componentBoxSelectionActive_ = true;
                 componentBoxSelectionObject_ = ObjectId::invalid();
@@ -7379,6 +7899,12 @@ protected:
             int componentShapeIndex = -1;
             const int componentIndex = hitTestComponent(screenPosition,
                                                        &componentShapeIndex);
+            DebugLog::instance().write(
+                QStringLiteral("synthetic component click mode=%1 screen=%2 shape=%3 component=%4")
+                    .arg(componentModeDiagnosticName(componentSelectionMode_))
+                    .arg(precisePointText(screenPosition))
+                    .arg(componentShapeIndex)
+                    .arg(componentIndex));
             if (componentIndex >= 0 && componentShapeIndex >= 0) {
                 const ObjectId componentObject =
                     shapes_.objectIdAt(componentShapeIndex);
@@ -7405,6 +7931,18 @@ protected:
                     objectSelection.insert(componentIndex);
                     activeComponentIndex() = componentIndex;
                 }
+                QStringList selectedIndices;
+                for (const int index : objectSelection) {
+                    selectedIndices.append(QString::number(index));
+                }
+                selectedIndices.sort();
+                DebugLog::instance().write(
+                    QStringLiteral("synthetic component click applied object=%1 geometry=%2 index=%3 additive=%4 selected=[%5]")
+                        .arg(componentObject.value())
+                        .arg(geometryTypeName(shapes_[componentShapeIndex].geometryType))
+                        .arg(componentIndex)
+                        .arg(additive)
+                        .arg(selectedIndices.join(QStringLiteral(","))));
                 update();
                 event->accept();
                 return;
@@ -7850,33 +8388,33 @@ protected:
             controlPointIndex_ >= 0) {
             const QPointF cursorStepScreen =
                 screenPosition - controlPointLastCursorScreen_;
+            const QPointF previousScreen = controlPointLastCursorScreen_;
             controlPointLastCursorScreen_ = screenPosition;
-            const QVector<QPointF> controlPoints =
-                controlPointsForShape(shapes_[selectedIndex]);
-            const bool hasControlPoint =
-                controlPointIndex_ < controlPoints.size();
-            const QPointF currentControlPoint = hasControlPoint
-                                                   ? controlPoints[controlPointIndex_]
-                                                   : QPointF{};
-            QPointF desiredControlPoint = currentControlPoint;
-            const QPointF desiredControlPointScreen =
+            const QPointF previousCursor =
+                previousScreen + controlPointCursorOffsetScreen_;
+            const QPointF currentCursor =
                 screenPosition + controlPointCursorOffsetScreen_;
-            const bool hasDesiredControlPoint =
-                hasControlPoint && controlPointDragFrameValid_ &&
-                viewportTransform_.screenToWorkPlane(
-                    desiredControlPointScreen,
-                    size(),
-                    controlPointDragFrame_,
-                    &desiredControlPoint);
-            if (!hasDesiredControlPoint && hasControlPoint) {
-                desiredControlPoint = currentControlPoint +
-                    (rawCursorWorld_ -
-                     selectionLastControlPointWorldPosition());
+            QPointF previousViewPoint;
+            QPointF currentViewPoint;
+            const bool hasViewDelta = controlPointDragFrameValid_ &&
+                viewportTransform_.screenToWorkPlaneUnclipped(
+                    previousCursor, size(), controlPointDragFrame_,
+                    &previousViewPoint) &&
+                viewportTransform_.screenToWorkPlaneUnclipped(
+                    currentCursor, size(), controlPointDragFrame_,
+                    &currentViewPoint);
+            Point3D worldDelta;
+            if (hasViewDelta) {
+                const Point3D previousWorld = workPlaneFramePointToWorld(
+                    previousViewPoint, controlPointDragFrame_);
+                const Point3D currentWorld = workPlaneFramePointToWorld(
+                    currentViewPoint, controlPointDragFrame_);
+                worldDelta = {currentWorld.x - previousWorld.x,
+                              currentWorld.y - previousWorld.y,
+                              currentWorld.z - previousWorld.z};
             }
-            const QPointF delta = hasControlPoint
-                                      ? desiredControlPoint - currentControlPoint
-                                      : QPointF{};
-            if (!qFuzzyIsNull(delta.x()) || !qFuzzyIsNull(delta.y())) {
+            const QPointF delta = projectWorldDeltaToWorkPlane(worldDelta);
+            if (hasViewDelta && !isZeroWorldDelta(worldDelta)) {
                 qint64 snapEvaluationMicroseconds = -1;
                 const qreal cursorDistanceFromSnap =
                     std::hypot(screenPosition.x() - dragSnapCursorScreen_.x(),
@@ -7894,7 +8432,7 @@ protected:
                     beginDragHistory();
                     translateControlPoint(selectedShapeIndex_,
                                           controlPointIndex_,
-                                          delta);
+                                          worldDelta);
                     currentDragSnap_ = DragSnapResult{};
                     dragSnapLocked_ = false;
                     DebugLog::instance().write(
@@ -7904,24 +8442,44 @@ protected:
                             .arg(cursorDistanceFromSnap, 0, 'f', 2));
                 } else {
                     beginDragHistory();
-                    translateControlPoint(selectedShapeIndex_, controlPointIndex_, delta);
+                    translateControlPoint(selectedShapeIndex_,
+                                          controlPointIndex_, worldDelta);
 
-                    const QVector<QPointF> movedControlPoints =
-                        controlPointsForShape(shapes_[selectedIndex]);
-                    if (controlPointIndex_ < movedControlPoints.size()) {
+                    const SceneObject *sceneObject =
+                        document_.object(selectedShapeIndex_);
+                    const Point3D placement = sceneObject != nullptr
+                        ? sceneObject->placementTranslation : Point3D{};
+                    Point3D movedControlPointWorld;
+                    bool foundMovedControlPoint = false;
+                    for (const auto &entry : curveControlPointVertices(
+                             shapes_[selectedIndex], placement)) {
+                        if (entry.first == controlPointIndex_) {
+                            movedControlPointWorld = entry.second;
+                            foundMovedControlPoint = true;
+                            break;
+                        }
+                    }
+                    if (foundMovedControlPoint) {
                         QElapsedTimer snapTimer;
                         snapTimer.start();
+                        const WorkPlaneFrame sourceFrame =
+                            controlPointWorkPlaneFrame(selectedShapeIndex_,
+                                                       controlPointIndex_);
+                        qreal normalCoordinate = 0.0;
+                        const QPointF localPoint = worldPointToWorkPlaneFrame(
+                            movedControlPointWorld, sourceFrame,
+                            &normalCoordinate);
                         currentDragSnap_ = findControlPointSnap(
                             selectedShapeIndex_,
                             controlPointIndex_,
-                            movedControlPoints[controlPointIndex_]);
+                            {localPoint.x(), localPoint.y(), normalCoordinate});
                         snapEvaluationMicroseconds = snapTimer.nsecsElapsed() / 1000;
-                        if (currentDragSnap_.isValid()) {
+                        if (currentDragSnap_.isValid() &&
+                            currentDragSnap_.hasWorldTranslation) {
                             translateControlPoint(selectedShapeIndex_,
                                                   controlPointIndex_,
-                                                  currentDragSnap_.translation);
+                                                  currentDragSnap_.worldTranslation);
                             dragSnapLocked_ = true;
-                            dragSnapCursorWorld_ = rawCursorWorld_;
                             dragSnapCursorScreen_ = screenPosition;
                             // Keep the original mouse-to-handle offset. A snap
                             // temporarily holds the CV at its target; release
@@ -7936,7 +8494,7 @@ protected:
                     }
                 }
 
-                setSelectionLastControlPointWorldPosition(rawCursorWorld_);
+                setSelectionLastControlPointWorldPosition(currentViewPoint);
                 qreal snapCorrectionPixels = -1.0;
                 if (currentDragSnap_.isValid()) {
                     const QPointF sourceScreen =
@@ -9658,11 +10216,68 @@ private:
                            selectionBox.height() >= 3.0;
         const bool additive = selectTool->selectionBoxAdditive();
         if (componentBoxSelectionActive_) {
+            DebugLog::instance().write(
+                QStringLiteral("component box begin mode=%1 start=%2 end=%3 bounds=(%4,%5,%6,%7) moved=%8 crossing=%9 additive=%10 xray=%11")
+                    .arg(componentModeDiagnosticName(componentSelectionMode_))
+                    .arg(precisePointText(boxStart))
+                    .arg(precisePointText(boxCurrent))
+                    .arg(selectionBox.left(), 0, 'f', 1)
+                    .arg(selectionBox.top(), 0, 'f', 1)
+                    .arg(selectionBox.width(), 0, 'f', 1)
+                    .arg(selectionBox.height(), 0, 'f', 1)
+                    .arg(moved)
+                    .arg(crossingSelection)
+                    .arg(additive)
+                    .arg(viewportShadingSettings_.xrayEnabled()));
             leftSelectionBoxStartedOnObject_ = false;
             const ObjectId requestedObjectId = componentBoxSelectionObject_;
+            const int pendingShapeIndex = pendingComponentClickShapeIndex_;
+            const int pendingComponentIndex = pendingComponentClickIndex_;
+            const QPointF pendingClickPosition =
+                pendingComponentClickScreenPosition_;
+            pendingComponentClickShapeIndex_ = -1;
+            pendingComponentClickIndex_ = -1;
             componentBoxSelectionActive_ = false;
             componentBoxSelectionObject_ = ObjectId::invalid();
             selectTool->cancelSelectionBox();
+            if (!moved && pendingShapeIndex >= 0 &&
+                pendingShapeIndex < shapes_.size() && pendingComponentIndex >= 0) {
+                const ObjectId objectId = shapes_.objectIdAt(pendingShapeIndex);
+                const bool clickAdditive = additive;
+                if (!clickAdditive) {
+                    clearComponentSelections();
+                    selection_.setObjectIds({objectId}, objectId);
+                } else {
+                    selection_.add(objectId);
+                    selection_.setPrimaryObjectId(objectId);
+                }
+                componentSelectionObject_ = objectId;
+                QSet<int> &selected = componentSelectionForObject(objectId);
+                if (clickAdditive && selected.contains(pendingComponentIndex)) {
+                    selected.remove(pendingComponentIndex);
+                } else {
+                    selected.insert(pendingComponentIndex);
+                }
+                activeComponentIndex() = selected.contains(pendingComponentIndex)
+                                             ? pendingComponentIndex : -1;
+                DebugLog::instance().write(
+                    QStringLiteral("component click applied mode=%1 object=%2 geometry=%3 screen=%4 index=%5 selected=[%6]")
+                        .arg(componentModeDiagnosticName(componentSelectionMode_))
+                        .arg(objectId.value())
+                        .arg(geometryTypeName(shapes_[pendingShapeIndex].geometryType))
+                        .arg(precisePointText(pendingClickPosition))
+                        .arg(pendingComponentIndex)
+                        .arg([&selected]() {
+                            QStringList indices;
+                            for (const int index : selected)
+                                indices.append(QString::number(index));
+                            indices.sort();
+                            return indices.join(QStringLiteral(","));
+                        }()));
+                update();
+                emitCoordinateUpdate();
+                return;
+            }
             if (!moved && componentBoxStartedOnBlank_ && !additive) {
                 clearComponentSelections();
                 componentSelectionObject_ = ObjectId::invalid();
@@ -9788,11 +10403,18 @@ private:
                             qreal curveScale = 1.0;
                             if (!curve.controlPoints.isEmpty()) {
                                 const Point3D origin = workPlaneFramePointToWorld(
-                                    curve.controlPoints.first(), frame);
-                                for (const QPointF &controlPoint :
-                                     curve.controlPoints) {
+                                    curve.controlPoints.first(),
+                                    curve.dimension == 3
+                                        ? curve.normalCoordinates.first() : 0.0,
+                                    frame);
+                                for (int pointIndex = 0;
+                                     pointIndex < curve.controlPoints.size();
+                                     ++pointIndex) {
                                     const Point3D point = workPlaneFramePointToWorld(
-                                        controlPoint, frame);
+                                        curve.controlPoints[pointIndex],
+                                        curve.dimension == 3
+                                            ? curve.normalCoordinates[pointIndex] : 0.0,
+                                        frame);
                                     const qreal dx = point.x - origin.x;
                                     const qreal dy = point.y - origin.y;
                                     const qreal dz = point.z - origin.z;
@@ -9837,27 +10459,33 @@ private:
                             projectedPoints.reserve(sampled.parameters.size());
                             bool allInsideWindow = !sampled.parameters.isEmpty();
                             bool allVisible = !sampled.parameters.isEmpty();
-                            for (qreal parameter : sampled.parameters) {
-                                QPointF localPoint;
-                                QPointF screenPoint;
-                                Point3D worldPoint;
-                                const bool valid =
-                                    evaluateNurbsPoint(curve, parameter,
-                                                       &localPoint) &&
-                                    viewportTransform_.worldPointToScreen(
-                                        (worldPoint = workPlaneFramePointToWorld(
-                                             localPoint, frame)),
-                                        size(), &screenPoint);
-                                worldPoints.append(worldPoint);
-                                screenPoints.append(screenPoint);
-                                projectedPoints.append(valid);
-                                if (!valid ||
-                                    !selectionBox.contains(screenPoint)) {
+                            for (int sampleIndex = 0;
+                                 sampleIndex < sampled.parameters.size();
+                                 ++sampleIndex) {
+                                if (sampleIndex >= sampled.worldPoints.size() ||
+                                    sampleIndex >= sampled.screenPoints.size()) {
                                     allInsideWindow = false;
                                     allVisible = false;
                                     continue;
                                 }
-                                if (!visibleCurvePoint(worldPoint, screenPoint)) {
+                                const Point3D worldPoint =
+                                    sampled.worldPoints[sampleIndex];
+                                const QPointF screenPoint =
+                                    sampled.screenPoints[sampleIndex];
+                                QPointF clippedScreenPoint;
+                                const bool valid =
+                                    viewportTransform_.worldPointToScreen(
+                                        worldPoint, size(), &clippedScreenPoint);
+                                worldPoints.append(worldPoint);
+                                screenPoints.append(valid ? clippedScreenPoint
+                                                          : screenPoint);
+                                projectedPoints.append(valid);
+                                if (!valid || !selectionBox.contains(clippedScreenPoint)) {
+                                    allInsideWindow = false;
+                                    allVisible = false;
+                                    continue;
+                                }
+                                if (!visibleCurvePoint(worldPoint, clippedScreenPoint)) {
                                     allVisible = false;
                                 }
                             }
@@ -10111,6 +10739,27 @@ private:
                     }
                 }
 
+                for (int shapeIndex = 0; shapeIndex < shapes_.size();
+                     ++shapeIndex) {
+                    const ObjectId objectId = shapes_.objectIdAt(shapeIndex);
+                    const QSet<int> indicesForObject =
+                        boxedComponentsByObject.value(objectId.value());
+                    QStringList indices;
+                    for (const int component : indicesForObject) {
+                        indices.append(QString::number(component));
+                    }
+                    indices.sort();
+                    const Shape &pickedShape = shapes_[shapeIndex];
+                    DebugLog::instance().write(
+                        QStringLiteral("component box result object=%1 geometry=%2 mode=%3 pickedIndices=[%4] displayedHandles=%5 nurbsCVs=%6")
+                            .arg(objectId.value())
+                            .arg(geometryTypeName(pickedShape.geometryType))
+                            .arg(componentModeDiagnosticName(componentSelectionMode_))
+                            .arg(indices.join(QStringLiteral(",")))
+                            .arg(controlPointsForShape(pickedShape).size())
+                            .arg(pickedShape.nurbs.controlPoints.size()));
+                }
+
                 if (!boxedComponentsByObject.isEmpty()) {
                     if (!additive) {
                         clearComponentSelections();
@@ -10136,6 +10785,23 @@ private:
                     // A box has no active component; selected edges all use
                     // the normal orange selection color.
                     activeComponentIndex() = -1;
+                    QStringList finalSelections;
+                    for (ObjectId objectId : boxedObjects) {
+                        QStringList indices;
+                        for (const int component :
+                             componentSelectionForObject(objectId)) {
+                            indices.append(QString::number(component));
+                        }
+                        indices.sort();
+                        finalSelections.append(
+                            QStringLiteral("%1:[%2]")
+                                .arg(objectId.value())
+                                .arg(indices.join(QStringLiteral(","))));
+                    }
+                    DebugLog::instance().write(
+                        QStringLiteral("component box applied mode=%1 selections={%2}")
+                            .arg(componentModeDiagnosticName(componentSelectionMode_))
+                            .arg(finalSelections.join(QStringLiteral(";"))));
                 } else if (!additive) {
                     clearComponentSelections();
                     componentSelectionObject_ = ObjectId::invalid();
@@ -11709,12 +12375,12 @@ private:
 
     DragSnapResult findControlPointSnap(ObjectId selectedObjectId,
                                         int selectedControlPointIndex,
-                                        const QPointF &controlPoint) const
+                                        const Point3D &localControlPoint) const
     {
         return snapEngine_.findControlPointSnap(document_,
                                                 objectIndex(selectedObjectId),
                                                 selectedControlPointIndex,
-                                                controlPoint,
+                                                localControlPoint,
                                                 viewportTransform_,
                                                 size());
     }
@@ -11939,33 +12605,12 @@ private:
     QVector<Point3D> controlPointWorldPositions(
         const ViewportRenderObject &renderObject) const
     {
-        const Shape &shape = renderObject.shape;
         QVector<Point3D> positions;
-        if (shape.geometryType == GeometryType::PolyCurve) {
-            for (int componentIndex = 0;
-                 componentIndex < shape.components.size();
-                 ++componentIndex) {
-                const Shape::NurbsCurve2D &component =
-                    shape.components[componentIndex];
-                for (const QPointF &controlPoint : component.controlPoints) {
-                    positions.append(shapeComponentPointToWorld(
-                        shape, componentIndex, controlPoint));
-                }
-            }
-        } else {
-            const QVector<QPointF> controlPoints =
-                controlPointsForShape(shape);
-            positions.reserve(controlPoints.size());
-            for (const QPointF &controlPoint : controlPoints) {
-                positions.append(shapePointToWorld(shape, controlPoint));
-            }
-        }
-
-        const Point3D &offset = renderObject.placementTranslation;
-        for (Point3D &position : positions) {
-            position.x += offset.x;
-            position.y += offset.y;
-            position.z += offset.z;
+        const auto indexed = curveControlPointVertices(
+            renderObject.shape, renderObject.placementTranslation);
+        positions.reserve(indexed.size());
+        for (const auto &entry : indexed) {
+            positions.append(entry.second);
         }
         return positions;
     }
@@ -12041,6 +12686,7 @@ private:
         }
 
         const auto appendControlPoints = [&](const QVector<QPointF> &points,
+                                             const QVector<double> &normalCoordinates,
                                              WorkPlaneFrame frame,
                                              int firstControlPointIndex) {
             if (points.isEmpty()) {
@@ -12050,8 +12696,13 @@ private:
             frame.origin.y += worldOffset.y;
             frame.origin.z += worldOffset.z;
             for (int index = 0; index < points.size(); ++index) {
+                const qreal normalCoordinate =
+                    normalCoordinates.size() == points.size()
+                        ? normalCoordinates[index] : 0.0;
                 controlPoints.append({firstControlPointIndex + index,
-                    workPlaneFramePointToWorld(points[index], frame)});
+                    workPlaneFramePointToWorld(points[index],
+                                               normalCoordinate,
+                                               frame)});
             }
         };
 
@@ -12060,15 +12711,24 @@ private:
             for (int componentIndex = 0;
                  componentIndex < shape.components.size();
                  ++componentIndex) {
-                const QVector<QPointF> &controlPoints =
-                    shape.components[componentIndex].controlPoints;
-                appendControlPoints(controlPoints,
+                const Shape::NurbsCurve3D &curve =
+                    shape.components[componentIndex];
+                appendControlPoints(curve.controlPoints,
+                    curve.normalCoordinates,
                     shapeComponentWorkPlaneFrame(shape, componentIndex),
                     firstControlPointIndex);
-                firstControlPointIndex += controlPoints.size();
+                firstControlPointIndex += curve.controlPoints.size();
             }
         } else {
-            appendControlPoints(controlPointsForShape(shape),
+            const bool hasStoredCurve = validateNurbsCurve(shape.nurbs);
+            const QVector<QPointF> displayedPoints =
+                controlPointsForShape(shape);
+            const QVector<double> displayedNormalCoordinates =
+                hasStoredCurve && shape.nurbs.dimension == 3
+                    ? shape.nurbs.normalCoordinates.mid(0, displayedPoints.size())
+                    : QVector<double>{};
+            appendControlPoints(displayedPoints,
+                            displayedNormalCoordinates,
                             shapeWorkPlaneFrame(shape), 0);
         }
         return controlPoints;
@@ -12153,6 +12813,7 @@ private:
                                        ? sceneObject->placementTranslation
                                        : Point3D{};
             const auto considerEndpoint = [&](const QVector<QPointF> &points,
+                                              const QVector<double> &normalCoordinates,
                                               const WorkPlaneFrame &sourceFrame,
                                               int globalIndex) {
                 if (points.isEmpty()) {
@@ -12163,8 +12824,11 @@ private:
                 frame.origin.y += offset.y;
                 frame.origin.z += offset.z;
                 const auto consider = [&](int pointIndex) {
+                    const qreal normalCoordinate =
+                        normalCoordinates.size() == points.size()
+                            ? normalCoordinates[pointIndex] : 0.0;
                     const Point3D worldPoint = workPlaneFramePointToWorld(
-                        points[pointIndex], frame);
+                        points[pointIndex], normalCoordinate, frame);
                     QPointF projected;
                     if (!viewportTransform_.worldPointToScreen(
                             worldPoint, size(), &projected)) {
@@ -12181,8 +12845,14 @@ private:
                 };
                 consider(0);
                 const QPointF delta = points.last() - points.first();
-                if (points.size() > 1 && QPointF::dotProduct(delta, delta) >
-                                              1.0e-16) {
+                const qreal normalDelta =
+                    normalCoordinates.size() == points.size()
+                        ? normalCoordinates.last() -
+                              normalCoordinates.first()
+                        : 0.0;
+                if (points.size() > 1 &&
+                    QPointF::dotProduct(delta, delta) +
+                            normalDelta * normalDelta > 1.0e-16) {
                     consider(points.size() - 1);
                 }
             };
@@ -12192,15 +12862,21 @@ private:
                 for (int componentIndex = 0;
                      componentIndex < shape.components.size();
                      ++componentIndex) {
-                    const QVector<QPointF> &points =
-                        shape.components[componentIndex].controlPoints;
-                    considerEndpoint(points,
+                    const Shape::NurbsCurve3D &curve =
+                        shape.components[componentIndex];
+                    considerEndpoint(curve.controlPoints,
+                        curve.normalCoordinates,
                         shapeComponentWorkPlaneFrame(shape, componentIndex),
                         globalIndex);
-                    globalIndex += points.size();
+                    globalIndex += curve.controlPoints.size();
                 }
             } else {
-                considerEndpoint(controlPointsForShape(shape),
+                const QVector<QPointF> points = controlPointsForShape(shape);
+                const QVector<double> normalCoordinates =
+                    shape.nurbs.dimension == 3
+                        ? shape.nurbs.normalCoordinates.mid(0, points.size())
+                        : QVector<double>{};
+                considerEndpoint(points, normalCoordinates,
                                  shapeWorkPlaneFrame(shape), 0);
             }
         }
@@ -12248,15 +12924,35 @@ private:
             const int modeIndex = static_cast<int>(originalMode);
             QSet<int> linkedComponents;
             if (originalMode == ComponentSelectionMode::Vertex) {
-                const QVector<QPointF> points = controlPointsForShape(shape);
-                for (int index = 0; index < points.size(); ++index) {
-                    linkedComponents.insert(index);
+                if (shape.geometryType == GeometryType::PolyCurve &&
+                    curveIndex >= 0 && curveIndex < shape.components.size()) {
+                    int firstControlPoint = 0;
+                    for (int index = 0; index < curveIndex; ++index) {
+                        firstControlPoint +=
+                            shape.components[index].controlPoints.size();
+                    }
+                    const int endControlPoint = firstControlPoint +
+                        shape.components[curveIndex].controlPoints.size();
+                    for (int index = firstControlPoint;
+                         index < endControlPoint; ++index) {
+                        linkedComponents.insert(index);
+                    }
+                } else {
+                    const QVector<QPointF> points = controlPointsForShape(shape);
+                    for (int index = 0; index < points.size(); ++index) {
+                        linkedComponents.insert(index);
+                    }
                 }
             } else if (originalMode == ComponentSelectionMode::Edge) {
                 const int curveCount =
                     curveSampler_.curvesForShape(shape).size();
-                for (int index = 0; index < curveCount; ++index) {
-                    linkedComponents.insert(index);
+                if (shape.geometryType == GeometryType::PolyCurve &&
+                    curveIndex >= 0 && curveIndex < curveCount) {
+                    linkedComponents.insert(curveIndex);
+                } else {
+                    for (int index = 0; index < curveCount; ++index) {
+                        linkedComponents.insert(index);
+                    }
                 }
             }
 
@@ -12785,10 +13481,18 @@ private:
                     qreal curveScale = 1.0;
                     if (!curve.controlPoints.isEmpty()) {
                         const Point3D origin = workPlaneFramePointToWorld(
-                            curve.controlPoints.first(), frame);
-                        for (const QPointF &controlPoint : curve.controlPoints) {
+                            curve.controlPoints.first(),
+                            curve.dimension == 3
+                                ? curve.normalCoordinates.first() : 0.0,
+                            frame);
+                        for (int pointIndex = 0;
+                             pointIndex < curve.controlPoints.size();
+                             ++pointIndex) {
                             const Point3D point = workPlaneFramePointToWorld(
-                                controlPoint, frame);
+                                curve.controlPoints[pointIndex],
+                                curve.dimension == 3
+                                    ? curve.normalCoordinates[pointIndex] : 0.0,
+                                frame);
                             const qreal dx = point.x - origin.x;
                             const qreal dy = point.y - origin.y;
                             const qreal dz = point.z - origin.z;
@@ -12802,18 +13506,14 @@ private:
                     for (int sampleIndex = 1;
                          sampleIndex < sampled.parameters.size();
                          ++sampleIndex) {
-                        QPointF localA;
-                        QPointF localB;
-                        if (!evaluateNurbsPoint(
-                                curve, sampled.parameters[sampleIndex - 1], &localA) ||
-                            !evaluateNurbsPoint(
-                                curve, sampled.parameters[sampleIndex], &localB)) {
+                        if (sampleIndex >= sampled.worldPoints.size() ||
+                            sampleIndex >= sampled.screenPoints.size()) {
                             continue;
                         }
                         const Point3D worldA =
-                            workPlaneFramePointToWorld(localA, frame);
+                            sampled.worldPoints[sampleIndex - 1];
                         const Point3D worldB =
-                            workPlaneFramePointToWorld(localB, frame);
+                            sampled.worldPoints[sampleIndex];
                         QPointF screenA;
                         QPointF screenB;
                         qreal segmentWorldT0 = 0.0;
@@ -14253,159 +14953,24 @@ private:
 
     void translateControlPoint(ObjectId objectId,
                                int controlPointIndex,
-                               const QPointF &delta)
+                               const Point3D &worldDelta)
     {
-        if (controlPointIndex < 0 ||
-            (qFuzzyIsNull(delta.x()) && qFuzzyIsNull(delta.y()))) {
+        if (controlPointIndex < 0 || isZeroWorldDelta(worldDelta)) {
             return;
         }
 
-        document_.mutateGeometry(
-            objectId,
-            [&](Shape &shape) {
-                if (shape.geometryType == GeometryType::PolyCurve) {
-                    int remaining = controlPointIndex;
-                    for (int componentIndex = 0;
-                         componentIndex < shape.components.size();
-                         ++componentIndex) {
-                        Shape::NurbsCurve2D &component = shape.components[componentIndex];
-                        if (remaining < component.controlPoints.size()) {
-                            const QPointF oldPoint = component.controlPoints[remaining];
-                            const WorkPlaneFrame componentFrame =
-                                shapeComponentWorkPlaneFrame(shape, componentIndex);
-                            const Point3D oldWorldPoint =
-                                workPlaneFramePointToWorld(oldPoint, componentFrame);
-                            const QPointF newPoint = oldPoint + delta;
-                            const Point3D newWorldPoint =
-                                workPlaneFramePointToWorld(newPoint, componentFrame);
-
-                            const qreal seamTolerance = joinEndpointTolerance();
-                            const auto worldDistance = [](const Point3D &first,
-                                                          const Point3D &second) {
-                                return std::hypot(
-                                    std::hypot(first.x - second.x,
-                                               first.y - second.y),
-                                    first.z - second.z);
-                            };
-                            QPointF componentStart;
-                            QPointF componentEnd;
-                            const bool hasEndpoints =
-                                (remaining == 0 ||
-                                 remaining == component.controlPoints.size() - 1) &&
-                                nurbsCurveEndpoints(component,
-                                                   &componentStart,
-                                                   &componentEnd);
-                            const bool movesJoinedEndpoint = hasEndpoints &&
-                                ((remaining == 0 &&
-                                  worldDistance(
-                                      oldWorldPoint,
-                                      workPlaneFramePointToWorld(componentStart,
-                                                                 componentFrame)) <=
-                                      seamTolerance) ||
-                                 (remaining == component.controlPoints.size() - 1 &&
-                                 worldDistance(
-                                      oldWorldPoint,
-                                      workPlaneFramePointToWorld(componentEnd,
-                                                                 componentFrame)) <=
-                                      seamTolerance));
-                            component.controlPoints[remaining] = newPoint;
-                            if (movesJoinedEndpoint) {
-                                for (int otherIndex = 0;
-                                     otherIndex < shape.components.size();
-                                     ++otherIndex) {
-                                    if (otherIndex == componentIndex) {
-                                        continue;
-                                    }
-                                    Shape::NurbsCurve2D &other =
-                                        shape.components[otherIndex];
-                                    if (other.controlPoints.isEmpty()) {
-                                        continue;
-                                    }
-                                    const WorkPlaneFrame otherFrame =
-                                        shapeComponentWorkPlaneFrame(shape,
-                                                                     otherIndex);
-                                    QPointF otherStart;
-                                    QPointF otherEnd;
-                                    if (!nurbsCurveEndpoints(other,
-                                                             &otherStart,
-                                                             &otherEnd)) {
-                                        continue;
-                                    }
-                                    const int otherLastIndex =
-                                        other.controlPoints.size() - 1;
-                                    const auto moveMatchingEndpoint =
-                                        [&](int controlPointIndex,
-                                            const QPointF &curveEndpoint) {
-                                            const Point3D endpointWorld =
-                                                workPlaneFramePointToWorld(
-                                                    curveEndpoint, otherFrame);
-                                            const Point3D controlPointWorld =
-                                                workPlaneFramePointToWorld(
-                                                    other.controlPoints[
-                                                        controlPointIndex],
-                                                    otherFrame);
-                                            if (worldDistance(oldWorldPoint,
-                                                              endpointWorld) <=
-                                                    seamTolerance &&
-                                                worldDistance(endpointWorld,
-                                                              controlPointWorld) <=
-                                                    seamTolerance) {
-                                                other.controlPoints[
-                                                    controlPointIndex] =
-                                                    worldPointToWorkPlaneFrame(
-                                                        newWorldPoint, otherFrame);
-                                            }
-                                        };
-                                    moveMatchingEndpoint(0, otherStart);
-                                    if (otherLastIndex != 0) {
-                                        moveMatchingEndpoint(otherLastIndex,
-                                                             otherEnd);
-                                    }
-                                }
-                            }
-                            shape.points = polyCurvePoints(shape.components);
-                            return true;
-                        }
-                        remaining -= component.controlPoints.size();
-                    }
-                    return false;
-                }
-
-                if (!shape.nurbs.controlPoints.isEmpty()) {
-                    if (controlPointIndex >= shape.nurbs.controlPoints.size()) {
-                        return false;
-                    }
-
-                    const QPointF newControlPoint =
-                        shape.nurbs.controlPoints[controlPointIndex] + delta;
-                    if (!setClosedNurbsSeamControlPoint(&shape,
-                                                       controlPointIndex,
-                                                       newControlPoint)) {
-                        shape.nurbs.controlPoints[controlPointIndex] = newControlPoint;
-                    }
-
-                    // These curve types keep their source points in the same
-                    // order as their NURBS CVs. Keep both synchronized. Arc
-                    // and circle construction points intentionally remain
-                    // unchanged; their stored NURBS is the edited geometry.
-                    if ((shape.geometryType == GeometryType::Line ||
-                         shape.geometryType == GeometryType::Bezier ||
-                         shape.geometryType == GeometryType::Nurbs) &&
-                        controlPointIndex < shape.points.size()) {
-                        shape.points[controlPointIndex] += delta;
-                    }
-                    if (shape.geometryType == GeometryType::Rectangle) {
-                        shape.points = rectangleVertices(shape);
-                    }
-                    return true;
-                }
-
-                if (controlPointIndex < shape.points.size()) {
-                    shape.points[controlPointIndex] += delta;
-                    return true;
-                }
-                return false;
-            });
+        if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+            const QSet<int> &selectedVertices =
+                componentSelectionForObject(objectId);
+            if (selectedVertices.contains(controlPointIndex)) {
+                translateConnectedCurveControlPointTargets(
+                    objectId, selectedVertices, worldDelta);
+                return;
+            }
+        }
+        translateCurveControlPointTargets(objectId,
+                                          QSet<int>{controlPointIndex},
+                                          worldDelta);
     }
 
     void translateShape(ObjectId objectId, const QPointF &delta)
@@ -14466,7 +15031,7 @@ private:
     void translateShapeGeometry(Shape &shape, const QPointF &delta) const
     {
         classiCAD::translateShapeGeometry(
-            &shape, delta, viewportTransform_.workPlaneFrame());
+            &shape, delta, shapeWorkPlaneFrame(shape));
     }
 
     void translateShapes(const QVector<ObjectId> &objectIds, const QPointF &delta)
@@ -14738,13 +15303,18 @@ private:
         document_.mutateGeometry(objectId, [&](Shape &shape) {
             QVector<Point3D> selectedWorldPoints;
             const auto collectTargets = [&](const QVector<QPointF> &points,
+                                            const QVector<double> &normalCoordinates,
                                             const WorkPlaneFrame &frame,
                                             int firstIndex) {
                 for (int index = 0; index < points.size(); ++index) {
                     if (!targetIndices.contains(firstIndex + index)) {
                         continue;
                     }
-                    Point3D world = workPlaneFramePointToWorld(points[index], frame);
+                    const qreal normalCoordinate =
+                        normalCoordinates.size() == points.size()
+                            ? normalCoordinates[index] : 0.0;
+                    Point3D world = workPlaneFramePointToWorld(
+                        points[index], normalCoordinate, frame);
                     world.x += offset.x;
                     world.y += offset.y;
                     world.z += offset.z;
@@ -14771,6 +15341,7 @@ private:
                      ++componentIndex) {
                     const auto &component = shape.components[componentIndex];
                     collectTargets(component.controlPoints,
+                        component.normalCoordinates,
                         shapeComponentWorkPlaneFrame(shape, componentIndex),
                         firstIndex);
                     firstIndex += component.controlPoints.size();
@@ -14781,8 +15352,14 @@ private:
                 if (shape.geometryType == GeometryType::Rectangle &&
                     shape.nurbs.controlPoints.isEmpty()) {
                     points = rectangleVertices(shape);
+                    if (!points.isEmpty()) {
+                        points.append(points.first());
+                    }
                 }
-                collectTargets(points, shapeWorkPlaneFrame(shape), 0);
+                collectTargets(points,
+                    shape.nurbs.controlPoints.isEmpty()
+                        ? QVector<double>{} : shape.nurbs.normalCoordinates,
+                    shapeWorkPlaneFrame(shape), 0);
             }
             if (selectedWorldPoints.isEmpty()) {
                 return false;
@@ -14790,12 +15367,20 @@ private:
 
             bool changed = false;
             const auto moveMatchingPoints = [&](QVector<QPointF> *points,
+                                                QVector<double> *normalCoordinates,
+                                                int *dimension,
                                                 const WorkPlaneFrame &frame) {
-                if (points == nullptr) {
+                if (points == nullptr || normalCoordinates == nullptr ||
+                    dimension == nullptr) {
                     return;
                 }
-                for (QPointF &point : *points) {
-                    Point3D world = workPlaneFramePointToWorld(point, frame);
+                for (int pointIndex = 0; pointIndex < points->size(); ++pointIndex) {
+                    const qreal oldNormalCoordinate =
+                        *dimension == 3 &&
+                                normalCoordinates->size() == points->size()
+                            ? normalCoordinates->at(pointIndex) : 0.0;
+                    Point3D world = workPlaneFramePointToWorld(
+                        points->at(pointIndex), oldNormalCoordinate, frame);
                     world.x += offset.x;
                     world.y += offset.y;
                     world.z += offset.z;
@@ -14816,7 +15401,20 @@ private:
                         world.x + worldDelta.x - offset.x,
                         world.y + worldDelta.y - offset.y,
                         world.z + worldDelta.z - offset.z};
-                    point = worldPointToWorkPlaneFrame(localWorld, frame);
+                    qreal newNormalCoordinate = 0.0;
+                    (*points)[pointIndex] = worldPointToWorkPlaneFrame(
+                        localWorld, frame, &newNormalCoordinate);
+                    if (*dimension == 2 &&
+                        std::abs(newNormalCoordinate) > 1.0e-9) {
+                        *dimension = 3;
+                        normalCoordinates->fill(0.0, points->size());
+                    }
+                    if (*dimension == 3) {
+                        if (normalCoordinates->size() != points->size()) {
+                            normalCoordinates->fill(0.0, points->size());
+                        }
+                        (*normalCoordinates)[pointIndex] = newNormalCoordinate;
+                    }
                     changed = true;
                 }
             };
@@ -14825,8 +15423,12 @@ private:
                 for (int componentIndex = 0;
                      componentIndex < shape.components.size();
                      ++componentIndex) {
+                    Shape::NurbsCurve3D &component =
+                        shape.components[componentIndex];
                     moveMatchingPoints(
-                        &shape.components[componentIndex].controlPoints,
+                        &component.controlPoints,
+                        &component.normalCoordinates,
+                        &component.dimension,
                         shapeComponentWorkPlaneFrame(shape, componentIndex));
                 }
                 if (changed) {
@@ -14834,6 +15436,8 @@ private:
                 }
             } else if (!shape.nurbs.controlPoints.isEmpty()) {
                 moveMatchingPoints(&shape.nurbs.controlPoints,
+                                   &shape.nurbs.normalCoordinates,
+                                   &shape.nurbs.dimension,
                                    shapeWorkPlaneFrame(shape));
                 if (changed &&
                     (shape.geometryType == GeometryType::Line ||
@@ -14845,10 +15449,93 @@ private:
                     shape.points = rectangleVertices(shape);
                 }
             } else {
-                moveMatchingPoints(&shape.points, shapeWorkPlaneFrame(shape));
+                QVector<QPointF> points = shape.geometryType == GeometryType::Rectangle
+                    ? rectangleVertices(shape) : shape.points;
+                if (shape.geometryType == GeometryType::Rectangle &&
+                    !points.isEmpty()) {
+                    points.append(points.first());
+                }
+                NurbsCurve3D materialized = makeDegreeOneNurbs(points);
+                if (validateNurbsCurve(materialized)) {
+                    moveMatchingPoints(&materialized.controlPoints,
+                                       &materialized.normalCoordinates,
+                                       &materialized.dimension,
+                                       shapeWorkPlaneFrame(shape));
+                    if (changed) {
+                        shape.nurbs = materialized;
+                        shape.points = materialized.controlPoints;
+                    }
+                }
             }
             return changed;
         });
+    }
+
+    void translateConnectedCurveControlPointTargets(
+        ObjectId sourceObjectId,
+        const QSet<int> &sourceTargetIndices,
+        const Point3D &worldDelta)
+    {
+        QVector<ObjectId> selectedObjects = selectedShapeIndices_;
+        if (!selectedObjects.contains(sourceObjectId)) {
+            selectedObjects.append(sourceObjectId);
+        }
+        QVector<QVector3D> selectedWorldPoints;
+        for (const ObjectId objectId : selectedObjects) {
+            const Shape *shape = document_.shape(objectId);
+            const SceneObject *object = document_.object(objectId);
+            if (shape == nullptr || object == nullptr ||
+                shape->geometryType == GeometryType::NurbsSurface ||
+                shape->geometryType == GeometryType::NurbsSolid ||
+                curveSampler_.curvesForShape(*shape).isEmpty()) {
+                continue;
+            }
+            const QSet<int> &indices = objectId == sourceObjectId
+                ? sourceTargetIndices : componentSelectionForObject(objectId);
+            for (const auto &point : curveControlPointVertices(
+                     *shape, object->placementTranslation)) {
+                if (indices.contains(point.first)) {
+                    selectedWorldPoints.append(QVector3D(
+                        float(point.second.x), float(point.second.y),
+                        float(point.second.z)));
+                }
+            }
+        }
+        if (selectedWorldPoints.isEmpty()) {
+            return;
+        }
+
+        QHash<quint64, QSet<int>> connectedTargets;
+        for (int index = 0; index < document_.size(); ++index) {
+            const ObjectId objectId = document_.objectIdAt(index);
+            const Shape *shape = document_.shape(objectId);
+            const SceneObject *object = document_.object(objectId);
+            if (shape == nullptr || object == nullptr ||
+                !document_.isObjectVisible(objectId) ||
+                !document_.isObjectEditable(objectId) ||
+                shape->geometryType == GeometryType::NurbsSurface ||
+                shape->geometryType == GeometryType::NurbsSolid ||
+                curveSampler_.curvesForShape(*shape).isEmpty()) {
+                continue;
+            }
+            for (const auto &point : curveControlPointVertices(
+                     *shape, object->placementTranslation)) {
+                const QVector3D world(float(point.second.x),
+                                      float(point.second.y),
+                                      float(point.second.z));
+                for (const QVector3D &selectedPoint : selectedWorldPoints) {
+                    if ((world - selectedPoint).lengthSquared() <= 1.0e-12f) {
+                        connectedTargets[objectId.value()].insert(point.first);
+                        break;
+                    }
+                }
+            }
+        }
+        for (auto targets = connectedTargets.cbegin();
+             targets != connectedTargets.cend(); ++targets) {
+            translateCurveControlPointTargets(
+                ObjectId::fromValue(targets.key()), targets.value(), worldDelta);
+        }
     }
 
     void translateShapesWorldDelta(const QVector<ObjectId> &objectIds,
@@ -16884,9 +17571,13 @@ private:
     ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
     bool componentBoxSelectionActive_ = false;
     bool componentBoxStartedOnBlank_ = false;
+    int pendingComponentClickShapeIndex_ = -1;
+    int pendingComponentClickIndex_ = -1;
+    QPointF pendingComponentClickScreenPosition_;
     ObjectId componentBoxSelectionObject_ = ObjectId::invalid();
     ComponentPickCycleState componentPickCycleStates_[3];
     QHash<quint64, QSet<int>> componentSelections_[3];
+    QString lastSelectionRenderDiagnostic_;
     QHash<quint64, QSet<int>> surfaceControlPointGrabTargets_;
     QHash<quint64, QSet<int>> curveControlPointGrabTargets_;
     QHash<quint64, QSet<int>> grabOriginalVertexSelections_;

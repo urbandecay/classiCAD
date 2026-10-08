@@ -115,6 +115,50 @@ Point3D candidateWorldPoint(const SnapCandidate &candidate,
                : workPlaneFramePointToWorld(candidate.point, fallbackFrame);
 }
 
+void appendCurveWorldCandidates(const NurbsCurve3D &curve,
+                                const WorkPlaneFrame &frame,
+                                int componentIndex,
+                                const Point3D &worldOffset,
+                                QVector<SnapCandidate> *candidates)
+{
+    if (candidates == nullptr || !validateNurbsCurve(curve) ||
+        !isValidWorkPlaneFrame(frame)) {
+        return;
+    }
+    qreal start = 0.0;
+    qreal end = 0.0;
+    if (!nurbsParameterDomain(curve, &start, &end)) {
+        return;
+    }
+    const auto append = [&](SnapType type, const Point3D &local) {
+        SnapCandidate candidate{type, {local.x, local.y}, -1, componentIndex};
+        candidate.worldPoint = workPlaneFramePointToWorld(
+            {local.x, local.y}, local.z, frame);
+        candidate.worldPoint.x += worldOffset.x;
+        candidate.worldPoint.y += worldOffset.y;
+        candidate.worldPoint.z += worldOffset.z;
+        candidate.hasWorldPoint = true;
+        candidates->append(candidate);
+    };
+    Point3D point;
+    if (evaluateNurbsPoint3D(curve, start, &point)) {
+        append(SnapType::Endpoint, point);
+    }
+    if (evaluateNurbsPoint3D(curve, end, &point)) {
+        append(SnapType::Endpoint, point);
+    }
+    if (evaluateNurbsPoint3D(curve, (start + end) * 0.5, &point)) {
+        append(SnapType::Midpoint, point);
+    }
+    for (int index = 0; index < curve.controlPoints.size(); ++index) {
+        const qreal normalCoordinate = curve.dimension == 3
+            ? curve.normalCoordinates[index] : 0.0;
+        append(SnapType::ControlPoint,
+               {curve.controlPoints[index].x(),
+                curve.controlPoints[index].y(), normalCoordinate});
+    }
+}
+
 qreal dotPoint3D(const Point3D &first, const Point3D &second)
 {
     return first.x * second.x + first.y * second.y + first.z * second.z;
@@ -207,8 +251,31 @@ void mapCurveBetweenFrames(Shape::NurbsCurve2D *curve,
     if (curve == nullptr) {
         return;
     }
-    for (QPointF &point : curve->controlPoints) {
-        point = mapPointBetweenFrames(point, source, destination);
+    if (!validateNurbsCurve(*curve) || !isValidWorkPlaneFrame(source) ||
+        !isValidWorkPlaneFrame(destination)) {
+        return;
+    }
+    QVector<double> mappedNormalCoordinates;
+    mappedNormalCoordinates.reserve(curve->controlPoints.size());
+    bool requiresDimension3 = curve->dimension == 3;
+    for (int index = 0; index < curve->controlPoints.size(); ++index) {
+        const qreal sourceNormal = curve->dimension == 3
+            ? curve->normalCoordinates[index] : 0.0;
+        const Point3D world = workPlaneFramePointToWorld(
+            curve->controlPoints[index], sourceNormal, source);
+        qreal destinationNormal = 0.0;
+        curve->controlPoints[index] = worldPointToWorkPlaneFrame(
+            world, destination, &destinationNormal);
+        mappedNormalCoordinates.append(destinationNormal);
+        requiresDimension3 = requiresDimension3 ||
+                             std::abs(destinationNormal) > 1.0e-9;
+    }
+    if (requiresDimension3) {
+        curve->dimension = 3;
+        curve->normalCoordinates = std::move(mappedNormalCoordinates);
+    } else {
+        curve->dimension = 2;
+        curve->normalCoordinates.clear();
     }
 }
 
@@ -981,6 +1048,21 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
         return candidates;
     }
 
+    if (shape.geometryType == GeometryType::PolyCurve) {
+        for (int index = 0; index < shape.components.size(); ++index) {
+            appendCurveWorldCandidates(
+                shape.components[index],
+                shapeComponentWorkPlaneFrame(shape, index),
+                index, worldOffset, &candidates);
+        }
+        return candidates;
+    }
+    if (validateNurbsCurve(shape.nurbs) && shape.nurbs.dimension == 3) {
+        appendCurveWorldCandidates(shape.nurbs, shapeWorkPlaneFrame(shape),
+                                   -1, worldOffset, &candidates);
+        return candidates;
+    }
+
     Shape::NurbsCurve2D subdivisionCurveData;
     if (subdivisionCurve(shape, &subdivisionCurveData)) {
         for (const double parameter : shape.subdivisionParameters) {
@@ -1007,35 +1089,6 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForShape(
 
     if (shape.geometryType == GeometryType::Point) {
         candidates.append({SnapType::Endpoint, shape.points.first()});
-        return candidates;
-    }
-    if (shape.geometryType == GeometryType::PolyCurve) {
-        for (int componentIndex = 0;
-             componentIndex < shape.components.size();
-             ++componentIndex) {
-            const Shape::NurbsCurve2D &component =
-                shape.components[componentIndex];
-            const WorkPlaneFrame frame =
-                shapeComponentWorkPlaneFrame(shape, componentIndex);
-            const auto appendComponentCandidate = [&](SnapType type,
-                                                       const QPointF &point) {
-                SnapCandidate candidate{type, point};
-                candidate.componentIndex = componentIndex;
-                candidate.worldPoint = workPlaneFramePointToWorld(point, frame);
-                candidate.hasWorldPoint = true;
-                candidates.append(candidate);
-            };
-            QPointF start;
-            QPointF end;
-            if (nurbsCurveEndpoints(component, &start, &end)) {
-                appendComponentCandidate(SnapType::Endpoint, start);
-                appendComponentCandidate(SnapType::Endpoint, end);
-            }
-            QPointF midpoint;
-            if (nurbsCurvePointAtFraction(component, 0.5, &midpoint)) {
-                appendComponentCandidate(SnapType::Midpoint, midpoint);
-            }
-        }
         return candidates;
     }
     if (shape.geometryType == GeometryType::Bezier ||
@@ -1175,6 +1228,34 @@ QVector<SnapCandidate> SnapEngine::edgeCenterCandidatesForShape(
         isDimensionGeometryType(shape.geometryType)) {
         return candidates;
     }
+    const auto appendWorldMidpoint = [&](const NurbsCurve3D &curve,
+                                         const WorkPlaneFrame &frame,
+                                         int componentIndex) {
+        qreal start = 0.0;
+        qreal end = 0.0;
+        Point3D point;
+        if (!nurbsParameterDomain(curve, &start, &end) ||
+            !evaluateNurbsPoint3D(curve, (start + end) * 0.5, &point)) {
+            return;
+        }
+        SnapCandidate candidate{SnapType::Midpoint,
+                                {point.x, point.y}, -1, componentIndex};
+        candidate.worldPoint = workPlaneFramePointToWorld(
+            {point.x, point.y}, point.z, frame);
+        candidate.hasWorldPoint = true;
+        candidates.append(candidate);
+    };
+    if (shape.geometryType == GeometryType::PolyCurve) {
+        for (int index = 0; index < shape.components.size(); ++index) {
+            appendWorldMidpoint(shape.components[index],
+                                shapeComponentWorkPlaneFrame(shape, index), index);
+        }
+        return candidates;
+    }
+    if (validateNurbsCurve(shape.nurbs) && shape.nurbs.dimension == 3) {
+        appendWorldMidpoint(shape.nurbs, shapeWorkPlaneFrame(shape), -1);
+        return candidates;
+    }
     if (shape.geometryType == GeometryType::Rectangle ||
         shape.geometryType == GeometryType::Polygon ||
         shape.geometryType == GeometryType::Picture) {
@@ -1238,9 +1319,20 @@ SnapResult SnapEngine::findEdgeCenterSnapPoint(
         }
         const Shape &shape = document[shapeIndex];
         const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        const SceneObject *sceneObject = document.object(objectId);
+        const Point3D worldOffset = sceneObject != nullptr
+                                        ? sceneObject->placementTranslation
+                                        : Point3D{};
         for (const SnapCandidate &candidate : edgeCenterCandidatesForShape(shape)) {
-            const Point3D worldPoint =
-                workPlaneFramePointToWorld(candidate.point, frame);
+            const WorkPlaneFrame &candidateFrame =
+                candidate.componentIndex >= 0
+                    ? shapeComponentWorkPlaneFrame(shape,
+                                                   candidate.componentIndex)
+                    : frame;
+            Point3D worldPoint = candidateWorldPoint(candidate, candidateFrame);
+            worldPoint.x += worldOffset.x;
+            worldPoint.y += worldOffset.y;
+            worldPoint.z += worldOffset.z;
             QPointF candidateScreen;
             if (!transform.worldPointToScreen(worldPoint, viewportSize,
                                               &candidateScreen)) {
@@ -1345,6 +1437,49 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                                         : Point3D{};
         const bool spatialSurface = shape.geometryType == GeometryType::NurbsSurface ||
                                     shape.geometryType == GeometryType::NurbsSolid;
+        const bool spatialCurve =
+            (shape.geometryType == GeometryType::PolyCurve &&
+             std::any_of(shape.components.cbegin(), shape.components.cend(),
+                         [](const NurbsCurve3D &curve) {
+                             return curve.dimension == 3;
+                         })) ||
+            (validateNurbsCurve(shape.nurbs) && shape.nurbs.dimension == 3);
+        if (spatialCurve) {
+            const auto appendEnabledSpatialCandidates =
+                [&](const NurbsCurve3D &curve,
+                    const WorkPlaneFrame &frame,
+                    int componentIndex) {
+                    QVector<SnapCandidate> curveCandidates;
+                    appendCurveWorldCandidates(curve, frame, componentIndex,
+                                               worldOffset, &curveCandidates);
+                    for (SnapCandidate candidate : curveCandidates) {
+                        if ((candidate.type == SnapType::Endpoint &&
+                             !settings_.endpoint) ||
+                            (candidate.type == SnapType::Midpoint &&
+                             !settings_.midpoint) ||
+                            (candidate.type == SnapType::ControlPoint &&
+                             !settings_.controlPoint)) {
+                            continue;
+                        }
+                        candidate.shapeIndex = shapeIndex;
+                        candidates.append(std::move(candidate));
+                    }
+                };
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                for (int componentIndex = 0;
+                     componentIndex < shape.components.size();
+                     ++componentIndex) {
+                    appendEnabledSpatialCandidates(
+                        shape.components[componentIndex],
+                        shapeComponentWorkPlaneFrame(shape, componentIndex),
+                        componentIndex);
+                }
+            } else {
+                appendEnabledSpatialCandidates(shape.nurbs,
+                                               shapeWorkPlaneFrame(shape), -1);
+            }
+            continue;
+        }
         if (!spatialSurface &&
             !workPlaneMatches(shapeWorkPlaneFrame(shape),
                               transform.workPlaneFrame())) {
@@ -3165,6 +3300,20 @@ DragSnapResult SnapEngine::findControlPointSnap(
     const ViewportTransform &transform,
     const QSize &viewportSize) const
 {
+    return findControlPointSnap(document, selectedShapeIndex,
+                                selectedControlPointIndex,
+                                Point3D{controlPoint.x(), controlPoint.y(), 0.0},
+                                transform, viewportSize);
+}
+
+DragSnapResult SnapEngine::findControlPointSnap(
+    const Document &document,
+    int selectedShapeIndex,
+    int selectedControlPointIndex,
+    const Point3D &localControlPoint,
+    const ViewportTransform &transform,
+    const QSize &viewportSize) const
+{
     DragSnapResult best;
     if (!settings_.enabled || selectedShapeIndex < 0 ||
         selectedShapeIndex >= document.size()) {
@@ -3173,6 +3322,8 @@ DragSnapResult SnapEngine::findControlPointSnap(
 
     const Shape &sourceShape = document[selectedShapeIndex];
     WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(sourceShape);
+    const NurbsCurve3D *sourceCurve = validateNurbsCurve(sourceShape.nurbs)
+                                          ? &sourceShape.nurbs : nullptr;
     if (sourceShape.geometryType == GeometryType::PolyCurve) {
         int remainingControlPointIndex = selectedControlPointIndex;
         bool foundComponent = false;
@@ -3184,6 +3335,7 @@ DragSnapResult SnapEngine::findControlPointSnap(
             if (remainingControlPointIndex < component.controlPoints.size()) {
                 sourceFrame = shapeComponentWorkPlaneFrame(sourceShape,
                                                            componentIndex);
+                sourceCurve = &component;
                 foundComponent = true;
                 break;
             }
@@ -3193,6 +3345,8 @@ DragSnapResult SnapEngine::findControlPointSnap(
             return best;
         }
     }
+    const bool sourceSpatial = sourceCurve != nullptr &&
+                               sourceCurve->dimension == 3;
 
     const SceneObject *sourceObject =
         document.object(document.objectIdAt(selectedShapeIndex));
@@ -3203,8 +3357,9 @@ DragSnapResult SnapEngine::findControlPointSnap(
     placedSourceFrame.origin.x += sourceWorldOffset.x;
     placedSourceFrame.origin.y += sourceWorldOffset.y;
     placedSourceFrame.origin.z += sourceWorldOffset.z;
-    const Point3D sourceWorld =
-        workPlaneFramePointToWorld(controlPoint, placedSourceFrame);
+    const Point3D sourceWorld = workPlaneFramePointToWorld(
+        {localControlPoint.x, localControlPoint.y},
+        localControlPoint.z, placedSourceFrame);
     QPointF sourceScreen;
     if (!transform.worldPointToScreen(sourceWorld,
                                       viewportSize,
@@ -3237,15 +3392,21 @@ DragSnapResult SnapEngine::findControlPointSnap(
             }
         }
         QPointF targetInSourcePlane;
-        if (!transform.screenToWorkPlane(targetScreen,
-                                         viewportSize,
-                                         placedSourceFrame,
-                                         &targetInSourcePlane)) {
-            return;
+        Point3D targetOnSourcePlane;
+        if (sourceSpatial) {
+            targetInSourcePlane = worldPointToWorkPlaneFrame(
+                targetWorld, placedSourceFrame);
+            targetOnSourcePlane = targetWorld;
+        } else {
+            if (!transform.screenToWorkPlane(targetScreen,
+                                             viewportSize,
+                                             placedSourceFrame,
+                                             &targetInSourcePlane)) {
+                return;
+            }
+            targetOnSourcePlane = workPlaneFramePointToWorld(
+                targetInSourcePlane, localControlPoint.z, placedSourceFrame);
         }
-        const Point3D targetOnSourcePlane =
-            workPlaneFramePointToWorld(targetInSourcePlane,
-                                       placedSourceFrame);
         constexpr qreal tieTolerancePixels = 1.0e-6;
         // Specific OSnaps take precedence over Near, even if the nearest point
         // on a curve happens to be a little closer to the dragged CV.
@@ -3269,7 +3430,8 @@ DragSnapResult SnapEngine::findControlPointSnap(
             // The viewport applies this delta to the selected CV's local
             // NURBS coordinates, which may use a different frame from the
             // target curve and the current drawing plane.
-            best.translation = targetInSourcePlane - controlPoint;
+            best.translation = targetInSourcePlane -
+                QPointF(localControlPoint.x, localControlPoint.y);
             best.targetShapeIndex = targetShapeIndex;
             best.targetComponentIndex = targetComponentIndex;
             best.worldSourcePoint = sourceWorld;
@@ -3297,6 +3459,118 @@ DragSnapResult SnapEngine::findControlPointSnap(
         return false;
     };
 
+    const auto considerNearCurve = [&](const NurbsCurve3D &curve,
+                                       const WorkPlaneFrame &frame,
+                                       const Point3D &worldOffset,
+                                       int shapeIndex,
+                                       int componentIndex) {
+        if (!settings_.near || !validateNurbsCurve(curve)) {
+            return;
+        }
+        qreal domainStart = 0.0;
+        qreal domainEnd = 0.0;
+        if (!nurbsParameterDomain(curve, &domainStart, &domainEnd)) {
+            return;
+        }
+        const QVector<double> fullKnots = expandedNurbsKnotVector(curve);
+        int nonZeroSpans = 0;
+        for (int span = curve.degree; span < curve.controlPoints.size(); ++span) {
+            if (fullKnots[span + 1] > fullKnots[span]) {
+                ++nonZeroSpans;
+            }
+        }
+        if (nonZeroSpans <= 0) {
+            return;
+        }
+        const int requestedSamplesPerSpan = curve.degree <= 1 ? 32 : 48;
+        const int samplesPerSpan = std::max(
+            1, std::min(requestedSamplesPerSpan, 4096 / nonZeroSpans));
+        qreal bestDistance = snapRadiusPixels;
+        Point3D nearestWorld;
+        bool foundNearest = false;
+        Point3D previousLocal;
+        if (!evaluateNurbsPoint3D(curve, domainStart, &previousLocal)) {
+            return;
+        }
+        const Point3D initialWorld = workPlaneFramePointToWorld(
+            {previousLocal.x, previousLocal.y}, previousLocal.z, frame);
+        Point3D placedInitialWorld{initialWorld.x + worldOffset.x,
+                                   initialWorld.y + worldOffset.y,
+                                   initialWorld.z + worldOffset.z};
+        QPointF previousScreen;
+        if (!transform.worldPointToScreen(placedInitialWorld, viewportSize,
+                                          &previousScreen)) {
+            return;
+        }
+        qreal previousParameter = domainStart;
+        bool hasPreviousScreen = true;
+        for (int span = curve.degree; span < curve.controlPoints.size(); ++span) {
+            const qreal spanStart = fullKnots[span];
+            const qreal spanEnd = fullKnots[span + 1];
+            if (spanEnd <= spanStart) {
+                continue;
+            }
+            for (int sample = 1; sample <= samplesPerSpan; ++sample) {
+                const qreal parameter = spanStart +
+                    (spanEnd - spanStart) *
+                        (static_cast<qreal>(sample) / samplesPerSpan);
+                Point3D localPoint;
+                if (!evaluateNurbsPoint3D(curve, parameter, &localPoint)) {
+                    continue;
+                }
+                Point3D worldPoint = workPlaneFramePointToWorld(
+                    {localPoint.x, localPoint.y}, localPoint.z, frame);
+                worldPoint.x += worldOffset.x;
+                worldPoint.y += worldOffset.y;
+                worldPoint.z += worldOffset.z;
+                QPointF screenPoint;
+                if (!transform.worldPointToScreen(worldPoint, viewportSize,
+                                                  &screenPoint)) {
+                    previousParameter = parameter;
+                    hasPreviousScreen = false;
+                    continue;
+                }
+
+                if (hasPreviousScreen) {
+                    const QPointF segment = screenPoint - previousScreen;
+                    const QPointF fromStart = sourceScreen - previousScreen;
+                    const qreal lengthSquared = QPointF::dotProduct(segment,
+                                                                    segment);
+                    const qreal fraction = lengthSquared > 1.0e-12
+                        ? std::clamp(QPointF::dotProduct(fromStart, segment) /
+                                         lengthSquared,
+                                     0.0, 1.0)
+                        : 0.0;
+                    const QPointF projected = previousScreen + segment * fraction;
+                    const qreal distance = std::hypot(
+                        sourceScreen.x() - projected.x(),
+                        sourceScreen.y() - projected.y());
+                    if (distance < bestDistance) {
+                        const qreal nearParameter = previousParameter +
+                            (parameter - previousParameter) * fraction;
+                        Point3D nearLocal;
+                        if (evaluateNurbsPoint3D(curve, nearParameter,
+                                                &nearLocal)) {
+                            nearestWorld = workPlaneFramePointToWorld(
+                                {nearLocal.x, nearLocal.y}, nearLocal.z, frame);
+                            nearestWorld.x += worldOffset.x;
+                            nearestWorld.y += worldOffset.y;
+                            nearestWorld.z += worldOffset.z;
+                            bestDistance = distance;
+                            foundNearest = true;
+                        }
+                    }
+                }
+                previousScreen = screenPoint;
+                previousParameter = parameter;
+                hasPreviousScreen = true;
+            }
+        }
+        if (foundNearest) {
+            consider(SnapType::Near, nearestWorld, shapeIndex, componentIndex);
+        }
+    };
+
     Document nearScene;
     QVector<QPair<int, int>> nearTargetIndices;
     const auto appendNearTarget = [&](const Shape &nearShape,
@@ -3308,7 +3582,8 @@ DragSnapResult SnapEngine::findControlPointSnap(
         placedFrame.origin.x += worldOffset.x;
         placedFrame.origin.y += worldOffset.y;
         placedFrame.origin.z += worldOffset.z;
-        if (!workPlaneFramesAreCoplanar(placedSourceFrame, placedFrame)) {
+        if (sourceSpatial ||
+            !workPlaneFramesAreCoplanar(placedSourceFrame, placedFrame)) {
             return;
         }
 
@@ -3363,12 +3638,18 @@ DragSnapResult SnapEngine::findControlPointSnap(
                     componentFrame.origin.x += sourceWorldOffset.x;
                     componentFrame.origin.y += sourceWorldOffset.y;
                     componentFrame.origin.z += sourceWorldOffset.z;
-                    for (const QPointF &point : component.controlPoints) {
+                    for (int pointIndex = 0;
+                         pointIndex < component.controlPoints.size();
+                         ++pointIndex) {
                         if (flattenedControlPointIndex !=
                             selectedControlPointIndex) {
+                            const qreal normalCoordinate =
+                                component.dimension == 3
+                                    ? component.normalCoordinates[pointIndex] : 0.0;
                             consider(SnapType::ControlPoint,
-                                     workPlaneFramePointToWorld(point,
-                                                                componentFrame),
+                                     workPlaneFramePointToWorld(
+                                         component.controlPoints[pointIndex],
+                                         normalCoordinate, componentFrame),
                                      shapeIndex,
                                      componentIndex);
                         }
@@ -3395,9 +3676,13 @@ DragSnapResult SnapEngine::findControlPointSnap(
             frame.origin.z += sourceWorldOffset.z;
             for (int pointIndex = 0; pointIndex < controlPoints.size(); ++pointIndex) {
                 if (pointIndex != selectedControlPointIndex) {
+                    const qreal normalCoordinate =
+                        shape.nurbs.dimension == 3 &&
+                                pointIndex < shape.nurbs.normalCoordinates.size()
+                            ? shape.nurbs.normalCoordinates[pointIndex] : 0.0;
                     consider(SnapType::ControlPoint,
                              workPlaneFramePointToWorld(controlPoints[pointIndex],
-                                                        frame),
+                                                        normalCoordinate, frame),
                              shapeIndex,
                              -1);
                 }
@@ -3432,6 +3717,31 @@ DragSnapResult SnapEngine::findControlPointSnap(
                      targetWorld,
                      shapeIndex,
                      target.componentIndex);
+        }
+
+        if (settings_.near && sourceSpatial &&
+            !isDimensionGeometryType(shape.geometryType)) {
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                for (int componentIndex = 0;
+                     componentIndex < shape.components.size();
+                     ++componentIndex) {
+                    considerNearCurve(
+                        shape.components[componentIndex],
+                        shapeComponentWorkPlaneFrame(shape, componentIndex),
+                        worldOffset, shapeIndex, componentIndex);
+                }
+            } else if (validateNurbsCurve(shape.nurbs)) {
+                considerNearCurve(shape.nurbs, shapeWorkPlaneFrame(shape),
+                                  worldOffset, shapeIndex, -1);
+            } else {
+                NurbsCurve3D fallbackCurve;
+                if (subdivisionCurve(shape, &fallbackCurve)) {
+                    considerNearCurve(fallbackCurve,
+                                      shapeWorkPlaneFrame(shape),
+                                      worldOffset, shapeIndex, -1);
+                }
+            }
+            continue;
         }
 
         if (!settings_.near || isDimensionGeometryType(shape.geometryType)) {

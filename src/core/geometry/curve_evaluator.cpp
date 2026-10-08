@@ -51,7 +51,24 @@ bool evaluateNurbsPoint(const NurbsCurve2D &curve,
                         qreal parameter,
                         QPointF *point)
 {
-    if (!validateNurbsCurve(curve) || point == nullptr) {
+    if (point == nullptr || !isNurbsCurvePlanarInWorkPlane(curve)) {
+        return false;
+    }
+
+    Point3D localPoint;
+    if (!evaluateNurbsPoint3D(curve, parameter, &localPoint)) {
+        return false;
+    }
+    *point = {localPoint.x, localPoint.y};
+    return true;
+}
+
+bool evaluateNurbsPoint3D(const NurbsCurve3D &curve,
+                          qreal parameter,
+                          Point3D *point)
+{
+    if (!validateNurbsCurve(curve) || point == nullptr ||
+        !std::isfinite(parameter)) {
         return false;
     }
 
@@ -60,15 +77,14 @@ bool evaluateNurbsPoint(const NurbsCurve2D &curve,
     const int endKnotIndex = controlPointCount;
     const qreal firstParameter = fullKnots[curve.degree];
     const qreal lastParameter = fullKnots[endKnotIndex];
-    constexpr qreal epsilon = 1.0e-12;
-    if (parameter <= firstParameter + epsilon) {
-        *point = curve.controlPoints.first();
-        return true;
+    if (lastParameter <= firstParameter) {
+        return false;
     }
-    if (parameter >= lastParameter - epsilon) {
-        *point = curve.controlPoints.last();
-        return true;
-    }
+    const qreal boundedParameter =
+        std::clamp(parameter, firstParameter, lastParameter);
+    const qreal evaluationParameter = boundedParameter >= lastParameter
+        ? std::nextafter(lastParameter, firstParameter)
+        : boundedParameter;
 
     const auto basis = [&fullKnots](const auto &self,
                                     int index,
@@ -98,27 +114,37 @@ bool evaluateNurbsPoint(const NurbsCurve2D &curve,
         return value;
     };
 
-    QPointF numerator(0.0, 0.0);
+    Point3D numerator;
     qreal denominator = 0.0;
     for (int index = 0; index < controlPointCount; ++index) {
-        const qreal weightedBasis = basis(basis, index, curve.degree, parameter) *
+        const qreal weightedBasis = basis(basis, index, curve.degree,
+                                          evaluationParameter) *
                                      (curve.rational ? curve.weights[index] : 1.0);
-        numerator += curve.controlPoints[index] * weightedBasis;
+        const QPointF &controlPoint = curve.controlPoints[index];
+        numerator.x += controlPoint.x() * weightedBasis;
+        numerator.y += controlPoint.y() * weightedBasis;
+        if (curve.dimension == 3) {
+            numerator.z += curve.normalCoordinates[index] * weightedBasis;
+        }
         denominator += weightedBasis;
     }
 
     if (std::abs(denominator) <= 1.0e-12) {
         return false;
     }
-    *point = numerator / denominator;
-    return true;
+    point->x = numerator.x / denominator;
+    point->y = numerator.y / denominator;
+    point->z = numerator.z / denominator;
+    return std::isfinite(point->x) && std::isfinite(point->y) &&
+           std::isfinite(point->z);
 }
 
 bool evaluateNurbsDerivative(const NurbsCurve2D &curve,
                              qreal parameter,
                              QPointF *derivative)
 {
-    if (!validateNurbsCurve(curve) || derivative == nullptr || curve.degree < 1) {
+    if (!isNurbsCurvePlanarInWorkPlane(curve) || derivative == nullptr ||
+        curve.degree < 1) {
         return false;
     }
 

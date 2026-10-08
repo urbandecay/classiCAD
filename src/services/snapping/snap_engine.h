@@ -137,6 +137,13 @@ public:
         const QPointF &controlPoint,
         const ViewportTransform &transform,
         const QSize &viewportSize) const;
+    DragSnapResult findControlPointSnap(
+        const Document &document,
+        int selectedShapeIndex,
+        int selectedControlPointIndex,
+        const Point3D &localControlPoint,
+        const ViewportTransform &transform,
+        const QSize &viewportSize) const;
 
 private:
     struct OcclusionPlane {

@@ -53,6 +53,18 @@ bool makeBoundaryCurve(const Shape &shape,
         if (!isValidWorkPlaneFrame(*frame)) {
             return false;
         }
+        const Shape::NurbsCurve2D &firstComponent = shape.components.first();
+        if (!validateNurbsCurve(firstComponent) ||
+            !isNurbsCurvePlanarInWorkPlane(firstComponent)) {
+            return false;
+        }
+        const qreal firstNormalCoordinate =
+            firstComponent.dimension == 3 &&
+                    !firstComponent.normalCoordinates.isEmpty()
+                ? firstComponent.normalCoordinates.first() : 0.0;
+        frame->origin.x += frame->normal.x * firstNormalCoordinate;
+        frame->origin.y += frame->normal.y * firstNormalCoordinate;
+        frame->origin.z += frame->normal.z * firstNormalCoordinate;
         QVector<QVector<QPointF>> componentPaths;
         componentPaths.reserve(shape.components.size());
         for (int componentIndex = 0;
@@ -63,15 +75,37 @@ bool makeBoundaryCurve(const Shape &shape,
                 shapeComponentWorkPlaneFrame(shape, componentIndex);
             if (!validateNurbsCurve(component) || component.degree != 1 ||
                 component.controlPoints.size() < 2 ||
-                !workPlaneFramesCoplanar(*frame, componentFrame)) {
+                !isNurbsCurvePlanarInWorkPlane(component)) {
+                return false;
+            }
+
+            const qreal normalCoordinate =
+                component.dimension == 3 &&
+                        !component.normalCoordinates.isEmpty()
+                    ? component.normalCoordinates.first() : 0.0;
+            WorkPlaneFrame actualComponentFrame = componentFrame;
+            actualComponentFrame.origin.x +=
+                actualComponentFrame.normal.x * normalCoordinate;
+            actualComponentFrame.origin.y +=
+                actualComponentFrame.normal.y * normalCoordinate;
+            actualComponentFrame.origin.z +=
+                actualComponentFrame.normal.z * normalCoordinate;
+            if (!workPlaneFramesCoplanar(*frame, actualComponentFrame)) {
                 return false;
             }
 
             QVector<QPointF> path;
             path.reserve(component.controlPoints.size());
-            for (const QPointF &point : component.controlPoints) {
+            for (int pointIndex = 0;
+                 pointIndex < component.controlPoints.size(); ++pointIndex) {
+                const QPointF &point = component.controlPoints[pointIndex];
+                const qreal pointNormalCoordinate = component.dimension == 3
+                    ? component.normalCoordinates[pointIndex] : 0.0;
                 path.append(worldPointToWorkPlaneFrame(
-                    workPlaneFramePointToWorld(point, componentFrame), *frame));
+                    workPlaneFramePointToWorld(point,
+                                               pointNormalCoordinate,
+                                               componentFrame),
+                    *frame));
             }
             componentPaths.append(path);
         }

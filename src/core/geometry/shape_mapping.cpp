@@ -41,7 +41,11 @@ bool isClosedPolygonNurbs(const Shape::NurbsCurve2D &curve)
     }
     const QPointF closure = curve.controlPoints.first() -
                             curve.controlPoints.last();
-    return std::hypot(closure.x(), closure.y()) <= 1.0e-9;
+    const qreal normalClosure = curve.dimension == 3
+        ? curve.normalCoordinates.first() - curve.normalCoordinates.last()
+        : 0.0;
+    return std::hypot(std::hypot(closure.x(), closure.y()),
+                      normalClosure) <= 1.0e-9;
 }
 
 WorkPlaneFrame shapeWorkPlaneFrame(const Shape &shape)

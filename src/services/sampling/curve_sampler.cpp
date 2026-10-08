@@ -15,20 +15,23 @@ namespace classiCAD {
 bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                                     const ViewportTransform &transform,
                                     const QSize &viewportSize,
-                                    SampledNurbsCurve2D *sampled) const
+                                    SampledNurbsCurve2D *sampled,
+                                    const Point3D &worldOffset) const
 {
     return sampleNurbsCurve(curve,
                             transform.workPlaneFrame(),
                             transform,
                             viewportSize,
-                            sampled);
+                            sampled,
+                            worldOffset);
 }
 
 bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                                     const WorkPlaneFrame &workPlaneFrame,
                                     const ViewportTransform &transform,
                                     const QSize &viewportSize,
-                                    SampledNurbsCurve2D *sampled) const
+                                    SampledNurbsCurve2D *sampled,
+                                    const Point3D &worldOffset) const
 {
     if (sampled == nullptr || !validateNurbsCurve(curve) ||
         !isValidWorkPlaneFrame(workPlaneFrame)) {
@@ -37,6 +40,7 @@ bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
 
     sampled->parameters.clear();
     sampled->screenPoints.clear();
+    sampled->worldPoints.clear();
     sampled->segmentBounds.clear();
     sampled->bounds = QRectF();
 
@@ -64,6 +68,7 @@ bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                           maximumSampleCount / std::max(1, nonZeroSpans)));
     sampled->parameters.reserve(nonZeroSpans * samplesForEachSpan + 1);
     sampled->screenPoints.reserve(nonZeroSpans * samplesForEachSpan + 1);
+    sampled->worldPoints.reserve(nonZeroSpans * samplesForEachSpan + 1);
 
     for (int spanIndex = curve.degree;
          spanIndex < curve.controlPoints.size();
@@ -83,19 +88,33 @@ bool CurveSampler::sampleNurbsCurve(const Shape::NurbsCurve2D &curve,
                                    samplesForEachSpan;
             const qreal parameter = spanStart +
                                     (spanEnd - spanStart) * fraction;
-            QPointF worldPoint;
-            if (!evaluateNurbsPoint(curve, parameter, &worldPoint)) {
+            Point3D localPoint;
+            if (!evaluateNurbsPoint3D(curve, parameter, &localPoint)) {
                 sampled->parameters.clear();
                 sampled->screenPoints.clear();
+                sampled->worldPoints.clear();
+                sampled->segmentBounds.clear();
+                sampled->bounds = QRectF();
+                return false;
+            }
+            Point3D worldPoint = workPlaneFramePointToWorld(
+                {localPoint.x, localPoint.y}, localPoint.z, workPlaneFrame);
+            worldPoint.x += worldOffset.x;
+            worldPoint.y += worldOffset.y;
+            worldPoint.z += worldOffset.z;
+            QPointF screenPoint;
+            if (!transform.worldPointToScreenUnclipped(
+                    worldPoint, viewportSize, &screenPoint)) {
+                sampled->parameters.clear();
+                sampled->screenPoints.clear();
+                sampled->worldPoints.clear();
                 sampled->segmentBounds.clear();
                 sampled->bounds = QRectF();
                 return false;
             }
             sampled->parameters.append(parameter);
-            sampled->screenPoints.append(
-                transform.workPlaneToScreen(worldPoint,
-                                            viewportSize,
-                                            workPlaneFrame));
+            sampled->screenPoints.append(screenPoint);
+            sampled->worldPoints.append(worldPoint);
         }
     }
 
@@ -195,13 +214,22 @@ QVector<EraseCurveSampleCache> CurveSampler::sampleDocument(
             EraseCurveSampleCache cache;
             cache.shapeIndex = shapeIndex;
             cache.componentIndex = componentIndex;
-            cache.workPlaneFrame = frame;
+            cache.workPlaneFrame =
+                shape.geometryType == GeometryType::PolyCurve
+                    ? shapeComponentWorkPlaneFrame(shape, componentIndex)
+                    : frame;
             cache.curve = curves[componentIndex];
+            const SceneObject *object = document.object(
+                document.objectIdAt(shapeIndex));
+            const Point3D worldOffset = object != nullptr
+                                            ? object->placementTranslation
+                                            : Point3D{};
             if (sampleNurbsCurve(cache.curve,
-                                 frame,
+                                 cache.workPlaneFrame,
                                  transform,
                                  viewportSize,
-                                 &cache.sampled)) {
+                                 &cache.sampled,
+                                 worldOffset)) {
                 caches.append(cache);
             }
         }

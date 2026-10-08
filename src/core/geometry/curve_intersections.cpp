@@ -155,6 +155,7 @@ NurbsCurveIntersectionResult intersectNurbsCurves(
     NurbsCurveIntersectionResult result;
     if (!validateNurbsCurve(firstCurve) ||
         !validateNurbsCurve(secondCurve) ||
+        firstCurve.dimension != 2 || secondCurve.dimension != 2 ||
         !isValidWorkPlaneFrame(firstFrame) ||
         !isValidWorkPlaneFrame(secondFrame) ||
         !workPlaneFramesCoplanar(firstFrame, secondFrame)) {

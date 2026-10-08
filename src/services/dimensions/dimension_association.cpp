@@ -79,7 +79,8 @@ bool closestCurveParameter(const Shape::NurbsCurve2D &curve,
                            qreal *fraction,
                            qreal *screenDistance)
 {
-    if (fraction == nullptr || screenDistance == nullptr) {
+    if (fraction == nullptr || screenDistance == nullptr ||
+        curve.dimension != 2) {
         return false;
     }
     SampledNurbsCurve2D sampled;
@@ -349,6 +350,9 @@ bool resolveDimensionAnchor(const Document &document,
             return false;
         }
         const Shape::NurbsCurve2D &curve = curves[curveIndex];
+        if (curve.dimension != 2) {
+            return false;
+        }
         qreal domainStart = 0.0;
         qreal domainEnd = 0.0;
         if (!nurbsParameterDomain(curve, &domainStart, &domainEnd)) {
@@ -371,7 +375,8 @@ bool resolveDimensionAnchor(const Document &document,
             curve = &shape->nurbs;
         }
         if (curve == nullptr || anchor.pointIndex < 0 ||
-            anchor.pointIndex >= curve->controlPoints.size()) {
+            anchor.pointIndex >= curve->controlPoints.size() ||
+            curve->dimension != 2) {
             return false;
         }
         *point = curve->controlPoints[anchor.pointIndex];

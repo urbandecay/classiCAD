@@ -14,6 +14,7 @@ struct LineSegment {
 
 struct HomogeneousControlPoint2D {
     QPointF weightedPosition;
+    qreal weightedNormalCoordinate = 0.0;
     qreal weight = 1.0;
 };
 

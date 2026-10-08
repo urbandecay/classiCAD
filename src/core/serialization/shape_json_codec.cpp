@@ -150,6 +150,13 @@ QJsonObject nurbsToJson(const Shape::NurbsCurve2D &curve)
     object.insert(QStringLiteral("order"), curve.order);
     object.insert(QStringLiteral("rational"), curve.rational);
     object.insert(QStringLiteral("controlPoints"), pointsToJson(curve.controlPoints));
+    if (curve.dimension == 3) {
+        QJsonArray normalCoordinates;
+        for (const double coordinate : curve.normalCoordinates) {
+            normalCoordinates.append(coordinate);
+        }
+        object.insert(QStringLiteral("normalCoordinates"), normalCoordinates);
+    }
 
     QJsonArray weights;
     for (const double weight : curve.weights) {
@@ -201,11 +208,28 @@ bool nurbsFromJson(const QJsonValue &value, Shape::NurbsCurve2D *curve)
         knots.append(knotValue.toDouble());
     }
 
+    QVector<double> normalCoordinates;
+    const QJsonValue normalCoordinatesValue =
+        object.value(QStringLiteral("normalCoordinates"));
+    if (!normalCoordinatesValue.isUndefined()) {
+        if (!normalCoordinatesValue.isArray()) {
+            return false;
+        }
+        for (const QJsonValue &coordinateValue : normalCoordinatesValue.toArray()) {
+            if (!coordinateValue.isDouble() ||
+                !std::isfinite(coordinateValue.toDouble())) {
+                return false;
+            }
+            normalCoordinates.append(coordinateValue.toDouble());
+        }
+    }
+
     curve->dimension = object.value(QStringLiteral("dimension")).toInt(2);
     curve->degree = object.value(QStringLiteral("degree")).toInt(1);
     curve->order = object.value(QStringLiteral("order")).toInt(2);
     curve->rational = object.value(QStringLiteral("rational")).toBool(false);
     curve->controlPoints = controlPoints;
+    curve->normalCoordinates = normalCoordinates;
     curve->weights = weights;
     curve->knots = knots;
     // Point and rectangle records carry an empty placeholder NURBS object.
@@ -701,6 +725,13 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
             (nurbs.controlPoints.first() + nurbs.controlPoints.last()) * 0.5;
         nurbs.controlPoints.first() = seam;
         nurbs.controlPoints.last() = seam;
+        if (nurbs.dimension == 3) {
+            const qreal normalSeam =
+                (nurbs.normalCoordinates.first() +
+                 nurbs.normalCoordinates.last()) * 0.5;
+            nurbs.normalCoordinates.first() = normalSeam;
+            nurbs.normalCoordinates.last() = normalSeam;
+        }
     }
 
     shape->geometryType = geometryType;

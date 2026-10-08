@@ -11,6 +11,8 @@ HomogeneousControlPoint2D blendHomogeneousControlPoints(
     return HomogeneousControlPoint2D{
         first.weightedPosition * firstFraction +
             second.weightedPosition * secondFraction,
+        first.weightedNormalCoordinate * firstFraction +
+            second.weightedNormalCoordinate * secondFraction,
         first.weight * firstFraction + second.weight * secondFraction};
 }
 

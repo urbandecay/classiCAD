@@ -222,21 +222,39 @@ bool isValidWorkPlaneFrame(const WorkPlaneFrame &frame)
 Point3D workPlaneFramePointToWorld(const QPointF &point,
                                    const WorkPlaneFrame &frame)
 {
-    if (!isValidWorkPlaneFrame(frame)) {
+    return workPlaneFramePointToWorld(point, 0.0, frame);
+}
+
+Point3D workPlaneFramePointToWorld(const QPointF &point,
+                                   qreal normalCoordinate,
+                                   const WorkPlaneFrame &frame)
+{
+    if (!isValidWorkPlaneFrame(frame) || !std::isfinite(normalCoordinate)) {
         return {};
     }
     return add(frame.origin,
                add(multiply(frame.xAxis, point.x()),
-                   multiply(frame.yAxis, point.y())));
+                   add(multiply(frame.yAxis, point.y()),
+                       multiply(frame.normal, normalCoordinate))));
 }
 
 QPointF worldPointToWorkPlaneFrame(const Point3D &point,
                                    const WorkPlaneFrame &frame)
 {
+    return worldPointToWorkPlaneFrame(point, frame, nullptr);
+}
+
+QPointF worldPointToWorkPlaneFrame(const Point3D &point,
+                                   const WorkPlaneFrame &frame,
+                                   qreal *normalCoordinate)
+{
     if (!isValidWorkPlaneFrame(frame) || !finite(point)) {
         return {};
     }
     const Point3D relative = subtract(point, frame.origin);
+    if (normalCoordinate != nullptr) {
+        *normalCoordinate = dot(relative, frame.normal);
+    }
     return {dot(relative, frame.xAxis), dot(relative, frame.yAxis)};
 }
 

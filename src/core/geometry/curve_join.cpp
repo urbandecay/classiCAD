@@ -41,11 +41,38 @@ qreal pointPrecision(const Point3D &first, const Point3D &second)
     return std::max<qreal>(1.0e-10, scale * 1.0e-12);
 }
 
+bool curveEndpointInWorld(const NurbsCurve2D &curve,
+                          const WorkPlaneFrame &frame,
+                          bool atStart,
+                          Point3D *point)
+{
+    if (point == nullptr || !isValidWorkPlaneFrame(frame)) {
+        return false;
+    }
+    qreal start = 0.0;
+    qreal end = 0.0;
+    Point3D localPoint;
+    if (!nurbsParameterDomain(curve, &start, &end) ||
+        !evaluateNurbsPoint3D(curve, atStart ? start : end, &localPoint)) {
+        return false;
+    }
+    *point = workPlaneFramePointToWorld(
+        {localPoint.x, localPoint.y}, localPoint.z, frame);
+    return true;
+}
+
 bool closePlanarLoopSeam(QVector<NurbsCurve2D> *components,
                          bool shouldClose)
 {
+    if (components == nullptr ||
+        std::any_of(components->cbegin(), components->cend(),
+                    [](const NurbsCurve2D &curve) {
+                        return curve.dimension != 2;
+                    })) {
+        return false;
+    }
     if (!shouldClose) {
-        return components != nullptr;
+        return true;
     }
     if (components == nullptr || components->size() < 2) {
         return false;
@@ -96,16 +123,13 @@ bool closeWorldLoopSeam(QVector<NurbsCurve2D> *components,
         return false;
     }
 
-    QPointF firstStart;
-    QPointF lastEnd;
-    if (!nurbsCurveEndpoints(components->first(), &firstStart, nullptr) ||
-        !nurbsCurveEndpoints(last, nullptr, &lastEnd)) {
+    Point3D firstWorld;
+    Point3D lastWorld;
+    if (!curveEndpointInWorld(components->first(), frames->first(), true,
+                               &firstWorld) ||
+        !curveEndpointInWorld(last, frames->last(), false, &lastWorld)) {
         return false;
     }
-    const Point3D firstWorld = workPlaneFramePointToWorld(
-        firstStart, frames->first());
-    const Point3D lastWorld = workPlaneFramePointToWorld(
-        lastEnd, frames->last());
     const qreal gap = pointDistance(firstWorld, lastWorld);
     const qreal precision = pointPrecision(firstWorld, lastWorld);
     if (gap <= precision) {
@@ -113,22 +137,28 @@ bool closeWorldLoopSeam(QVector<NurbsCurve2D> *components,
     }
 
     const int endpointControlPoint = last.controlPoints.size() - 1;
+    const qreal endpointNormalCoordinate = last.dimension == 3
+        ? last.normalCoordinates[endpointControlPoint] : 0.0;
     const Point3D endpointControlPointWorld = workPlaneFramePointToWorld(
-        last.controlPoints[endpointControlPoint], frames->last());
+        last.controlPoints[endpointControlPoint], endpointNormalCoordinate,
+        frames->last());
     if (pointDistance(endpointControlPointWorld, lastWorld) > precision) {
         return false;
     }
+    qreal normalCoordinate = 0.0;
     last.controlPoints[endpointControlPoint] = worldPointToWorkPlaneFrame(
-        firstWorld, frames->last());
-
-    QPointF verifiedEnd;
-    if (!nurbsCurveEndpoints(last, nullptr, &verifiedEnd)) {
-        return false;
+        firstWorld, frames->last(), &normalCoordinate);
+    if (last.dimension == 2 && std::abs(normalCoordinate) > 1.0e-9) {
+        last.dimension = 3;
+        last.normalCoordinates.fill(0.0, last.controlPoints.size());
     }
-    return pointDistance(firstWorld,
-                         workPlaneFramePointToWorld(verifiedEnd,
-                                                    frames->last())) <=
-           precision * 10.0;
+    if (last.dimension == 3) {
+        last.normalCoordinates[endpointControlPoint] = normalCoordinate;
+    }
+
+    Point3D verifiedEnd;
+    return curveEndpointInWorld(last, frames->last(), false, &verifiedEnd) &&
+           pointDistance(firstWorld, verifiedEnd) <= precision * 10.0;
 }
 
 } // namespace
@@ -137,7 +167,11 @@ bool orderConnectedNurbsCurves(const QVector<NurbsCurve2D> &input,
                               QVector<NurbsCurve2D> *ordered,
                               qreal tolerance)
 {
-    if (ordered == nullptr || input.isEmpty()) {
+    if (ordered == nullptr || input.isEmpty() ||
+        std::any_of(input.cbegin(), input.cend(),
+                    [](const NurbsCurve2D &curve) {
+                        return curve.dimension != 2;
+                    })) {
         return false;
     }
 
@@ -244,6 +278,12 @@ QVector<QVector<NurbsCurve2D>> connectedNurbsCurveGroups(
     const QVector<NurbsCurve2D> &curves,
     qreal orderingTolerance)
 {
+    if (std::any_of(curves.cbegin(), curves.cend(),
+                    [](const NurbsCurve2D &curve) {
+                        return curve.dimension != 2;
+                    })) {
+        return {};
+    }
     QVector<QPointF> starts;
     QVector<QPointF> ends;
     starts.reserve(curves.size());
@@ -326,22 +366,6 @@ QVector<NurbsCurveFrameGroup> connectedNurbsCurveGroupsInWorld(
         return {};
     }
 
-    const auto worldPoint = [](const NurbsCurve2D &curve,
-                               const WorkPlaneFrame &frame,
-                               bool atStart,
-                               Point3D *point) {
-        if (point == nullptr || !isValidWorkPlaneFrame(frame)) {
-            return false;
-        }
-        QPointF localPoint;
-        if (!nurbsCurveEndpoints(curve,
-                                 atStart ? &localPoint : nullptr,
-                                 atStart ? nullptr : &localPoint)) {
-            return false;
-        }
-        *point = workPlaneFramePointToWorld(localPoint, frame);
-        return true;
-    };
     const auto distance = [](const Point3D &first, const Point3D &second) {
         return std::hypot(std::hypot(first.x - second.x,
                                      first.y - second.y),
@@ -353,10 +377,10 @@ QVector<NurbsCurveFrameGroup> connectedNurbsCurveGroupsInWorld(
     QVector<bool> valid(curves.size(), false);
     qreal coordinateScale = 1.0;
     for (int index = 0; index < curves.size(); ++index) {
-        valid[index] = worldPoint(curves[index], workPlaneFrames[index],
-                                  true, &starts[index]) &&
-                       worldPoint(curves[index], workPlaneFrames[index],
-                                  false, &ends[index]);
+        valid[index] = curveEndpointInWorld(curves[index], workPlaneFrames[index],
+                                            true, &starts[index]) &&
+                       curveEndpointInWorld(curves[index], workPlaneFrames[index],
+                                            false, &ends[index]);
         if (!valid[index]) {
             continue;
         }
@@ -449,14 +473,12 @@ bool orderConnectedNurbsCurvesInWorld(
     starts.reserve(input.size());
     ends.reserve(input.size());
     for (int index = 0; index < input.size(); ++index) {
-        QPointF start;
-        QPointF end;
-        if (!isValidWorkPlaneFrame(frames[index]) ||
-            !nurbsCurveEndpoints(input[index], &start, &end)) {
+        if (!curveEndpointInWorld(input[index], frames[index], true,
+                                  &starts[index]) ||
+            !curveEndpointInWorld(input[index], frames[index], false,
+                                  &ends[index])) {
             return false;
         }
-        starts.append(workPlaneFramePointToWorld(start, frames[index]));
-        ends.append(workPlaneFramePointToWorld(end, frames[index]));
     }
 
     QVector<int> componentOrder;
@@ -542,6 +564,12 @@ bool closeConnectedNurbsCurveGaps(QVector<NurbsCurve2D> *components,
     if (components == nullptr || components->isEmpty()) {
         return false;
     }
+    if (std::any_of(components->cbegin(), components->cend(),
+                    [](const NurbsCurve2D &curve) {
+                        return curve.dimension != 2;
+                    })) {
+        return false;
+    }
 
     bool shouldCloseLoop = false;
     if (components->size() > 1) {
@@ -576,6 +604,12 @@ bool connectedNurbsCurvesAreContinuous(
     const QVector<NurbsCurve2D> &components,
     qreal tolerance)
 {
+    if (std::any_of(components.cbegin(), components.cend(),
+                    [](const NurbsCurve2D &curve) {
+                        return curve.dimension != 2;
+                    })) {
+        return false;
+    }
     for (int index = 0; index + 1 < components.size(); ++index) {
         QPointF previousEnd;
         QPointF nextStart;
@@ -603,30 +637,26 @@ bool closeConnectedNurbsCurveGapsInWorld(
 
     bool shouldCloseLoop = false;
     if (components->size() > 1) {
-        QPointF firstStart;
-        QPointF lastEnd;
-        if (!nurbsCurveEndpoints(components->first(), &firstStart, nullptr) ||
-            !nurbsCurveEndpoints(components->last(), nullptr, &lastEnd)) {
+        Point3D firstWorld;
+        Point3D lastWorld;
+        if (!curveEndpointInWorld(components->first(), frames->first(), true,
+                                  &firstWorld) ||
+            !curveEndpointInWorld(components->last(), frames->last(), false,
+                                  &lastWorld)) {
             return false;
         }
-        const Point3D firstWorld = workPlaneFramePointToWorld(
-            firstStart, frames->first());
-        const Point3D lastWorld = workPlaneFramePointToWorld(
-            lastEnd, frames->last());
         shouldCloseLoop = pointDistance(firstWorld, lastWorld) <= tolerance;
     }
 
     for (int index = 0; index + 1 < components->size(); ++index) {
-        QPointF previousEnd;
-        QPointF nextStart;
-        if (!nurbsCurveEndpoints(components->at(index), nullptr, &previousEnd) ||
-            !nurbsCurveEndpoints(components->at(index + 1), &nextStart, nullptr)) {
+        Point3D previousWorld;
+        Point3D nextWorld;
+        if (!curveEndpointInWorld(components->at(index), frames->at(index),
+                                  false, &previousWorld) ||
+            !curveEndpointInWorld(components->at(index + 1),
+                                  frames->at(index + 1), true, &nextWorld)) {
             return false;
         }
-        const Point3D previousWorld = workPlaneFramePointToWorld(
-            previousEnd, frames->at(index));
-        const Point3D nextWorld = workPlaneFramePointToWorld(
-            nextStart, frames->at(index + 1));
         const Point3D delta{previousWorld.x - nextWorld.x,
                             previousWorld.y - nextWorld.y,
                             previousWorld.z - nextWorld.z};
@@ -651,16 +681,14 @@ bool connectedNurbsCurvesAreContinuousInWorld(
         return false;
     }
     for (int index = 0; index + 1 < components.size(); ++index) {
-        QPointF previousEnd;
-        QPointF nextStart;
-        if (!nurbsCurveEndpoints(components[index], nullptr, &previousEnd) ||
-            !nurbsCurveEndpoints(components[index + 1], &nextStart, nullptr)) {
+        Point3D first;
+        Point3D second;
+        if (!curveEndpointInWorld(components[index], frames[index], false,
+                                  &first) ||
+            !curveEndpointInWorld(components[index + 1], frames[index + 1],
+                                  true, &second)) {
             return false;
         }
-        const Point3D first = workPlaneFramePointToWorld(previousEnd,
-                                                          frames[index]);
-        const Point3D second = workPlaneFramePointToWorld(nextStart,
-                                                           frames[index + 1]);
         const qreal gap = std::hypot(std::hypot(first.x - second.x,
                                                first.y - second.y),
                                      first.z - second.z);
@@ -675,6 +703,12 @@ int fuseOverlappingNurbsLineComponents(QVector<NurbsCurve2D> *components,
                                        qreal tolerance)
 {
     if (components == nullptr || components->isEmpty()) {
+        return 0;
+    }
+    if (std::any_of(components->cbegin(), components->cend(),
+                    [](const NurbsCurve2D &curve) {
+                        return curve.dimension != 2;
+                    })) {
         return 0;
     }
 
@@ -819,6 +853,14 @@ int fuseOverlappingNurbsLineComponentsInWorld(
 {
     if (components == nullptr || frames == nullptr ||
         components->size() != frames->size()) {
+        return 0;
+    }
+    // The overlap merger below operates on 2D line coordinates. Keep spatial
+    // components separate so it cannot flatten their normal coordinates.
+    if (std::any_of(components->cbegin(), components->cend(),
+                    [](const NurbsCurve2D &curve) {
+                        return curve.dimension == 3;
+                    })) {
         return 0;
     }
 

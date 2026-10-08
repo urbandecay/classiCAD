@@ -12,6 +12,7 @@ namespace classiCAD {
 struct SampledNurbsCurve2D {
     QVector<qreal> parameters;
     QVector<QPointF> screenPoints;
+    QVector<Point3D> worldPoints;
     QVector<QRectF> segmentBounds;
     QRectF bounds;
 };

@@ -35,7 +35,9 @@ public:
     qreal distanceToNurbsCurve(const QPointF &screenPosition,
                                const Shape::NurbsCurve2D &curve,
                                const ViewportTransform &transform,
-                               const QSize &viewportSize) const;
+                               const QSize &viewportSize,
+                               const WorkPlaneFrame *frame = nullptr,
+                               const Point3D &worldOffset = {}) const;
     qreal distanceToNurbsSurface(const QPointF &screenPosition,
                                  const Shape::NurbsSurface3D &surface,
                                  const ViewportTransform &transform,

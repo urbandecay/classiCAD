@@ -13,12 +13,21 @@ bool makeNurbsExtrusionSurface(const NurbsCurve2D &curve,
                                NurbsSurface3D *surface)
 {
     if (surface == nullptr || !validateNurbsCurve(curve) ||
+        !isNurbsCurvePlanarInWorkPlane(curve) ||
         !isValidWorkPlaneFrame(curveFrame) ||
         !std::isfinite(displacement.x) || !std::isfinite(displacement.y) ||
         !std::isfinite(displacement.z) ||
         std::hypot(displacement.x,
                    std::hypot(displacement.y, displacement.z)) <= 1.0e-12) {
         return false;
+    }
+
+    WorkPlaneFrame baseFrame = curveFrame;
+    if (curve.dimension == 3 && !curve.normalCoordinates.isEmpty()) {
+        const qreal offset = curve.normalCoordinates.first();
+        baseFrame.origin.x += baseFrame.normal.x * offset;
+        baseFrame.origin.y += baseFrame.normal.y * offset;
+        baseFrame.origin.z += baseFrame.normal.z * offset;
     }
 
     NurbsSurface3D result;
@@ -35,8 +44,8 @@ bool makeNurbsExtrusionSurface(const NurbsCurve2D &curve,
     result.weights.reserve(result.controlVertexCountU * 2);
 
     for (int index = 0; index < curve.controlPoints.size(); ++index) {
-        const Point3D base = workPlaneFramePointToWorld(curve.controlPoints[index],
-                                                        curveFrame);
+        const Point3D base = workPlaneFramePointToWorld(
+            curve.controlPoints[index], baseFrame);
         const double weight = curve.weights[index];
         result.controlPoints.append(base);
         result.controlPoints.append({base.x + displacement.x,
@@ -58,25 +67,37 @@ bool makeNurbsPlanarFillSurface(const NurbsCurve2D &curve,
                                 NurbsSurface3D *surface)
 {
     if (surface == nullptr || !validateNurbsCurve(curve) ||
+        !isNurbsCurvePlanarInWorkPlane(curve) ||
         !isValidWorkPlaneFrame(curveFrame)) {
         return false;
+    }
+
+    NurbsCurve2D planarCurve = curve;
+    WorkPlaneFrame fillFrame = curveFrame;
+    if (curve.dimension == 3 && !curve.normalCoordinates.isEmpty()) {
+        const qreal offset = curve.normalCoordinates.first();
+        fillFrame.origin.x += fillFrame.normal.x * offset;
+        fillFrame.origin.y += fillFrame.normal.y * offset;
+        fillFrame.origin.z += fillFrame.normal.z * offset;
+        planarCurve.dimension = 2;
+        planarCurve.normalCoordinates.clear();
     }
 
     qreal curveStart = 0.0;
     qreal curveEnd = 0.0;
     QPointF firstPoint;
     QPointF lastPoint;
-    if (!nurbsParameterDomain(curve, &curveStart, &curveEnd) ||
-        !evaluateNurbsPoint(curve, curveStart, &firstPoint) ||
-        !evaluateNurbsPoint(curve, curveEnd, &lastPoint)) {
+    if (!nurbsParameterDomain(planarCurve, &curveStart, &curveEnd) ||
+        !evaluateNurbsPoint(planarCurve, curveStart, &firstPoint) ||
+        !evaluateNurbsPoint(planarCurve, curveEnd, &lastPoint)) {
         return false;
     }
 
-    qreal minimumX = curve.controlPoints.first().x();
+    qreal minimumX = planarCurve.controlPoints.first().x();
     qreal maximumX = minimumX;
-    qreal minimumY = curve.controlPoints.first().y();
+    qreal minimumY = planarCurve.controlPoints.first().y();
     qreal maximumY = minimumY;
-    for (const QPointF &point : curve.controlPoints) {
+    for (const QPointF &point : planarCurve.controlPoints) {
         minimumX = std::min(minimumX, point.x());
         maximumX = std::max(maximumX, point.x());
         minimumY = std::min(minimumY, point.y());
@@ -102,14 +123,14 @@ bool makeNurbsPlanarFillSurface(const NurbsCurve2D &curve,
     result.knotsU = {0.0, 1.0};
     result.knotsV = {0.0, 1.0};
     result.controlPoints = {
-        workPlaneFramePointToWorld({minimumX, minimumY}, curveFrame),
-        workPlaneFramePointToWorld({minimumX, maximumY}, curveFrame),
-        workPlaneFramePointToWorld({maximumX, minimumY}, curveFrame),
-        workPlaneFramePointToWorld({maximumX, maximumY}, curveFrame)};
+        workPlaneFramePointToWorld({minimumX, minimumY}, fillFrame),
+        workPlaneFramePointToWorld({minimumX, maximumY}, fillFrame),
+        workPlaneFramePointToWorld({maximumX, minimumY}, fillFrame),
+        workPlaneFramePointToWorld({maximumX, maximumY}, fillFrame)};
     result.weights = {1.0, 1.0, 1.0, 1.0};
 
     NurbsSurfaceTrimLoop outerLoop;
-    outerLoop.curve = curve;
+    outerLoop.curve = planarCurve;
     for (QPointF &point : outerLoop.curve.controlPoints) {
         point.setX((point.x() - minimumX) / (maximumX - minimumX));
         point.setY((point.y() - minimumY) / (maximumY - minimumY));

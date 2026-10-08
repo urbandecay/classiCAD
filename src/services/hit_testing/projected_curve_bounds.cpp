@@ -14,7 +14,8 @@ bool projectedNurbsControlHullBounds(
     const WorkPlaneFrame &workPlaneFrame,
     const ViewportTransform &viewportTransform,
     const QSize &viewportSize,
-    QRectF *screenBounds)
+    QRectF *screenBounds,
+    const Point3D &worldOffset)
 {
     if (screenBounds == nullptr || !validateNurbsCurve(curve) ||
         !isValidWorkPlaneFrame(workPlaneFrame) || curve.controlPoints.isEmpty()) {
@@ -29,10 +30,17 @@ bool projectedNurbsControlHullBounds(
     qreal minY = 0.0;
     qreal maxY = 0.0;
     bool initialized = false;
-    for (const QPointF &controlPoint : curve.controlPoints) {
+    WorkPlaneFrame placedFrame = workPlaneFrame;
+    placedFrame.origin.x += worldOffset.x;
+    placedFrame.origin.y += worldOffset.y;
+    placedFrame.origin.z += worldOffset.z;
+    for (int index = 0; index < curve.controlPoints.size(); ++index) {
+        const QPointF &controlPoint = curve.controlPoints[index];
+        const qreal normalCoordinate = curve.dimension == 3
+            ? curve.normalCoordinates[index] : 0.0;
         QPointF screenPoint;
-        const Point3D worldPoint =
-            workPlaneFramePointToWorld(controlPoint, workPlaneFrame);
+        const Point3D worldPoint = workPlaneFramePointToWorld(
+            controlPoint, normalCoordinate, placedFrame);
         if (!viewportTransform.worldPointToScreen(worldPoint,
                                                   viewportSize,
                                                   &screenPoint)) {

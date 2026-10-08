@@ -1463,6 +1463,9 @@ bool PointConstructionTool::addPointOnCurve(const Shape &shape,
     qreal bestDistanceSquared = std::numeric_limits<qreal>::infinity();
     QPointF spanMidpoint;
     for (const Shape::NurbsCurve2D &source : sourceCurves) {
+        if (source.dimension != 2) {
+            return false;
+        }
         Shape::NurbsCurve2D curve;
         if (!mapCurveToFrame(shape, source, *frame, &curve)) {
             return false;

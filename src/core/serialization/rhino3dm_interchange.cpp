@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace classiCAD {
@@ -176,7 +177,6 @@ bool importNurbsCurve(const ON_Curve &source,
     }
 
     Shape::NurbsCurve2D result;
-    result.dimension = 2;
     result.order = converted.Order();
     result.degree = result.order - 1;
     result.rational = converted.IsRational();
@@ -222,8 +222,19 @@ bool importNurbsCurve(const ON_Curve &source,
     WorkPlane plane = WorkPlane::XY;
     qreal offset = 0.0;
     WorkPlaneFrame frame;
+    bool sourceIsPlanar = converted.Dimension() == 2;
+    ON_Plane curvePlane;
+    if (converted.Dimension() == 3) {
+        sourceIsPlanar = converted.IsPlanar(&curvePlane, planarTolerance);
+    }
     if (forcedFrame != nullptr && isValidWorkPlaneFrame(*forcedFrame)) {
         frame = *forcedFrame;
+    } else if (!sourceIsPlanar) {
+        // Spatial curves use the world axes as their local frame. This keeps
+        // every imported XYZ coordinate exact without flattening the curve.
+        plane = WorkPlane::XY;
+        offset = 0.0;
+        frame = makeWorkPlaneFrame(WorkPlane::XY, 0.0);
     } else if (maxZ - minZ <= planarTolerance) {
         plane = WorkPlane::XY;
         offset = worldControlPoints.first().z * unitScale;
@@ -237,15 +248,13 @@ bool importNurbsCurve(const ON_Curve &source,
         offset = worldControlPoints.first().x * unitScale;
         frame = makeWorkPlaneFrame(plane, offset);
     } else {
-        ON_Plane curvePlane;
-        if (!converted.IsPlanar(&curvePlane, planarTolerance) ||
-            !workPlaneFrameFromOpenNurbsPlane(curvePlane,
+        if (!workPlaneFrameFromOpenNurbsPlane(curvePlane,
                                               unitScale,
                                               &plane,
                                               &offset,
                                               &frame)) {
             if (reason != nullptr) {
-                *reason = QStringLiteral("curve is not planar or its plane is invalid");
+                *reason = QStringLiteral("curve plane is invalid");
             }
             return false;
         }
@@ -257,11 +266,35 @@ bool importNurbsCurve(const ON_Curve &source,
         return false;
     }
     result.controlPoints.reserve(worldControlPoints.size());
+    QVector<double> localNormalCoordinates;
+    localNormalCoordinates.reserve(worldControlPoints.size());
     for (const Point3D &point : worldControlPoints) {
         const Point3D scaledPoint{point.x * unitScale,
                                   point.y * unitScale,
                                   point.z * unitScale};
-        result.controlPoints.append(worldPointToWorkPlaneFrame(scaledPoint, frame));
+        qreal normalCoordinate = 0.0;
+        result.controlPoints.append(worldPointToWorkPlaneFrame(
+            scaledPoint, frame, &normalCoordinate));
+        localNormalCoordinates.append(normalCoordinate);
+    }
+    const qreal normalCoordinateScale = std::max<qreal>(
+        {1.0, std::abs(localNormalCoordinates.first()),
+         std::abs(planarTolerance * unitScale)});
+    const qreal framePlanarityTolerance = std::max<qreal>(
+        1.0e-9, std::numeric_limits<qreal>::epsilon() *
+                   normalCoordinateScale * 128.0);
+    bool liesInFrame = sourceIsPlanar;
+    for (const qreal coordinate : localNormalCoordinates) {
+        liesInFrame = liesInFrame &&
+            std::abs(coordinate - localNormalCoordinates.first()) <=
+                framePlanarityTolerance;
+    }
+    result.dimension = liesInFrame &&
+                               std::abs(localNormalCoordinates.first()) <=
+                                   framePlanarityTolerance
+                           ? 2 : 3;
+    if (result.dimension == 3) {
+        result.normalCoordinates = std::move(localNormalCoordinates);
     }
 
     result.knots.reserve(converted.KnotCount());
@@ -330,12 +363,18 @@ bool importCurve(const ON_Curve &curve,
             }
             if (result.points.isEmpty()) {
                 const Point3D startWorld = workPlaneFramePointToWorld(
-                    converted.controlPoints.first(), segmentFrame);
+                    converted.controlPoints.first(),
+                    converted.dimension == 3
+                        ? converted.normalCoordinates.first() : 0.0,
+                    segmentFrame);
                 result.points.append(worldPointToWorkPlaneFrame(
                     startWorld, result.workPlaneFrame));
             }
             const Point3D endWorld = workPlaneFramePointToWorld(
-                converted.controlPoints.last(), segmentFrame);
+                converted.controlPoints.last(),
+                converted.dimension == 3
+                    ? converted.normalCoordinates.last() : 0.0,
+                segmentFrame);
             result.points.append(worldPointToWorkPlaneFrame(
                 endWorld, result.workPlaneFrame));
             result.components.append(std::move(converted));

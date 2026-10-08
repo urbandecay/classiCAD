@@ -1,10 +1,11 @@
 #include "nurbs_curve.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace classiCAD {
 
-QVector<double> expandedNurbsKnotVector(const NurbsCurve2D &curve)
+QVector<double> expandedNurbsKnotVector(const NurbsCurve3D &curve)
 {
     QVector<double> fullKnots;
     if (curve.knots.isEmpty()) {
@@ -18,7 +19,7 @@ QVector<double> expandedNurbsKnotVector(const NurbsCurve2D &curve)
     return fullKnots;
 }
 
-bool validateNurbsCurve(const NurbsCurve2D &curve, QString *error)
+bool validateNurbsCurve(const NurbsCurve3D &curve, QString *error)
 {
     const auto fail = [error](const QString &message) {
         if (error != nullptr) {
@@ -27,8 +28,8 @@ bool validateNurbsCurve(const NurbsCurve2D &curve, QString *error)
         return false;
     };
 
-    if (curve.dimension != 2) {
-        return fail(QStringLiteral("NURBS dimension must be 2"));
+    if (curve.dimension != 2 && curve.dimension != 3) {
+        return fail(QStringLiteral("NURBS dimension must be 2 or 3"));
     }
     if (curve.degree < 1 || curve.order != curve.degree + 1) {
         return fail(QStringLiteral("NURBS order must equal degree plus one"));
@@ -42,10 +43,20 @@ bool validateNurbsCurve(const NurbsCurve2D &curve, QString *error)
     if (curve.weights.size() != curve.controlPoints.size()) {
         return fail(QStringLiteral("NURBS weights must match control points"));
     }
+    if ((curve.dimension == 2 && !curve.normalCoordinates.isEmpty()) ||
+        (curve.dimension == 3 &&
+         curve.normalCoordinates.size() != curve.controlPoints.size())) {
+        return fail(QStringLiteral("NURBS normal coordinates must match its dimension and CV count"));
+    }
 
     for (const QPointF &point : curve.controlPoints) {
         if (!std::isfinite(point.x()) || !std::isfinite(point.y())) {
             return fail(QStringLiteral("NURBS control point is not finite"));
+        }
+    }
+    for (const double coordinate : curve.normalCoordinates) {
+        if (!std::isfinite(coordinate)) {
+            return fail(QStringLiteral("NURBS normal coordinate is not finite"));
         }
     }
     for (int index = 0; index < curve.knots.size(); ++index) {
@@ -70,6 +81,25 @@ bool validateNurbsCurve(const NurbsCurve2D &curve, QString *error)
 
     if (error != nullptr) {
         error->clear();
+    }
+    return true;
+}
+
+bool isNurbsCurvePlanarInWorkPlane(const NurbsCurve3D &curve)
+{
+    if (!validateNurbsCurve(curve)) {
+        return false;
+    }
+    if (curve.dimension == 2 || curve.normalCoordinates.isEmpty()) {
+        return true;
+    }
+    const double planeCoordinate = curve.normalCoordinates.first();
+    for (const double coordinate : curve.normalCoordinates) {
+        const double scale = std::max({1.0, std::abs(planeCoordinate),
+                                      std::abs(coordinate)});
+        if (std::abs(coordinate - planeCoordinate) > 1.0e-9 * scale) {
+            return false;
+        }
     }
     return true;
 }

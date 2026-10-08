@@ -73,6 +73,12 @@ bool calculateTrimEraseReplacement(
     if (sourceComponents.isEmpty()) {
         return false;
     }
+    const bool allowIntersectionFreeWholeObjectErase =
+        wholeObjectOnIntersectionFreeErase && trimBox == nullptr &&
+        std::all_of(sourceComponents.cbegin(), sourceComponents.cend(),
+                    [](const ShapeNurbsCurveComponent &component) {
+                        return component.curve.dimension == 2;
+                    });
 
     QVector<TrimEraseComponentQueryResult> componentResults;
     QVector<QVector<ParameterInterval>> strokeHitIntervals;
@@ -88,7 +94,7 @@ bool calculateTrimEraseReplacement(
         componentResults.append(std::move(componentResult));
     }
 
-    if (wholeObjectOnIntersectionFreeErase && trimBox == nullptr) {
+    if (allowIntersectionFreeWholeObjectErase) {
         bool strokeHitsObject = false;
         bool objectHasIntersection = false;
         for (int index = 0; index < sourceComponents.size(); ++index) {
@@ -165,7 +171,7 @@ bool calculateTrimEraseReplacement(
                 sourceComponent.workPlaneFrame,
                 cachedTarget,
                 intersectionResolver);
-        } else if (wholeObjectOnIntersectionFreeErase && trimBox == nullptr) {
+        } else if (allowIntersectionFreeWholeObjectErase) {
             intersections.parameters = componentResult.intersectionParameters;
             intersections.intersectingObjectIds =
                 componentResult.intersectingObjectIds;
@@ -193,7 +199,7 @@ bool calculateTrimEraseReplacement(
                 *trimBox,
                 viewportTransform,
                 viewportSize);
-        } else if (wholeObjectOnIntersectionFreeErase) {
+        } else if (allowIntersectionFreeWholeObjectErase) {
             hitIntervals = strokeHitIntervals[index];
         } else {
             hitIntervals = nurbsEraseIntervalsForStroke(
@@ -205,7 +211,7 @@ bool calculateTrimEraseReplacement(
         }
 
         if (cachedTarget == nullptr &&
-            !(wholeObjectOnIntersectionFreeErase && trimBox == nullptr)) {
+            !allowIntersectionFreeWholeObjectErase) {
             intersections = intersectionsForComponent(
                 sourceComponent.componentIndex,
                 sourceComponent.curve,

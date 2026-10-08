@@ -108,8 +108,11 @@ bool rationalBezierSpansForCurve(const NurbsCurve2D &curve,
     controlPoints.reserve(curve.controlPoints.size());
     for (int index = 0; index < curve.controlPoints.size(); ++index) {
         const qreal weight = curve.rational ? curve.weights[index] : 1.0;
+        const qreal normalCoordinate = curve.dimension == 3
+            ? curve.normalCoordinates[index] : 0.0;
         controlPoints.append(HomogeneousControlPoint2D{
             curve.controlPoints[index] * weight,
+            normalCoordinate * weight,
             weight});
     }
 
@@ -286,6 +289,10 @@ bool trimNurbsCurve(const NurbsCurve2D &source,
                 return false;
             }
             result.controlPoints.append(point.weightedPosition / point.weight);
+            if (source.dimension == 3) {
+                result.normalCoordinates.append(
+                    point.weightedNormalCoordinate / point.weight);
+            }
             result.weights.append(source.rational ? point.weight : 1.0);
         }
     }
@@ -325,6 +332,10 @@ bool reverseNurbsCurve(const NurbsCurve2D &source,
 
     NurbsCurve2D result = source;
     std::reverse(result.controlPoints.begin(), result.controlPoints.end());
+    if (!result.normalCoordinates.isEmpty()) {
+        std::reverse(result.normalCoordinates.begin(),
+                     result.normalCoordinates.end());
+    }
     if (!result.weights.isEmpty()) {
         std::reverse(result.weights.begin(), result.weights.end());
     }

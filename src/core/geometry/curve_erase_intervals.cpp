@@ -79,12 +79,13 @@ QVector<ParameterInterval> boundCurveEraseIntervals(
 
     // The domain endpoints of a closed curve are one point. Keep the first
     // and last pieces connected unless a real intersection cuts the seam.
-    QPointF firstPoint;
-    QPointF lastPoint;
-    const bool closed = evaluateNurbsPoint(curve, domainStart, &firstPoint) &&
-                        evaluateNurbsPoint(curve, domainEnd, &lastPoint) &&
-                        std::hypot(firstPoint.x() - lastPoint.x(),
-                                   firstPoint.y() - lastPoint.y()) <= 1.0e-8;
+    Point3D firstPoint;
+    Point3D lastPoint;
+    const bool closed = evaluateNurbsPoint3D(curve, domainStart, &firstPoint) &&
+                        evaluateNurbsPoint3D(curve, domainEnd, &lastPoint) &&
+                        std::hypot(std::hypot(firstPoint.x - lastPoint.x,
+                                              firstPoint.y - lastPoint.y),
+                                   firstPoint.z - lastPoint.z) <= 1.0e-8;
     const bool seamIsIntersection = std::any_of(
         intersectionParameters.begin(), intersectionParameters.end(),
         [&](qreal parameter) {
@@ -208,18 +209,28 @@ bool rebuildShapeFromCurveEraseFragments(
         const WorkPlaneFrame resultFrame = shapeWorkPlaneFrame(source);
         QVector<QPointF> points;
         for (int index = 0; index < group.curves.size(); ++index) {
-            QPointF start;
-            QPointF end;
+            qreal domainStart = 0.0;
+            qreal domainEnd = 0.0;
+            Point3D start;
+            Point3D end;
             if (!isValidWorkPlaneFrame(resultFrame) ||
                 !isValidWorkPlaneFrame(group.workPlaneFrames[index]) ||
-                !nurbsCurveEndpoints(group.curves[index], &start, &end)) {
+                !nurbsParameterDomain(group.curves[index],
+                                      &domainStart, &domainEnd) ||
+                !evaluateNurbsPoint3D(group.curves[index], domainStart,
+                                      &start) ||
+                !evaluateNurbsPoint3D(group.curves[index], domainEnd, &end)) {
                 return Shape{};
             }
+            const WorkPlaneFrame &componentFrame =
+                group.workPlaneFrames[index];
             const QPointF startInResultFrame = worldPointToWorkPlaneFrame(
-                workPlaneFramePointToWorld(start, group.workPlaneFrames[index]),
+                workPlaneFramePointToWorld({start.x, start.y}, start.z,
+                                           componentFrame),
                 resultFrame);
             const QPointF endInResultFrame = worldPointToWorkPlaneFrame(
-                workPlaneFramePointToWorld(end, group.workPlaneFrames[index]),
+                workPlaneFramePointToWorld({end.x, end.y}, end.z,
+                                           componentFrame),
                 resultFrame);
             if (index == 0) {
                 points.append(startInResultFrame);

@@ -20,8 +20,9 @@ namespace classiCAD {
 struct Shape {
     GeometryType geometryType = GeometryType::Invalid;
     QVector<QPointF> points;
+    using NurbsCurve3D = classiCAD::NurbsCurve3D;
     using NurbsCurve2D = classiCAD::NurbsCurve2D;
-    NurbsCurve2D nurbs;
+    NurbsCurve3D nurbs;
 
     ArcMode arcMode = ArcMode::TwoPoint;
     qreal arcSweep = 0.0;
@@ -30,7 +31,7 @@ struct Shape {
     QVector<double> subdivisionParameters;
     // A joined spline remains a Rhino-style component curve collection. Each
     // component keeps its own degree, weights, knots, and parameter domain.
-    QVector<NurbsCurve2D> components;
+    QVector<NurbsCurve3D> components;
     // Mixed-plane PolyCurves store one frame per component. Empty is the
     // legacy representation and uses workPlaneFrame for all components.
     QVector<WorkPlaneFrame> componentWorkPlaneFrames;

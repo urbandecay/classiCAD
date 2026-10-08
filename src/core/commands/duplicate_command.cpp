@@ -26,8 +26,25 @@ bool validDuplicateGeometry(const Shape &shape)
     if (shape.geometryType == GeometryType::Picture) {
         return true;
     }
+    if (shape.geometryType == GeometryType::PolyCurve) {
+        if (shape.components.isEmpty() ||
+            (!shape.componentWorkPlaneFrames.isEmpty() &&
+             shape.componentWorkPlaneFrames.size() != shape.components.size())) {
+            return false;
+        }
+        for (int index = 0; index < shape.components.size(); ++index) {
+            if (!validateNurbsCurve(shape.components[index]) ||
+                (!shape.componentWorkPlaneFrames.isEmpty() &&
+                 !isValidWorkPlaneFrame(shape.componentWorkPlaneFrames[index]))) {
+                return false;
+            }
+        }
+        return true;
+    }
     return validateNurbsCurve(shape.nurbs) &&
-           isValidWorkPlaneFrame(shape.workPlaneFrame);
+           (isValidWorkPlaneFrame(shape.workPlaneFrame) ||
+            isValidWorkPlaneFrame(makeWorkPlaneFrame(shape.workPlane,
+                                                      shape.workPlaneOffset)));
 }
 
 } // namespace

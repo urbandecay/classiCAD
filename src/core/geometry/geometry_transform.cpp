@@ -84,6 +84,65 @@ void mirrorCurve(Shape::NurbsCurve2D *curve,
     }
 }
 
+void scaleCurveInFrame(Shape::NurbsCurve3D *curve,
+                       const WorkPlaneFrame &curveFrame,
+                       const QPointF &base,
+                       const QPointF &axisDirection,
+                       qreal factor,
+                       bool oneDimensional,
+                       const WorkPlaneFrame &surfaceFrame)
+{
+    if (curve == nullptr || !validateNurbsCurve(*curve) ||
+        !isValidWorkPlaneFrame(curveFrame) ||
+        !isValidWorkPlaneFrame(surfaceFrame)) {
+        return;
+    }
+
+    const auto scaledPoint = [base, axisDirection, factor, oneDimensional](
+                                 const QPointF &point) {
+        const QPointF offset = point - base;
+        if (!oneDimensional) {
+            return base + offset * factor;
+        }
+        const qreal alongAxis = QPointF::dotProduct(offset, axisDirection);
+        return base + offset + axisDirection * (alongAxis * (factor - 1.0));
+    };
+
+    QVector<double> transformedNormalCoordinates;
+    transformedNormalCoordinates.reserve(curve->controlPoints.size());
+    bool requiresDimension3 = curve->dimension == 3;
+    for (int index = 0; index < curve->controlPoints.size(); ++index) {
+        const qreal oldNormalCoordinate = curve->dimension == 3
+            ? curve->normalCoordinates[index] : 0.0;
+        Point3D worldPoint = workPlaneFramePointToWorld(
+            curve->controlPoints[index], oldNormalCoordinate, curveFrame);
+        qreal depth = 0.0;
+        const QPointF surfacePoint =
+            worldPointToWorkPlaneFrame(worldPoint, surfaceFrame, &depth);
+        const QPointF transformedSurfacePoint = scaledPoint(surfacePoint);
+        if (!oneDimensional) {
+            depth *= factor;
+        }
+        worldPoint = workPlaneFramePointToWorld(transformedSurfacePoint,
+                                                depth,
+                                                surfaceFrame);
+        qreal newNormalCoordinate = 0.0;
+        curve->controlPoints[index] = worldPointToWorkPlaneFrame(
+            worldPoint, curveFrame, &newNormalCoordinate);
+        transformedNormalCoordinates.append(newNormalCoordinate);
+        requiresDimension3 = requiresDimension3 ||
+                             std::abs(newNormalCoordinate) > 1.0e-9;
+    }
+
+    if (requiresDimension3) {
+        curve->dimension = 3;
+        curve->normalCoordinates = std::move(transformedNormalCoordinates);
+    } else {
+        curve->dimension = 2;
+        curve->normalCoordinates.clear();
+    }
+}
+
 Point3D rotateVector(const Point3D &vector, const Point3D &axis, qreal angle)
 {
     const qreal axisLength = std::hypot(std::hypot(axis.x, axis.y), axis.z);
@@ -193,20 +252,44 @@ bool translateShapeGeometry(Shape *shape,
     for (QPointF &point : shape->points) {
         point += delta;
     }
-    for (QPointF &point : shape->nurbs.controlPoints) {
-        point += delta;
-    }
-    for (NurbsCurve2D &component : shape->components) {
-        for (QPointF &point : component.controlPoints) {
-            point += delta;
+    const Point3D worldOrigin = workPlaneFramePointToWorld({}, inputFrame);
+    const Point3D worldEnd = workPlaneFramePointToWorld(delta, inputFrame);
+    const Point3D worldDelta{worldEnd.x - worldOrigin.x,
+                             worldEnd.y - worldOrigin.y,
+                             worldEnd.z - worldOrigin.z};
+    const auto translateCurve = [&worldDelta](Shape::NurbsCurve3D *curve,
+                                               const WorkPlaneFrame &frame) {
+        if (curve == nullptr || !validateNurbsCurve(*curve)) {
+            return;
         }
+        for (int index = 0; index < curve->controlPoints.size(); ++index) {
+            const qreal normalCoordinate = curve->dimension == 3
+                ? curve->normalCoordinates[index] : 0.0;
+            Point3D world = workPlaneFramePointToWorld(
+                curve->controlPoints[index], normalCoordinate, frame);
+            world.x += worldDelta.x;
+            world.y += worldDelta.y;
+            world.z += worldDelta.z;
+            qreal newNormalCoordinate = 0.0;
+            curve->controlPoints[index] = worldPointToWorkPlaneFrame(
+                world, frame, &newNormalCoordinate);
+            if (curve->dimension == 2 &&
+                std::abs(newNormalCoordinate) > 1.0e-9) {
+                curve->dimension = 3;
+                curve->normalCoordinates.fill(0.0,
+                                             curve->controlPoints.size());
+            }
+            if (curve->dimension == 3) {
+                curve->normalCoordinates[index] = newNormalCoordinate;
+            }
+        }
+    };
+    translateCurve(&shape->nurbs, shapeWorkPlaneFrame(*shape));
+    for (int index = 0; index < shape->components.size(); ++index) {
+        translateCurve(&shape->components[index],
+                       shapeComponentWorkPlaneFrame(*shape, index));
     }
     if (validateNurbsSurface(shapeBaseSurface(*shape))) {
-        const Point3D origin = workPlaneFramePointToWorld({}, inputFrame);
-        const Point3D end = workPlaneFramePointToWorld(delta, inputFrame);
-        const Point3D worldDelta{end.x - origin.x,
-                                 end.y - origin.y,
-                                 end.z - origin.z};
         // Translation changes placement only. Recomputing the solid's vector
         // by subtracting translated endpoints introduces cancellation error
         // and makes an unchanged extrusion appear deformed to display caches.
@@ -285,7 +368,8 @@ bool setClosedNurbsSeamControlPoint(Shape *shape,
                                     int controlPointIndex,
                                     const QPointF &position)
 {
-    if (shape == nullptr || shape->nurbs.controlPoints.size() < 2) {
+    if (shape == nullptr || !validateNurbsCurve(shape->nurbs) ||
+        shape->nurbs.controlPoints.size() < 2) {
         return false;
     }
     const int lastIndex = shape->nurbs.controlPoints.size() - 1;
@@ -297,13 +381,27 @@ bool setClosedNurbsSeamControlPoint(Shape *shape,
                                   shape->geometryType == GeometryType::Ellipse;
     const QPointF seamDelta = shape->nurbs.controlPoints.first() -
                               shape->nurbs.controlPoints.last();
-    const bool alreadyClosed = QPointF::dotProduct(seamDelta, seamDelta) <= 1.0e-18;
+    const qreal seamNormalDelta = shape->nurbs.dimension == 3
+        ? shape->nurbs.normalCoordinates.first() -
+              shape->nurbs.normalCoordinates.last()
+        : 0.0;
+    const bool alreadyClosed =
+        QPointF::dotProduct(seamDelta, seamDelta) +
+                seamNormalDelta * seamNormalDelta <= 1.0e-18;
     if (!alwaysClosedType && !alreadyClosed) {
         return false;
     }
 
     shape->nurbs.controlPoints[0] = position;
     shape->nurbs.controlPoints[lastIndex] = position;
+    if (shape->nurbs.dimension == 3) {
+        const qreal seamNormalCoordinate =
+            controlPointIndex == 0
+                ? shape->nurbs.normalCoordinates.first()
+                : shape->nurbs.normalCoordinates.last();
+        shape->nurbs.normalCoordinates[0] = seamNormalCoordinate;
+        shape->nurbs.normalCoordinates[lastIndex] = seamNormalCoordinate;
+    }
     return true;
 }
 
@@ -334,13 +432,21 @@ bool scaleShapeGeometry(Shape *shape,
     for (QPointF &point : shape->points) {
         point = scaledPoint(point);
     }
-    for (QPointF &point : shape->nurbs.controlPoints) {
-        point = scaledPoint(point);
-    }
-    for (Shape::NurbsCurve2D &component : shape->components) {
-        for (QPointF &point : component.controlPoints) {
-            point = scaledPoint(point);
-        }
+    scaleCurveInFrame(&shape->nurbs,
+                      shapeWorkPlaneFrame(*shape),
+                      base,
+                      axisDirection,
+                      factor,
+                      oneDimensional,
+                      surfaceFrame);
+    for (int index = 0; index < shape->components.size(); ++index) {
+        scaleCurveInFrame(&shape->components[index],
+                          shapeComponentWorkPlaneFrame(*shape, index),
+                          base,
+                          axisDirection,
+                          factor,
+                          oneDimensional,
+                          surfaceFrame);
     }
     if (validateNurbsSurface(shapeBaseSurface(*shape))) {
         transformSpatialGeometry(shape, [&](Point3D point) {
@@ -367,6 +473,14 @@ bool rotateShapeGeometry(Shape *shape,
     if (shape == nullptr) {
         return false;
     }
+    if (shape->componentWorkPlaneFrames.size() == shape->components.size()) {
+        for (const WorkPlaneFrame &componentFrame :
+             shape->componentWorkPlaneFrames) {
+            if (!isValidWorkPlaneFrame(componentFrame)) {
+                return false;
+            }
+        }
+    }
     if (validateNurbsSurface(shapeBaseSurface(*shape))) {
         transformSpatialGeometry(shape, [&](const Point3D &point) {
             return rotatePoint(point, pivot, axis, angle);
@@ -379,6 +493,14 @@ bool rotateShapeGeometry(Shape *shape,
         return false;
     }
     shape->workPlaneFrame = frame;
+    if (shape->componentWorkPlaneFrames.size() == shape->components.size()) {
+        for (WorkPlaneFrame &componentFrame : shape->componentWorkPlaneFrames) {
+            componentFrame = rotateFrame(componentFrame, pivot, axis, angle);
+            if (!isValidWorkPlaneFrame(componentFrame)) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 

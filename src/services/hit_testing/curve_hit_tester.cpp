@@ -243,9 +243,14 @@ qreal CurveHitTester::distanceToNurbsCurve(
     const QPointF &screenPosition,
     const Shape::NurbsCurve2D &curve,
     const ViewportTransform &transform,
-    const QSize &viewportSize) const
+    const QSize &viewportSize,
+    const WorkPlaneFrame *frameOverride,
+    const Point3D &worldOffset) const
 {
-    if (!validateNurbsCurve(curve)) {
+    const WorkPlaneFrame &frame = frameOverride != nullptr
+                                      ? *frameOverride
+                                      : transform.workPlaneFrame();
+    if (!validateNurbsCurve(curve) || !isValidWorkPlaneFrame(frame)) {
         return 1.0e9;
     }
 
@@ -264,22 +269,34 @@ qreal CurveHitTester::distanceToNurbsCurve(
     }
 
     const int sampleCount = std::max(64, nonZeroSpans * 32);
-    QPointF previousWorld;
-    if (!evaluateNurbsPoint(curve, firstParameter, &previousWorld)) {
+    Point3D previousLocal;
+    if (!evaluateNurbsPoint3D(curve, firstParameter, &previousLocal)) {
         return 1.0e9;
     }
 
     qreal closestDistance = 1.0e9;
-    QPointF previous = transform.worldToScreen(previousWorld, viewportSize);
+    const auto project = [&](const Point3D &local, QPointF *screen) {
+        Point3D world = workPlaneFramePointToWorld(
+            {local.x, local.y}, local.z, frame);
+        world.x += worldOffset.x;
+        world.y += worldOffset.y;
+        world.z += worldOffset.z;
+        return transform.worldPointToScreenUnclipped(world, viewportSize, screen);
+    };
+    QPointF previous;
+    if (!project(previousLocal, &previous)) {
+        return 1.0e9;
+    }
     for (int sample = 1; sample <= sampleCount; ++sample) {
         const qreal fraction = static_cast<qreal>(sample) / sampleCount;
         const qreal parameter = firstParameter +
                                 (lastParameter - firstParameter) * fraction;
-        QPointF currentWorld;
-        if (!evaluateNurbsPoint(curve, parameter, &currentWorld)) {
+        Point3D currentLocal;
+        QPointF current;
+        if (!evaluateNurbsPoint3D(curve, parameter, &currentLocal) ||
+            !project(currentLocal, &current)) {
             continue;
         }
-        const QPointF current = transform.worldToScreen(currentWorld, viewportSize);
         closestDistance = std::min(closestDistance,
                                    distanceToSegment(screenPosition,
                                                     previous,
@@ -492,6 +509,7 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                                       quint64 geometryRevision,
                                       const Point3D &worldOffset) const
 {
+    const WorkPlaneFrame shapeFrame = shapeWorkPlaneFrame(shape);
     if (shape.geometryType == GeometryType::NurbsSolid) {
         qreal closest = 1.0e9;
         const auto faces = shapeSurfaceFaces(shape);
@@ -537,14 +555,17 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
     if (shape.geometryType == GeometryType::PolyCurve && !shape.components.isEmpty()) {
         qreal distance = 1.0e9;
         for (int index = 0; index < shape.components.size(); ++index) {
+            const WorkPlaneFrame componentFrame =
+                shapeComponentWorkPlaneFrame(shape, index);
             ViewportTransform componentTransform = transform;
-            componentTransform.setWorkPlaneFrame(
-                shapeComponentWorkPlaneFrame(shape, index));
+            componentTransform.setWorkPlaneFrame(componentFrame);
             distance = std::min(distance,
                                 distanceToNurbsCurve(screenPosition,
                                                      shape.components[index],
                                                      componentTransform,
-                                                     viewportSize));
+                                                     viewportSize,
+                                                     &componentFrame,
+                                                     worldOffset));
         }
         return distance;
     }
@@ -557,7 +578,9 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
             return distanceToNurbsCurve(screenPosition,
                                        shape.nurbs,
                                        transform,
-                                       viewportSize);
+                                       viewportSize,
+                                       &shapeFrame,
+                                       worldOffset);
         }
         const QPointF center = transform.worldToScreen(shape.points[0], viewportSize);
         const QPointF edge = transform.worldToScreen(shape.points[1], viewportSize);
@@ -570,7 +593,9 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                    ? distanceToNurbsCurve(screenPosition,
                                          shape.nurbs,
                                          transform,
-                                         viewportSize)
+                                         viewportSize,
+                                         &shapeFrame,
+                                         worldOffset)
                    : 1.0e9;
     }
     if (shape.geometryType == GeometryType::Arc && shape.points.size() >= 3) {
@@ -578,7 +603,9 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
                    ? distanceToNurbsCurve(screenPosition,
                                          shape.nurbs,
                                          transform,
-                                         viewportSize)
+                                         viewportSize,
+                                         &shapeFrame,
+                                         worldOffset)
                    : distanceToArc(screenPosition, shape, transform, viewportSize);
     }
     if (shape.geometryType == GeometryType::Bezier ||
@@ -587,7 +614,9 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
             return distanceToNurbsCurve(screenPosition,
                                        shape.nurbs,
                                        transform,
-                                       viewportSize);
+                                       viewportSize,
+                                       &shapeFrame,
+                                       worldOffset);
         }
         return shape.points.size() >= 4
                    ? distanceToCubicCurve(screenPosition,
@@ -598,7 +627,9 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
     }
     if (shape.geometryType == GeometryType::Rectangle) {
         if (validateNurbsCurve(shape.nurbs)) {
-            return distanceToNurbsCurve(screenPosition, shape.nurbs, transform, viewportSize);
+            return distanceToNurbsCurve(screenPosition, shape.nurbs, transform,
+                                        viewportSize, &shapeFrame,
+                                        worldOffset);
         }
         const QVector<QPointF> vertices = rectangleVertices(shape);
         if (vertices.size() < 4) {
@@ -644,14 +675,18 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
         return distanceToNurbsCurve(screenPosition,
                                    shape.nurbs,
                                    transform,
-                                   viewportSize);
+                                   viewportSize,
+                                   &shapeFrame,
+                                   worldOffset);
     }
     if (shape.geometryType == GeometryType::Line) {
         if (validateNurbsCurve(shape.nurbs)) {
             return distanceToNurbsCurve(screenPosition,
                                        shape.nurbs,
                                        transform,
-                                       viewportSize);
+                                       viewportSize,
+                                       &shapeFrame,
+                                       worldOffset);
         }
         qreal distance = 1.0e9;
         for (int index = 0; index + 1 < shape.points.size(); ++index) {
@@ -787,13 +822,19 @@ bool CurveHitTester::hitTestSelectedControlPoint(
                                       ? sceneObject->placementTranslation
                                       : Point3D{};
         const auto considerControlPoint = [&](const QPointF &controlPoint,
+                                              qreal normalCoordinate,
                                               WorkPlaneFrame frame,
                                               int candidateControlPointIndex) {
             frame.origin.x += placement.x;
             frame.origin.y += placement.y;
             frame.origin.z += placement.z;
-            const QPointF screenPoint = transform.workPlaneToScreen(
-                controlPoint, viewportSize, frame);
+            const Point3D worldPoint = workPlaneFramePointToWorld(
+                controlPoint, normalCoordinate, frame);
+            QPointF screenPoint;
+            if (!transform.worldPointToScreenUnclipped(
+                    worldPoint, viewportSize, &screenPoint)) {
+                return;
+            }
             const qreal distance = std::hypot(
                 screenPosition.x() - screenPoint.x(),
                 screenPosition.y() - screenPoint.y());
@@ -811,9 +852,14 @@ bool CurveHitTester::hitTestSelectedControlPoint(
                  ++componentIndex) {
                 const WorkPlaneFrame frame =
                     shapeComponentWorkPlaneFrame(shape, componentIndex);
-                for (const QPointF &controlPoint :
-                     shape.components[componentIndex].controlPoints) {
-                    considerControlPoint(controlPoint, frame, globalIndex);
+                const Shape::NurbsCurve3D &curve =
+                    shape.components[componentIndex];
+                for (int pointIndex = 0;
+                     pointIndex < curve.controlPoints.size(); ++pointIndex) {
+                    const qreal normalCoordinate = curve.dimension == 3
+                        ? curve.normalCoordinates[pointIndex] : 0.0;
+                    considerControlPoint(curve.controlPoints[pointIndex],
+                                         normalCoordinate, frame, globalIndex);
                     ++globalIndex;
                 }
             }
@@ -824,6 +870,12 @@ bool CurveHitTester::hitTestSelectedControlPoint(
              candidateControlPointIndex < controlPoints.size();
              ++candidateControlPointIndex) {
             considerControlPoint(controlPoints[candidateControlPointIndex],
+                                 shape.nurbs.dimension == 3 &&
+                                         candidateControlPointIndex <
+                                             shape.nurbs.normalCoordinates.size()
+                                     ? shape.nurbs.normalCoordinates[
+                                           candidateControlPointIndex]
+                                     : 0.0,
                                  shapeWorkPlaneFrame(shape),
                                  candidateControlPointIndex);
         }
@@ -874,7 +926,8 @@ int CurveHitTester::hitTestShape(const Document &document,
                                                       component.workPlaneFrame,
                                                       transform,
                                                       viewportSize,
-                                                      &componentBounds)) {
+                                                      &componentBounds,
+                                                      worldOffset)) {
                     hullIsKnown = false;
                     break;
                 }
@@ -929,13 +982,55 @@ int CurveHitTester::hitTestShapeOnAnyWorkPlane(
             // remain selectable in the regular hit test above.
             continue;
         }
+        const ObjectId objectId = document.objectIdAt(index);
+        const SceneObject *sceneObject = document.object(objectId);
+        const Point3D worldOffset = sceneObject != nullptr
+                                        ? sceneObject->placementTranslation
+                                        : Point3D{};
         ViewportTransform shapeTransform = transform;
-        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
-        shapeTransform.setWorkPlaneFrame(frame);
         const QVector<ShapeNurbsCurveComponent> curveComponents =
             shapeHasCurveControlHull(shape)
                 ? nurbsCurveComponentsForShape(shape)
                 : QVector<ShapeNurbsCurveComponent>{};
+        WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        if (!curveComponents.isEmpty()) {
+            frame = curveComponents.first().workPlaneFrame;
+            bool planarCurveBundle = true;
+            bool firstPlane = true;
+            for (const ShapeNurbsCurveComponent &component : curveComponents) {
+                if (!isNurbsCurvePlanarInWorkPlane(component.curve)) {
+                    planarCurveBundle = false;
+                    break;
+                }
+                const qreal normalCoordinate =
+                    component.curve.dimension == 3 &&
+                            !component.curve.normalCoordinates.isEmpty()
+                        ? component.curve.normalCoordinates.first() : 0.0;
+                WorkPlaneFrame componentPlane = component.workPlaneFrame;
+                componentPlane.origin.x +=
+                    componentPlane.normal.x * normalCoordinate;
+                componentPlane.origin.y +=
+                    componentPlane.normal.y * normalCoordinate;
+                componentPlane.origin.z +=
+                    componentPlane.normal.z * normalCoordinate;
+                if (firstPlane) {
+                    frame = componentPlane;
+                    firstPlane = false;
+                } else if (!workPlaneFramesCoplanar(frame, componentPlane)) {
+                    planarCurveBundle = false;
+                    break;
+                }
+            }
+            if (!planarCurveBundle) {
+                // Spatial curves that do not share one plane cannot supply a
+                // drawing frame to a planar tool.
+                continue;
+            }
+        }
+        frame.origin.x += worldOffset.x;
+        frame.origin.y += worldOffset.y;
+        frame.origin.z += worldOffset.z;
+        shapeTransform.setWorkPlaneFrame(frame);
         if (!curveComponents.isEmpty()) {
             bool hullIsKnown = true;
             QRectF projectedHull;
@@ -946,7 +1041,8 @@ int CurveHitTester::hitTestShapeOnAnyWorkPlane(
                                                       component.workPlaneFrame,
                                                       transform,
                                                       viewportSize,
-                                                      &componentBounds)) {
+                                                      &componentBounds,
+                                                      worldOffset)) {
                     hullIsKnown = false;
                     break;
                 }
@@ -966,7 +1062,10 @@ int CurveHitTester::hitTestShapeOnAnyWorkPlane(
         const qreal distance = distanceToShape(screenPosition,
                                                shape,
                                                shapeTransform,
-                                               viewportSize);
+                                               viewportSize,
+                                               objectId,
+                                               document.objectGeometryRevision(objectId),
+                                               worldOffset);
         if (!std::isfinite(distance) || distance > hitRadiusPixels) {
             continue;
         }
@@ -1102,21 +1201,37 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
                 return;
             }
             constexpr int samples = 128;
-            QPointF previousLocal;
-            if (!evaluateNurbsPoint(curve, firstParameter, &previousLocal)) {
+            Point3D previousLocal;
+            if (!evaluateNurbsPoint3D(curve, firstParameter, &previousLocal)) {
                 return;
             }
-            QPointF previousScreen = transform.workPlaneToScreen(
-                previousLocal, viewportSize, curveFrame);
+            const auto toWorld = [&](const Point3D &local) {
+                Point3D world = workPlaneFramePointToWorld(
+                    {local.x, local.y}, local.z, curveFrame);
+                world.x += worldOffset.x;
+                world.y += worldOffset.y;
+                world.z += worldOffset.z;
+                return world;
+            };
+            Point3D previousWorld = toWorld(previousLocal);
+            QPointF previousScreen;
+            if (!transform.worldPointToScreenUnclipped(
+                    previousWorld, viewportSize, &previousScreen)) {
+                return;
+            }
             for (int sample = 1; sample <= samples; ++sample) {
-                QPointF currentLocal;
+                Point3D currentLocal;
                 const qreal parameter = firstParameter +
                     (lastParameter - firstParameter) * sample / samples;
-                if (!evaluateNurbsPoint(curve, parameter, &currentLocal)) {
+                if (!evaluateNurbsPoint3D(curve, parameter, &currentLocal)) {
                     continue;
                 }
-                const QPointF currentScreen = transform.workPlaneToScreen(
-                    currentLocal, viewportSize, curveFrame);
+                const Point3D currentWorld = toWorld(currentLocal);
+                QPointF currentScreen;
+                if (!transform.worldPointToScreenUnclipped(
+                        currentWorld, viewportSize, &currentScreen)) {
+                    continue;
+                }
                 const QPointF segment = currentScreen - previousScreen;
                 const qreal lengthSquared = QPointF::dotProduct(segment, segment);
                 const qreal fraction = lengthSquared > 1.0e-12
@@ -1130,11 +1245,13 @@ bool CurveHitTester::hitTestVisibleDepth(const Document &document,
                     closestScreen.y() - screenPosition.y());
                 if (std::isfinite(distance) && distance <= closestStrokeDistance) {
                     closestStrokeDistance = distance;
-                    candidate = workPlaneFramePointToWorld(
-                        previousLocal + (currentLocal - previousLocal) * fraction,
-                        curveFrame);
+                    candidate = {
+                        previousWorld.x + (currentWorld.x - previousWorld.x) * fraction,
+                        previousWorld.y + (currentWorld.y - previousWorld.y) * fraction,
+                        previousWorld.z + (currentWorld.z - previousWorld.z) * fraction};
                 }
                 previousLocal = currentLocal;
+                previousWorld = currentWorld;
                 previousScreen = currentScreen;
             }
         };

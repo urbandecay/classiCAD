@@ -10,7 +10,8 @@ struct ShapeNurbsCurveComponent {
     WorkPlaneFrame workPlaneFrame;
 };
 
-// Maps the local XY coordinates stored by a shape through its work plane.
+// Maps local curve (u, v, w) coordinates through the work-plane frame. Basic
+// point geometry continues to use only local (u, v).
 WorkPlaneFrame shapeWorkPlaneFrame(const Shape &shape);
 WorkPlaneFrame shapeComponentWorkPlaneFrame(const Shape &shape,
                                             int componentIndex);

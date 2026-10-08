@@ -17,7 +17,8 @@ bool projectedNurbsControlHullBounds(
     const WorkPlaneFrame &workPlaneFrame,
     const ViewportTransform &viewportTransform,
     const QSize &viewportSize,
-    QRectF *screenBounds);
+    QRectF *screenBounds,
+    const Point3D &worldOffset = {});
 
 bool screenBoundsOverlap(const QRectF &first, const QRectF &second);
 

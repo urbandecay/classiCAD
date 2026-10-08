@@ -32,7 +32,8 @@ bool setClosedNurbsSeamControlPoint(Shape *shape,
                                     const QPointF &position);
 
 // Applies the viewport's uniform or one-axis scale semantics to exact stored
-// geometry. Surface depth relative to surfaceFrame is preserved.
+// geometry. Uniform scale affects all three coordinates; one-axis scale moves
+// along the active in-plane axis and preserves depth relative to surfaceFrame.
 bool scaleShapeGeometry(Shape *shape,
                         const QPointF &base,
                         const QPointF &axisDirection,
@@ -40,9 +41,8 @@ bool scaleShapeGeometry(Shape *shape,
                         bool oneDimensional,
                         const WorkPlaneFrame &surfaceFrame);
 
-// Rotates planar geometry by rotating its workplane frame and rotates surface
-// control vertices in world space. Stored curve parameters and UV trims stay
-// unchanged.
+// Rotates curve work-plane frames and surface control vertices in world space.
+// Stored curve parameters and surface UV trims stay unchanged.
 bool rotateShapeGeometry(Shape *shape,
                          const Point3D &pivot,
                          const Point3D &axis,

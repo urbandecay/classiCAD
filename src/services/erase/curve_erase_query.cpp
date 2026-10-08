@@ -39,12 +39,18 @@ qreal squaredScreenDistanceAt(const NurbsCurve2D &curve,
                               const ViewportTransform &viewportTransform,
                               const QSize &viewportSize)
 {
-    QPointF localPoint;
-    if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
+    Point3D localPoint;
+    if (!evaluateNurbsPoint3D(curve, parameter, &localPoint)) {
         return std::numeric_limits<qreal>::infinity();
     }
-    const QPointF curveScreen = viewportTransform.workPlaneToScreen(
-        localPoint, viewportSize, workPlaneFrame);
+    const Point3D worldPoint = workPlaneFramePointToWorld(
+        {localPoint.x, localPoint.y}, localPoint.z, workPlaneFrame);
+    QPointF curveScreen;
+    if (!viewportTransform.worldPointToScreen(worldPoint,
+                                              viewportSize,
+                                              &curveScreen)) {
+        return std::numeric_limits<qreal>::infinity();
+    }
     const QPointF delta = curveScreen - screenPoint;
     return QPointF::dotProduct(delta, delta);
 }
@@ -256,14 +262,19 @@ EraseIntersectionParameterResult findEraseIntersectionParameters(
                                      &candidateDomainEnd)) {
                 for (const qreal endpointParameter :
                      {candidateDomainStart, candidateDomainEnd}) {
-                    QPointF candidateLocalPoint;
-                    if (!evaluateNurbsPoint(candidate.curve,
-                                            endpointParameter,
-                                            &candidateLocalPoint)) {
+                    Point3D candidateLocalPoint;
+                    if (candidate.curve.dimension != 2 ||
+                        sourceCurve.dimension != 2 ||
+                        !evaluateNurbsPoint3D(candidate.curve,
+                                              endpointParameter,
+                                              &candidateLocalPoint)) {
                         continue;
                     }
                     const Point3D candidateWorldPoint =
-                        workPlaneFramePointToWorld(candidateLocalPoint,
+                        workPlaneFramePointToWorld(
+                                                   {candidateLocalPoint.x,
+                                                    candidateLocalPoint.y},
+                                                   candidateLocalPoint.z,
                                                    candidate.workPlaneFrame);
                     const qreal planeDistance = std::abs(
                         signedDistanceFromWorkPlaneFrame(
@@ -294,7 +305,7 @@ EraseIntersectionParameterResult findEraseIntersectionParameters(
     }
 
     for (const ErasePointIntersectionCandidate &candidate : otherPoints) {
-        if (candidate.objectId == sourceObjectId) {
+        if (candidate.objectId == sourceObjectId || sourceCurve.dimension != 2) {
             continue;
         }
         ++result.pointChecks;
@@ -433,12 +444,18 @@ QVector<ParameterInterval> nurbsEraseIntervalsForStrokeSegment(
     constexpr qreal eraserRadiusSquared =
         eraserRadiusPixels * eraserRadiusPixels;
     const auto squaredDistanceToStroke = [&](qreal parameter) {
-        QPointF localPoint;
-        if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
+        Point3D localPoint;
+        if (!evaluateNurbsPoint3D(curve, parameter, &localPoint)) {
             return std::numeric_limits<qreal>::infinity();
         }
-        const QPointF curveScreen = viewportTransform.workPlaneToScreen(
-            localPoint, viewportSize, workPlaneFrame);
+        const Point3D worldPoint = workPlaneFramePointToWorld(
+            {localPoint.x, localPoint.y}, localPoint.z, workPlaneFrame);
+        QPointF curveScreen;
+        if (!viewportTransform.worldPointToScreen(worldPoint,
+                                                  viewportSize,
+                                                  &curveScreen)) {
+            return std::numeric_limits<qreal>::infinity();
+        }
         const qreal distance = distanceToScreenSegment(curveScreen,
                                                        strokeStart,
                                                        strokeEnd);
@@ -617,10 +634,17 @@ QVector<ParameterInterval> nurbsCurveIntervalsInsideScreenBox(
     }
     const QRectF region = box.normalized();
     const auto isInside = [&](qreal parameter) {
-        QPointF localPoint;
-        return evaluateNurbsPoint(curve, parameter, &localPoint) &&
-               region.contains(viewportTransform.workPlaneToScreen(
-                   localPoint, viewportSize, workPlaneFrame));
+        Point3D localPoint;
+        if (!evaluateNurbsPoint3D(curve, parameter, &localPoint)) {
+            return false;
+        }
+        const Point3D worldPoint = workPlaneFramePointToWorld(
+            {localPoint.x, localPoint.y}, localPoint.z, workPlaneFrame);
+        QPointF screenPoint;
+        return viewportTransform.worldPointToScreen(worldPoint,
+                                                    viewportSize,
+                                                    &screenPoint) &&
+               region.contains(screenPoint);
     };
     const auto refineBoundary = [&](qreal first,
                                     qreal second,

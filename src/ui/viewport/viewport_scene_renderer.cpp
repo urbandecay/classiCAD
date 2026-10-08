@@ -274,9 +274,14 @@ QVector<QVector3D> controlGuideVertices(const Shape &shape)
         return vertices;
     }
     vertices.reserve((points.size() - 1) * 2);
+    const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
     for (int index = 0; index + 1 < points.size(); ++index) {
-        for (const QPointF &point : {points[index], points[index + 1]}) {
-            const Point3D world = shapePointToWorld(shape, point);
+        for (const int pointIndex : {index, index + 1}) {
+            const qreal normalCoordinate =
+                shape.nurbs.dimension == 3
+                    ? shape.nurbs.normalCoordinates[pointIndex] : 0.0;
+            const Point3D world = workPlaneFramePointToWorld(
+                points[pointIndex], normalCoordinate, frame);
             vertices.append(QVector3D(world.x, world.y, world.z));
         }
     }
@@ -380,6 +385,7 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
          geometryType == GeometryType::Nurbs)) {
         *controlGuide = {&shape, QColor(QStringLiteral("#8aa7c7")), 1.0f, true};
         controlGuide->editModeWire = true;
+        controlGuide->worldOffset = object.preparedGeometryOffset;
         controlGuide->objectId = object.objectId;
         controlGuide->geometryRevision = object.geometryRevision;
         controlGuide->cacheableGeometry = object.cacheable;

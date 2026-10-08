@@ -212,11 +212,12 @@ void appendCurveDepthVertices(const Shape::NurbsCurve2D &curve,
                                    samplesForEachSpan;
             const qreal parameter = spanStart +
                                     (spanEnd - spanStart) * fraction;
-            QPointF localPoint;
-            if (!evaluateNurbsPoint(curve, parameter, &localPoint)) {
+            Point3D localPoint;
+            if (!evaluateNurbsPoint3D(curve, parameter, &localPoint)) {
                 return;
             }
-            const Point3D world = workPlaneFramePointToWorld(localPoint, frame);
+            const Point3D world = workPlaneFramePointToWorld(
+                {localPoint.x, localPoint.y}, localPoint.z, frame);
             if (hasPreviousPoint) {
                 geometry->lineVertices.append(asVector(previousWorldPoint));
                 geometry->lineVertices.append(asVector(world));
@@ -456,6 +457,10 @@ void writeCurve(QDataStream &stream, const Shape::NurbsCurve2D &curve)
            << qint32(curve.controlPoints.size());
     for (const QPointF &point : curve.controlPoints) {
         stream << double(point.x()) << double(point.y());
+    }
+    stream << qint32(curve.normalCoordinates.size());
+    for (double coordinate : curve.normalCoordinates) {
+        stream << coordinate;
     }
     stream << qint32(curve.weights.size());
     for (double weight : curve.weights) {

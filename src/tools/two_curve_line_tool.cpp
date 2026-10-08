@@ -49,7 +49,7 @@ bool curveInFrame(const Shape &shape,
                   const WorkPlaneFrame &frame,
                   Shape::NurbsCurve2D *mapped)
 {
-    if (mapped == nullptr) {
+    if (mapped == nullptr || curve.dimension != 2) {
         return false;
     }
     const WorkPlaneFrame sourceFrame = shapeWorkPlaneFrame(shape);

@@ -81,8 +81,8 @@ QVector<double> equalArcLengthSubdivisionParameters(const Shape &shape,
     sampleParameters.reserve(sampleCount + 1);
     cumulativeLengths.reserve(sampleCount + 1);
 
-    QPointF previousPoint;
-    if (!evaluateNurbsPoint(curve, firstParameter, &previousPoint)) {
+    Point3D previousPoint;
+    if (!evaluateNurbsPoint3D(curve, firstParameter, &previousPoint)) {
         return parameters;
     }
     sampleParameters.append(firstParameter);
@@ -92,12 +92,14 @@ QVector<double> equalArcLengthSubdivisionParameters(const Shape &shape,
         const qreal fraction = static_cast<qreal>(sample) / sampleCount;
         const qreal parameter = firstParameter +
                                 (lastParameter - firstParameter) * fraction;
-        QPointF currentPoint;
-        if (!evaluateNurbsPoint(curve, parameter, &currentPoint)) {
+        Point3D currentPoint;
+        if (!evaluateNurbsPoint3D(curve, parameter, &currentPoint)) {
             return {};
         }
-        totalLength += std::hypot(currentPoint.x() - previousPoint.x(),
-                                  currentPoint.y() - previousPoint.y());
+        totalLength += std::hypot(
+            std::hypot(currentPoint.x - previousPoint.x,
+                       currentPoint.y - previousPoint.y),
+            currentPoint.z - previousPoint.z);
         sampleParameters.append(parameter);
         cumulativeLengths.append(totalLength);
         previousPoint = currentPoint;

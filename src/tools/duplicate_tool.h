@@ -15,6 +15,8 @@ class DuplicateTool final {
 public:
     bool begin(const Document &document,
                const QVector<ObjectId> &selectedObjectIds);
+    bool beginFromComponentSnapshots(
+        const QVector<SceneObject> &componentSnapshots);
     void beginMove(const Point3D &basePointWorld);
     void beginInPlace();
     void updatePlacementWorld(

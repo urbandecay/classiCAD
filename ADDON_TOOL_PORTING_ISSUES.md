@@ -315,3 +315,21 @@ misread or implemented incorrectly.
   overlapping disconnected surfaces, a connected PolyCurve, and a spline
   whose interior control points are hidden. Check visible-depth and X-ray
   picking, `Shift+L` removal, and additive selection.
+
+## Blender mesh duplicate port findings
+
+- Blender's `MESH_OT_duplicate` duplicates the selected BMesh geometry returned
+  by the `duplicate` BMesh operator (`geom.out`), then deselects the originals
+  and selects the copies before starting the move. Passing only selected object
+  IDs duplicates an entire solid and is incorrect in component mode.
+- For classiCAD's affine NURBS solids, make selected complete faces into exact
+  copies of their derived NURBS surface, selected edges into degree-1 NURBS
+  curves, and isolated selected vertices into point objects. A vertex selection
+  that covers the whole cage or a component selection covering the whole solid
+  can retain the whole-solid copy. Do not turn a partial vertex selection into
+  a copy of the solid.
+- [ ] Check Shift+D in vertex, edge, and face modes: a four-corner top-face
+  selection copies only that face, previews it selected from the first frame,
+  moves from its component center, leaves the source solid in place, and commits
+  as one undoable operation. Also check isolated vertices, edges, whole-solid
+  selection, cancel, repeated duplication, and mixed object/component selection.

@@ -22,6 +22,18 @@ bool DuplicateTool::begin(const Document &document,
     return true;
 }
 
+bool DuplicateTool::beginFromComponentSnapshots(
+    const QVector<SceneObject> &componentSnapshots)
+{
+    reset();
+    if (componentSnapshots.isEmpty()) {
+        return false;
+    }
+    sourceObjects_ = componentSnapshots;
+    active_ = true;
+    return true;
+}
+
 void DuplicateTool::beginMove(const Point3D &basePointWorld)
 {
     if (!active_) {

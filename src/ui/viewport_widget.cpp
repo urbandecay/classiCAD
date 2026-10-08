@@ -14,6 +14,7 @@
 #include "../core/commands/trim_erase_command.h"
 #include "../core/debug_log.h"
 #include "../core/geometry/circle_construction.h"
+#include "../core/geometry/curve_construction.h"
 #include "../core/geometry/arc_curve_factory.h"
 #include "../core/geometry/curve_evaluator.h"
 #include "../core/geometry/curve_erase_intervals.h"
@@ -2527,6 +2528,316 @@ public:
         DebugLog::instance().write(QStringLiteral("grab canceled moved=%1").arg(moved));
     }
 
+    static bool duplicatePointsEqual(const Point3D &first,
+                                     const Point3D &second)
+    {
+        const qreal dx = first.x - second.x;
+        const qreal dy = first.y - second.y;
+        const qreal dz = first.z - second.z;
+        return dx * dx + dy * dy + dz * dz <= 1.0e-16;
+    }
+
+    static Point3D duplicateCagePoint(const QVector3D &point)
+    {
+        return {point.x(), point.y(), point.z()};
+    }
+
+    static Point3D duplicateCagePoint(const Point3D &point)
+    {
+        return point;
+    }
+
+    bool buildDuplicateComponentSnapshots(
+        const QVector<ObjectId> &objectIds,
+        QVector<SceneObject> *snapshots,
+        bool *hasComponentSelection) const
+    {
+        if (snapshots == nullptr || hasComponentSelection == nullptr) {
+            return false;
+        }
+        snapshots->clear();
+        *hasComponentSelection = false;
+        const auto &activeSelections =
+            componentSelections_[static_cast<int>(componentSelectionMode_)];
+        for (const ObjectId objectId : objectIds) {
+            const auto selectionIt = activeSelections.constFind(objectId.value());
+            if (selectionIt != activeSelections.cend() &&
+                !selectionIt.value().isEmpty()) {
+                *hasComponentSelection = true;
+                break;
+            }
+        }
+        if (!*hasComponentSelection) {
+            return false;
+        }
+
+        const auto appendSnapshot = [snapshots](const SceneObject &source,
+                                                const Shape &geometry) {
+            SceneObject snapshot = source;
+            snapshot.geometry = geometry;
+            snapshots->append(std::move(snapshot));
+        };
+        const auto appendFace = [&appendSnapshot](const SceneObject &source,
+                                                  const NurbsSurface3D &face) {
+            Shape geometry;
+            geometry.geometryType = GeometryType::NurbsSurface;
+            geometry.nurbsSurface = face;
+            appendSnapshot(source, geometry);
+        };
+        const auto appendEdge = [&appendSnapshot](const SceneObject &source,
+                                                  const Point3D &first,
+                                                  const Point3D &second) {
+            const Point3D direction{second.x - first.x,
+                                    second.y - first.y,
+                                    second.z - first.z};
+            const qreal length = std::sqrt(direction.x * direction.x +
+                                           direction.y * direction.y +
+                                           direction.z * direction.z);
+            if (length <= 1.0e-10) {
+                return;
+            }
+            const Point3D tangent{direction.x / length,
+                                  direction.y / length,
+                                  direction.z / length};
+            const Point3D reference = std::abs(tangent.z) < 0.9
+                                          ? Point3D{0.0, 0.0, 1.0}
+                                          : Point3D{0.0, 1.0, 0.0};
+            const Point3D normal{
+                tangent.y * reference.z - tangent.z * reference.y,
+                tangent.z * reference.x - tangent.x * reference.z,
+                tangent.x * reference.y - tangent.y * reference.x};
+            Shape geometry;
+            geometry.geometryType = GeometryType::Line;
+            geometry.workPlaneFrame = makeWorkPlaneFrameFromNormal(
+                first, normal, tangent);
+            geometry.points = {worldPointToWorkPlaneFrame(
+                                   first, geometry.workPlaneFrame),
+                               worldPointToWorkPlaneFrame(
+                                   second, geometry.workPlaneFrame)};
+            geometry.nurbs = makeDegreeOneNurbs(geometry.points);
+            appendSnapshot(source, geometry);
+        };
+        const auto appendPoint = [&appendSnapshot](const SceneObject &source,
+                                                   const Point3D &point) {
+            Shape geometry;
+            geometry.geometryType = GeometryType::Point;
+            geometry.workPlaneFrame = makeWorkPlaneFrameFromNormal(
+                point, {0.0, 0.0, 1.0}, {1.0, 0.0, 0.0});
+            geometry.points = {QPointF(0.0, 0.0)};
+            appendSnapshot(source, geometry);
+        };
+
+        for (const ObjectId objectId : objectIds) {
+            const SceneObject *source = document_.object(objectId);
+            if (source == nullptr || !document_.isObjectEditable(objectId)) {
+                continue;
+            }
+            const auto selectedIt = activeSelections.constFind(objectId.value());
+            if (selectedIt == activeSelections.cend() ||
+                selectedIt.value().isEmpty()) {
+                appendSnapshot(*source, source->geometry);
+                continue;
+            }
+            const Shape &shape = source->geometry;
+            if (shape.geometryType != GeometryType::NurbsSurface &&
+                shape.geometryType != GeometryType::NurbsSolid) {
+                // Curve control-point duplication has its own curve topology;
+                // retain the existing whole-object behavior for those shapes.
+                appendSnapshot(*source, shape);
+                continue;
+            }
+
+            const ViewportDepthGeometry parentCage = selectedSurfaceCage(shape);
+            const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(shape);
+            const int vertexCount = int(parentCage.pointVertices.size());
+            const int edgeCount = int(parentCage.preciseLineVertices.size() / 2);
+            const QSet<int> selectedComponents = selectedIt.value();
+            QSet<int> selectedVertices;
+            QSet<int> selectedEdges;
+            QSet<int> selectedFaces;
+            for (int index : selectedComponents) {
+                if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                    index >= 0 && index < vertexCount) {
+                    selectedVertices.insert(index);
+                } else if (componentSelectionMode_ == ComponentSelectionMode::Edge &&
+                           index >= 0 && index < edgeCount) {
+                    selectedEdges.insert(index);
+                } else if (componentSelectionMode_ == ComponentSelectionMode::Face &&
+                           index >= 0 && index < faces.size()) {
+                    selectedFaces.insert(index);
+                }
+            }
+
+            if ((componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                 !selectedVertices.isEmpty() && selectedVertices.size() == vertexCount) ||
+                (componentSelectionMode_ == ComponentSelectionMode::Edge &&
+                 !selectedEdges.isEmpty() && selectedEdges.size() == edgeCount) ||
+                (componentSelectionMode_ == ComponentSelectionMode::Face &&
+                 !selectedFaces.isEmpty() && selectedFaces.size() == faces.size())) {
+                appendSnapshot(*source, shape);
+                continue;
+            }
+
+            QSet<int> copiedVertices;
+            QSet<int> copiedEdges;
+            const auto findParentVertex = [&parentCage](const Point3D &point) {
+                for (int index = 0; index < parentCage.pointVertices.size(); ++index) {
+                    if (duplicatePointsEqual(
+                            duplicateCagePoint(parentCage.pointVertices[index]), point)) {
+                        return index;
+                    }
+                }
+                return -1;
+            };
+            const auto findParentEdge = [&parentCage](const Point3D &first,
+                                                       const Point3D &second) {
+                for (int index = 0;
+                     index + 1 < parentCage.preciseLineVertices.size(); index += 2) {
+                    const Point3D a = duplicateCagePoint(
+                        parentCage.preciseLineVertices[index]);
+                    const Point3D b = duplicateCagePoint(
+                        parentCage.preciseLineVertices[index + 1]);
+                    if ((duplicatePointsEqual(a, first) &&
+                         duplicatePointsEqual(b, second)) ||
+                        (duplicatePointsEqual(a, second) &&
+                         duplicatePointsEqual(b, first))) {
+                        return index / 2;
+                    }
+                }
+                return -1;
+            };
+
+            if (componentSelectionMode_ == ComponentSelectionMode::Face) {
+                for (int faceIndex : selectedFaces) {
+                    appendFace(*source, faces[faceIndex]);
+                    Shape faceShape;
+                    faceShape.geometryType = GeometryType::NurbsSurface;
+                    faceShape.nurbsSurface = faces[faceIndex];
+                    const ViewportDepthGeometry faceCage =
+                        selectedSurfaceCage(faceShape);
+                    for (const QVector3D &point : faceCage.pointVertices) {
+                        const int vertexIndex = findParentVertex(
+                            duplicateCagePoint(point));
+                        if (vertexIndex >= 0) copiedVertices.insert(vertexIndex);
+                    }
+                    for (int edgeIndex = 0;
+                         edgeIndex + 1 < faceCage.preciseLineVertices.size();
+                         edgeIndex += 2) {
+                        const int parentEdge = findParentEdge(
+                            duplicateCagePoint(faceCage.preciseLineVertices[edgeIndex]),
+                            duplicateCagePoint(faceCage.preciseLineVertices[edgeIndex + 1]));
+                        if (parentEdge >= 0) copiedEdges.insert(parentEdge);
+                    }
+                }
+            } else if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                for (int faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+                    Shape faceShape;
+                    faceShape.geometryType = GeometryType::NurbsSurface;
+                    faceShape.nurbsSurface = faces[faceIndex];
+                    const ViewportDepthGeometry faceCage = selectedSurfaceCage(faceShape);
+                    if (faceCage.pointVertices.isEmpty()) continue;
+                    QVector<int> faceVertices;
+                    bool fullySelected = true;
+                    for (const QVector3D &point : faceCage.pointVertices) {
+                        const int vertexIndex = findParentVertex(
+                            duplicateCagePoint(point));
+                        if (vertexIndex < 0 || !selectedVertices.contains(vertexIndex)) {
+                            fullySelected = false;
+                            break;
+                        }
+                        faceVertices.append(vertexIndex);
+                    }
+                    if (!fullySelected) continue;
+                    appendFace(*source, faces[faceIndex]);
+                    for (int vertexIndex : faceVertices) copiedVertices.insert(vertexIndex);
+                    for (int edgeIndex = 0;
+                         edgeIndex + 1 < faceCage.preciseLineVertices.size();
+                         edgeIndex += 2) {
+                        const int parentEdge = findParentEdge(
+                            duplicateCagePoint(faceCage.preciseLineVertices[edgeIndex]),
+                            duplicateCagePoint(faceCage.preciseLineVertices[edgeIndex + 1]));
+                        if (parentEdge >= 0) copiedEdges.insert(parentEdge);
+                    }
+                }
+            }
+
+            for (int edgeIndex = 0; edgeIndex < edgeCount; ++edgeIndex) {
+                const Point3D first = duplicateCagePoint(
+                    parentCage.preciseLineVertices[edgeIndex * 2]);
+                const Point3D second = duplicateCagePoint(
+                    parentCage.preciseLineVertices[edgeIndex * 2 + 1]);
+                const int firstVertex = findParentVertex(first);
+                const int secondVertex = findParentVertex(second);
+                const bool selected = componentSelectionMode_ ==
+                                              ComponentSelectionMode::Edge
+                                          ? selectedEdges.contains(edgeIndex)
+                                          : selectedVertices.contains(firstVertex) &&
+                                                selectedVertices.contains(secondVertex);
+                if (!selected || copiedEdges.contains(edgeIndex)) continue;
+                appendEdge(*source, first, second);
+                copiedEdges.insert(edgeIndex);
+                if (firstVertex >= 0) copiedVertices.insert(firstVertex);
+                if (secondVertex >= 0) copiedVertices.insert(secondVertex);
+            }
+            if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                for (int vertexIndex : selectedVertices) {
+                    if (copiedVertices.contains(vertexIndex)) continue;
+                    appendPoint(*source, duplicateCagePoint(
+                        parentCage.pointVertices[vertexIndex]));
+                }
+            }
+        }
+        return !snapshots->isEmpty();
+    }
+
+    Point3D duplicateComponentPivotWorld(
+        const QVector<SceneObject> &snapshots) const
+    {
+        QVector<Point3D> uniquePoints;
+        Point3D pivot{};
+        for (const SceneObject &snapshot : snapshots) {
+            const Shape &shape = snapshot.geometry;
+            QVector<Point3D> points;
+            if (shape.geometryType == GeometryType::NurbsSurface ||
+                shape.geometryType == GeometryType::NurbsSolid) {
+                const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+                points.reserve(cage.pointVertices.size());
+                for (const QVector3D &point : cage.pointVertices) {
+                    points.append(duplicateCagePoint(point));
+                }
+            } else {
+                const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+                points.reserve(shape.points.size());
+                for (const QPointF &point : shape.points) {
+                    points.append(workPlaneFramePointToWorld(point, frame));
+                }
+            }
+            for (Point3D point : points) {
+                point.x += snapshot.placementTranslation.x;
+                point.y += snapshot.placementTranslation.y;
+                point.z += snapshot.placementTranslation.z;
+                if (std::none_of(uniquePoints.cbegin(), uniquePoints.cend(),
+                                 [&point](const Point3D &existing) {
+                                     return duplicatePointsEqual(point, existing);
+                                 })) {
+                    uniquePoints.append(point);
+                }
+            }
+        }
+        for (const Point3D &point : uniquePoints) {
+            pivot.x += point.x;
+            pivot.y += point.y;
+            pivot.z += point.z;
+        }
+        if (!uniquePoints.isEmpty()) {
+            const qreal inverseCount = 1.0 / uniquePoints.size();
+            pivot.x *= inverseCount;
+            pivot.y *= inverseCount;
+            pivot.z *= inverseCount;
+        }
+        return pivot;
+    }
+
     Point3D duplicateSelectionPivotWorld(
         const QVector<ObjectId> &objectIds) const
     {
@@ -2571,10 +2882,29 @@ public:
             selected.append(selectedShapeIndex_);
         }
 
-        if (!duplicateTool_.begin(document_, selected)) {
+        QVector<SceneObject> componentSnapshots;
+        bool hasComponentSelection = false;
+        buildDuplicateComponentSnapshots(selected, &componentSnapshots,
+                                         &hasComponentSelection);
+        const bool started = hasComponentSelection
+                                 ? duplicateTool_.beginFromComponentSnapshots(
+                                       componentSnapshots)
+                                 : duplicateTool_.begin(document_, selected);
+        if (!started) {
             return false;
         }
-        const Point3D pivot = duplicateSelectionPivotWorld(selected);
+        const Point3D pivot = hasComponentSelection
+                                  ? duplicateComponentPivotWorld(componentSnapshots)
+                                  : duplicateSelectionPivotWorld(selected);
+        if (hasComponentSelection) {
+            duplicateOriginalComponentSelectionMode_ = componentSelectionMode_;
+            const int modeIndex = static_cast<int>(componentSelectionMode_);
+            duplicateOriginalComponentSelections_ = componentSelections_[modeIndex];
+            duplicateOriginalActiveComponentIndex_ = activeComponentIndices_[modeIndex];
+            componentSelections_[modeIndex].clear();
+            activeComponentIndices_[modeIndex] = -1;
+            duplicateHasOriginalComponentSelection_ = true;
+        }
         duplicateTool_.beginMove(pivot);
         const QPoint localCursor = mapFromGlobal(QCursor::pos());
         grabAxisAnchorWorld_ = pivot;
@@ -2799,6 +3129,14 @@ public:
             return;
         }
         const QVector<ObjectId> sourceObjectIds = duplicateTool_.sourceObjectIds();
+        if (duplicateHasOriginalComponentSelection_) {
+            const int modeIndex = static_cast<int>(
+                duplicateOriginalComponentSelectionMode_);
+            componentSelections_[modeIndex] =
+                duplicateOriginalComponentSelections_;
+            activeComponentIndices_[modeIndex] =
+                duplicateOriginalActiveComponentIndex_;
+        }
         selection_.setObjectIds(
             sourceObjectIds,
             sourceObjectIds.isEmpty() ? ObjectId::invalid()
@@ -5366,6 +5704,24 @@ protected:
                                 static_cast<float>(vertex.second.x),
                                 static_cast<float>(vertex.second.y),
                                 static_cast<float>(vertex.second.z));
+                            handle.fillColor = viewportSelectionColor();
+                            handle.outlineColor = viewportSelectionColor();
+                            handle.diameterPixels = 4.0f;
+                            handle.outlineWidthPixels = 0.0f;
+                            handle.shape = ViewportControlPointShape::Circle;
+                            gpuControlPointHandles.append(handle);
+                        }
+                    }
+                    if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                        (preview.geometryType == GeometryType::NurbsSurface ||
+                         preview.geometryType == GeometryType::NurbsSolid)) {
+                        const ViewportDepthGeometry cage = selectedSurfaceCage(preview);
+                        for (const QVector3D &cagePoint : cage.pointVertices) {
+                            ViewportControlPointHandle handle;
+                            handle.worldPosition = QVector3D(
+                                cagePoint.x() + float(placement.x),
+                                cagePoint.y() + float(placement.y),
+                                cagePoint.z() + float(placement.z));
                             handle.fillColor = viewportSelectionColor();
                             handle.outlineColor = viewportSelectionColor();
                             handle.diameterPixels = 4.0f;
@@ -9610,6 +9966,9 @@ private:
     void resetDuplicateInteraction()
     {
         duplicateTool_.reset();
+        duplicateOriginalComponentSelections_.clear();
+        duplicateOriginalActiveComponentIndex_ = -1;
+        duplicateHasOriginalComponentSelection_ = false;
         duplicateNumericInput_.clear();
         grabAxisAnchorWorld_ = {};
         grabViewPlaneFrame_ = WorkPlaneFrame{};
@@ -16246,6 +16605,11 @@ private:
     NavigationController navigationController_;
     GrabTool grabTool_;
     DuplicateTool duplicateTool_;
+    ComponentSelectionMode duplicateOriginalComponentSelectionMode_ =
+        ComponentSelectionMode::Vertex;
+    QHash<quint64, QSet<int>> duplicateOriginalComponentSelections_;
+    int duplicateOriginalActiveComponentIndex_ = -1;
+    bool duplicateHasOriginalComponentSelection_ = false;
     QString duplicateNumericInput_;
     BlenderGridAppearance gridAppearance_;
     ToolContext toolContext_;

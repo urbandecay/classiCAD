@@ -6153,6 +6153,64 @@ protected:
                                 curveSampler_.sampleNurbsCurve(
                                     curve, frame, viewportTransform_, size(),
                                     &sampled)) {
+                                QVector<qreal> normalizedArcLengths;
+                                qreal totalArcLength = 0.0;
+                                if (visibleShape.geometryType ==
+                                        GeometryType::PolyCurve &&
+                                    !sampled.worldPoints.isEmpty()) {
+                                    normalizedArcLengths.fill(
+                                        0.0, sampled.worldPoints.size());
+                                    for (int point = 1;
+                                         point < sampled.worldPoints.size();
+                                         ++point) {
+                                        const Point3D &a =
+                                            sampled.worldPoints[point - 1];
+                                        const Point3D &b =
+                                            sampled.worldPoints[point];
+                                        const qreal dx = b.x - a.x;
+                                        const qreal dy = b.y - a.y;
+                                        const qreal dz = b.z - a.z;
+                                        totalArcLength += std::sqrt(
+                                            dx * dx + dy * dy + dz * dz);
+                                        normalizedArcLengths[point] =
+                                            totalArcLength;
+                                    }
+                                    if (totalArcLength > 1.0e-12) {
+                                        for (qreal &length : normalizedArcLengths) {
+                                            length /= totalArcLength;
+                                        }
+                                    } else if (sampled.parameters.size() > 1) {
+                                        const qreal firstParameter =
+                                            sampled.parameters.first();
+                                        const qreal parameterRange =
+                                            sampled.parameters.last() - firstParameter;
+                                        if (parameterRange > 1.0e-12) {
+                                            for (int point = 0;
+                                                 point < sampled.parameters.size() &&
+                                                 point < normalizedArcLengths.size();
+                                                 ++point) {
+                                                normalizedArcLengths[point] =
+                                                    (sampled.parameters[point] -
+                                                     firstParameter) /
+                                                    parameterRange;
+                                            }
+                                        }
+                                    }
+                                }
+                                const qreal arcStartSelected =
+                                    wireSelectedControlPoints.contains(
+                                        firstControlPoint)
+                                        ? qreal(1.0) : qreal(0.0);
+                                const qreal arcEndSelected =
+                                    !curve.controlPoints.isEmpty() &&
+                                            wireSelectedControlPoints.contains(
+                                                firstControlPoint +
+                                                curve.controlPoints.size() - 1)
+                                        ? qreal(1.0) : qreal(0.0);
+                                // Treat each PolyCurve component as one wire
+                                // edge between its editable endpoints, matching
+                                // the surface edge fade: two selected ends stay
+                                // fully orange; one selected end fades to black.
                                 for (int sample = 1;
                                      sample < sampled.parameters.size(); ++sample) {
                                     if (sample >= sampled.worldPoints.size() ||
@@ -6170,12 +6228,29 @@ protected:
                                                      float(first.z))
                                         << QVector3D(float(second.x), float(second.y),
                                                      float(second.z));
-                                    const qreal influenceA = selectionInfluence(
-                                        curve, firstControlPoint,
-                                        sampled.parameters[sample - 1]);
-                                    const qreal influenceB = selectionInfluence(
-                                        curve, firstControlPoint,
-                                        sampled.parameters[sample]);
+                                    const bool polyCurveArc =
+                                        visibleShape.geometryType ==
+                                        GeometryType::PolyCurve;
+                                    const qreal influenceA = polyCurveArc
+                                        ? arcStartSelected *
+                                                  (1.0 - normalizedArcLengths.value(
+                                                             sample - 1)) +
+                                              arcEndSelected *
+                                                  normalizedArcLengths.value(
+                                                      sample - 1)
+                                        : selectionInfluence(
+                                              curve, firstControlPoint,
+                                              sampled.parameters[sample - 1]);
+                                    const qreal influenceB = polyCurveArc
+                                        ? arcStartSelected *
+                                                  (1.0 - normalizedArcLengths.value(
+                                                             sample)) +
+                                              arcEndSelected *
+                                                  normalizedArcLengths.value(
+                                                      sample)
+                                        : selectionInfluence(
+                                              curve, firstControlPoint,
+                                              sampled.parameters[sample]);
                                     vertexSelectedWireColors
                                         << QVector4D(float(influenceA),
                                                      float(influenceA),

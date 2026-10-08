@@ -5286,6 +5286,49 @@ protected:
         viewportRenderer_.setShadingSettings(viewportShadingSettings_);
         const ViewportRenderFrame renderFrame = viewportRenderFrame();
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
+        QHash<quint64, QSet<int>> weldedVertexSelections;
+        if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+            struct WeldedEndpoint {
+                ObjectId objectId;
+                int componentIndex = -1;
+                Point3D worldPoint;
+            };
+            QVector<WeldedEndpoint> weldedEndpoints;
+            QVector<Point3D> selectedWeldedPoints;
+            for (const ViewportRenderObject &renderObject : visibleShapes) {
+                if (renderObject.shape.geometryType != GeometryType::PolyCurve) {
+                    continue;
+                }
+                const QSet<int> &selection =
+                    componentSelectionForObject(renderObject.objectId);
+                for (const auto &endpoint : curveEndpointVertices(
+                         renderObject.shape,
+                         renderObject.placementTranslation)) {
+                    weldedEndpoints.append({renderObject.objectId,
+                                            endpoint.first,
+                                            endpoint.second});
+                    if (selection.contains(endpoint.first)) {
+                        selectedWeldedPoints.append(endpoint.second);
+                    }
+                }
+            }
+            const auto sameWeldedPoint = [](const Point3D &first,
+                                            const Point3D &second) {
+                const qreal dx = first.x - second.x;
+                const qreal dy = first.y - second.y;
+                const qreal dz = first.z - second.z;
+                return dx * dx + dy * dy + dz * dz <= 1.0e-12;
+            };
+            for (const WeldedEndpoint &endpoint : weldedEndpoints) {
+                for (const Point3D &selectedPoint : selectedWeldedPoints) {
+                    if (sameWeldedPoint(endpoint.worldPoint, selectedPoint)) {
+                        weldedVertexSelections[endpoint.objectId.value()].insert(
+                            endpoint.componentIndex);
+                        break;
+                    }
+                }
+            }
+        }
         const ToolPreview &activeToolPreview = renderFrame.activeToolPreview;
         QStringList selectionRenderState;
         for (const ViewportRenderObject &renderObject : visibleShapes) {
@@ -5352,6 +5395,10 @@ protected:
                         ? curveEndpointVertices(renderObject->shape,
                                                 renderObject->placementTranslation)
                         : QVector<QPair<int, Point3D>>{};
+                QSet<int> effectiveEndpointSelection =
+                    componentSelectionForObject(objectId);
+                effectiveEndpointSelection.unite(
+                    weldedVertexSelections.value(objectId.value()));
                 const QVector<Point3D> controlPoints =
                     showCurveEndpointVertices
                         ? QVector<Point3D>{}
@@ -5374,17 +5421,17 @@ protected:
                         static_cast<float>(worldPoint.y),
                         static_cast<float>(worldPoint.z));
                     if (showCurveEndpointVertices) {
-                        const QSet<int> &endpointSelection =
-                            componentSelectionForObject(objectId);
                         // Selecting a spline in vertex mode selects its
                         // editable endpoint/control vertices, as Blender's
-                        // curve edit overlay does. Once there is an explicit
-                        // component selection, keep its per-vertex colors.
+                        // curve edit overlay does. Welded curve pieces can be
+                        // separate objects, so coincident welded endpoints
+                        // share the same selection state.
                         const bool selected =
-                            endpointSelection.contains(componentIndex) ||
-                            (renderObject->selected && endpointSelection.isEmpty());
+                            effectiveEndpointSelection.contains(componentIndex) ||
+                            (renderObject->selected &&
+                             effectiveEndpointSelection.isEmpty());
                         const bool activeVertex =
-                            endpointSelection.contains(componentIndex) &&
+                            effectiveEndpointSelection.contains(componentIndex) &&
                             componentSelectionObject_ == objectId &&
                             activeComponentIndices_[static_cast<int>(
                                 ComponentSelectionMode::Vertex)] == componentIndex;
@@ -5481,6 +5528,9 @@ protected:
             const GeometryType geometryType = visibleShape.geometryType;
             const QSet<int> &objectComponentSelection =
                 componentSelectionForObject(objectId);
+            QSet<int> objectVertexSelection = objectComponentSelection;
+            objectVertexSelection.unite(
+                weldedVertexSelections.value(objectId.value()));
             const int objectActiveComponentIndex =
                 componentSelectionObject_ == objectId
                     ? activeComponentIndex()
@@ -5779,7 +5829,7 @@ protected:
                     ViewportSceneStroke edgeCage;
                     edgeCage.shape = &visibleShape;
                     const bool hasComponentSelection =
-                        selected && !objectComponentSelection.isEmpty();
+                        selected && !objectVertexSelection.isEmpty();
                     edgeCage.color = selected && !hasComponentSelection
                                          ? viewportSelectionColor()
                                          : QColor(Qt::black);
@@ -5793,19 +5843,37 @@ protected:
                     if (hasComponentSelection &&
                         componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                         edgeCage.color = Qt::white;
-                        for (const QVector3D &endpoint : cage->lineVertices) {
-                            bool endpointSelected = false;
+                        const auto vertexSelectedAt =
+                            [&](const QVector3D &endpoint) {
                             for (int vertex = 0; vertex < cage->pointVertices.size(); ++vertex) {
                                 if ((cage->pointVertices[vertex] - endpoint).lengthSquared() <= 1.0e-12f &&
-                                    objectComponentSelection.contains(vertex)) {
-                                    endpointSelected = true;
-                                    break;
+                                    objectVertexSelection.contains(vertex)) {
+                                    return true;
                                 }
                             }
-                            const QColor color = endpointSelected
-                                ? QColor(QStringLiteral("#ff9900")) : QColor(Qt::black);
-                            edgeCage.lineVertexColors.append(QVector4D(
-                                color.redF(), color.greenF(), color.blueF(), 1.0f));
+                            return false;
+                        };
+                        const QColor selectedVertexColor(
+                            QStringLiteral("#ff9900"));
+                        const QColor wireColor(Qt::black);
+                        for (int edgeVertex = 0;
+                             edgeVertex + 1 < cage->lineVertices.size();
+                             edgeVertex += 2) {
+                            const QVector3D &first =
+                                cage->lineVertices[edgeVertex];
+                            const QVector3D &second =
+                                cage->lineVertices[edgeVertex + 1];
+                            const bool firstSelected = vertexSelectedAt(first);
+                            const bool secondSelected = vertexSelectedAt(second);
+                            const QColor firstColor = firstSelected
+                                ? selectedVertexColor : wireColor;
+                            const QColor secondColor = secondSelected
+                                ? selectedVertexColor : wireColor;
+                            edgeCage.lineVertexColors
+                                << QVector4D(firstColor.redF(), firstColor.greenF(),
+                                             firstColor.blueF(), 1.0f)
+                                << QVector4D(secondColor.redF(), secondColor.greenF(),
+                                             secondColor.blueF(), 1.0f);
                         }
                     }
                     gpuStrokes.append(std::move(edgeCage));
@@ -6006,7 +6074,8 @@ protected:
                             : 2.0);
                 }
                 const bool selectedCurveVertexOverlay =
-                    selected && showCurveEndpointVertices &&
+                    showCurveEndpointVertices &&
+                    (selected || !objectVertexSelection.isEmpty()) &&
                     !curveSampler_.curvesForShape(visibleShape).isEmpty();
                 if (selectedCurveVertexOverlay) {
                     // Blender keeps the selected spline wire at edit-wire
@@ -6014,18 +6083,18 @@ protected:
                     // selection, instead of applying object selection color
                     // to the entire spline.
                     sceneStroke.width = 1.0f;
-                    if (!objectComponentSelection.isEmpty()) {
+                    if (!objectVertexSelection.isEmpty()) {
                         const QVector<Shape::NurbsCurve2D> curves =
                             curveSampler_.curvesForShape(visibleShape);
                         QSet<int> wireSelectedControlPoints =
-                            objectComponentSelection;
+                            objectVertexSelection;
                         if (visibleShape.geometryType == GeometryType::PolyCurve) {
                             const auto controlPoints = curveControlPointVertices(
                                 visibleShape,
                                 renderObject.placementTranslation);
                             QVector<Point3D> selectedWorldPoints;
                             for (const auto &entry : controlPoints) {
-                                if (objectComponentSelection.contains(entry.first)) {
+                                if (objectVertexSelection.contains(entry.first)) {
                                     selectedWorldPoints.append(entry.second);
                                 }
                             }
@@ -6198,20 +6267,21 @@ protected:
                                         }
                                     }
                                 }
-                                const qreal arcStartSelected =
+                                const bool arcStartSelected =
                                     wireSelectedControlPoints.contains(
-                                        firstControlPoint)
-                                        ? qreal(1.0) : qreal(0.0);
-                                const qreal arcEndSelected =
+                                        firstControlPoint);
+                                const bool arcEndSelected =
                                     !curve.controlPoints.isEmpty() &&
                                             wireSelectedControlPoints.contains(
                                                 firstControlPoint +
-                                                curve.controlPoints.size() - 1)
-                                        ? qreal(1.0) : qreal(0.0);
-                                // Treat each PolyCurve component as one wire
-                                // edge between its editable endpoints, matching
-                                // the surface edge fade: two selected ends stay
-                                // fully orange; one selected end fades to black.
+                                                curve.controlPoints.size() - 1);
+                                const bool polyCurveArc =
+                                    visibleShape.geometryType ==
+                                    GeometryType::PolyCurve;
+                                // Welded pieces have the same selection rule as
+                                // mesh edges: each endpoint sets its own color,
+                                // so two selected endpoints make a solid edge
+                                // and one selected endpoint fades along it.
                                 for (int sample = 1;
                                      sample < sampled.parameters.size(); ++sample) {
                                     if (sample >= sampled.worldPoints.size() ||
@@ -6229,24 +6299,21 @@ protected:
                                                      float(first.z))
                                         << QVector3D(float(second.x), float(second.y),
                                                      float(second.z));
-                                    const bool polyCurveArc =
-                                        visibleShape.geometryType ==
-                                        GeometryType::PolyCurve;
                                     const qreal influenceA = polyCurveArc
-                                        ? arcStartSelected *
+                                        ? (arcStartSelected ? 1.0 : 0.0) *
                                                   (1.0 - normalizedArcLengths.value(
                                                              sample - 1)) +
-                                              arcEndSelected *
+                                              (arcEndSelected ? 1.0 : 0.0) *
                                                   normalizedArcLengths.value(
                                                       sample - 1)
                                         : selectionInfluence(
                                               curve, firstControlPoint,
                                               sampled.parameters[sample - 1]);
                                     const qreal influenceB = polyCurveArc
-                                        ? arcStartSelected *
+                                        ? (arcStartSelected ? 1.0 : 0.0) *
                                                   (1.0 - normalizedArcLengths.value(
                                                              sample)) +
-                                              arcEndSelected *
+                                              (arcEndSelected ? 1.0 : 0.0) *
                                                   normalizedArcLengths.value(
                                                       sample)
                                         : selectionInfluence(
@@ -7293,14 +7360,18 @@ protected:
                 painter.setBrush(QColor(12, 12, 12));
                 const QSet<int> &endpointSelection =
                     componentSelectionForObject(renderObject->objectId);
+                QSet<int> effectiveEndpointSelection = endpointSelection;
+                effectiveEndpointSelection.unite(weldedVertexSelections.value(
+                    renderObject->objectId.value()));
                 for (const auto &endpoint : curveEndpointVertices(
                          renderObject->shape,
                          renderObject->placementTranslation)) {
                     const bool selected =
-                        endpointSelection.contains(endpoint.first) ||
-                        (renderObject->selected && endpointSelection.isEmpty());
+                        effectiveEndpointSelection.contains(endpoint.first) ||
+                        (renderObject->selected &&
+                         effectiveEndpointSelection.isEmpty());
                     const bool active =
-                        endpointSelection.contains(endpoint.first) &&
+                        effectiveEndpointSelection.contains(endpoint.first) &&
                         componentSelectionObject_ == renderObject->objectId &&
                         activeComponentIndices_[static_cast<int>(
                             ComponentSelectionMode::Vertex)] == endpoint.first;

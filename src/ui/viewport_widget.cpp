@@ -591,6 +591,8 @@ struct TransientPreviewStroke {
     bool pointOutline = false;
     Point3D worldOffset;
     bool opaqueSurface = false;
+    bool highlighted = false;
+    QColor layerColor;
 };
 
 struct TransientPreviewPicture {
@@ -2525,6 +2527,39 @@ public:
         DebugLog::instance().write(QStringLiteral("grab canceled moved=%1").arg(moved));
     }
 
+    Point3D duplicateSelectionPivotWorld(
+        const QVector<ObjectId> &objectIds) const
+    {
+        Point3D pivot{};
+        int objectCount = 0;
+        for (const ObjectId objectId : objectIds) {
+            const SceneObject *sceneObject = document_.object(objectId);
+            if (sceneObject == nullptr) {
+                continue;
+            }
+            Point3D origin = sceneObject->placementTranslation;
+            if (sceneObject->geometry.geometryType != GeometryType::NurbsSurface &&
+                sceneObject->geometry.geometryType != GeometryType::NurbsSolid) {
+                const WorkPlaneFrame frame =
+                    shapeWorkPlaneFrame(sceneObject->geometry);
+                origin.x += frame.origin.x;
+                origin.y += frame.origin.y;
+                origin.z += frame.origin.z;
+            }
+            pivot.x += origin.x;
+            pivot.y += origin.y;
+            pivot.z += origin.z;
+            ++objectCount;
+        }
+        if (objectCount > 0) {
+            const qreal inverseCount = 1.0 / objectCount;
+            pivot.x *= inverseCount;
+            pivot.y *= inverseCount;
+            pivot.z *= inverseCount;
+        }
+        return pivot;
+    }
+
     bool beginDuplicate()
     {
         if (!selectionShortcutsAvailable()) {
@@ -2539,13 +2574,38 @@ public:
         if (!duplicateTool_.begin(document_, selected)) {
             return false;
         }
+        const Point3D pivot = duplicateSelectionPivotWorld(selected);
+        duplicateTool_.beginMove(pivot);
+        const QPoint localCursor = mapFromGlobal(QCursor::pos());
+        grabAxisAnchorWorld_ = pivot;
+        grabAxisStartScreen_ = localCursor;
+        grabViewPlaneFrame_ = makeWorkPlaneFrameFromNormal(
+            pivot, viewportTransform_.viewDirection(),
+            viewportTransform_.viewUp());
+        QPointF startOnViewPlane;
+        grabViewPlaneAnchorValid_ =
+            rect().contains(localCursor) &&
+            isValidWorkPlaneFrame(grabViewPlaneFrame_) &&
+            viewportTransform_.screenToWorkPlaneUnclipped(
+                localCursor, size(), grabViewPlaneFrame_, &startOnViewPlane);
+        if (grabViewPlaneAnchorValid_) {
+            grabViewPlaneStartWorld_ = workPlaneFramePointToWorld(
+                startOnViewPlane, grabViewPlaneFrame_);
+        }
+        dragAxisLock_ = DragAxisLock::None;
+        duplicateNumericInput_.clear();
+        selection_.clear();
         currentSnap_ = SnapResult{};
         setFocus(Qt::OtherFocusReason);
-        setCursor(Qt::CrossCursor);
+        setCursor(Qt::SizeAllCursor);
         update();
         DebugLog::instance().write(
-            QStringLiteral("beginDuplicate objects=%1")
-                .arg(duplicateTool_.sourceObjects().size()));
+            QStringLiteral("beginDuplicate objects=%1 pivot=(%2,%3,%4) cursor=%5")
+                .arg(duplicateTool_.sourceObjects().size())
+                .arg(pivot.x, 0, 'g', 12)
+                .arg(pivot.y, 0, 'g', 12)
+                .arg(pivot.z, 0, 'g', 12)
+                .arg(pointText(localCursor)));
         return true;
     }
 
@@ -2560,34 +2620,128 @@ public:
         return true;
     }
 
-    void updateDuplicatePreview(const QPointF &rawPoint)
+    void translateDuplicateShapeWorld(Shape &shape,
+                                     Point3D &placement,
+                                     const Point3D &delta) const
+    {
+        if (shape.geometryType == GeometryType::NurbsSurface ||
+            shape.geometryType == GeometryType::NurbsSolid) {
+            placement.x += delta.x;
+            placement.y += delta.y;
+            placement.z += delta.z;
+            return;
+        }
+        WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+        frame.origin.x += delta.x;
+        frame.origin.y += delta.y;
+        frame.origin.z += delta.z;
+        shape.workPlaneFrame = frame;
+        for (WorkPlaneFrame &componentFrame : shape.componentWorkPlaneFrames) {
+            componentFrame.origin.x += delta.x;
+            componentFrame.origin.y += delta.y;
+            componentFrame.origin.z += delta.z;
+        }
+    }
+
+    void updateDuplicatePreview(const QPointF &screenPosition)
     {
         if (!duplicateTool_.isActive() || !duplicateTool_.hasBasePoint()) {
             return;
         }
 
-        const QPointF destinationCursor = rawPoint - duplicateTool_.cursorOffset();
-        currentSnap_ = findDuplicateDestinationSnap(destinationCursor);
-        duplicateTool_.updatePlacement(
-            destinationCursor,
-            currentSnap_,
-            [this](Shape &shape, Point3D &placement, const QPointF &delta) {
-                if (shape.geometryType == GeometryType::NurbsSurface ||
-                    shape.geometryType == GeometryType::NurbsSolid) {
-                    const WorkPlaneFrame frame = viewportTransform_.workPlaneFrame();
-                    placement.x += frame.xAxis.x * delta.x() +
-                                   frame.yAxis.x * delta.y();
-                    placement.y += frame.xAxis.y * delta.x() +
-                                   frame.yAxis.y * delta.y();
-                    placement.z += frame.xAxis.z * delta.x() +
-                                   frame.yAxis.z * delta.y();
-                } else {
-                    translateShapeGeometry(shape, delta);
-                }
+        Point3D worldDelta{};
+        bool hasNumericDistance = false;
+        qreal numericDistance = duplicateNumericInput_.toDouble(&hasNumericDistance);
+        if (hasNumericDistance) {
+            const Point3D axis = dragAxisLock_ == DragAxisLock::Y
+                                     ? Point3D{0.0, 1.0, 0.0}
+                                 : dragAxisLock_ == DragAxisLock::Z
+                                     ? Point3D{0.0, 0.0, 1.0}
+                                     : Point3D{1.0, 0.0, 0.0};
+            worldDelta = {axis.x * numericDistance,
+                          axis.y * numericDistance,
+                          axis.z * numericDistance};
+            currentSnap_ = SnapResult{};
+        } else if (dragAxisLock_ != DragAxisLock::None) {
+            const Point3D axis = dragAxisLock_ == DragAxisLock::X
+                                     ? Point3D{1.0, 0.0, 0.0}
+                                 : dragAxisLock_ == DragAxisLock::Y
+                                     ? Point3D{0.0, 1.0, 0.0}
+                                     : Point3D{0.0, 0.0, 1.0};
+            blenderGrabAxisDelta(screenPosition, axis, &worldDelta);
+        } else {
+            QPointF currentOnViewPlane;
+            if (grabViewPlaneAnchorValid_ &&
+                viewportTransform_.screenToWorkPlaneUnclipped(
+                    screenPosition, size(), grabViewPlaneFrame_,
+                    &currentOnViewPlane)) {
+                const QPointF startOnViewPlane = worldPointToWorkPlaneFrame(
+                    grabViewPlaneStartWorld_, grabViewPlaneFrame_);
+                const QPointF viewPlaneDelta =
+                    currentOnViewPlane - startOnViewPlane;
+                const WorkPlaneFrame &frame = grabViewPlaneFrame_;
+                worldDelta = {
+                    frame.xAxis.x * viewPlaneDelta.x() +
+                        frame.yAxis.x * viewPlaneDelta.y(),
+                    frame.xAxis.y * viewPlaneDelta.x() +
+                        frame.yAxis.y * viewPlaneDelta.y(),
+                    frame.xAxis.z * viewPlaneDelta.x() +
+                        frame.yAxis.z * viewPlaneDelta.y()};
+            }
+        }
+
+        if (!hasNumericDistance) {
+            currentSnap_ = findDuplicateDestinationSnap(screenPosition);
+        }
+        if (!hasNumericDistance && currentSnap_.isValid() &&
+            currentSnap_.hasWorldPoint) {
+            const Point3D base = duplicateTool_.basePointWorld();
+            worldDelta = {currentSnap_.worldPoint.x - base.x,
+                          currentSnap_.worldPoint.y - base.y,
+                          currentSnap_.worldPoint.z - base.z};
+            if (dragAxisLock_ != DragAxisLock::None) {
+                const Point3D axis = dragAxisLock_ == DragAxisLock::X
+                                         ? Point3D{1.0, 0.0, 0.0}
+                                     : dragAxisLock_ == DragAxisLock::Y
+                                         ? Point3D{0.0, 1.0, 0.0}
+                                         : Point3D{0.0, 0.0, 1.0};
+                const qreal distance = worldDelta.x * axis.x +
+                                       worldDelta.y * axis.y +
+                                       worldDelta.z * axis.z;
+                worldDelta = {axis.x * distance, axis.y * distance,
+                              axis.z * distance};
+                currentSnap_.worldPoint = {base.x + worldDelta.x,
+                                           base.y + worldDelta.y,
+                                           base.z + worldDelta.z};
+                currentSnap_.point = worldPointToWorkPlaneFrame(
+                    currentSnap_.worldPoint, viewportTransform_.workPlaneFrame());
+            }
+        }
+
+        duplicateTool_.updatePlacementWorld(
+            worldDelta, [this](Shape &shape, Point3D &placement,
+                               const Point3D &delta) {
+                translateDuplicateShapeWorld(shape, placement, delta);
             });
-        cursorWorld_ = duplicateTool_.destination();
-        lastWorldPosition_ = duplicateTool_.destination();
+        cursorWorld_ = screenToWorld(screenPosition);
+        lastWorldPosition_ = cursorWorld_;
         update();
+    }
+
+    void cancelDuplicateMove()
+    {
+        if (!duplicateTool_.isActive()) {
+            return;
+        }
+        dragAxisLock_ = DragAxisLock::None;
+        duplicateNumericInput_.clear();
+        currentSnap_ = SnapResult{};
+        duplicateTool_.updatePlacementWorld(
+            {}, [this](Shape &shape, Point3D &placement,
+                       const Point3D &delta) {
+                translateDuplicateShapeWorld(shape, placement, delta);
+            });
+        finishDuplicate();
     }
 
     void finishDuplicate()
@@ -2621,8 +2775,7 @@ public:
                                 duplicateIds.isEmpty() ? ObjectId::invalid()
                                                        : duplicateIds.back());
         const int duplicateCount = duplicateIds.size();
-        const QPointF committedDelta = duplicateTool_.destination() -
-                                       duplicateTool_.basePoint();
+        const Point3D committedDelta = duplicateTool_.worldDelta();
         resetDuplicateInteraction();
         currentSnap_ = SnapResult{};
         setCursor(Qt::ArrowCursor);
@@ -2633,9 +2786,11 @@ public:
             commandFinished_(Tool::Select);
         }
         DebugLog::instance().write(
-            QStringLiteral("duplicate committed objects=%1 delta=%2")
+            QStringLiteral("duplicate committed objects=%1 worldDelta=(%2,%3,%4)")
                 .arg(duplicateCount)
-                .arg(pointText(committedDelta)));
+                .arg(committedDelta.x, 0, 'g', 12)
+                .arg(committedDelta.y, 0, 'g', 12)
+                .arg(committedDelta.z, 0, 'g', 12));
     }
 
     void cancelDuplicate()
@@ -2643,6 +2798,11 @@ public:
         if (!duplicateTool_.isActive()) {
             return;
         }
+        const QVector<ObjectId> sourceObjectIds = duplicateTool_.sourceObjectIds();
+        selection_.setObjectIds(
+            sourceObjectIds,
+            sourceObjectIds.isEmpty() ? ObjectId::invalid()
+                                      : sourceObjectIds.back());
         resetDuplicateInteraction();
         currentSnap_ = SnapResult{};
         setCursor(activeTool_ == Tool::Select ? Qt::ArrowCursor : Qt::CrossCursor);
@@ -4594,8 +4754,9 @@ protected:
                                 selectedFace.placementTranslation =
                                     renderObject.placementTranslation;
                                 selectedFace.preparedGeometryOffset =
-                                    renderObject.preparedGeometryOffset;
+                                    renderObject.placementTranslation;
                                 ViewportDepthGeometry selectionGeometry;
+                                bool selectionGeometryUsesCachedOffset = false;
                                 const bool sweptPanel =
                                     geometryType == GeometryType::NurbsSolid &&
                                     face.trimLoops.isEmpty() &&
@@ -4604,13 +4765,26 @@ protected:
                                     face.controlPoints.size() == 4;
                                 const ViewportDepthGeometry *sourceGeometry =
                                     renderObject.preparedDepthGeometry.data();
-                                if (sweptPanel && sourceGeometry != nullptr &&
+                                if (geometryType == GeometryType::NurbsSurface &&
+                                    sourceGeometry != nullptr) {
+                                    // Match Blender's edit-face overlay: draw
+                                    // the same triangles as the shaded face so
+                                    // both passes have identical depth values.
+                                    selectionGeometry = *sourceGeometry;
+                                    selectionGeometryUsesCachedOffset = true;
+                                } else if (sweptPanel && sourceGeometry != nullptr &&
                                     sourceGeometry->surfaceVertices.size() ==
                                         sourceGeometry->surfaceNormals.size()) {
                                     const QVector3D origin = QVector3D(
-                                        float(face.controlPoints[0].x),
-                                        float(face.controlPoints[0].y),
-                                        float(face.controlPoints[0].z));
+                                        float(face.controlPoints[0].x -
+                                              renderObject.preparedGeometryOffset.x +
+                                              renderObject.placementTranslation.x),
+                                        float(face.controlPoints[0].y -
+                                              renderObject.preparedGeometryOffset.y +
+                                              renderObject.placementTranslation.y),
+                                        float(face.controlPoints[0].z -
+                                              renderObject.preparedGeometryOffset.z +
+                                              renderObject.placementTranslation.z));
                                     const QVector3D panelU = QVector3D(
                                         float(face.controlPoints[2].x -
                                               face.controlPoints[0].x),
@@ -4678,13 +4852,18 @@ protected:
                                                 << sourceGeometry->surfaceNormals[triangle + 1]
                                                 << sourceGeometry->surfaceNormals[triangle + 2];
                                         }
+                                        selectionGeometryUsesCachedOffset =
+                                            !selectionGeometry.surfaceVertices.isEmpty();
                                     }
                                 }
-                                if (!sweptPanel &&
-                                    selectionGeometry.surfaceVertices.isEmpty()) {
+                                if (selectionGeometry.surfaceVertices.isEmpty()) {
                                     selectionGeometry = buildViewportDepthGeometry(
                                         selectedFace,
                                         &surfaceTessellationCache_);
+                                }
+                                if (selectionGeometryUsesCachedOffset) {
+                                    selectedFace.preparedGeometryOffset =
+                                        renderObject.preparedGeometryOffset;
                                 }
                                 selectedFace.preparedDepthGeometry =
                                     QSharedPointer<ViewportDepthGeometry>::create(
@@ -5038,7 +5217,10 @@ protected:
                                      float pointDiameter,
                                      bool dashed,
                                      bool pointOutline,
-                                     const Point3D &worldOffset = Point3D{}) {
+                                     const Point3D &worldOffset = Point3D{},
+                                     bool opaqueSurface = false,
+                                     bool highlighted = false,
+                                     const QColor &layerColor = QColor()) {
                     const GeometryType type = shape.geometryType;
                     const bool supportedType =
                         type == GeometryType::Point || type == GeometryType::Line ||
@@ -5064,7 +5246,8 @@ protected:
                     gpuPreviewGeometry.append(
                         {shape, color, width, controlGuide, pointDiameter,
                          dashed, pointOutline, worldOffset,
-                         activeTool_ == Tool::PointExtrude});
+                         opaqueSurface || activeTool_ == Tool::PointExtrude,
+                         highlighted, layerColor});
                     return true;
                 };
 
@@ -5072,7 +5255,9 @@ protected:
                 [&gpuPreviewPictures](const Shape &picture,
                                       int duplicateIndex,
                                       bool activeToolPreview,
-                                      ObjectId mirrorObjectId) {
+                                      ObjectId mirrorObjectId,
+                                      const QColor &frameColor =
+                                          QColor(QStringLiteral("#e6b85c"))) {
                     if (picture.geometryType != GeometryType::Picture ||
                         picture.pictureImage.isNull() ||
                         pictureFrameCorners(picture).size() != 4) {
@@ -5086,7 +5271,7 @@ protected:
                          mirrorObjectId,
                          activeToolPreview,
                          0.78f,
-                         QColor(QStringLiteral("#e6b85c"))});
+                         frameColor});
                     return true;
                 };
 
@@ -5149,11 +5334,46 @@ protected:
                 const Shape &preview = duplicateTool_.previewShapes()[index];
                 if (preview.geometryType == GeometryType::Picture) {
                     addPicturePreview(preview, index, false,
-                                      ObjectId::invalid());
+                                      ObjectId::invalid(),
+                                      viewportSelectionColor());
                 } else {
+                    const Point3D placement =
+                        duplicateTool_.previewPlacementTranslations().value(index);
+                    QColor duplicateLayerColor;
+                    if (index < duplicateTool_.sourceObjects().size()) {
+                        const Layer *sourceLayer = document_.layer(
+                            duplicateTool_.sourceObjects()[index].layerId);
+                        if (sourceLayer != nullptr) {
+                            duplicateLayerColor = sourceLayer->color;
+                        }
+                    }
                     gpuDuplicatePreviewHandled[index] = addPreviewShape(
-                        preview, previewColor, 1.5f, false, 0.0f, false, false,
-                        duplicateTool_.previewPlacementTranslations().value(index));
+                        preview, viewportSelectionColor(), 3.5f, false, 0.0f,
+                        false, false,
+                        placement,
+                        preview.geometryType == GeometryType::NurbsSolid ||
+                            preview.geometryType == GeometryType::NurbsSurface,
+                        true, duplicateLayerColor);
+                    if ((controlPointsVisible_ || showCurveEndpointVertices) &&
+                        preview.geometryType != GeometryType::NurbsSolid &&
+                        preview.geometryType != GeometryType::NurbsSurface) {
+                        const auto vertices = showCurveEndpointVertices
+                            ? curveEndpointVertices(preview, placement)
+                            : curveControlPointVertices(preview, placement);
+                        for (const auto &vertex : vertices) {
+                            ViewportControlPointHandle handle;
+                            handle.worldPosition = QVector3D(
+                                static_cast<float>(vertex.second.x),
+                                static_cast<float>(vertex.second.y),
+                                static_cast<float>(vertex.second.z));
+                            handle.fillColor = viewportSelectionColor();
+                            handle.outlineColor = viewportSelectionColor();
+                            handle.diameterPixels = 4.0f;
+                            handle.outlineWidthPixels = 0.0f;
+                            handle.shape = ViewportControlPointShape::Circle;
+                            gpuControlPointHandles.append(handle);
+                        }
+                    }
                 }
             }
 
@@ -5423,11 +5643,15 @@ protected:
                 surfaceObject.placementTranslation = preview.worldOffset;
                 surfaceObject.preparedGeometryOffset = preview.worldOffset;
                 surfaceObject.cacheable = false;
-                surfaceObject.selected = false;
-                const Layer *previewLayer =
-                    document_.layer(document_.activeLayerId());
-                if (previewLayer != nullptr) {
-                    surfaceObject.layerColor = previewLayer->color;
+                surfaceObject.selected = preview.highlighted;
+                if (preview.layerColor.isValid()) {
+                    surfaceObject.layerColor = preview.layerColor;
+                } else {
+                    const Layer *previewLayer =
+                        document_.layer(document_.activeLayerId());
+                    if (previewLayer != nullptr) {
+                        surfaceObject.layerColor = previewLayer->color;
+                    }
                 }
                 surfaceObject.preparedDepthGeometry =
                     QSharedPointer<ViewportDepthGeometry>::create(
@@ -5445,7 +5669,9 @@ protected:
                 // extrusion preview instead of waiting for commit.
                 ViewportSceneStroke previewCage;
                 previewCage.shape = &preview.shape;
-                previewCage.color = QColor(Qt::black);
+                previewCage.color = preview.highlighted
+                                        ? viewportSelectionColor()
+                                        : QColor(Qt::black);
                 previewCage.width = 1.0f;
                 previewCage.editModeWire = true;
                 previewCage.worldOffset = preview.worldOffset;
@@ -5453,6 +5679,19 @@ protected:
                     QSharedPointer<ViewportDepthGeometry>::create(
                         selectedSurfaceCage(preview.shape));
                 gpuPreviewStrokes.append(std::move(previewCage));
+                if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                    ViewportSceneStroke previewVertices;
+                    previewVertices.shape = &preview.shape;
+                    previewVertices.color = preview.highlighted
+                                                ? viewportSelectionColor()
+                                                : QColor(12, 12, 12);
+                    previewVertices.pointDiameter = 4.0f;
+                    previewVertices.editModeWire = true;
+                    previewVertices.worldOffset = preview.worldOffset;
+                    previewVertices.preparedDepthGeometry =
+                        gpuPreviewStrokes.back().preparedDepthGeometry;
+                    gpuPreviewStrokes.append(std::move(previewVertices));
+                }
                 continue;
             }
             gpuPreviewStrokes.append({&preview.shape,
@@ -6096,22 +6335,12 @@ protected:
             lastWorldPosition_ = rawWorldPosition;
             cursorValid_ = true;
             if (event->button() == Qt::LeftButton) {
-                if (duplicateTool_.isPickingBasePoint()) {
-                    const SnapResult baseSnap = findDuplicateBasePointSnap(rawWorldPosition);
-                    duplicateTool_.chooseBasePoint(
-                        rawWorldPosition,
-                        baseSnap.isValid() ? baseSnap.point : rawWorldPosition);
-                    currentSnap_ = baseSnap;
-                    setCursor(Qt::SizeAllCursor);
-                    updateDuplicatePreview(rawWorldPosition);
-                } else {
-                    updateDuplicatePreview(rawWorldPosition);
-                    finishDuplicate();
-                }
+                updateDuplicatePreview(screenPosition);
+                finishDuplicate();
                 update();
                 emitCoordinateUpdate();
             } else if (event->button() == Qt::RightButton) {
-                cancelDuplicate();
+                cancelDuplicateMove();
             }
             return;
         }
@@ -6892,18 +7121,8 @@ protected:
         }
 
         if (duplicateTool_.isActive()) {
-            if (duplicateTool_.isPickingBasePoint()) {
-                currentSnap_ = findDuplicateBasePointSnap(rawCursorWorld_);
-                cursorWorld_ = currentSnap_.isValid()
-                                   ? currentSnap_.point
-                                   : rawCursorWorld_;
-                lastWorldPosition_ = cursorWorld_;
-                update();
-                emitCoordinateUpdate();
-            } else {
-                updateDuplicatePreview(rawCursorWorld_);
-                emitCoordinateUpdate();
-            }
+            updateDuplicatePreview(screenPosition);
+            emitCoordinateUpdate();
             return;
         }
 
@@ -7638,8 +7857,56 @@ protected:
         }
 
         if (duplicateTool_.isActive() && event->key() == Qt::Key_Escape) {
-            cancelDuplicate();
+            cancelDuplicateMove();
             return;
+        }
+
+        if (duplicateTool_.isActive() && !event->isAutoRepeat() &&
+            event->modifiers() == Qt::NoModifier &&
+            (event->key() == Qt::Key_Return ||
+             event->key() == Qt::Key_Enter)) {
+            updateDuplicatePreview(mapFromGlobal(QCursor::pos()));
+            finishDuplicate();
+            event->accept();
+            return;
+        }
+
+        if (duplicateTool_.isActive() && !event->isAutoRepeat() &&
+            event->modifiers() == Qt::NoModifier &&
+            (event->key() == Qt::Key_X || event->key() == Qt::Key_Y ||
+             event->key() == Qt::Key_Z)) {
+            dragAxisLock_ = event->key() == Qt::Key_X
+                                ? DragAxisLock::X
+                            : event->key() == Qt::Key_Y
+                                ? DragAxisLock::Y
+                                : DragAxisLock::Z;
+            updateDuplicatePreview(mapFromGlobal(QCursor::pos()));
+            event->accept();
+            update();
+            emitCoordinateUpdate();
+            return;
+        }
+
+        if (duplicateTool_.isActive() && !event->isAutoRepeat() &&
+            event->modifiers() == Qt::NoModifier) {
+            if (event->key() == Qt::Key_Backspace) {
+                duplicateNumericInput_.chop(1);
+                updateDuplicatePreview(mapFromGlobal(QCursor::pos()));
+                event->accept();
+                return;
+            }
+            const QString numericText = event->text();
+            if (!numericText.isEmpty() &&
+                std::all_of(numericText.cbegin(), numericText.cend(),
+                            [](QChar character) {
+                                return character.isDigit() || character == QLatin1Char('.') ||
+                                       character == QLatin1Char('-');
+                            })) {
+                duplicateNumericInput_.append(numericText);
+                updateDuplicatePreview(mapFromGlobal(QCursor::pos()));
+                event->accept();
+                return;
+            }
         }
 
         if (grabTool_.isActive() && !event->isAutoRepeat() &&
@@ -7652,6 +7919,14 @@ protected:
             !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
             event->key() == Qt::Key_G) {
             beginGrab();
+            return;
+        }
+
+        if (selectionShortcutsAvailable() && !event->isAutoRepeat() &&
+            event->modifiers() == Qt::ShiftModifier &&
+            event->key() == Qt::Key_D) {
+            beginDuplicate();
+            event->accept();
             return;
         }
 
@@ -9335,6 +9610,13 @@ private:
     void resetDuplicateInteraction()
     {
         duplicateTool_.reset();
+        duplicateNumericInput_.clear();
+        grabAxisAnchorWorld_ = {};
+        grabViewPlaneFrame_ = WorkPlaneFrame{};
+        grabViewPlaneStartWorld_ = {};
+        grabViewPlaneAnchorValid_ = false;
+        grabAxisStartScreen_ = {};
+        dragAxisLock_ = DragAxisLock::None;
     }
 
     void resetInteractionAfterHistory()
@@ -10631,24 +10913,7 @@ private:
         return selectedIndices;
     }
 
-    SnapResult findDuplicateBasePointSnap(const QPointF &rawPoint) const
-    {
-        QVector<int> excludedShapeIndices;
-        const QVector<int> selectedIndices = duplicateSourceShapeIndices();
-        for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
-            if (!selectedIndices.contains(shapeIndex)) {
-                excludedShapeIndices.append(shapeIndex);
-            }
-        }
-        const QVector<SnapCandidate> candidates =
-            snapEngine_.snapCandidatesForScene(document_,
-                                               excludedShapeIndices,
-                                               viewportTransform_,
-                                               size());
-        return closestSnapCandidate(rawPoint, candidates);
-    }
-
-    SnapResult findDuplicateDestinationSnap(const QPointF &rawPoint) const
+    SnapResult findDuplicateDestinationSnap(const QPointF &screenPosition) const
     {
         const QVector<int> selectedIndices = duplicateSourceShapeIndices();
         bool selectedLine = false;
@@ -10659,15 +10924,16 @@ private:
                 break;
             }
         }
-        return snapEngine_.findSnapPoint(document_,
-                                         rawPoint,
-                                         true,
-                                         QVector<QPointF>{duplicateTool_.basePoint()},
-                                         viewportTransform_,
-                                         size(),
-                                         selectedIndices,
-                                         true,
-                                         !selectedLine);
+        const Point3D basePointWorld = duplicateTool_.basePointWorld();
+        return snapEngine_.findSpatialSnapPoint(document_,
+                                                screenPosition,
+                                                &basePointWorld,
+                                                viewportTransform_,
+                                                size(),
+                                                {},
+                                                selectedIndices,
+                                                true,
+                                                !selectedLine);
     }
 
     SnapResult findGrabDestinationSnap(const QPointF &screenPosition) const
@@ -11116,6 +11382,10 @@ private:
         const QVector<QPair<int, Point3D>> allControlPoints =
             curveControlPointVertices(shape, worldOffset);
         QVector<QPair<int, Point3D>> endpoints;
+        if (shape.geometryType == GeometryType::Rectangle ||
+            shape.geometryType == GeometryType::Polygon) {
+            return allControlPoints;
+        }
         const auto appendEndpoints = [&endpoints, &allControlPoints](int first,
                                                                     int last) {
             if (first < 0 || last < first || last >= allControlPoints.size()) {
@@ -15976,6 +16246,7 @@ private:
     NavigationController navigationController_;
     GrabTool grabTool_;
     DuplicateTool duplicateTool_;
+    QString duplicateNumericInput_;
     BlenderGridAppearance gridAppearance_;
     ToolContext toolContext_;
     ToolRegistry &toolRegistry_;

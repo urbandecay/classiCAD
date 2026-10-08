@@ -658,7 +658,7 @@ private:
         }
 
         statusBar()->showMessage(
-            QStringLiteral("Duplicate: click a base point, then click where to place the copy"));
+            QStringLiteral("Duplicate: move the copy, X/Y/Z constrains an axis; click or Enter confirms"));
     }
 
     void duplicateInPlace()
@@ -844,8 +844,6 @@ private:
         });
 
         QAction *duplicateAction = editMenu->addAction(QStringLiteral("Duplicate"));
-        duplicateAction->setShortcut(QKeySequence(QStringLiteral("Shift+D")));
-        duplicateAction->setShortcutContext(Qt::WindowShortcut);
         connect(duplicateAction, &QAction::triggered, this, [this]() {
             startDuplicate();
         });

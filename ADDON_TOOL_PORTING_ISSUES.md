@@ -79,6 +79,10 @@ misread or implemented incorrectly.
 - Keep preview rendering on the established OpenGL viewport path where the
   ported tool already uses it; do not silently replace it with a separate Qt
   painter preview.
+- Shift+D's moving duplicate is already the active selection in Blender. Its
+  preview must show the selection-colored outline/control points from the first
+  movement frame, while retaining the object's normal opaque surface shading;
+  applying selection only after commit makes the preview appear unselected.
 - Match the add-on's key semantics: the line tool uses Shift to lock direction;
   do not add an unrelated `N` control while porting it.
 - Arc angles use clockwise as the positive direction. The arc compass and

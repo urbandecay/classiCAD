@@ -3,28 +3,23 @@
 #include "core/document/document.h"
 #include "core/document/object_id.h"
 
-#include <QPointF>
 #include <QVector>
 
 #include <functional>
 
 namespace classiCAD {
 
-struct SnapResult;
-
-// Owns the source snapshot, base-point stage, and translated preview set for
-// interactive Duplicate. The viewport supplies its shared snap query.
+// Owns the source snapshot and translated preview for interactive Duplicate.
+// The viewport supplies the transform and shared snap query.
 class DuplicateTool final {
 public:
     bool begin(const Document &document,
                const QVector<ObjectId> &selectedObjectIds);
+    void beginMove(const Point3D &basePointWorld);
     void beginInPlace();
-    void chooseBasePoint(const QPointF &rawPosition,
-                         const QPointF &resolvedBasePoint);
-    void updatePlacement(
-        const QPointF &destinationCursor,
-        const SnapResult &destinationSnap,
-        const std::function<void(Shape &, Point3D &, const QPointF &)> &translate);
+    void updatePlacementWorld(
+        const Point3D &worldDelta,
+        const std::function<void(Shape &, Point3D &, const Point3D &)> &translate);
     void reset();
 
     bool isActive() const;
@@ -34,9 +29,8 @@ public:
     QVector<ObjectId> sourceObjectIds() const;
     const QVector<Shape> &previewShapes() const;
     const QVector<Point3D> &previewPlacementTranslations() const;
-    QPointF basePoint() const;
-    QPointF cursorOffset() const;
-    QPointF destination() const;
+    Point3D basePointWorld() const;
+    Point3D worldDelta() const;
 
 private:
     bool active_ = false;
@@ -45,9 +39,8 @@ private:
     QVector<SceneObject> sourceObjects_;
     QVector<Shape> previewShapes_;
     QVector<Point3D> previewPlacementTranslations_;
-    QPointF basePoint_;
-    QPointF cursorOffset_;
-    QPointF destination_;
+    Point3D basePointWorld_;
+    Point3D worldDelta_;
 };
 
 } // namespace classiCAD

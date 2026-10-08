@@ -1,7 +1,5 @@
 #include "duplicate_tool.h"
 
-#include "services/snapping/snap_types.h"
-
 #include <utility>
 
 namespace classiCAD {
@@ -21,20 +19,18 @@ bool DuplicateTool::begin(const Document &document,
         return false;
     }
     active_ = true;
-    pickingBasePoint_ = true;
     return true;
 }
 
-void DuplicateTool::beginInPlace()
+void DuplicateTool::beginMove(const Point3D &basePointWorld)
 {
     if (!active_) {
         return;
     }
     pickingBasePoint_ = false;
     hasBasePoint_ = true;
-    basePoint_ = {};
-    cursorOffset_ = {};
-    destination_ = {};
+    basePointWorld_ = basePointWorld;
+    worldDelta_ = {};
     previewShapes_.clear();
     previewPlacementTranslations_.clear();
     previewShapes_.reserve(sourceObjects_.size());
@@ -45,30 +41,33 @@ void DuplicateTool::beginInPlace()
     }
 }
 
-void DuplicateTool::chooseBasePoint(const QPointF &rawPosition,
-                                    const QPointF &resolvedBasePoint)
+void DuplicateTool::beginInPlace()
 {
-    if (!active_ || !pickingBasePoint_) {
+    if (!active_) {
         return;
     }
-    basePoint_ = resolvedBasePoint;
-    cursorOffset_ = rawPosition - basePoint_;
-    destination_ = basePoint_;
-    hasBasePoint_ = true;
     pickingBasePoint_ = false;
+    hasBasePoint_ = true;
+    previewShapes_.clear();
+    previewPlacementTranslations_.clear();
+    previewShapes_.reserve(sourceObjects_.size());
+    previewPlacementTranslations_.reserve(sourceObjects_.size());
+    for (const SceneObject &source : sourceObjects_) {
+        previewShapes_.append(source.geometry);
+        previewPlacementTranslations_.append(source.placementTranslation);
+    }
+    basePointWorld_ = {};
+    worldDelta_ = {};
 }
 
-void DuplicateTool::updatePlacement(
-    const QPointF &destinationCursor,
-    const SnapResult &destinationSnap,
-    const std::function<void(Shape &, Point3D &, const QPointF &)> &translate)
+void DuplicateTool::updatePlacementWorld(
+    const Point3D &worldDelta,
+    const std::function<void(Shape &, Point3D &, const Point3D &)> &translate)
 {
     if (!active_ || !hasBasePoint_ || !translate) {
         return;
     }
-    destination_ = destinationSnap.isValid() ? destinationSnap.point
-                                              : destinationCursor;
-    const QPointF delta = destination_ - basePoint_;
+    worldDelta_ = worldDelta;
     previewShapes_.clear();
     previewPlacementTranslations_.clear();
     previewShapes_.reserve(sourceObjects_.size());
@@ -76,7 +75,7 @@ void DuplicateTool::updatePlacement(
     for (const SceneObject &source : sourceObjects_) {
         Shape preview = source.geometry;
         Point3D placement = source.placementTranslation;
-        translate(preview, placement, delta);
+        translate(preview, placement, worldDelta);
         previewShapes_.append(preview);
         previewPlacementTranslations_.append(placement);
     }
@@ -90,9 +89,8 @@ void DuplicateTool::reset()
     sourceObjects_.clear();
     previewShapes_.clear();
     previewPlacementTranslations_.clear();
-    basePoint_ = {};
-    cursorOffset_ = {};
-    destination_ = {};
+    basePointWorld_ = {};
+    worldDelta_ = {};
 }
 
 bool DuplicateTool::isActive() const
@@ -135,19 +133,14 @@ const QVector<Point3D> &DuplicateTool::previewPlacementTranslations() const
     return previewPlacementTranslations_;
 }
 
-QPointF DuplicateTool::basePoint() const
+Point3D DuplicateTool::basePointWorld() const
 {
-    return basePoint_;
+    return basePointWorld_;
 }
 
-QPointF DuplicateTool::cursorOffset() const
+Point3D DuplicateTool::worldDelta() const
 {
-    return cursorOffset_;
-}
-
-QPointF DuplicateTool::destination() const
-{
-    return destination_;
+    return worldDelta_;
 }
 
 } // namespace classiCAD

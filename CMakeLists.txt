@@ -86,6 +86,7 @@ set(CLASSICAD_COMMAND_SOURCES
     src/core/commands/subdivision_command.cpp
     src/core/commands/trim_erase_command.cpp
     src/core/commands/transform_command.cpp
+    src/core/commands/weld_command.cpp
 )
 
 set(CLASSICAD_SERIALIZATION_SOURCES

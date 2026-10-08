@@ -606,6 +606,29 @@ private:
                 controlPointsButton_->toggle();
             }
         });
+
+        auto *weldShortcut =
+            new QShortcut(QKeySequence(QStringLiteral("W")), viewport_);
+        weldShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(weldShortcut, &QShortcut::activated, this, [this]() {
+            startWeld();
+        });
+    }
+
+    void startWeld()
+    {
+        if (viewport_ == nullptr) {
+            return;
+        }
+        const ViewportCommandResult result =
+            viewport_->executeCommand(ViewportCommand::Weld);
+        if (result.accepted) {
+            statusBar()->showMessage(
+                QStringLiteral("Welded %1 curve crossing%2")
+                    .arg(result.count)
+                    .arg(result.count == 1 ? QString() : QStringLiteral("s")),
+                5000);
+        }
     }
 
     void createScaleToolMenu(QToolButton *button)
@@ -1353,6 +1376,7 @@ private:
             subdivideWithNumberOfPoints();
         };
         callbacks.joinRequested = [this]() { startJoinMode(); };
+        callbacks.weldRequested = [this]() { startWeld(); };
         callbacks.explodeRequested = [this]() { explodeSelectedShapes(); };
 
         toolShelf_ = new ToolShelf(std::move(callbacks));

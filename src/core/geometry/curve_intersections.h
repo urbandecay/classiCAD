@@ -7,7 +7,14 @@
 
 namespace classiCAD {
 
+struct NurbsCurveIntersection {
+    qreal firstCurveParameter = 0.0;
+    qreal secondCurveParameter = 0.0;
+};
+
 struct NurbsCurveIntersectionResult {
+    QVector<NurbsCurveIntersection> intersections;
+    // Kept for existing callers that only need parameters on the first curve.
     QVector<qreal> firstCurveParameters;
     int seedSolves = 0;
 };
@@ -17,8 +24,10 @@ struct NurbsPointClosestParameter {
     qreal distanceSquared = 0.0;
 };
 
-// Finds intersections between planar curves in 3D workplane frames. Returned
-// parameters belong to the first curve's original NURBS parameter domain.
+// Finds intersections between planar curves in 3D workplane frames. Paired
+// results preserve each curve's original NURBS parameter domain; the legacy
+// firstCurveParameters list remains available to callers that need only the
+// first curve's parameters.
 NurbsCurveIntersectionResult intersectNurbsCurves(
     const NurbsCurve2D &firstCurve,
     const WorkPlaneFrame &firstFrame,

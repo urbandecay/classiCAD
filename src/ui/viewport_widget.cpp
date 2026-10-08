@@ -12,6 +12,7 @@
 #include "../core/commands/explode_command.h"
 #include "../core/commands/fill_command.h"
 #include "../core/commands/trim_erase_command.h"
+#include "../core/commands/weld_command.h"
 #include "../core/debug_log.h"
 #include "../core/geometry/circle_construction.h"
 #include "../core/geometry/curve_construction.h"
@@ -9555,7 +9556,70 @@ private:
             const int count = beginPointExtrude();
             return ApplicationCommandResult{count > 0, count};
         };
+        handlers.weld = [this](int) {
+            return weldSelectedCurves();
+        };
         commandRouter_.setHandlers(std::move(handlers));
+    }
+
+    ApplicationCommandResult weldSelectedCurves()
+    {
+        if (joinTool_.isActive()) {
+            cancelJoinMode(false);
+        }
+        if (subdivisionTool_.isActive()) {
+            cancelSubdivisionPreview();
+        }
+
+        QVector<ObjectId> selected = selectedShapeIndices_;
+        if (selectedShapeIndex_.isValid() &&
+            objectIndex(selectedShapeIndex_) >= 0 &&
+            !selected.contains(selectedShapeIndex_)) {
+            selected.append(selectedShapeIndex_);
+        }
+        setTool(Tool::Select);
+
+        WeldCommandPlan plan;
+        if (!buildWeldCommandPlan(document_, selected, &plan)) {
+            if (toolStatusUpdate_) {
+                toolStatusUpdate_(QStringLiteral("Weld could not inspect the selected curves"));
+            }
+            return {};
+        }
+        if (!plan.failureMessage.isEmpty()) {
+            if (toolStatusUpdate_) {
+                toolStatusUpdate_(plan.failureMessage);
+            }
+            return {};
+        }
+
+        DocumentTransaction transaction = session_.beginTransaction();
+        if (!applyWeldCommand(transaction, plan) ||
+            !session_.commitTransaction(transaction)) {
+            if (toolStatusUpdate_) {
+                toolStatusUpdate_(QStringLiteral("Weld failed while updating the selected curves"));
+            }
+            return {};
+        }
+
+        selection_.clearActiveControlPoint();
+        session_.notifySelectionChanged();
+        update();
+        const QString statusMessage =
+            QStringLiteral("Welded %1 crossing%2 across %3 curve%4")
+                .arg(plan.intersectionCount)
+                .arg(plan.intersectionCount == 1 ? QString() : QStringLiteral("s"))
+                .arg(plan.splitCurveCount)
+                .arg(plan.splitCurveCount == 1 ? QString() : QStringLiteral("s"));
+        if (toolStatusUpdate_) {
+            toolStatusUpdate_(statusMessage);
+        }
+        DebugLog::instance().write(
+            QStringLiteral("weld committed crossings=%1 splitCurves=%2 objects=%3")
+                .arg(plan.intersectionCount)
+                .arg(plan.splitCurveCount)
+                .arg(plan.replacements.size()));
+        return {true, plan.intersectionCount};
     }
 
     ArcTool::InteractionState &arcState()

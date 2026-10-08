@@ -21,6 +21,7 @@ enum class ApplicationCommand {
     BeginDuplicate,
     DuplicateInPlace,
     BeginPointExtrude,
+    Weld,
 };
 
 struct ApplicationCommandResult {
@@ -47,6 +48,7 @@ public:
         Handler beginDuplicate;
         Handler duplicateInPlace;
         Handler beginPointExtrude;
+        Handler weld;
     };
 
     explicit CommandRouter(Handlers handlers = {});

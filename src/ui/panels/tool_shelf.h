@@ -26,6 +26,7 @@ struct ToolShelfCallbacks {
     std::function<void(bool)> controlPointsVisibilityChanged;
     std::function<void()> subdivideRequested;
     std::function<void()> joinRequested;
+    std::function<void()> weldRequested;
     std::function<void()> explodeRequested;
 };
 

@@ -61,6 +61,9 @@ ApplicationCommandResult CommandRouter::execute(ApplicationCommand command,
     case ApplicationCommand::BeginPointExtrude:
         handler = &handlers_.beginPointExtrude;
         break;
+    case ApplicationCommand::Weld:
+        handler = &handlers_.weld;
+        break;
     }
 
     return handler != nullptr && *handler ? (*handler)(argument)

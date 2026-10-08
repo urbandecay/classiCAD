@@ -192,25 +192,84 @@ NurbsCurveIntersectionResult intersectNurbsCurves(
         std::max<qreal>(1.0e-7, firstCoordinateScale * 1.0e-4);
     const qreal parameterTolerance = std::max<qreal>(
         1.0e-12, domainLength * 1.0e-9);
-    const auto appendUniqueParameter = [&](qreal parameter) {
-        const qreal boundedParameter =
-            std::clamp(parameter, domainStart, domainEnd);
-        QPointF candidatePoint;
-        if (!evaluateNurbsPoint(firstCurve, boundedParameter, &candidatePoint)) {
+    qreal secondDomainStart = 0.0;
+    qreal secondDomainEnd = 0.0;
+    if (!nurbsParameterDomain(secondCurve,
+                              &secondDomainStart,
+                              &secondDomainEnd)) {
+        return result;
+    }
+    const qreal secondDomainLength = secondDomainEnd - secondDomainStart;
+    const qreal secondParameterTolerance = std::max<qreal>(
+        1.0e-12, secondDomainLength * 1.0e-9);
+    const auto appendUniqueParameter = [&](qreal firstParameter,
+                                           qreal secondParameter) {
+        const qreal boundedFirstParameter =
+            std::clamp(firstParameter, domainStart, domainEnd);
+        const qreal boundedSecondParameter =
+            std::clamp(secondParameter, secondDomainStart, secondDomainEnd);
+        QPointF candidateFirstPoint;
+        QPointF candidateSecondPoint;
+        if (!evaluateNurbsPoint(firstCurve,
+                                boundedFirstParameter,
+                                &candidateFirstPoint) ||
+            !evaluateNurbsPoint(secondCurve,
+                                boundedSecondParameter,
+                                &candidateSecondPoint)) {
             return;
         }
+        bool duplicatePair = false;
+        for (const NurbsCurveIntersection &existing : result.intersections) {
+            if (std::abs(existing.firstCurveParameter -
+                         boundedFirstParameter) >
+                    std::max(parameterTolerance, domainLength * 1.0e-4) ||
+                std::abs(existing.secondCurveParameter -
+                         boundedSecondParameter) >
+                    std::max(secondParameterTolerance,
+                             secondDomainLength * 1.0e-4)) {
+                continue;
+            }
+            QPointF existingFirstPoint;
+            QPointF existingSecondPoint;
+            if (evaluateNurbsPoint(firstCurve,
+                                   existing.firstCurveParameter,
+                                   &existingFirstPoint) &&
+                evaluateNurbsPoint(secondCurve,
+                                   existing.secondCurveParameter,
+                                   &existingSecondPoint) &&
+                squaredDistance(existingFirstPoint, candidateFirstPoint) <=
+                    contactPositionTolerance * contactPositionTolerance &&
+                squaredDistance(existingSecondPoint, candidateSecondPoint) <=
+                    contactPositionTolerance * contactPositionTolerance) {
+                duplicatePair = true;
+                break;
+            }
+        }
+        if (!duplicatePair) {
+            result.intersections.append(
+                {boundedFirstParameter, boundedSecondParameter});
+        }
+
+        // Keep the legacy first-curve result's original de-duplication rule
+        // unchanged for trim and erase callers.
+        bool duplicateFirstParameter = false;
         for (const qreal existing : result.firstCurveParameters) {
-            if (std::abs(existing - boundedParameter) <= parameterTolerance) {
-                return;
+            if (std::abs(existing - boundedFirstParameter) <=
+                parameterTolerance) {
+                duplicateFirstParameter = true;
+                break;
             }
             QPointF existingPoint;
             if (evaluateNurbsPoint(firstCurve, existing, &existingPoint) &&
-                squaredDistance(existingPoint, candidatePoint) <=
+                squaredDistance(existingPoint, candidateFirstPoint) <=
                     contactPositionTolerance * contactPositionTolerance) {
-                return;
+                duplicateFirstParameter = true;
+                break;
             }
         }
-        result.firstCurveParameters.append(boundedParameter);
+        if (!duplicateFirstParameter) {
+            result.firstCurveParameters.append(boundedFirstParameter);
+        }
     };
     constexpr qreal seedFractions[] = {0.0, 0.25, 0.5, 0.75, 1.0};
 
@@ -220,7 +279,8 @@ NurbsCurveIntersectionResult intersectNurbsCurves(
             qreal firstSeed,
             qreal secondSeed,
             qreal geometryTolerance,
-            qreal *firstParameter) {
+            qreal *firstParameter,
+            qreal *secondParameter) {
             qreal firstFraction = firstSeed;
             qreal secondFraction = secondSeed;
             qreal damping = 1.0e-4;
@@ -276,6 +336,7 @@ NurbsCurveIntersectionResult intersectNurbsCurves(
                 if (currentDistanceSquared <=
                     geometryTolerance * geometryTolerance) {
                     *firstParameter = currentFirstParameter;
+                    *secondParameter = currentSecondParameter;
                     return true;
                 }
                 if (!evaluateNurbsDerivative(firstCurve,
@@ -383,6 +444,8 @@ NurbsCurveIntersectionResult intersectNurbsCurves(
                 return false;
             }
             *firstParameter = firstSpan.start + firstSpanLength * firstFraction;
+            *secondParameter =
+                secondSpan.start + secondSpanLength * secondFraction;
             return true;
         };
 
@@ -411,14 +474,17 @@ NurbsCurveIntersectionResult intersectNurbsCurves(
             for (const qreal firstSeed : seedFractions) {
                 for (const qreal secondSeed : seedFractions) {
                     ++result.seedSolves;
-                    qreal parameter = 0.0;
+                    qreal firstParameter = 0.0;
+                    qreal secondParameter = 0.0;
                     if (refineIntersection(firstSpan,
                                            secondSpan,
                                            firstSeed,
                                            secondSeed,
                                            geometryTolerance,
-                                           &parameter)) {
-                        appendUniqueParameter(parameter);
+                                           &firstParameter,
+                                           &secondParameter)) {
+                        appendUniqueParameter(firstParameter,
+                                              secondParameter);
                     }
                 }
             }

@@ -150,6 +150,14 @@ ToolShelf::ToolShelf(ToolShelfCallbacks callbacks, QWidget *parent)
         if (callbacks_.joinRequested) callbacks_.joinRequested();
     });
 
+    auto *weldButton = makeActionButton(
+        QStringLiteral("Weld"),
+        QStringLiteral("W — split selected planar curves at crossings and share their endpoints"),
+        layout);
+    connect(weldButton, &QToolButton::clicked, this, [this]() {
+        if (callbacks_.weldRequested) callbacks_.weldRequested();
+    });
+
     auto *explodeButton = makeActionButton(
         QStringLiteral("Explode\nCurves"),
         QStringLiteral("Separate selected rectangles or joined splines into individual curves"),

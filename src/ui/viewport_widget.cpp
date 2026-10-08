@@ -4901,10 +4901,17 @@ protected:
                         static_cast<float>(worldPoint.y),
                         static_cast<float>(worldPoint.z));
                     if (showCurveEndpointVertices) {
+                        const QSet<int> &endpointSelection =
+                            componentSelectionForObject(objectId);
+                        // Selecting a spline in vertex mode selects its
+                        // editable endpoint/control vertices, as Blender's
+                        // curve edit overlay does. Once there is an explicit
+                        // component selection, keep its per-vertex colors.
                         const bool selected =
-                            componentSelectionForObject(objectId).contains(
-                                componentIndex);
-                        const bool activeVertex = selected &&
+                            endpointSelection.contains(componentIndex) ||
+                            (renderObject->selected && endpointSelection.isEmpty());
+                        const bool activeVertex =
+                            endpointSelection.contains(componentIndex) &&
                             componentSelectionObject_ == objectId &&
                             activeComponentIndices_[static_cast<int>(
                                 ComponentSelectionMode::Vertex)] == componentIndex;
@@ -5524,6 +5531,16 @@ protected:
                         layerLineWeightMm > 0.0
                             ? std::clamp(layerLineWeightMm * 6.0, 1.0, 10.0)
                             : 2.0);
+                }
+                const bool selectedCurveVertexOverlay =
+                    selected && showCurveEndpointVertices &&
+                    !curveSampler_.curvesForShape(visibleShape).isEmpty();
+                if (selectedCurveVertexOverlay) {
+                    // Blender keeps the selected spline wire at edit-wire
+                    // thickness and draws its selected points as a separate
+                    // overlay. The generic object-selection stroke is much
+                    // thicker, which obscures the point markers on curves.
+                    sceneStroke.width = 1.5f;
                 }
                 if (controlGuide.shape != nullptr) {
                     gpuStrokes.append(std::move(controlGuide));
@@ -6547,13 +6564,16 @@ protected:
                 }
                 painter.setPen(Qt::NoPen);
                 painter.setBrush(QColor(12, 12, 12));
+                const QSet<int> &endpointSelection =
+                    componentSelectionForObject(renderObject->objectId);
                 for (const auto &endpoint : curveEndpointVertices(
                          renderObject->shape,
                          renderObject->placementTranslation)) {
                     const bool selected =
-                        componentSelectionForObject(renderObject->objectId)
-                            .contains(endpoint.first);
-                    const bool active = selected &&
+                        endpointSelection.contains(endpoint.first) ||
+                        (renderObject->selected && endpointSelection.isEmpty());
+                    const bool active =
+                        endpointSelection.contains(endpoint.first) &&
                         componentSelectionObject_ == renderObject->objectId &&
                         activeComponentIndices_[static_cast<int>(
                             ComponentSelectionMode::Vertex)] == endpoint.first;

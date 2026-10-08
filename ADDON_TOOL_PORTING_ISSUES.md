@@ -333,3 +333,12 @@ misread or implemented incorrectly.
   moves from its component center, leaves the source solid in place, and commits
   as one undoable operation. Also check isolated vertices, edges, whole-solid
   selection, cancel, repeated duplication, and mixed object/component selection.
+
+## Weld tool port findings
+
+- The add-on's X weld checks edge pairs from the same selected mesh as well as
+  pairs from separate objects. A classiCAD `Line` can hold a multi-segment
+  degree-one NURBS as one curve record, so checking only pairs of curve records
+  misses crossings between its own spans. Check self-intersections of
+  multi-segment polylines and split both crossing parameters into the same
+  replacement object.

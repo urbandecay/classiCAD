@@ -22,9 +22,10 @@ struct WeldCommandPlan {
     QString failureMessage;
 };
 
-// Splits selected planar NURBS curves at interior, transverse intersections.
-// Each source object stays separate; the resulting curve pieces share exact
-// endpoint coordinates at each welded intersection.
+// Splits selected planar NURBS curves at interior, transverse intersections,
+// including crossings between spans of one multi-segment polyline. Each source
+// object stays separate; resulting pieces share exact endpoint coordinates at
+// each welded intersection.
 bool buildWeldCommandPlan(const Document &document,
                           const QVector<ObjectId> &selectedObjectIds,
                           WeldCommandPlan *plan);

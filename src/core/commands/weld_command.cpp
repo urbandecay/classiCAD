@@ -134,6 +134,11 @@ qreal coordinateScale(const Point3D &point)
                             std::abs(point.z)});
 }
 
+bool hasMultiplePolylineSegments(const Shape::NurbsCurve2D &curve)
+{
+    return curve.degree == 1 && curve.controlPoints.size() >= 4;
+}
+
 QVector<QPointF> polyCurvePoints(
     const QVector<Shape::NurbsCurve2D> &components,
     const QVector<WorkPlaneFrame> &componentFrames,
@@ -315,22 +320,26 @@ bool buildWeldCommandPlan(const Document &document,
         }
     }
 
-    if (curves.size() < 2) {
+    if (curves.isEmpty()) {
         plan->failureMessage = QStringLiteral(
-            "Weld needs at least two selected curves");
+            "Weld needs at least one selected planar curve");
         return true;
     }
 
     QVector<WeldIntersectionEvent> events;
-    for (int firstIndex = 0; firstIndex + 1 < curves.size(); ++firstIndex) {
+    for (int firstIndex = 0; firstIndex < curves.size(); ++firstIndex) {
         const WeldCurveRecord &first = curves[firstIndex];
         if (!validateNurbsCurve(first.curve)) {
             continue;
         }
-        for (int secondIndex = firstIndex + 1; secondIndex < curves.size();
+        for (int secondIndex = firstIndex; secondIndex < curves.size();
              ++secondIndex) {
             const WeldCurveRecord &second = curves[secondIndex];
             if (!validateNurbsCurve(second.curve)) {
+                continue;
+            }
+            const bool sameCurve = firstIndex == secondIndex;
+            if (sameCurve && !hasMultiplePolylineSegments(first.curve)) {
                 continue;
             }
 
@@ -357,6 +366,8 @@ bool buildWeldCommandPlan(const Document &document,
             const qreal secondInteriorTolerance =
                 std::max<qreal>(1.0e-9,
                                 (secondDomainEnd - secondDomainStart) * 1.0e-8);
+            const qreal selfParameterTolerance =
+                std::max(firstInteriorTolerance, secondInteriorTolerance);
 
             for (const NurbsCurveIntersection &intersection :
                  intersections.intersections) {
@@ -364,6 +375,13 @@ bool buildWeldCommandPlan(const Document &document,
                     intersection.firstCurveParameter;
                 const qreal secondParameter =
                     intersection.secondCurveParameter;
+                if (sameCurve &&
+                    firstParameter >= secondParameter -
+                                          selfParameterTolerance) {
+                    // Self-intersection queries return both (a, b) and (b, a),
+                    // as well as the trivial diagonal. Keep one ordered pair.
+                    continue;
+                }
                 if (firstParameter <= firstDomainStart +
                                           firstInteriorTolerance ||
                     firstParameter >= firstDomainEnd -

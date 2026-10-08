@@ -740,6 +740,10 @@ public:
             return true;
         });
         toolContext_.setToolFinisher([this](ToolId tool) {
+            if (activeTool_ == Tool::PointExtrude && tool == Tool::Select) {
+                selectExtrudedCapComponents(
+                    toolPreview_.completedFaceExtrusionObjectIds);
+            }
             setTool(tool);
             if (commandFinished_) {
                 commandFinished_(tool);
@@ -1745,6 +1749,83 @@ public:
     QString subdivisionStatusText() const
     {
         return subdivisionTool_.prompt();
+    }
+
+    void selectExtrudedCapComponents(const QVector<ObjectId> &extrudedObjectIds)
+    {
+        const int modeIndex = static_cast<int>(componentSelectionMode_);
+        for (const ObjectId objectId : extrudedObjectIds) {
+            const auto oldSelection =
+                componentSelections_[modeIndex].constFind(objectId.value());
+            if (oldSelection == componentSelections_[modeIndex].cend() ||
+                oldSelection.value().isEmpty()) {
+                continue;
+            }
+            const Shape *shape = document_.shape(objectId);
+            if (shape == nullptr || shape->geometryType != GeometryType::NurbsSolid) {
+                continue;
+            }
+            const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(*shape);
+            if (faces.size() < 2) {
+                continue;
+            }
+            QSet<int> capSelection;
+            if (componentSelectionMode_ == ComponentSelectionMode::Face) {
+                capSelection.insert(1);
+            } else {
+                Shape cap;
+                cap.geometryType = GeometryType::NurbsSurface;
+                cap.nurbsSurface = faces[1];
+                const ViewportDepthGeometry solidCage = selectedSurfaceCage(*shape);
+                const ViewportDepthGeometry capCage = selectedSurfaceCage(cap);
+                if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                    for (int capIndex = 0;
+                         capIndex < capCage.pointVertices.size(); ++capIndex) {
+                        const Point3D capPoint = duplicateCagePoint(
+                            capCage.pointVertices[capIndex]);
+                        for (int solidIndex = 0;
+                             solidIndex < solidCage.pointVertices.size(); ++solidIndex) {
+                            if (duplicatePointsEqual(
+                                    capPoint,
+                                    duplicateCagePoint(
+                                        solidCage.pointVertices[solidIndex]))) {
+                                capSelection.insert(solidIndex);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    for (int capEdge = 0;
+                         capEdge + 1 < capCage.preciseLineVertices.size();
+                         capEdge += 2) {
+                        const Point3D first = duplicateCagePoint(
+                            capCage.preciseLineVertices[capEdge]);
+                        const Point3D second = duplicateCagePoint(
+                            capCage.preciseLineVertices[capEdge + 1]);
+                        for (int solidEdge = 0;
+                             solidEdge + 1 < solidCage.preciseLineVertices.size();
+                             solidEdge += 2) {
+                            const Point3D solidFirst = duplicateCagePoint(
+                                solidCage.preciseLineVertices[solidEdge]);
+                            const Point3D solidSecond = duplicateCagePoint(
+                                solidCage.preciseLineVertices[solidEdge + 1]);
+                            if ((duplicatePointsEqual(first, solidFirst) &&
+                                 duplicatePointsEqual(second, solidSecond)) ||
+                                (duplicatePointsEqual(first, solidSecond) &&
+                                 duplicatePointsEqual(second, solidFirst))) {
+                                capSelection.insert(solidEdge / 2);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!capSelection.isEmpty()) {
+                componentSelections_[modeIndex][objectId.value()] = capSelection;
+                activeComponentIndices_[modeIndex] = -1;
+                componentSelectionObject_ = objectId;
+            }
+        }
     }
 
     int beginPointExtrude()
@@ -4887,7 +4968,10 @@ protected:
                                      ? rasterScenePainter
                                      : painter;
         QVector<ViewportSceneStroke> gpuStrokes;
+        QVector<ViewportSceneStroke> gpuDepthTestedPreviewStrokes;
         QVector<ViewportRenderObject> gpuVertexSelectedFaces;
+        QVector<ViewportRenderObject> gpuExtrudeSelectedFaces;
+        QVector<Shape> gpuExtrudePreviewCapShapes;
         QVector<TransientPreviewStroke> gpuPreviewGeometry;
         QVector<TransientPreviewPicture> gpuPreviewPictures;
         gpuPreviewGeometry.reserve(duplicateTool_.previewShapes().size() +
@@ -4900,6 +4984,7 @@ protected:
         QVector<ObjectId> gpuMirrorPreviewHandled;
         bool gpuActiveToolPreview = false;
         bool gpuActivePicturePreviewRendered = false;
+        int extrudePreviewCapStrokeIndex = 0;
         for (const ViewportRenderObject &renderObject : visibleShapes) {
             const int index = renderObject.objectIndex;
             const ObjectId objectId = renderObject.objectId;
@@ -5782,6 +5867,44 @@ protected:
                     gpuActiveToolPreview |= addPreviewShape(
                         previewShape, activeToolPreviewColor,
                         1.5f, false, 0.0f, false, false);
+                    if (previewShape.geometryType != GeometryType::NurbsSolid) {
+                        continue;
+                    }
+                    const QVector<NurbsSurface3D> faces =
+                        shapeSurfaceFaces(previewShape);
+                    if (faces.size() < 2) {
+                        continue;
+                    }
+                    Shape cap;
+                    cap.geometryType = GeometryType::NurbsSurface;
+                    cap.nurbsSurface = faces[1];
+                    gpuExtrudePreviewCapShapes.append(cap);
+
+                    ViewportRenderObject selectedCap;
+                    selectedCap.shape = cap;
+                    selectedCap.selected = true;
+                    selectedCap.cacheable = false;
+                    selectedCap.preparedDepthGeometry =
+                        QSharedPointer<ViewportDepthGeometry>::create(
+                            buildViewportDepthGeometry(
+                                selectedCap, &surfaceTessellationCache_));
+                    gpuExtrudeSelectedFaces.append(std::move(selectedCap));
+
+                    if (componentSelectionMode_ ==
+                        ComponentSelectionMode::Vertex) {
+                        const ViewportDepthGeometry capCage =
+                            selectedSurfaceCage(cap);
+                        for (const QVector3D &point : capCage.pointVertices) {
+                            ViewportControlPointHandle handle;
+                            handle.worldPosition = point;
+                            handle.fillColor = viewportSelectionColor();
+                            handle.outlineColor = viewportSelectionColor();
+                            handle.diameterPixels = 4.0f;
+                            handle.outlineWidthPixels = 0.0f;
+                            handle.shape = ViewportControlPointShape::Circle;
+                            gpuControlPointHandles.append(handle);
+                        }
+                    }
                 }
             }
 
@@ -6023,6 +6146,10 @@ protected:
                 // Committed solids get their visible wire cage from the
                 // scene-stroke pass, so add the same cage for a live
                 // extrusion preview instead of waiting for commit.
+                QVector<ViewportSceneStroke> &surfacePreviewStrokes =
+                    activeTool_ == Tool::PointExtrude
+                        ? gpuDepthTestedPreviewStrokes
+                        : gpuPreviewStrokes;
                 ViewportSceneStroke previewCage;
                 previewCage.shape = &preview.shape;
                 previewCage.color = preview.highlighted
@@ -6034,7 +6161,33 @@ protected:
                 previewCage.preparedDepthGeometry =
                     QSharedPointer<ViewportDepthGeometry>::create(
                         selectedSurfaceCage(preview.shape));
-                gpuPreviewStrokes.append(std::move(previewCage));
+                if (activeTool_ == Tool::PointExtrude &&
+                    preview.shape.geometryType == GeometryType::NurbsSolid &&
+                    extrudePreviewCapStrokeIndex <
+                        gpuExtrudePreviewCapShapes.size()) {
+                    const ViewportDepthGeometry capCage = selectedSurfaceCage(
+                        gpuExtrudePreviewCapShapes[extrudePreviewCapStrokeIndex++]);
+                    const auto isCapVertex = [&capCage](const QVector3D &point) {
+                        return std::any_of(
+                            capCage.pointVertices.cbegin(),
+                            capCage.pointVertices.cend(),
+                            [&point](const QVector3D &capPoint) {
+                                return (capPoint - point).lengthSquared() <= 1.0e-12f;
+                            });
+                    };
+                    previewCage.color = Qt::white;
+                    previewCage.lineVertexColors.reserve(
+                        previewCage.preparedDepthGeometry->lineVertices.size());
+                    for (const QVector3D &endpoint :
+                         previewCage.preparedDepthGeometry->lineVertices) {
+                        const QColor color = isCapVertex(endpoint)
+                            ? QColor(QStringLiteral("#ff9900"))
+                            : QColor(Qt::black);
+                        previewCage.lineVertexColors.append(QVector4D(
+                            color.redF(), color.greenF(), color.blueF(), 1.0f));
+                    }
+                }
+                surfacePreviewStrokes.append(std::move(previewCage));
                 if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                     ViewportSceneStroke previewVertices;
                     previewVertices.shape = &preview.shape;
@@ -6045,8 +6198,8 @@ protected:
                     previewVertices.editModeWire = true;
                     previewVertices.worldOffset = preview.worldOffset;
                     previewVertices.preparedDepthGeometry =
-                        gpuPreviewStrokes.back().preparedDepthGeometry;
-                    gpuPreviewStrokes.append(std::move(previewVertices));
+                        surfacePreviewStrokes.back().preparedDepthGeometry;
+                    surfacePreviewStrokes.append(std::move(previewVertices));
                 }
                 continue;
             }
@@ -6211,11 +6364,31 @@ protected:
                     false,
                     false);
             }
+            if (surfaceRenderer != nullptr &&
+                !gpuExtrudeSelectedFaces.isEmpty()) {
+                surfaceRenderer->draw(gpuExtrudeSelectedFaces,
+                                      renderFrame.camera,
+                                      renderFrame.viewportSize,
+                                      devicePixelRatioF(),
+                                      viewportShadingSettings_,
+                                      false,
+                                      false,
+                                      true);
+            }
             gpuPreviewRendered = previewRenderer != nullptr &&
                                  previewRenderer->draw(gpuPreviewStrokes,
                                                        renderFrame.camera,
                                                        renderFrame.viewportSize,
                                                        devicePixelRatioF());
+            if (previewRenderer != nullptr &&
+                !gpuDepthTestedPreviewStrokes.isEmpty()) {
+                gpuPreviewRendered = previewRenderer->draw(
+                    gpuDepthTestedPreviewStrokes,
+                    renderFrame.camera,
+                    renderFrame.viewportSize,
+                    devicePixelRatioF(),
+                    true) || gpuPreviewRendered;
+            }
             if ((controlPointsVisible_ || showCurveEndpointVertices) &&
                 controlPointRenderer != nullptr) {
                 gpuControlPointsDrawn = controlPointRenderer->draw(
@@ -6477,6 +6650,11 @@ protected:
                            (!gpuActiveToolPreview || !gpuPreviewRendered)) {
                     drawShape(painter, previewShape, true, false, false,
                               arcPreviewColor);
+                }
+            }
+            if (!gpuOpaqueExtrudePreviewRendered) {
+                for (const Shape &cap : gpuExtrudePreviewCapShapes) {
+                    drawShape(painter, cap, false, true, false);
                 }
             }
         } else if (activeToolPreview.hasShape &&

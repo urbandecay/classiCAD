@@ -330,6 +330,14 @@ ToolPreview PointExtrudeTool::preview() const
             }
         }
     }
+    if (status_.state == ToolLifecycleState::Completed) {
+        for (const SourcePoint &source : sourcePoints_) {
+            if (!source.surface.controlPoints.isEmpty() &&
+                source.objectId.isValid()) {
+                result.completedFaceExtrusionObjectIds.append(source.objectId);
+            }
+        }
+    }
     return result;
 }
 

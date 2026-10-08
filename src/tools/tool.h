@@ -59,6 +59,7 @@ struct ToolPreview {
     Point3D worldCursorPoint;
     QVector<Shape> shapes;
     QVector<ObjectId> hiddenObjectIds;
+    QVector<ObjectId> completedFaceExtrusionObjectIds;
     bool planeLocked = false;
     SnapResult snap;
     bool overridesSnap = false;

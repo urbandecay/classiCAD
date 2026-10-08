@@ -5537,10 +5537,151 @@ protected:
                     !curveSampler_.curvesForShape(visibleShape).isEmpty();
                 if (selectedCurveVertexOverlay) {
                     // Blender keeps the selected spline wire at edit-wire
-                    // thickness and draws its selected points as a separate
-                    // overlay. The generic object-selection stroke is much
-                    // thicker, which obscures the point markers on curves.
-                    sceneStroke.width = 1.5f;
+                    // thickness and colors each wire from its control-point
+                    // selection, instead of applying object selection color
+                    // to the entire spline.
+                    sceneStroke.width = 1.0f;
+                    if (!objectComponentSelection.isEmpty()) {
+                        const QVector<Shape::NurbsCurve2D> curves =
+                            curveSampler_.curvesForShape(visibleShape);
+                        ViewportDepthGeometry vertexSelectedWire;
+                        QVector<QVector4D> vertexSelectedWireColors;
+                        int firstControlPoint = 0;
+                        const auto selectionInfluence =
+                            [&objectComponentSelection](
+                                const Shape::NurbsCurve2D &curve,
+                                int firstIndex,
+                                qreal parameter) {
+                                const int count = curve.controlPoints.size();
+                                if (count <= 0) return qreal(0.0);
+                                qreal domainStart = 0.0;
+                                qreal domainEnd = 0.0;
+                                if (!nurbsParameterDomain(curve, &domainStart,
+                                                           &domainEnd)) {
+                                    return qreal(0.0);
+                                }
+                                if (parameter <= domainStart + 1.0e-12) {
+                                    return objectComponentSelection.contains(firstIndex)
+                                        ? qreal(1.0) : qreal(0.0);
+                                }
+                                if (parameter >= domainEnd - 1.0e-12) {
+                                    return objectComponentSelection.contains(
+                                        firstIndex + count - 1)
+                                        ? qreal(1.0) : qreal(0.0);
+                                }
+                                const QVector<double> knots =
+                                    expandedNurbsKnotVector(curve);
+                                const auto basis = [&knots](const auto &self,
+                                                            int index,
+                                                            int degree,
+                                                            qreal value) -> qreal {
+                                    if (degree == 0) {
+                                        return knots[index] <= value &&
+                                                       value < knots[index + 1]
+                                            ? 1.0 : 0.0;
+                                    }
+                                    qreal result = 0.0;
+                                    const qreal left = knots[index + degree] -
+                                                       knots[index];
+                                    if (std::abs(left) > 1.0e-12) {
+                                        result += (value - knots[index]) / left *
+                                            self(self, index, degree - 1, value);
+                                    }
+                                    const qreal right =
+                                        knots[index + degree + 1] -
+                                        knots[index + 1];
+                                    if (std::abs(right) > 1.0e-12) {
+                                        result +=
+                                            (knots[index + degree + 1] - value) /
+                                            right * self(self, index + 1,
+                                                         degree - 1, value);
+                                    }
+                                    return result;
+                                };
+                                qreal weightedTotal = 0.0;
+                                qreal weightedSelected = 0.0;
+                                for (int index = 0; index < count; ++index) {
+                                    const qreal weight = curve.rational
+                                        ? curve.weights[index] : 1.0;
+                                    const qreal contribution =
+                                        basis(basis, index, curve.degree,
+                                              parameter) * weight;
+                                    weightedTotal += contribution;
+                                    if (objectComponentSelection.contains(
+                                            firstIndex + index)) {
+                                        weightedSelected += contribution;
+                                    }
+                                }
+                                return weightedTotal > 1.0e-12
+                                    ? std::clamp(weightedSelected / weightedTotal,
+                                                 qreal(0.0), qreal(1.0))
+                                    : qreal(0.0);
+                            };
+                        for (int curveIndex = 0; curveIndex < curves.size();
+                             ++curveIndex) {
+                            const Shape::NurbsCurve2D &curve = curves[curveIndex];
+                            const WorkPlaneFrame frame =
+                                visibleShape.geometryType == GeometryType::PolyCurve
+                                    ? shapeComponentWorkPlaneFrame(visibleShape,
+                                                                   curveIndex)
+                                    : shapeWorkPlaneFrame(visibleShape);
+                            SampledNurbsCurve2D sampled;
+                            if (isValidWorkPlaneFrame(frame) &&
+                                curveSampler_.sampleNurbsCurve(
+                                    curve, frame, viewportTransform_, size(),
+                                    &sampled)) {
+                                for (int sample = 1;
+                                     sample < sampled.parameters.size(); ++sample) {
+                                    QPointF localA;
+                                    QPointF localB;
+                                    if (!evaluateNurbsPoint(
+                                            curve, sampled.parameters[sample - 1],
+                                            &localA) ||
+                                        !evaluateNurbsPoint(
+                                            curve, sampled.parameters[sample],
+                                            &localB)) {
+                                        continue;
+                                    }
+                                    const Point3D first =
+                                        workPlaneFramePointToWorld(localA, frame);
+                                    const Point3D second =
+                                        workPlaneFramePointToWorld(localB, frame);
+                                    vertexSelectedWire.preciseLineVertices
+                                        << first << second;
+                                    vertexSelectedWire.lineVertices
+                                        << QVector3D(float(first.x), float(first.y),
+                                                     float(first.z))
+                                        << QVector3D(float(second.x), float(second.y),
+                                                     float(second.z));
+                                    const qreal influenceA = selectionInfluence(
+                                        curve, firstControlPoint,
+                                        sampled.parameters[sample - 1]);
+                                    const qreal influenceB = selectionInfluence(
+                                        curve, firstControlPoint,
+                                        sampled.parameters[sample]);
+                                    vertexSelectedWireColors
+                                        << QVector4D(float(influenceA),
+                                                     float(influenceA),
+                                                     float(influenceA), 1.0f)
+                                        << QVector4D(float(influenceB),
+                                                     float(influenceB),
+                                                     float(influenceB), 1.0f);
+                                }
+                            }
+                            firstControlPoint += curve.controlPoints.size();
+                        }
+                        if (!vertexSelectedWire.lineVertices.isEmpty()) {
+                            sceneStroke.color = viewportSelectionColor();
+                            sceneStroke.lineVertexColors =
+                                std::move(vertexSelectedWireColors);
+                            sceneStroke.preparedDepthGeometry =
+                                QSharedPointer<ViewportDepthGeometry>::create(
+                                    std::move(vertexSelectedWire));
+                            sceneStroke.worldOffset =
+                                renderObject.placementTranslation;
+                            sceneStroke.cacheableGeometry = false;
+                        }
+                    }
                 }
                 if (controlGuide.shape != nullptr) {
                     gpuStrokes.append(std::move(controlGuide));

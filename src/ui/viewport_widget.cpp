@@ -12815,8 +12815,11 @@ private:
         const QVector<QPair<int, Point3D>> allControlPoints =
             curveControlPointVertices(shape, worldOffset);
         QVector<QPair<int, Point3D>> endpoints;
-        if (shape.geometryType == GeometryType::Rectangle ||
+        if (shape.geometryType == GeometryType::Line ||
+            shape.geometryType == GeometryType::Rectangle ||
             shape.geometryType == GeometryType::Polygon) {
+            // Degree-one Line geometry stores every polyline corner as a CV;
+            // each CV is a selectable vertex, not just the two outer ends.
             return allControlPoints;
         }
         const auto appendEndpoints = [&endpoints, &allControlPoints](int first,

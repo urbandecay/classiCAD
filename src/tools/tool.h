@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document/shape.h"
+#include "core/document/object_id.h"
 #include "core/tool_id.h"
 #include "tool_input.h"
 
@@ -57,6 +58,7 @@ struct ToolPreview {
     QVector<Point3D> worldPoints;
     Point3D worldCursorPoint;
     QVector<Shape> shapes;
+    QVector<ObjectId> hiddenObjectIds;
     bool planeLocked = false;
     SnapResult snap;
     bool overridesSnap = false;

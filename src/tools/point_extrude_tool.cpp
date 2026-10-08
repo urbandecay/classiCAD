@@ -236,8 +236,55 @@ void PointExtrudeTool::commit(ToolContext &context)
     }
 
     const QVector<Shape> lines = makeLineShapes(cursorPoint_);
-    if (lines.isEmpty() ||
-        !context.commitShapes(ToolId::PointExtrude, lines)) {
+    if (lines.isEmpty() || lines.size() != sourcePoints_.size()) {
+        status_.text = QStringLiteral("Extrude failed to create geometry");
+        status_.canCommit = false;
+        publish(context);
+        return;
+    }
+
+    DocumentTransaction transaction = context.beginTransaction();
+    for (int index = 0; index < sourcePoints_.size(); ++index) {
+        const SourcePoint &source = sourcePoints_[index];
+        if (!source.surface.controlPoints.isEmpty()) {
+            // A face extrusion replaces its source sheet. Keeping both puts
+            // the old face directly on top of the solid's new cap, causing
+            // z-fighting even when nothing is selected.
+            const SceneObject *sceneObject =
+                context.document().object(source.objectId);
+            if (sceneObject == nullptr) {
+                transaction.rollback();
+                status_.text = QStringLiteral("Extrude failed to create geometry");
+                status_.canCommit = false;
+                publish(context);
+                return;
+            }
+            const Point3D placement = sceneObject->placementTranslation;
+            if ((placement.x != 0.0 || placement.y != 0.0 || placement.z != 0.0) &&
+                !transaction.setObjectPlacementTranslation(
+                    source.objectId, Point3D{})) {
+                transaction.rollback();
+                status_.text = QStringLiteral("Extrude failed to create geometry");
+                status_.canCommit = false;
+                publish(context);
+                return;
+            }
+            if (!transaction.replaceGeometry(source.objectId, lines[index])) {
+                transaction.rollback();
+                status_.text = QStringLiteral("Extrude failed to create geometry");
+                status_.canCommit = false;
+                publish(context);
+                return;
+            }
+        } else if (!transaction.addShape(lines[index]).isValid()) {
+            transaction.rollback();
+            status_.text = QStringLiteral("Extrude failed to create geometry");
+            status_.canCommit = false;
+            publish(context);
+            return;
+        }
+    }
+    if (!context.commitTransaction(transaction)) {
         status_.text = QStringLiteral("Extrude failed to create geometry");
         status_.canCommit = false;
         publish(context);
@@ -273,6 +320,14 @@ ToolPreview PointExtrudeTool::preview() const
         result.worldPoints.append(cursorPoint_);
         if (status_.canCommit) {
             result.shapes = makeLineShapes(cursorPoint_);
+            if (!result.shapes.isEmpty()) {
+                for (const SourcePoint &source : sourcePoints_) {
+                    if (!source.surface.controlPoints.isEmpty() &&
+                        source.objectId.isValid()) {
+                        result.hiddenObjectIds.append(source.objectId);
+                    }
+                }
+            }
         }
     }
     return result;

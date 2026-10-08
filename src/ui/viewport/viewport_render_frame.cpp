@@ -63,10 +63,21 @@ ViewportRenderFrame buildViewportRenderFrame(
         }
     }
 
+    QSet<quint64> hiddenPreviewIds;
+    if (!input.activeToolPreview.shapes.isEmpty()) {
+        hiddenPreviewIds.reserve(input.activeToolPreview.hiddenObjectIds.size());
+        for (const ObjectId id : input.activeToolPreview.hiddenObjectIds) {
+            if (id.isValid()) {
+                hiddenPreviewIds.insert(id.value());
+            }
+        }
+    }
+
     int objectIndex = 0;
     for (const SceneObject &sceneObject : document.objects()) {
         const Layer *layer = document.layer(sceneObject.layerId);
-        if (layer == nullptr || !layer->visible || layer->frozen) {
+        if (layer == nullptr || !layer->visible || layer->frozen ||
+            hiddenPreviewIds.contains(sceneObject.id.value())) {
             ++objectIndex;
             continue;
         }

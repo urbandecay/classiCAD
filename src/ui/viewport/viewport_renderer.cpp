@@ -1240,8 +1240,22 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
         return;
     }
 
-    drawControlPointChain(curveHitTester_.controlPointsForShape(shape),
-                          shapeWorkPlaneFrame(shape));
+    const QVector<QPointF> controlPoints =
+        curveHitTester_.controlPointsForShape(shape);
+    const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+    drawControlPointChain(controlPoints, frame);
+    if ((shape.geometryType == GeometryType::Rectangle ||
+         shape.geometryType == GeometryType::Polygon) &&
+        controlPoints.size() > 2) {
+        painter.setPen(QPen(handleColor, 1.0, Qt::DashLine));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(transform_.workPlaneToScreen(controlPoints.last(),
+                                                       viewportSize,
+                                                       frame),
+                         transform_.workPlaneToScreen(controlPoints.first(),
+                                                       viewportSize,
+                                                       frame));
+    }
 }
 
 void ViewportRenderer::drawSubdivisionPoints(QPainter &painter,

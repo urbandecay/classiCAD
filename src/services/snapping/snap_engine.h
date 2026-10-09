@@ -4,6 +4,7 @@
 #include "snap_types.h"
 
 #include <QHash>
+#include <QSet>
 #include <QSize>
 
 #include <functional>
@@ -60,6 +61,12 @@ public:
         const ViewportTransform &transform,
         const QSize &viewportSize,
         const Point3D &worldOffset = {}) const;
+    QVector<SnapCandidate> snapCandidatesForShape(
+        const Shape &shape,
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        const Point3D &worldOffset,
+        bool includeControlPointCandidates) const;
     QVector<SnapCandidate> edgeCenterCandidatesForShape(
         const Shape &shape) const;
     SnapResult findEdgeCenterSnapPoint(
@@ -136,14 +143,18 @@ public:
         int selectedControlPointIndex,
         const QPointF &controlPoint,
         const ViewportTransform &transform,
-        const QSize &viewportSize) const;
+        const QSize &viewportSize,
+        const QHash<int, QSet<int>> &excludedControlPointIndices = {}) const;
     DragSnapResult findControlPointSnap(
         const Document &document,
         int selectedShapeIndex,
         int selectedControlPointIndex,
         const Point3D &localControlPoint,
         const ViewportTransform &transform,
-        const QSize &viewportSize) const;
+        const QSize &viewportSize,
+        const QHash<int, QSet<int>> &excludedControlPointIndices = {},
+        const QPointF *snapTargetScreen = nullptr,
+        const Point3D *requiredTranslationAxis = nullptr) const;
 
 private:
     struct OcclusionPlane {

@@ -322,6 +322,13 @@ misread or implemented incorrectly.
   by the `duplicate` BMesh operator (`geom.out`), then deselects the originals
   and selects the copies before starting the move. Passing only selected object
   IDs duplicates an entire solid and is incorrect in component mode.
+- Blender's legacy `CURVE_OT_duplicate` uses different geometry rules: it
+  copies contiguous selected CV runs for curves and rectangular selected CV
+  patches for NURBS surfaces. That does not make its partial copies equivalent
+  to mesh topology. The classiCAD port keeps the mesh-style selected-copy and
+  Shift+D/G interaction, then expresses NURBS selections as exact native
+  surfaces, degree-one curves, or points because the document has no BMesh-like
+  shared topology representation.
 - In orthographic views, do not anchor Shift+D movement by intersecting the
   camera-facing plane through the selection with the unclipped projection ray
   whose origin is the orbit target. A selected point on the camera side of that
@@ -340,19 +347,63 @@ misread or implemented incorrectly.
   that covers the whole cage or a component selection covering the whole solid
   can retain the whole-solid copy. Do not turn a partial vertex selection into
   a copy of the solid.
+- A loose `GeometryType::Point` must remain selectable after component
+  duplication. It is one vertex component in Vertex mode, with picking mapped
+  through its work-plane frame and scene-object placement; its displayed vertex
+  marker and drag path must use that same point location.
 - A closed Line-tool polyline stores its start point again as its last NURBS
   control vertex. Vertex marquee picking may report only one of those
   coincident indices, so Shift+D must treat the first and last CV as one
   selectable closure point; otherwise selecting all visible corners copies an
   open curve with its closing edge missing.
-- [x] Reproduce a Line-tool closed square in vertex mode, marquee its four
-  visible corners, Shift+D and confirm the copy, then G-move it; the duplicate
-  retains all four sides.
-- [ ] Check Shift+D in vertex, edge, and face modes: a four-corner top-face
-  selection copies only that face, previews it selected from the first frame,
-  moves from its component center, leaves the source solid in place, and commits
-  as one undoable operation. Also check isolated vertices, edges, whole-solid
-  selection, cancel, repeated duplication, and mixed object/component selection.
+- Blender mesh duplication and legacy Curve/NURBS duplication share the
+  selection-first interaction, but use different geometry rules. Mesh Edit
+  Mode copies selected BMesh topology into the same mesh, including dependent
+  vertices and edges; legacy Curve duplicates selected CV runs as new
+  splines, and NURBS surfaces duplicate rectangular CV patches.
+- Surface component selection must use the stored control net flattened as
+  `u * controlVertexCountV + v`, with edges between adjacent U/V CVs. A cage
+  made from evaluated domain corners hides interior CVs on curved surfaces.
+  Face mode remains a selection of whole stored NURBS faces.
+- On a standalone surface, preserve control-net indices even when two CVs have
+  identical coordinates. Switching Vertex↔Edge uses explicit U/V endpoint
+  indices. Face→Vertex selects the full CV net, and Face→Edge selects every
+  control-net edge so both conversion paths preserve the same patch selection.
+  Edge→Face promotes an untrimmed patch when its perimeter control-net edges
+  are selected. Once promoted, the patch carries its internal CV-net edges too,
+  avoiding loose line copies alongside the surface.
+- The perimeter rule applies to untrimmed open patches. A trimmed patch's real
+  boundary is its UV trim loop, and the current model has no explicit periodic
+  surface flag; do not infer a whole face from a rectangular CV-net perimeter
+  for those cases.
+- Face marquee uses projected surface samples/triangles to test actual box
+  overlap in crossing mode, including X-ray. Projected face bounds alone can
+  include empty regions around a curved or trimmed patch.
+- Highlighting, click picking, mode conversion, marquee selection, and
+  duplication must use the same derived-face list for solids. A swept NURBS
+  wall is one face per boundary loop even when its degree-one knot spans look
+  like separate planar panels; splitting only the highlight creates a face
+  that cannot actually be picked or duplicated.
+- A `NurbsSurface3D` stores one tensor-product patch and has no identity map
+  for copied partial vertices, edges, and faces. Current partial surface
+  extraction can create point/line geometry, but does not preserve Blender's
+  same-mesh topology. Keep that limitation explicit until a topology contract
+  supports shared copied elements.
+- [x] Draw a closed square with the Line tool, select its four visible corners,
+  Shift+D and confirm, then G-move the selected copy. Verify closure and that
+  the source stays fixed.
+- [x] Check curved 3x3 NURBS CV/edge/face extraction, face marquee, face-mode
+  conversion, source preservation, and nonzero Shift+D placement. Check a solid
+  cap copy followed by G movement.
+- [ ] Click a drawn and duplicated loose Point in Object and Vertex modes;
+  confirm component highlighting and movement, then Extrude it into a line.
+- [ ] Check duplicate-move Escape/in-place behavior and one-step Undo on both a
+  curved NURBS patch and a solid. Check trimmed surfaces and very small solids.
+- [x] Build and run the closed-PolyCurve and NURBS duplicate regressions; both
+  pass. In the combined `viewport_interaction` run, two separate assertions
+  still fail: the Lighting popover control check and the committed Point-tool
+  rendering check. Their baseline status has not been established, so they
+  remain open rather than being attributed to this duplicate port.
 
 ## Weld tool port findings
 
@@ -362,3 +413,34 @@ misread or implemented incorrectly.
   misses crossings between its own spans. Check self-intersections of
   multi-segment polylines and split both crossing parameters into the same
   replacement object.
+
+## Blender vertex snapping port findings
+
+- Blender Edit Mode's Closest snap base chooses the selected vertex nearest the
+  snap target. Resolve the snap target near the drag cursor first, then choose
+  the selected vertex nearest that target. Do not always use the active vertex
+  as the source; apply the winning translation to the full selected set.
+- Vertex targets must include actual curve CVs, including planar NURBS and
+  loose Point objects. Surface and solid targets use their stored control-net
+  CVs, with face identity preserved. Keep flattened PolyCurve indices and map
+  each curve candidate through its component workplane and object placement
+  before comparing or applying a snap.
+- Do not project a vertex snap target back to the dragged curve's plane. Keep
+  the target in world XYZ so editing can promote a planar curve to a spatial
+  curve when the snapped target is off-plane.
+- Exclude selected control vertices from snap targets so a multi-vertex
+  selection cannot lock onto another selected vertex and appear not to move.
+- Loose Point objects must participate in the same selected-vertex translation
+  path as curve CVs; do not filter them out because they have no sampled curve.
+- `G`/Grab component moves use the same selected-CV target search as direct
+  vertex dragging. Surface control nets use their stored face-CV order; solid
+  face occurrences map to the deduplicated selectable cage indices. Under an
+  axis constraint, filter targets by whether the correction stays on that axis
+  before ranking them. Resolve source-dependent Near, Perpendicular, and
+  Tangent targets against the selected vertices that can generate them.
+- [ ] In Vertex mode, move one and several selected vertices onto an endpoint,
+  another curve CV, and a loose Point. Check that the nearest selected vertex
+  drives the snap, the whole selection moves together, and off-plane targets
+  preserve their Z coordinate.
+- [ ] Repeat the vertex snap checks with `G`/Grab on a surface and a solid,
+  including a connected CV shared across faces and an axis-constrained move.

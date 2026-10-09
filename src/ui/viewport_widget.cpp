@@ -333,25 +333,30 @@ SurfaceDiagnosticCounts surfaceDiagnosticCounts(const Shape &shape)
     return counts;
 }
 
-ViewportDepthGeometry selectedSurfaceCage(const Shape &shape)
+ViewportDepthGeometry selectedSurfaceControlNet(const Shape &shape)
 {
     ViewportDepthGeometry geometry;
     const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(shape);
     QVector<Point3D> uniquePoints;
-    const auto appendSegment = [&geometry, &uniquePoints](const Point3D &a,
-                                                           const Point3D &b) {
+    const bool preserveControlVertexIndices =
+        shape.geometryType == GeometryType::NurbsSurface;
+    const auto appendSegment = [&geometry, &uniquePoints,
+                                preserveControlVertexIndices](
+                                   const Point3D &a, const Point3D &b) {
         const auto close = [](const Point3D &lhs, const Point3D &rhs) {
             const double dx = lhs.x - rhs.x;
             const double dy = lhs.y - rhs.y;
             const double dz = lhs.z - rhs.z;
             return dx * dx + dy * dy + dz * dz <= 1.0e-16;
         };
-        for (int i = 0; i + 1 < geometry.preciseLineVertices.size(); i += 2) {
-            const Point3D &first = geometry.preciseLineVertices[i];
-            const Point3D &second = geometry.preciseLineVertices[i + 1];
-            if ((close(first, a) && close(second, b)) ||
-                (close(first, b) && close(second, a))) {
-                return;
+        if (!preserveControlVertexIndices) {
+            for (int i = 0; i + 1 < geometry.preciseLineVertices.size(); i += 2) {
+                const Point3D &first = geometry.preciseLineVertices[i];
+                const Point3D &second = geometry.preciseLineVertices[i + 1];
+                if ((close(first, a) && close(second, b)) ||
+                    (close(first, b) && close(second, a))) {
+                    return;
+                }
             }
         }
         geometry.preciseLineVertices.append(a);
@@ -359,11 +364,65 @@ ViewportDepthGeometry selectedSurfaceCage(const Shape &shape)
         geometry.lineVertices.append(QVector3D(float(a.x), float(a.y), float(a.z)));
         geometry.lineVertices.append(QVector3D(float(b.x), float(b.y), float(b.z)));
     };
-    const auto appendVertex = [&geometry, &uniquePoints](const Point3D &point) {
+    const auto appendVertex = [&geometry, &uniquePoints,
+                               preserveControlVertexIndices](
+                                  const Point3D &point) {
         const auto close = [](const Point3D &lhs, const Point3D &rhs) {
             const double dx = lhs.x - rhs.x;
             const double dy = lhs.y - rhs.y;
             const double dz = lhs.z - rhs.z;
+            return dx * dx + dy * dy + dz * dz <= 1.0e-16;
+        };
+        if (preserveControlVertexIndices ||
+            std::none_of(uniquePoints.cbegin(), uniquePoints.cend(),
+                         [&point, &close](const Point3D &existing) {
+                             return close(point, existing);
+                         })) {
+            uniquePoints.append(point);
+            geometry.precisePointVertices.append(point);
+            geometry.pointVertices.append(QVector3D(float(point.x),
+                                                    float(point.y),
+                                                    float(point.z)));
+        }
+    };
+    for (const NurbsSurface3D &face : faces) {
+        const int countU = face.controlVertexCountU;
+        const int countV = face.controlVertexCountV;
+        if (countU < 2 || countV < 2 ||
+            face.controlPoints.size() != countU * countV) {
+            continue;
+        }
+
+        // Component editing follows the NURBS control net. Evaluated surface
+        // corners hide interior CVs on curved patches and make their edges
+        // unrelated to the control geometry being duplicated or moved.
+        for (int u = 0; u < countU; ++u) {
+            for (int v = 0; v < countV; ++v) {
+                const int index = u * countV + v;
+                const Point3D &point = face.controlPoints[index];
+                appendVertex(point);
+                if (v + 1 < countV) {
+                    appendSegment(point, face.controlPoints[index + 1]);
+                }
+                if (u + 1 < countU) {
+                    appendSegment(point, face.controlPoints[index + countV]);
+                }
+            }
+        }
+    }
+    return geometry;
+}
+
+ViewportDepthGeometry selectedSurfaceCage(const Shape &shape)
+{
+    ViewportDepthGeometry geometry;
+    const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(shape);
+    QVector<Point3D> uniquePoints;
+    const auto appendVertex = [&geometry, &uniquePoints](const Point3D &point) {
+        const auto close = [](const Point3D &first, const Point3D &second) {
+            const double dx = first.x - second.x;
+            const double dy = first.y - second.y;
+            const double dz = first.z - second.z;
             return dx * dx + dy * dy + dz * dz <= 1.0e-16;
         };
         if (std::none_of(uniquePoints.cbegin(), uniquePoints.cend(),
@@ -371,126 +430,196 @@ ViewportDepthGeometry selectedSurfaceCage(const Shape &shape)
                              return close(point, existing);
                          })) {
             uniquePoints.append(point);
+            geometry.precisePointVertices.append(point);
             geometry.pointVertices.append(QVector3D(float(point.x),
                                                     float(point.y),
                                                     float(point.z)));
         }
+    };
+    const auto appendSegment = [&geometry](const Point3D &first,
+                                           const Point3D &second) {
+        const auto close = [](const Point3D &a, const Point3D &b) {
+            const double dx = a.x - b.x;
+            const double dy = a.y - b.y;
+            const double dz = a.z - b.z;
+            return dx * dx + dy * dy + dz * dz <= 1.0e-16;
+        };
+        for (int index = 0; index + 1 < geometry.preciseLineVertices.size();
+             index += 2) {
+            const Point3D &a = geometry.preciseLineVertices[index];
+            const Point3D &b = geometry.preciseLineVertices[index + 1];
+            if ((close(a, first) && close(b, second)) ||
+                (close(a, second) && close(b, first))) {
+                return;
+            }
+        }
+        geometry.preciseLineVertices.append(first);
+        geometry.preciseLineVertices.append(second);
+        geometry.lineVertices.append(QVector3D(float(first.x), float(first.y),
+                                               float(first.z)));
+        geometry.lineVertices.append(QVector3D(float(second.x), float(second.y),
+                                               float(second.z)));
     };
     for (const NurbsSurface3D &face : faces) {
         PreparedNurbsSurfaceEvaluator evaluator;
         if (!evaluator.prepare(face)) {
             continue;
         }
-        QVector<QVector<QPointF>> boundaries;
-        QVector<QPointF> topologyVertices;
+        const auto appendUvBoundary = [&](const QVector<QPointF> &parameters,
+                                          bool closed) {
+            if (parameters.size() < 2) {
+                return;
+            }
+            QVector<Point3D> points;
+            points.reserve(parameters.size());
+            for (const QPointF &parameter : parameters) {
+                Point3D point;
+                if (!evaluator.evaluate(parameter.x(), parameter.y(), &point)) {
+                    return;
+                }
+                points.append(point);
+            }
+            for (int index = 1; index < points.size(); ++index) {
+                appendSegment(points[index - 1], points[index]);
+            }
+            if (closed) {
+                appendSegment(points.last(), points.first());
+            }
+            if (!points.isEmpty()) {
+                appendVertex(points.first());
+                if (!closed) {
+                    appendVertex(points.last());
+                }
+            }
+        };
+
         if (!face.trimLoops.isEmpty()) {
             for (const NurbsSurfaceTrimLoop &loop : face.trimLoops) {
-                if (loop.curve.degree == 1) {
-                    boundaries.append(loop.curve.controlPoints);
-                } else {
-                    boundaries.append(sampleNurbsSurfaceTrimLoop(loop, 64));
+                appendUvBoundary(sampleNurbsSurfaceTrimLoop(loop, 96), true);
+                for (const QPointF &parameter : loop.curve.controlPoints) {
+                    Point3D point;
+                    if (evaluator.evaluate(parameter.x(), parameter.y(), &point)) {
+                        appendVertex(point);
+                    }
                 }
-                topologyVertices += loop.curve.controlPoints;
             }
-        } else {
-            qreal u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
-            if (!evaluator.parameterDomains(&u0, &u1, &v0, &v1)) {
-                continue;
-            }
-            QVector<double> uBreaks;
-            QVector<double> vBreaks;
-            const auto appendKnotBreaks = [](const QVector<double> &knots,
-                                             qreal start,
-                                             qreal end,
-                                             QVector<double> *breaks) {
-                for (double knot : knots) {
-                    if (knot >= start - 1.0e-10 &&
-                        knot <= end + 1.0e-10 &&
-                        (breaks->isEmpty() ||
-                         std::abs(breaks->last() - knot) > 1.0e-10)) {
-                        breaks->append(knot);
-                    }
-                }
-                if (breaks->isEmpty() || std::abs(breaks->first() - start) > 1.0e-10) {
-                    breaks->prepend(start);
-                }
-                if (std::abs(breaks->last() - end) > 1.0e-10) {
-                    breaks->append(end);
-                }
-            };
-            if (face.degreeU == 1 && face.degreeV == 1) {
-                appendKnotBreaks(expandedNurbsSurfaceKnotVector(face.knotsU),
-                                 u0, u1, &uBreaks);
-                appendKnotBreaks(expandedNurbsSurfaceKnotVector(face.knotsV),
-                                 v0, v1, &vBreaks);
-                for (double u : uBreaks) {
-                    for (double v : vBreaks) {
-                        Point3D point;
-                        if (evaluator.evaluate(u, v, &point)) {
-                            appendVertex(point);
-                        }
-                    }
-                }
-                for (double u : uBreaks) {
-                    Point3D previous;
-                    if (!evaluator.evaluate(u, vBreaks.first(), &previous)) {
-                        continue;
-                    }
-                    for (int i = 1; i < vBreaks.size(); ++i) {
-                        Point3D current;
-                        if (evaluator.evaluate(u, vBreaks[i], &current)) {
-                            appendSegment(previous, current);
-                            previous = current;
-                        }
-                    }
-                }
-                for (double v : vBreaks) {
-                    Point3D previous;
-                    if (!evaluator.evaluate(uBreaks.first(), v, &previous)) {
-                        continue;
-                    }
-                    for (int i = 1; i < uBreaks.size(); ++i) {
-                        Point3D current;
-                        if (evaluator.evaluate(uBreaks[i], v, &current)) {
-                            appendSegment(previous, current);
-                            previous = current;
-                        }
-                    }
-                }
-                continue;
-            }
-            QVector<QPointF> rectangle;
-            rectangle << QPointF(u0, v0) << QPointF(u1, v0)
-                      << QPointF(u1, v1) << QPointF(u0, v1);
-            boundaries.append(rectangle);
-            topologyVertices += rectangle;
+            continue;
         }
-        for (const QVector<QPointF> &boundary : boundaries) {
-            if (boundary.size() < 2) {
-                continue;
-            }
-            Point3D previous;
-            if (!evaluator.evaluate(boundary.first().x(), boundary.first().y(),
-                                    &previous)) {
-                continue;
-            }
-            for (int i = 1; i <= boundary.size(); ++i) {
-                Point3D current;
-                const QPointF uv = boundary[i % boundary.size()];
-                if (evaluator.evaluate(uv.x(), uv.y(), &current)) {
-                    appendSegment(previous, current);
-                    previous = current;
-                }
-            }
+
+        qreal u0 = 0.0;
+        qreal u1 = 0.0;
+        qreal v0 = 0.0;
+        qreal v1 = 0.0;
+        if (!evaluator.parameterDomains(&u0, &u1, &v0, &v1)) {
+            continue;
         }
-        for (const QPointF &uv : topologyVertices) {
-            Point3D point;
-            if (evaluator.evaluate(uv.x(), uv.y(), &point)) {
-                appendVertex(point);
+        constexpr int boundarySamples = 32;
+        QVector<QPointF> bottom;
+        QVector<QPointF> right;
+        QVector<QPointF> top;
+        QVector<QPointF> left;
+        bottom.reserve(boundarySamples + 1);
+        right.reserve(boundarySamples + 1);
+        top.reserve(boundarySamples + 1);
+        left.reserve(boundarySamples + 1);
+        for (int sample = 0; sample <= boundarySamples; ++sample) {
+            const qreal t = qreal(sample) / boundarySamples;
+            bottom.append({u0 + (u1 - u0) * t, v0});
+            right.append({u1, v0 + (v1 - v0) * t});
+            top.append({u1 - (u1 - u0) * t, v1});
+            left.append({u0, v1 - (v1 - v0) * t});
+        }
+        appendUvBoundary(bottom, false);
+        appendUvBoundary(right, false);
+        appendUvBoundary(top, false);
+        appendUvBoundary(left, false);
+    }
+    return geometry;
+}
+
+QVector<QPair<int, int>> nurbsSurfaceControlNetEdgeVertexIndices(
+    const NurbsSurface3D &surface)
+{
+    QVector<QPair<int, int>> endpoints;
+    const int countU = surface.controlVertexCountU;
+    const int countV = surface.controlVertexCountV;
+    if (countU < 2 || countV < 2 ||
+        surface.controlPoints.size() != countU * countV) {
+        return endpoints;
+    }
+    for (int u = 0; u < countU; ++u) {
+        for (int v = 0; v < countV; ++v) {
+            const int index = u * countV + v;
+            if (v + 1 < countV) {
+                endpoints.append({index, index + 1});
+            }
+            if (u + 1 < countU) {
+                endpoints.append({index, index + countV});
             }
         }
     }
-    return geometry;
+    return endpoints;
+}
+
+QVector<int> nurbsSurfaceControlNetBoundaryEdgeIndices(
+    const NurbsSurface3D &surface)
+{
+    QVector<int> boundaryEdges;
+    const int countU = surface.controlVertexCountU;
+    const int countV = surface.controlVertexCountV;
+    if (countU < 2 || countV < 2 ||
+        surface.controlPoints.size() != countU * countV) {
+        return boundaryEdges;
+    }
+    int edgeIndex = 0;
+    for (int u = 0; u < countU; ++u) {
+        for (int v = 0; v < countV; ++v) {
+            if (v + 1 < countV) {
+                if (u == 0 || u == countU - 1) {
+                    boundaryEdges.append(edgeIndex);
+                }
+                ++edgeIndex;
+            }
+            if (u + 1 < countU) {
+                if (v == 0 || v == countV - 1) {
+                    boundaryEdges.append(edgeIndex);
+                }
+                ++edgeIndex;
+            }
+        }
+    }
+    return boundaryEdges;
+}
+
+QVector<QPair<int, int>> selectedSurfaceControlNetEdgeVertexIndices(
+    const Shape &shape)
+{
+    if (shape.geometryType == GeometryType::NurbsSurface) {
+        return nurbsSurfaceControlNetEdgeVertexIndices(shape.nurbsSurface);
+    }
+
+    QVector<QPair<int, int>> endpoints;
+    const ViewportDepthGeometry cage = selectedSurfaceControlNet(shape);
+    const auto findVertex = [&cage](const Point3D &point) {
+        for (int vertex = 0;
+             vertex < cage.precisePointVertices.size(); ++vertex) {
+            const Point3D &candidate = cage.precisePointVertices[vertex];
+            const double dx = candidate.x - point.x;
+            const double dy = candidate.y - point.y;
+            const double dz = candidate.z - point.z;
+            if (dx * dx + dy * dy + dz * dz <= 1.0e-16) {
+                return vertex;
+            }
+        }
+        return -1;
+    };
+    endpoints.reserve(cage.preciseLineVertices.size() / 2);
+    for (int edge = 0; edge * 2 + 1 < cage.preciseLineVertices.size(); ++edge) {
+        const int first = findVertex(cage.preciseLineVertices[edge * 2]);
+        const int second = findVertex(cage.preciseLineVertices[edge * 2 + 1]);
+        endpoints.append({first, second});
+    }
+    return endpoints;
 }
 
 } // namespace
@@ -1782,8 +1911,10 @@ public:
                 Shape cap;
                 cap.geometryType = GeometryType::NurbsSurface;
                 cap.nurbsSurface = faces[1];
-                const ViewportDepthGeometry solidCage = selectedSurfaceCage(*shape);
-                const ViewportDepthGeometry capCage = selectedSurfaceCage(cap);
+                const ViewportDepthGeometry solidCage =
+                    selectedSurfaceControlNet(*shape);
+                const ViewportDepthGeometry capCage =
+                    selectedSurfaceControlNet(cap);
                 if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                     for (int capIndex = 0;
                          capIndex < capCage.pointVertices.size(); ++capIndex) {
@@ -2384,7 +2515,8 @@ public:
                     continue;
                 }
 
-                const ViewportDepthGeometry cage = selectedSurfaceCage(*shape);
+                const ViewportDepthGeometry cage =
+                    selectedSurfaceControlNet(*shape);
                 const QVector3D placement(float(offset.x), float(offset.y),
                                           float(offset.z));
                 if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
@@ -2918,6 +3050,39 @@ public:
                 }
             }
         };
+        const auto normalizeClosedCurvePointSelection = [](
+                const Shape::NurbsCurve3D &curve,
+                const WorkPlaneFrame &frame,
+                int selectablePointCount,
+                QSet<int> *selectedPoints) {
+            if (selectedPoints == nullptr ||
+                curve.controlPoints.size() != selectablePointCount ||
+                curve.controlPoints.size() < 2) {
+                return;
+            }
+            const qreal firstNormal = curve.dimension == 3
+                ? curve.normalCoordinates.first() : 0.0;
+            const qreal lastNormal = curve.dimension == 3
+                ? curve.normalCoordinates.last() : 0.0;
+            const Point3D firstWorld = workPlaneFramePointToWorld(
+                curve.controlPoints.first(), firstNormal, frame);
+            const Point3D lastWorld = workPlaneFramePointToWorld(
+                curve.controlPoints.last(), lastNormal, frame);
+            const qreal dx = firstWorld.x - lastWorld.x;
+            const qreal dy = firstWorld.y - lastWorld.y;
+            const qreal dz = firstWorld.z - lastWorld.z;
+            const bool repeatedClosurePoint =
+                dx * dx + dy * dy + dz * dz <= 1.0e-12;
+            if (repeatedClosurePoint &&
+                (selectedPoints->contains(0) ||
+                 selectedPoints->contains(selectablePointCount - 1))) {
+                // The line tool stores a closed loop with its first CV repeated
+                // at the end. Treat those two indices as Blender treats one
+                // cyclic control point, including when only one index was hit.
+                selectedPoints->insert(0);
+                selectedPoints->insert(selectablePointCount - 1);
+            }
+        };
 
         for (const ObjectId objectId : objectIds) {
             const SceneObject *source = document_.object(objectId);
@@ -2943,13 +3108,31 @@ public:
                     if (shape.geometryType == GeometryType::PolyCurve) {
                         int firstControlPoint = 0;
                         bool allControlPointsSelected = !shape.components.isEmpty();
-                        for (const Shape::NurbsCurve3D &component : shape.components) {
+                        for (int componentIndex = 0;
+                             componentIndex < shape.components.size();
+                             ++componentIndex) {
+                            const Shape::NurbsCurve3D &component =
+                                shape.components[componentIndex];
+                            QSet<int> localSelection;
+                            for (int pointIndex = 0;
+                                 pointIndex < component.controlPoints.size();
+                                 ++pointIndex) {
+                                if (selectedComponents.contains(firstControlPoint +
+                                                                pointIndex)) {
+                                    localSelection.insert(pointIndex);
+                                }
+                            }
+                            normalizeClosedCurvePointSelection(
+                                component,
+                                shapeComponentWorkPlaneFrame(shape,
+                                                             componentIndex),
+                                component.controlPoints.size(),
+                                &localSelection);
                             for (int pointIndex = 0;
                                  pointIndex < component.controlPoints.size();
                                  ++pointIndex) {
                                 allControlPointsSelected = allControlPointsSelected &&
-                                    selectedComponents.contains(firstControlPoint +
-                                                                pointIndex);
+                                    localSelection.contains(pointIndex);
                             }
                             firstControlPoint += component.controlPoints.size();
                         }
@@ -2973,6 +3156,12 @@ public:
                                     localSelection.insert(pointIndex);
                                 }
                             }
+                            normalizeClosedCurvePointSelection(
+                                component,
+                                shapeComponentWorkPlaneFrame(shape,
+                                                             componentIndex),
+                                component.controlPoints.size(),
+                                &localSelection);
                             if (localSelection.size() ==
                                 component.controlPoints.size()) {
                                 appendCurveObject(
@@ -3003,36 +3192,22 @@ public:
                             continue;
                         }
                         QSet<int> selectedControlPoints = selectedComponents;
+                        const WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
                         const int lastControlPoint =
                             curve.controlPoints.size() - 1;
-                        if (curve.controlPoints.size() == selectablePoints.size() &&
-                            lastControlPoint > 0) {
-                            const WorkPlaneFrame frame =
-                                shapeWorkPlaneFrame(shape);
-                            const qreal firstW = curve.dimension == 3
-                                ? curve.normalCoordinates.first() : 0.0;
-                            const qreal lastW = curve.dimension == 3
-                                ? curve.normalCoordinates.last() : 0.0;
-                            const Point3D firstWorld = workPlaneFramePointToWorld(
-                                curve.controlPoints.first(), firstW, frame);
-                            const Point3D lastWorld = workPlaneFramePointToWorld(
-                                curve.controlPoints.last(), lastW, frame);
-                            const qreal dx = firstWorld.x - lastWorld.x;
-                            const qreal dy = firstWorld.y - lastWorld.y;
-                            const qreal dz = firstWorld.z - lastWorld.z;
-                            const bool hasCoincidentClosure =
-                                dx * dx + dy * dy + dz * dz <= 1.0e-12;
-                            if (hasCoincidentClosure &&
-                                (selectedControlPoints.contains(0) ||
-                                 selectedControlPoints.contains(
-                                     lastControlPoint))) {
-                                selectedControlPoints.insert(0);
-                                selectedControlPoints.insert(lastControlPoint);
-                                DebugLog::instance().write(
-                                    QStringLiteral("duplicate closed endpoint selection normalized object=%1 endpoints=0,%2")
-                                        .arg(objectId.value())
-                                        .arg(lastControlPoint));
-                            }
+                        const bool hadOneClosureEndpoint = lastControlPoint > 0 &&
+                            (selectedControlPoints.contains(0) ||
+                             selectedControlPoints.contains(lastControlPoint));
+                        normalizeClosedCurvePointSelection(
+                            curve, frame, selectablePoints.size(),
+                            &selectedControlPoints);
+                        if (hadOneClosureEndpoint &&
+                            selectedControlPoints.contains(0) &&
+                            selectedControlPoints.contains(lastControlPoint)) {
+                            DebugLog::instance().write(
+                                QStringLiteral("duplicate closed endpoint selection normalized object=%1 endpoints=0,%2")
+                                    .arg(objectId.value())
+                                    .arg(lastControlPoint));
                         }
                         bool allControlPointsSelected =
                             !selectablePoints.isEmpty();
@@ -3071,7 +3246,10 @@ public:
                 continue;
             }
 
-            const ViewportDepthGeometry parentCage = selectedSurfaceCage(shape);
+            const ViewportDepthGeometry parentCage =
+                selectedSurfaceControlNet(shape);
+            const QVector<QPair<int, int>> parentEdgeVertexIndices =
+                selectedSurfaceControlNetEdgeVertexIndices(shape);
             const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(shape);
             const int vertexCount = int(parentCage.pointVertices.size());
             const int edgeCount = int(parentCage.preciseLineVertices.size() / 2);
@@ -3105,9 +3283,10 @@ public:
             QSet<int> copiedVertices;
             QSet<int> copiedEdges;
             const auto findParentVertex = [&parentCage](const Point3D &point) {
-                for (int index = 0; index < parentCage.pointVertices.size(); ++index) {
+                for (int index = 0;
+                     index < parentCage.precisePointVertices.size(); ++index) {
                     if (duplicatePointsEqual(
-                            duplicateCagePoint(parentCage.pointVertices[index]), point)) {
+                            parentCage.precisePointVertices[index], point)) {
                         return index;
                     }
                 }
@@ -3131,6 +3310,27 @@ public:
                 return -1;
             };
 
+            const auto parentVertexForFace = [&](int faceIndex,
+                                                 int faceVertexIndex,
+                                                 const Point3D &point) {
+                if (shape.geometryType == GeometryType::NurbsSurface &&
+                    faceIndex == 0 && faceVertexIndex >= 0 &&
+                    faceVertexIndex < parentCage.pointVertices.size()) {
+                    return faceVertexIndex;
+                }
+                return findParentVertex(point);
+            };
+            const auto parentEdgeForFace = [&](int faceIndex,
+                                               int faceEdgeIndex,
+                                               const Point3D &first,
+                                               const Point3D &second) {
+                if (shape.geometryType == GeometryType::NurbsSurface &&
+                    faceIndex == 0 && faceEdgeIndex >= 0 &&
+                    faceEdgeIndex < parentCage.preciseLineVertices.size() / 2) {
+                    return faceEdgeIndex;
+                }
+                return findParentEdge(first, second);
+            };
             if (componentSelectionMode_ == ComponentSelectionMode::Face) {
                 for (int faceIndex : selectedFaces) {
                     appendFace(*source, faces[faceIndex]);
@@ -3138,16 +3338,23 @@ public:
                     faceShape.geometryType = GeometryType::NurbsSurface;
                     faceShape.nurbsSurface = faces[faceIndex];
                     const ViewportDepthGeometry faceCage =
-                        selectedSurfaceCage(faceShape);
-                    for (const QVector3D &point : faceCage.pointVertices) {
-                        const int vertexIndex = findParentVertex(
+                        selectedSurfaceControlNet(faceShape);
+                    for (int faceVertexIndex = 0;
+                         faceVertexIndex < faceCage.pointVertices.size();
+                         ++faceVertexIndex) {
+                        const QVector3D &point =
+                            faceCage.pointVertices[faceVertexIndex];
+                        const int vertexIndex = parentVertexForFace(
+                            faceIndex, faceVertexIndex,
                             duplicateCagePoint(point));
                         if (vertexIndex >= 0) copiedVertices.insert(vertexIndex);
                     }
                     for (int edgeIndex = 0;
                          edgeIndex + 1 < faceCage.preciseLineVertices.size();
                          edgeIndex += 2) {
-                        const int parentEdge = findParentEdge(
+                        const int faceEdgeIndex = edgeIndex / 2;
+                        const int parentEdge = parentEdgeForFace(
+                            faceIndex, faceEdgeIndex,
                             duplicateCagePoint(faceCage.preciseLineVertices[edgeIndex]),
                             duplicateCagePoint(faceCage.preciseLineVertices[edgeIndex + 1]));
                         if (parentEdge >= 0) copiedEdges.insert(parentEdge);
@@ -3158,12 +3365,18 @@ public:
                     Shape faceShape;
                     faceShape.geometryType = GeometryType::NurbsSurface;
                     faceShape.nurbsSurface = faces[faceIndex];
-                    const ViewportDepthGeometry faceCage = selectedSurfaceCage(faceShape);
+                    const ViewportDepthGeometry faceCage =
+                        selectedSurfaceControlNet(faceShape);
                     if (faceCage.pointVertices.isEmpty()) continue;
                     QVector<int> faceVertices;
                     bool fullySelected = true;
-                    for (const QVector3D &point : faceCage.pointVertices) {
-                        const int vertexIndex = findParentVertex(
+                    for (int faceVertexIndex = 0;
+                         faceVertexIndex < faceCage.pointVertices.size();
+                         ++faceVertexIndex) {
+                        const QVector3D &point =
+                            faceCage.pointVertices[faceVertexIndex];
+                        const int vertexIndex = parentVertexForFace(
+                            faceIndex, faceVertexIndex,
                             duplicateCagePoint(point));
                         if (vertexIndex < 0 || !selectedVertices.contains(vertexIndex)) {
                             fullySelected = false;
@@ -3177,9 +3390,90 @@ public:
                     for (int edgeIndex = 0;
                          edgeIndex + 1 < faceCage.preciseLineVertices.size();
                          edgeIndex += 2) {
-                        const int parentEdge = findParentEdge(
+                        const int faceEdgeIndex = edgeIndex / 2;
+                        const int parentEdge = parentEdgeForFace(
+                            faceIndex, faceEdgeIndex,
                             duplicateCagePoint(faceCage.preciseLineVertices[edgeIndex]),
                             duplicateCagePoint(faceCage.preciseLineVertices[edgeIndex + 1]));
+                        if (parentEdge >= 0) copiedEdges.insert(parentEdge);
+                    }
+                }
+            } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
+                for (int faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+                    // The control-net perimeter is the BRep boundary only for
+                    // an untrimmed open patch. Trim curves have their own UV
+                    // boundary and must not be guessed from the rectangular CV grid.
+                    if (!faces[faceIndex].trimLoops.isEmpty()) {
+                        continue;
+                    }
+                    Shape faceShape;
+                    faceShape.geometryType = GeometryType::NurbsSurface;
+                    faceShape.nurbsSurface = faces[faceIndex];
+                    const ViewportDepthGeometry faceCage =
+                        selectedSurfaceControlNet(faceShape);
+                    if (faceCage.preciseLineVertices.isEmpty()) {
+                        continue;
+                    }
+                    QVector<int> faceEdges;
+                    QVector<int> faceVertices;
+                    const QVector<QPair<int, int>> edgeVertices =
+                        nurbsSurfaceControlNetEdgeVertexIndices(
+                            faces[faceIndex]);
+                    const QVector<int> boundaryEdges =
+                        nurbsSurfaceControlNetBoundaryEdgeIndices(
+                            faces[faceIndex]);
+                    if (edgeVertices.size() * 2 !=
+                            faceCage.preciseLineVertices.size() ||
+                        boundaryEdges.isEmpty()) {
+                        continue;
+                    }
+                    bool fullySelected = true;
+                    for (int faceEdgeIndex : boundaryEdges) {
+                        const int edgeIndex = faceEdgeIndex * 2;
+                        const int parentEdge = parentEdgeForFace(
+                            faceIndex, faceEdgeIndex,
+                            faceCage.preciseLineVertices[edgeIndex],
+                            faceCage.preciseLineVertices[edgeIndex + 1]);
+                        if (parentEdge < 0 ||
+                            !selectedEdges.contains(parentEdge)) {
+                            fullySelected = false;
+                            break;
+                        }
+                        faceEdges.append(parentEdge);
+                        const QPair<int, int> localEndpoints =
+                            edgeVertices[faceEdgeIndex];
+                        for (int localVertex : {localEndpoints.first,
+                                                localEndpoints.second}) {
+                            const int vertex = parentVertexForFace(
+                                faceIndex, localVertex,
+                                duplicateCagePoint(
+                                    faceCage.pointVertices[localVertex]));
+                            if (vertex >= 0 && !faceVertices.contains(vertex)) {
+                                faceVertices.append(vertex);
+                            }
+                        }
+                    }
+                    if (!fullySelected) {
+                        continue;
+                    }
+                    appendFace(*source, faces[faceIndex]);
+                    for (int vertex : faceVertices) {
+                        copiedVertices.insert(vertex);
+                    }
+                    // The duplicate is the complete NURBS patch. Mark every
+                    // control-net edge as carried by that patch so converted
+                    // Face -> Edge selections do not also emit loose Lines.
+                    for (int faceEdgeIndex = 0;
+                         faceEdgeIndex * 2 + 1 <
+                             faceCage.preciseLineVertices.size();
+                         ++faceEdgeIndex) {
+                        const int edgeOffset = faceEdgeIndex * 2;
+                        const int parentEdge = parentEdgeForFace(
+                            faceIndex, faceEdgeIndex,
+                            duplicateCagePoint(
+                                faceCage.preciseLineVertices[edgeOffset]),
+                            duplicateCagePoint(
+                                faceCage.preciseLineVertices[edgeOffset + 1]));
                         if (parentEdge >= 0) copiedEdges.insert(parentEdge);
                     }
                 }
@@ -3190,8 +3484,10 @@ public:
                     parentCage.preciseLineVertices[edgeIndex * 2]);
                 const Point3D second = duplicateCagePoint(
                     parentCage.preciseLineVertices[edgeIndex * 2 + 1]);
-                const int firstVertex = findParentVertex(first);
-                const int secondVertex = findParentVertex(second);
+                const int firstVertex = edgeIndex < parentEdgeVertexIndices.size()
+                    ? parentEdgeVertexIndices[edgeIndex].first : -1;
+                const int secondVertex = edgeIndex < parentEdgeVertexIndices.size()
+                    ? parentEdgeVertexIndices[edgeIndex].second : -1;
                 const bool selected = componentSelectionMode_ ==
                                               ComponentSelectionMode::Edge
                                           ? selectedEdges.contains(edgeIndex)
@@ -3224,7 +3520,8 @@ public:
             QVector<Point3D> points;
             if (shape.geometryType == GeometryType::NurbsSurface ||
                 shape.geometryType == GeometryType::NurbsSolid) {
-                const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+                const ViewportDepthGeometry cage =
+                    selectedSurfaceControlNet(shape);
                 points.reserve(cage.pointVertices.size());
                 for (const QVector3D &point : cage.pointVertices) {
                     points.append(duplicateCagePoint(point));
@@ -3537,7 +3834,8 @@ public:
         const bool surface = shape.geometryType == GeometryType::NurbsSurface ||
                              shape.geometryType == GeometryType::NurbsSolid;
         if (surface) {
-            const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+            const ViewportDepthGeometry cage =
+                selectedSurfaceControlNet(shape);
             if (mode == ComponentSelectionMode::Vertex) {
                 return cage.pointVertices.size();
             }
@@ -5092,29 +5390,24 @@ protected:
                     continue;
                 }
 
-                const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+                const QVector<QPair<int, int>> edgeVertices =
+                    selectedSurfaceControlNetEdgeVertexIndices(shape);
                 QSet<int> &vertices = selectedVertices[objectIt.key()];
                 const int activeEdge = activeComponentIndices_[
                     static_cast<int>(ComponentSelectionMode::Edge)];
                 for (int edgeIndex : objectIt.value()) {
-                    const int first = edgeIndex * 2;
-                    if (edgeIndex < 0 || first + 1 >= cage.lineVertices.size()) {
+                    if (edgeIndex < 0 || edgeIndex >= edgeVertices.size()) {
                         continue;
                     }
-                    int endpointIndices[2] = {-1, -1};
-                    for (int endpoint = 0; endpoint < 2; ++endpoint) {
-                        const QVector3D &position = cage.lineVertices[first + endpoint];
-                        for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
-                            if ((cage.pointVertices[vertex] - position).lengthSquared() <=
-                                1.0e-12f) {
-                                endpointIndices[endpoint] = vertex;
-                                vertices.insert(vertex);
-                                break;
-                            }
-                        }
+                    const QPair<int, int> endpoints = edgeVertices[edgeIndex];
+                    if (endpoints.first >= 0) {
+                        vertices.insert(endpoints.first);
                     }
-                    if (edgeIndex == activeEdge && endpointIndices[0] >= 0) {
-                        activeVertex = endpointIndices[0];
+                    if (endpoints.second >= 0) {
+                        vertices.insert(endpoints.second);
+                    }
+                    if (edgeIndex == activeEdge && endpoints.first >= 0) {
+                        activeVertex = endpoints.first;
                     }
                 }
                 if (vertices.isEmpty()) {
@@ -5146,26 +5439,14 @@ protected:
                     continue;
                 }
 
-                const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+                const QVector<QPair<int, int>> edgeVertices =
+                    selectedSurfaceControlNetEdgeVertexIndices(shape);
                 QSet<int> &edges = selectedEdges[objectIt.key()];
-                for (int edgeIndex = 0;
-                     edgeIndex * 2 + 1 < cage.lineVertices.size();
-                     ++edgeIndex) {
-                    int endpointIndices[2] = {-1, -1};
-                    for (int endpoint = 0; endpoint < 2; ++endpoint) {
-                        const QVector3D &position =
-                            cage.lineVertices[edgeIndex * 2 + endpoint];
-                        for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
-                            if ((cage.pointVertices[vertex] - position).lengthSquared() <=
-                                1.0e-12f) {
-                                endpointIndices[endpoint] = vertex;
-                                break;
-                            }
-                        }
-                    }
-                    if (endpointIndices[0] >= 0 && endpointIndices[1] >= 0 &&
-                        objectIt.value().contains(endpointIndices[0]) &&
-                        objectIt.value().contains(endpointIndices[1])) {
+                for (int edgeIndex = 0; edgeIndex < edgeVertices.size(); ++edgeIndex) {
+                    const QPair<int, int> endpoints = edgeVertices[edgeIndex];
+                    if (endpoints.first >= 0 && endpoints.second >= 0 &&
+                        objectIt.value().contains(endpoints.first) &&
+                        objectIt.value().contains(endpoints.second)) {
                         edges.insert(edgeIndex);
                     }
                 }
@@ -5175,6 +5456,166 @@ protected:
             }
             activeComponentIndices_[static_cast<int>(ComponentSelectionMode::Edge)] =
                 -1;
+        }
+
+        if ((componentSelectionMode_ == ComponentSelectionMode::Face &&
+             mode != ComponentSelectionMode::Face) ||
+            (componentSelectionMode_ != ComponentSelectionMode::Face &&
+             mode == ComponentSelectionMode::Face)) {
+            const ComponentSelectionMode sourceMode = componentSelectionMode_;
+            const auto sourceSelections =
+                componentSelections_[static_cast<int>(sourceMode)];
+            auto &targetSelections =
+                componentSelections_[static_cast<int>(mode)];
+            targetSelections.clear();
+
+            for (auto objectIt = sourceSelections.cbegin();
+                 objectIt != sourceSelections.cend(); ++objectIt) {
+                const ObjectId objectId = ObjectId::fromValue(objectIt.key());
+                const int shapeIndex = document_.indexOf(objectId);
+                if (shapeIndex < 0 || shapeIndex >= shapes_.size()) {
+                    continue;
+                }
+                const Shape &shape = shapes_[shapeIndex];
+                if (shape.geometryType != GeometryType::NurbsSurface &&
+                    shape.geometryType != GeometryType::NurbsSolid) {
+                    continue;
+                }
+                const ViewportDepthGeometry parentCage =
+                    selectedSurfaceControlNet(shape);
+                const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(shape);
+                QSet<int> &target = targetSelections[objectIt.key()];
+                const auto findParentVertex = [&](const Point3D &point) {
+                    for (int vertex = 0;
+                         vertex < parentCage.precisePointVertices.size();
+                         ++vertex) {
+                        if (duplicatePointsEqual(
+                                parentCage.precisePointVertices[vertex], point)) {
+                            return vertex;
+                        }
+                    }
+                    return -1;
+                };
+                const auto findParentEdge = [&](const Point3D &first,
+                                                const Point3D &second) {
+                    for (int edge = 0;
+                         edge * 2 + 1 < parentCage.preciseLineVertices.size();
+                         ++edge) {
+                        const Point3D a = duplicateCagePoint(
+                            parentCage.preciseLineVertices[edge * 2]);
+                        const Point3D b = duplicateCagePoint(
+                            parentCage.preciseLineVertices[edge * 2 + 1]);
+                        if ((duplicatePointsEqual(a, first) &&
+                             duplicatePointsEqual(b, second)) ||
+                            (duplicatePointsEqual(a, second) &&
+                             duplicatePointsEqual(b, first))) {
+                            return edge;
+                        }
+                    }
+                    return -1;
+                };
+
+                for (int faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
+                    Shape faceShape;
+                    faceShape.geometryType = GeometryType::NurbsSurface;
+                    faceShape.nurbsSurface = faces[faceIndex];
+                    const ViewportDepthGeometry faceCage =
+                        selectedSurfaceControlNet(faceShape);
+                    if (sourceMode == ComponentSelectionMode::Face) {
+                        if (!objectIt.value().contains(faceIndex)) {
+                            continue;
+                        }
+                        if (mode == ComponentSelectionMode::Vertex) {
+                            for (int localVertex = 0;
+                                 localVertex < faceCage.pointVertices.size();
+                                 ++localVertex) {
+                                const QVector3D &point =
+                                    faceCage.pointVertices[localVertex];
+                                const int parentVertex =
+                                    shape.geometryType == GeometryType::NurbsSurface &&
+                                            faceIndex == 0
+                                        ? localVertex
+                                        : findParentVertex(
+                                              duplicateCagePoint(point));
+                                if (parentVertex >= 0) {
+                                    target.insert(parentVertex);
+                                }
+                            }
+                        } else {
+                            // A selected NURBS patch flushes through its full
+                            // control net. This keeps Face -> Edge consistent
+                            // with Face -> Vertex -> Edge; selected edges still
+                            // describe the control net, not a polygonal
+                            // approximation of the evaluated surface.
+                            const int faceEdgeCount =
+                                faceCage.preciseLineVertices.size() / 2;
+                            for (int localEdge = 0;
+                                 localEdge < faceEdgeCount;
+                                 ++localEdge) {
+                                const Point3D first = duplicateCagePoint(
+                                    faceCage.preciseLineVertices[localEdge * 2]);
+                                const Point3D second = duplicateCagePoint(
+                                    faceCage.preciseLineVertices[localEdge * 2 + 1]);
+                                const int parentEdge =
+                                    shape.geometryType == GeometryType::NurbsSurface &&
+                                            faceIndex == 0
+                                        ? localEdge
+                                        : findParentEdge(first, second);
+                                if (parentEdge >= 0) target.insert(parentEdge);
+                            }
+                        }
+                        continue;
+                    }
+
+                    bool fullySelected = !faceCage.pointVertices.isEmpty();
+                    if (sourceMode == ComponentSelectionMode::Vertex) {
+                        for (int localVertex = 0;
+                             localVertex < faceCage.pointVertices.size();
+                             ++localVertex) {
+                            const QVector3D &point =
+                                faceCage.pointVertices[localVertex];
+                            const int parentVertex =
+                                shape.geometryType == GeometryType::NurbsSurface &&
+                                        faceIndex == 0
+                                    ? localVertex
+                                    : findParentVertex(duplicateCagePoint(point));
+                            if (parentVertex < 0 ||
+                                !objectIt.value().contains(parentVertex)) {
+                                fullySelected = false;
+                                break;
+                            }
+                        }
+                    } else {
+                        const QVector<int> boundaryEdges =
+                            nurbsSurfaceControlNetBoundaryEdgeIndices(
+                                faces[faceIndex]);
+                        if (!faces[faceIndex].trimLoops.isEmpty() ||
+                            boundaryEdges.isEmpty()) {
+                            fullySelected = false;
+                        }
+                        for (int localEdge : boundaryEdges) {
+                            const int edgeOffset = localEdge * 2;
+                            const Point3D first = duplicateCagePoint(
+                                faceCage.preciseLineVertices[edgeOffset]);
+                            const Point3D second = duplicateCagePoint(
+                                faceCage.preciseLineVertices[edgeOffset + 1]);
+                            const int parentEdge =
+                                shape.geometryType == GeometryType::NurbsSurface &&
+                                        faceIndex == 0
+                                    ? localEdge
+                                    : findParentEdge(first, second);
+                            if (parentEdge < 0 ||
+                                !objectIt.value().contains(parentEdge)) {
+                                fullySelected = false;
+                                break;
+                            }
+                        }
+                    }
+                    if (fullySelected) target.insert(faceIndex);
+                }
+                if (target.isEmpty()) targetSelections.remove(objectIt.key());
+            }
+            activeComponentIndices_[static_cast<int>(mode)] = -1;
         }
 
         componentSelectionMode_ = mode;
@@ -5542,124 +5983,50 @@ protected:
                  geometryType == GeometryType::NurbsSolid)) {
                 if (sceneRenderer != nullptr) {
                     auto cage = QSharedPointer<ViewportDepthGeometry>::create(
-                        selectedSurfaceCage(visibleShape));
+                        componentSelectionMode_ == ComponentSelectionMode::Vertex ||
+                                componentSelectionMode_ == ComponentSelectionMode::Edge
+                            ? selectedSurfaceControlNet(visibleShape)
+                            : selectedSurfaceCage(visibleShape));
                     if (selected &&
                         (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                          componentSelectionMode_ == ComponentSelectionMode::Edge) &&
                         !objectComponentSelection.isEmpty()) {
-                        QVector<NurbsSurface3D> selectableFaces;
-                        if (geometryType == GeometryType::NurbsSolid &&
-                            visibleShape.nurbsSolid.boundaryFaces.isEmpty()) {
-                            const QVector<NurbsSurface3D> solidFaces =
-                                shapeSurfaceFaces(visibleShape);
-                            if (solidFaces.size() >= 2) {
-                                selectableFaces.append(solidFaces[0]);
-                                selectableFaces.append(solidFaces[1]);
-                            }
-
-                            // A swept boundary loop is stored as one exact
-                            // NURBS wall, but its degree-one knot spans are
-                            // separate planar edit faces, like Blender's
-                            // individual sides of a cube.
-                            WorkPlaneFrame baseFrame;
-                            qreal u0 = 0.0;
-                            qreal u1 = 0.0;
-                            qreal v0 = 0.0;
-                            qreal v1 = 0.0;
-                            const NurbsSurface3D &base =
-                                visibleShape.nurbsSolid.baseSurface;
-                            if (nurbsSolidBaseFrame(base, &baseFrame) &&
-                                nurbsSurfaceParameterDomains(
-                                    base, &u0, &u1, &v0, &v1)) {
-                                const Point3D uAxis{
-                                    base.controlPoints[2].x - base.controlPoints[0].x,
-                                    base.controlPoints[2].y - base.controlPoints[0].y,
-                                    base.controlPoints[2].z - base.controlPoints[0].z};
-                                const Point3D vAxis{
-                                    base.controlPoints[1].x - base.controlPoints[0].x,
-                                    base.controlPoints[1].y - base.controlPoints[0].y,
-                                    base.controlPoints[1].z - base.controlPoints[0].z};
-                                QVector<NurbsSurfaceTrimLoop> boundaryLoops =
-                                    base.trimLoops;
-                                if (boundaryLoops.isEmpty()) {
-                                    NurbsSurfaceTrimLoop perimeter;
-                                    perimeter.curve.degree = 1;
-                                    perimeter.curve.order = 2;
-                                    perimeter.curve.controlPoints = {
-                                        {u0, v0}, {u1, v0}, {u1, v1},
-                                        {u0, v1}, {u0, v0}};
-                                    perimeter.curve.weights = {1, 1, 1, 1, 1};
-                                    perimeter.curve.knots = {0, 1, 2, 3, 4};
-                                    boundaryLoops.append(std::move(perimeter));
-                                }
-                                for (const NurbsSurfaceTrimLoop &loop :
-                                     boundaryLoops) {
-                                    const NurbsCurve2D &boundary = loop.curve;
-                                    if (boundary.degree != 1 ||
-                                        boundary.controlPoints.size() < 3) {
-                                        continue;
-                                    }
-                                    for (int index = 0;
-                                         index + 1 < boundary.controlPoints.size();
-                                         ++index) {
-                                        const auto toFramePoint =
-                                            [&](const QPointF &uv) {
-                                                const qreal a =
-                                                    (uv.x() - u0) / (u1 - u0);
-                                                const qreal b =
-                                                    (uv.y() - v0) / (v1 - v0);
-                                                const Point3D world{
-                                                    baseFrame.origin.x + a * uAxis.x +
-                                                        b * vAxis.x,
-                                                    baseFrame.origin.y + a * uAxis.y +
-                                                        b * vAxis.y,
-                                                    baseFrame.origin.z + a * uAxis.z +
-                                                        b * vAxis.z};
-                                                return worldPointToWorkPlaneFrame(
-                                                    world, baseFrame);
-                                            };
-                                        NurbsCurve2D segment;
-                                        segment.degree = 1;
-                                        segment.order = 2;
-                                        segment.controlPoints = {
-                                            toFramePoint(
-                                                boundary.controlPoints[index]),
-                                            toFramePoint(
-                                                boundary.controlPoints[index + 1])};
-                                        segment.weights = {1.0, 1.0};
-                                        segment.knots = {0.0, 1.0};
-                                        NurbsSurface3D panel;
-                                        if (makeNurbsExtrusionSurface(
-                                                segment, baseFrame,
-                                                visibleShape.nurbsSolid.displacement,
-                                                &panel)) {
-                                            selectableFaces.append(std::move(panel));
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            selectableFaces = shapeSurfaceFaces(visibleShape);
-                        }
-                        for (const NurbsSurface3D &face : selectableFaces) {
+            // Use the same derived-face list for highlighting as for picking,
+            // mode conversion, marquee selection, and duplication. A swept
+            // NURBS wall remains one face per boundary loop even when its knot
+            // spans happen to be planar panels.
+            const QVector<NurbsSurface3D> selectableFaces =
+                shapeSurfaceFaces(visibleShape);
+                        for (int selectableFaceIndex = 0;
+                             selectableFaceIndex < selectableFaces.size();
+                             ++selectableFaceIndex) {
+                            const NurbsSurface3D &face =
+                                selectableFaces[selectableFaceIndex];
                             Shape faceShape;
                             faceShape.geometryType = GeometryType::NurbsSurface;
                             faceShape.nurbsSurface = face;
                             const ViewportDepthGeometry faceCage =
-                                selectedSurfaceCage(faceShape);
+                                selectedSurfaceControlNet(faceShape);
+                            const QVector<int> boundaryEdgeIndices =
+                                face.trimLoops.isEmpty()
+                                    ? nurbsSurfaceControlNetBoundaryEdgeIndices(face)
+                                    : QVector<int>{};
                             const bool vertexMode =
                                 componentSelectionMode_ ==
                                 ComponentSelectionMode::Vertex;
                             bool fullySelected = vertexMode
                                 ? faceCage.pointVertices.size() >= 3
-                                : faceCage.preciseLineVertices.size() >= 6;
+                                : !boundaryEdgeIndices.isEmpty();
                             if (vertexMode) {
-                                for (const QVector3D &point : faceCage.pointVertices) {
+                                for (const Point3D &point :
+                                     faceCage.precisePointVertices) {
                                     int vertex = -1;
                                     for (int index = 0;
-                                         index < cage->pointVertices.size(); ++index) {
-                                        if ((cage->pointVertices[index] - point)
-                                                .lengthSquared() <= 1.0e-12f) {
+                                         index < cage->precisePointVertices.size();
+                                         ++index) {
+                                        if (duplicatePointsEqual(
+                                                cage->precisePointVertices[index],
+                                                point)) {
                                             vertex = index;
                                             break;
                                         }
@@ -5671,27 +6038,33 @@ protected:
                                     }
                                 }
                             } else {
-                                for (int faceEdge = 0;
-                                     fullySelected &&
-                                     faceEdge + 1 <
-                                         faceCage.preciseLineVertices.size();
-                                     faceEdge += 2) {
-                                    const QVector3D &faceA =
-                                        faceCage.lineVertices[faceEdge];
-                                    const QVector3D &faceB =
-                                        faceCage.lineVertices[faceEdge + 1];
+                                for (int faceEdgeIndex : boundaryEdgeIndices) {
+                                    if (!fullySelected) break;
+                                    const int faceEdge = faceEdgeIndex * 2;
+                                    const Point3D &faceA =
+                                        faceCage.preciseLineVertices[faceEdge];
+                                    const Point3D &faceB =
+                                        faceCage.preciseLineVertices[faceEdge + 1];
                                     int edgeIndex = -1;
+                                    if (geometryType == GeometryType::NurbsSurface &&
+                                        selectableFaceIndex == 0 &&
+                                        faceEdgeIndex * 2 + 1 <
+                                            cage->preciseLineVertices.size()) {
+                                        edgeIndex = faceEdgeIndex;
+                                    }
                                     for (int edge = 0;
-                                         edge * 2 + 1 < cage->lineVertices.size();
+                                         edgeIndex < 0 &&
+                                         edge * 2 + 1 <
+                                             cage->preciseLineVertices.size();
                                          ++edge) {
-                                        const QVector3D &a =
-                                            cage->lineVertices[edge * 2];
-                                        const QVector3D &b =
-                                            cage->lineVertices[edge * 2 + 1];
-                                        if (((a - faceA).lengthSquared() <= 1.0e-12f &&
-                                             (b - faceB).lengthSquared() <= 1.0e-12f) ||
-                                            ((a - faceB).lengthSquared() <= 1.0e-12f &&
-                                             (b - faceA).lengthSquared() <= 1.0e-12f)) {
+                                        const Point3D &a =
+                                            cage->preciseLineVertices[edge * 2];
+                                        const Point3D &b =
+                                            cage->preciseLineVertices[edge * 2 + 1];
+                                        if ((duplicatePointsEqual(a, faceA) &&
+                                             duplicatePointsEqual(b, faceB)) ||
+                                            (duplicatePointsEqual(a, faceB) &&
+                                             duplicatePointsEqual(b, faceA))) {
                                             edgeIndex = edge;
                                             break;
                                         }
@@ -6651,7 +7024,8 @@ protected:
                     if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
                         (preview.geometryType == GeometryType::NurbsSurface ||
                          preview.geometryType == GeometryType::NurbsSolid)) {
-                        const ViewportDepthGeometry cage = selectedSurfaceCage(preview);
+                        const ViewportDepthGeometry cage =
+                            selectedSurfaceControlNet(preview);
                         for (const QVector3D &cagePoint : cage.pointVertices) {
                             ViewportControlPointHandle handle;
                             handle.worldPosition = QVector3D(
@@ -6744,7 +7118,7 @@ protected:
                     if (componentSelectionMode_ ==
                         ComponentSelectionMode::Vertex) {
                         const ViewportDepthGeometry capCage =
-                            selectedSurfaceCage(cap);
+                            selectedSurfaceControlNet(cap);
                         for (const QVector3D &point : capCage.pointVertices) {
                             ViewportControlPointHandle handle;
                             handle.worldPosition = point;
@@ -8038,7 +8412,8 @@ protected:
             activeTool_ == Tool::Select && !syntheticSelectionInput_) {
             const int hitShapeIndex = hitTestShape(screenPosition);
             if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
-                componentSelectionMode_ == ComponentSelectionMode::Edge) {
+                componentSelectionMode_ == ComponentSelectionMode::Edge ||
+                componentSelectionMode_ == ComponentSelectionMode::Face) {
                 // Defer a component click until release so a real drag can
                 // still become a marquee selection.
                 pendingComponentClickShapeIndex_ = -1;
@@ -8572,52 +8947,159 @@ protected:
                     translateControlPoint(selectedShapeIndex_,
                                           controlPointIndex_, worldDelta);
 
-                    const SceneObject *sceneObject =
-                        document_.object(selectedShapeIndex_);
-                    const Point3D placement = sceneObject != nullptr
-                        ? sceneObject->placementTranslation : Point3D{};
-                    Point3D movedControlPointWorld;
-                    bool foundMovedControlPoint = false;
-                    for (const auto &entry : curveControlPointVertices(
-                             shapes_[selectedIndex], placement)) {
-                        if (entry.first == controlPointIndex_) {
-                            movedControlPointWorld = entry.second;
-                            foundMovedControlPoint = true;
-                            break;
+                    QElapsedTimer snapTimer;
+                    snapTimer.start();
+                    QHash<int, QSet<int>> selectedControlPointIndices;
+                    QVector<ObjectId> selectedObjects = selectedShapeIndices_;
+                    if (!selectedObjects.contains(selectedShapeIndex_)) {
+                        selectedObjects.append(selectedShapeIndex_);
+                    }
+                    for (const ObjectId objectId : selectedObjects) {
+                        const int objectShapeIndex = objectIndex(objectId);
+                        if (objectShapeIndex < 0 ||
+                            !document_.isObjectVisible(objectId) ||
+                            !document_.isObjectEditable(objectId)) {
+                            continue;
+                        }
+                        QSet<int> selectedIndices;
+                        if (componentSelectionMode_ ==
+                            ComponentSelectionMode::Vertex) {
+                            selectedIndices =
+                                componentSelectionForObject(objectId);
+                        }
+                        if (objectId == selectedShapeIndex_) {
+                            selectedIndices.insert(controlPointIndex_);
+                        }
+                        if (!selectedIndices.isEmpty()) {
+                            selectedControlPointIndices.insert(
+                                objectShapeIndex, std::move(selectedIndices));
                         }
                     }
-                    if (foundMovedControlPoint) {
-                        QElapsedTimer snapTimer;
-                        snapTimer.start();
-                        const WorkPlaneFrame sourceFrame =
-                            controlPointWorkPlaneFrame(selectedShapeIndex_,
-                                                       controlPointIndex_);
-                        qreal normalCoordinate = 0.0;
-                        const QPointF localPoint = worldPointToWorkPlaneFrame(
-                            movedControlPointWorld, sourceFrame,
-                            &normalCoordinate);
-                        currentDragSnap_ = findControlPointSnap(
-                            selectedShapeIndex_,
-                            controlPointIndex_,
-                            {localPoint.x(), localPoint.y(), normalCoordinate});
-                        snapEvaluationMicroseconds = snapTimer.nsecsElapsed() / 1000;
+
+                    struct SelectedSnapSource {
+                        ObjectId objectId;
+                        int shapeIndex = -1;
+                        int controlPointIndex = -1;
+                        Point3D worldPoint;
+                        Point3D localPoint;
+                    };
+                    QVector<SelectedSnapSource> selectedSnapSources;
+                    for (auto selected = selectedControlPointIndices.cbegin();
+                         selected != selectedControlPointIndices.cend();
+                         ++selected) {
+                        const int objectShapeIndex = selected.key();
+                        const ObjectId objectId =
+                            document_.objectIdAt(objectShapeIndex);
+                        const SceneObject *sceneObject =
+                            document_.object(objectId);
+                        const Point3D placement = sceneObject != nullptr
+                            ? sceneObject->placementTranslation : Point3D{};
+                        for (const auto &entry : curveControlPointVertices(
+                                 shapes_[objectShapeIndex], placement)) {
+                            if (!selected.value().contains(entry.first)) {
+                                continue;
+                            }
+                            const WorkPlaneFrame sourceFrame =
+                                controlPointWorkPlaneFrame(objectId,
+                                                           entry.first);
+                            qreal normalCoordinate = 0.0;
+                            const QPointF localPoint = worldPointToWorkPlaneFrame(
+                                entry.second, sourceFrame, &normalCoordinate);
+                            selectedSnapSources.append(
+                                {objectId, objectShapeIndex, entry.first,
+                                 entry.second,
+                                 {localPoint.x(), localPoint.y(),
+                                  normalCoordinate}});
+                        }
+                    }
+
+                    currentDragSnap_ = DragSnapResult{};
+                    const auto activeSource = std::find_if(
+                        selectedSnapSources.cbegin(),
+                        selectedSnapSources.cend(),
+                        [this](const SelectedSnapSource &source) {
+                            return source.objectId == selectedShapeIndex_ &&
+                                   source.controlPointIndex == controlPointIndex_;
+                        });
+                    if (activeSource != selectedSnapSources.cend()) {
+                        currentDragSnap_ = snapEngine_.findControlPointSnap(
+                            document_, activeSource->shapeIndex,
+                            activeSource->controlPointIndex,
+                            activeSource->localPoint,
+                            viewportTransform_, size(),
+                            selectedControlPointIndices, &currentCursor);
                         if (currentDragSnap_.isValid() &&
                             currentDragSnap_.hasWorldTranslation) {
-                            translateControlPoint(selectedShapeIndex_,
-                                                  controlPointIndex_,
-                                                  currentDragSnap_.worldTranslation);
-                            dragSnapLocked_ = true;
-                            dragSnapCursorScreen_ = screenPosition;
-                            // Keep the original mouse-to-handle offset. A snap
-                            // temporarily holds the CV at its target; release
-                            // restores the cursor-relative drag position.
-                            DebugLog::instance().write(
-                                QStringLiteral("control point snapped shape=%1 index=%2 type=%3 target=%4")
-                                    .arg(selectedIndex)
-                                    .arg(controlPointIndex_)
-                                    .arg(snapTypeName(currentDragSnap_.type))
-                                    .arg(pointText(currentDragSnap_.targetPoint)));
+                            QPointF targetScreen;
+                            if (viewportTransform_.worldPointToScreen(
+                                    currentDragSnap_.worldTargetPoint, size(),
+                                    &targetScreen)) {
+                                qreal closestSelectedVertexDistance =
+                                    std::numeric_limits<qreal>::infinity();
+                                const SelectedSnapSource *closestSource = nullptr;
+                                for (const SelectedSnapSource &source :
+                                     selectedSnapSources) {
+                                    QPointF sourceScreen;
+                                    if (!viewportTransform_.worldPointToScreen(
+                                            source.worldPoint, size(),
+                                            &sourceScreen)) {
+                                        continue;
+                                    }
+                                    const qreal distance = std::hypot(
+                                        targetScreen.x() - sourceScreen.x(),
+                                        targetScreen.y() - sourceScreen.y());
+                                    if (distance < closestSelectedVertexDistance) {
+                                        closestSelectedVertexDistance = distance;
+                                        closestSource = &source;
+                                    }
+                                }
+                                if (closestSource != nullptr &&
+                                    currentDragSnap_.type != SnapType::Tangent &&
+                                    currentDragSnap_.type !=
+                                        SnapType::Perpendicular) {
+                                    currentDragSnap_.worldSourcePoint =
+                                        closestSource->worldPoint;
+                                    currentDragSnap_.sourcePoint =
+                                        worldPointToWorkPlaneFrame(
+                                            closestSource->worldPoint,
+                                            viewportTransform_.workPlaneFrame());
+                                    currentDragSnap_.worldTranslation = {
+                                        currentDragSnap_.worldTargetPoint.x -
+                                            closestSource->worldPoint.x,
+                                        currentDragSnap_.worldTargetPoint.y -
+                                            closestSource->worldPoint.y,
+                                        currentDragSnap_.worldTargetPoint.z -
+                                            closestSource->worldPoint.z};
+                                    currentDragSnap_.translation =
+                                        worldPointToWorkPlaneFrame(
+                                            currentDragSnap_.worldTargetPoint,
+                                            controlPointWorkPlaneFrame(
+                                                closestSource->objectId,
+                                                closestSource->controlPointIndex)) -
+                                        QPointF(closestSource->localPoint.x,
+                                               closestSource->localPoint.y);
+                                }
+                            }
                         }
+                    }
+                    snapEvaluationMicroseconds =
+                        snapTimer.nsecsElapsed() / 1000;
+                    if (currentDragSnap_.isValid() &&
+                        currentDragSnap_.hasWorldTranslation) {
+                        translateControlPoint(selectedShapeIndex_,
+                                              controlPointIndex_,
+                                              currentDragSnap_.worldTranslation);
+                        dragSnapLocked_ = true;
+                        dragSnapCursorScreen_ = screenPosition;
+                        // Keep the original mouse-to-handle offset. A snap
+                        // temporarily holds the closest selected CV at its
+                        // target; release restores the cursor-relative drag.
+                        DebugLog::instance().write(
+                            QStringLiteral("control point snapped shape=%1 index=%2 type=%3 target=%4")
+                                .arg(selectedIndex)
+                                .arg(controlPointIndex_)
+                                .arg(snapTypeName(currentDragSnap_.type))
+                                .arg(pointText(currentDragSnap_.targetPoint)));
                     }
                 }
 
@@ -10723,7 +11205,7 @@ private:
                     }
 
                     const ViewportDepthGeometry cage =
-                        selectedSurfaceCage(candidateShape);
+                        selectedSurfaceControlNet(candidateShape);
                     qreal cageScale = 1.0;
                     if (!cage.pointVertices.isEmpty()) {
                         const QVector3D origin = cage.pointVertices.first();
@@ -10741,37 +11223,246 @@ private:
                                 viewportTransform_.worldDirectionToView(worldPoint)
                                     .towardCamera;
                             if (!std::isfinite(componentDepth)) return false;
-                            // Vertices often project exactly onto a tessellation
-                            // edge. Probe the surrounding pixel centers as click
-                            // picking does, then keep only samples at the
-                            // vertex's depth on the same object.
+                            // Probe around tessellation edges. NURBS CVs can
+                            // sit off the evaluated surface, so visibility is
+                            // determined by whether another surface occludes
+                            // the CV, not whether the CV lies on its own patch.
                             for (qreal yOffset : {-1.0, 0.0, 1.0}) {
                                 for (qreal xOffset : {-1.0, 0.0, 1.0}) {
                                     Point3D visiblePoint;
                                     Point3D visibleNormal;
-                                    int visibleShapeIndex = -1;
-                                    if (!curveHitTester_.hitTestVisibleSurface(
+                                    const bool hitSurface =
+                                        curveHitTester_.hitTestVisibleSurface(
                                             document_,
                                             projected + QPointF(xOffset, yOffset),
                                             viewportTransform_, size(),
-                                            &visiblePoint, &visibleNormal, nullptr,
-                                            &visibleShapeIndex) ||
-                                        visibleShapeIndex != index) {
-                                        continue;
+                                            &visiblePoint, &visibleNormal);
+                                    if (!hitSurface) {
+                                        return true;
                                     }
                                     const qreal surfaceDepth =
                                         viewportTransform_.worldDirectionToView(
                                             visiblePoint).towardCamera;
                                     if (std::isfinite(surfaceDepth) &&
-                                        std::abs(componentDepth - surfaceDepth) <=
-                                            depthTolerance) {
+                                        componentDepth + depthTolerance >=
+                                            surfaceDepth) {
                                         return true;
+                                    }
+                                    if (!std::isfinite(surfaceDepth)) {
+                                        continue;
                                     }
                                 }
                             }
                             return false;
                         };
-                    if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                    if (componentSelectionMode_ == ComponentSelectionMode::Face) {
+                        const QVector<NurbsSurface3D> faces =
+                            shapeSurfaceFaces(candidateShape);
+                        for (int faceIndex = 0;
+                             faceIndex < faces.size(); ++faceIndex) {
+                            Shape faceShape;
+                            faceShape.geometryType = GeometryType::NurbsSurface;
+                            faceShape.nurbsSurface = faces[faceIndex];
+                            bool hasProjectedBounds = false;
+                            const QRectF faceBounds =
+                                selectionBoundsForShape(
+                                    faceShape, &hasProjectedBounds, offset)
+                                    .normalized();
+                            if (!hasProjectedBounds || faceBounds.isEmpty()) {
+                                continue;
+                            }
+                            const bool boundsMatch = crossingSelection
+                                ? selectionBox.intersects(faceBounds)
+                                : selectionBox.contains(faceBounds);
+                            if (!boundsMatch) {
+                                continue;
+                            }
+
+                            bool visibleInBox = false;
+                            PreparedNurbsSurfaceEvaluator evaluator;
+                            qreal u0 = 0.0;
+                            qreal u1 = 0.0;
+                            qreal v0 = 0.0;
+                            qreal v1 = 0.0;
+                            if (evaluator.prepare(faces[faceIndex]) &&
+                                evaluator.parameterDomains(&u0, &u1, &v0, &v1)) {
+                                constexpr int visibilitySamples = 32;
+                                const int gridWidth = visibilitySamples + 1;
+                                QVector<QPointF> projectedGrid(
+                                    gridWidth * gridWidth);
+                                QVector<bool> validGrid(gridWidth * gridWidth,
+                                                        false);
+                                const auto gridIndex = [gridWidth](int u, int v) {
+                                    return u * gridWidth + v;
+                                };
+                                const auto visibleFaceAt = [&](const QPointF &point) {
+                                    if (viewportShadingSettings_.xrayEnabled()) {
+                                        return true;
+                                    }
+                                    Point3D visiblePoint;
+                                    Point3D visibleNormal;
+                                    int visibleFace = -1;
+                                    int visibleShape = -1;
+                                    return curveHitTester_.hitTestVisibleSurface(
+                                               document_, point,
+                                               viewportTransform_, size(),
+                                               &visiblePoint, &visibleNormal,
+                                               &visibleFace, &visibleShape) &&
+                                           visibleShape == index &&
+                                           visibleFace == faceIndex;
+                                };
+                                const auto testBoxPoint = [&](const QPointF &point) {
+                                    if (selectionBox.contains(point) &&
+                                        visibleFaceAt(point)) {
+                                        visibleInBox = true;
+                                    }
+                                };
+
+                                for (int uSample = 0;
+                                     uSample <= visibilitySamples;
+                                     ++uSample) {
+                                    const qreal u = u0 + (u1 - u0) *
+                                        (qreal(uSample) / visibilitySamples);
+                                    for (int vSample = 0;
+                                         vSample <= visibilitySamples;
+                                         ++vSample) {
+                                        const qreal v = v0 + (v1 - v0) *
+                                            (qreal(vSample) /
+                                             visibilitySamples);
+                                        if (!nurbsSurfaceParameterInsideTrim(
+                                                faces[faceIndex], u, v)) {
+                                            continue;
+                                        }
+                                        Point3D worldPoint;
+                                        if (!evaluator.evaluate(u, v,
+                                                                &worldPoint)) {
+                                            continue;
+                                        }
+                                        worldPoint.x += offset.x;
+                                        worldPoint.y += offset.y;
+                                        worldPoint.z += offset.z;
+                                        QPointF projected;
+                                        if (!viewportTransform_.worldPointToScreen(
+                                                worldPoint, size(), &projected)) {
+                                            continue;
+                                        }
+                                        const int slot = gridIndex(uSample,
+                                                                   vSample);
+                                        projectedGrid[slot] = projected;
+                                        validGrid[slot] = true;
+                                        if (!visibleInBox &&
+                                            (!crossingSelection ||
+                                             selectionBox.contains(projected))) {
+                                            testBoxPoint(projected);
+                                        }
+                                    }
+                                }
+
+                                if (crossingSelection && !visibleInBox) {
+                                    const QPointF boxCorners[] = {
+                                        selectionBox.topLeft(),
+                                        selectionBox.topRight(),
+                                        selectionBox.bottomRight(),
+                                        selectionBox.bottomLeft()};
+                                    const QLineF boxSides[] = {
+                                        QLineF(boxCorners[0], boxCorners[1]),
+                                        QLineF(boxCorners[1], boxCorners[2]),
+                                        QLineF(boxCorners[2], boxCorners[3]),
+                                        QLineF(boxCorners[3], boxCorners[0])};
+                                    const auto testProjectedSegment =
+                                        [&](const QPointF &first,
+                                            const QPointF &second) {
+                                            if (visibleInBox) return;
+                                            if (selectionBox.contains(first)) {
+                                                testBoxPoint(first);
+                                            }
+                                            if (selectionBox.contains(second)) {
+                                                testBoxPoint(second);
+                                            }
+                                            const QLineF segment(first, second);
+                                            for (const QLineF &side : boxSides) {
+                                                QPointF intersection;
+                                                if (segment.intersects(
+                                                        side, &intersection) ==
+                                                    QLineF::BoundedIntersection) {
+                                                    testBoxPoint(intersection);
+                                                    if (visibleInBox) return;
+                                                }
+                                            }
+                                        };
+                                    const auto testTriangle =
+                                        [&](const QPointF &a, const QPointF &b,
+                                            const QPointF &c) {
+                                            if (visibleInBox) return;
+                                            testProjectedSegment(a, b);
+                                            testProjectedSegment(b, c);
+                                            testProjectedSegment(c, a);
+                                            if (visibleInBox) return;
+                                            QPolygonF triangle;
+                                            triangle << a << b << c;
+                                            for (const QPointF &corner : boxCorners) {
+                                                if (triangle.containsPoint(
+                                                        corner,
+                                                        Qt::OddEvenFill)) {
+                                                    testBoxPoint(corner);
+                                                    if (visibleInBox) return;
+                                                }
+                                            }
+                                        };
+
+                                    for (int uSample = 0;
+                                         uSample < visibilitySamples &&
+                                         !visibleInBox;
+                                         ++uSample) {
+                                        for (int vSample = 0;
+                                             vSample < visibilitySamples &&
+                                             !visibleInBox;
+                                             ++vSample) {
+                                            const int topLeft = gridIndex(
+                                                uSample, vSample);
+                                            const int topRight = gridIndex(
+                                                uSample, vSample + 1);
+                                            const int bottomLeft = gridIndex(
+                                                uSample + 1, vSample);
+                                            const int bottomRight = gridIndex(
+                                                uSample + 1, vSample + 1);
+                                            if (!validGrid[topLeft] ||
+                                                !validGrid[topRight] ||
+                                                !validGrid[bottomLeft] ||
+                                                !validGrid[bottomRight]) {
+                                                continue;
+                                            }
+                                            const qreal middleU = u0 + (u1 - u0) *
+                                                ((uSample + 0.5) /
+                                                 visibilitySamples);
+                                            const qreal middleV = v0 + (v1 - v0) *
+                                                ((vSample + 0.5) /
+                                                 visibilitySamples);
+                                            if (!nurbsSurfaceParameterInsideTrim(
+                                                    faces[faceIndex], middleU,
+                                                    middleV)) {
+                                                continue;
+                                            }
+                                            const QPointF &a =
+                                                projectedGrid[topLeft];
+                                            const QPointF &b =
+                                                projectedGrid[topRight];
+                                            const QPointF &c =
+                                                projectedGrid[bottomRight];
+                                            const QPointF &d =
+                                                projectedGrid[bottomLeft];
+                                            testTriangle(a, b, c);
+                                            testTriangle(a, c, d);
+                                        }
+                                    }
+                                }
+                            }
+                            if (visibleInBox) {
+                                candidateComponents.insert(faceIndex);
+                            }
+                        }
+                    } else if (componentSelectionMode_ ==
+                               ComponentSelectionMode::Vertex) {
                         const QRectF vertexPickBounds =
                             selectionBox.adjusted(-2.0, -2.0, 2.0, 2.0);
                         for (int vertex = 0;
@@ -13402,7 +14093,8 @@ private:
                     }
                 }
             } else {
-                const ViewportDepthGeometry cage = selectedSurfaceCage(*shape);
+                const ViewportDepthGeometry cage =
+                    selectedSurfaceControlNet(*shape);
                 const int count = originalMode == ComponentSelectionMode::Vertex
                     ? cage.pointVertices.size()
                     : cage.preciseLineVertices.size() / 2;
@@ -13877,7 +14569,8 @@ private:
             const Point3D offset = object != nullptr
                                        ? object->placementTranslation
                                        : Point3D{};
-            const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+            const ViewportDepthGeometry cage =
+                selectedSurfaceControlNet(shape);
             qreal cageScale = 1.0;
             if (!cage.pointVertices.isEmpty()) {
                 const QVector3D origin = cage.pointVertices.first();
@@ -14039,25 +14732,31 @@ private:
                         for (qreal xOffset : {-1.0, 0.0, 1.0}) {
                             Point3D visiblePoint;
                             Point3D visibleNormal;
-                            int visibleShapeIndex = -1;
-                            if (!curveHitTester_.hitTestVisibleSurface(
+                            const bool hitSurface =
+                                curveHitTester_.hitTestVisibleSurface(
                                     document_,
                                     candidate.closestScreenPoint +
                                         QPointF(xOffset, yOffset),
                                     viewportTransform_, size(),
-                                    &visiblePoint, &visibleNormal, nullptr,
-                                    &visibleShapeIndex) ||
-                                visibleShapeIndex != candidate.shapeIndex) {
-                                continue;
+                                    &visiblePoint, &visibleNormal);
+                            if (!hitSurface) {
+                                visible = true;
+                                break;
                             }
                             const qreal visibleDepth =
                                 viewportTransform_.worldDirectionToView(
                                     visiblePoint).towardCamera;
                             if (std::isfinite(visibleDepth) &&
-                                std::abs(componentDepth - visibleDepth) <=
-                                    candidate.depthTolerance) {
+                                componentDepth + candidate.depthTolerance >=
+                                    visibleDepth) {
+                                // A control vertex can sit off the evaluated
+                                // surface. Accept it whenever it is in front
+                                // of the visible geometry at this pixel.
                                 visible = true;
                                 break;
+                            }
+                            if (!std::isfinite(visibleDepth)) {
+                                continue;
                             }
                         }
                         if (visible) break;
@@ -15270,8 +15969,16 @@ private:
         if (controlPointIndex == 0 && sourceShape != nullptr &&
             sourceShape->geometryType == GeometryType::Point &&
             sourceShape->points.size() == 1) {
-            translateCurveControlPointTargets(
-                objectId, QSet<int>{controlPointIndex}, worldDelta);
+            const QSet<int> &selectedVertices =
+                componentSelectionForObject(objectId);
+            if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                selectedVertices.contains(controlPointIndex)) {
+                translateConnectedCurveControlPointTargets(
+                    objectId, selectedVertices, worldDelta);
+            } else {
+                translateCurveControlPointTargets(
+                    objectId, QSet<int>{controlPointIndex}, worldDelta);
+            }
             return;
         }
 
@@ -15833,7 +16540,8 @@ private:
             if (shape == nullptr || object == nullptr ||
                 shape->geometryType == GeometryType::NurbsSurface ||
                 shape->geometryType == GeometryType::NurbsSolid ||
-                curveSampler_.curvesForShape(*shape).isEmpty()) {
+                (shape->geometryType != GeometryType::Point &&
+                 curveSampler_.curvesForShape(*shape).isEmpty())) {
                 continue;
             }
             const QSet<int> &indices = objectId == sourceObjectId
@@ -15861,7 +16569,8 @@ private:
                 !document_.isObjectEditable(objectId) ||
                 shape->geometryType == GeometryType::NurbsSurface ||
                 shape->geometryType == GeometryType::NurbsSolid ||
-                curveSampler_.curvesForShape(*shape).isEmpty()) {
+                (shape->geometryType != GeometryType::Point &&
+                 curveSampler_.curvesForShape(*shape).isEmpty())) {
                 continue;
             }
             for (const auto &point : curveControlPointVertices(
@@ -15969,7 +16678,8 @@ private:
                                 ++pointIndex;
                             }
                         }
-                        const ViewportDepthGeometry cage = selectedSurfaceCage(candidate);
+                        const ViewportDepthGeometry cage =
+                            selectedSurfaceControlNet(candidate);
                         QSet<int> vertices;
                         for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex)
                             for (const QVector3D &point : movedPoints)
@@ -16086,6 +16796,314 @@ private:
         return delta;
     }
 
+    DragSnapResult findComponentGrabSnap(
+        const QVector<ObjectId> &objectIds,
+        const QPointF &snapTargetScreen,
+        DragAxisLock snapAxisLock = DragAxisLock::None) const
+    {
+        struct SelectedVertex {
+            int shapeIndex = -1;
+            int controlPointIndex = -1;
+            Point3D localPoint;
+            Point3D worldPoint;
+        };
+
+        QHash<int, QSet<int>> selectedControlPointIndices;
+        QVector<SelectedVertex> selectedVertices;
+        for (const ObjectId objectId : objectIds) {
+            const int shapeIndex = document_.indexOf(objectId);
+            const Shape *shape = document_.shape(objectId);
+            const SceneObject *object = document_.object(objectId);
+            if (shapeIndex < 0 || shape == nullptr || object == nullptr) {
+                continue;
+            }
+            const Point3D offset = object->placementTranslation;
+            if (shape->geometryType == GeometryType::NurbsSurface ||
+                shape->geometryType == GeometryType::NurbsSolid) {
+                const auto targets =
+                    surfaceControlPointGrabTargets_.constFind(objectId.value());
+                if (targets == surfaceControlPointGrabTargets_.cend()) {
+                    continue;
+                }
+                const auto appendSurfaceSource =
+                    [&](int canonicalIndex, const Point3D &point) {
+                        const Point3D worldPoint{
+                            point.x + offset.x,
+                            point.y + offset.y,
+                            point.z + offset.z};
+                        selectedVertices.append(
+                            {shapeIndex, canonicalIndex,
+                             {point.x, point.y, point.z}, worldPoint});
+                        selectedControlPointIndices[shapeIndex].insert(
+                            canonicalIndex);
+                    };
+                if (shape->geometryType == GeometryType::NurbsSolid) {
+                    // Grab mutates a materialized solid boundary, whose wall
+                    // panels repeat CV occurrences. SnapEngine addresses the
+                    // original derived faces, so map the moved panel CVs back
+                    // to those original face indices by position.
+                    Shape materialized = *shape;
+                    if (!materializeNurbsSolidBoundary(
+                            &materialized.nurbsSolid)) {
+                        continue;
+                    }
+                    QVector<Point3D> selectedPanelPoints;
+                    int panelOccurrenceIndex = 0;
+                    for (const NurbsSurface3D &face :
+                         shapeSurfaceFaces(materialized)) {
+                        for (const Point3D &point : face.controlPoints) {
+                            if (targets->contains(panelOccurrenceIndex) &&
+                                std::none_of(
+                                    selectedPanelPoints.cbegin(),
+                                    selectedPanelPoints.cend(),
+                                    [&point](const Point3D &existing) {
+                                        const qreal dx = point.x - existing.x;
+                                        const qreal dy = point.y - existing.y;
+                                        const qreal dz = point.z - existing.z;
+                                        return dx * dx + dy * dy + dz * dz <=
+                                               1.0e-12;
+                                    })) {
+                                selectedPanelPoints.append(point);
+                            }
+                            ++panelOccurrenceIndex;
+                        }
+                    }
+
+                    QVector<Point3D> uniqueControlPoints;
+                    QSet<int> addedSources;
+                    for (const NurbsSurface3D &face :
+                         shapeSurfaceFaces(*shape)) {
+                        for (const Point3D &point : face.controlPoints) {
+                            int canonicalIndex = -1;
+                            for (int index = 0;
+                                 index < uniqueControlPoints.size(); ++index) {
+                                const Point3D &existing = uniqueControlPoints[index];
+                                const qreal dx = point.x - existing.x;
+                                const qreal dy = point.y - existing.y;
+                                const qreal dz = point.z - existing.z;
+                                if (dx * dx + dy * dy + dz * dz <= 1.0e-16) {
+                                    canonicalIndex = index;
+                                    break;
+                                }
+                            }
+                            if (canonicalIndex < 0) {
+                                canonicalIndex = uniqueControlPoints.size();
+                                uniqueControlPoints.append(point);
+                            }
+                            const bool selectedSource = std::any_of(
+                                selectedPanelPoints.cbegin(),
+                                selectedPanelPoints.cend(),
+                                [&point](const Point3D &selectedPoint) {
+                                    const qreal dx =
+                                        point.x - selectedPoint.x;
+                                    const qreal dy =
+                                        point.y - selectedPoint.y;
+                                    const qreal dz =
+                                        point.z - selectedPoint.z;
+                                    return dx * dx + dy * dy + dz * dz <=
+                                           1.0e-12;
+                                });
+                            if (selectedSource &&
+                                !addedSources.contains(canonicalIndex)) {
+                                appendSurfaceSource(canonicalIndex, point);
+                                addedSources.insert(canonicalIndex);
+                            }
+                        }
+                    }
+                } else {
+                    int controlPointIndex = 0;
+                    for (const NurbsSurface3D &face : shapeSurfaceFaces(*shape)) {
+                        for (const Point3D &point : face.controlPoints) {
+                            if (targets->contains(controlPointIndex)) {
+                                appendSurfaceSource(controlPointIndex, point);
+                            }
+                            ++controlPointIndex;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            const auto targets =
+                curveControlPointGrabTargets_.constFind(objectId.value());
+            if (targets == curveControlPointGrabTargets_.cend()) {
+                continue;
+            }
+            for (const auto &controlPoint :
+                 curveControlPointVertices(*shape, offset)) {
+                if (!targets->contains(controlPoint.first)) {
+                    continue;
+                }
+                const WorkPlaneFrame frame = controlPointWorkPlaneFrame(
+                    objectId, controlPoint.first);
+                qreal normalCoordinate = 0.0;
+                const QPointF local = worldPointToWorkPlaneFrame(
+                    controlPoint.second, frame, &normalCoordinate);
+                selectedVertices.append(
+                    {shapeIndex, controlPoint.first,
+                     {local.x(), local.y(), normalCoordinate},
+                     controlPoint.second});
+                selectedControlPointIndices[shapeIndex].insert(
+                    controlPoint.first);
+            }
+        }
+        if (selectedVertices.isEmpty()) {
+            return {};
+        }
+
+        const auto correctionFitsAxis = [snapAxisLock](
+                                            const Point3D &correction) {
+            constexpr qreal axisSnapTolerance = 1.0e-7;
+            switch (snapAxisLock) {
+            case DragAxisLock::X:
+                return std::abs(correction.y) <= axisSnapTolerance &&
+                       std::abs(correction.z) <= axisSnapTolerance;
+            case DragAxisLock::Y:
+                return std::abs(correction.x) <= axisSnapTolerance &&
+                       std::abs(correction.z) <= axisSnapTolerance;
+            case DragAxisLock::Z:
+                return std::abs(correction.x) <= axisSnapTolerance &&
+                       std::abs(correction.y) <= axisSnapTolerance;
+            case DragAxisLock::None:
+                return true;
+            }
+            return false;
+        };
+
+        const SelectedVertex *activeSource = nullptr;
+        const int primaryShapeIndex = document_.indexOf(selectedShapeIndex_);
+        const int primaryControlPointIndex = activeComponentIndices_[0];
+        for (const SelectedVertex &source : selectedVertices) {
+            if (source.shapeIndex == primaryShapeIndex &&
+                source.controlPointIndex == primaryControlPointIndex) {
+                activeSource = &source;
+                break;
+            }
+        }
+        if (activeSource == nullptr) {
+            activeSource = &selectedVertices.first();
+        }
+        Point3D requiredAxis;
+        const Point3D *requiredAxisPointer = nullptr;
+        switch (snapAxisLock) {
+        case DragAxisLock::X:
+            requiredAxis = {1.0, 0.0, 0.0};
+            requiredAxisPointer = &requiredAxis;
+            break;
+        case DragAxisLock::Y:
+            requiredAxis = {0.0, 1.0, 0.0};
+            requiredAxisPointer = &requiredAxis;
+            break;
+        case DragAxisLock::Z:
+            requiredAxis = {0.0, 0.0, 1.0};
+            requiredAxisPointer = &requiredAxis;
+            break;
+        case DragAxisLock::None:
+            break;
+        }
+        const SnapSettings &settings = snapEngine_.settings();
+        const bool queryEverySource =
+            snapAxisLock != DragAxisLock::None || settings.near ||
+            settings.perpendicular || settings.tangent;
+        QVector<const SelectedVertex *> querySources{activeSource};
+        if (queryEverySource) {
+            for (const SelectedVertex &source : selectedVertices) {
+                if (&source != activeSource) {
+                    querySources.append(&source);
+                }
+            }
+        }
+
+        DragSnapResult best;
+        const SelectedVertex *bestQuerySource = nullptr;
+        qreal bestTargetDistance = std::numeric_limits<qreal>::infinity();
+        int bestTargetPriority = -1;
+        for (const SelectedVertex *source : querySources) {
+            const DragSnapResult candidate = snapEngine_.findControlPointSnap(
+                document_, source->shapeIndex, source->controlPointIndex,
+                source->localPoint, viewportTransform_, size(),
+                selectedControlPointIndices, &snapTargetScreen,
+                requiredAxisPointer);
+            if (!candidate.isValid() || !candidate.hasWorldTranslation) {
+                continue;
+            }
+            QPointF candidateTargetScreen;
+            if (!viewportTransform_.worldPointToScreen(
+                    candidate.worldTargetPoint, size(),
+                    &candidateTargetScreen)) {
+                continue;
+            }
+            const qreal targetDistance = std::hypot(
+                candidateTargetScreen.x() - snapTargetScreen.x(),
+                candidateTargetScreen.y() - snapTargetScreen.y());
+            const int targetPriority =
+                candidate.type == SnapType::Near ? 0 : 1;
+            if (targetPriority > bestTargetPriority ||
+                (targetPriority == bestTargetPriority &&
+                 targetDistance < bestTargetDistance)) {
+                best = candidate;
+                bestQuerySource = source;
+                bestTargetDistance = targetDistance;
+                bestTargetPriority = targetPriority;
+            }
+        }
+        if (!best.isValid() || bestQuerySource == nullptr ||
+            best.type == SnapType::Tangent ||
+            best.type == SnapType::Perpendicular) {
+            return best;
+        }
+
+        QPointF targetScreen;
+        if (!viewportTransform_.worldPointToScreen(best.worldTargetPoint,
+                                                   size(),
+                                                   &targetScreen)) {
+            return best;
+        }
+        const SelectedVertex *closestSource = nullptr;
+        qreal closestSourceDistance = std::numeric_limits<qreal>::infinity();
+        for (const SelectedVertex &source : selectedVertices) {
+            QPointF sourceScreen;
+            if (!viewportTransform_.worldPointToScreen(source.worldPoint,
+                                                       size(),
+                                                       &sourceScreen)) {
+                continue;
+            }
+            const Point3D sourceCorrection{
+                best.worldTargetPoint.x - source.worldPoint.x,
+                best.worldTargetPoint.y - source.worldPoint.y,
+                best.worldTargetPoint.z - source.worldPoint.z};
+            if (!correctionFitsAxis(sourceCorrection)) {
+                continue;
+            }
+            const qreal distance = std::hypot(
+                sourceScreen.x() - targetScreen.x(),
+                sourceScreen.y() - targetScreen.y());
+            if (distance < closestSourceDistance) {
+                closestSourceDistance = distance;
+                closestSource = &source;
+            }
+        }
+        if (closestSource != nullptr) {
+            best.worldSourcePoint = closestSource->worldPoint;
+            best.sourcePoint = worldPointToWorkPlaneFrame(
+                closestSource->worldPoint, viewportTransform_.workPlaneFrame());
+            best.worldTranslation = {
+                best.worldTargetPoint.x - closestSource->worldPoint.x,
+                best.worldTargetPoint.y - closestSource->worldPoint.y,
+                best.worldTargetPoint.z - closestSource->worldPoint.z};
+            best.translation = worldPointToWorkPlaneFrame(
+                                   best.worldTargetPoint,
+                                   viewportTransform_.workPlaneFrame()) -
+                              best.sourcePoint;
+            if (!correctionFitsAxis(best.worldTranslation)) {
+                return {};
+            }
+        } else {
+            return {};
+        }
+        return best;
+    }
+
     void updateGrabPosition(const QVector<ObjectId> &dragIndices,
                             const QPointF &screenPosition)
     {
@@ -16152,6 +17170,20 @@ private:
                 grabTool_.setMoved(false);
             }
             currentDragSnap_ = DragSnapResult{};
+            if (hasComponentGrabTargets()) {
+                DragSnapResult componentSnap = findComponentGrabSnap(
+                    dragIndices, screenPosition, dragAxisLock_);
+                if (componentSnap.isValid() &&
+                    componentSnap.hasWorldTranslation) {
+                    const Point3D &correction =
+                        componentSnap.worldTranslation;
+                    currentDragSnap_ = componentSnap;
+                    if (!isZeroWorldDelta(correction)) {
+                        translateShapesWorldDelta(dragIndices, correction);
+                        grabTool_.setMoved(true);
+                    }
+                }
+            }
             setSelectionLastDragWorldPosition(rawCursorWorld_);
             static quint64 zGrabUpdateSequence = 0;
             if (++zGrabUpdateSequence % 10 == 0) {
@@ -16250,20 +17282,40 @@ private:
                             .arg(grabViewPlaneFrame_.origin.y, 0, 'g', 12)
                             .arg(grabViewPlaneFrame_.origin.z, 0, 'g', 12)
                             .arg(grabUpdateTimer.nsecsElapsed() / 1000));
-                    if (!viewPlaneSnapBreakaway && !hasComponentGrabTargets()) {
-                        currentDragSnap_ = findDragSnap(dragIndices);
-                        if (currentDragSnap_.isValid()) {
-                            applyObjectDragSnap(dragIndices, currentDragSnap_);
-                            dragSnapLocked_ = true;
-                            dragSnapCursorWorld_ = rawCursorWorld_;
-                            dragSnapViewPlaneWorld_ = destination;
-                            selectionDragSnapScreen_ = screenPosition;
-                            dragSnapViewPlaneAnchorValid_ = true;
-                            DebugLog::instance().write(
-                                QStringLiteral("grab view-plane snap=%1 source=%2 target=%3")
-                                    .arg(snapTypeName(currentDragSnap_.type))
-                                    .arg(pointText(currentDragSnap_.sourcePoint))
-                                    .arg(pointText(currentDragSnap_.targetPoint)));
+                    if (!viewPlaneSnapBreakaway) {
+                        if (hasComponentGrabTargets()) {
+                            currentDragSnap_ = findComponentGrabSnap(
+                                dragIndices, screenPosition);
+                            if (currentDragSnap_.isValid() &&
+                                currentDragSnap_.hasWorldTranslation) {
+                                if (!isZeroWorldDelta(
+                                        currentDragSnap_.worldTranslation)) {
+                                    translateShapesWorldDelta(
+                                        dragIndices,
+                                        currentDragSnap_.worldTranslation);
+                                    grabTool_.setMoved(true);
+                                }
+                                dragSnapLocked_ = true;
+                                dragSnapCursorWorld_ = rawCursorWorld_;
+                                dragSnapViewPlaneWorld_ = destination;
+                                selectionDragSnapScreen_ = screenPosition;
+                                dragSnapViewPlaneAnchorValid_ = true;
+                            }
+                        } else {
+                            currentDragSnap_ = findDragSnap(dragIndices);
+                            if (currentDragSnap_.isValid()) {
+                                applyObjectDragSnap(dragIndices, currentDragSnap_);
+                                dragSnapLocked_ = true;
+                                dragSnapCursorWorld_ = rawCursorWorld_;
+                                dragSnapViewPlaneWorld_ = destination;
+                                selectionDragSnapScreen_ = screenPosition;
+                                dragSnapViewPlaneAnchorValid_ = true;
+                                DebugLog::instance().write(
+                                    QStringLiteral("grab view-plane snap=%1 source=%2 target=%3")
+                                        .arg(snapTypeName(currentDragSnap_.type))
+                                        .arg(pointText(currentDragSnap_.sourcePoint))
+                                        .arg(pointText(currentDragSnap_.targetPoint)));
+                            }
                         }
                     }
                     return;

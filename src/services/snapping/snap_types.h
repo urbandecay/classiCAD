@@ -48,6 +48,7 @@ struct SnapCandidate {
     QPointF point;
     int shapeIndex = -1;
     int componentIndex = -1;
+    int controlPointIndex = -1;
     Point3D worldPoint;
     bool hasWorldPoint = false;
 };

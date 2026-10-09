@@ -12,6 +12,7 @@
 #include "core/geometry/nurbs_surface_factory.h"
 #include "core/geometry/nurbs_solid.h"
 #include "core/serialization/blender_project_file.h"
+#include "app/application_session.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -746,6 +747,739 @@ bool verifySurfaceVertexGrab(QApplication &application)
     return passed;
 }
 
+bool verifyClosedPolyCurveDuplicate(QApplication &application)
+{
+    bool passed = true;
+    const QSize viewportSize(640, 480);
+    WorkPlaneFrame frame = makeWorkPlaneFrame(WorkPlane::XY);
+    Shape closedLoop;
+    closedLoop.geometryType = GeometryType::PolyCurve;
+    closedLoop.workPlaneFrame = frame;
+    closedLoop.components = {makeDegreeOneNurbs(
+        {{-6.0, -6.0}, {6.0, -6.0}, {6.0, 6.0}, {-6.0, 6.0}, {-6.0, -6.0}})};
+    closedLoop.componentWorkPlaneFrames = {frame};
+
+    Document source;
+    const ObjectId sourceId = source.append(closedLoop);
+    QTemporaryDir directory;
+    const QString path = directory.filePath(
+        QStringLiteral("closed-polycurve-duplicate.vignola"));
+    QString error;
+    passed &= check(directory.isValid() &&
+                        saveVignolaDocument(path, source, &error),
+                    "closed PolyCurve duplicate fixture must save");
+
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget());
+    viewport->resize(viewportSize);
+    viewport->show();
+    application.processEvents();
+    passed &= check(viewport->loadVignolaDocument(path, &error),
+                    "closed PolyCurve duplicate fixture must load");
+    viewport->setViewPreset(ViewportViewPreset::Top);
+    passed &= check(waitForViewPreset(viewport.get(), ViewportViewPreset::Top),
+                    "closed PolyCurve duplicate camera must settle");
+    viewport->setTool(ToolId::Select);
+    viewport->setComponentSelectionMode(0);
+    viewport->setControlPointsVisible(true);
+    viewport->setOsnapEnabled(false);
+    viewport->setOrthoEnabled(false);
+
+    ViewportTransform projection;
+    projection.setCameraPreferences(viewport->cameraPreferences());
+    projection.setViewPreset(ViewportViewPreset::Top);
+    QVector<QPointF> corners;
+    for (const QPointF &point : QVector<QPointF>{{-6.0, -6.0}, {6.0, -6.0},
+                                                  {6.0, 6.0}, {-6.0, 6.0}}) {
+        QPointF screen;
+        projection.worldPointToScreen({point.x(), point.y(), 0.0},
+                                      viewportSize, &screen);
+        corners.append(screen);
+    }
+    const auto click = [&](const QPointF &position,
+                           Qt::KeyboardModifiers modifiers) {
+        sendMouse(viewport.get(), QEvent::MouseButtonPress, position,
+                  Qt::LeftButton, Qt::LeftButton, modifiers);
+        sendMouse(viewport.get(), QEvent::MouseButtonRelease, position,
+                  Qt::LeftButton, Qt::NoButton, modifiers);
+        application.processEvents();
+    };
+    for (int index = 0; index < corners.size(); ++index) {
+        const QPointF center(viewportSize.width() * 0.5,
+                             viewportSize.height() * 0.5);
+        const QPointF towardCenter = center - corners[index];
+        const QPointF hit = corners[index] + towardCenter *
+            (2.0 / std::max<qreal>(1.0, std::hypot(towardCenter.x(),
+                                                   towardCenter.y())));
+        click(hit, index == 0 ? Qt::NoModifier : Qt::ShiftModifier);
+    }
+
+    const auto key = [&](int code, Qt::KeyboardModifiers modifiers) {
+        QKeyEvent event(QEvent::KeyPress, code, modifiers);
+        QApplication::sendEvent(viewport.get(), &event);
+        application.processEvents();
+    };
+    const QPointF duplicateDestination = corners[1] + QPointF(44.0, -28.0);
+    QCursor::setPos(viewport->mapToGlobal(corners.last().toPoint()));
+    key(Qt::Key_D, Qt::ShiftModifier);
+    sendMouse(viewport.get(), QEvent::MouseMove, duplicateDestination,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    click(duplicateDestination, Qt::NoModifier);
+
+    Document duplicated;
+    passed &= check(viewport->saveVignolaDocument(path, &error) &&
+                        loadVignolaDocument(path, &duplicated, &error) &&
+                        duplicated.size() == 2,
+                    "Shift+D must commit one copied PolyCurve");
+    const auto hasClosedSquare = [](const Shape &shape) {
+        if (shape.geometryType != GeometryType::PolyCurve ||
+            shape.components.size() != 1) {
+            return false;
+        }
+        const Shape::NurbsCurve3D &curve = shape.components.first();
+        return validateNurbsCurve(curve) && curve.degree == 1 &&
+               curve.controlPoints.size() == 5 &&
+               curve.controlPoints.first() == curve.controlPoints.last();
+    };
+    if (duplicated.size() == 2) {
+        passed &= check(duplicated.object(sourceId) != nullptr &&
+                            hasClosedSquare(duplicated.object(sourceId)->geometry) &&
+                            hasClosedSquare(duplicated.objects().last().geometry),
+                        "duplicating all visible corners of a closed PolyCurve must retain its closing edge");
+    }
+
+    // Match the user's follow-up workflow: confirm Shift+D, then use G to move
+    // the selected copy again. Keep the first copy offset from the source so
+    // this checks the copy's own component selection and geometry.
+    const QPointF grabDestination = duplicateDestination + QPointF(36.0, 24.0);
+    QCursor::setPos(viewport->mapToGlobal(duplicateDestination.toPoint()));
+    key(Qt::Key_G, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseMove, grabDestination,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    click(grabDestination, Qt::NoModifier);
+    Document moved;
+    passed &= check(viewport->saveVignolaDocument(path, &error) &&
+                        loadVignolaDocument(path, &moved, &error) &&
+                        moved.size() == 2,
+                    "G must move the newly duplicated PolyCurve without splitting it");
+    if (moved.size() == 2) {
+        const Shape &original = moved.object(sourceId)->geometry;
+        const Shape &copy = moved.objects().last().geometry;
+        passed &= check(hasClosedSquare(original) && hasClosedSquare(copy) &&
+                            original.componentWorkPlaneFrames.first().origin.x ==
+                                frame.origin.x &&
+                            original.componentWorkPlaneFrames.first().origin.y ==
+                                frame.origin.y &&
+                            copy.componentWorkPlaneFrames.first().origin.x !=
+                                original.componentWorkPlaneFrames.first().origin.x,
+                        "G must move the duplicate while the source closed PolyCurve stays in place");
+    }
+    return passed;
+}
+
+bool verifyLineToolSquareDuplicate(QApplication &application)
+{
+    const QSize viewportSize(640, 480);
+    ApplicationSession session;
+    std::unique_ptr<ViewportWidgetApi> viewport(
+        createViewportWidget(session));
+    viewport->resize(viewportSize);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Top);
+    bool passed = check(waitForViewPreset(viewport.get(), ViewportViewPreset::Top),
+                        "Line-tool square duplicate camera must settle");
+    viewport->setOsnapEnabled(false);
+    viewport->setOrthoEnabled(false);
+    viewport->setLineAutoWeldEnabled(true);
+    viewport->setControlPointsVisible(true);
+    viewport->setComponentSelectionMode(0);
+    viewport->setTool(ToolId::Line);
+
+    ViewportTransform projection;
+    projection.setCameraPreferences(viewport->cameraPreferences());
+    projection.setViewPreset(ViewportViewPreset::Top);
+    const QVector<QPointF> square = {
+        {-6.0, -6.0}, {6.0, -6.0}, {6.0, 6.0}, {-6.0, 6.0}, {-6.0, -6.0}};
+    QVector<QPointF> screenCorners;
+    for (const QPointF &point : square) {
+        QPointF screen;
+        projection.worldPointToScreen({point.x(), point.y(), 0.0},
+                                      viewportSize, &screen);
+        screenCorners.append(screen);
+        sendMouse(viewport.get(), QEvent::MouseButtonPress, screen,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(viewport.get(), QEvent::MouseButtonRelease, screen,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    }
+    const QPointF finishPoint = screenCorners.last();
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, finishPoint,
+              Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, finishPoint,
+              Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+
+    const Document &drawnDocument = session.document();
+    passed &= check(drawnDocument.size() == 1,
+                    "Line tool must draw one closed square before duplication");
+    if (drawnDocument.size() != 1) return passed;
+    const ObjectId sourceId = drawnDocument.objects().first().id;
+    const auto worldControlPoints = [](const SceneObject &object) {
+        QVector<Point3D> points;
+        const Shape &shape = object.geometry;
+        const auto appendCurve = [&](const Shape::NurbsCurve3D &curve,
+                                     const WorkPlaneFrame &frame) {
+            for (int index = 0; index < curve.controlPoints.size(); ++index) {
+                Point3D point = workPlaneFramePointToWorld(
+                    curve.controlPoints[index],
+                    curve.dimension == 3 ? curve.normalCoordinates[index] : 0.0,
+                    frame);
+                point.x += object.placementTranslation.x;
+                point.y += object.placementTranslation.y;
+                point.z += object.placementTranslation.z;
+                points.append(point);
+            }
+        };
+        if (shape.geometryType == GeometryType::PolyCurve) {
+            for (int index = 0; index < shape.components.size(); ++index) {
+                appendCurve(shape.components[index],
+                            shapeComponentWorkPlaneFrame(shape, index));
+            }
+        } else if (validateNurbsCurve(shape.nurbs)) {
+            appendCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
+        }
+        return points;
+    };
+    const auto isClosedDegreeOnePath = [](const Shape &shape) {
+        QVector<Shape::NurbsCurve3D> curves;
+        QVector<WorkPlaneFrame> frames;
+        if (shape.geometryType == GeometryType::PolyCurve) {
+            curves = shape.components;
+            for (int index = 0; index < curves.size(); ++index) {
+                frames.append(shapeComponentWorkPlaneFrame(shape, index));
+            }
+        } else if (validateNurbsCurve(shape.nurbs)) {
+            curves.append(shape.nurbs);
+            frames.append(shapeWorkPlaneFrame(shape));
+        }
+        if (curves.isEmpty()) return false;
+        QVector<Point3D> path;
+        for (int curveIndex = 0; curveIndex < curves.size(); ++curveIndex) {
+            const Shape::NurbsCurve3D &curve = curves[curveIndex];
+            if (!validateNurbsCurve(curve) || curve.degree != 1 ||
+                curve.controlPoints.size() < 2) {
+                return false;
+            }
+            for (int pointIndex = 0;
+                 pointIndex < curve.controlPoints.size(); ++pointIndex) {
+                const Point3D point = workPlaneFramePointToWorld(
+                    curve.controlPoints[pointIndex],
+                    curve.dimension == 3
+                        ? curve.normalCoordinates[pointIndex] : 0.0,
+                    frames[curveIndex]);
+                if (!path.isEmpty() && pointIndex == 0) {
+                    const Point3D &previous = path.last();
+                    if (std::hypot(previous.x - point.x,
+                                   std::hypot(previous.y - point.y,
+                                              previous.z - point.z)) > 1.0e-6) {
+                        return false;
+                    }
+                    continue;
+                }
+                path.append(point);
+            }
+        }
+        if (path.size() < 5) return false;
+        const Point3D &first = path.first();
+        const Point3D &last = path.last();
+        return std::hypot(first.x - last.x,
+                          std::hypot(first.y - last.y,
+                                     first.z - last.z)) <= 1.0e-6;
+    };
+    const auto samePoints = [](const QVector<Point3D> &first,
+                               const QVector<Point3D> &second) {
+        if (first.size() != second.size()) return false;
+        for (int index = 0; index < first.size(); ++index) {
+            if (std::hypot(first[index].x - second[index].x,
+                           std::hypot(first[index].y - second[index].y,
+                                      first[index].z - second[index].z)) >
+                1.0e-6) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const SceneObject *sourceAfterDraw = drawnDocument.object(sourceId);
+    passed &= check(sourceAfterDraw != nullptr &&
+                        isClosedDegreeOnePath(sourceAfterDraw->geometry),
+                    "Line tool must commit the clicked square as a closed degree-one curve path");
+    if (sourceAfterDraw == nullptr ||
+        !isClosedDegreeOnePath(sourceAfterDraw->geometry)) {
+        return false;
+    }
+    const QVector<Point3D> sourcePointsBeforeDuplicate =
+        worldControlPoints(*sourceAfterDraw);
+
+    viewport->setTool(ToolId::Select);
+    for (int corner = 0; corner < 4; ++corner) {
+        const QPointF towardCenter =
+            QPointF(viewportSize.width() * 0.5, viewportSize.height() * 0.5) -
+            screenCorners[corner];
+        const QPointF hit = screenCorners[corner] + towardCenter *
+            (2.0 / std::max<qreal>(1.0, std::hypot(towardCenter.x(),
+                                                   towardCenter.y())));
+        sendMouse(viewport.get(), QEvent::MouseButtonPress, hit,
+                  Qt::LeftButton, Qt::LeftButton,
+                  corner == 0 ? Qt::NoModifier : Qt::ShiftModifier);
+        sendMouse(viewport.get(), QEvent::MouseButtonRelease, hit,
+                  Qt::LeftButton, Qt::NoButton,
+                  corner == 0 ? Qt::NoModifier : Qt::ShiftModifier);
+        application.processEvents();
+    }
+
+    QCursor::setPos(viewport->mapToGlobal(screenCorners[3].toPoint()));
+    QKeyEvent duplicateKey(QEvent::KeyPress, Qt::Key_D, Qt::ShiftModifier);
+    QApplication::sendEvent(viewport.get(), &duplicateKey);
+    application.processEvents();
+    const QPointF duplicateDestination = screenCorners[1] + QPointF(44.0, -28.0);
+    sendMouse(viewport.get(), QEvent::MouseMove, duplicateDestination,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, duplicateDestination,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, duplicateDestination,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+
+    const Document &afterDuplicate = session.document();
+    passed &= check(afterDuplicate.size() == 2,
+                    "selecting a Line-tool square and Shift+D must create one closed copy");
+    if (afterDuplicate.size() != 2) return false;
+    const SceneObject *source = afterDuplicate.object(sourceId);
+    const SceneObject &copy = afterDuplicate.objects().last();
+    passed &= check(source != nullptr &&
+                        isClosedDegreeOnePath(source->geometry) &&
+                        isClosedDegreeOnePath(copy.geometry) &&
+                        samePoints(worldControlPoints(*source),
+                                   sourcePointsBeforeDuplicate) &&
+                        !samePoints(worldControlPoints(copy),
+                                    sourcePointsBeforeDuplicate),
+                    "Shift+D must copy all four drawn sides, keep the source fixed, and preserve closure");
+    const QVector<Point3D> copyPointsBeforeGrab = worldControlPoints(copy);
+
+    const QPointF grabDestination = duplicateDestination + QPointF(36.0, 24.0);
+    QCursor::setPos(viewport->mapToGlobal(duplicateDestination.toPoint()));
+    QKeyEvent grabKey(QEvent::KeyPress, Qt::Key_G, Qt::NoModifier);
+    QApplication::sendEvent(viewport.get(), &grabKey);
+    application.processEvents();
+    sendMouse(viewport.get(), QEvent::MouseMove, grabDestination,
+              Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, grabDestination,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, grabDestination,
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    application.processEvents();
+
+    const SceneObject *sourceAfterGrab = session.document().object(sourceId);
+    const SceneObject &copyAfterGrab = session.document().objects().last();
+    passed &= check(session.document().size() == 2 &&
+                        sourceAfterGrab != nullptr &&
+                        isClosedDegreeOnePath(sourceAfterGrab->geometry) &&
+                        isClosedDegreeOnePath(copyAfterGrab.geometry) &&
+                        samePoints(worldControlPoints(*sourceAfterGrab),
+                                   sourcePointsBeforeDuplicate) &&
+                        !samePoints(worldControlPoints(copyAfterGrab),
+                                    copyPointsBeforeGrab),
+                    "G must move the drawn duplicate and leave the original closed square in place");
+    return passed;
+}
+
+bool verifyMeshLikeNurbsDuplicateModes(QApplication &application)
+{
+    const QSize viewportSize(640, 480);
+    const QVector<Point3D> surfaceControlNet = {
+        {-8, -8, 0}, {-8, 0, 2}, {-8, 8, 0},
+        {0, -8, 2}, {0, 0, 6}, {0, 8, 2},
+        {8, -8, 0}, {8, 0, 2}, {8, 8, 0}};
+    const auto samePoints = [](const QVector<Point3D> &first,
+                               const QVector<Point3D> &second) {
+        if (first.size() != second.size()) {
+            return false;
+        }
+        for (int index = 0; index < first.size(); ++index) {
+            if (std::hypot(first[index].x - second[index].x,
+                           std::hypot(first[index].y - second[index].y,
+                                      first[index].z - second[index].z)) >
+                1.0e-9) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto runCase = [&](int mode,
+                             const QVector<Point3D> &selectionPoints,
+                             int switchToMode,
+                             int secondSwitchToMode,
+                             bool boxSelectFace,
+                             GeometryType expectedCopyType,
+                             const char *caseName) {
+        ApplicationSession session;
+        Shape sourceShape;
+        sourceShape.geometryType = GeometryType::NurbsSurface;
+        sourceShape.nurbsSurface.degreeU = 2;
+        sourceShape.nurbsSurface.degreeV = 2;
+        sourceShape.nurbsSurface.orderU = 3;
+        sourceShape.nurbsSurface.orderV = 3;
+        sourceShape.nurbsSurface.controlVertexCountU = 3;
+        sourceShape.nurbsSurface.controlVertexCountV = 3;
+        sourceShape.nurbsSurface.controlPoints = surfaceControlNet;
+        sourceShape.nurbsSurface.weights.fill(1.0, 9);
+        sourceShape.nurbsSurface.knotsU = {0, 0, 1, 1};
+        sourceShape.nurbsSurface.knotsV = {0, 0, 1, 1};
+        const bool validFixture =
+            validateNurbsSurface(sourceShape.nurbsSurface);
+        const QVector<Point3D> originalControlPoints =
+            sourceShape.nurbsSurface.controlPoints;
+        const ObjectId sourceId = session.document().append(sourceShape);
+
+        std::unique_ptr<ViewportWidgetApi> viewport(
+            createViewportWidget(session));
+        viewport->resize(viewportSize);
+        viewport->show();
+        application.processEvents();
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        bool passed = check(validFixture,
+                            "curved NURBS surface duplicate fixture must be valid");
+        passed &= check(
+            waitForViewPreset(viewport.get(), ViewportViewPreset::Top),
+            "mesh-like NURBS duplicate camera must settle");
+        viewport->setTool(ToolId::Select);
+        viewport->setControlPointsVisible(true);
+        viewport->setOsnapEnabled(false);
+        viewport->setOrthoEnabled(false);
+        viewport->setComponentSelectionMode(0);
+
+        ViewportTransform projection;
+        projection.setCameraPreferences(viewport->cameraPreferences());
+        projection.setViewPreset(ViewportViewPreset::Top);
+        const auto screenPoint = [&](const Point3D &point) {
+            QPointF screen;
+            projection.worldPointToScreen(point, viewportSize, &screen);
+            return screen;
+        };
+        const auto click = [&](const QPointF &screen,
+                               Qt::KeyboardModifiers modifiers) {
+            sendMouse(viewport.get(), QEvent::MouseButtonPress, screen,
+                      Qt::LeftButton, Qt::LeftButton, modifiers);
+            sendMouse(viewport.get(), QEvent::MouseButtonRelease, screen,
+                      Qt::LeftButton, Qt::NoButton, modifiers);
+            application.processEvents();
+        };
+
+        if (mode == 2) {
+            viewport->setComponentSelectionMode(2);
+            if (boxSelectFace) {
+                QPointF first = screenPoint(surfaceControlNet.first());
+                qreal minX = first.x();
+                qreal minY = first.y();
+                qreal maxX = first.x();
+                qreal maxY = first.y();
+                for (int index = 1; index < surfaceControlNet.size(); ++index) {
+                    const QPointF projected = screenPoint(surfaceControlNet[index]);
+                    minX = qMin(minX, projected.x());
+                    minY = qMin(minY, projected.y());
+                    maxX = qMax(maxX, projected.x());
+                    maxY = qMax(maxY, projected.y());
+                }
+                const QRectF controlNetBounds(
+                    QPointF(minX - 12.0, minY - 12.0),
+                    QPointF(maxX + 12.0, maxY + 12.0));
+                const QPointF start = controlNetBounds.bottomRight();
+                const QPointF end = controlNetBounds.topLeft();
+                sendMouse(viewport.get(), QEvent::MouseButtonPress, start,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                sendMouse(viewport.get(), QEvent::MouseMove, end,
+                          Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                sendMouse(viewport.get(), QEvent::MouseButtonRelease, end,
+                          Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                application.processEvents();
+            } else {
+                click(screenPoint({0, 0, 0}), Qt::NoModifier);
+            }
+            if (switchToMode >= 0) {
+                viewport->setComponentSelectionMode(switchToMode);
+            }
+        } else {
+            for (int index = 0; index < selectionPoints.size(); ++index) {
+                click(screenPoint(selectionPoints[index]),
+                      index == 0 ? Qt::NoModifier : Qt::ShiftModifier);
+            }
+            if (switchToMode >= 0) {
+                viewport->setComponentSelectionMode(switchToMode);
+            }
+        }
+        if (secondSwitchToMode >= 0) {
+            viewport->setComponentSelectionMode(secondSwitchToMode);
+        }
+
+        QPointF anchor = screenPoint(selectionPoints.isEmpty()
+                                         ? Point3D{0, 0, 0}
+                                         : selectionPoints.last());
+        QCursor::setPos(viewport->mapToGlobal(anchor.toPoint()));
+        QKeyEvent duplicateKey(QEvent::KeyPress, Qt::Key_D,
+                               Qt::ShiftModifier);
+        QApplication::sendEvent(viewport.get(), &duplicateKey);
+        application.processEvents();
+        const QPointF destination = anchor + QPointF(48.0, -32.0);
+        sendMouse(viewport.get(), QEvent::MouseMove, destination,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        click(destination, Qt::NoModifier);
+
+        const Document &document = session.document();
+        passed &= check(document.size() == 2,
+                        caseName);
+        if (document.size() == 2) {
+            const SceneObject *source = document.object(sourceId);
+            const SceneObject &copy = document.objects().last();
+            passed &= check(source != nullptr &&
+                                samePoints(
+                                    source->geometry.nurbsSurface.controlPoints,
+                                    originalControlPoints) &&
+                                copy.geometry.geometryType == expectedCopyType,
+                            caseName);
+            if (source != nullptr &&
+                expectedCopyType == GeometryType::NurbsSurface) {
+                const Point3D placementDelta{
+                    copy.placementTranslation.x -
+                        source->placementTranslation.x,
+                    copy.placementTranslation.y -
+                        source->placementTranslation.y,
+                    copy.placementTranslation.z -
+                        source->placementTranslation.z};
+                passed &= check(
+                    std::hypot(placementDelta.x,
+                               std::hypot(placementDelta.y,
+                                          placementDelta.z)) > 1.0e-6,
+                    "Shift+D must move the copied NURBS surface to the confirmed destination");
+            }
+            if (expectedCopyType == GeometryType::Line) {
+                passed &= check(copy.geometry.nurbs.controlPoints.size() == 2 &&
+                                    validateNurbsCurve(copy.geometry.nurbs),
+                                caseName);
+            } else if (expectedCopyType == GeometryType::Point) {
+                passed &= check(copy.geometry.points.size() == 1 &&
+                                    isValidWorkPlaneFrame(
+                                        copy.geometry.workPlaneFrame),
+                                caseName);
+            } else {
+                passed &= check(validateNurbsSurface(copy.geometry.nurbsSurface),
+                                caseName);
+            }
+        }
+        return passed;
+    };
+
+    bool passed = true;
+    passed &= runCase(0, {{-8, -8, 0}, {-8, 0, 2}}, -1, -1, false,
+                      GeometryType::Line,
+                      "vertex selection of adjacent curved-surface CVs must duplicate their implied control-net edge");
+    passed &= runCase(0, {{-8, -8, 0}, {-8, 0, 2}}, 1, -1, false,
+                      GeometryType::Line,
+                      "switching to edge mode must keep the selected curved-surface control-net edge");
+    passed &= runCase(2, {}, -1, -1, false, GeometryType::NurbsSurface,
+                      "face mode must duplicate the selected NURBS surface face");
+    passed &= runCase(2, {}, -1, -1, true, GeometryType::NurbsSurface,
+                      "face marquee selection must duplicate the selected NURBS surface face");
+    passed &= runCase(2, {}, 0, -1, false, GeometryType::NurbsSurface,
+                      "switching from face to vertex mode must carry the face's complete control net selection");
+    passed &= runCase(2, {}, 1, -1, false, GeometryType::NurbsSurface,
+                      "switching from face to edge mode must carry the complete control-net edge selection");
+    passed &= runCase(2, {}, 0, 1, false, GeometryType::NurbsSurface,
+                      "Face-to-Vertex-to-Edge conversion must match direct Face-to-Edge selection");
+    passed &= runCase(0, {{-8, -8, 0}, {-8, 0, 2}, {-8, 8, 0},
+                          {0, -8, 2}, {0, 8, 2},
+                          {8, -8, 0}, {8, 0, 2}, {8, 8, 0}},
+                      1, -1, false, GeometryType::NurbsSurface,
+                      "selecting every boundary control-net edge must duplicate the NURBS face while leaving interior cage edges unselected");
+    passed &= runCase(0, {{-8, -8, 0}, {-8, 0, 2}, {-8, 8, 0},
+                          {0, -8, 2}, {0, 8, 2},
+                          {8, -8, 0}, {8, 0, 2}, {8, 8, 0}},
+                      1, 2, false, GeometryType::NurbsSurface,
+                      "switching from selected NURBS boundary edges to face mode must select the enclosed face");
+    passed &= runCase(0, {{-8, -8, 0}, {-8, 0, 2}, {-8, 8, 0},
+                          {0, -8, 2}, {0, 0, 6}, {0, 8, 2},
+                          {8, -8, 0}, {8, 0, 2}, {8, 8, 0}},
+                      -1, -1, false, GeometryType::NurbsSurface,
+                      "vertex selection of the complete curved-surface CV net must duplicate the implied face");
+    passed &= runCase(0, {{0, 0, 6}}, -1, -1, false, GeometryType::Point,
+                      "an isolated curved-surface CV must duplicate as a point component");
+    return passed;
+}
+
+bool verifyMeshLikeNurbsSolidFaceDuplicate(QApplication &application)
+{
+    const QSize viewportSize(640, 480);
+    const auto samePointLists = [](const QVector<Point3D> &first,
+                                   const QVector<Point3D> &second) {
+        if (first.size() != second.size()) return false;
+        for (int index = 0; index < first.size(); ++index) {
+            if (std::hypot(first[index].x - second[index].x,
+                           std::hypot(first[index].y - second[index].y,
+                                      first[index].z - second[index].z)) >
+                1.0e-9) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto runCase = [&](bool faceToVertex) {
+        ApplicationSession session;
+        Shape sourceShape;
+        sourceShape.geometryType = GeometryType::NurbsSolid;
+        NurbsSurface3D &base = sourceShape.nurbsSolid.baseSurface;
+        base.degreeU = 1;
+        base.degreeV = 1;
+        base.orderU = 2;
+        base.orderV = 2;
+        base.controlVertexCountU = 2;
+        base.controlVertexCountV = 2;
+        base.controlPoints = {{-8, -8, 0}, {-8, 8, 0},
+                              {8, -8, 0}, {8, 8, 0}};
+        base.weights.fill(1.0, 4);
+        base.knotsU = {0, 1};
+        base.knotsV = {0, 1};
+        const bool validFixture = makeNurbsExtrusionSolid(
+            base, {0, 0, 6}, &sourceShape.nurbsSolid);
+        const QVector<Point3D> originalBasePoints =
+            sourceShape.nurbsSolid.baseSurface.controlPoints;
+        QVector<Point3D> expectedTopPoints = originalBasePoints;
+        for (Point3D &point : expectedTopPoints) point.z += 6.0;
+        const ObjectId sourceId = session.document().append(sourceShape);
+
+        std::unique_ptr<ViewportWidgetApi> viewport(
+            createViewportWidget(session));
+        viewport->resize(viewportSize);
+        viewport->show();
+        application.processEvents();
+        viewport->setViewPreset(ViewportViewPreset::Isometric);
+        bool passed = check(validFixture,
+                            "multi-face NURBS solid duplicate fixture must be valid");
+        passed &= check(waitForViewPreset(viewport.get(),
+                                          ViewportViewPreset::Isometric),
+                        "multi-face NURBS solid duplicate camera must settle");
+        viewport->setTool(ToolId::Select);
+        viewport->setControlPointsVisible(true);
+        viewport->setOsnapEnabled(false);
+        viewport->setOrthoEnabled(false);
+        viewport->setComponentSelectionMode(0);
+
+        ViewportTransform projection;
+        projection.setCameraPreferences(viewport->cameraPreferences());
+        projection.setViewPreset(ViewportViewPreset::Isometric);
+        const auto screenPoint = [&](const Point3D &point) {
+            QPointF screen;
+            projection.worldPointToScreen(point, viewportSize, &screen);
+            return screen;
+        };
+        const auto click = [&](const QPointF &screen,
+                               Qt::KeyboardModifiers modifiers) {
+            sendMouse(viewport.get(), QEvent::MouseButtonPress, screen,
+                      Qt::LeftButton, Qt::LeftButton, modifiers);
+            sendMouse(viewport.get(), QEvent::MouseButtonRelease, screen,
+                      Qt::LeftButton, Qt::NoButton, modifiers);
+            application.processEvents();
+        };
+        if (faceToVertex) {
+            viewport->setComponentSelectionMode(2);
+            click(screenPoint({0, 0, 6}), Qt::NoModifier);
+            viewport->setComponentSelectionMode(0);
+        } else {
+            const QVector<Point3D> topCorners = {
+                {-8, -8, 6}, {-8, 8, 6}, {8, -8, 6}, {8, 8, 6}};
+            for (int corner = 0; corner < topCorners.size(); ++corner) {
+                click(screenPoint(topCorners[corner]),
+                      corner == 0 ? Qt::NoModifier : Qt::ShiftModifier);
+            }
+            // The four selected cap CVs flush to their perimeter edges. The
+            // cap is one face of this solid; copying the whole solid here
+            // would differ from duplicating Blender's selected mesh face.
+            viewport->setComponentSelectionMode(1);
+        }
+
+        const QPointF anchor = screenPoint({0, 0, 6});
+        QCursor::setPos(viewport->mapToGlobal(anchor.toPoint()));
+        QKeyEvent duplicateKey(QEvent::KeyPress, Qt::Key_D,
+                               Qt::ShiftModifier);
+        QApplication::sendEvent(viewport.get(), &duplicateKey);
+        application.processEvents();
+        const QPointF destination = anchor + QPointF(48.0, -32.0);
+        sendMouse(viewport.get(), QEvent::MouseMove, destination,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        click(destination, Qt::NoModifier);
+
+        const Document &document = session.document();
+        passed &= check(document.size() == 2,
+                        "partial NURBS solid face selection must create one duplicate");
+        if (document.size() != 2) return passed;
+        const SceneObject *source = document.object(sourceId);
+        const SceneObject &copy = document.objects().last();
+        passed &= check(source != nullptr &&
+                            source->geometry.geometryType == GeometryType::NurbsSolid &&
+                            samePointLists(
+                                source->geometry.nurbsSolid.baseSurface.controlPoints,
+                                originalBasePoints) &&
+                            copy.geometry.geometryType == GeometryType::NurbsSurface &&
+                            validateNurbsSurface(copy.geometry.nurbsSurface) &&
+                            std::hypot(
+                                copy.placementTranslation.x -
+                                    source->placementTranslation.x,
+                                std::hypot(
+                                    copy.placementTranslation.y -
+                                        source->placementTranslation.y,
+                                    copy.placementTranslation.z -
+                                        source->placementTranslation.z)) > 1.0e-6 &&
+                            samePointLists(
+                                copy.geometry.nurbsSurface.controlPoints,
+                                expectedTopPoints),
+                        faceToVertex
+                            ? "Face-to-Vertex conversion must duplicate only the selected solid cap"
+                            : "boundary-edge selection must duplicate only the selected solid cap");
+
+        if (!faceToVertex) {
+            const QVector<Point3D> copiedPointsAfterDuplicate =
+                copy.geometry.nurbsSurface.controlPoints;
+            const QPointF grabDestination = destination + QPointF(36.0, 24.0);
+            QCursor::setPos(viewport->mapToGlobal(destination.toPoint()));
+            QKeyEvent grabKey(QEvent::KeyPress, Qt::Key_G, Qt::NoModifier);
+            QApplication::sendEvent(viewport.get(), &grabKey);
+            application.processEvents();
+            sendMouse(viewport.get(), QEvent::MouseMove, grabDestination,
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            click(grabDestination, Qt::NoModifier);
+            const SceneObject *sourceAfterMove =
+                session.document().object(sourceId);
+            const SceneObject &movedCopy = session.document().objects().last();
+            passed &= check(session.document().size() == 2 &&
+                                sourceAfterMove != nullptr &&
+                                sourceAfterMove->geometry.geometryType ==
+                                    GeometryType::NurbsSolid &&
+                                samePointLists(
+                                    sourceAfterMove->geometry.nurbsSolid.baseSurface.controlPoints,
+                                    originalBasePoints) &&
+                                movedCopy.geometry.geometryType ==
+                                    GeometryType::NurbsSurface &&
+                                !samePointLists(
+                                    movedCopy.geometry.nurbsSurface.controlPoints,
+                                    copiedPointsAfterDuplicate),
+                            "G after Shift+D must move the copied NURBS face while preserving the source solid");
+        }
+        return passed;
+    };
+
+    bool passed = true;
+    passed &= runCase(false);
+    passed &= runCase(true);
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
@@ -753,6 +1487,18 @@ int main(int argc, char **argv)
         return verifySurfaceVertexGrab(application) ? 0 : 1;
     if (qEnvironmentVariableIsSet("CLASSICAD_VERTEX_SELECTION_ONLY")) {
         return verifyVertexComponentSelection(application) ? 0 : 1;
+    }
+    if (qEnvironmentVariableIsSet("CLASSICAD_DUPLICATE_POLYCURVE_CLOSURE_ONLY")) {
+        const bool polyCurveCopy =
+            verifyClosedPolyCurveDuplicate(application);
+        const bool lineToolCopy = verifyLineToolSquareDuplicate(application);
+        return polyCurveCopy && lineToolCopy ? 0 : 1;
+    }
+    if (qEnvironmentVariableIsSet("CLASSICAD_DUPLICATE_NURBS_MODES_ONLY")) {
+        const bool modeCases = verifyMeshLikeNurbsDuplicateModes(application);
+        const bool solidFaceCases =
+            verifyMeshLikeNurbsSolidFaceDuplicate(application);
+        return modeCases && solidFaceCases ? 0 : 1;
     }
     bool passed = true;
 

@@ -477,6 +477,18 @@ if (CLASSICAD_BUILD_TESTS)
     set_tests_properties(viewport_interaction PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+    add_test(NAME viewport_duplicate_polycurve_closure
+        COMMAND classicad_viewport_interaction_test
+    )
+    set_tests_properties(viewport_duplicate_polycurve_closure PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_DUPLICATE_POLYCURVE_CLOSURE_ONLY=1"
+    )
+    add_test(NAME viewport_duplicate_nurbs_modes
+        COMMAND classicad_viewport_interaction_test
+    )
+    set_tests_properties(viewport_duplicate_nurbs_modes PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_DUPLICATE_NURBS_MODES_ONLY=1"
+    )
 
     add_executable(classicad_vignola_file_test
         tests/vignola_file.cpp

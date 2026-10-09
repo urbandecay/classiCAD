@@ -20,6 +20,9 @@ struct ViewportDepthGeometry {
     // QVector3D is a GPU upload format and is too lossy for large CAD scenes.
     QVector<Point3D> preciseLineVertices;
     QVector<QVector3D> pointVertices;
+    // Keep component identity matching in double precision as well; GPU point
+    // coordinates are not precise enough to distinguish small CAD features.
+    QVector<Point3D> precisePointVertices;
     QVector<QVector3D> surfaceVertices;
     // One smooth normal per expanded GL_TRIANGLES vertex.
     QVector<QVector3D> surfaceNormals;

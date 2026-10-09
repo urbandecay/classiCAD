@@ -570,7 +570,14 @@ qreal CurveHitTester::distanceToShape(const QPointF &screenPosition,
         return distance;
     }
     if (shape.geometryType == GeometryType::Point && !shape.points.isEmpty()) {
-        const QPointF point = transform.worldToScreen(shape.points.first(), viewportSize);
+        Point3D worldPoint = shapePointToWorld(shape, shape.points.first());
+        worldPoint.x += worldOffset.x;
+        worldPoint.y += worldOffset.y;
+        worldPoint.z += worldOffset.z;
+        QPointF point;
+        if (!transform.worldPointToScreen(worldPoint, viewportSize, &point)) {
+            return 1.0e9;
+        }
         return std::hypot(screenPosition.x() - point.x(), screenPosition.y() - point.y());
     }
     if (shape.geometryType == GeometryType::Circle && shape.points.size() >= 2) {
@@ -777,8 +784,8 @@ qreal CurveHitTester::distanceToNurbsSurface(
 QVector<QPointF> CurveHitTester::controlPointsForShape(const Shape &shape) const
 {
     if (shape.geometryType == GeometryType::Rectangle) return rectangleVertices(shape);
-    if (shape.geometryType == GeometryType::Point ||
-        isDimensionGeometryType(shape.geometryType)) {
+    if (shape.geometryType == GeometryType::Point) return shape.points;
+    if (isDimensionGeometryType(shape.geometryType)) {
         return {};
     }
     if (shape.geometryType == GeometryType::PolyCurve) {

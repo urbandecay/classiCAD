@@ -12869,6 +12869,7 @@ private:
         for (int index = 0; index < shapes_.size(); ++index) {
             const GeometryType type = shapes_[index].geometryType;
             switch (type) {
+            case GeometryType::Point:
             case GeometryType::Line:
             case GeometryType::Arc:
             case GeometryType::Bezier:
@@ -12899,6 +12900,7 @@ private:
     {
         QVector<QPair<int, Point3D>> controlPoints;
         switch (shape.geometryType) {
+        case GeometryType::Point:
         case GeometryType::Line:
         case GeometryType::Arc:
         case GeometryType::Bezier:
@@ -15264,6 +15266,15 @@ private:
             return;
         }
 
+        const Shape *sourceShape = document_.shape(objectId);
+        if (controlPointIndex == 0 && sourceShape != nullptr &&
+            sourceShape->geometryType == GeometryType::Point &&
+            sourceShape->points.size() == 1) {
+            translateCurveControlPointTargets(
+                objectId, QSet<int>{controlPointIndex}, worldDelta);
+            return;
+        }
+
         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
             const QSet<int> &selectedVertices =
                 componentSelectionForObject(objectId);
@@ -15607,6 +15618,30 @@ private:
                                            const QSet<int> &targetIndices,
                                            const Point3D &worldDelta)
     {
+        const Shape *sourceShape = document_.shape(objectId);
+        if (sourceShape != nullptr &&
+            sourceShape->geometryType == GeometryType::Point) {
+            if (!targetIndices.contains(0) || sourceShape->points.size() != 1) {
+                return;
+            }
+            document_.mutateGeometry(objectId, [&](Shape &shape) {
+                if (shape.geometryType != GeometryType::Point ||
+                    shape.points.size() != 1) {
+                    return false;
+                }
+                WorkPlaneFrame frame = shapeWorkPlaneFrame(shape);
+                frame.origin.x += worldDelta.x;
+                frame.origin.y += worldDelta.y;
+                frame.origin.z += worldDelta.z;
+                if (!isValidWorkPlaneFrame(frame)) {
+                    return false;
+                }
+                shape.workPlaneFrame = frame;
+                return true;
+            });
+            return;
+        }
+
         const SceneObject *sceneObject = document_.object(objectId);
         const Point3D offset = sceneObject != nullptr
                                    ? sceneObject->placementTranslation

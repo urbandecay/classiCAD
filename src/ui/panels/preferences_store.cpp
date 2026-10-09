@@ -185,6 +185,8 @@ StoredPreferences loadStoredPreferences()
         settings.value(QStringLiteral("osnap/controlPoint"), false).toBool();
     stored.controlPointsVisible =
         settings.value(QStringLiteral("view/controlPoints"), false).toBool();
+    stored.lineAutoWeldEnabled =
+        settings.value(QStringLiteral("modeling/lineAutoWeldEnabled"), true).toBool();
     return stored;
 }
 
@@ -336,6 +338,13 @@ void saveControlPointsPreference(bool visible)
 {
     writeSettings([visible](QSettings &settings) {
         settings.setValue(QStringLiteral("view/controlPoints"), visible);
+    });
+}
+
+void saveLineAutoWeldPreference(bool enabled)
+{
+    writeSettings([enabled](QSettings &settings) {
+        settings.setValue(QStringLiteral("modeling/lineAutoWeldEnabled"), enabled);
     });
 }
 

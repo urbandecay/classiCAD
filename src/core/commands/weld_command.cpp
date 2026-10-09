@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <QSet>
 #include <utility>
 
 namespace classiCAD {
@@ -19,6 +20,7 @@ struct WeldCut {
 };
 
 struct WeldCurveRecord {
+    ObjectId objectId = ObjectId::invalid();
     Shape::NurbsCurve2D curve;
     WorkPlaneFrame frame;
     WorkPlaneFrame effectiveFrame;
@@ -265,12 +267,19 @@ bool splitCurveAtCuts(const WeldCurveRecord &record,
 
 bool buildWeldCommandPlan(const Document &document,
                           const QVector<ObjectId> &selectedObjectIds,
-                          WeldCommandPlan *plan)
+                          WeldCommandPlan *plan,
+                          const QVector<ObjectId> &focusedObjectIds)
 {
     if (plan == nullptr) {
         return false;
     }
     *plan = WeldCommandPlan{};
+    QSet<quint64> focusedIds;
+    for (const ObjectId objectId : focusedObjectIds) {
+        if (objectId.isValid()) {
+            focusedIds.insert(objectId.value());
+        }
+    }
 
     QVector<WeldOwner> owners;
     QVector<WeldCurveRecord> curves;
@@ -293,6 +302,7 @@ bool buildWeldCommandPlan(const Document &document,
         owners.append(std::move(owner));
         for (const ShapeNurbsCurveComponent &component : sourceComponents) {
             WeldCurveRecord record;
+            record.objectId = object.id;
             record.curve = component.curve;
             record.frame = component.workPlaneFrame;
             record.placementTranslation = object.placementTranslation;
@@ -336,6 +346,11 @@ bool buildWeldCommandPlan(const Document &document,
              ++secondIndex) {
             const WeldCurveRecord &second = curves[secondIndex];
             if (!validateNurbsCurve(second.curve)) {
+                continue;
+            }
+            if (!focusedIds.isEmpty() &&
+                !focusedIds.contains(first.objectId.value()) &&
+                !focusedIds.contains(second.objectId.value())) {
                 continue;
             }
             const bool sameCurve = firstIndex == secondIndex;

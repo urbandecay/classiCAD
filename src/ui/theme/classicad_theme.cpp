@@ -70,8 +70,24 @@ QString classicadThemeStyleSheet()
                 background: #232323;
                 border-top: 1px solid #151515;
                 border-bottom: 1px solid #151515;
-                spacing: 4px;
-                padding: 3px 8px;
+                spacing: 2px;
+                padding: 1px 4px;
+            }
+            QToolButton#viewportControlButton {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                color: #c7c7c7;
+                padding: 0;
+                margin: 0;
+            }
+            QToolButton#viewportControlButton:hover {
+                background: #3d3d3d;
+                border-color: #5d5d5d;
+            }
+            QToolButton#viewportControlButton:checked {
+                background: #537da0;
+                border-color: #82c7ec;
             }
             QLabel#osnapLaneLabel {
                 color: #777777;

@@ -133,12 +133,6 @@ namespace classiCAD {
 namespace {
 
 constexpr qreal kDragSnapBreakawayPixels = 36.0;
-constexpr qreal kViewportShadingButtonSize = 20.0;
-constexpr qreal kViewportShadingButtonGap = 1.0;
-constexpr qreal kViewportShadingPanelPadding = 2.0;
-constexpr qreal kViewportShadingSettingsButtonWidth = 15.0;
-constexpr qreal kComponentModeButtonSize = kViewportShadingButtonSize;
-constexpr qreal kComponentModeButtonGap = kViewportShadingButtonGap;
 
 enum class ComponentSelectionMode { Vertex, Edge, Face };
 
@@ -148,89 +142,6 @@ struct ComponentPickCycleState {
     ObjectId object = ObjectId::invalid();
     int componentIndex = -1;
 };
-
-QRectF componentModePanelRect(const QSize &size)
-{
-    const qreal width = kComponentModeButtonSize * 3.0 +
-                        kComponentModeButtonGap * 2.0 +
-                        kViewportShadingPanelPadding * 2.0;
-    const qreal height = kComponentModeButtonSize +
-                         kViewportShadingPanelPadding * 2.0;
-    return QRectF(8.0, size.height() - 12.0 - height, width, height);
-}
-
-QRectF componentModeButtonRect(const QSize &size, int index)
-{
-    const QRectF panel = componentModePanelRect(size);
-    const qreal x = panel.left() + kViewportShadingPanelPadding + index *
-                    (kComponentModeButtonSize + kComponentModeButtonGap);
-    return QRectF(x, panel.top() + kViewportShadingPanelPadding,
-                  kComponentModeButtonSize, kComponentModeButtonSize);
-}
-
-const QPixmap &blenderSelectionModeIcon(int mode, bool active)
-{
-    // Retain the pixmaps across frames, just like the shading toolbar icons.
-    // Destroying temporary pixmaps during an OpenGL paint invalidates textures
-    // while Qt still has their bindings cached for the remaining draws.
-    static const std::array<QPixmap, 6> icons = [] {
-        const std::array<QString, 3> paths{
-            QStringLiteral(":/blender-shading/selection_vertex.png"),
-            QStringLiteral(":/blender-shading/selection_edge.png"),
-            QStringLiteral(":/blender-shading/selection_face.png")};
-        std::array<QPixmap, 6> result;
-        for (int state = 0; state < 2; ++state) {
-            for (int index = 0; index < 3; ++index) {
-                QImage image(paths[index]);
-                image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-                QPainter tint(&image);
-                tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
-                tint.fillRect(image.rect(), state ? QColor(235, 239, 246)
-                                                 : QColor(205, 205, 205));
-                tint.end();
-                result[state * 3 + index] = QPixmap::fromImage(std::move(image));
-            }
-        }
-        return result;
-    }();
-    return icons[(active ? 3 : 0) + mode];
-}
-
-QRectF viewportShadingPanelRect(const QSize &size)
-{
-    const qreal buttonWidth = kViewportShadingButtonSize * 3.0 +
-                              kViewportShadingButtonGap * 3.0 +
-                              kViewportShadingSettingsButtonWidth;
-    const qreal width = buttonWidth + kViewportShadingPanelPadding * 2.0;
-    const qreal height = kViewportShadingButtonSize +
-                         kViewportShadingPanelPadding * 2.0;
-    return QRectF(size.width() - 12.0 - width,
-                  size.height() - 12.0 - height,
-                  width,
-                  height);
-}
-
-QRectF viewportShadingButtonRect(const QSize &size, int index)
-{
-    const QRectF panel = viewportShadingPanelRect(size);
-    return QRectF(panel.left() + kViewportShadingPanelPadding +
-                      index * (kViewportShadingButtonSize +
-                               kViewportShadingButtonGap),
-                  panel.top() + kViewportShadingPanelPadding,
-                  kViewportShadingButtonSize,
-                  kViewportShadingButtonSize);
-}
-
-QRectF viewportShadingSettingsButtonRect(const QSize &size)
-{
-    const QRectF panel = viewportShadingPanelRect(size);
-    return QRectF(panel.left() + kViewportShadingPanelPadding +
-                      3.0 * (kViewportShadingButtonSize +
-                             kViewportShadingButtonGap),
-                  panel.top() + kViewportShadingPanelPadding,
-                  kViewportShadingSettingsButtonWidth,
-                  kViewportShadingButtonSize);
-}
 
 QColor viewportShadingBackgroundColor(
     const ViewportShadingSettings &settings)
@@ -729,6 +640,9 @@ public:
                 committedShape.workPlane = viewportTransform_.workPlane();
                 committedShape.workPlaneOffset = viewportTransform_.workPlaneOffset();
                 committedShape.workPlaneFrame = viewportTransform_.workPlaneFrame();
+            }
+            if (tool == Tool::Line) {
+                return commitLineWithAutomaticWeld(committedShape);
             }
             DocumentTransaction transaction = session_.beginTransaction();
             if (!transaction.addShape(committedShape).isValid() ||
@@ -1437,6 +1351,51 @@ public:
     bool controlPointsVisible() const override
     {
         return controlPointsVisible_;
+    }
+
+    void setLineAutoWeldEnabled(bool enabled) override
+    {
+        lineAutoWeldEnabled_ = enabled;
+        update();
+    }
+
+    bool lineAutoWeldEnabled() const override
+    {
+        return lineAutoWeldEnabled_;
+    }
+
+    void setComponentSelectionMode(int mode) override
+    {
+        if (mode < static_cast<int>(ComponentSelectionMode::Vertex) ||
+            mode > static_cast<int>(ComponentSelectionMode::Face)) {
+            return;
+        }
+        setComponentSelectionMode(static_cast<ComponentSelectionMode>(mode));
+    }
+
+    int componentSelectionMode() const override
+    {
+        return static_cast<int>(componentSelectionMode_);
+    }
+
+    void activateViewportShadingControl(int control) override
+    {
+        activateViewportShadingControlInternal(control);
+    }
+
+    bool viewportXrayEnabled() const override
+    {
+        return viewportShadingSettings_.xrayEnabled();
+    }
+
+    bool viewportWireframeEnabled() const override
+    {
+        return viewportShadingSettings_.mode == ViewportShadingMode::Wireframe;
+    }
+
+    void showViewportShadingSettings(const QRect &globalButtonRect) override
+    {
+        showShadingPopover(globalButtonRect);
     }
 
     void setSnapLabelsVisible(bool visible) override
@@ -4916,7 +4875,7 @@ protected:
         update();
     }
 
-    void showShadingPopover()
+    void showShadingPopover(const QRect &requestedGlobalAnchor = {})
     {
         if (shadingPopover_ == nullptr) {
             return;
@@ -4925,13 +4884,14 @@ protected:
         shadingPopover_->adjustSize();
         shadingPopover_->setMaximumHeight(std::max(220, height() - 16));
         shadingPopover_->adjustSize();
-        const QRectF button = viewportShadingSettingsButtonRect(size());
-        const QPoint globalTopRight = mapToGlobal(button.topRight().toPoint());
-        const QPoint globalBottomRight = mapToGlobal(button.bottomRight().toPoint());
-        QPoint position(globalBottomRight.x() - shadingPopover_->width(),
-                        globalTopRight.y() - shadingPopover_->height() - 5);
+        const QRect globalAnchor = requestedGlobalAnchor.isEmpty()
+                                       ? QRect(mapToGlobal(rect().bottomRight()),
+                                               QSize(1, 1))
+                                       : requestedGlobalAnchor;
+        QPoint position(globalAnchor.right() - shadingPopover_->width(),
+                        globalAnchor.top() - shadingPopover_->height() - 5);
         if (position.y() < 4) {
-            position.setY(globalBottomRight.y() + 5);
+            position.setY(globalAnchor.bottom() + 5);
         }
         shadingPopover_->move(position);
         shadingPopover_->show();
@@ -4987,98 +4947,6 @@ protected:
         const QPoint menuPosition = studioLightPreviewButton_->mapToGlobal(
             QPoint(0, studioLightPreviewButton_->height()));
         menu->popup(menuPosition);
-    }
-
-    void drawViewportShadingControls(QPainter &painter)
-    {
-        static const QPixmap xrayIcon(QStringLiteral(":/blender-shading/xray.png"));
-        static const QPixmap wireframeIcon(
-            QStringLiteral(":/blender-shading/shading_wire.png"));
-        static const QPixmap solidIcon(
-            QStringLiteral(":/blender-shading/shading_solid.png"));
-        const QPixmap *icons[] = {&xrayIcon, &wireframeIcon, &solidIcon};
-        const QRectF panel = viewportShadingPanelRect(size());
-        painter.save();
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setPen(QPen(QColor(20, 21, 23, 245), 1.0));
-        painter.setBrush(QColor(31, 32, 34, 248));
-        painter.drawRoundedRect(panel, 3.0, 3.0);
-
-        for (int index = 0; index < 3; ++index) {
-            const QRectF button = viewportShadingButtonRect(size(), index);
-            const bool active = index == 0
-                                    ? viewportShadingSettings_.xrayEnabled()
-                                    : index == 1
-                                          ? viewportShadingSettings_.mode ==
-                                                ViewportShadingMode::Wireframe
-                                          : viewportShadingSettings_.mode ==
-                                                ViewportShadingMode::Solid;
-            const bool hovered = index == shadingControlHover_;
-            const QColor buttonColor = active
-                                           ? QColor(58, 126, 184, 255)
-                                           : hovered
-                                                 ? QColor(83, 85, 88, 255)
-                                                 : QColor(60, 61, 63, 255);
-            painter.setPen(QPen(active ? QColor(76, 142, 197, 255)
-                                       : QColor(42, 43, 45, 255),
-                                1.0));
-            painter.setBrush(buttonColor);
-            painter.drawRoundedRect(button, 2.0, 2.0);
-
-            const QPointF center = button.center();
-            const QRectF iconRect(center.x() - 8.0, center.y() - 8.0,
-                                  16.0, 16.0);
-            painter.drawPixmap(iconRect, *icons[index],
-                               QRectF(icons[index]->rect()));
-        }
-        const QRectF settingsButton = viewportShadingSettingsButtonRect(size());
-        const bool settingsHovered = shadingControlHover_ == 3;
-        painter.setPen(QPen(settingsHovered ? QColor(76, 142, 197, 255)
-                                            : QColor(42, 43, 45, 255),
-                            1.0));
-        painter.setBrush(shadingPopover_ != nullptr && shadingPopover_->isVisible()
-                             ? QColor(58, 126, 184, 255)
-                             : settingsHovered ? QColor(83, 85, 88, 255)
-                                               : QColor(60, 61, 63, 255));
-        painter.drawRoundedRect(settingsButton, 2.0, 2.0);
-        painter.setPen(QColor(220, 220, 220));
-        painter.drawText(settingsButton, Qt::AlignCenter,
-                         QString::fromUtf8("⌄"));
-        painter.restore();
-    }
-
-    void drawComponentModeControls(QPainter &painter)
-    {
-        const QRectF panel = componentModePanelRect(size());
-        painter.save();
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setPen(QPen(QColor(20, 21, 23, 245), 1.0));
-        painter.setBrush(QColor(31, 32, 34, 248));
-        painter.drawRoundedRect(panel, 3.0, 3.0);
-        for (int index = 0; index < 3; ++index) {
-            const QRectF button = componentModeButtonRect(size(), index);
-            const bool active = static_cast<int>(componentSelectionMode_) == index;
-            const bool hovered = index == componentModeHover_;
-            painter.setPen(QPen(active ? QColor(76, 142, 197, 255)
-                                      : QColor(42, 43, 45, 255), 1.0));
-            painter.setBrush(active ? QColor(58, 126, 184, 255)
-                                    : hovered ? QColor(83, 85, 88, 255)
-                                              : QColor(60, 61, 63, 255));
-            painter.drawRoundedRect(button, 2.0, 2.0);
-            const QRectF iconRect(button.center().x() - 8.0,
-                                  button.center().y() - 8.0, 16.0, 16.0);
-            const QPixmap &icon = blenderSelectionModeIcon(index, active);
-            if (!icon.isNull()) painter.drawPixmap(iconRect, icon, icon.rect());
-        }
-        painter.restore();
-    }
-
-    int componentModeControlAt(const QPointF &position) const
-    {
-        for (int i = 0; i < 3; ++i) {
-            if (componentModeButtonRect(size(), i).contains(position)) return i;
-        }
-        return -1;
     }
 
     void setComponentSelectionMode(ComponentSelectionMode mode)
@@ -5199,6 +5067,7 @@ protected:
 
         componentSelectionMode_ = mode;
         update();
+        notifyViewportControlsChanged();
     }
 
     QSet<int> &componentSelectionForObject(ObjectId objectId)
@@ -5227,20 +5096,7 @@ protected:
         for (int &activeIndex : activeComponentIndices_) activeIndex = -1;
     }
 
-    int viewportShadingControlAt(const QPointF &position) const
-    {
-        for (int index = 0; index < 3; ++index) {
-            if (viewportShadingButtonRect(size(), index).contains(position)) {
-                return index;
-            }
-        }
-        if (viewportShadingSettingsButtonRect(size()).contains(position)) {
-            return 3;
-        }
-        return -1;
-    }
-
-    void activateViewportShadingControl(int index)
+    void activateViewportShadingControlInternal(int index)
     {
         if (index == 0) {
             viewportShadingSettings_.toggleXray();
@@ -5256,6 +5112,16 @@ protected:
             return;
         }
         update();
+        notifyViewportControlsChanged();
+    }
+
+    void notifyViewportControlsChanged()
+    {
+        if (viewportControlsChanged_) {
+            viewportControlsChanged_(componentSelectionMode(),
+                                     viewportXrayEnabled(),
+                                     viewportWireframeEnabled());
+        }
     }
 
     void paintViewport(QPainter &painter,
@@ -7556,8 +7422,6 @@ protected:
         viewportHudRenderer_.draw(painter, size(), hudState);
         navigationGizmo_.draw(
             painter, size(), navigationController_.hoverPosition());
-        drawViewportShadingControls(painter);
-        drawComponentModeControls(painter);
         if (traceComponentGrab) {
             static quint64 paintSequence = 0;
             ++paintSequence;
@@ -7596,24 +7460,6 @@ protected:
     {
         navigationController_.stopAnimation();
         const QPointF screenPosition = eventPosition(event);
-        if (event->button() == Qt::LeftButton) {
-            const int componentMode = componentModeControlAt(screenPosition);
-            if (componentMode >= 0) {
-                setComponentSelectionMode(
-                    static_cast<ComponentSelectionMode>(componentMode));
-                event->accept();
-                return;
-            }
-            const int shadingControl = viewportShadingControlAt(screenPosition);
-            if (shadingControl >= 0) {
-                shadingControlPressed_ = shadingControl;
-                shadingControlHover_ = shadingControl;
-                event->accept();
-                update();
-                return;
-            }
-            shadingControlPressed_ = -1;
-        }
         if (event->button() == Qt::LeftButton &&
             navigationController_.handleGizmoPress(screenPosition, size())) {
             event->accept();
@@ -8287,52 +8133,6 @@ protected:
                 cycleState.valid = false;
             }
         }
-        const int componentMode = componentModeControlAt(screenPosition);
-        if (componentMode >= 0) {
-            if (componentMode != componentModeHover_) {
-                componentModeHover_ = componentMode;
-                const QStringList tips{QStringLiteral("Vertex Select (1)"),
-                                       QStringLiteral("Edge Select (2)"),
-                                       QStringLiteral("Face Select (3)")};
-                setToolTip(tips[componentMode]);
-                update();
-            }
-            event->accept();
-            return;
-        }
-        if (componentModeHover_ >= 0) {
-            componentModeHover_ = -1;
-            setToolTip(QString());
-            update();
-        }
-        const int shadingControl = viewportShadingControlAt(screenPosition);
-        if (shadingControlPressed_ >= 0) {
-            if (shadingControl != shadingControlHover_) {
-                shadingControlHover_ = shadingControl;
-                update();
-            }
-            event->accept();
-            return;
-        }
-        if (shadingControl >= 0) {
-            if (shadingControl != shadingControlHover_) {
-                shadingControlHover_ = shadingControl;
-                const QStringList tips{
-                    QStringLiteral("X-Ray (Alt+Z)"),
-                    QStringLiteral("Wireframe"),
-                    QStringLiteral("Solid"),
-                    QStringLiteral("Viewport Shading Settings")};
-                setToolTip(tips[shadingControl]);
-                update();
-            }
-            event->accept();
-            return;
-        }
-        if (shadingControlHover_ >= 0) {
-            shadingControlHover_ = -1;
-            setToolTip(QString());
-            update();
-        }
         if (navigationController_.handleGizmoMove(screenPosition,
                                                   event->buttons(),
                                                   size())) {
@@ -8967,11 +8767,6 @@ protected:
     void leaveEvent(QEvent *event) override
     {
         navigationController_.pointerLeave();
-        if (shadingControlPressed_ < 0 && shadingControlHover_ >= 0) {
-            shadingControlHover_ = -1;
-            setToolTip(QString());
-            update();
-        }
         QWidget::leaveEvent(event);
     }
 
@@ -8985,18 +8780,6 @@ protected:
                                         Qt::LeftButton,
                                         Qt::NoButton,
                                         event->modifiers());
-            event->accept();
-            return;
-        }
-        if (event->button() == Qt::LeftButton &&
-            shadingControlPressed_ >= 0) {
-            const int pressed = shadingControlPressed_;
-            shadingControlPressed_ = -1;
-            if (viewportShadingControlAt(eventPosition(event)) == pressed) {
-                activateViewportShadingControl(pressed);
-            } else {
-                update();
-            }
             event->accept();
             return;
         }
@@ -11142,6 +10925,61 @@ private:
         DocumentTransaction transaction = session_.beginTransaction();
         if (!transaction.addShape(shape).isValid()) {
             return false;
+        }
+        return session_.commitTransaction(transaction);
+    }
+
+    bool commitLineWithAutomaticWeld(const Shape &line)
+    {
+        if (!lineAutoWeldEnabled_) {
+            return commitShape(line);
+        }
+        const auto hasOnlyPlanarCurves = [](const Shape &shape) {
+            const QVector<ShapeNurbsCurveComponent> components =
+                nurbsCurveComponentsForShape(shape);
+            if (components.isEmpty()) {
+                return false;
+            }
+            for (const ShapeNurbsCurveComponent &component : components) {
+                if (!validateNurbsCurve(component.curve) ||
+                    component.curve.dimension != 2 ||
+                    !isValidWorkPlaneFrame(component.workPlaneFrame)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        DocumentTransaction transaction = session_.beginTransaction();
+        const ObjectId newLineId = transaction.addShape(line);
+        if (!newLineId.isValid()) {
+            return false;
+        }
+        if (!hasOnlyPlanarCurves(line)) {
+            return session_.commitTransaction(transaction);
+        }
+
+        QVector<ObjectId> candidateIds;
+        for (const SceneObject &object : document_.objects()) {
+            if (!document_.isObjectEditable(object.id) ||
+                !hasOnlyPlanarCurves(object.geometry)) {
+                continue;
+            }
+            candidateIds.append(object.id);
+        }
+
+        WeldCommandPlan plan;
+        if (buildWeldCommandPlan(document_, candidateIds, &plan, {newLineId}) &&
+            plan.failureMessage.isEmpty() && !plan.replacements.isEmpty()) {
+            if (!applyWeldCommand(transaction, plan)) {
+                transaction.rollback();
+                return commitShape(line);
+            }
+            DebugLog::instance().write(
+                QStringLiteral("line auto-weld crossings=%1 splitCurves=%2 objects=%3")
+                    .arg(plan.intersectionCount)
+                    .arg(plan.splitCurveCount)
+                    .arg(plan.replacements.size()));
         }
         return session_.commitTransaction(transaction);
     }
@@ -17811,9 +17649,6 @@ private:
     QLabel *shadowIntensityLabel_ = nullptr;
     QCheckBox *depthOfFieldCheck_ = nullptr;
     QCheckBox *cavityCheck_ = nullptr;
-    int componentModeHover_ = -1;
-    int shadingControlHover_ = -1;
-    int shadingControlPressed_ = -1;
     BlenderGridRenderer blenderGridRenderer_;
     ViewportGpuSurface *gpuSurface_ = nullptr;
     ViewportOverlay viewportOverlay_;
@@ -17909,6 +17744,7 @@ private:
     int trimHoverWindowEvents_ = 0;
     qreal &zoom_;
     bool lineCommandActive_ = false;
+    bool lineAutoWeldEnabled_ = true;
     bool cursorValid_ = false;
     bool orthoEnabled_ = false;
     bool osnapEnabled_ = false;

@@ -13,6 +13,7 @@
 
 #include <QString>
 #include <QColor>
+#include <QRect>
 #include <QVector>
 #include <QWidget>
 
@@ -55,6 +56,7 @@ struct ViewportUiCallbacks {
     std::function<void(const QString &)> subdivisionStatusUpdate;
     std::function<void(const QString &)> joinStatusUpdate;
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate;
+    std::function<void(int, bool, bool)> viewportControlsChanged;
 };
 
 struct RotateToolPreferences {
@@ -88,6 +90,14 @@ public:
     virtual ArcMode arcMode() const = 0;
     virtual void setControlPointsVisible(bool visible) = 0;
     virtual bool controlPointsVisible() const = 0;
+    virtual void setLineAutoWeldEnabled(bool enabled) = 0;
+    virtual bool lineAutoWeldEnabled() const = 0;
+    virtual void setComponentSelectionMode(int mode) = 0;
+    virtual int componentSelectionMode() const = 0;
+    virtual void activateViewportShadingControl(int control) = 0;
+    virtual bool viewportXrayEnabled() const = 0;
+    virtual bool viewportWireframeEnabled() const = 0;
+    virtual void showViewportShadingSettings(const QRect &globalButtonRect) = 0;
     virtual void setSnapLabelsVisible(bool visible) = 0;
     virtual void setSmoothCurveDisplay(bool enabled) = 0;
     virtual RotateToolPreferences rotateToolPreferences() const = 0;
@@ -161,6 +171,7 @@ public:
         subdivisionStatusUpdate_ = callbacks.subdivisionStatusUpdate;
         joinStatusUpdate_ = callbacks.joinStatusUpdate;
         viewStateUpdate_ = callbacks.viewStateUpdate;
+        viewportControlsChanged_ = callbacks.viewportControlsChanged;
     }
 
 protected:
@@ -172,6 +183,7 @@ protected:
     std::function<void(const QString &)> subdivisionStatusUpdate_;
     std::function<void(const QString &)> joinStatusUpdate_;
     std::function<void(WorkPlane, qreal, ViewportViewPreset)> viewStateUpdate_;
+    std::function<void(int, bool, bool)> viewportControlsChanged_;
 };
 
 ViewportWidgetApi *createViewportWidget(QWidget *parent = nullptr);

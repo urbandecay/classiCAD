@@ -25,10 +25,12 @@ struct WeldCommandPlan {
 // Splits selected planar NURBS curves at interior, transverse intersections,
 // including crossings between spans of one multi-segment polyline. Each source
 // object stays separate; resulting pieces share exact endpoint coordinates at
-// each welded intersection.
+// each welded intersection. When focusedObjectIds is nonempty, only crossings
+// involving one of those objects are planned.
 bool buildWeldCommandPlan(const Document &document,
                           const QVector<ObjectId> &selectedObjectIds,
-                          WeldCommandPlan *plan);
+                          WeldCommandPlan *plan,
+                          const QVector<ObjectId> &focusedObjectIds = {});
 bool applyWeldCommand(DocumentTransaction &transaction,
                       const WeldCommandPlan &plan);
 

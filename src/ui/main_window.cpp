@@ -19,6 +19,7 @@
 #include <QApplication>
 #include <QAction>
 #include <QActionGroup>
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -43,6 +44,7 @@
 #include <QShortcut>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -52,6 +54,7 @@
 #include <QWidget>
 #include <QtMath>
 
+#include <array>
 #include <utility>
 
 namespace classiCAD {
@@ -1138,6 +1141,25 @@ private:
                 statusBar()->showMessage(QStringLiteral("Select mode"));
             }
         };
+        viewportCallbacks.viewportControlsChanged =
+            [this](int componentMode, bool xrayEnabled, bool wireframeEnabled) {
+                if (componentModeButtonGroup_ != nullptr) {
+                    if (QAbstractButton *button =
+                            componentModeButtonGroup_->button(componentMode)) {
+                        button->setChecked(true);
+                    }
+                }
+                if (xrayToggleButton_ != nullptr) {
+                    xrayToggleButton_->setChecked(xrayEnabled);
+                }
+                if (shadingModeButtonGroup_ != nullptr) {
+                    const int shadingModeId = wireframeEnabled ? 1 : 2;
+                    if (QAbstractButton *button =
+                            shadingModeButtonGroup_->button(shadingModeId)) {
+                        button->setChecked(true);
+                    }
+                }
+            };
         workspaceSplitter->addWidget(viewport_);
         workspaceSplitter->addWidget(createRightPanel());
         workspaceSplitter->setStretchFactor(0, 1);
@@ -1185,7 +1207,6 @@ private:
         });
 
         connect(osnapAction_, &QAction::toggled, this, [this](bool enabled) {
-            osnapLane_->setVisible(enabled);
             viewport_->setOsnapEnabled(enabled);
             saveOsnapEnabledPreference(enabled);
             statusBar()->showMessage(enabled ? QStringLiteral("OSnap: On")
@@ -1239,6 +1260,10 @@ private:
             }
         };
         viewport_->setUiCallbacks(viewportCallbacks);
+        viewportCallbacks.viewportControlsChanged(
+            viewport_->componentSelectionMode(),
+            viewport_->viewportXrayEnabled(),
+            viewport_->viewportWireframeEnabled());
         viewportCallbacks.viewStateUpdate(viewport_->workPlane(),
                                           viewport_->workPlaneOffset(),
                                           viewport_->viewPreset());
@@ -1252,7 +1277,40 @@ private:
         osnapLane_->setObjectName(QStringLiteral("osnapLane"));
         osnapLane_->setMovable(false);
         osnapLane_->setFloatable(false);
-        osnapLane_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        osnapLane_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+
+        componentModeButtonGroup_ = new QButtonGroup(this);
+        componentModeButtonGroup_->setExclusive(true);
+        const std::array<QString, 3> componentModeIcons{
+            QStringLiteral(":/blender-shading/selection_vertex.png"),
+            QStringLiteral(":/blender-shading/selection_edge.png"),
+            QStringLiteral(":/blender-shading/selection_face.png")};
+        const std::array<QString, 3> componentModeTips{
+            QStringLiteral("Vertex Select (1)"),
+            QStringLiteral("Edge Select (2)"),
+            QStringLiteral("Face Select (3)")};
+        for (int index = 0; index < 3; ++index) {
+            auto *button = new QToolButton(osnapLane_);
+            button->setObjectName(QStringLiteral("viewportControlButton"));
+            button->setIcon(QIcon(componentModeIcons[index]));
+            button->setIconSize(QSize(16, 16));
+            button->setFixedSize(20, 20);
+            button->setCheckable(true);
+            button->setToolTip(componentModeTips[index]);
+            componentModeButtonGroup_->addButton(button, index);
+            osnapLane_->addWidget(button);
+            connect(button, &QToolButton::clicked, this, [this, index]() {
+                viewport_->setComponentSelectionMode(index);
+            });
+        }
+        osnapLane_->addSeparator();
+
+        // Balance the snap controls between the component buttons on the left
+        // and viewport shading controls on the right.
+        auto *leftCenteringSpacer = new QWidget(osnapLane_);
+        leftCenteringSpacer->setSizePolicy(QSizePolicy::Expanding,
+                                           QSizePolicy::Preferred);
+        osnapLane_->addWidget(leftCenteringSpacer);
 
         QLabel *label = new QLabel(QStringLiteral("OSNAP"));
         label->setObjectName(QStringLiteral("osnapLaneLabel"));
@@ -1315,8 +1373,77 @@ private:
         connect(nearSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
         connect(controlPointSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
 
+        lineAutoWeldCheckBox_ = new QCheckBox(QStringLiteral("Weld"));
+        lineAutoWeldCheckBox_->setObjectName(QStringLiteral("osnapCheckBox"));
+        lineAutoWeldCheckBox_->setToolTip(QStringLiteral(
+            "Automatically weld planar intersections when finishing a line"));
+        osnapLane_->addWidget(lineAutoWeldCheckBox_);
+        connect(lineAutoWeldCheckBox_, &QCheckBox::toggled, this,
+                [this](bool enabled) {
+                    viewport_->setLineAutoWeldEnabled(enabled);
+                    saveLineAutoWeldPreference(enabled);
+                });
+
+        auto *spacer = new QWidget(osnapLane_);
+        spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        osnapLane_->addWidget(spacer);
+        osnapLane_->addSeparator();
+
+        const auto makeViewportButton = [this](const QString &iconPath,
+                                               const QString &toolTip,
+                                               bool checkable = true) {
+            auto *button = new QToolButton(osnapLane_);
+            button->setObjectName(QStringLiteral("viewportControlButton"));
+            if (!iconPath.isEmpty()) {
+                button->setIcon(QIcon(iconPath));
+            }
+            button->setIconSize(QSize(16, 16));
+            button->setFixedSize(20, 20);
+            button->setCheckable(checkable);
+            button->setToolTip(toolTip);
+            return button;
+        };
+
+        xrayToggleButton_ = makeViewportButton(
+            QStringLiteral(":/blender-shading/xray.png"),
+            QStringLiteral("X-Ray (Alt+Z)"));
+        osnapLane_->addWidget(xrayToggleButton_);
+        connect(xrayToggleButton_, &QToolButton::clicked, this, [this]() {
+            viewport_->activateViewportShadingControl(0);
+        });
+
+        shadingModeButtonGroup_ = new QButtonGroup(this);
+        shadingModeButtonGroup_->setExclusive(true);
+        auto *wireframeButton = makeViewportButton(
+            QStringLiteral(":/blender-shading/shading_wire.png"),
+            QStringLiteral("Wireframe"));
+        auto *solidButton = makeViewportButton(
+            QStringLiteral(":/blender-shading/shading_solid.png"),
+            QStringLiteral("Solid"));
+        shadingModeButtonGroup_->addButton(wireframeButton, 1);
+        shadingModeButtonGroup_->addButton(solidButton, 2);
+        osnapLane_->addWidget(wireframeButton);
+        osnapLane_->addWidget(solidButton);
+        connect(wireframeButton, &QToolButton::clicked, this, [this]() {
+            viewport_->activateViewportShadingControl(1);
+        });
+        connect(solidButton, &QToolButton::clicked, this, [this]() {
+            viewport_->activateViewportShadingControl(2);
+        });
+
+        auto *settingsButton = makeViewportButton(
+            QString(), QStringLiteral("Viewport Shading Settings"), false);
+        settingsButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        settingsButton->setText(QString::fromUtf8("⌄"));
+        osnapLane_->addWidget(settingsButton);
+        connect(settingsButton, &QToolButton::clicked, this,
+                [this, settingsButton]() {
+                    viewport_->showViewportShadingSettings(
+                        QRect(settingsButton->mapToGlobal(QPoint(0, 0)),
+                              settingsButton->size()));
+                });
+
         addToolBar(Qt::BottomToolBarArea, osnapLane_);
-        osnapLane_->setVisible(false);
     }
 
     QWidget *createToolShelf()
@@ -1846,6 +1973,11 @@ private:
         if (controlPointsButton_ != nullptr) {
             controlPointsButton_->setChecked(stored.controlPointsVisible);
         }
+        if (lineAutoWeldCheckBox_ != nullptr) {
+            const QSignalBlocker blocker(lineAutoWeldCheckBox_);
+            lineAutoWeldCheckBox_->setChecked(stored.lineAutoWeldEnabled);
+        }
+        viewport_->setLineAutoWeldEnabled(stored.lineAutoWeldEnabled);
     }
 
 
@@ -2518,6 +2650,10 @@ private:
     QCheckBox *tangentSnapCheckBox_ = nullptr;
     QCheckBox *nearSnapCheckBox_ = nullptr;
     QCheckBox *controlPointSnapCheckBox_ = nullptr;
+    QCheckBox *lineAutoWeldCheckBox_ = nullptr;
+    QButtonGroup *componentModeButtonGroup_ = nullptr;
+    QButtonGroup *shadingModeButtonGroup_ = nullptr;
+    QToolButton *xrayToggleButton_ = nullptr;
     QToolBar *osnapLane_ = nullptr;
 };
 

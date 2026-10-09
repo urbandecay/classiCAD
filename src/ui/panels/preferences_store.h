@@ -19,6 +19,7 @@ struct StoredPreferences {
     bool nearSnapEnabled = false;
     bool controlPointSnapEnabled = false;
     bool controlPointsVisible = false;
+    bool lineAutoWeldEnabled = true;
 };
 
 StoredPreferences loadStoredPreferences();
@@ -37,5 +38,6 @@ void saveOrthoPreference(bool enabled);
 void saveOsnapEnabledPreference(bool enabled);
 void saveSnapModesPreference(const StoredPreferences &preferences);
 void saveControlPointsPreference(bool visible);
+void saveLineAutoWeldPreference(bool enabled);
 
 } // namespace classiCAD

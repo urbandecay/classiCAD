@@ -161,6 +161,7 @@ void ViewportHudRenderer::draw(QPainter &painter,
         painter.setBrush(QColor(20, 20, 20, 170));
         painter.drawRoundedRect(panel, 4.0, 4.0);
         painter.setFont(QFont(QStringLiteral("Sans"), 9));
+        const QFontMetrics metrics(painter.font());
         painter.setPen(QColor(225, 225, 225));
         painter.drawText(QPointF(20.0, panel.top() + 17.0),
                          lineCommandStatus.isEmpty()
@@ -169,7 +170,10 @@ void ViewportHudRenderer::draw(QPainter &painter,
         painter.setPen(QColor(170, 170, 170));
         painter.drawText(
             QPointF(20.0, panel.top() + 35.0),
-            QStringLiteral("Click point  •  Type length, Enter applies  •  X/Y/Z axis  •  Shift direction  •  N normal  •  L plane lock  •  Space/RMB finish  •  Esc exits"));
+            metrics.elidedText(
+                QStringLiteral("Click point  •  Length + Enter  •  X/Y/Z  •  Shift direction  •  N normal  •  L plane  •  Space/RMB finish  •  Esc exits"),
+                Qt::ElideRight,
+                std::max(1, static_cast<int>(panel.width() - 96.0))));
         painter.restore();
     } else if (activeTool == Tool::Picture) {
         painter.setPen(QColor(QStringLiteral("#777777")));

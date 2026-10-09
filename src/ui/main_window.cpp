@@ -27,6 +27,7 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -55,6 +56,7 @@
 #include <QtMath>
 
 #include <array>
+#include <algorithm>
 #include <utility>
 
 namespace classiCAD {
@@ -1136,6 +1138,9 @@ private:
         viewport_ = createViewportWidget(session_, workspaceSplitter);
         ViewportUiCallbacks viewportCallbacks;
         viewportCallbacks.commandFinished = [this](ToolId tool) {
+            if (lineAutoWeldCheckBox_ != nullptr) {
+                lineAutoWeldCheckBox_->hide();
+            }
             if (tool == Tool::Select && selectToolButton_ != nullptr) {
                 selectToolButton_->setChecked(true);
                 statusBar()->showMessage(QStringLiteral("Select mode"));
@@ -1374,10 +1379,15 @@ private:
         connect(controlPointSnapCheckBox_, &QCheckBox::toggled, this, syncSnapModes);
 
         lineAutoWeldCheckBox_ = new QCheckBox(QStringLiteral("Weld"));
-        lineAutoWeldCheckBox_->setObjectName(QStringLiteral("osnapCheckBox"));
+        lineAutoWeldCheckBox_->setObjectName(QStringLiteral("lineAutoWeldHudCheckBox"));
         lineAutoWeldCheckBox_->setToolTip(QStringLiteral(
             "Automatically weld planar intersections when finishing a line"));
-        osnapLane_->addWidget(lineAutoWeldCheckBox_);
+        lineAutoWeldCheckBox_->setParent(viewport_);
+        lineAutoWeldCheckBox_->setFixedSize(68, 20);
+        lineAutoWeldCheckBox_->installEventFilter(this);
+        viewport_->installEventFilter(this);
+        positionLineAutoWeldCheckBox();
+        lineAutoWeldCheckBox_->hide();
         connect(lineAutoWeldCheckBox_, &QCheckBox::toggled, this,
                 [this](bool enabled) {
                     viewport_->setLineAutoWeldEnabled(enabled);
@@ -1450,6 +1460,10 @@ private:
     {
         ToolShelfCallbacks callbacks;
         callbacks.toolRequested = [this](ToolId tool) {
+            if (lineAutoWeldCheckBox_ != nullptr) {
+                lineAutoWeldCheckBox_->setVisible(tool == Tool::Line);
+                positionLineAutoWeldCheckBox();
+            }
             if (tool == Tool::Picture) {
                 startPicturePlacement();
                 return;
@@ -1526,6 +1540,28 @@ private:
         controlPointsButton_ = toolShelf_->controlPointsButton();
         updateToolHelp();
         return toolShelf_;
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (watched == viewport_ && event->type() == QEvent::Resize) {
+            positionLineAutoWeldCheckBox();
+        }
+        return QMainWindow::eventFilter(watched, event);
+    }
+
+    void positionLineAutoWeldCheckBox()
+    {
+        if (viewport_ == nullptr || lineAutoWeldCheckBox_ == nullptr) {
+            return;
+        }
+        constexpr int panelLeft = 12;
+        constexpr int panelWidth = 750;
+        const int x = std::max(panelLeft,
+                               std::min(panelLeft + panelWidth - 76,
+                                        viewport_->width() - 12 -
+                                            lineAutoWeldCheckBox_->width()));
+        lineAutoWeldCheckBox_->move(x, viewport_->height() - 37);
     }
 
     void startPicturePlacement()

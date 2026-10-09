@@ -115,6 +115,24 @@ QString classicadThemeStyleSheet()
                 background: #537da0;
                 border-color: #82c7ec;
             }
+            QCheckBox#lineAutoWeldHudCheckBox {
+                color: #c7c7c7;
+                spacing: 4px;
+                padding: 0;
+                background: transparent;
+                border: 0;
+            }
+            QCheckBox#lineAutoWeldHudCheckBox::indicator {
+                width: 13px;
+                height: 13px;
+                background: #303030;
+                border: 1px solid #686868;
+                border-radius: 2px;
+            }
+            QCheckBox#lineAutoWeldHudCheckBox::indicator:checked {
+                background: #537da0;
+                border-color: #82c7ec;
+            }
             QFrame#toolShelf, QFrame#rightPanel {
                 background: #232323;
                 border: 0;

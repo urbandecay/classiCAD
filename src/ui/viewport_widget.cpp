@@ -63,6 +63,7 @@
 #include "viewport/viewport_shading.h"
 #include "viewport/navigation_controller.h"
 #include "viewport/viewport_control_point_renderer.h"
+#include "viewport/viewport_marker_style.h"
 #include "viewport/viewport_gpu_surface.h"
 #include "viewport/viewport_hud_renderer.h"
 #include "viewport/viewport_scene_renderer.h"
@@ -5440,7 +5441,8 @@ protected:
                                        : QColor(12, 12, 12);
                         handle.fillColor = vertexColor;
                         handle.outlineColor = vertexColor;
-                        handle.diameterPixels = 4.0f;
+                        handle.diameterPixels = static_cast<float>(
+                            kViewportPointVertexMarkerDiameterPixels);
                         handle.outlineWidthPixels = 0.0f;
                         handle.shape = ViewportControlPointShape::Circle;
                     } else {
@@ -5448,7 +5450,8 @@ protected:
                         handle.outlineColor = active ? activeHandle : handleOutline;
                         // The old QPainter square is 8 logical pixels with a
                         // 1.5-pixel outline straddling its edges.
-                        handle.diameterPixels = 9.5f;
+                        handle.diameterPixels = static_cast<float>(
+                            kViewportControlPointMarkerDiameterPixels);
                         handle.outlineWidthPixels = 1.5f;
                         handle.shape = ViewportControlPointShape::Square;
                     }
@@ -5883,7 +5886,9 @@ protected:
                                            : QColor(12, 12, 12);
                     vertexCage.pointDiameter =
                         componentSelectionMode_ == ComponentSelectionMode::Vertex
-                            ? 4.0f : 0.0f;
+                            ? static_cast<float>(
+                                  kViewportPointVertexMarkerDiameterPixels)
+                            : 0.0f;
                     vertexCage.editModeWire = true;
                     vertexCage.objectId = objectId;
                     vertexCage.geometryRevision = renderObject.geometryRevision;
@@ -6866,7 +6871,9 @@ protected:
                                   arcState().previewSweepAngle,
                                   &pointPreview)) {
                     gpuActiveToolPreview |= addPreviewShape(
-                        pointPreview, previewColor, 1.5f, false, 9.0f,
+                        pointPreview, previewColor, 1.5f, false,
+                        static_cast<float>(
+                            kViewportPointVertexMarkerDiameterPixels),
                         false, false);
                 }
             } else if (activeTool_ == Tool::Line) {
@@ -6900,7 +6907,10 @@ protected:
                         activeToolPreviewColor,
                         2.0f,
                         false,
-                        toolPreview.geometryType == GeometryType::Point ? 9.0f : 0.0f,
+                        toolPreview.geometryType == GeometryType::Point
+                            ? static_cast<float>(
+                                  kViewportPointVertexMarkerDiameterPixels)
+                            : 0.0f,
                         false,
                         false);
                 }
@@ -7040,7 +7050,8 @@ protected:
                     previewVertices.color = preview.highlighted
                                                 ? viewportSelectionColor()
                                                 : QColor(12, 12, 12);
-                    previewVertices.pointDiameter = 4.0f;
+                    previewVertices.pointDiameter = static_cast<float>(
+                        kViewportPointVertexMarkerDiameterPixels);
                     previewVertices.editModeWire = true;
                     previewVertices.worldOffset = preview.worldOffset;
                     previewVertices.preparedDepthGeometry =

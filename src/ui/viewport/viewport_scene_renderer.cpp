@@ -9,6 +9,7 @@
 #include "core/geometry/shape_mapping.h"
 #include "line_type_style.h"
 #include "viewport_depth_geometry.h"
+#include "viewport_marker_style.h"
 #include "viewport_render_frame.h"
 #include "viewport_shading.h"
 
@@ -400,7 +401,7 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
         static_cast<float>(highlighted ? 3.5 : storedWidth),
         false,
         geometryType == GeometryType::Point
-            ? (highlighted ? 10.0f : 9.0f)
+            ? static_cast<float>(kViewportPointVertexMarkerDiameterPixels)
             : 0.0f};
     sceneStroke->objectId = object.objectId;
     sceneStroke->editModeWire = geometryType == GeometryType::NurbsSurface ||

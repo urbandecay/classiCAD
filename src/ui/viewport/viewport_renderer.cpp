@@ -11,6 +11,7 @@
 #include "blender_grid_frame.h"
 #include "line_type_style.h"
 #include "viewport_depth_geometry.h"
+#include "viewport_marker_style.h"
 #include "workbench_lighting.h"
 #include "services/dimensions/dimension_font.h"
 #include "services/dimensions/dimension_layout.h"
@@ -1047,14 +1048,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
         }
     } else if (shape.geometryType == GeometryType::Point && !shape.points.isEmpty()) {
-        const qreal pointWidth = selected ? 2.0 : curveWidth;
-        painter.setPen(selected || preview
-                           ? QPen(curveColor, pointWidth)
-                           : layerLineTypePen(curveColor, pointWidth, layerLineType));
+        painter.setPen(Qt::NoPen);
         painter.setBrush(curveColor);
+        const qreal radius = kViewportPointVertexMarkerDiameterPixels * 0.5;
         painter.drawEllipse(worldToScreen(shape.points.first(), viewportSize),
-                            selected ? 5.0 : 4.5,
-                            selected ? 5.0 : 4.5);
+                            radius, radius);
     } else if (shape.geometryType == GeometryType::Line && shape.points.size() >= 2) {
         if (isValidNurbsCurve(shape.nurbs)) {
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));

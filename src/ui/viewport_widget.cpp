@@ -6278,6 +6278,13 @@ protected:
                                 const bool polyCurveArc =
                                     visibleShape.geometryType ==
                                     GeometryType::PolyCurve;
+                                // Welded polylines can keep several degree-one
+                                // spans inside one component. Evaluate selection
+                                // from the active span's control vertices so a
+                                // selected corner fades along both adjoining
+                                // spans, just as it does on an ordinary polyline.
+                                const bool polylineComponent =
+                                    polyCurveArc && curve.degree == 1;
                                 // Welded pieces have the same selection rule as
                                 // mesh edges: each endpoint sets its own color,
                                 // so two selected endpoints make a solid edge
@@ -6299,7 +6306,8 @@ protected:
                                                      float(first.z))
                                         << QVector3D(float(second.x), float(second.y),
                                                      float(second.z));
-                                    const qreal influenceA = polyCurveArc
+                                    const qreal influenceA =
+                                        polyCurveArc && !polylineComponent
                                         ? (arcStartSelected ? 1.0 : 0.0) *
                                                   (1.0 - normalizedArcLengths.value(
                                                              sample - 1)) +
@@ -6309,7 +6317,8 @@ protected:
                                         : selectionInfluence(
                                               curve, firstControlPoint,
                                               sampled.parameters[sample - 1]);
-                                    const qreal influenceB = polyCurveArc
+                                    const qreal influenceB =
+                                        polyCurveArc && !polylineComponent
                                         ? (arcStartSelected ? 1.0 : 0.0) *
                                                   (1.0 - normalizedArcLengths.value(
                                                              sample)) +

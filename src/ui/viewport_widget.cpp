@@ -2926,7 +2926,12 @@ public:
             const auto selectedIt = activeSelections.constFind(objectId.value());
             if (selectedIt == activeSelections.cend() ||
                 selectedIt.value().isEmpty()) {
-                appendSnapshot(*source, source->geometry);
+                // In component mode Blender duplicates only the selected
+                // geometry. A different selected object with no selected
+                // components must not turn into a whole-object copy.
+                if (!*hasComponentSelection) {
+                    appendSnapshot(*source, source->geometry);
+                }
                 continue;
             }
             const Shape &shape = source->geometry;
@@ -2996,7 +3001,38 @@ public:
                             appendSnapshot(*source, shape);
                             continue;
                         }
-                        const QSet<int> selectedControlPoints = selectedComponents;
+                        QSet<int> selectedControlPoints = selectedComponents;
+                        const int lastControlPoint =
+                            curve.controlPoints.size() - 1;
+                        if (curve.controlPoints.size() == selectablePoints.size() &&
+                            lastControlPoint > 0) {
+                            const WorkPlaneFrame frame =
+                                shapeWorkPlaneFrame(shape);
+                            const qreal firstW = curve.dimension == 3
+                                ? curve.normalCoordinates.first() : 0.0;
+                            const qreal lastW = curve.dimension == 3
+                                ? curve.normalCoordinates.last() : 0.0;
+                            const Point3D firstWorld = workPlaneFramePointToWorld(
+                                curve.controlPoints.first(), firstW, frame);
+                            const Point3D lastWorld = workPlaneFramePointToWorld(
+                                curve.controlPoints.last(), lastW, frame);
+                            const qreal dx = firstWorld.x - lastWorld.x;
+                            const qreal dy = firstWorld.y - lastWorld.y;
+                            const qreal dz = firstWorld.z - lastWorld.z;
+                            const bool hasCoincidentClosure =
+                                dx * dx + dy * dy + dz * dz <= 1.0e-12;
+                            if (hasCoincidentClosure &&
+                                (selectedControlPoints.contains(0) ||
+                                 selectedControlPoints.contains(
+                                     lastControlPoint))) {
+                                selectedControlPoints.insert(0);
+                                selectedControlPoints.insert(lastControlPoint);
+                                DebugLog::instance().write(
+                                    QStringLiteral("duplicate closed endpoint selection normalized object=%1 endpoints=0,%2")
+                                        .arg(objectId.value())
+                                        .arg(lastControlPoint));
+                            }
+                        }
                         bool allControlPointsSelected =
                             !selectablePoints.isEmpty();
                         for (int pointIndex = 0;
@@ -3332,7 +3368,7 @@ public:
         grabViewPlaneAnchorValid_ =
             rect().contains(localCursor) &&
             isValidWorkPlaneFrame(grabViewPlaneFrame_) &&
-            viewportTransform_.screenToWorkPlaneUnclipped(
+            viewportTransform_.screenToWorkPlane(
                 localCursor, size(), grabViewPlaneFrame_, &startOnViewPlane);
         if (grabViewPlaneAnchorValid_) {
             grabViewPlaneStartWorld_ = workPlaneFramePointToWorld(
@@ -3346,12 +3382,16 @@ public:
         setCursor(Qt::SizeAllCursor);
         update();
         DebugLog::instance().write(
-            QStringLiteral("beginDuplicate objects=%1 pivot=(%2,%3,%4) cursor=%5")
+            QStringLiteral("beginDuplicate objects=%1 pivot=(%2,%3,%4) cursor=%5 anchorValid=%6 anchorWorld=%7")
                 .arg(duplicateTool_.sourceObjects().size())
                 .arg(pivot.x, 0, 'g', 12)
                 .arg(pivot.y, 0, 'g', 12)
                 .arg(pivot.z, 0, 'g', 12)
-                .arg(pointText(localCursor)));
+                .arg(pointText(localCursor))
+                .arg(grabViewPlaneAnchorValid_)
+                .arg(grabViewPlaneAnchorValid_
+                         ? pointText(startOnViewPlane)
+                         : QStringLiteral("invalid")));
         return true;
     }
 
@@ -3414,11 +3454,11 @@ public:
                                  : dragAxisLock_ == DragAxisLock::Y
                                      ? Point3D{0.0, 1.0, 0.0}
                                      : Point3D{0.0, 0.0, 1.0};
-            blenderGrabAxisDelta(screenPosition, axis, &worldDelta);
+            blenderGrabAxisDelta(screenPosition, axis, &worldDelta, true);
         } else {
             QPointF currentOnViewPlane;
             if (grabViewPlaneAnchorValid_ &&
-                viewportTransform_.screenToWorkPlaneUnclipped(
+                viewportTransform_.screenToWorkPlane(
                     screenPosition, size(), grabViewPlaneFrame_,
                     &currentOnViewPlane)) {
                 const QPointF startOnViewPlane = worldPointToWorkPlaneFrame(
@@ -3490,6 +3530,34 @@ public:
         finishDuplicate();
     }
 
+    int duplicateComponentCount(const Shape &shape,
+                               ComponentSelectionMode mode) const
+    {
+        const bool surface = shape.geometryType == GeometryType::NurbsSurface ||
+                             shape.geometryType == GeometryType::NurbsSolid;
+        if (surface) {
+            const ViewportDepthGeometry cage = selectedSurfaceCage(shape);
+            if (mode == ComponentSelectionMode::Vertex) {
+                return cage.pointVertices.size();
+            }
+            if (mode == ComponentSelectionMode::Edge) {
+                return cage.preciseLineVertices.size() / 2;
+            }
+            return shapeSurfaceFaces(shape).size();
+        }
+
+        if (mode == ComponentSelectionMode::Vertex) {
+            if (shape.geometryType == GeometryType::Point) {
+                return shape.points.isEmpty() ? 0 : 1;
+            }
+            return curveControlPointVertices(shape, {}).size();
+        }
+        if (mode == ComponentSelectionMode::Edge) {
+            return curveSampler_.curvesForShape(shape).size();
+        }
+        return 0;
+    }
+
     void finishDuplicate()
     {
         if (!duplicateTool_.isActive() || !duplicateTool_.hasBasePoint() ||
@@ -3520,8 +3588,49 @@ public:
         selection_.setObjectIds(duplicateIds,
                                 duplicateIds.isEmpty() ? ObjectId::invalid()
                                                        : duplicateIds.back());
+        if (duplicateHasOriginalComponentSelection_) {
+            const int modeIndex = static_cast<int>(
+                duplicateOriginalComponentSelectionMode_);
+            // The committed selection now belongs to the copied geometry.
+            // Clear every cached mode so a later mode switch cannot revive
+            // component selections on the deselected source objects.
+            for (auto &selections : componentSelections_) {
+                selections.clear();
+            }
+            for (int &activeIndex : activeComponentIndices_) {
+                activeIndex = -1;
+            }
+            componentSelectionObject_ = ObjectId::invalid();
+            auto &duplicateSelections = componentSelections_[modeIndex];
+            int activeDuplicateComponent = -1;
+            ObjectId activeDuplicateObject = ObjectId::invalid();
+            for (int index = 0;
+                 index < duplicateIds.size() &&
+                 index < plan.duplicateObjects.size();
+                 ++index) {
+                const int count = duplicateComponentCount(
+                    plan.duplicateObjects[index].geometry,
+                    duplicateOriginalComponentSelectionMode_);
+                if (count <= 0) {
+                    continue;
+                }
+                QSet<int> &selectedComponents =
+                    duplicateSelections[duplicateIds[index].value()];
+                for (int componentIndex = 0;
+                     componentIndex < count;
+                     ++componentIndex) {
+                    selectedComponents.insert(componentIndex);
+                }
+                activeDuplicateComponent = count - 1;
+                activeDuplicateObject = duplicateIds[index];
+            }
+            activeComponentIndices_[modeIndex] = activeDuplicateComponent;
+            componentSelectionObject_ = activeDuplicateObject;
+        }
         const int duplicateCount = duplicateIds.size();
         const Point3D committedDelta = duplicateTool_.worldDelta();
+        const bool duplicateAnchorValid = grabViewPlaneAnchorValid_;
+        const QString duplicateSnapType = snapTypeName(currentSnap_.type);
         resetDuplicateInteraction();
         currentSnap_ = SnapResult{};
         setCursor(Qt::ArrowCursor);
@@ -3532,11 +3641,13 @@ public:
             commandFinished_(Tool::Select);
         }
         DebugLog::instance().write(
-            QStringLiteral("duplicate committed objects=%1 worldDelta=(%2,%3,%4)")
+            QStringLiteral("duplicate committed objects=%1 worldDelta=(%2,%3,%4) anchorValid=%5 snap=%6")
                 .arg(duplicateCount)
                 .arg(committedDelta.x, 0, 'g', 12)
                 .arg(committedDelta.y, 0, 'g', 12)
-                .arg(committedDelta.z, 0, 'g', 12));
+                .arg(committedDelta.z, 0, 'g', 12)
+                .arg(duplicateAnchorValid)
+                .arg(duplicateSnapType));
     }
 
     void cancelDuplicate()
@@ -5162,7 +5273,7 @@ protected:
             QVector<WeldedEndpoint> weldedEndpoints;
             QVector<Point3D> selectedWeldedPoints;
             for (const ViewportRenderObject &renderObject : visibleShapes) {
-                if (renderObject.shape.geometryType != GeometryType::PolyCurve) {
+                if (nurbsCurveComponentsForShape(renderObject.shape).isEmpty()) {
                     continue;
                 }
                 const QSet<int> &selection =
@@ -5265,6 +5376,28 @@ protected:
                     componentSelectionForObject(objectId);
                 effectiveEndpointSelection.unite(
                     weldedVertexSelections.value(objectId.value()));
+                if (showCurveEndpointVertices &&
+                    (renderObject->shape.geometryType == GeometryType::Line ||
+                     renderObject->shape.geometryType == GeometryType::Rectangle ||
+                     renderObject->shape.geometryType == GeometryType::Polygon)) {
+                    const QVector<QPair<int, Point3D>> allCurveVertices =
+                        curveControlPointVertices(
+                            renderObject->shape,
+                            renderObject->placementTranslation);
+                    if (allCurveVertices.size() > 2) {
+                        const auto &first = allCurveVertices.first();
+                        const auto &last = allCurveVertices.last();
+                        const qreal dx = first.second.x - last.second.x;
+                        const qreal dy = first.second.y - last.second.y;
+                        const qreal dz = first.second.z - last.second.z;
+                        if (dx * dx + dy * dy + dz * dz <= 1.0e-12 &&
+                            (effectiveEndpointSelection.contains(first.first) ||
+                             effectiveEndpointSelection.contains(last.first))) {
+                            effectiveEndpointSelection.insert(first.first);
+                            effectiveEndpointSelection.insert(last.first);
+                        }
+                    }
+                }
                 const QVector<Point3D> controlPoints =
                     showCurveEndpointVertices
                         ? QVector<Point3D>{}
@@ -5941,7 +6074,9 @@ protected:
                 }
                 const bool selectedCurveVertexOverlay =
                     showCurveEndpointVertices &&
-                    (selected || !objectVertexSelection.isEmpty()) &&
+                    (selected || !objectVertexSelection.isEmpty() ||
+                     !weldedVertexSelections.value(
+                          renderObject.objectId.value()).isEmpty()) &&
                     !curveSampler_.curvesForShape(visibleShape).isEmpty();
                 if (selectedCurveVertexOverlay) {
                     // Blender keeps the selected spline wire at edit-wire
@@ -5949,18 +6084,24 @@ protected:
                     // selection, instead of applying object selection color
                     // to the entire spline.
                     sceneStroke.width = 1.0f;
-                    if (!objectVertexSelection.isEmpty()) {
+                    const QSet<int> linkedEndpointSelection =
+                        weldedVertexSelections.value(
+                            renderObject.objectId.value());
+                    if (!objectVertexSelection.isEmpty() ||
+                        !linkedEndpointSelection.isEmpty()) {
                         const QVector<Shape::NurbsCurve2D> curves =
                             curveSampler_.curvesForShape(visibleShape);
                         QSet<int> wireSelectedControlPoints =
                             objectVertexSelection;
+                        wireSelectedControlPoints.unite(
+                            linkedEndpointSelection);
                         if (visibleShape.geometryType == GeometryType::PolyCurve) {
                             const auto controlPoints = curveControlPointVertices(
                                 visibleShape,
                                 renderObject.placementTranslation);
                             QVector<Point3D> selectedWorldPoints;
                             for (const auto &entry : controlPoints) {
-                                if (objectVertexSelection.contains(entry.first)) {
+                                if (wireSelectedControlPoints.contains(entry.first)) {
                                     selectedWorldPoints.append(entry.second);
                                 }
                             }
@@ -5973,6 +6114,25 @@ protected:
                                         wireSelectedControlPoints.insert(entry.first);
                                         break;
                                     }
+                                }
+                            }
+                        } else if (visibleShape.geometryType == GeometryType::Line ||
+                                   visibleShape.geometryType == GeometryType::Rectangle ||
+                                   visibleShape.geometryType == GeometryType::Polygon) {
+                            const auto controlPoints = curveControlPointVertices(
+                                visibleShape,
+                                renderObject.placementTranslation);
+                            if (controlPoints.size() > 2) {
+                                const auto &first = controlPoints.first();
+                                const auto &last = controlPoints.last();
+                                const qreal dx = first.second.x - last.second.x;
+                                const qreal dy = first.second.y - last.second.y;
+                                const qreal dz = first.second.z - last.second.z;
+                                if (dx * dx + dy * dy + dz * dz <= 1.0e-12 &&
+                                    (wireSelectedControlPoints.contains(first.first) ||
+                                     wireSelectedControlPoints.contains(last.first))) {
+                                    wireSelectedControlPoints.insert(first.first);
+                                    wireSelectedControlPoints.insert(last.first);
                                 }
                             }
                         }
@@ -12945,65 +13105,173 @@ private:
         };
         if (curveIndex >= 0 && curveShapeIndex >= 0 &&
             !isSurfaceShape(curveShapeIndex)) {
-            const ObjectId objectId = shapes_.objectIdAt(curveShapeIndex);
-            const Shape &shape = shapes_[curveShapeIndex];
-            const int modeIndex = static_cast<int>(originalMode);
-            QSet<int> linkedComponents;
-            if (originalMode == ComponentSelectionMode::Vertex) {
-                if (shape.geometryType == GeometryType::PolyCurve &&
-                    curveIndex >= 0 && curveIndex < shape.components.size()) {
-                    int firstControlPoint = 0;
-                    for (int index = 0; index < curveIndex; ++index) {
-                        firstControlPoint +=
-                            shape.components[index].controlPoints.size();
-                    }
-                    const int endControlPoint = firstControlPoint +
-                        shape.components[curveIndex].controlPoints.size();
-                    for (int index = firstControlPoint;
-                         index < endControlPoint; ++index) {
-                        linkedComponents.insert(index);
-                    }
-                } else {
-                    const QVector<QPointF> points = controlPointsForShape(shape);
-                    for (int index = 0; index < points.size(); ++index) {
-                        linkedComponents.insert(index);
-                    }
+            struct LinkedCurveComponent {
+                ObjectId objectId;
+                int componentIndex = -1;
+                int firstControlPoint = 0;
+                int controlPointCount = 0;
+                Point3D start;
+                Point3D end;
+            };
+            const auto sameWorldPoint = [](const Point3D &first,
+                                           const Point3D &second) {
+                const qreal dx = first.x - second.x;
+                const qreal dy = first.y - second.y;
+                const qreal dz = first.z - second.z;
+                return dx * dx + dy * dy + dz * dz <= 1.0e-12;
+            };
+            QVector<LinkedCurveComponent> curveComponents;
+            int seedComponent = -1;
+            const ObjectId seedObjectId =
+                shapes_.objectIdAt(curveShapeIndex);
+            for (int objectIndex = 0; objectIndex < document_.size();
+                 ++objectIndex) {
+                const ObjectId objectId = document_.objectIdAt(objectIndex);
+                if (!document_.isObjectVisible(objectId) ||
+                    !document_.isObjectEditable(objectId)) {
+                    continue;
                 }
-            } else if (originalMode == ComponentSelectionMode::Edge) {
-                const int curveCount =
-                    curveSampler_.curvesForShape(shape).size();
-                if (shape.geometryType == GeometryType::PolyCurve &&
-                    curveIndex >= 0 && curveIndex < curveCount) {
-                    linkedComponents.insert(curveIndex);
-                } else {
-                    for (int index = 0; index < curveCount; ++index) {
-                        linkedComponents.insert(index);
+                const Shape *shape = document_.shape(objectId);
+                const SceneObject *sceneObject = document_.object(objectId);
+                if (shape == nullptr || sceneObject == nullptr ||
+                    shape->geometryType == GeometryType::NurbsSurface ||
+                    shape->geometryType == GeometryType::NurbsSolid) {
+                    continue;
+                }
+
+                int firstControlPoint = 0;
+                for (const ShapeNurbsCurveComponent &component :
+                     nurbsCurveComponentsForShape(*shape)) {
+                    qreal domainStart = 0.0;
+                    qreal domainEnd = 0.0;
+                    Point3D localStart;
+                    Point3D localEnd;
+                    if (isValidWorkPlaneFrame(component.workPlaneFrame) &&
+                        nurbsParameterDomain(component.curve, &domainStart,
+                                             &domainEnd) &&
+                        evaluateNurbsPoint3D(component.curve, domainStart,
+                                             &localStart) &&
+                        evaluateNurbsPoint3D(component.curve, domainEnd,
+                                             &localEnd)) {
+                        Point3D start = workPlaneFramePointToWorld(
+                            {localStart.x, localStart.y}, localStart.z,
+                            component.workPlaneFrame);
+                        Point3D end = workPlaneFramePointToWorld(
+                            {localEnd.x, localEnd.y}, localEnd.z,
+                            component.workPlaneFrame);
+                        start.x += sceneObject->placementTranslation.x;
+                        start.y += sceneObject->placementTranslation.y;
+                        start.z += sceneObject->placementTranslation.z;
+                        end.x += sceneObject->placementTranslation.x;
+                        end.y += sceneObject->placementTranslation.y;
+                        end.z += sceneObject->placementTranslation.z;
+                        LinkedCurveComponent linked;
+                        linked.objectId = objectId;
+                        linked.componentIndex = component.componentIndex;
+                        linked.firstControlPoint = firstControlPoint;
+                        linked.controlPointCount =
+                            component.curve.controlPoints.size();
+                        linked.start = start;
+                        linked.end = end;
+                        const int index = curveComponents.size();
+                        curveComponents.append(linked);
+                        if (objectId == seedObjectId &&
+                            component.componentIndex == curveIndex) {
+                            seedComponent = index;
+                        }
+                    }
+                    firstControlPoint += component.curve.controlPoints.size();
+                }
+            }
+
+            if (seedComponent < 0) {
+                return;
+            }
+            QVector<int> linkedCurveIndices{seedComponent};
+            QSet<int> visitedCurveIndices{seedComponent};
+            for (int cursorIndex = 0;
+                 cursorIndex < linkedCurveIndices.size(); ++cursorIndex) {
+                const LinkedCurveComponent &current =
+                    curveComponents[linkedCurveIndices[cursorIndex]];
+                for (int candidateIndex = 0;
+                     candidateIndex < curveComponents.size();
+                     ++candidateIndex) {
+                    if (visitedCurveIndices.contains(candidateIndex)) {
+                        continue;
+                    }
+                    const LinkedCurveComponent &candidate =
+                        curveComponents[candidateIndex];
+                    const bool connected =
+                        sameWorldPoint(current.start, candidate.start) ||
+                        sameWorldPoint(current.start, candidate.end) ||
+                        sameWorldPoint(current.end, candidate.start) ||
+                        sameWorldPoint(current.end, candidate.end);
+                    if (connected) {
+                        visitedCurveIndices.insert(candidateIndex);
+                        linkedCurveIndices.append(candidateIndex);
                     }
                 }
             }
 
-            if (originalMode == ComponentSelectionMode::Face) {
-                if (!deselect) {
-                    selection_.add(objectId);
-                    selection_.setPrimaryObjectId(objectId);
+            const int modeIndex = static_cast<int>(originalMode);
+            QHash<quint64, QSet<int>> linkedComponentsByObject;
+            for (const int linkedIndex : linkedCurveIndices) {
+                const LinkedCurveComponent &linked = curveComponents[linkedIndex];
+                QSet<int> &components =
+                    linkedComponentsByObject[linked.objectId.value()];
+                const Shape *linkedShape =
+                    document_.shape(linked.objectId);
+                if (linkedShape == nullptr) {
+                    continue;
                 }
-            } else if (!linkedComponents.isEmpty()) {
-                QSet<int> &selection = componentSelections_[modeIndex]
-                    [objectId.value()];
+                if (linkedShape->geometryType != GeometryType::PolyCurve) {
+                    if (originalMode == ComponentSelectionMode::Vertex) {
+                        const QVector<QPointF> points =
+                            controlPointsForShape(*linkedShape);
+                        for (int index = 0; index < points.size(); ++index) {
+                            components.insert(index);
+                        }
+                    } else if (originalMode == ComponentSelectionMode::Edge) {
+                        const int count =
+                            curveSampler_.curvesForShape(*linkedShape).size();
+                        for (int index = 0; index < count; ++index) {
+                            components.insert(index);
+                        }
+                    }
+                    continue;
+                }
+                if (originalMode == ComponentSelectionMode::Vertex) {
+                    for (int index = linked.firstControlPoint;
+                         index < linked.firstControlPoint +
+                                     linked.controlPointCount;
+                         ++index) {
+                        components.insert(index);
+                    }
+                } else if (originalMode == ComponentSelectionMode::Edge) {
+                    components.insert(linked.componentIndex);
+                }
+            }
+
+            for (auto it = linkedComponentsByObject.cbegin();
+                 it != linkedComponentsByObject.cend(); ++it) {
+                const ObjectId objectId = ObjectId::fromValue(it.key());
+                QSet<int> &selection = componentSelections_[modeIndex][it.key()];
                 if (deselect) {
-                    for (int component : linkedComponents) {
+                    for (const int component : it.value()) {
                         selection.remove(component);
                     }
                 } else {
                     selection_.add(objectId);
-                    selection_.setPrimaryObjectId(objectId);
-                    for (int component : linkedComponents) {
+                    for (const int component : it.value()) {
                         selection.insert(component);
                     }
                 }
-                componentSelectionObject_ = objectId;
-                activeComponentIndices_[modeIndex] = -1;
             }
+            if (!deselect) {
+                selection_.setPrimaryObjectId(seedObjectId);
+            }
+            componentSelectionObject_ = seedObjectId;
+            activeComponentIndices_[modeIndex] = -1;
             update();
             emitCoordinateUpdate();
             return;
@@ -15107,7 +15375,8 @@ private:
 
     bool blenderGrabAxisDelta(const QPointF &screenPosition,
                               const Point3D &axis,
-                              Point3D *worldDelta) const
+                              Point3D *worldDelta,
+                              bool useForwardCameraRay = false) const
     {
         if (worldDelta == nullptr || !grabViewPlaneAnchorValid_) {
             return false;
@@ -15115,12 +15384,17 @@ private:
 
         QPointF startOnViewPlane;
         QPointF currentOnViewPlane;
-        if (!viewportTransform_.screenToWorkPlaneUnclipped(
-                grabAxisStartScreen_, size(), grabViewPlaneFrame_,
-                &startOnViewPlane) ||
-            !viewportTransform_.screenToWorkPlaneUnclipped(
-                screenPosition, size(), grabViewPlaneFrame_,
-                &currentOnViewPlane)) {
+        const auto projectToViewPlane =
+            [this, useForwardCameraRay](const QPointF &position,
+                                        QPointF *projected) {
+                return useForwardCameraRay
+                    ? viewportTransform_.screenToWorkPlane(
+                          position, size(), grabViewPlaneFrame_, projected)
+                    : viewportTransform_.screenToWorkPlaneUnclipped(
+                          position, size(), grabViewPlaneFrame_, projected);
+            };
+        if (!projectToViewPlane(grabAxisStartScreen_, &startOnViewPlane) ||
+            !projectToViewPlane(screenPosition, &currentOnViewPlane)) {
             return false;
         }
 

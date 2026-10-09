@@ -322,12 +322,32 @@ misread or implemented incorrectly.
   by the `duplicate` BMesh operator (`geom.out`), then deselects the originals
   and selects the copies before starting the move. Passing only selected object
   IDs duplicates an entire solid and is incorrect in component mode.
+- In orthographic views, do not anchor Shift+D movement by intersecting the
+  camera-facing plane through the selection with the unclipped projection ray
+  whose origin is the orbit target. A selected point on the camera side of that
+  target produces negative depth, so the anchor is rejected and the copy
+  commits at zero displacement. Use the forward camera ray used by ordinary
+  work-plane projection for both the initial anchor and subsequent movement.
+- If component mode has any selected components, skip other selected objects
+  with no component selection; Blender does not turn those into whole-object
+  copies. After commit, select the duplicate components so the new geometry
+  remains visibly active in the current component mode. Clear cached component
+  selections for the deselected source objects in every mode, or switching
+  modes can revive the originals' earlier selections.
 - For classiCAD's affine NURBS solids, make selected complete faces into exact
   copies of their derived NURBS surface, selected edges into degree-1 NURBS
   curves, and isolated selected vertices into point objects. A vertex selection
   that covers the whole cage or a component selection covering the whole solid
   can retain the whole-solid copy. Do not turn a partial vertex selection into
   a copy of the solid.
+- A closed Line-tool polyline stores its start point again as its last NURBS
+  control vertex. Vertex marquee picking may report only one of those
+  coincident indices, so Shift+D must treat the first and last CV as one
+  selectable closure point; otherwise selecting all visible corners copies an
+  open curve with its closing edge missing.
+- [x] Reproduce a Line-tool closed square in vertex mode, marquee its four
+  visible corners, Shift+D and confirm the copy, then G-move it; the duplicate
+  retains all four sides.
 - [ ] Check Shift+D in vertex, edge, and face modes: a four-corner top-face
   selection copies only that face, previews it selected from the first frame,
   moves from its component center, leaves the source solid in place, and commits

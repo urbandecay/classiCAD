@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <QSet>
 #include <utility>
 
@@ -22,6 +23,7 @@ struct WeldCut {
 struct WeldCurveRecord {
     ObjectId objectId = ObjectId::invalid();
     Shape::NurbsCurve2D curve;
+    int firstControlPointIndex = 0;
     WorkPlaneFrame frame;
     WorkPlaneFrame effectiveFrame;
     Point3D placementTranslation;
@@ -300,15 +302,18 @@ bool buildWeldCommandPlan(const Document &document,
         owner.sourceShape = object.geometry;
         const int ownerIndex = owners.size();
         owners.append(std::move(owner));
+        int firstControlPointIndex = 0;
         for (const ShapeNurbsCurveComponent &component : sourceComponents) {
             WeldCurveRecord record;
             record.objectId = object.id;
             record.curve = component.curve;
+            record.firstControlPointIndex = firstControlPointIndex;
             record.frame = component.workPlaneFrame;
             record.placementTranslation = object.placementTranslation;
             record.effectiveFrame = record.frame;
             translateFrame(&record.effectiveFrame,
                            object.placementTranslation);
+            firstControlPointIndex += component.curve.controlPoints.size();
 
             if (!validateNurbsCurve(record.curve)) {
                 owners[ownerIndex].curveRecordIndices.append(curves.size());
@@ -491,11 +496,35 @@ bool buildWeldCommandPlan(const Document &document,
     }
     plan->intersectionCount = nodes.size();
 
+    quint64 nextWeldGroupId = 1;
+    for (const SceneObject &object : document.objects()) {
+        for (const quint64 group : object.geometry.controlPointWeldGroups) {
+            if (group == std::numeric_limits<quint64>::max()) {
+                plan->failureMessage = QStringLiteral(
+                    "Weld could not allocate a control-point group identifier");
+                return true;
+            }
+            nextWeldGroupId = std::max(nextWeldGroupId, group + 1);
+        }
+    }
+    QVector<quint64> nodeWeldGroupIds;
+    nodeWeldGroupIds.reserve(nodes.size());
+    for (int nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
+        if (nextWeldGroupId == 0 ||
+            nextWeldGroupId == std::numeric_limits<quint64>::max()) {
+            plan->failureMessage = QStringLiteral(
+                "Weld could not allocate a control-point group identifier");
+            return true;
+        }
+        nodeWeldGroupIds.append(nextWeldGroupId++);
+    }
+
     for (int ownerIndex = 0; ownerIndex < owners.size(); ++ownerIndex) {
         const WeldOwner &owner = owners[ownerIndex];
         bool ownerChanged = false;
         QVector<Shape::NurbsCurve2D> outputComponents;
         QVector<WorkPlaneFrame> outputFrames;
+        QVector<QVector<quint64>> outputComponentWeldGroups;
         for (const int recordIndex : owner.curveRecordIndices) {
             const WeldCurveRecord &record = curves[recordIndex];
             if (!record.cuts.isEmpty()) {
@@ -513,6 +542,50 @@ bool buildWeldCommandPlan(const Document &document,
             for (const Shape::NurbsCurve2D &piece : pieces) {
                 outputComponents.append(piece);
                 outputFrames.append(record.frame);
+                QVector<quint64> pieceWeldGroups(
+                    piece.controlPoints.size(), 0);
+                const Shape &sourceShape = owner.sourceShape;
+                const auto sourceGroupAt = [&](int localControlPointIndex) {
+                    const int sourceIndex =
+                        record.firstControlPointIndex + localControlPointIndex;
+                    return sourceIndex >= 0 &&
+                            sourceIndex < sourceShape.controlPointWeldGroups.size()
+                        ? sourceShape.controlPointWeldGroups[sourceIndex]
+                        : quint64(0);
+                };
+                if (record.cuts.isEmpty()) {
+                    for (int controlPoint = 0;
+                         controlPoint < pieceWeldGroups.size(); ++controlPoint) {
+                        pieceWeldGroups[controlPoint] =
+                            sourceGroupAt(controlPoint);
+                    }
+                } else if (pieceWeldGroups.size() >= 2 &&
+                           record.curve.controlPoints.size() >= 2) {
+                    const auto preserveEndpointGroup =
+                        [&](int pieceEndpoint, int sourceEndpoint) {
+                            const quint64 group = sourceGroupAt(sourceEndpoint);
+                            if (group == 0) {
+                                return;
+                            }
+                            Point3D pieceWorld = workPlaneFramePointToWorld(
+                                piece.controlPoints[pieceEndpoint], record.frame);
+                            Point3D sourceWorld = workPlaneFramePointToWorld(
+                                record.curve.controlPoints[sourceEndpoint],
+                                record.frame);
+                            pieceWorld = add(pieceWorld,
+                                             record.placementTranslation);
+                            sourceWorld = add(sourceWorld,
+                                              record.placementTranslation);
+                            if (squaredDistance(pieceWorld, sourceWorld) <=
+                                nodeTolerance * nodeTolerance) {
+                                pieceWeldGroups[pieceEndpoint] = group;
+                            }
+                        };
+                    preserveEndpointGroup(0, 0);
+                    preserveEndpointGroup(pieceWeldGroups.size() - 1,
+                                          record.curve.controlPoints.size() - 1);
+                }
+                outputComponentWeldGroups.append(std::move(pieceWeldGroups));
             }
         }
         if (!ownerChanged || outputComponents.isEmpty()) {
@@ -527,6 +600,42 @@ bool buildWeldCommandPlan(const Document &document,
         weldedShape.subdivisionParameters.clear();
         weldedShape.components = outputComponents;
         weldedShape.componentWorkPlaneFrames = outputFrames;
+        weldedShape.controlPointWeldGroups.clear();
+        for (int componentIndex = 0;
+             componentIndex < outputComponents.size(); ++componentIndex) {
+            const Shape::NurbsCurve2D &component =
+                outputComponents[componentIndex];
+            const WorkPlaneFrame &frame = outputFrames[componentIndex];
+            const SceneObject *ownerObject = document.object(owner.objectId);
+            const Point3D placement = ownerObject != nullptr
+                ? ownerObject->placementTranslation : Point3D{};
+            const auto assignNodeGroup = [&](int localControlPointIndex) {
+                if (localControlPointIndex < 0 ||
+                    localControlPointIndex >= component.controlPoints.size()) {
+                    return;
+                }
+                Point3D worldPoint = workPlaneFramePointToWorld(
+                    component.controlPoints[localControlPointIndex], frame);
+                worldPoint = add(worldPoint, placement);
+                for (int nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex) {
+                    if (squaredDistance(worldPoint, nodes[nodeIndex].worldPoint) <=
+                        nodeTolerance * nodeTolerance) {
+                        outputComponentWeldGroups[componentIndex]
+                            [localControlPointIndex] =
+                                nodeWeldGroupIds[nodeIndex];
+                        break;
+                    }
+                }
+            };
+            if (!component.controlPoints.isEmpty()) {
+                assignNodeGroup(0);
+                assignNodeGroup(component.controlPoints.size() - 1);
+            }
+            for (const quint64 group :
+                 outputComponentWeldGroups[componentIndex]) {
+                weldedShape.controlPointWeldGroups.append(group);
+            }
+        }
         weldedShape.points = polyCurvePoints(
             outputComponents, outputFrames, shapeWorkPlaneFrame(weldedShape));
         plan->replacements.append({owner.objectId, std::move(weldedShape)});

@@ -5,7 +5,9 @@
 
 #include <QHash>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace classiCAD {
 namespace {
@@ -66,16 +68,41 @@ bool buildDuplicateCommandPlan(const Document &document,
         return false;
     }
 
+    quint64 nextWeldGroupId = 1;
+    for (const SceneObject &object : document.objects()) {
+        for (const quint64 group : object.geometry.controlPointWeldGroups) {
+            if (group == std::numeric_limits<quint64>::max()) {
+                return false;
+            }
+            nextWeldGroupId = std::max(nextWeldGroupId, group + 1);
+        }
+    }
+    QHash<quint64, quint64> duplicateWeldGroups;
+
     plan->duplicateObjects.reserve(sourceObjectIds.size());
     plan->sourceObjectIds.reserve(sourceObjectIds.size());
     for (int index = 0; index < sourceObjectIds.size(); ++index) {
         const ObjectId sourceId = sourceObjectIds[index];
         const SceneObject *sourceObject = document.object(sourceId);
-        const Shape &geometry = duplicateGeometry[index];
+        Shape geometry = duplicateGeometry[index];
         if (sourceObject == nullptr || !document.isObjectEditable(sourceId) ||
             !validDuplicateGeometry(geometry)) {
             *plan = DuplicateCommandPlan{};
             return false;
+        }
+        for (quint64 &group : geometry.controlPointWeldGroups) {
+            if (group == 0) {
+                continue;
+            }
+            if (!duplicateWeldGroups.contains(group)) {
+                if (nextWeldGroupId == 0 ||
+                    nextWeldGroupId == std::numeric_limits<quint64>::max()) {
+                    *plan = DuplicateCommandPlan{};
+                    return false;
+                }
+                duplicateWeldGroups.insert(group, nextWeldGroupId++);
+            }
+            group = duplicateWeldGroups.value(group);
         }
 
         SceneObject duplicate = *sourceObject;

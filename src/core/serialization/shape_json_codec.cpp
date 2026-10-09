@@ -443,6 +443,13 @@ QJsonObject shapeToJson(const Shape &shape)
         }
         object.insert(QStringLiteral("componentWorkPlaneFrames"), componentFrames);
     }
+    if (!shape.controlPointWeldGroups.isEmpty()) {
+        QJsonArray weldGroups;
+        for (const quint64 group : shape.controlPointWeldGroups) {
+            weldGroups.append(QString::number(group));
+        }
+        object.insert(QStringLiteral("controlPointWeldGroups"), weldGroups);
+    }
 
     if (!shape.dimensionAnchors.isEmpty()) {
         QJsonArray anchors;
@@ -646,6 +653,49 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         }
     }
 
+    QVector<quint64> controlPointWeldGroups;
+    const QJsonValue weldGroupsValue =
+        object.value(QStringLiteral("controlPointWeldGroups"));
+    if (!weldGroupsValue.isUndefined()) {
+        int controlPointCount = 0;
+        if (geometryType == GeometryType::PolyCurve) {
+            for (const Shape::NurbsCurve2D &component : components) {
+                controlPointCount += component.controlPoints.size();
+            }
+        } else {
+            switch (geometryType) {
+            case GeometryType::Line:
+            case GeometryType::Arc:
+            case GeometryType::Bezier:
+            case GeometryType::Nurbs:
+            case GeometryType::Rectangle:
+            case GeometryType::Circle:
+            case GeometryType::Ellipse:
+            case GeometryType::Polygon:
+                controlPointCount = nurbs.controlPoints.size();
+                break;
+            default:
+                break;
+            }
+        }
+        if (!weldGroupsValue.isArray() ||
+            weldGroupsValue.toArray().size() != controlPointCount) {
+            return false;
+        }
+        controlPointWeldGroups.reserve(controlPointCount);
+        for (const QJsonValue &groupValue : weldGroupsValue.toArray()) {
+            if (!groupValue.isString()) {
+                return false;
+            }
+            bool groupValid = false;
+            const quint64 group = groupValue.toString().toULongLong(&groupValid);
+            if (!groupValid) {
+                return false;
+            }
+            controlPointWeldGroups.append(group);
+        }
+    }
+
     QVector<DimensionAnchorReference> dimensionAnchors;
     const QJsonValue dimensionAnchorsValue =
         object.value(QStringLiteral("dimensionAnchors"));
@@ -744,6 +794,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->subdivisionParameters = subdivisionParameters;
     shape->components = components;
     shape->componentWorkPlaneFrames = componentWorkPlaneFrames;
+    shape->controlPointWeldGroups = controlPointWeldGroups;
     shape->dimensionAnchors = dimensionAnchors;
     shape->dimensionOffset = dimensionOffset;
     shape->dimensionOffsetValid = dimensionOffsetValid;

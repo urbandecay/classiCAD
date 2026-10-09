@@ -35,6 +35,10 @@ struct Shape {
     // Mixed-plane PolyCurves store one frame per component. Empty is the
     // legacy representation and uses workPlaneFrame for all components.
     QVector<WorkPlaneFrame> componentWorkPlaneFrames;
+    // Explicit cross-curve weld topology, flattened in the same control-point
+    // order as curveControlPointVertices(). Zero means the CV is not welded;
+    // matching nonzero values identify CVs joined by the Weld command.
+    QVector<quint64> controlPointWeldGroups;
     QVector<DimensionAnchorReference> dimensionAnchors;
     qreal dimensionOffset = 0.0;
     bool dimensionOffsetValid = false;

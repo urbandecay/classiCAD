@@ -12953,8 +12953,8 @@ private:
         if (shape.geometryType == GeometryType::Line ||
             shape.geometryType == GeometryType::Rectangle ||
             shape.geometryType == GeometryType::Polygon) {
-            // Degree-one Line geometry stores every polyline corner as a CV;
-            // each CV is a selectable vertex, not just the two outer ends.
+            // Degree-one line and closed outline geometry stores every corner
+            // as a CV, so each is a selectable vertex.
             return allControlPoints;
         }
         const auto appendEndpoints = [&endpoints, &allControlPoints](int first,
@@ -12978,9 +12978,27 @@ private:
         if (shape.geometryType == GeometryType::PolyCurve) {
             int first = 0;
             for (const auto &component : shape.components) {
-                const int last = first + component.controlPoints.size() - 1;
-                appendEndpoints(first, last);
-                first += component.controlPoints.size();
+                const int pointCount = component.controlPoints.size();
+                const int last = first + pointCount - 1;
+                if (component.degree == 1) {
+                    int uniquePointCount = pointCount;
+                    if (pointCount > 1) {
+                        const Point3D &start = allControlPoints[first].second;
+                        const Point3D &end = allControlPoints[last].second;
+                        const qreal dx = end.x - start.x;
+                        const qreal dy = end.y - start.y;
+                        const qreal dz = end.z - start.z;
+                        if (dx * dx + dy * dy + dz * dz <= 1.0e-16) {
+                            --uniquePointCount;
+                        }
+                    }
+                    for (int point = 0; point < uniquePointCount; ++point) {
+                        endpoints.append(allControlPoints[first + point]);
+                    }
+                } else {
+                    appendEndpoints(first, last);
+                }
+                first += pointCount;
             }
         } else if (!allControlPoints.isEmpty()) {
             appendEndpoints(0, allControlPoints.size() - 1);
@@ -13019,78 +13037,26 @@ private:
             if (candidateShapeIndex < 0 || candidateShapeIndex >= shapes_.size()) {
                 continue;
             }
-            const Shape &shape = shapes_[candidateShapeIndex];
             const ObjectId objectId = shapes_.objectIdAt(candidateShapeIndex);
             const SceneObject *sceneObject = document_.object(objectId);
             const Point3D offset = sceneObject != nullptr
                                        ? sceneObject->placementTranslation
                                        : Point3D{};
-            const auto considerEndpoint = [&](const QVector<QPointF> &points,
-                                              const QVector<double> &normalCoordinates,
-                                              const WorkPlaneFrame &sourceFrame,
-                                              int globalIndex) {
-                if (points.isEmpty()) {
-                    return;
+            for (const auto &endpoint : curveEndpointVertices(
+                     shapes_[candidateShapeIndex], offset)) {
+                QPointF projected;
+                if (!viewportTransform_.worldPointToScreen(
+                        endpoint.second, size(), &projected)) {
+                    continue;
                 }
-                WorkPlaneFrame frame = sourceFrame;
-                frame.origin.x += offset.x;
-                frame.origin.y += offset.y;
-                frame.origin.z += offset.z;
-                const auto consider = [&](int pointIndex) {
-                    const qreal normalCoordinate =
-                        normalCoordinates.size() == points.size()
-                            ? normalCoordinates[pointIndex] : 0.0;
-                    const Point3D worldPoint = workPlaneFramePointToWorld(
-                        points[pointIndex], normalCoordinate, frame);
-                    QPointF projected;
-                    if (!viewportTransform_.worldPointToScreen(
-                            worldPoint, size(), &projected)) {
-                        return;
-                    }
-                    const qreal distance = std::hypot(
-                        screenPosition.x() - projected.x(),
-                        screenPosition.y() - projected.y());
-                    if (distance <= closestDistance) {
-                        closestDistance = distance;
-                        closestShapeIndex = candidateShapeIndex;
-                        closestControlPointIndex = globalIndex + pointIndex;
-                    }
-                };
-                consider(0);
-                const QPointF delta = points.last() - points.first();
-                const qreal normalDelta =
-                    normalCoordinates.size() == points.size()
-                        ? normalCoordinates.last() -
-                              normalCoordinates.first()
-                        : 0.0;
-                if (points.size() > 1 &&
-                    QPointF::dotProduct(delta, delta) +
-                            normalDelta * normalDelta > 1.0e-16) {
-                    consider(points.size() - 1);
+                const qreal distance = std::hypot(
+                    screenPosition.x() - projected.x(),
+                    screenPosition.y() - projected.y());
+                if (distance <= closestDistance) {
+                    closestDistance = distance;
+                    closestShapeIndex = candidateShapeIndex;
+                    closestControlPointIndex = endpoint.first;
                 }
-            };
-
-            if (shape.geometryType == GeometryType::PolyCurve) {
-                int globalIndex = 0;
-                for (int componentIndex = 0;
-                     componentIndex < shape.components.size();
-                     ++componentIndex) {
-                    const Shape::NurbsCurve3D &curve =
-                        shape.components[componentIndex];
-                    considerEndpoint(curve.controlPoints,
-                        curve.normalCoordinates,
-                        shapeComponentWorkPlaneFrame(shape, componentIndex),
-                        globalIndex);
-                    globalIndex += curve.controlPoints.size();
-                }
-            } else {
-                const QVector<QPointF> points = controlPointsForShape(shape);
-                const QVector<double> normalCoordinates =
-                    shape.nurbs.dimension == 3
-                        ? shape.nurbs.normalCoordinates.mid(0, points.size())
-                        : QVector<double>{};
-                considerEndpoint(points, normalCoordinates,
-                                 shapeWorkPlaneFrame(shape), 0);
             }
         }
 

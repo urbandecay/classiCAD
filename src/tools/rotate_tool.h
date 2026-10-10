@@ -3,6 +3,9 @@
 #include "tool.h"
 #include "core/document/object_id.h"
 
+#include <QHash>
+#include <QSet>
+
 namespace classiCAD {
 
 enum class RotatePointAction {
@@ -45,6 +48,7 @@ class RotateTool final : public InteractionTool {
 public:
     struct InteractionState {
         QVector<ObjectId> sourceObjectIds;
+        QHash<quint64, QSet<int>> controlPointIndices;
         int stage = 0;
         WorkPlaneFrame frame;
         WorkPlaneFrame primaryFrame;
@@ -82,7 +86,8 @@ public:
     ToolStatus status() const override;
     void resetInteraction(bool angleSnapEnabled);
     void beginSelection(const QVector<ObjectId> &sourceObjectIds,
-                        bool angleSnapEnabled);
+                        bool angleSnapEnabled,
+                        const QHash<quint64, QSet<int>> &controlPointIndices = {});
     RotatePointResult acceptPoint(const ToolInput &input,
                                   qreal snapIncrementDegrees,
                                   qreal snapStrengthDegrees,

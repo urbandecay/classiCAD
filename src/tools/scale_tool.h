@@ -3,6 +3,8 @@
 #include "tool.h"
 #include "core/document/object_id.h"
 
+#include <QHash>
+#include <QSet>
 #include <QString>
 
 namespace classiCAD {
@@ -49,6 +51,7 @@ class ScaleTool final : public InteractionTool {
 public:
     struct InteractionState {
         QVector<ObjectId> sourceObjectIds;
+        QHash<quint64, QSet<int>> controlPointIndices;
         ScaleMode mode = ScaleMode::TwoD;
         int stage = 0;
         QPointF basePoint{0.0, 0.0};
@@ -71,7 +74,10 @@ public:
                             ToolContext &context) override;
     ToolStatus status() const override;
     QString prompt() const;
-    void beginSelection(const QVector<ObjectId> &sourceObjectIds, ScaleMode mode);
+    void beginSelection(
+        const QVector<ObjectId> &sourceObjectIds,
+        ScaleMode mode,
+        const QHash<quint64, QSet<int>> &controlPointIndices = {});
     void resetInteraction();
     ScalePointResult acceptPoint(const QPointF &point);
     bool commitScale(qreal factor,

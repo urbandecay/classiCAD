@@ -140,10 +140,12 @@ void RotateTool::resetInteraction(bool angleSnapEnabled)
 }
 
 void RotateTool::beginSelection(const QVector<ObjectId> &sourceObjectIds,
-                                bool angleSnapEnabled)
+                                bool angleSnapEnabled,
+                                const QHash<quint64, QSet<int>> &controlPointIndices)
 {
     resetInteraction(angleSnapEnabled);
     interactionState_.sourceObjectIds = sourceObjectIds;
+    interactionState_.controlPointIndices = controlPointIndices;
 }
 
 RotatePointResult RotateTool::acceptPoint(const ToolInput &input,
@@ -274,13 +276,33 @@ bool RotateTool::commitAngle(qreal angle,
     if (std::abs(angle) > 1.0e-12) {
         DocumentTransaction transaction = context.beginTransaction();
         const InteractionState &state = interactionState_;
-        const bool edited = TransformCommand::apply(
-            context.document(), transaction, state.sourceObjectIds,
-            [pivot = state.baseWorldPoint,
-             axis = state.frame.normal,
-             angle](Shape &shape) {
-                rotateShapeGeometry(&shape, pivot, axis, angle);
-            });
+        const bool componentEdit = !state.controlPointIndices.isEmpty();
+        const bool edited = componentEdit
+            ? TransformCommand::applyPerObject(
+                  context.document(), transaction, state.sourceObjectIds,
+                  [pivot = state.baseWorldPoint,
+                   axis = state.frame.normal,
+                   angle,
+                   indices = state.controlPointIndices](ObjectId objectId,
+                                                        Shape &shape) {
+                      const auto targets = indices.constFind(objectId.value());
+                      if (targets == indices.cend()) {
+                          return;
+                      }
+                      transformShapeControlPoints(
+                          &shape, targets.value(),
+                          [pivot, axis, angle](const Point3D &point) {
+                              return rotatePointAboutAxis(point, pivot, axis,
+                                                          angle);
+                          });
+                  })
+            : TransformCommand::apply(
+                  context.document(), transaction, state.sourceObjectIds,
+                  [pivot = state.baseWorldPoint,
+                   axis = state.frame.normal,
+                   angle](Shape &shape) {
+                      rotateShapeGeometry(&shape, pivot, axis, angle);
+                  });
         if (edited) {
             updateAssociativeDimensions(context.document(), context.curveSampler());
             context.commitTransaction(transaction);

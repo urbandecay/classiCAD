@@ -1,5 +1,6 @@
 #include "geometry_transform.h"
 
+#include "core/geometry/curve_evaluator.h"
 #include "core/geometry/shape_mapping.h"
 
 #include <algorithm>
@@ -195,30 +196,51 @@ WorkPlaneFrame rotateFrame(const WorkPlaneFrame &frame,
 bool bakeShapePlacementTranslation(Shape *shape,
                                    const Point3D &translation)
 {
-    if (shape == nullptr ||
-        (shape->geometryType != GeometryType::NurbsSurface &&
-         shape->geometryType != GeometryType::NurbsSolid) ||
-        !std::isfinite(translation.x) || !std::isfinite(translation.y) ||
+    if (shape == nullptr || !std::isfinite(translation.x) ||
+        !std::isfinite(translation.y) ||
         !std::isfinite(translation.z)) {
         return false;
     }
     if (translation.x == 0.0 && translation.y == 0.0 && translation.z == 0.0) {
         return true;
     }
-    NurbsSurface3D &surface = shapeBaseSurface(*shape);
-    if (!validateNurbsSurface(surface)) {
-        return false;
-    }
-    for (Point3D &point : surface.controlPoints) {
-        point.x += translation.x;
-        point.y += translation.y;
-        point.z += translation.z;
-    }
-    for (NurbsSurface3D &face : shape->nurbsSolid.boundaryFaces) {
-        for (Point3D &point : face.controlPoints) {
+    if (shape->geometryType == GeometryType::NurbsSurface ||
+        shape->geometryType == GeometryType::NurbsSolid) {
+        NurbsSurface3D &surface = shapeBaseSurface(*shape);
+        if (!validateNurbsSurface(surface)) {
+            return false;
+        }
+        for (Point3D &point : surface.controlPoints) {
             point.x += translation.x;
             point.y += translation.y;
             point.z += translation.z;
+        }
+        for (NurbsSurface3D &face : shape->nurbsSolid.boundaryFaces) {
+            for (Point3D &point : face.controlPoints) {
+                point.x += translation.x;
+                point.y += translation.y;
+                point.z += translation.z;
+            }
+        }
+        return true;
+    }
+
+    WorkPlaneFrame frame = shapeWorkPlaneFrame(*shape);
+    frame.origin.x += translation.x;
+    frame.origin.y += translation.y;
+    frame.origin.z += translation.z;
+    if (!isValidWorkPlaneFrame(frame)) {
+        return false;
+    }
+    shape->workPlaneFrame = frame;
+    if (shape->componentWorkPlaneFrames.size() == shape->components.size()) {
+        for (WorkPlaneFrame &componentFrame : shape->componentWorkPlaneFrames) {
+            componentFrame.origin.x += translation.x;
+            componentFrame.origin.y += translation.y;
+            componentFrame.origin.z += translation.z;
+            if (!isValidWorkPlaneFrame(componentFrame)) {
+                return false;
+            }
         }
     }
     return true;
@@ -501,6 +523,275 @@ bool rotateShapeGeometry(Shape *shape,
             }
         }
     }
+    return true;
+}
+
+Point3D rotatePointAboutAxis(const Point3D &point,
+                             const Point3D &pivot,
+                             const Point3D &axis,
+                             qreal angle)
+{
+    return rotatePoint(point, pivot, axis, angle);
+}
+
+Point3D scalePointInFrame(const Point3D &point,
+                          const QPointF &base,
+                          const QPointF &axisDirection,
+                          qreal factor,
+                          bool oneDimensional,
+                          const WorkPlaneFrame &surfaceFrame)
+{
+    if (!isValidWorkPlaneFrame(surfaceFrame)) {
+        return point;
+    }
+    const QPointF local = worldPointToWorkPlaneFrame(point, surfaceFrame);
+    const QPointF offset = local - base;
+    QPointF transformedLocal;
+    qreal depth = signedDistanceFromWorkPlaneFrame(point, surfaceFrame);
+    if (oneDimensional) {
+        const qreal alongAxis = QPointF::dotProduct(offset, axisDirection);
+        transformedLocal = base + offset +
+                           axisDirection * (alongAxis * (factor - 1.0));
+    } else {
+        transformedLocal = base + offset * factor;
+        depth *= factor;
+    }
+    Point3D result = workPlaneFramePointToWorld(transformedLocal, surfaceFrame);
+    result.x += surfaceFrame.normal.x * depth;
+    result.y += surfaceFrame.normal.y * depth;
+    result.z += surfaceFrame.normal.z * depth;
+    return result;
+}
+
+bool transformShapeControlPoints(
+    Shape *shape,
+    const QSet<int> &controlPointIndices,
+    const std::function<Point3D(const Point3D &)> &transform)
+{
+    if (shape == nullptr || controlPointIndices.isEmpty() || !transform) {
+        return false;
+    }
+
+    const auto close = [](const Point3D &first, const Point3D &second) {
+        const qreal dx = first.x - second.x;
+        const qreal dy = first.y - second.y;
+        const qreal dz = first.z - second.z;
+        return dx * dx + dy * dy + dz * dz <= 1.0e-16;
+    };
+    const auto finite = [](const Point3D &point) {
+        return std::isfinite(point.x) && std::isfinite(point.y) &&
+               std::isfinite(point.z);
+    };
+
+    if (shape->geometryType == GeometryType::Point) {
+        if (!controlPointIndices.contains(0) || shape->points.size() != 1) {
+            return false;
+        }
+        WorkPlaneFrame frame = shapeWorkPlaneFrame(*shape);
+        if (!isValidWorkPlaneFrame(frame)) {
+            return false;
+        }
+        const QPointF localPoint = shape->points.first();
+        const Point3D worldPoint = shapePointToWorld(*shape, localPoint);
+        const Point3D moved = transform(worldPoint);
+        if (!finite(moved)) {
+            return false;
+        }
+        const Point3D localOffset{
+            frame.xAxis.x * localPoint.x() + frame.yAxis.x * localPoint.y(),
+            frame.xAxis.y * localPoint.x() + frame.yAxis.y * localPoint.y(),
+            frame.xAxis.z * localPoint.x() + frame.yAxis.z * localPoint.y()};
+        frame.origin = {moved.x - localOffset.x,
+                        moved.y - localOffset.y,
+                        moved.z - localOffset.z};
+        if (!isValidWorkPlaneFrame(frame)) {
+            return false;
+        }
+        shape->workPlaneFrame = frame;
+        return true;
+    }
+
+    if (shape->geometryType == GeometryType::NurbsSurface) {
+        if (!validateNurbsSurface(shape->nurbsSurface)) {
+            return false;
+        }
+        bool changed = false;
+        for (int index = 0; index < shape->nurbsSurface.controlPoints.size(); ++index) {
+            if (!controlPointIndices.contains(index)) {
+                continue;
+            }
+            const Point3D moved = transform(
+                shape->nurbsSurface.controlPoints[index]);
+            if (!finite(moved)) {
+                return false;
+            }
+            shape->nurbsSurface.controlPoints[index] = moved;
+            changed = true;
+        }
+        return changed && validateNurbsSurface(shape->nurbsSurface);
+    }
+
+    if (shape->geometryType == GeometryType::NurbsSolid) {
+        const QVector<NurbsSurface3D> visibleFaces = shapeSurfaceFaces(*shape);
+        QVector<Point3D> selectedPositions;
+        QVector<Point3D> uniquePositions;
+        for (const NurbsSurface3D &face : visibleFaces) {
+            for (const Point3D &point : face.controlPoints) {
+                int pointIndex = -1;
+                for (int index = 0; index < uniquePositions.size(); ++index) {
+                    if (close(uniquePositions[index], point)) {
+                        pointIndex = index;
+                        break;
+                    }
+                }
+                if (pointIndex < 0) {
+                    pointIndex = uniquePositions.size();
+                    uniquePositions.append(point);
+                }
+                if (controlPointIndices.contains(pointIndex) &&
+                    !std::any_of(selectedPositions.cbegin(),
+                                 selectedPositions.cend(),
+                                 [&point, &close](const Point3D &existing) {
+                                     return close(existing, point);
+                                 })) {
+                    selectedPositions.append(point);
+                }
+            }
+        }
+        if (selectedPositions.isEmpty() ||
+            !materializeNurbsSolidBoundary(&shape->nurbsSolid)) {
+            return false;
+        }
+        for (NurbsSurface3D &face : shape->nurbsSolid.boundaryFaces) {
+            for (Point3D &point : face.controlPoints) {
+                const bool selected = std::any_of(
+                    selectedPositions.cbegin(), selectedPositions.cend(),
+                    [&point, &close](const Point3D &candidate) {
+                        return close(point, candidate);
+                    });
+                if (!selected) {
+                    continue;
+                }
+                const Point3D moved = transform(point);
+                if (!finite(moved)) {
+                    return false;
+                }
+                point = moved;
+            }
+        }
+        return validateNurbsSolid(shape->nurbsSolid);
+    }
+
+    QSet<int> indicesToTransform = controlPointIndices;
+    for (const int index : controlPointIndices) {
+        if (index >= 0 && index < shape->controlPointWeldGroups.size()) {
+            const quint64 group = shape->controlPointWeldGroups[index];
+            if (group == 0) {
+                continue;
+            }
+            for (int candidate = 0;
+                 candidate < shape->controlPointWeldGroups.size(); ++candidate) {
+                if (shape->controlPointWeldGroups[candidate] == group) {
+                    indicesToTransform.insert(candidate);
+                }
+            }
+        }
+    }
+
+    bool changed = false;
+    const auto transformCurve = [&](NurbsCurve3D *curve,
+                                    const WorkPlaneFrame &frame,
+                                    int firstGlobalIndex) {
+        if (curve == nullptr || !validateNurbsCurve(*curve) ||
+            !isValidWorkPlaneFrame(frame)) {
+            return false;
+        }
+        const int lastGlobalIndex =
+            firstGlobalIndex + curve->controlPoints.size() - 1;
+        if (curve->controlPoints.size() > 1) {
+            const qreal firstNormal = curve->dimension == 3
+                ? curve->normalCoordinates.first() : 0.0;
+            const qreal lastNormal = curve->dimension == 3
+                ? curve->normalCoordinates.last() : 0.0;
+            const Point3D firstWorld = workPlaneFramePointToWorld(
+                curve->controlPoints.first(), firstNormal, frame);
+            const Point3D lastWorld = workPlaneFramePointToWorld(
+                curve->controlPoints.last(), lastNormal, frame);
+            if (close(firstWorld, lastWorld) &&
+                (indicesToTransform.contains(firstGlobalIndex) ||
+                 indicesToTransform.contains(lastGlobalIndex))) {
+                indicesToTransform.insert(firstGlobalIndex);
+                indicesToTransform.insert(lastGlobalIndex);
+            }
+        }
+
+        for (int index = 0; index < curve->controlPoints.size(); ++index) {
+            if (!indicesToTransform.contains(firstGlobalIndex + index)) {
+                continue;
+            }
+            const qreal normal = curve->dimension == 3
+                ? curve->normalCoordinates[index] : 0.0;
+            const Point3D moved = transform(workPlaneFramePointToWorld(
+                curve->controlPoints[index], normal, frame));
+            if (!finite(moved)) {
+                return false;
+            }
+            qreal newNormal = 0.0;
+            curve->controlPoints[index] = worldPointToWorkPlaneFrame(
+                moved, frame, &newNormal);
+            if (curve->dimension == 2 && std::abs(newNormal) > 1.0e-9) {
+                curve->dimension = 3;
+                curve->normalCoordinates.fill(0.0,
+                                              curve->controlPoints.size());
+            }
+            if (curve->dimension == 3) {
+                curve->normalCoordinates[index] = newNormal;
+            }
+            changed = true;
+        }
+        return true;
+    };
+
+    int globalIndex = 0;
+    if (shape->geometryType == GeometryType::PolyCurve &&
+        !shape->components.isEmpty()) {
+        for (int componentIndex = 0;
+             componentIndex < shape->components.size(); ++componentIndex) {
+            NurbsCurve3D &component = shape->components[componentIndex];
+            if (!transformCurve(&component,
+                                shapeComponentWorkPlaneFrame(*shape,
+                                                             componentIndex),
+                                globalIndex)) {
+                return false;
+            }
+            globalIndex += component.controlPoints.size();
+        }
+        if (changed) {
+            shape->points.clear();
+            for (int index = 0; index < shape->components.size(); ++index) {
+                QPointF start;
+                QPointF end;
+                if (!nurbsCurveEndpoints(shape->components[index],
+                                         &start, &end)) {
+                    continue;
+                }
+                if (index == 0) {
+                    shape->points.append(start);
+                }
+                shape->points.append(end);
+            }
+        }
+        return changed;
+    }
+
+    if (!validateNurbsCurve(shape->nurbs)) {
+        return false;
+    }
+    if (!transformCurve(&shape->nurbs, shapeWorkPlaneFrame(*shape), 0) ||
+        !changed) {
+        return false;
+    }
+    shape->points = shape->nurbs.controlPoints;
     return true;
 }
 

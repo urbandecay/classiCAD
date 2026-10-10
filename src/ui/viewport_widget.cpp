@@ -55,6 +55,7 @@
 #include "../tools/subdivision_tool.h"
 #include "../tools/grab_tool.h"
 #include "../tools/duplicate_tool.h"
+#include "../tools/point_extrude_tool.h"
 #include "../tools/erase_tool.h"
 #include "../tools/trim_tool.h"
 #include "input_helpers.h"
@@ -931,9 +932,14 @@ public:
                      componentSelectionMode_ == ComponentSelectionMode::Vertex)) {
                     int shapeIndex = -1;
                     int controlPointIndex = -1;
-                    if (hitTestSelectedControlPoint(screenPosition,
-                                                    &shapeIndex,
-                                                    &controlPointIndex)) {
+                    const bool controlPointHit = syntheticSelectionInput_
+                        ? hitTestSelectedControlPoint(
+                              screenPosition, &shapeIndex,
+                              &controlPointIndex)
+                        : hitTestDisplayedControlPoint(
+                              screenPosition, &shapeIndex,
+                              &controlPointIndex);
+                    if (controlPointHit) {
                         const Shape &shape = shapes_[shapeIndex];
                         const QVector<QPointF> handles =
                             controlPointsForShape(shape);
@@ -1967,6 +1973,114 @@ public:
 
     int beginPointExtrude()
     {
+        const QHash<quint64, QSet<int>> controlPointTargets =
+            selectedVertexControlPointTargets();
+        if (!controlPointTargets.isEmpty()) {
+            QVector<PointExtrudeTool::ControlPointSource> pointSources;
+            for (int index = 0; index < document_.size(); ++index) {
+                const ObjectId objectId = document_.objectIdAt(index);
+                const auto selectedIt =
+                    controlPointTargets.constFind(objectId.value());
+                if (selectedIt == controlPointTargets.cend()) {
+                    continue;
+                }
+                const Shape *shape = document_.shape(objectId);
+                const SceneObject *sceneObject = document_.object(objectId);
+                if (shape == nullptr || sceneObject == nullptr) {
+                    continue;
+                }
+                const Point3D offset = sceneObject->placementTranslation;
+                const auto appendPointSource =
+                    [&](const Point3D &point, WorkPlaneFrame frame) {
+                        if (!isValidWorkPlaneFrame(frame)) {
+                            frame = makeWorkPlaneFrameFromNormal(
+                                point, viewportTransform_.viewDirection(),
+                                viewportTransform_.viewUp());
+                        }
+                        frame.origin = point;
+                        if (!isValidWorkPlaneFrame(frame)) {
+                            return;
+                        }
+                        PointExtrudeTool::ControlPointSource source;
+                        source.objectId = objectId;
+                        source.worldPoint = point;
+                        source.workPlaneFrame = frame;
+                        pointSources.append(source);
+                    };
+
+                if (shape->geometryType == GeometryType::Point) {
+                    if (selectedIt.value().contains(0) &&
+                        shape->points.size() == 1) {
+                        Point3D point = shapePointToWorld(
+                            *shape, shape->points.first());
+                        point.x += offset.x;
+                        point.y += offset.y;
+                        point.z += offset.z;
+                        WorkPlaneFrame frame = shapeWorkPlaneFrame(*shape);
+                        frame.origin.x += offset.x;
+                        frame.origin.y += offset.y;
+                        frame.origin.z += offset.z;
+                        appendPointSource(point, frame);
+                    }
+                    continue;
+                }
+
+                if (shape->geometryType == GeometryType::NurbsSurface ||
+                    shape->geometryType == GeometryType::NurbsSolid) {
+                    const ViewportDepthGeometry cage =
+                        selectedSurfaceControlNet(*shape);
+                    WorkPlaneFrame sourceFrame;
+                    if (shape->geometryType == GeometryType::NurbsSurface) {
+                        nurbsSolidBaseFrame(shape->nurbsSurface, &sourceFrame);
+                    }
+                    for (int controlPoint = 0;
+                         controlPoint < cage.precisePointVertices.size();
+                         ++controlPoint) {
+                        if (!selectedIt.value().contains(controlPoint)) {
+                            continue;
+                        }
+                        Point3D point = cage.precisePointVertices[controlPoint];
+                        point.x += offset.x;
+                        point.y += offset.y;
+                        point.z += offset.z;
+                        appendPointSource(point, sourceFrame);
+                    }
+                    continue;
+                }
+
+                const QVector<QPair<int, Point3D>> vertices =
+                    curveControlPointVertices(*shape, offset);
+                for (const auto &vertex : vertices) {
+                    if (!selectedIt.value().contains(vertex.first)) {
+                        continue;
+                    }
+                    appendPointSource(
+                        vertex.second,
+                        controlPointWorkPlaneFrame(objectId, vertex.first));
+                }
+            }
+
+            if (pointSources.isEmpty()) {
+                DebugLog::instance().write(
+                    QStringLiteral("beginPointExtrude ignored selected control points with no editable source"));
+                return 0;
+            }
+            if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
+                    toolRegistry_.find(Tool::PointExtrude))) {
+                extrudeTool->setControlPointSources(pointSources);
+            } else {
+                return 0;
+            }
+            setTool(Tool::PointExtrude);
+            setFocus(Qt::OtherFocusReason);
+            setCursor(Qt::CrossCursor);
+            update();
+            DebugLog::instance().write(
+                QStringLiteral("beginPointExtrude selectedControlPoints=%1")
+                    .arg(pointSources.size()));
+            return activeTool_ == Tool::PointExtrude ? pointSources.size() : 0;
+        }
+
         QVector<ObjectId> selected = selectedShapeIndices_;
         if (selectedShapeIndex_.isValid() &&
             !selected.contains(selectedShapeIndex_)) {
@@ -2013,13 +2127,111 @@ public:
 
 
 
+    QHash<quint64, QSet<int>> selectedVertexControlPointTargets() const
+    {
+        QHash<quint64, QSet<int>> targets;
+        if (componentSelectionMode_ != ComponentSelectionMode::Vertex) {
+            return targets;
+        }
+
+        const QHash<quint64, QSet<int>> &selected =
+            componentSelections_[static_cast<int>(ComponentSelectionMode::Vertex)];
+        QSet<quint64> selectedWeldGroups;
+        for (auto selection = selected.cbegin(); selection != selected.cend();
+             ++selection) {
+            const ObjectId objectId = ObjectId::fromValue(selection.key());
+            const Shape *shape = document_.shape(objectId);
+            if (shape == nullptr || !document_.isObjectVisible(objectId) ||
+                !document_.isObjectEditable(objectId)) {
+                continue;
+            }
+
+            int pointCount = 0;
+            if (shape->geometryType == GeometryType::Point) {
+                pointCount = shape->points.size() == 1 ? 1 : 0;
+            } else if (shape->geometryType == GeometryType::NurbsSurface ||
+                       shape->geometryType == GeometryType::NurbsSolid) {
+                pointCount = selectedSurfaceControlNet(*shape)
+                                 .precisePointVertices.size();
+            } else {
+                const SceneObject *sceneObject = document_.object(objectId);
+                const Point3D offset = sceneObject != nullptr
+                                           ? sceneObject->placementTranslation
+                                           : Point3D{};
+                pointCount = curveControlPointVertices(*shape, offset).size();
+            }
+
+            QSet<int> validIndices;
+            for (const int index : selection.value()) {
+                if (index >= 0 && index < pointCount) {
+                    validIndices.insert(index);
+                    if (index < shape->controlPointWeldGroups.size()) {
+                        const quint64 group =
+                            shape->controlPointWeldGroups[index];
+                        if (group != 0) {
+                            selectedWeldGroups.insert(group);
+                        }
+                    }
+                }
+            }
+            if (!validIndices.isEmpty()) {
+                targets.insert(objectId.value(), std::move(validIndices));
+            }
+        }
+
+        if (!selectedWeldGroups.isEmpty()) {
+            for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
+                const ObjectId objectId = document_.objectIdAt(shapeIndex);
+                const Shape *shape = document_.shape(objectId);
+                if (shape == nullptr || !document_.isObjectVisible(objectId) ||
+                    !document_.isObjectEditable(objectId) ||
+                    curveSampler_.curvesForShape(*shape).isEmpty()) {
+                    continue;
+                }
+                QSet<int> &objectTargets = targets[objectId.value()];
+                for (int index = 0;
+                     index < shape->controlPointWeldGroups.size(); ++index) {
+                    if (selectedWeldGroups.contains(
+                            shape->controlPointWeldGroups[index])) {
+                        objectTargets.insert(index);
+                    }
+                }
+                if (objectTargets.isEmpty()) {
+                    targets.remove(objectId.value());
+                }
+            }
+        }
+        return targets;
+    }
+
+    QVector<ObjectId> controlPointTargetObjectIds(
+        const QHash<quint64, QSet<int>> &targets) const
+    {
+        QVector<ObjectId> objectIds;
+        for (int index = 0; index < document_.size(); ++index) {
+            const ObjectId objectId = document_.objectIdAt(index);
+            if (targets.contains(objectId.value())) {
+                objectIds.append(objectId);
+            }
+        }
+        return objectIds;
+    }
+
     bool beginRotate()
     {
-        QVector<ObjectId> selected = selectedShapeIndices_;
+        const QHash<quint64, QSet<int>> controlPointTargets =
+            selectedVertexControlPointTargets();
+        QVector<ObjectId> selected = controlPointTargets.isEmpty()
+                                         ? selectedShapeIndices_
+                                         : controlPointTargetObjectIds(
+                                               controlPointTargets);
         if (joinTool_.isActive()) {
-            selected = joinTool_.selectedObjectIds();
+            if (controlPointTargets.isEmpty()) {
+                selected = joinTool_.selectedObjectIds();
+            }
         }
-        if (selectedShapeIndex_.isValid() && objectIndex(selectedShapeIndex_) >= 0 &&
+        if (controlPointTargets.isEmpty() && selectedShapeIndex_.isValid() &&
+            objectIndex(selectedShapeIndex_) >= 0 &&
             !selected.contains(selectedShapeIndex_)) {
             selected.append(selectedShapeIndex_);
         }
@@ -2042,7 +2254,8 @@ public:
             rotateSnapIncrementDegrees(),
             rotateToolPreferences_.angleSnapStrengthDegrees);
         rotateTool_.beginSelection(validSelection,
-                                   rotateToolPreferences_.angleSnapEnabled);
+                                   rotateToolPreferences_.angleSnapEnabled,
+                                   controlPointTargets);
         updateDrawingWorkPlaneFromHover(QPointF(lastMousePosition_));
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
@@ -2054,8 +2267,14 @@ public:
 
     bool beginScale(ScaleMode mode)
     {
-        QVector<ObjectId> selected = selectedShapeIndices_;
-        if (selectedShapeIndex_.isValid() && !selected.contains(selectedShapeIndex_)) {
+        const QHash<quint64, QSet<int>> controlPointTargets =
+            selectedVertexControlPointTargets();
+        QVector<ObjectId> selected = controlPointTargets.isEmpty()
+                                         ? selectedShapeIndices_
+                                         : controlPointTargetObjectIds(
+                                               controlPointTargets);
+        if (controlPointTargets.isEmpty() && selectedShapeIndex_.isValid() &&
+            !selected.contains(selectedShapeIndex_)) {
             selected.append(selectedShapeIndex_);
         }
 
@@ -2071,7 +2290,7 @@ public:
         }
 
         setTool(Tool::Scale);
-        scaleTool_.beginSelection(validSelection, mode);
+        scaleTool_.beginSelection(validSelection, mode, controlPointTargets);
         setFocus(Qt::OtherFocusReason);
         setCursor(Qt::CrossCursor);
         publishScalePrompt();
@@ -2084,8 +2303,17 @@ public:
 
     bool beginMirror()
     {
+        const QHash<quint64, QSet<int>> controlPointTargets =
+            selectedVertexControlPointTargets();
+        if (!controlPointTargets.isEmpty()) {
+            DebugLog::instance().write(
+                QStringLiteral("beginMirror ignored control point selection"));
+            return false;
+        }
+
         QVector<ObjectId> selected = selectedShapeIndices_;
-        if (selectedShapeIndex_.isValid() && !selected.contains(selectedShapeIndex_)) {
+        if (selectedShapeIndex_.isValid() &&
+            !selected.contains(selectedShapeIndex_)) {
             selected.append(selectedShapeIndex_);
         }
 
@@ -4534,6 +4762,8 @@ protected:
         if (activeTool_ == Tool::Scale && scaleState().previewValid) {
             input.transformPreview.kind = ViewportRenderTransformKind::Scale;
             input.transformPreview.objectIds = scaleState().sourceObjectIds;
+            input.transformPreview.controlPointIndices =
+                scaleState().controlPointIndices;
             input.transformPreview.scaleBasePoint = scaleState().basePoint;
             input.transformPreview.scaleAxis = scaleState().previewAxis;
             input.transformPreview.scaleFactor = scaleState().previewFactor;
@@ -4543,6 +4773,8 @@ protected:
         } else if (activeTool_ == Tool::Rotate && rotateState().stage == 2) {
             input.transformPreview.kind = ViewportRenderTransformKind::Rotate;
             input.transformPreview.objectIds = rotateState().sourceObjectIds;
+            input.transformPreview.controlPointIndices =
+                rotateState().controlPointIndices;
             input.transformPreview.rotatePivot = rotateState().baseWorldPoint;
             input.transformPreview.rotateAxis = rotateState().frame.normal;
             input.transformPreview.rotateAngle = rotateState().previewAngle;
@@ -8423,6 +8655,65 @@ protected:
         }
 
         if (event->button() == Qt::LeftButton &&
+            activeTool_ == Tool::Select && !syntheticSelectionInput_ &&
+            (controlPointsVisible_ ||
+             componentSelectionMode_ == ComponentSelectionMode::Vertex) &&
+            !event->modifiers().testFlag(Qt::ShiftModifier)) {
+            int handleShapeIndex = -1;
+            int handleControlPointIndex = -1;
+            if (hitTestDisplayedControlPoint(screenPosition,
+                                             &handleShapeIndex,
+                                             &handleControlPointIndex)) {
+                const ObjectId objectId =
+                    shapes_.objectIdAt(handleShapeIndex);
+                if (!selection_.contains(objectId)) {
+                    clearComponentSelections();
+                    selection_.setObjectIds({objectId}, objectId);
+                    componentSelectionObject_ = objectId;
+                } else {
+                    selection_.setPrimaryObjectId(objectId);
+                }
+                if (componentSelectionMode_ ==
+                    ComponentSelectionMode::Vertex) {
+                    const int vertexModeIndex =
+                        static_cast<int>(ComponentSelectionMode::Vertex);
+                    const bool pointAlreadySelected =
+                        componentSelections_[vertexModeIndex]
+                            .value(objectId.value())
+                            .contains(handleControlPointIndex);
+                    if (!pointAlreadySelected) {
+                        clearComponentSelections();
+                    }
+                    componentSelectionObject_ = objectId;
+                    componentSelections_[vertexModeIndex][objectId.value()]
+                        .insert(handleControlPointIndex);
+                    activeComponentIndices_[vertexModeIndex] =
+                        handleControlPointIndex;
+                }
+                rawCursorWorld_ = rawWorldPosition;
+                cursorWorld_ = worldPosition;
+                lastWorldPosition_ = worldPosition;
+                cursorValid_ = true;
+
+                SelectTool *selectionTool = selectionToolController();
+                if (selectionTool != nullptr &&
+                    selectionTool->beginControlPointSelectionDrag(
+                        translatedInput, objectId, handleControlPointIndex,
+                        toolContext_) &&
+                    controlPointSelectionDragActive()) {
+                    DebugLog::instance().write(
+                        QStringLiteral("visible control point drag picked object=%1 index=%2")
+                            .arg(objectId.value())
+                            .arg(handleControlPointIndex));
+                    update();
+                    emitCoordinateUpdate();
+                    event->accept();
+                    return;
+                }
+            }
+        }
+
+        if (event->button() == Qt::LeftButton &&
             activeTool_ == Tool::Select && !syntheticSelectionInput_) {
             const int hitShapeIndex = hitTestShape(screenPosition);
             if (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
@@ -10729,8 +11020,325 @@ private:
         }
     }
 
+    bool rebuildCurveWithoutControlPoints(
+        Shape::NurbsCurve3D *curve,
+        const QSet<int> &selectedLocalIndices,
+        QHash<int, int> *oldToNewIndex) const
+    {
+        if (curve == nullptr || oldToNewIndex == nullptr ||
+            !validateNurbsCurve(*curve)) {
+            return false;
+        }
+        oldToNewIndex->clear();
+
+        QSet<int> removed = selectedLocalIndices;
+        const int lastIndex = curve->controlPoints.size() - 1;
+        if (lastIndex > 0) {
+            const QPointF delta = curve->controlPoints.first() -
+                                  curve->controlPoints.last();
+            const qreal firstNormal = curve->dimension == 3
+                ? curve->normalCoordinates.first() : 0.0;
+            const qreal lastNormal = curve->dimension == 3
+                ? curve->normalCoordinates.last() : 0.0;
+            const qreal dx = delta.x();
+            const qreal dy = delta.y();
+            const qreal dz = firstNormal - lastNormal;
+            if (dx * dx + dy * dy + dz * dz <= 1.0e-16 &&
+                (removed.contains(0) || removed.contains(lastIndex))) {
+                removed.insert(0);
+                removed.insert(lastIndex);
+            }
+        }
+
+        QVector<QPointF> points;
+        QVector<double> normals;
+        QVector<double> weights;
+        points.reserve(curve->controlPoints.size());
+        if (curve->dimension == 3) {
+            normals.reserve(curve->normalCoordinates.size());
+        }
+        weights.reserve(curve->weights.size());
+        for (int index = 0; index < curve->controlPoints.size(); ++index) {
+            if (removed.contains(index)) {
+                continue;
+            }
+            points.append(curve->controlPoints[index]);
+            if (curve->dimension == 3) {
+                normals.append(curve->normalCoordinates[index]);
+            }
+            weights.append(curve->weights[index]);
+            oldToNewIndex->insert(index, points.size() - 1);
+        }
+        if (points.size() < 2) {
+            curve->controlPoints = std::move(points);
+            curve->normalCoordinates = std::move(normals);
+            curve->weights = std::move(weights);
+            return true;
+        }
+
+        Shape::NurbsCurve3D rebuilt;
+        rebuilt.dimension = curve->dimension;
+        rebuilt.degree = std::min(curve->degree,
+                                  static_cast<int>(points.size()) - 1);
+        rebuilt.order = rebuilt.degree + 1;
+        rebuilt.rational = curve->rational;
+        rebuilt.controlPoints = std::move(points);
+        rebuilt.weights = curve->rational ? std::move(weights)
+                                          : QVector<double>(weights.size(), 1.0);
+        if (rebuilt.dimension == 3) {
+            rebuilt.normalCoordinates = std::move(normals);
+        }
+
+        const QVector<double> fullKnots = expandedNurbsKnotVector(*curve);
+        const double domainStart = fullKnots[curve->degree];
+        const double domainEnd = fullKnots[curve->controlPoints.size()];
+        const int count = rebuilt.controlPoints.size();
+        const int degree = rebuilt.degree;
+        QVector<double> rebuiltFullKnots;
+        rebuiltFullKnots.reserve(count + degree + 1);
+        for (int index = 0; index <= degree; ++index) {
+            rebuiltFullKnots.append(domainStart);
+        }
+        const int interiorCount = count - degree - 1;
+        for (int index = 1; index <= interiorCount; ++index) {
+            const qreal t = qreal(index) / (interiorCount + 1);
+            rebuiltFullKnots.append(domainStart +
+                                    (domainEnd - domainStart) * t);
+        }
+        for (int index = 0; index <= degree; ++index) {
+            rebuiltFullKnots.append(domainEnd);
+        }
+        rebuilt.knots = rebuiltFullKnots.mid(1,
+                                             rebuiltFullKnots.size() - 2);
+        if (!validateNurbsCurve(rebuilt)) {
+            return false;
+        }
+        *curve = std::move(rebuilt);
+        return true;
+    }
+
+    bool deleteSelectedControlPoints(
+        const QHash<quint64, QSet<int>> &targets)
+    {
+        QVector<ObjectId> objectsToDelete;
+        QVector<ObjectId> liveObjects;
+        int editedObjectCount = 0;
+        DocumentTransaction transaction = session_.beginTransaction();
+
+        for (int objectIndexValue = 0;
+             objectIndexValue < document_.size(); ++objectIndexValue) {
+            const ObjectId objectId = document_.objectIdAt(objectIndexValue);
+            const auto selected = targets.constFind(objectId.value());
+            if (selected == targets.cend()) {
+                continue;
+            }
+            const Shape *source = document_.shape(objectId);
+            if (source == nullptr) {
+                continue;
+            }
+            liveObjects.append(objectId);
+            if (source->geometryType == GeometryType::Point &&
+                selected.value().contains(0)) {
+                objectsToDelete.append(objectId);
+                continue;
+            }
+
+            if (source->geometryType == GeometryType::NurbsSurface ||
+                source->geometryType == GeometryType::NurbsSolid) {
+                const int count = selectedSurfaceControlNet(*source)
+                                      .precisePointVertices.size();
+                if (count <= 0 || selected.value().size() < count) {
+                    transaction.rollback();
+                    const QString message = QStringLiteral(
+                        "Delete cannot remove individual NURBS surface or solid control points; select all control points to delete the object");
+                    if (toolStatusUpdate_) {
+                        toolStatusUpdate_(message);
+                    }
+                    DebugLog::instance().write(message);
+                    return false;
+                }
+                objectsToDelete.append(objectId);
+                continue;
+            }
+
+            Shape *shape = transaction.editGeometry(objectId);
+            if (shape == nullptr) {
+                continue;
+            }
+            const bool hadWeldGroups =
+                !shape->controlPointWeldGroups.isEmpty();
+            QVector<quint64> rebuiltWeldGroups;
+            bool changed = false;
+            bool removeObject = false;
+
+            if (shape->geometryType == GeometryType::PolyCurve &&
+                !shape->components.isEmpty()) {
+                QVector<Shape::NurbsCurve3D> rebuiltComponents;
+                QVector<WorkPlaneFrame> rebuiltFrames;
+                int sourceGlobalIndex = 0;
+                int rebuiltGlobalIndex = 0;
+                const bool hadComponentFrames =
+                    shape->componentWorkPlaneFrames.size() ==
+                    shape->components.size();
+                for (int componentIndex = 0;
+                     componentIndex < shape->components.size();
+                     ++componentIndex) {
+                    Shape::NurbsCurve3D component =
+                        shape->components[componentIndex];
+                    const int originalComponentCount =
+                        component.controlPoints.size();
+                    const int componentGlobalStart = sourceGlobalIndex;
+                    QSet<int> localSelection;
+                    for (int index = 0;
+                         index < originalComponentCount; ++index) {
+                        if (selected.value().contains(sourceGlobalIndex + index)) {
+                            localSelection.insert(index);
+                        }
+                    }
+                    sourceGlobalIndex += originalComponentCount;
+                    if (localSelection.isEmpty()) {
+                        rebuiltComponents.append(component);
+                        if (hadComponentFrames) {
+                            rebuiltFrames.append(shapeComponentWorkPlaneFrame(
+                                *shape, componentIndex));
+                        }
+                        for (int index = 0;
+                             index < originalComponentCount; ++index) {
+                            const int oldIndex = componentGlobalStart + index;
+                            if (hadWeldGroups &&
+                                oldIndex < shape->controlPointWeldGroups.size()) {
+                                if (rebuiltWeldGroups.size() <= rebuiltGlobalIndex) {
+                                    rebuiltWeldGroups.resize(rebuiltGlobalIndex + 1);
+                                }
+                                rebuiltWeldGroups[rebuiltGlobalIndex] =
+                                    shape->controlPointWeldGroups[oldIndex];
+                            }
+                            ++rebuiltGlobalIndex;
+                        }
+                        continue;
+                    }
+
+                    QHash<int, int> oldToNewIndex;
+                    const bool valid = rebuildCurveWithoutControlPoints(
+                        &component, localSelection, &oldToNewIndex);
+                    if (!valid) {
+                        transaction.rollback();
+                        return false;
+                    }
+                    changed = true;
+                    if (component.controlPoints.size() < 2) {
+                        continue;
+                    }
+                    rebuiltComponents.append(component);
+                    if (hadComponentFrames) {
+                        rebuiltFrames.append(shapeComponentWorkPlaneFrame(
+                            *shape, componentIndex));
+                    }
+                    for (int oldIndex = 0;
+                         oldIndex < originalComponentCount; ++oldIndex) {
+                        const auto mapped = oldToNewIndex.constFind(oldIndex);
+                        if (mapped == oldToNewIndex.cend()) {
+                            continue;
+                        }
+                        const int newFlatIndex = rebuiltGlobalIndex + mapped.value();
+                        if (hadWeldGroups &&
+                            componentGlobalStart + oldIndex <
+                                shape->controlPointWeldGroups.size()) {
+                            if (rebuiltWeldGroups.size() <= newFlatIndex) {
+                                rebuiltWeldGroups.resize(newFlatIndex + 1);
+                            }
+                            rebuiltWeldGroups[newFlatIndex] =
+                                shape->controlPointWeldGroups[
+                                    componentGlobalStart + oldIndex];
+                        }
+                    }
+                    rebuiltGlobalIndex += component.controlPoints.size();
+                }
+                shape->components = std::move(rebuiltComponents);
+                shape->componentWorkPlaneFrames = hadComponentFrames
+                    ? std::move(rebuiltFrames)
+                    : QVector<WorkPlaneFrame>{};
+                shape->controlPointWeldGroups = hadWeldGroups
+                    ? std::move(rebuiltWeldGroups)
+                    : QVector<quint64>{};
+                shape->points = polyCurvePoints(shape->components);
+                removeObject = shape->components.isEmpty();
+            } else if (validateNurbsCurve(shape->nurbs)) {
+                QHash<int, int> oldToNewIndex;
+                const bool valid = rebuildCurveWithoutControlPoints(
+                    &shape->nurbs, selected.value(), &oldToNewIndex);
+                if (!valid) {
+                    transaction.rollback();
+                    return false;
+                }
+                changed = true;
+                removeObject = shape->nurbs.controlPoints.size() < 2;
+                shape->points = shape->nurbs.controlPoints;
+                if (hadWeldGroups) {
+                    for (int oldIndex = 0;
+                         oldIndex < oldToNewIndex.size(); ++oldIndex) {
+                        const auto mapped = oldToNewIndex.constFind(oldIndex);
+                        if (mapped != oldToNewIndex.cend() &&
+                            oldIndex < shape->controlPointWeldGroups.size()) {
+                            if (rebuiltWeldGroups.size() <= mapped.value()) {
+                                rebuiltWeldGroups.resize(mapped.value() + 1);
+                            }
+                            rebuiltWeldGroups[mapped.value()] =
+                                shape->controlPointWeldGroups[oldIndex];
+                        }
+                    }
+                    shape->controlPointWeldGroups =
+                        std::move(rebuiltWeldGroups);
+                }
+            } else {
+                continue;
+            }
+
+            if (removeObject) {
+                objectsToDelete.append(objectId);
+            } else if (changed) {
+                ++editedObjectCount;
+            }
+        }
+
+        if (editedObjectCount == 0 && objectsToDelete.isEmpty()) {
+            transaction.rollback();
+            DebugLog::instance().write(
+                QStringLiteral("delete selected control points skipped: unsupported or empty component selection"));
+            return false;
+        }
+        if (!objectsToDelete.isEmpty()) {
+            transaction.removeObjects(objectsToDelete);
+        }
+        if (!session_.commitTransaction(transaction)) {
+            return false;
+        }
+
+        clearSelection();
+        clearComponentSelections();
+        clearSelectionDragState();
+        selection_.clearActiveControlPoint();
+        dragHistoryRecorded_ = false;
+        currentDragSnap_ = DragSnapResult{};
+        dragSnapLocked_ = false;
+        update();
+        DebugLog::instance().write(
+            QStringLiteral("delete selected control points objects=%1 edited=%2 removed=%3")
+                .arg(liveObjects.size())
+                .arg(editedObjectCount)
+                .arg(objectsToDelete.size()));
+        return true;
+    }
+
     bool deleteSelectedShapes()
     {
+        if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+            const QHash<quint64, QSet<int>> controlPointTargets =
+                selectedVertexControlPointTargets();
+            if (!controlPointTargets.isEmpty()) {
+                return deleteSelectedControlPoints(controlPointTargets);
+            }
+        }
         QVector<ObjectId> liveObjectIds;
         liveObjectIds.reserve(selectedShapeIndices_.size());
         for (const ObjectId objectId : selectedShapeIndices_) {
@@ -10993,7 +11601,7 @@ private:
                         if (componentSelectionMode_ ==
                             ComponentSelectionMode::Vertex) {
                             for (const auto &endpoint :
-                                 curveEndpointVertices(candidateShape, offset)) {
+                                 vertexSelectionPoints(candidateShape, offset)) {
                                 QPointF projected;
                                 if (!viewportTransform_.worldPointToScreen(
                                         endpoint.second, size(), &projected) ||
@@ -13745,6 +14353,14 @@ private:
         return endpoints;
     }
 
+    QVector<QPair<int, Point3D>> vertexSelectionPoints(
+        const Shape &shape, const Point3D &worldOffset) const
+    {
+        return controlPointsVisible_
+            ? curveControlPointVertices(shape, worldOffset)
+            : curveEndpointVertices(shape, worldOffset);
+    }
+
     bool hitTestSelectedControlPoint(const QPointF &screenPosition,
                                      int *shapeIndex,
                                      int *controlPointIndex) const
@@ -13763,7 +14379,46 @@ private:
                                                            controlPointIndex);
     }
 
+    bool hitTestDisplayedControlPoint(const QPointF &screenPosition,
+                                      int *shapeIndex,
+                                      int *controlPointIndex) const
+    {
+        if (!controlPointsVisible_) {
+            if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                return hitTestDisplayedCurveEndpoint(screenPosition,
+                                                     shapeIndex,
+                                                     controlPointIndex);
+            }
+            return hitTestSelectedControlPoint(screenPosition, shapeIndex,
+                                               controlPointIndex);
+        }
+        return curveHitTester_.hitTestSelectedControlPoint(
+            document_, curveDisplayShapeIndices(), screenPosition,
+            viewportTransform_, size(), shapeIndex, controlPointIndex);
+    }
+
     bool hitTestSelectedCurveEndpoint(const QPointF &screenPosition,
+                                      int *shapeIndex,
+                                      int *controlPointIndex) const
+    {
+        return hitTestCurveEndpointInShapes(screenPosition,
+                                            controlPointShapeIndices(),
+                                            shapeIndex,
+                                            controlPointIndex);
+    }
+
+    bool hitTestDisplayedCurveEndpoint(const QPointF &screenPosition,
+                                       int *shapeIndex,
+                                       int *controlPointIndex) const
+    {
+        return hitTestCurveEndpointInShapes(screenPosition,
+                                            curveDisplayShapeIndices(),
+                                            shapeIndex,
+                                            controlPointIndex);
+    }
+
+    bool hitTestCurveEndpointInShapes(const QPointF &screenPosition,
+                                      const QVector<int> &candidateShapeIndices,
                                       int *shapeIndex,
                                       int *controlPointIndex) const
     {
@@ -13772,7 +14427,7 @@ private:
         int closestShapeIndex = -1;
         int closestControlPointIndex = -1;
 
-        for (const int candidateShapeIndex : controlPointShapeIndices()) {
+        for (const int candidateShapeIndex : candidateShapeIndices) {
             if (candidateShapeIndex < 0 || candidateShapeIndex >= shapes_.size()) {
                 continue;
             }
@@ -14477,7 +15132,7 @@ private:
                                            ? curveObject->placementTranslation
                                            : Point3D{};
                 if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
-                    const auto endpoints = curveEndpointVertices(shape, offset);
+                    const auto endpoints = vertexSelectionPoints(shape, offset);
                     qreal endpointScale = 1.0;
                     if (!endpoints.isEmpty()) {
                         const Point3D origin = endpoints.first().second;
@@ -18619,6 +19274,31 @@ private:
                                            controlPointSelectionDragActive(),
                                            controlPointIndex_,
                                            drawMarkers);
+        if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+            const QSet<int> &selectedControlPoints =
+                componentSelectionForObject(renderObject.objectId);
+            if (!selectedControlPoints.isEmpty()) {
+                painter.save();
+                painter.setRenderHint(QPainter::Antialiasing, true);
+                painter.setPen(QPen(QColor(QStringLiteral("#f0a45a")), 1.5));
+                painter.setBrush(QColor(QStringLiteral("#f0a45a")));
+                for (const auto &controlPoint : curveControlPointVertices(
+                         renderObject.shape,
+                         renderObject.placementTranslation)) {
+                    if (!selectedControlPoints.contains(controlPoint.first)) {
+                        continue;
+                    }
+                    QPointF screenPoint;
+                    if (!viewportTransform_.worldPointToScreenUnclipped(
+                            controlPoint.second, size(), &screenPoint)) {
+                        continue;
+                    }
+                    painter.drawRect(QRectF(screenPoint - QPointF(4.0, 4.0),
+                                            screenPoint + QPointF(4.0, 4.0)));
+                }
+                painter.restore();
+            }
+        }
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 

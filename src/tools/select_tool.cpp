@@ -33,17 +33,10 @@ bool SelectTool::handleMousePress(const ToolInput &input, ToolContext &context)
                                                       !additive);
     SelectionModel &selection = context.selection();
     if (!additive && hit.isControlPoint()) {
-        selection.setPrimaryObjectId(hit.objectId);
-        selection.setActiveControlPoint(hit.objectId, hit.controlPointIndex);
-        beginControlPointDrag(hit.objectId,
-                              hit.controlPointIndex,
-                              input.screenPosition,
-                              input.rawWorldPosition);
-        context.beginSelectionGesture(SelectionGestureKind::BeginControlPointDrag,
-                                      input,
-                                      hit,
-                                      false);
-        return true;
+        return beginControlPointSelectionDrag(input,
+                                              hit.objectId,
+                                              hit.controlPointIndex,
+                                              context);
     }
 
     selection.clearActiveControlPoint();
@@ -80,6 +73,29 @@ bool SelectTool::handleMousePress(const ToolInput &input, ToolContext &context)
                                       hit,
                                       false);
     }
+    return true;
+}
+
+bool SelectTool::beginControlPointSelectionDrag(const ToolInput &input,
+                                                ObjectId objectId,
+                                                int controlPointIndex,
+                                                ToolContext &context)
+{
+    if (input.button != Qt::LeftButton || !objectId.isValid() ||
+        controlPointIndex < 0 || !context.selection().contains(objectId)) {
+        return false;
+    }
+
+    context.selection().setPrimaryObjectId(objectId);
+    context.selection().setActiveControlPoint(objectId, controlPointIndex);
+    beginControlPointDrag(objectId,
+                          controlPointIndex,
+                          input.screenPosition,
+                          input.rawWorldPosition);
+    context.beginSelectionGesture(SelectionGestureKind::BeginControlPointDrag,
+                                  input,
+                                  SelectionHit{objectId, controlPointIndex},
+                                  false);
     return true;
 }
 

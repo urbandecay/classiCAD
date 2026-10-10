@@ -11,6 +11,7 @@
 
 #include <QColor>
 #include <QHash>
+#include <QSet>
 #include <QSharedPointer>
 #include <QSize>
 #include <QString>
@@ -30,6 +31,7 @@ enum class ViewportRenderTransformKind {
 struct ViewportRenderTransform {
     ViewportRenderTransformKind kind = ViewportRenderTransformKind::None;
     QVector<ObjectId> objectIds;
+    QHash<quint64, QSet<int>> controlPointIndices;
 
     QPointF scaleBasePoint;
     QPointF scaleAxis{1.0, 0.0};

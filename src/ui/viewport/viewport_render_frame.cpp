@@ -104,12 +104,26 @@ ViewportRenderFrame buildViewportRenderFrame(
                     &entry.shape, entry.placementTranslation)) {
                 entry.placementTranslation = {};
             }
-            scaleShapeGeometry(&entry.shape,
-                               preview.scaleBasePoint,
-                               preview.scaleAxis,
-                               preview.scaleFactor,
-                               preview.scaleMode == ScaleMode::OneD,
-                               preview.scaleSurfaceFrame);
+            const auto componentTargets =
+                preview.controlPointIndices.constFind(entry.objectId.value());
+            if (componentTargets != preview.controlPointIndices.cend()) {
+                transformShapeControlPoints(
+                    &entry.shape, componentTargets.value(),
+                    [&preview](const Point3D &point) {
+                        return scalePointInFrame(
+                            point, preview.scaleBasePoint,
+                            preview.scaleAxis, preview.scaleFactor,
+                            preview.scaleMode == ScaleMode::OneD,
+                            preview.scaleSurfaceFrame);
+                    });
+            } else {
+                scaleShapeGeometry(&entry.shape,
+                                   preview.scaleBasePoint,
+                                   preview.scaleAxis,
+                                   preview.scaleFactor,
+                                   preview.scaleMode == ScaleMode::OneD,
+                                   preview.scaleSurfaceFrame);
+            }
         } else if (transformObject &&
                    input.transformPreview.kind == ViewportRenderTransformKind::Rotate) {
             entry.rotatePreview = true;
@@ -119,10 +133,22 @@ ViewportRenderFrame buildViewportRenderFrame(
                     &entry.shape, entry.placementTranslation)) {
                 entry.placementTranslation = {};
             }
-            rotateShapeGeometry(&entry.shape,
-                                preview.rotatePivot,
-                                preview.rotateAxis,
-                                preview.rotateAngle);
+            const auto componentTargets =
+                preview.controlPointIndices.constFind(entry.objectId.value());
+            if (componentTargets != preview.controlPointIndices.cend()) {
+                transformShapeControlPoints(
+                    &entry.shape, componentTargets.value(),
+                    [&preview](const Point3D &point) {
+                        return rotatePointAboutAxis(
+                            point, preview.rotatePivot,
+                            preview.rotateAxis, preview.rotateAngle);
+                    });
+            } else {
+                rotateShapeGeometry(&entry.shape,
+                                    preview.rotatePivot,
+                                    preview.rotateAxis,
+                                    preview.rotateAngle);
+            }
         }
 
         frame.objectIndices.insert(entry.objectId.value(), frame.objects.size());

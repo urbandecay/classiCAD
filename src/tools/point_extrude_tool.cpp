@@ -64,8 +64,20 @@ ToolId PointExtrudeTool::id() const
     return ToolId::PointExtrude;
 }
 
+void PointExtrudeTool::setControlPointSources(
+    const QVector<ControlPointSource> &sources)
+{
+    stagedControlPointSources_ = sources;
+    stagedControlPointSourcesRequested_ = true;
+}
+
 void PointExtrudeTool::begin(ToolContext &context)
 {
+    const QVector<ControlPointSource> stagedSources =
+        stagedControlPointSources_;
+    const bool useStagedSources = stagedControlPointSourcesRequested_;
+    stagedControlPointSources_.clear();
+    stagedControlPointSourcesRequested_ = false;
     sourcePoints_.clear();
     inputFrame_ = {};
     cursorPoint_ = {};
@@ -76,8 +88,21 @@ void PointExtrudeTool::begin(ToolContext &context)
     hasCursorPoint_ = false;
     snap_ = {};
 
-    const QVector<ObjectId> &selectedObjects = context.selection().objectIds();
-    for (const ObjectId selectedObjectId : selectedObjects) {
+    if (useStagedSources) {
+        for (const ControlPointSource &staged : stagedSources) {
+            if (!isValidWorkPlaneFrame(staged.workPlaneFrame)) {
+                continue;
+            }
+            SourcePoint source;
+            source.objectId = staged.objectId;
+            source.worldPoint = staged.worldPoint;
+            source.workPlaneFrame = staged.workPlaneFrame;
+            source.workPlaneFrame.origin = staged.worldPoint;
+            sourcePoints_.append(source);
+        }
+    } else {
+        const QVector<ObjectId> &selectedObjects = context.selection().objectIds();
+        for (const ObjectId selectedObjectId : selectedObjects) {
         const Shape *selectedShape = context.document().shape(selectedObjectId);
         if (selectedShape == nullptr ||
             !context.document().isObjectVisible(selectedObjectId) ||
@@ -89,10 +114,18 @@ void PointExtrudeTool::begin(ToolContext &context)
             selectedShape->points.size() == 1 &&
             context.document().isObjectVisible(selectedObjectId) &&
             context.document().isObjectEditable(selectedObjectId)) {
+            const SceneObject *sceneObject =
+                context.document().object(selectedObjectId);
+            const Point3D placement = sceneObject != nullptr
+                                          ? sceneObject->placementTranslation
+                                          : Point3D{};
             SourcePoint source;
             source.objectId = selectedObjectId;
             source.worldPoint = shapePointToWorld(*selectedShape,
                                                   selectedShape->points.first());
+            source.worldPoint.x += placement.x;
+            source.worldPoint.y += placement.y;
+            source.worldPoint.z += placement.z;
             source.workPlaneFrame = shapeWorkPlaneFrame(*selectedShape);
             source.workPlaneFrame.origin = source.worldPoint;
             if (isValidWorkPlaneFrame(source.workPlaneFrame)) {
@@ -131,6 +164,7 @@ void PointExtrudeTool::begin(ToolContext &context)
                     source.curve.controlPoints.first(), source.workPlaneFrame);
                 sourcePoints_.append(source);
             }
+        }
         }
     }
 

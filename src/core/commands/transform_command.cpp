@@ -10,6 +10,23 @@ bool TransformCommand::apply(Document &document,
                              const GeometryEdit &edit,
                              int *editedCount)
 {
+    if (!edit) {
+        if (editedCount != nullptr) {
+            *editedCount = 0;
+        }
+        return false;
+    }
+    return applyPerObject(
+        document, transaction, objectIds,
+        [&edit](ObjectId, Shape &shape) { edit(shape); }, editedCount);
+}
+
+bool TransformCommand::applyPerObject(Document &document,
+                                      DocumentTransaction &transaction,
+                                      const QVector<ObjectId> &objectIds,
+                                      const ObjectGeometryEdit &edit,
+                                      int *editedCount)
+{
     if (editedCount != nullptr) {
         *editedCount = 0;
     }
@@ -37,7 +54,7 @@ bool TransformCommand::apply(Document &document,
                 continue;
             }
         }
-        edit(*shape);
+        edit(objectId, *shape);
         ++count;
     }
     if (editedCount != nullptr) {

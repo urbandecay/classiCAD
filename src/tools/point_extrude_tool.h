@@ -6,7 +6,15 @@ namespace classiCAD {
 
 class PointExtrudeTool final : public InteractionTool {
 public:
+    struct ControlPointSource {
+        ObjectId objectId = ObjectId::invalid();
+        Point3D worldPoint;
+        WorkPlaneFrame workPlaneFrame;
+    };
+
     ToolId id() const override;
+    void setControlPointSources(
+        const QVector<ControlPointSource> &sources);
     void begin(ToolContext &context) override;
     bool handleMousePress(const ToolInput &input, ToolContext &context) override;
     bool handleMouseMove(const ToolInput &input, ToolContext &context) override;
@@ -34,6 +42,8 @@ private:
     void publish(ToolContext &context);
 
     QVector<SourcePoint> sourcePoints_;
+    QVector<ControlPointSource> stagedControlPointSources_;
+    bool stagedControlPointSourcesRequested_ = false;
     WorkPlaneFrame inputFrame_;
     Point3D cursorPoint_;
     ToolInput lastInput_;

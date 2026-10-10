@@ -174,12 +174,15 @@ QString ScaleTool::prompt() const
                      .arg(scaleModeName(interactionState_.mode));
 }
 
-void ScaleTool::beginSelection(const QVector<ObjectId> &sourceObjectIds,
-                               ScaleMode mode)
+void ScaleTool::beginSelection(
+    const QVector<ObjectId> &sourceObjectIds,
+    ScaleMode mode,
+    const QHash<quint64, QSet<int>> &controlPointIndices)
 {
     resetInteraction();
     interactionState_.sourceObjectIds = sourceObjectIds;
     interactionState_.mode = mode;
+    interactionState_.controlPointIndices = controlPointIndices;
 }
 
 void ScaleTool::resetInteraction()
@@ -243,14 +246,36 @@ bool ScaleTool::commitScale(qreal factor,
         const InteractionState &state = interactionState_;
         const WorkPlaneFrame surfaceFrame = context.viewportTransform().workPlaneFrame();
         DocumentTransaction transaction = context.beginTransaction();
-        const bool edited = TransformCommand::apply(
-            context.document(), transaction, state.sourceObjectIds,
-            [base = state.basePoint, axisDirection, factor,
-             oneDimensional = state.mode == ScaleMode::OneD,
-             surfaceFrame](Shape &shape) {
-                scaleShapeGeometry(&shape, base, axisDirection, factor,
-                                   oneDimensional, surfaceFrame);
-            });
+        const bool componentEdit = !state.controlPointIndices.isEmpty();
+        const bool edited = componentEdit
+            ? TransformCommand::applyPerObject(
+                  context.document(), transaction, state.sourceObjectIds,
+                  [base = state.basePoint, axisDirection, factor,
+                   oneDimensional = state.mode == ScaleMode::OneD,
+                   surfaceFrame,
+                   indices = state.controlPointIndices](ObjectId objectId,
+                                                        Shape &shape) {
+                      const auto targets = indices.constFind(objectId.value());
+                      if (targets == indices.cend()) {
+                          return;
+                      }
+                      transformShapeControlPoints(
+                          &shape, targets.value(),
+                          [base, axisDirection, factor, oneDimensional,
+                           surfaceFrame](const Point3D &point) {
+                              return scalePointInFrame(
+                                  point, base, axisDirection, factor,
+                                  oneDimensional, surfaceFrame);
+                          });
+                  })
+            : TransformCommand::apply(
+                  context.document(), transaction, state.sourceObjectIds,
+                  [base = state.basePoint, axisDirection, factor,
+                   oneDimensional = state.mode == ScaleMode::OneD,
+                   surfaceFrame](Shape &shape) {
+                      scaleShapeGeometry(&shape, base, axisDirection, factor,
+                                         oneDimensional, surfaceFrame);
+                  });
         if (edited) {
             updateAssociativeDimensions(context.document(), context.curveSampler());
             context.commitTransaction(transaction);

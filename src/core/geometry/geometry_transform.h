@@ -2,10 +2,13 @@
 
 #include "core/document/shape.h"
 
+#include <QSet>
+#include <functional>
+
 namespace classiCAD {
 
-// Bake a scene object's world-space translation into a spatial NURBS shape.
-// Used only when a non-translation geometry edit needs world-space CVs.
+// Bake a scene object's world-space translation into its geometry. Used when
+// a non-translation edit needs geometry in the same world-space frame.
 bool bakeShapePlacementTranslation(Shape *shape,
                                    const Point3D &translation);
 
@@ -47,5 +50,24 @@ bool rotateShapeGeometry(Shape *shape,
                          const Point3D &pivot,
                          const Point3D &axis,
                          qreal angle);
+
+// Transforms only selected control vertices in world space while preserving
+// each curve's local frame, NURBS parameters, and rational data.
+bool transformShapeControlPoints(
+    Shape *shape,
+    const QSet<int> &controlPointIndices,
+    const std::function<Point3D(const Point3D &)> &transform);
+
+Point3D rotatePointAboutAxis(const Point3D &point,
+                             const Point3D &pivot,
+                             const Point3D &axis,
+                             qreal angle);
+
+Point3D scalePointInFrame(const Point3D &point,
+                          const QPointF &base,
+                          const QPointF &axisDirection,
+                          qreal factor,
+                          bool oneDimensional,
+                          const WorkPlaneFrame &surfaceFrame);
 
 } // namespace classiCAD

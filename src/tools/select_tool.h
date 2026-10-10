@@ -15,6 +15,11 @@ public:
     bool handleKey(const ToolInput &input, ToolContext &context) override;
     ToolStatus status() const override;
 
+    bool beginControlPointSelectionDrag(const ToolInput &input,
+                                        ObjectId objectId,
+                                        int controlPointIndex,
+                                        ToolContext &context);
+
     void beginSelectionBox(const QPointF &screenPosition, bool additive);
     void updateSelectionBox(const QPointF &screenPosition);
     void cancelSelectionBox();

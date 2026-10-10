@@ -38,6 +38,22 @@ QVector3D asVector(const Point3D &point)
             static_cast<float>(point.z)};
 }
 
+QMatrix4x4 cameraViewMatrix(const ViewportTransform &transform,
+                            const Point3D &eye)
+{
+    const Point3D outward = transform.viewDirection();
+    QMatrix4x4 view;
+    // This lookAt only sees unit-sized orientation vectors. Applying the
+    // camera translation afterward avoids deriving the view rotation by
+    // subtracting two large, float-rounded world positions.
+    view.lookAt(asVector(outward), QVector3D(0.0f, 0.0f, 0.0f),
+                asVector(transform.viewUp()));
+    view.translate(asVector({outward.x - eye.x,
+                             outward.y - eye.y,
+                             outward.z - eye.z}));
+    return view;
+}
+
 Point3D subtract(const Point3D &first, const Point3D &second)
 {
     return {first.x - second.x, first.y - second.y, first.z - second.z};
@@ -119,7 +135,6 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
     const ViewportCameraState camera = transform.cameraState();
     const ViewportCameraPreferences cameraPreferences = transform.cameraPreferences();
     const Point3D outward = transform.viewDirection();
-    const Point3D up = transform.viewUp();
     const Point3D target = transform.viewTarget();
     const ProjectionClipRange clipRange =
         projectionClipRange(transform, viewportSize);
@@ -132,8 +147,11 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
         *renderCameraPosition = eye;
     }
 
-    QMatrix4x4 view;
-    view.lookAt(asVector(eye), asVector(target), asVector(up));
+    // Build the view rotation from the unit camera orientation, then apply
+    // the world-space camera translation separately. Passing large world
+    // eye/target positions to QMatrix4x4::lookAt() makes it subtract floats;
+    // at far zoom that can corrupt the direction vector itself.
+    QMatrix4x4 view = cameraViewMatrix(transform, eye);
 
     QMatrix4x4 projection;
     if (camera.perspective) {
@@ -180,8 +198,10 @@ QMatrix4x4 gridViewProjection(const ViewportTransform &transform,
         *renderCameraPosition = transform.cameraPosition(viewportSize);
     }
 
-    QMatrix4x4 view;
-    view.lookAt(asVector(eye), asVector(target), asVector(transform.viewUp()));
+    // Keep the one-unit orthographic grid camera offset out of the lookAt
+    // direction calculation. A large cursor-anchored view target can otherwise
+    // round eye and target to the same QVector3D float and rotate the grid.
+    QMatrix4x4 view = cameraViewMatrix(transform, eye);
 
     const qreal zoom = std::max<qreal>(
         transform.viewScalePixelsPerWorldUnit(viewportSize), 1.0e-8);

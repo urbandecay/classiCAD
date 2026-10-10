@@ -444,3 +444,16 @@ misread or implemented incorrectly.
   preserve their Z coordinate.
 - [ ] Repeat the vertex snap checks with `G`/Grab on a surface and a solid,
   including a connected CV shared across faces and an axis-constrained move.
+
+## Blender viewport zoom findings
+
+- Blender's wheel zoom applies its distance range in both perspective and
+  orthographic views. The far limit comes from `clip_end * 10`; a fixed
+  10,000-unit orthographic cap makes zoom-out stop early whenever the user has
+  raised the clip end for large scenes. Derive the orthographic limit from the
+  same camera preference as the perspective limit.
+- The grid's orthographic view matrix must keep camera orientation independent
+  of large world-space view offsets. Constructing `lookAt(target + direction,
+  target, up)` makes Qt subtract two float-rounded positions; at far zoom, the
+  one-unit direction can collapse and visibly rotate the grid. Build the view
+  rotation from the stored unit camera orientation, then apply translation.

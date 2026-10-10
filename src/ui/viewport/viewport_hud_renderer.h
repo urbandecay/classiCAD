@@ -19,6 +19,7 @@ struct ViewportHudState {
     bool lineCommandActive = false;
     QString lineCommandStatus;
     QString pointToolInstructions;
+    bool pointExtrudeWeldEnabled = true;
     int rotateStep = 0;
     bool rotateAngleSnapEnabled = false;
     bool rotateAngleInputActive = false;

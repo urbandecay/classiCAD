@@ -485,6 +485,19 @@ misread or implemented incorrectly.
 - [ ] Repeat the vertex snap checks with `G`/Grab on a surface and a solid,
   including a connected CV shared across faces and an axis-constrained move.
 
+## Extrude weld toggle port findings
+
+- In the supplied add-on, the active modal handler maps `W` to the global
+  `auto_weld` flag (except Move and Rotate), and geometry commit invokes the
+  weld manager on the newly created vertices and edges. There is no matching
+  extrusion-specific handler to copy directly. For classiCAD's selection-based
+  Extrude, map that option to explicit weld groups between the source control
+  points and the extrusion's copied base boundary; keep the toggle visible in
+  the Extrude HUD and make `W` update the preview/status immediately.
+- A curve extrusion's base CVs occupy every other control point in its ruled
+  surface net. Persist those weld groups on the surface and include surface and
+  loose-point control points in the same linked-move path as curve CVs.
+
 ## Blender viewport zoom findings
 
 - Blender's wheel zoom applies its distance range in both perspective and

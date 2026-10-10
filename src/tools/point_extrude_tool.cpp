@@ -12,6 +12,7 @@
 #include "core/geometry/nurbs_surface_factory.h"
 
 #include <cmath>
+#include <limits>
 
 namespace classiCAD {
 namespace {
@@ -92,6 +93,7 @@ void PointExtrudeTool::begin(ToolContext &context)
     lastInput_ = {};
     constraintAxisKey_ = 0;
     normalConstraint_ = false;
+    weldEnabled_ = true;
     hasLastInput_ = false;
     hasCursorPoint_ = false;
     snap_ = {};
@@ -105,6 +107,7 @@ void PointExtrudeTool::begin(ToolContext &context)
             source.objectId = staged.objectId;
             source.worldPoint = staged.worldPoint;
             source.workPlaneFrame = staged.workPlaneFrame;
+            source.sourceControlPointIndex = staged.controlPointIndex;
             source.workPlaneFrame.origin = staged.worldPoint;
             sourcePoints_.append(source);
         }
@@ -117,6 +120,8 @@ void PointExtrudeTool::begin(ToolContext &context)
             source.objectId = staged.objectId;
             source.curve = staged.curve;
             source.workPlaneFrame = staged.workPlaneFrame;
+            source.sourceControlPointIndices =
+                staged.sourceControlPointIndices;
             const qreal normalCoordinate = source.curve.dimension == 3
                                                ? source.curve.normalCoordinates.first()
                                                : 0.0;
@@ -148,6 +153,7 @@ void PointExtrudeTool::begin(ToolContext &context)
             source.objectId = selectedObjectId;
             source.worldPoint = shapePointToWorld(*selectedShape,
                                                   selectedShape->points.first());
+            source.sourceControlPointIndex = 0;
             source.worldPoint.x += placement.x;
             source.worldPoint.y += placement.y;
             source.worldPoint.z += placement.z;
@@ -176,11 +182,23 @@ void PointExtrudeTool::begin(ToolContext &context)
             sourcePoints_.append(source);
         } else {
             const auto curves = context.curveSampler().curvesForShape(*selectedShape);
+            int firstControlPointIndex = 0;
             for (int index = 0; index < curves.size(); ++index) {
+                const int curveFirstControlPointIndex =
+                    firstControlPointIndex;
+                firstControlPointIndex += curves[index].controlPoints.size();
                 if (!validateNurbsCurve(curves[index])) continue;
                 SourcePoint source;
                 source.objectId = selectedObjectId;
                 source.curve = curves[index];
+                source.sourceControlPointIndices.reserve(
+                    curves[index].controlPoints.size());
+                for (int controlPointIndex = 0;
+                     controlPointIndex < curves[index].controlPoints.size();
+                     ++controlPointIndex) {
+                    source.sourceControlPointIndices.append(
+                        curveFirstControlPointIndex + controlPointIndex);
+                }
                 const SceneObject *sceneObject =
                     context.document().object(selectedObjectId);
                 const Point3D placement = sceneObject != nullptr
@@ -266,6 +284,12 @@ bool PointExtrudeTool::handleKey(const ToolInput &input, ToolContext &context)
         context.finishTool(ToolId::Select);
         return true;
     }
+    if (input.key == Qt::Key_W) {
+        weldEnabled_ = !weldEnabled_;
+        updateStatus();
+        publish(context);
+        return true;
+    }
     if (input.key == Qt::Key_X || input.key == Qt::Key_Y ||
         input.key == Qt::Key_Z) {
         normalConstraint_ = false;
@@ -306,7 +330,7 @@ void PointExtrudeTool::commit(ToolContext &context)
         return;
     }
 
-    const QVector<Shape> lines = makeLineShapes(cursorPoint_);
+    QVector<Shape> lines = makeLineShapes(cursorPoint_);
     if (lines.isEmpty() || lines.size() != sourcePoints_.size()) {
         status_.text = QStringLiteral("Extrude failed to create geometry");
         status_.canCommit = false;
@@ -315,6 +339,174 @@ void PointExtrudeTool::commit(ToolContext &context)
     }
 
     DocumentTransaction transaction = context.beginTransaction();
+    if (weldEnabled_) {
+        quint64 nextWeldGroup = 1;
+        for (int objectIndex = 0;
+             objectIndex < context.document().size(); ++objectIndex) {
+            const Shape *shape = context.document().shape(
+                context.document().objectIdAt(objectIndex));
+            if (shape == nullptr) {
+                continue;
+            }
+            for (const quint64 group : shape->controlPointWeldGroups) {
+                if (group >= nextWeldGroup &&
+                    group < std::numeric_limits<quint64>::max()) {
+                    nextWeldGroup = group + 1;
+                }
+            }
+        }
+
+        const auto controlPointCount = [](const Shape &shape) -> int {
+            if (shape.geometryType == GeometryType::Point) {
+                return shape.points.size();
+            }
+            if (shape.geometryType == GeometryType::NurbsSurface) {
+                return shape.nurbsSurface.controlPoints.size();
+            }
+            if (shape.geometryType == GeometryType::PolyCurve) {
+                int count = 0;
+                for (const Shape::NurbsCurve2D &component : shape.components) {
+                    count += component.controlPoints.size();
+                }
+                return count;
+            }
+            switch (shape.geometryType) {
+            case GeometryType::Line:
+            case GeometryType::Arc:
+            case GeometryType::Bezier:
+            case GeometryType::Nurbs:
+            case GeometryType::Rectangle:
+            case GeometryType::Circle:
+            case GeometryType::Ellipse:
+            case GeometryType::Polygon:
+                return shape.nurbs.controlPoints.size();
+            default:
+                return 0;
+            }
+        };
+        const auto ensureGroups = [&controlPointCount](Shape *shape) {
+            if (shape == nullptr) {
+                return false;
+            }
+            const int count = controlPointCount(*shape);
+            if (count <= 0) {
+                return false;
+            }
+            if (shape->controlPointWeldGroups.isEmpty()) {
+                shape->controlPointWeldGroups.fill(0, count);
+            }
+            return shape->controlPointWeldGroups.size() == count;
+        };
+        const auto assignGroup = [&nextWeldGroup](Shape *sourceShape,
+                                                  int sourceIndex,
+                                                  Shape *extrudedShape,
+                                                  int extrudedIndex) {
+            if (sourceShape == nullptr || extrudedShape == nullptr ||
+                sourceIndex < 0 ||
+                sourceIndex >= sourceShape->controlPointWeldGroups.size() ||
+                extrudedIndex < 0 ||
+                extrudedIndex >= extrudedShape->controlPointWeldGroups.size()) {
+                return false;
+            }
+            quint64 group = sourceShape->controlPointWeldGroups[sourceIndex];
+            if (group == 0) {
+                if (nextWeldGroup == 0 ||
+                    nextWeldGroup == std::numeric_limits<quint64>::max()) {
+                    return false;
+                }
+                group = nextWeldGroup++;
+                sourceShape->controlPointWeldGroups[sourceIndex] = group;
+            }
+            extrudedShape->controlPointWeldGroups[extrudedIndex] = group;
+            return true;
+        };
+
+        for (int index = 0; index < sourcePoints_.size(); ++index) {
+            SourcePoint &source = sourcePoints_[index];
+            if (!source.objectId.isValid() ||
+                !source.surface.controlPoints.isEmpty() ||
+                !lines[index].controlPointWeldGroups.isEmpty()) {
+                continue;
+            }
+            const Shape *sourceShapeRead =
+                context.document().shape(source.objectId);
+            if (sourceShapeRead == nullptr ||
+                controlPointCount(*sourceShapeRead) <= 0) {
+                continue;
+            }
+            const int surfacePointCount =
+                lines[index].nurbsSurface.controlPoints.size();
+            if (!source.curve.controlPoints.isEmpty()) {
+                if (surfacePointCount !=
+                    source.sourceControlPointIndices.size() * 2) {
+                    continue;
+                }
+                bool hasValidSourceMapping = true;
+                for (const int sourceIndex :
+                     source.sourceControlPointIndices) {
+                    hasValidSourceMapping = hasValidSourceMapping &&
+                        sourceIndex >= 0 &&
+                        sourceIndex < controlPointCount(*sourceShapeRead);
+                }
+                if (!hasValidSourceMapping) {
+                    continue;
+                }
+            } else if (source.sourceControlPointIndex < 0) {
+                continue;
+            } else if (source.sourceControlPointIndex >=
+                       controlPointCount(*sourceShapeRead)) {
+                continue;
+            }
+            if (!sourceShapeRead->controlPointWeldGroups.isEmpty() &&
+                sourceShapeRead->controlPointWeldGroups.size() !=
+                    controlPointCount(*sourceShapeRead)) {
+                continue;
+            }
+            Shape *sourceShape = transaction.editGeometry(source.objectId);
+            if (sourceShape == nullptr || !ensureGroups(sourceShape)) {
+                transaction.rollback();
+                status_.text = QStringLiteral("Extrude failed to weld source geometry");
+                status_.canCommit = false;
+                publish(context);
+                return;
+            }
+            if (!source.curve.controlPoints.isEmpty()) {
+                lines[index].controlPointWeldGroups.fill(0, surfacePointCount);
+                bool mappedAll = true;
+                for (int curvePoint = 0;
+                     curvePoint < source.sourceControlPointIndices.size();
+                     ++curvePoint) {
+                    mappedAll = assignGroup(
+                                    sourceShape,
+                                    source.sourceControlPointIndices[curvePoint],
+                                    &lines[index], curvePoint * 2) && mappedAll;
+                }
+                if (!mappedAll) {
+                    transaction.rollback();
+                    status_.text = QStringLiteral("Extrude failed to weld spline boundary");
+                    status_.canCommit = false;
+                    publish(context);
+                    return;
+                }
+            } else if (source.sourceControlPointIndex >= 0) {
+                if (lines[index].geometryType != GeometryType::Line ||
+                    !validateNurbsCurve(lines[index].nurbs)) {
+                    continue;
+                }
+                lines[index].controlPointWeldGroups.fill(
+                    0, lines[index].nurbs.controlPoints.size());
+                if (!assignGroup(sourceShape, source.sourceControlPointIndex,
+                                 &lines[index], 0)) {
+                    transaction.rollback();
+                    status_.text = QStringLiteral("Extrude failed to weld source point");
+                    status_.canCommit = false;
+                    publish(context);
+                    return;
+                }
+            }
+        }
+    }
+
     for (int index = 0; index < sourcePoints_.size(); ++index) {
         const SourcePoint &source = sourcePoints_[index];
         if (!source.surface.controlPoints.isEmpty()) {
@@ -596,6 +788,14 @@ void PointExtrudeTool::updateStatus()
     } else if (normalConstraint_) {
         status_.text += QStringLiteral(" • face normal");
     }
+    status_.text += weldEnabled_
+        ? QStringLiteral(" • W Weld on")
+        : QStringLiteral(" • W Weld off");
+}
+
+bool PointExtrudeTool::weldEnabled() const
+{
+    return weldEnabled_;
 }
 
 void PointExtrudeTool::publish(ToolContext &context)

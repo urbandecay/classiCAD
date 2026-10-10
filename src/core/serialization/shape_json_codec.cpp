@@ -658,7 +658,11 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         object.value(QStringLiteral("controlPointWeldGroups"));
     if (!weldGroupsValue.isUndefined()) {
         int controlPointCount = 0;
-        if (geometryType == GeometryType::PolyCurve) {
+        if (geometryType == GeometryType::Point) {
+            controlPointCount = points.size();
+        } else if (geometryType == GeometryType::NurbsSurface) {
+            controlPointCount = nurbsSurface.controlPoints.size();
+        } else if (geometryType == GeometryType::PolyCurve) {
             for (const Shape::NurbsCurve2D &component : components) {
                 controlPointCount += component.controlPoints.size();
             }

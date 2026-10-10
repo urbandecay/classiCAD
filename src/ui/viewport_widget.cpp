@@ -2003,6 +2003,7 @@ public:
                 const Point3D offset = sceneObject->placementTranslation;
                 const auto makePointSource =
                     [&](const Point3D &point, WorkPlaneFrame frame,
+                        int controlPointIndex,
                         PointExtrudeTool::ControlPointSource *source) {
                         if (source == nullptr) {
                             return false;
@@ -2019,12 +2020,15 @@ public:
                         source->objectId = objectId;
                         source->worldPoint = point;
                         source->workPlaneFrame = frame;
+                        source->controlPointIndex = controlPointIndex;
                         return true;
                     };
                 const auto appendPointSource =
-                    [&](const Point3D &point, WorkPlaneFrame frame) {
+                    [&](const Point3D &point, WorkPlaneFrame frame,
+                        int controlPointIndex) {
                         PointExtrudeTool::ControlPointSource source;
-                        if (makePointSource(point, frame, &source)) {
+                        if (makePointSource(point, frame, controlPointIndex,
+                                            &source)) {
                             pointSources.append(source);
                         }
                     };
@@ -2041,7 +2045,7 @@ public:
                         frame.origin.x += offset.x;
                         frame.origin.y += offset.y;
                         frame.origin.z += offset.z;
-                        appendPointSource(point, frame);
+                        appendPointSource(point, frame, 0);
                     }
                     continue;
                 }
@@ -2064,7 +2068,7 @@ public:
                         point.x += offset.x;
                         point.y += offset.y;
                         point.z += offset.z;
-                        appendPointSource(point, sourceFrame);
+                        appendPointSource(point, sourceFrame, controlPoint);
                     }
                     continue;
                 }
@@ -2073,6 +2077,7 @@ public:
                     Shape::NurbsCurve2D curve;
                     WorkPlaneFrame frame;
                     QVector<QVector<int>> selectablePointsByControlPoint;
+                    QVector<int> sourceControlPointIndices;
                 };
                 QVector<CurveSelectionMapping> curveMappings;
                 if (shape->geometryType == GeometryType::PolyCurve) {
@@ -2086,6 +2091,14 @@ public:
                             *shape, curveIndex);
                         mapping.selectablePointsByControlPoint.resize(
                             mapping.curve.controlPoints.size());
+                        mapping.sourceControlPointIndices.reserve(
+                            mapping.curve.controlPoints.size());
+                        for (int controlPoint = 0;
+                             controlPoint < mapping.curve.controlPoints.size();
+                             ++controlPoint) {
+                            mapping.sourceControlPointIndices.append(
+                                firstSelectablePoint + controlPoint);
+                        }
                         const int lastPoint =
                             mapping.curve.controlPoints.size() - 1;
                         bool repeatedClosurePoint = false;
@@ -2155,6 +2168,13 @@ public:
                             mapping.curve.controlPoints.size());
                         const int controlPointCount =
                             mapping.curve.controlPoints.size();
+                        mapping.sourceControlPointIndices.reserve(
+                            controlPointCount);
+                        for (int controlPoint = 0;
+                             controlPoint < controlPointCount; ++controlPoint) {
+                            mapping.sourceControlPointIndices.append(
+                                controlPoint);
+                        }
                         const int selectablePointCount =
                             selectableVertices.size();
                         // Rectangle editing exposes four corner handles even
@@ -2245,7 +2265,8 @@ public:
                 };
                 const auto appendCurveSource =
                     [&](const CurveSelectionMapping &mapping,
-                        const Shape::NurbsCurve2D &curve) {
+                        const Shape::NurbsCurve2D &curve,
+                        const QVector<int> &sourceControlPointIndices) {
                         WorkPlaneFrame frame = mapping.frame;
                         frame.origin.x += offset.x;
                         frame.origin.y += offset.y;
@@ -2258,6 +2279,8 @@ public:
                         source.objectId = objectId;
                         source.curve = curve;
                         source.workPlaneFrame = frame;
+                        source.sourceControlPointIndices =
+                            sourceControlPointIndices;
                         curveSources.append(std::move(source));
                         return true;
                     };
@@ -2311,7 +2334,9 @@ public:
 
                     if (allDistinctControlPointsSelected ||
                         bothOpenEndpointsSelected) {
-                        if (appendCurveSource(mapping, mapping.curve)) {
+                        if (appendCurveSource(
+                                mapping, mapping.curve,
+                                mapping.sourceControlPointIndices)) {
                             for (const QVector<int> &selectableIndices :
                                  mapping.selectablePointsByControlPoint) {
                                 for (const int selectableIndex :
@@ -2398,11 +2423,25 @@ public:
 
                     for (const SelectedSpanRun &run : selectedSpanRuns) {
                         Shape::NurbsCurve2D spanCurve;
+                        QVector<int> spanSourceControlPoints;
+                        if (mapping.curve.degree == 1 &&
+                            run.supportControlPoints.size() == 2) {
+                            spanSourceControlPoints.reserve(2);
+                            for (const int controlPoint :
+                                 run.supportControlPoints) {
+                                spanSourceControlPoints.append(
+                                    mapping.sourceControlPointIndices.value(
+                                        controlPoint, -1));
+                            }
+                            std::sort(spanSourceControlPoints.begin(),
+                                      spanSourceControlPoints.end());
+                        }
                         if (!trimNurbsCurve(mapping.curve,
                                             run.startParameter,
                                             run.endParameter,
                                             &spanCurve) ||
-                            !appendCurveSource(mapping, spanCurve)) {
+                            !appendCurveSource(mapping, spanCurve,
+                                               spanSourceControlPoints)) {
                             continue;
                         }
                         for (const int controlPoint :
@@ -2447,6 +2486,7 @@ public:
                     if (!makePointSource(
                             vertex.second,
                             controlPointWorkPlaneFrame(objectId, vertex.first),
+                            vertex.first,
                             &source)) {
                         continue;
                     }
@@ -2622,7 +2662,7 @@ public:
                 const Shape *shape = document_.shape(objectId);
                 if (shape == nullptr || !document_.isObjectVisible(objectId) ||
                     !document_.isObjectEditable(objectId) ||
-                    curveSampler_.curvesForShape(*shape).isEmpty()) {
+                    shape->controlPointWeldGroups.isEmpty()) {
                     continue;
                 }
                 QSet<int> &objectTargets = targets[objectId.value()];
@@ -3273,7 +3313,7 @@ public:
                 if (shape == nullptr ||
                     !document_.isObjectVisible(objectId) ||
                     !document_.isObjectEditable(objectId) ||
-                    curveSampler_.curvesForShape(*shape).isEmpty()) {
+                    shape->controlPointWeldGroups.isEmpty()) {
                     continue;
                 }
                 QSet<int> targets;
@@ -8688,6 +8728,10 @@ protected:
         hudState.lineCommandActive = lineCommandActive_;
         hudState.lineCommandStatus = toolStatus_.text;
         hudState.pointToolInstructions = activeToolPreview.hudInstructionsLine;
+        if (const auto *extrudeTool = dynamic_cast<const PointExtrudeTool *>(
+                toolRegistry_.find(Tool::PointExtrude))) {
+            hudState.pointExtrudeWeldEnabled = extrudeTool->weldEnabled();
+        }
         hudState.rotateStep = rotateState().stage;
         hudState.rotateAngleSnapEnabled = rotateState().angleSnapEnabled;
         hudState.rotateAngleInputActive = rotateState().angleInputActive;
@@ -17649,6 +17693,44 @@ private:
             return;
         }
 
+        if (sourceShape != nullptr &&
+            sourceShape->geometryType == GeometryType::NurbsSurface) {
+            document_.mutateGeometry(objectId, [&](Shape &shape) {
+                if (shape.geometryType != GeometryType::NurbsSurface) {
+                    return false;
+                }
+                QSet<int> indicesToMove = targetIndices;
+                QSet<quint64> selectedGroups;
+                for (const int index : targetIndices) {
+                    if (index >= 0 &&
+                        index < shape.controlPointWeldGroups.size()) {
+                        const quint64 group =
+                            shape.controlPointWeldGroups[index];
+                        if (group != 0) selectedGroups.insert(group);
+                    }
+                }
+                for (int index = 0;
+                     index < shape.controlPointWeldGroups.size(); ++index) {
+                    if (selectedGroups.contains(
+                            shape.controlPointWeldGroups[index])) {
+                        indicesToMove.insert(index);
+                    }
+                }
+                bool changed = false;
+                for (int index = 0;
+                     index < shape.nurbsSurface.controlPoints.size(); ++index) {
+                    if (!indicesToMove.contains(index)) continue;
+                    Point3D &point = shape.nurbsSurface.controlPoints[index];
+                    point.x += worldDelta.x;
+                    point.y += worldDelta.y;
+                    point.z += worldDelta.z;
+                    changed = true;
+                }
+                return changed;
+            });
+            return;
+        }
+
         const SceneObject *sceneObject = document_.object(objectId);
         const Point3D offset = sceneObject != nullptr
                                    ? sceneObject->placementTranslation
@@ -17897,7 +17979,7 @@ private:
                 if (shape == nullptr ||
                     !document_.isObjectVisible(objectId) ||
                     !document_.isObjectEditable(objectId) ||
-                    curveSampler_.curvesForShape(*shape).isEmpty()) {
+                    shape->controlPointWeldGroups.isEmpty()) {
                     continue;
                 }
                 for (int controlPoint = 0;

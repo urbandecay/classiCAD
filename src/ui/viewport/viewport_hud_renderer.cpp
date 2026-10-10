@@ -72,7 +72,10 @@ void ViewportHudRenderer::draw(QPainter &painter,
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,
                          viewportSize.height() - 18,
-                         QStringLiteral("Click endpoint  •  X/Y/Z locks axis  •  Enter confirms  •  Esc/RMB cancels"));
+                         QStringLiteral("Click endpoint  •  X/Y/Z locks axis  •  W Weld %1  •  Enter confirms  •  Esc/RMB cancels")
+                             .arg(state.pointExtrudeWeldEnabled
+                                      ? QStringLiteral("on")
+                                      : QStringLiteral("off")));
     } else if (activeTool == Tool::Erase) {
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,

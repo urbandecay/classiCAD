@@ -10,11 +10,13 @@ public:
         ObjectId objectId = ObjectId::invalid();
         Point3D worldPoint;
         WorkPlaneFrame workPlaneFrame;
+        int controlPointIndex = -1;
     };
     struct CurveSource {
         ObjectId objectId = ObjectId::invalid();
         Shape::NurbsCurve2D curve;
         WorkPlaneFrame workPlaneFrame;
+        QVector<int> sourceControlPointIndices;
     };
 
     ToolId id() const override;
@@ -29,6 +31,7 @@ public:
     void commit(ToolContext &context) override;
     ToolPreview preview() const override;
     ToolStatus status() const override;
+    bool weldEnabled() const;
 
 private:
     struct SourcePoint {
@@ -37,6 +40,8 @@ private:
         WorkPlaneFrame workPlaneFrame;
         Shape::NurbsCurve2D curve;
         Shape::NurbsSurface3D surface;
+        int sourceControlPointIndex = -1;
+        QVector<int> sourceControlPointIndices;
     };
 
     Point3D resolveTarget(const ToolInput &input, ToolContext &context);
@@ -56,6 +61,7 @@ private:
     ToolInput lastInput_;
     int constraintAxisKey_ = 0;
     bool normalConstraint_ = false;
+    bool weldEnabled_ = true;
     bool hasLastInput_ = false;
     bool hasCursorPoint_ = false;
     SnapResult snap_;

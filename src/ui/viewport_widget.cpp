@@ -13842,6 +13842,8 @@ private:
                 int componentIndex = -1;
                 int firstControlPoint = 0;
                 int controlPointCount = 0;
+                quint64 startWeldGroup = 0;
+                quint64 endWeldGroup = 0;
                 Point3D start;
                 Point3D end;
             };
@@ -13903,6 +13905,25 @@ private:
                         linked.firstControlPoint = firstControlPoint;
                         linked.controlPointCount =
                             component.curve.controlPoints.size();
+                        if (shape->geometryType == GeometryType::PolyCurve &&
+                            linked.controlPointCount > 0) {
+                            const int lastControlPoint =
+                                firstControlPoint + linked.controlPointCount - 1;
+                            if (firstControlPoint >= 0 &&
+                                firstControlPoint <
+                                    shape->controlPointWeldGroups.size()) {
+                                linked.startWeldGroup =
+                                    shape->controlPointWeldGroups[
+                                        firstControlPoint];
+                            }
+                            if (lastControlPoint >= 0 &&
+                                lastControlPoint <
+                                    shape->controlPointWeldGroups.size()) {
+                                linked.endWeldGroup =
+                                    shape->controlPointWeldGroups[
+                                        lastControlPoint];
+                            }
+                        }
                         linked.start = start;
                         linked.end = end;
                         const int index = curveComponents.size();
@@ -13933,11 +13954,29 @@ private:
                     }
                     const LinkedCurveComponent &candidate =
                         curveComponents[candidateIndex];
-                    const bool connected =
-                        sameWorldPoint(current.start, candidate.start) ||
-                        sameWorldPoint(current.start, candidate.end) ||
-                        sameWorldPoint(current.end, candidate.start) ||
-                        sameWorldPoint(current.end, candidate.end);
+                    // Snapping can make separate endpoints coincide without
+                    // welding them. Cross-object links therefore come only
+                    // from explicit weld groups; coordinate matching is kept
+                    // for components already stored in one joined PolyCurve.
+                    const bool connectedByWeld =
+                        (current.startWeldGroup != 0 &&
+                         (current.startWeldGroup == candidate.startWeldGroup ||
+                          current.startWeldGroup == candidate.endWeldGroup)) ||
+                        (current.endWeldGroup != 0 &&
+                         (current.endWeldGroup == candidate.startWeldGroup ||
+                          current.endWeldGroup == candidate.endWeldGroup));
+                    const Shape *currentShape =
+                        document_.shape(current.objectId);
+                    const bool sameJoinedPolyCurve =
+                        current.objectId == candidate.objectId &&
+                        currentShape != nullptr &&
+                        currentShape->geometryType == GeometryType::PolyCurve &&
+                        (sameWorldPoint(current.start, candidate.start) ||
+                         sameWorldPoint(current.start, candidate.end) ||
+                         sameWorldPoint(current.end, candidate.start) ||
+                         sameWorldPoint(current.end, candidate.end));
+                    const bool connected = connectedByWeld ||
+                                           sameJoinedPolyCurve;
                     if (connected) {
                         visitedCurveIndices.insert(candidateIndex);
                         linkedCurveIndices.append(candidateIndex);

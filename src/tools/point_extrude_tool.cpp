@@ -71,12 +71,20 @@ void PointExtrudeTool::setControlPointSources(
     stagedControlPointSourcesRequested_ = true;
 }
 
+void PointExtrudeTool::setCurveSources(
+    const QVector<CurveSource> &sources)
+{
+    stagedCurveSources_ = sources;
+}
+
 void PointExtrudeTool::begin(ToolContext &context)
 {
     const QVector<ControlPointSource> stagedSources =
         stagedControlPointSources_;
+    const QVector<CurveSource> stagedCurves = stagedCurveSources_;
     const bool useStagedSources = stagedControlPointSourcesRequested_;
     stagedControlPointSources_.clear();
+    stagedCurveSources_.clear();
     stagedControlPointSourcesRequested_ = false;
     sourcePoints_.clear();
     inputFrame_ = {};
@@ -98,6 +106,23 @@ void PointExtrudeTool::begin(ToolContext &context)
             source.worldPoint = staged.worldPoint;
             source.workPlaneFrame = staged.workPlaneFrame;
             source.workPlaneFrame.origin = staged.worldPoint;
+            sourcePoints_.append(source);
+        }
+        for (const CurveSource &staged : stagedCurves) {
+            if (!validateNurbsCurve(staged.curve) ||
+                !isValidWorkPlaneFrame(staged.workPlaneFrame)) {
+                continue;
+            }
+            SourcePoint source;
+            source.objectId = staged.objectId;
+            source.curve = staged.curve;
+            source.workPlaneFrame = staged.workPlaneFrame;
+            const qreal normalCoordinate = source.curve.dimension == 3
+                                               ? source.curve.normalCoordinates.first()
+                                               : 0.0;
+            source.worldPoint = workPlaneFramePointToWorld(
+                source.curve.controlPoints.first(), normalCoordinate,
+                source.workPlaneFrame);
             sourcePoints_.append(source);
         }
     } else {

@@ -1977,6 +1977,7 @@ public:
             selectedVertexControlPointTargets();
         if (!controlPointTargets.isEmpty()) {
             QVector<PointExtrudeTool::ControlPointSource> pointSources;
+            QVector<PointExtrudeTool::CurveSource> curveSources;
             for (int index = 0; index < document_.size(); ++index) {
                 const ObjectId objectId = document_.objectIdAt(index);
                 const auto selectedIt =
@@ -2048,10 +2049,84 @@ public:
                     continue;
                 }
 
+                QSet<int> curveControlPointsExtrudedAsCurves;
+                const QVector<Shape::NurbsCurve2D> curves =
+                    curveSampler_.curvesForShape(*shape);
+                const GeometryType sourceType = shape->geometryType;
+                const bool controlPointIndicesMatchCurves =
+                    sourceType == GeometryType::PolyCurve ||
+                    validateNurbsCurve(shape->nurbs) ||
+                    sourceType == GeometryType::Line ||
+                    sourceType == GeometryType::Bezier ||
+                    sourceType == GeometryType::Nurbs;
+                int firstCurveControlPoint = 0;
+                for (int curveIndex = 0;
+                     controlPointIndicesMatchCurves &&
+                     curveIndex < curves.size(); ++curveIndex) {
+                    const Shape::NurbsCurve2D &curve = curves[curveIndex];
+                    const int curveControlPointCount =
+                        curve.controlPoints.size();
+                    if (validateNurbsCurve(curve) &&
+                        curveControlPointCount >= 2) {
+                        bool allControlPointsSelected = true;
+                        for (int point = 0; point < curveControlPointCount;
+                             ++point) {
+                            allControlPointsSelected &= selectedIt.value().contains(
+                                firstCurveControlPoint + point);
+                        }
+                        qreal domainStart = 0.0;
+                        qreal domainEnd = 0.0;
+                        Point3D curveStart;
+                        Point3D curveEnd;
+                        const bool hasDomain = nurbsParameterDomain(
+                            curve, &domainStart, &domainEnd);
+                        const bool hasEndpoints = hasDomain &&
+                            evaluateNurbsPoint3D(curve, domainStart, &curveStart) &&
+                            evaluateNurbsPoint3D(curve, domainEnd, &curveEnd);
+                        const qreal dx = curveStart.x - curveEnd.x;
+                        const qreal dy = curveStart.y - curveEnd.y;
+                        const qreal dz = curveStart.z - curveEnd.z;
+                        const bool isClosed = hasEndpoints &&
+                            dx * dx + dy * dy + dz * dz <= 1.0e-12;
+                        const bool bothEndpointsSelected =
+                            selectedIt.value().contains(firstCurveControlPoint) &&
+                            selectedIt.value().contains(
+                                firstCurveControlPoint +
+                                curveControlPointCount - 1);
+                        const bool extrudeWholeCurve =
+                            allControlPointsSelected ||
+                            (!isClosed && bothEndpointsSelected);
+                        if (extrudeWholeCurve) {
+                            WorkPlaneFrame frame =
+                                sourceType == GeometryType::PolyCurve
+                                    ? shapeComponentWorkPlaneFrame(*shape,
+                                                                   curveIndex)
+                                    : shapeWorkPlaneFrame(*shape);
+                            frame.origin.x += offset.x;
+                            frame.origin.y += offset.y;
+                            frame.origin.z += offset.z;
+                            if (isValidWorkPlaneFrame(frame)) {
+                                PointExtrudeTool::CurveSource source;
+                                source.objectId = objectId;
+                                source.curve = curve;
+                                source.workPlaneFrame = frame;
+                                curveSources.append(std::move(source));
+                                for (int point = 0;
+                                     point < curveControlPointCount; ++point) {
+                                    curveControlPointsExtrudedAsCurves.insert(
+                                        firstCurveControlPoint + point);
+                                }
+                            }
+                        }
+                    }
+                    firstCurveControlPoint += curveControlPointCount;
+                }
+
                 const QVector<QPair<int, Point3D>> vertices =
                     curveControlPointVertices(*shape, offset);
                 for (const auto &vertex : vertices) {
-                    if (!selectedIt.value().contains(vertex.first)) {
+                    if (!selectedIt.value().contains(vertex.first) ||
+                        curveControlPointsExtrudedAsCurves.contains(vertex.first)) {
                         continue;
                     }
                     appendPointSource(
@@ -2060,7 +2135,7 @@ public:
                 }
             }
 
-            if (pointSources.isEmpty()) {
+            if (pointSources.isEmpty() && curveSources.isEmpty()) {
                 DebugLog::instance().write(
                     QStringLiteral("beginPointExtrude ignored selected control points with no editable source"));
                 return 0;
@@ -2068,6 +2143,7 @@ public:
             if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
                     toolRegistry_.find(Tool::PointExtrude))) {
                 extrudeTool->setControlPointSources(pointSources);
+                extrudeTool->setCurveSources(curveSources);
             } else {
                 return 0;
             }
@@ -2077,8 +2153,10 @@ public:
             update();
             DebugLog::instance().write(
                 QStringLiteral("beginPointExtrude selectedControlPoints=%1")
-                    .arg(pointSources.size()));
-            return activeTool_ == Tool::PointExtrude ? pointSources.size() : 0;
+                    .arg(pointSources.size()) +
+                QStringLiteral(" selectedCurves=%1").arg(curveSources.size()));
+            const int sourceCount = pointSources.size() + curveSources.size();
+            return activeTool_ == Tool::PointExtrude ? sourceCount : 0;
         }
 
         QVector<ObjectId> selected = selectedShapeIndices_;
@@ -3324,6 +3402,45 @@ public:
                 selectedPoints->insert(selectablePointCount - 1);
             }
         };
+        const auto isWholeCurveSelection = [](
+                const Shape::NurbsCurve3D &curve,
+                const WorkPlaneFrame &frame,
+                int selectablePointCount,
+                const QSet<int> &selectedPoints) {
+            if (curve.controlPoints.size() < 2 ||
+                curve.controlPoints.size() != selectablePointCount) {
+                return false;
+            }
+            if (curve.dimension == 3 &&
+                curve.normalCoordinates.size() != curve.controlPoints.size()) {
+                return false;
+            }
+
+            bool allControlPointsSelected = true;
+            for (int pointIndex = 0; pointIndex < selectablePointCount;
+                 ++pointIndex) {
+                allControlPointsSelected = allControlPointsSelected &&
+                    selectedPoints.contains(pointIndex);
+            }
+            if (allControlPointsSelected) {
+                return true;
+            }
+
+            const qreal firstNormal = curve.dimension == 3
+                ? curve.normalCoordinates.first() : 0.0;
+            const qreal lastNormal = curve.dimension == 3
+                ? curve.normalCoordinates.last() : 0.0;
+            const Point3D firstWorld = workPlaneFramePointToWorld(
+                curve.controlPoints.first(), firstNormal, frame);
+            const Point3D lastWorld = workPlaneFramePointToWorld(
+                curve.controlPoints.last(), lastNormal, frame);
+            const qreal dx = firstWorld.x - lastWorld.x;
+            const qreal dy = firstWorld.y - lastWorld.y;
+            const qreal dz = firstWorld.z - lastWorld.z;
+            const bool isClosed = dx * dx + dy * dy + dz * dz <= 1.0e-12;
+            return !isClosed && selectedPoints.contains(0) &&
+                   selectedPoints.contains(selectablePointCount - 1);
+        };
 
         for (const ObjectId objectId : objectIds) {
             const SceneObject *source = document_.object(objectId);
@@ -3348,7 +3465,8 @@ public:
                 if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                     if (shape.geometryType == GeometryType::PolyCurve) {
                         int firstControlPoint = 0;
-                        bool allControlPointsSelected = !shape.components.isEmpty();
+                        bool allComponentsFullySelected =
+                            !shape.components.isEmpty();
                         for (int componentIndex = 0;
                              componentIndex < shape.components.size();
                              ++componentIndex) {
@@ -3369,15 +3487,17 @@ public:
                                                              componentIndex),
                                 component.controlPoints.size(),
                                 &localSelection);
-                            for (int pointIndex = 0;
-                                 pointIndex < component.controlPoints.size();
-                                 ++pointIndex) {
-                                allControlPointsSelected = allControlPointsSelected &&
-                                    localSelection.contains(pointIndex);
-                            }
+                            allComponentsFullySelected =
+                                allComponentsFullySelected &&
+                                isWholeCurveSelection(
+                                    component,
+                                    shapeComponentWorkPlaneFrame(
+                                        shape, componentIndex),
+                                    component.controlPoints.size(),
+                                    localSelection);
                             firstControlPoint += component.controlPoints.size();
                         }
-                        if (allControlPointsSelected) {
+                        if (allComponentsFullySelected) {
                             appendSnapshot(*source, shape);
                             continue;
                         }
@@ -3403,18 +3523,18 @@ public:
                                                              componentIndex),
                                 component.controlPoints.size(),
                                 &localSelection);
-                            if (localSelection.size() ==
-                                component.controlPoints.size()) {
+                            const WorkPlaneFrame frame =
+                                shapeComponentWorkPlaneFrame(shape,
+                                                             componentIndex);
+                            if (isWholeCurveSelection(
+                                    component, frame,
+                                    component.controlPoints.size(),
+                                    localSelection)) {
                                 appendCurveObject(
-                                    *source, component,
-                                    shapeComponentWorkPlaneFrame(shape,
-                                                                 componentIndex),
-                                    shape);
+                                    *source, component, frame, shape);
                             } else if (!localSelection.isEmpty()) {
                                 duplicateSelectedCurvePoints(
-                                    *source, shape, component,
-                                    shapeComponentWorkPlaneFrame(shape,
-                                                                 componentIndex),
+                                    *source, shape, component, frame,
                                     localSelection,
                                     component.controlPoints.size());
                             }
@@ -3450,16 +3570,9 @@ public:
                                     .arg(objectId.value())
                                     .arg(lastControlPoint));
                         }
-                        bool allControlPointsSelected =
-                            !selectablePoints.isEmpty();
-                        for (int pointIndex = 0;
-                             pointIndex < selectablePoints.size();
-                             ++pointIndex) {
-                            allControlPointsSelected =
-                                allControlPointsSelected &&
-                                selectedControlPoints.contains(pointIndex);
-                        }
-                        if (allControlPointsSelected) {
+                        if (isWholeCurveSelection(
+                                curve, frame, selectablePoints.size(),
+                                selectedControlPoints)) {
                             appendSnapshot(*source, shape);
                             continue;
                         }

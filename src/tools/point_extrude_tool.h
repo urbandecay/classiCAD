@@ -11,10 +11,16 @@ public:
         Point3D worldPoint;
         WorkPlaneFrame workPlaneFrame;
     };
+    struct CurveSource {
+        ObjectId objectId = ObjectId::invalid();
+        Shape::NurbsCurve2D curve;
+        WorkPlaneFrame workPlaneFrame;
+    };
 
     ToolId id() const override;
     void setControlPointSources(
         const QVector<ControlPointSource> &sources);
+    void setCurveSources(const QVector<CurveSource> &sources);
     void begin(ToolContext &context) override;
     bool handleMousePress(const ToolInput &input, ToolContext &context) override;
     bool handleMouseMove(const ToolInput &input, ToolContext &context) override;
@@ -43,6 +49,7 @@ private:
 
     QVector<SourcePoint> sourcePoints_;
     QVector<ControlPointSource> stagedControlPointSources_;
+    QVector<CurveSource> stagedCurveSources_;
     bool stagedControlPointSourcesRequested_ = false;
     WorkPlaneFrame inputFrame_;
     Point3D cursorPoint_;

@@ -56,6 +56,39 @@ misread or implemented incorrectly.
   those local coordinates in a newly selected frame.
 - Reuse the existing OSnap result. Plane changes must not disable snapping or
   introduce a separate snap overlay/model.
+- One Point Arc's first click must use world-space OSnap targets in perspective.
+  Its planar snap query only considers geometry coplanar with the current view
+  plane, so endpoints and near points on spatial splines can be visibly under
+  the cursor but never become candidates. Preserve that world snap through
+  input translation; the generic planar constraint check otherwise clears an
+  off-plane target before the arc receives it. When the center snaps off the
+  current plane, translate the captured plane along its normal to the snapped
+  center. Apply the same world-space snap query to the radius pick. If its
+  target is off the center plane, derive a plane containing the fixed center
+  and snapped radius point, using the captured normal to resolve the remaining
+  orientation; this keeps the circle exact while making both picks true 3D
+  snaps.
+- When a One Point Arc click changes its work-plane frame, remap the cursor
+  from the current screen location into that new frame before drawing the
+  radius preview. Camera orbit or pan also needs to refresh the arc cursor and
+  OSnap while navigation is active and once more on release; otherwise the
+  snap marker and radius guide can remain at their old projected positions
+  until another mouse move.
+- Blender's `ModalManager.get_snap_data` keeps spatial geometry snapping on
+  during all One Point Arc stages, including the final sweep-angle stage.
+  `ArcTool_Common.update` projects that snapped world point into the captured
+  arc plane through `world_to_plane` to derive the angle. Keep the spatial
+  snap query active after the radius point is planted, and calculate the sweep
+  from the snapped world point's coordinates in the fixed arc frame. The
+  screen-plane point used to draw the snap marker is not the geometric angle
+  target. Do not move the captured arc plane when resolving sweep snaps.
+- A One Point Arc's captured input frame takes precedence over pre-click
+  axis/plane locks after its center is clicked. The endpoint trace showed the
+  correct snapped-center plane immediately after the click, then the generic
+  hover handler restored the old locked plane on the next mouse move. That
+  reinterpreted the saved local center at the wrong world depth. Restore the
+  arc's current input frame before handling generic drawing-plane locks; also
+  preserve a radius-derived or perpendicular frame through later moves.
 - Preserve the model representation required by the tool. In particular,
   circles and circular arcs remain exact rational degree-2 NURBS; do not
   replace them with polygon segments because the preview looks similar.

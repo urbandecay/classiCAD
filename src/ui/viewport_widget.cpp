@@ -8322,10 +8322,14 @@ protected:
             return;
         }
 
+        const bool preserveArcPointSnap =
+            activeTool_ == Tool::Arc &&
+            arcState().mode == ArcMode::OnePoint &&
+            currentSnap_.isValid() && currentSnap_.hasWorldPoint;
         const ToolInput translatedInput = ToolInputTranslator::fromMouseEvent(
             *event, activeTool_, screenPosition, rawWorldPosition,
             worldPosition, viewportTransform_.workPlaneFrame(),
-            orthoEnabled_, size(), currentSnap_);
+            orthoEnabled_, size(), currentSnap_, preserveArcPointSnap);
 
         if (duplicateTool_.isActive()) {
             rawCursorWorld_ = rawWorldPosition;
@@ -8866,7 +8870,15 @@ protected:
         cursorValid_ = true;
 
         if (activeTool_ == Tool::Arc) {
+            const WorkPlaneFrame frameBeforeClick =
+                viewportTransform_.workPlaneFrame();
             dispatchArcClick(translatedInput, worldPositionValid);
+            if (arcState().mode == ArcMode::OnePoint &&
+                !workPlaneFramesMatch(
+                    frameBeforeClick,
+                    viewportTransform_.workPlaneFrame())) {
+                refreshArcCursorOnCurrentFrame(true, &screenPosition);
+            }
             update();
             emitCoordinateUpdate();
             return;
@@ -8992,6 +9004,12 @@ protected:
         }
         if (navigationController_.handlePanMove(screenPosition, size())) {
             lastMousePosition_ = screenPosition.toPoint();
+            if (activeTool_ == Tool::Arc) {
+                cursorValid_ = true;
+                refreshArcCursorOnCurrentFrame(true, &screenPosition);
+                update();
+                emitCoordinateUpdate();
+            }
             return;
         }
         if (navigationController_.updateGizmoHover(
@@ -9771,8 +9789,20 @@ protected:
         if (releaseEraseCursor) {
             eraseTool_.setCursorPressed(false);
         }
-        if (navigationController_.finishPointerRelease(event->button())) {
+        const QPointF releaseScreenPosition = eventPosition(event);
+        const bool navigationWasActive = navigationController_.isPanning();
+        const bool navigationFinished =
+            navigationController_.finishPointerRelease(event->button());
+        if (navigationFinished) {
             DebugLog::instance().write(QStringLiteral("mouseRelease branch=end-pan-orbit"));
+        }
+        if (navigationWasActive && navigationFinished &&
+            activeTool_ == Tool::Arc) {
+            lastMousePosition_ = releaseScreenPosition.toPoint();
+            cursorValid_ = true;
+            refreshArcCursorOnCurrentFrame(true, &releaseScreenPosition);
+            update();
+            emitCoordinateUpdate();
         }
 
         if (rightPanClickSelect) {
@@ -13638,6 +13668,19 @@ private:
             return result;
         }
 
+        // Blender keeps spatial geometry snapping active through the
+        // one-point arc's center, radius, and sweep stages. The planar snap
+        // path filters out curves whose stored frames differ from the view
+        // plane, even when their endpoints are directly under the cursor.
+        if (activeTool_ == Tool::Arc &&
+            arcState().mode == ArcMode::OnePoint) {
+            const SnapResult result = snapEngine_.findSpatialSnapPoint(
+                document_, worldToScreen(rawPoint), nullptr,
+                viewportTransform_, size());
+            traceSnapResult(result, true);
+            return result;
+        }
+
         const bool arcPlaneConstraintActive =
             activeTool_ == Tool::Arc &&
             (arcState().planeNormalLockKey != 0 || arcState().axisConstraintKey != 0 ||
@@ -13948,6 +13991,20 @@ private:
         const QPointF snappedOrRawPoint = currentSnap_.isValid()
                                               ? currentSnap_.point
                                               : rawPoint;
+
+        if (activeTool_ == Tool::Arc &&
+            arcState().mode == ArcMode::OnePoint &&
+            arcTool_.inputStage() == ArcInputStage::Complete &&
+            currentSnap_.isValid() && currentSnap_.hasWorldPoint) {
+            // Blender keeps geometry snapping active while choosing the
+            // one-point arc sweep, then projects the snapped world target
+            // into the captured arc plane to get its angle. SnapResult::point
+            // is the marker's screen-plane location, so derive the sweep
+            // cursor from the actual target in the arc's local frame.
+            return worldPointToWorkPlaneFrame(
+                currentSnap_.worldPoint,
+                viewportTransform_.workPlaneFrame());
+        }
 
         if (activeTool_ == Tool::Arc &&
             (arcState().mode == ArcMode::TwoPoint ||
@@ -18429,18 +18486,23 @@ private:
         return result.point;
     }
 
-    void refreshArcCursorOnCurrentFrame(bool force = false)
+    void refreshArcCursorOnCurrentFrame(
+        bool force = false,
+        const QPointF *screenPositionOverride = nullptr)
     {
         if (!cursorValid_ && !force) {
             return;
         }
-        const QPointF screenPosition = currentArcScreenPosition();
+        const QPointF screenPosition =
+            currentArcScreenPosition(screenPositionOverride);
         QPointF rawPosition;
         if (!viewportTransform_.screenToWorkPlane(
                 screenPosition,
                 size(),
                 viewportTransform_.workPlaneFrame(),
                 &rawPosition)) {
+            currentSnap_ = SnapResult{};
+            cursorValid_ = false;
             return;
         }
         rawCursorWorld_ = rawPosition;
@@ -18603,6 +18665,16 @@ private:
     {
         if (objectSelectionDragActive() || controlPointSelectionDragActive() ||
             grabTool_.isActive() || duplicateTool_.isActive()) {
+            return;
+        }
+        if (activeTool_ == Tool::Arc &&
+            arcState().mode == ArcMode::OnePoint &&
+            arcTool_.inputStage() != ArcInputStage::FirstPoint &&
+            arcState().inputFrameValid) {
+            // The captured arc frame includes the snapped center's depth
+            // and any accepted radius-plane change. A pre-click plane lock
+            // must never restore its old origin over these world anchors.
+            viewportTransform_.setWorkPlaneFrame(arcState().inputFrame);
             return;
         }
         if (activeTool_ == Tool::Arc &&

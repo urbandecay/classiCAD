@@ -44,6 +44,66 @@ Point3D vectorCross(const Point3D &first, const Point3D &second)
             first.x * second.y - first.y * second.x};
 }
 
+bool makeOnePointArcFrameThroughRadius(const Point3D &center,
+                                       const Point3D &radiusPoint,
+                                       const Point3D &referenceNormal,
+                                       const WorkPlaneFrame &referenceFrame,
+                                       WorkPlaneFrame *frame)
+{
+    if (frame == nullptr) {
+        return false;
+    }
+    Point3D yAxis = referenceNormal;
+    const qreal normalLength = vectorLength(yAxis);
+    const Point3D bridge = vectorSubtract(radiusPoint, center);
+    const qreal bridgeLength = vectorLength(bridge);
+    if (normalLength <= 1.0e-9 || bridgeLength <= 1.0e-9) {
+        return false;
+    }
+    yAxis = vectorScale(yAxis, 1.0 / normalLength);
+    const Point3D bridgeDirection = vectorScale(bridge, 1.0 / bridgeLength);
+
+    Point3D planeNormal = vectorCross(bridgeDirection, yAxis);
+    qreal planeNormalLength = vectorLength(planeNormal);
+    Point3D xAxis;
+    if (planeNormalLength > 1.0e-9) {
+        planeNormal = vectorScale(planeNormal, 1.0 / planeNormalLength);
+        xAxis = vectorCross(yAxis, planeNormal);
+        const qreal xLength = vectorLength(xAxis);
+        if (xLength <= 1.0e-9) {
+            return false;
+        }
+        xAxis = vectorScale(xAxis, 1.0 / xLength);
+    } else {
+        // If the snapped radius direction is parallel to the reference
+        // normal, any perpendicular axis completes the plane. Reuse the
+        // captured X axis so the choice remains stable.
+        xAxis = vectorSubtract(
+            referenceFrame.xAxis,
+            vectorScale(yAxis, vectorDot(referenceFrame.xAxis, yAxis)));
+        const qreal xLength = vectorLength(xAxis);
+        if (xLength <= 1.0e-9) {
+            return false;
+        }
+        xAxis = vectorScale(xAxis, 1.0 / xLength);
+        yAxis = bridgeDirection;
+        planeNormal = vectorCross(xAxis, yAxis);
+        planeNormalLength = vectorLength(planeNormal);
+        if (planeNormalLength <= 1.0e-9) {
+            return false;
+        }
+        planeNormal = vectorScale(planeNormal, 1.0 / planeNormalLength);
+    }
+
+    *frame = {};
+    frame->origin = center;
+    frame->xAxis = xAxis;
+    frame->yAxis = yAxis;
+    frame->normal = planeNormal;
+    frame->valid = true;
+    return isValidWorkPlaneFrame(*frame);
+}
+
 } // namespace
 
 ArcTool::ArcTool()
@@ -511,20 +571,59 @@ ArcClickResult ArcTool::handleClick(const ToolInput &input,
         if (!isValidWorkPlaneFrame(frame)) {
             frame = context.viewportTransform().workPlaneFrame();
         }
-        const QPointF firstPoint = input.positionInFrame(frame);
+        Point3D firstWorld = input.resolvedWorldPoint();
+        if (input.snapResult.isValid() && input.snapResult.hasWorldPoint &&
+            isValidWorkPlaneFrame(frame)) {
+            // Spatial snapping can place the center off the current drawing
+            // plane. Move that plane along its normal so the center remains
+            // exactly on the snapped world point while keeping the captured
+            // orientation unchanged.
+            const Point3D fromPlane = vectorSubtract(firstWorld, frame.origin);
+            const qreal normalOffset = vectorDot(fromPlane, frame.normal);
+            frame.origin = vectorAdd(frame.origin,
+                                     vectorScale(frame.normal, normalOffset));
+            context.viewportTransform().setWorkPlaneFrame(frame);
+        }
+        const QPointF firstPoint = worldPointToWorkPlaneFrame(firstWorld, frame);
         captureReferenceForFirstPoint(firstPoint, frame);
         return result;
     }
 
     if (stage == ArcInputStage::SecondPoint) {
-        const WorkPlaneFrame frame = isValidWorkPlaneFrame(interactionState_.inputFrame)
-                                         ? interactionState_.inputFrame
-                                         : input.workPlaneFrame;
-        const QPointF localPoint = input.positionInFrame(frame);
+        WorkPlaneFrame frame = isValidWorkPlaneFrame(interactionState_.inputFrame)
+                                   ? interactionState_.inputFrame
+                                   : input.workPlaneFrame;
         if (mode() == ArcMode::OnePoint) {
+            const Point3D radiusWorld = input.resolvedWorldPoint();
+            if (input.snapResult.isValid() && input.snapResult.hasWorldPoint &&
+                isValidWorkPlaneFrame(frame)) {
+                const qreal planeOffset = vectorDot(
+                    vectorSubtract(radiusWorld, frame.origin), frame.normal);
+                if (std::abs(planeOffset) > 1.0e-8) {
+                    WorkPlaneFrame radiusFrame;
+                    if (makeOnePointArcFrameThroughRadius(
+                            interactionState_.firstPointWorld,
+                            radiusWorld,
+                            interactionState_.referenceNormal,
+                            interactionState_.referenceFrame,
+                            &radiusFrame)) {
+                        frame = radiusFrame;
+                        context.viewportTransform().setWorkPlaneFrame(frame);
+                        interactionState_.inputFrame = frame;
+                        interactionState_.inputFrameValid = true;
+                        setInputPoint(
+                            0,
+                            worldPointToWorkPlaneFrame(
+                                interactionState_.firstPointWorld, frame));
+                    }
+                }
+            }
+            const QPointF localPoint = worldPointToWorkPlaneFrame(radiusWorld,
+                                                                  frame);
             appendInputPoint(localPoint);
             initializePreviewTracking();
         } else {
+            const QPointF localPoint = input.positionInFrame(frame);
             interactionState_.secondPointWorld =
                 interactionState_.resolvedChordPointValid
                     ? interactionState_.resolvedChordPointWorld

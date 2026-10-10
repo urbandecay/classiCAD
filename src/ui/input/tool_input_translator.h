@@ -22,7 +22,8 @@ public:
                                     const WorkPlaneFrame &workPlaneFrame,
                                     bool orthoEnabled,
                                     const QSize &viewportSize,
-                                    const SnapResult &snapResult);
+                                    const SnapResult &snapResult,
+                                    bool preserveWorldSnap = false);
 
     static ToolInput fromKeyEvent(const QKeyEvent &event,
                                   const QPointF &screenPosition,

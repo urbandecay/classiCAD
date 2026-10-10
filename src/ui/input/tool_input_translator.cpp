@@ -17,7 +17,8 @@ ToolInput ToolInputTranslator::fromMouseEvent(
     const WorkPlaneFrame &workPlaneFrame,
     bool orthoEnabled,
     const QSize &viewportSize,
-    const SnapResult &snapResult)
+    const SnapResult &snapResult,
+    bool preserveWorldSnap)
 {
     ToolInput input;
     input.screenPosition = screenPosition;
@@ -32,7 +33,8 @@ ToolInput ToolInputTranslator::fromMouseEvent(
     input.buttons = event.buttons();
     input.modifiers = event.modifiers();
 
-    if (activeTool != Tool::Line && activeTool != Tool::PointEdgeCenter &&
+    if (!preserveWorldSnap && activeTool != Tool::Line &&
+        activeTool != Tool::PointEdgeCenter &&
         activeTool != Tool::PointByLine && activeTool != Tool::PointByArcs &&
         input.snapResult.isValid() && input.snapResult.hasWorldPoint &&
         isValidWorkPlaneFrame(workPlaneFrame)) {

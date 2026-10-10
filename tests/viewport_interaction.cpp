@@ -1480,9 +1480,96 @@ bool verifyMeshLikeNurbsSolidFaceDuplicate(QApplication &application)
     return passed;
 }
 
+bool verifyOnePointArcSnapAnchor(QApplication &application)
+{
+    bool passed = true;
+    for (bool orbit : {false, true}) {
+    for (double radiusX : {5.0, 6.25}) {
+        const QSize size(640, 480);
+        ApplicationSession session;
+        Shape line;
+        line.geometryType = GeometryType::Line;
+        line.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY, 2.0);
+        line.points = {{5.0, 0.0}, {radiusX, 3.0}};
+        line.nurbs = makeDegreeOneNurbs(line.points);
+        session.document().append(line);
+        std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+        viewport->resize(size);
+        viewport->show();
+        application.processEvents();
+        viewport->setViewPreset(ViewportViewPreset::Isometric);
+        passed &= check(waitForViewPreset(viewport.get(), ViewportViewPreset::Isometric),
+                        "Arc snap camera must settle");
+        viewport->setTool(ToolId::Arc);
+        viewport->setArcMode(ArcMode::OnePoint);
+        viewport->setOrthoEnabled(false);
+        viewport->setOsnapEnabled(true);
+        viewport->setSnapModes(true, false, false, false, false, false, false, false);
+        ViewportTransform projection;
+        projection.setCameraPreferences(viewport->cameraPreferences());
+        projection.setViewPreset(ViewportViewPreset::Isometric);
+        QPointF centerScreen, radiusScreen;
+        projection.worldPointToScreen({5.0, 0.0, 2.0}, size, &centerScreen);
+        projection.worldPointToScreen({radiusX, 3.0, 2.0}, size, &radiusScreen);
+        auto move = [&](QPointF p) {
+            sendMouse(viewport.get(), QEvent::MouseMove, p,
+                      Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        };
+        auto click = [&](QPointF p) {
+            move(p);
+            sendMouse(viewport.get(), QEvent::MouseButtonPress, p,
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            sendMouse(viewport.get(), QEvent::MouseButtonRelease, p,
+                      Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        };
+        move(QPointF(320.0, 240.0));
+        QKeyEvent axis(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier);
+        QApplication::sendEvent(viewport.get(), &axis);
+        click(centerScreen);
+        click(radiusScreen);
+        if (orbit) {
+            const QPointF orbitStart(320.0, 240.0);
+            const QPointF orbitEnd(355.0, 260.0);
+            sendMouse(viewport.get(), QEvent::MouseButtonPress, orbitStart,
+                      Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+            sendMouse(viewport.get(), QEvent::MouseMove, orbitEnd,
+                      Qt::NoButton, Qt::MiddleButton, Qt::NoModifier);
+            sendMouse(viewport.get(), QEvent::MouseButtonRelease, orbitEnd,
+                      Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+        }
+        viewport->setOsnapEnabled(false);
+        click(radiusScreen + QPointF(-60.0, -90.0));
+        application.processEvents();
+        passed &= check(session.document().size() == 2,
+                        "Three arc clicks must commit one arc");
+        if (session.document().size() != 2) continue;
+        const Shape &arc = session.document().objects().last().geometry;
+        passed &= check(validateNurbsCurve(arc.nurbs), "Snapped arc must be valid NURBS");
+        if (arc.points.isEmpty() || arc.nurbs.controlPoints.isEmpty()) {
+            passed &= check(false, "Committed arc must contain its center and CVs");
+            continue;
+        }
+        const auto frame = shapeWorkPlaneFrame(arc);
+        const Point3D center = workPlaneFramePointToWorld(arc.points.first(), 0.0, frame);
+        const Point3D start = workPlaneFramePointToWorld(arc.nurbs.controlPoints.first(), 0.0, frame);
+        auto near = [](Point3D a, Point3D b) {
+            return std::abs(a.x-b.x) < 1e-6 && std::abs(a.y-b.y) < 1e-6 &&
+                   std::abs(a.z-b.z) < 1e-6;
+        };
+        passed &= check(near(center, {5.0, 0.0, 2.0}),
+                        "Mouse movement must preserve the exact snapped center depth");
+        passed &= check(near(start, {radiusX, 3.0, 2.0}),
+                        "Mouse movement must preserve the exact snapped radius endpoint");
+    }
+    }
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_ARC_SNAP_ONLY"))
+        return verifyOnePointArcSnapAnchor(application) ? 0 : 1;
     if (qEnvironmentVariableIsSet("CLASSICAD_SURFACE_VERTEX_GRAB_ONLY"))
         return verifySurfaceVertexGrab(application) ? 0 : 1;
     if (qEnvironmentVariableIsSet("CLASSICAD_VERTEX_SELECTION_ONLY")) {

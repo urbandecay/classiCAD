@@ -1565,9 +1565,79 @@ bool verifyOnePointArcSnapAnchor(QApplication &application)
     return passed;
 }
 
+bool verifyContinuousNearDrag(QApplication &application)
+{
+    bool allPassed = true;
+    for (bool useGrab : {false, true}) {
+    ApplicationSession session;
+    Shape source;
+    source.geometryType = GeometryType::Line;
+    source.points = {{0, 0}, {0, 15}};
+    source.nurbs = makeDegreeOneNurbs(source.points);
+    session.document().append(source);
+    Shape rail;
+    rail.geometryType = GeometryType::Bezier;
+    rail.nurbs = makeBezierNurbs({{-20, -0.2}, {-7, -0.3}, {7, -0.3}, {20, -0.2}});
+    session.document().append(rail);
+    const QSize size(640, 480);
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+    viewport->resize(size);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Top);
+    bool passed = check(waitForViewPreset(viewport.get(), ViewportViewPreset::Top),
+                        "Near drag camera must settle");
+    viewport->setTool(ToolId::Select);
+    viewport->setControlPointsVisible(true);
+    viewport->setOrthoEnabled(false);
+    viewport->setOsnapEnabled(true);
+    viewport->setSnapModes(false, false, false, false, false, false, true, false);
+    ViewportTransform projection;
+    projection.setViewPreset(ViewportViewPreset::Top);
+    QPointF start;
+    projection.worldPointToScreen({0, 0, 0}, size, &start);
+    sendMouse(viewport.get(), QEvent::MouseButtonPress, start,
+              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    if (useGrab) {
+        sendMouse(viewport.get(), QEvent::MouseButtonRelease, start,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QKeyEvent grabKey(QEvent::KeyPress, Qt::Key_G, Qt::NoModifier);
+        QApplication::sendEvent(viewport.get(), &grabKey);
+    }
+    double previousX = -1e9;
+    for (int step = 5; step <= 15; ++step) {
+        sendMouse(viewport.get(), QEvent::MouseMove, start + QPointF(step, 0),
+                  Qt::NoButton, useGrab ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+        application.processEvents();
+        const QPointF point = session.document()[0].nurbs.controlPoints.first();
+        passed &= check(point.y() < -0.274 && point.y() >= -0.275001,
+                        "Dragged control point must remain on the Near spline");
+        passed &= check(point.x() > previousX + 1e-5,
+                        "Every one-pixel move must advance the Near target");
+        previousX = point.x();
+    }
+    for (int step = 14; step >= 5; --step) {
+        sendMouse(viewport.get(), QEvent::MouseMove, start + QPointF(step, 0),
+                  Qt::NoButton, useGrab ? Qt::NoButton : Qt::LeftButton, Qt::NoModifier);
+        application.processEvents();
+        const QPointF point = session.document()[0].nurbs.controlPoints.first();
+        passed &= check(point.y() < -0.274 && point.y() >= -0.275001 &&
+                            point.x() < previousX - 1e-5,
+                        "Near must also track every one-pixel move back along the spline");
+        previousX = point.x();
+    }
+    sendMouse(viewport.get(), QEvent::MouseButtonRelease, start + QPointF(15, 0),
+              Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    allPassed &= passed;
+    }
+    return allPassed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_NEAR_DRAG_ONLY"))
+        return verifyContinuousNearDrag(application) ? 0 : 1;
     if (qEnvironmentVariableIsSet("CLASSICAD_ARC_SNAP_ONLY"))
         return verifyOnePointArcSnapAnchor(application) ? 0 : 1;
     if (qEnvironmentVariableIsSet("CLASSICAD_SURFACE_VERTEX_GRAB_ONLY"))

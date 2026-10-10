@@ -2843,19 +2843,24 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
     if ((!settings_.enabled && !forceEnabled) || viewportSize.isEmpty()) return best;
     const OcclusionPlane occlusionPlane =
         occlusionPlaneAt(screenPosition, excludedShapeIndices);
-    qreal bestDistance = 12.0;
+    constexpr qreal specificSnapRadiusPixels = 12.0;
+    constexpr qreal nearSnapRadiusPixels = 18.0;
+    qreal bestDistance = nearSnapRadiusPixels;
     int bestPriority = -1;
     const auto considerWorld = [&](SnapType type, const Point3D &world) {
         QPointF screen;
         if (!transform.worldPointToScreen(world, viewportSize, &screen)) return;
         const qreal distance = std::hypot(screen.x() - screenPosition.x(),
                                           screen.y() - screenPosition.y());
-        if (distance > 12.0 ||
+        const qreal snapRadius = type == SnapType::Near
+                                     ? nearSnapRadiusPixels
+                                     : specificSnapRadiusPixels;
+        if (distance > snapRadius ||
             !pointPassesOcclusionPlane(world, occlusionPlane, transform)) {
             return;
         }
         const int priority = type == SnapType::Near ? 0 : 1;
-        if (distance <= 12.0 && (priority > bestPriority ||
+        if (distance <= snapRadius && (priority > bestPriority ||
             (priority == bestPriority && distance <= bestDistance))) {
             bestDistance = distance;
             bestPriority = priority;
@@ -2912,7 +2917,8 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
         QPointF localCursor;
         if (transform.screenToWorkPlane(screenPosition, viewportSize, frame, &localCursor)) {
             for (const SnapCandidate &candidate : nearCandidatesForScene(
-                    scene.document, localCursor, shapeTransform, viewportSize)) {
+                    scene.document, localCursor, shapeTransform, viewportSize,
+                    {}, nearSnapRadiusPixels)) {
                 consider(candidate);
             }
             if (anchor != nullptr) {

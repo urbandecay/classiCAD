@@ -200,5 +200,26 @@ int main()
                         std::abs(spatialSnap.worldTranslation.x - snapDelta.x()) < 1.0e-9 &&
                         std::abs(spatialSnap.worldTranslation.z - 5) < 1.0e-9,
                     "large-selection spatial buckets must preserve the target's world depth");
+
+    Document nearScene;
+    nearScene.append(lineShape(0.0));
+    SnapEngine spatialNearEngine;
+    SnapSettings spatialNearSettings;
+    spatialNearSettings.enabled = true;
+    spatialNearSettings.endpoint = spatialNearSettings.midpoint = false;
+    spatialNearSettings.intersection = spatialNearSettings.center = false;
+    spatialNearSettings.perpendicular = spatialNearSettings.tangent = false;
+    spatialNearSettings.near = true;
+    spatialNearSettings.controlPoint = false;
+    spatialNearEngine.setSettings(spatialNearSettings);
+    QPointF lineScreen;
+    transform.worldPointToScreen({0.0, 0.0, 0.0}, viewportSize, &lineScreen);
+    const SnapResult nearAtFifteenPixels =
+        spatialNearEngine.findSpatialSnapPoint(
+            nearScene, lineScreen + QPointF(0.0, 15.0), nullptr,
+            transform, viewportSize);
+    passed &= check(nearAtFifteenPixels.type == SnapType::Near &&
+                        nearAtFifteenPixels.hasWorldPoint,
+                    "Spatial Near snapping must retain the spline within the 18 px rail tolerance");
     return passed ? 0 : 1;
 }

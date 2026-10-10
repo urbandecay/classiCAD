@@ -82,6 +82,13 @@ misread or implemented incorrectly.
   from the snapped world point's coordinates in the fixed arc frame. The
   screen-plane point used to draw the snap marker is not the geometric angle
   target. Do not move the captured arc plane when resolving sweep snaps.
+- The general Near snap path acquires curves within 18 screen pixels, while
+  the spatial snap path used by One Point Arc previously stopped at 12. Near
+  uses the general path's 18-pixel tolerance now; specific spatial snaps
+  retain their 12-pixel tolerance. This acquisition change does not fix
+  control-point drag stepping: that comes from holding a Near target fixed
+  until the breakaway threshold. Direct CV dragging and G/Grab must evaluate
+  Near on every mouse move rather than apply the fixed-target hold rule.
 - A One Point Arc's captured input frame takes precedence over pre-click
   axis/plane locks after its center is clicked. The endpoint trace showed the
   correct snapped-center plane immediately after the click, then the generic

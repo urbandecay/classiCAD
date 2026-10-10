@@ -9245,7 +9245,12 @@ protected:
                     std::hypot(screenPosition.x() - dragSnapCursorScreen_.x(),
                                screenPosition.y() - dragSnapCursorScreen_.y());
 
-                if (dragSnapLocked_ &&
+                // Near is a continuous curve target, so update it on every
+                // mouse move instead of holding a sampled location until
+                // the fixed-point snap breakaway distance is reached.
+                const bool fixedPointSnapLocked = dragSnapLocked_ &&
+                    currentDragSnap_.type != SnapType::Near;
+                if (fixedPointSnapLocked &&
                     cursorDistanceFromSnap <= kDragSnapBreakawayPixels) {
                     DebugLog::instance().write(
                         QStringLiteral("control point snap-hold shape=%1 index=%2 cursorDistance=%3 breakaway=%4")
@@ -9253,7 +9258,7 @@ protected:
                             .arg(controlPointIndex_)
                             .arg(cursorDistanceFromSnap, 0, 'f', 2)
                             .arg(kDragSnapBreakawayPixels, 0, 'f', 2));
-                } else if (dragSnapLocked_) {
+                } else if (fixedPointSnapLocked) {
                     beginDragHistory();
                     translateControlPoint(selectedShapeIndex_,
                                           controlPointIndex_,
@@ -17907,7 +17912,7 @@ private:
                                    grabViewPlaneAnchorValid_;
         bool viewPlaneSnapBreakaway = false;
         Point3D viewPlaneSnapCorrection;
-        if (dragSnapLocked_) {
+        if (dragSnapLocked_ && currentDragSnap_.type != SnapType::Near) {
             const QPointF snapScreen = viewPlaneGrab &&
                                                dragSnapViewPlaneAnchorValid_
                                            ? selectionDragSnapScreen_

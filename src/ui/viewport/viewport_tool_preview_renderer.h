@@ -106,8 +106,7 @@ public:
 
 private:
     void drawSnapMarker(QPainter &painter,
-                        SnapType type,
-                        const QPointF &worldPoint,
+                        const SnapResult &snap,
                         const QSize &viewportSize) const;
 
     const ViewportRenderer &renderer_;

@@ -65,11 +65,15 @@ ViewportToolPreviewRenderer::ViewportToolPreviewRenderer(
 
 void ViewportToolPreviewRenderer::drawSnapMarker(
     QPainter &painter,
-    SnapType type,
-    const QPointF &worldPoint,
+    const SnapResult &snap,
     const QSize &viewportSize) const
 {
-    snapMarkerRenderer_.draw(painter, type, worldPoint, viewportSize);
+    if (snap.hasWorldPoint) {
+        snapMarkerRenderer_.drawWorld(painter, snap.type, snap.worldPoint,
+                                      viewportSize);
+    } else {
+        snapMarkerRenderer_.draw(painter, snap.type, snap.point, viewportSize);
+    }
 }
 
 void ViewportToolPreviewRenderer::drawLinePreview(QPainter &painter,
@@ -117,7 +121,7 @@ void ViewportToolPreviewRenderer::drawLinePreview(QPainter &painter,
     }
 
     if (currentSnap.isValid()) {
-        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        drawSnapMarker(painter, currentSnap, viewportSize);
     }
 }
 
@@ -255,7 +259,7 @@ void ViewportToolPreviewRenderer::drawArcPreview(QPainter &painter,
 
         if (pendingPoints.isEmpty()) {
             if (currentSnap.isValid()) {
-                drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+                drawSnapMarker(painter, currentSnap, viewportSize);
             }
             return;
         }
@@ -271,7 +275,7 @@ void ViewportToolPreviewRenderer::drawArcPreview(QPainter &painter,
         QPointF centerScreen;
         if (!screenPoint(pendingPoints.first(), &centerScreen)) {
             if (currentSnap.isValid()) {
-                drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+                drawSnapMarker(painter, currentSnap, viewportSize);
             }
             return;
         }
@@ -348,7 +352,7 @@ void ViewportToolPreviewRenderer::drawArcPreview(QPainter &painter,
         }
 
         if (currentSnap.isValid()) {
-            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+            drawSnapMarker(painter, currentSnap, viewportSize);
         }
         return;
     }
@@ -431,15 +435,14 @@ void ViewportToolPreviewRenderer::drawArcPreview(QPainter &painter,
         painter.restore();
 
         if (currentSnap.isValid()) {
-            drawSnapMarker(painter, currentSnap.type, currentSnap.point,
-                           viewportSize);
+            drawSnapMarker(painter, currentSnap, viewportSize);
         }
         return;
     }
 
     if (pendingPoints.isEmpty()) {
         if (currentSnap.isValid()) {
-            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+            drawSnapMarker(painter, currentSnap, viewportSize);
         }
         return;
     }
@@ -482,7 +485,7 @@ void ViewportToolPreviewRenderer::drawArcPreview(QPainter &painter,
     }
 
     if (currentSnap.isValid()) {
-        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        drawSnapMarker(painter, currentSnap, viewportSize);
     }
 }
 
@@ -537,7 +540,7 @@ void ViewportToolPreviewRenderer::drawCirclePreview(QPainter &painter,
         }
         painter.restore();
         if (currentSnap.isValid()) {
-            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+            drawSnapMarker(painter, currentSnap, viewportSize);
         }
         return;
     }
@@ -612,7 +615,7 @@ void ViewportToolPreviewRenderer::drawCirclePreview(QPainter &painter,
     painter.restore();
 
     if (currentSnap.isValid()) {
-        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        drawSnapMarker(painter, currentSnap, viewportSize);
     }
 }
 
@@ -651,7 +654,7 @@ void ViewportToolPreviewRenderer::drawEllipsePreview(QPainter &painter,
     painter.restore();
 
     if (currentSnap.isValid()) {
-        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        drawSnapMarker(painter, currentSnap, viewportSize);
     }
 }
 
@@ -666,7 +669,7 @@ void ViewportToolPreviewRenderer::drawRectanglePreview(QPainter &painter,
 {
     if (pendingPoints.isEmpty()) {
         if (currentSnap.isValid()) {
-            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+            drawSnapMarker(painter, currentSnap, viewportSize);
         }
         return;
     }
@@ -743,7 +746,7 @@ void ViewportToolPreviewRenderer::drawRectanglePreview(QPainter &painter,
     painter.restore();
 
     if (currentSnap.isValid()) {
-        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        drawSnapMarker(painter, currentSnap, viewportSize);
     }
 }
 
@@ -759,7 +762,7 @@ void ViewportToolPreviewRenderer::drawPolygonPreview(QPainter &painter,
 {
     if (pendingPoints.isEmpty()) {
         if (currentSnap.isValid()) {
-            drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+            drawSnapMarker(painter, currentSnap, viewportSize);
         }
         return;
     }
@@ -820,7 +823,7 @@ void ViewportToolPreviewRenderer::drawPolygonPreview(QPainter &painter,
     painter.restore();
 
     if (currentSnap.isValid()) {
-        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        drawSnapMarker(painter, currentSnap, viewportSize);
     }
 }
 
@@ -843,7 +846,7 @@ void ViewportToolPreviewRenderer::drawPointPreview(QPainter &painter,
         painter.drawEllipse(screenPoint, 4.5, 4.5);
     }
     if (currentSnap.isValid()) {
-        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        drawSnapMarker(painter, currentSnap, viewportSize);
     }
 }
 
@@ -961,7 +964,7 @@ void ViewportToolPreviewRenderer::drawRotatePreview(QPainter &painter,
     }
     if (currentSnap.isValid() &&
         !(rotateAngleInputActive && !rotateAngleInput.isEmpty())) {
-        drawSnapMarker(painter, currentSnap.type, currentSnap.point, viewportSize);
+        drawSnapMarker(painter, currentSnap, viewportSize);
     }
 }
 

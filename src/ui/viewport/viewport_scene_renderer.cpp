@@ -1364,7 +1364,14 @@ bool ViewportSceneRenderer::drawArcToolOverlay(
     QPointF snapScreen;
     const bool snapScreenValid = currentSnap.isValid();
     if (snapScreenValid) {
-        snapScreen = transform.worldToScreen(currentSnap.point, viewportSize);
+        if (currentSnap.hasWorldPoint) {
+            transform.worldPointToScreen(currentSnap.worldPoint,
+                                         viewportSize,
+                                         &snapScreen);
+        } else {
+            snapScreen = transform.worldToScreen(currentSnap.point,
+                                                 viewportSize);
+        }
         const QColor snapColor(QStringLiteral("#63b5e8"));
         switch (currentSnap.type) {
         case SnapType::Endpoint:

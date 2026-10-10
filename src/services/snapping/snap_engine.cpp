@@ -1522,13 +1522,18 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
     QVector<Shape::NurbsCurve2D> intersectionCurves;
     QVector<IntersectionSegment> intersectionSegments;
     const auto appendIntersectionCurve = [&](const Shape::NurbsCurve2D &curve,
-                                             const WorkPlaneFrame &frame) {
+                                             const WorkPlaneFrame &frame,
+                                             const Point3D &worldOffset) {
         if (!settings_.intersection || !validateNurbsCurve(curve)) {
             return;
         }
+        WorkPlaneFrame placedFrame = frame;
+        placedFrame.origin.x += worldOffset.x;
+        placedFrame.origin.y += worldOffset.y;
+        placedFrame.origin.z += worldOffset.z;
         Shape::NurbsCurve2D projectedCurve = curve;
         mapCurveBetweenFrames(&projectedCurve,
-                              frame,
+                              placedFrame,
                               transform.workPlaneFrame());
         const int curveIndex = intersectionCurves.size();
         intersectionCurves.append(std::move(projectedCurve));
@@ -1570,6 +1575,34 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
         }
     };
 
+    struct CandidateWorldPositionGuard {
+        QVector<SnapCandidate> &candidates;
+        qsizetype firstCandidate = 0;
+        int shapeIndex = -1;
+        WorkPlaneFrame frame;
+        Point3D worldOffset;
+
+        ~CandidateWorldPositionGuard()
+        {
+            for (qsizetype index = firstCandidate;
+                 index < candidates.size(); ++index) {
+                SnapCandidate &candidate = candidates[index];
+                if (candidate.shapeIndex < 0) {
+                    candidate.shapeIndex = shapeIndex;
+                }
+                if (candidate.hasWorldPoint) {
+                    continue;
+                }
+                candidate.worldPoint = workPlaneFramePointToWorld(
+                    candidate.point, frame);
+                candidate.worldPoint.x += worldOffset.x;
+                candidate.worldPoint.y += worldOffset.y;
+                candidate.worldPoint.z += worldOffset.z;
+                candidate.hasWorldPoint = true;
+            }
+        }
+    };
+
     for (int shapeIndex = 0; shapeIndex < document.size(); ++shapeIndex) {
         if (excludedShapeIndices.contains(shapeIndex)) {
             continue;
@@ -1580,9 +1613,13 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
         const ObjectId objectId = document.objectIdAt(shapeIndex);
         const SceneObject *sceneObject = document.object(objectId);
         const Shape &shape = document[shapeIndex];
+        CandidateWorldPositionGuard candidateWorldPositionGuard{
+            candidates, candidates.size(), shapeIndex,
+            shapeWorkPlaneFrame(shape), {}};
         const Point3D worldOffset = sceneObject != nullptr
                                         ? sceneObject->placementTranslation
                                         : Point3D{};
+        candidateWorldPositionGuard.worldOffset = worldOffset;
         const bool spatialSurface = shape.geometryType == GeometryType::NurbsSurface ||
                                     shape.geometryType == GeometryType::NurbsSolid;
         const bool usesDisplayedControlPointList =
@@ -1661,10 +1698,13 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                      ++componentIndex) {
                     appendIntersectionCurve(
                         shape.components[componentIndex],
-                        shapeComponentWorkPlaneFrame(shape, componentIndex));
+                        shapeComponentWorkPlaneFrame(shape, componentIndex),
+                        worldOffset);
                 }
             } else if (validateNurbsCurve(shape.nurbs)) {
-                appendIntersectionCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
+                appendIntersectionCurve(shape.nurbs,
+                                        shapeWorkPlaneFrame(shape),
+                                        worldOffset);
             } else {
                 Shape::NurbsCurve2D intersectionCurve;
                 if (shape.geometryType == GeometryType::Line &&
@@ -1726,7 +1766,8 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                     }
                 }
                 appendIntersectionCurve(intersectionCurve,
-                                        shapeWorkPlaneFrame(shape));
+                                        shapeWorkPlaneFrame(shape),
+                                        worldOffset);
             }
         }
 
@@ -1925,7 +1966,11 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                     candidate.componentIndex = componentIndex;
                     candidate.worldPoint = workPlaneFramePointToWorld(
                         point, componentFrame);
+                    candidate.worldPoint.x += worldOffset.x;
+                    candidate.worldPoint.y += worldOffset.y;
+                    candidate.worldPoint.z += worldOffset.z;
                     candidate.hasWorldPoint = true;
+                    candidate.shapeIndex = shapeIndex;
                     candidates.append(candidate);
                 };
                 QPointF start;

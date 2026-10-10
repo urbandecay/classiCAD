@@ -7940,9 +7940,15 @@ protected:
         }
         if ((objectSelectionDragActive() || controlPointSelectionDragActive()) &&
             currentDragSnap_.isValid()) {
-            drawSnapMarker(painter,
-                           currentDragSnap_.type,
-                           currentDragSnap_.targetPoint);
+            if (currentDragSnap_.hasWorldTranslation) {
+                viewportOverlay_.drawWorldSnapMarker(
+                    painter, currentDragSnap_.type,
+                    currentDragSnap_.worldTargetPoint, size());
+            } else {
+                drawSnapMarker(painter,
+                               currentDragSnap_.type,
+                               currentDragSnap_.targetPoint);
+            }
         }
 
         if (selectionBoxOverlayActive()) {
@@ -12825,7 +12831,13 @@ private:
             activeTool_ == Tool::AngularDimension;
         const auto traceSnapResult = [&](const SnapResult &result,
                                          bool spatial) {
-            if (!traceSnaps && !traceAngularDimension) {
+            // Endpoint misplacements are difficult to diagnose from the
+            // cursor event log alone. Keep a focused trace enabled whenever
+            // an Endpoint snap is actually chosen; the environment flag
+            // still enables the full candidate trace for other snap types.
+            const bool traceEndpointSnap = result.isValid() &&
+                                           result.type == SnapType::Endpoint;
+            if (!traceSnaps && !traceAngularDimension && !traceEndpointSnap) {
                 return;
             }
 
@@ -12833,7 +12845,13 @@ private:
             const QPointF cursorScreen = worldToScreen(rawPoint);
             QPointF markerScreen = cursorScreen;
             if (result.isValid()) {
-                markerScreen = worldToScreen(result.point);
+                if (result.hasWorldPoint) {
+                    viewportTransform_.worldPointToScreen(result.worldPoint,
+                                                          size(),
+                                                          &markerScreen);
+                } else {
+                    markerScreen = worldToScreen(result.point);
+                }
             }
             Point3D resultWorld = workPlaneFramePointToWorld(rawPoint, activeFrame);
             QPointF resultWorldScreen = markerScreen;
@@ -12923,8 +12941,10 @@ private:
                     continue;
                 }
                 for (const SnapCandidate &candidate : candidates) {
-                    const Point3D candidateWorld =
-                        workPlaneFramePointToWorld(candidate.point, targetFrame);
+                    const Point3D candidateWorld = candidate.hasWorldPoint
+                        ? candidate.worldPoint
+                        : workPlaneFramePointToWorld(candidate.point,
+                                                     targetFrame);
                     QPointF candidateScreen;
                     const bool projectable = viewportTransform_.worldPointToScreen(
                         candidateWorld, size(), &candidateScreen);

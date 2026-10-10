@@ -6771,6 +6771,11 @@ protected:
                                 qreal parameter) {
                                 const int count = curve.controlPoints.size();
                                 if (count <= 0) return qreal(0.0);
+                                const bool firstEndpointSelected =
+                                    wireSelectedControlPoints.contains(firstIndex);
+                                const bool lastEndpointSelected =
+                                    wireSelectedControlPoints.contains(
+                                        firstIndex + count - 1);
                                 qreal domainStart = 0.0;
                                 qreal domainEnd = 0.0;
                                 if (!nurbsParameterDomain(curve, &domainStart,
@@ -6791,18 +6796,24 @@ protected:
                                     endpointDx * endpointDx +
                                             endpointDy * endpointDy +
                                             endpointDz * endpointDz <= 1.0e-12;
+                                // Selecting both ends of one open spline means
+                                // the whole connected curve is selected. B-spline
+                                // basis weights alone would leave its middle
+                                // faded because the endpoint CVs have little
+                                // influence there.
+                                if (!closedCurve && firstEndpointSelected &&
+                                    lastEndpointSelected) {
+                                    return qreal(1.0);
+                                }
                                 if (parameter <= domainStart + 1.0e-12) {
-                                    return (wireSelectedControlPoints.contains(firstIndex) ||
+                                    return (firstEndpointSelected ||
                                             (closedCurve &&
-                                             wireSelectedControlPoints.contains(
-                                                 firstIndex + count - 1)))
+                                             lastEndpointSelected))
                                         ? qreal(1.0) : qreal(0.0);
                                 }
                                 if (parameter >= domainEnd - 1.0e-12) {
-                                    return (wireSelectedControlPoints.contains(
-                                                firstIndex + count - 1) ||
-                                            (closedCurve &&
-                                             wireSelectedControlPoints.contains(firstIndex)))
+                                    return (lastEndpointSelected ||
+                                            (closedCurve && firstEndpointSelected))
                                         ? qreal(1.0) : qreal(0.0);
                                 }
                                 const QVector<double> knots =

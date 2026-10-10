@@ -49,6 +49,11 @@ struct ToolPreviewGuide {
     bool hasWorkPlaneFrame = false;
 };
 
+struct CompletedFaceExtrusion {
+    ObjectId objectId = ObjectId::invalid();
+    int capIndex = 1;
+};
+
 struct ToolPreview {
     QVector<QPointF> points;
     QVector<ToolPreviewGuide> guides;
@@ -60,7 +65,7 @@ struct ToolPreview {
     QVector<Shape> shapes;
     QVector<ObjectId> hiddenObjectIds;
     QVector<ObjectId> completedExtrusionObjectIds;
-    QVector<ObjectId> completedFaceExtrusionObjectIds;
+    QVector<CompletedFaceExtrusion> completedFaceExtrusions;
     bool planeLocked = false;
     SnapResult snap;
     bool overridesSnap = false;

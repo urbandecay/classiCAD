@@ -284,6 +284,32 @@ misread or implemented incorrectly.
   the translated control row for a ruled surface, or the new cap for a solid.
   Keeping only the original source selected makes repeated extrusion start
   over from the old geometry.
+- Repeating Extrude from the translated boundary row of a ruled NURBS surface
+  must rebuild that row as its exact NURBS curve (degree, knots, weights, and
+  CV order) and sweep it again. Treating every selected row CV as a separate
+  point creates disconnected uprights instead of continuing the surface.
+- Repeating Extrude from a complete cap of an affine extrusion solid must
+  continue the same solid: extend the top displacement, or move the base and
+  compensate the displacement for the bottom cap. Treating cap vertices as
+  separate point sources leaves only uprights; replacing the solid with an
+  extruded cap loses its original sides. This solid format cannot represent a
+  sideways cap continuation exactly, so reject that sweep instead of creating
+  a detached cap solid.
+- On a planar 2×2 NURBS patch, extruding all four selected control vertices
+  represents extruding the complete face; extruding two adjacent selected
+  control vertices represents its edge. Route those selections through face
+  or edge extrusion so they do not become independent point edges. Partial or
+  non-adjacent vertex selections remain point extrusions.
+- Face/edge/cap promotion consumes any welded seam points on that selected
+  patch. Do not also promote a linked source curve or its endpoints into a
+  second extrusion; compare weld-group identity and world position while
+  preserving unrelated selected geometry.
+- A promoted edge on a rational surface must copy the selected CV weights and
+  rational flag. Replacing them with unit weights changes the exact NURBS edge.
+- When points or curves are selected with a solid cap, derive the shared
+  extrusion constraint from the cap source rather than whichever point happens
+  to be first. The current affine solid representation only permits extending
+  that cap along its outward normal; report unsupported axis overrides clearly.
 - Mixed point/curve previews must draw surface previews even when edge
   previews succeeded on the GPU; one global GPU-preview flag must not suppress
   geometry that uses the painter path.

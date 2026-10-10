@@ -497,6 +497,10 @@ misread or implemented incorrectly.
 - A curve extrusion's base CVs occupy every other control point in its ruled
   surface net. Persist those weld groups on the surface and include surface and
   loose-point control points in the same linked-move path as curve CVs.
+- The existing viewport `W` shortcut starts the Weld command before an active
+  tool can process the key. Claim `W` through Qt's shortcut-override event while
+  Extrude is active so its weld toggle receives the key without ending the
+  extrusion; keep the Weld command shortcut available in other tools.
 
 ## Blender viewport zoom findings
 

@@ -10486,6 +10486,17 @@ protected:
     bool event(QEvent *event) override
     {
         if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
+            activeTool_ == Tool::PointExtrude) {
+            const auto *keyEvent = static_cast<const QKeyEvent *>(event);
+            if (keyEvent->key() == Qt::Key_W &&
+                keyEvent->modifiers() == Qt::NoModifier) {
+                // W toggles the active extrusion's weld option. Claim it
+                // before the main-window Weld shortcut can replace the tool.
+                event->accept();
+                return true;
+            }
+        }
+        if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
             activeTool_ == Tool::Arc) {
             const auto *keyEvent = static_cast<const QKeyEvent *>(event);
             const bool arcTextEnter =

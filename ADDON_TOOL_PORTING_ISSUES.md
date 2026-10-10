@@ -279,6 +279,11 @@ misread or implemented incorrectly.
   spatial mouse input, free dragging, XYZ constraints, snaps, and completion
   behave identically. A separate curve command cleared selection before its
   controller began and was missing preview publication/rendering hooks.
+- After a successful extrusion, keep the new boundary selected so the next
+  Extrude continues from the result: select the new endpoint for point output,
+  the translated control row for a ruled surface, or the new cap for a solid.
+  Keeping only the original source selected makes repeated extrusion start
+  over from the old geometry.
 - Mixed point/curve previews must draw surface previews even when edge
   previews succeeded on the GPU; one global GPU-preview flag must not suppress
   geometry that uses the painter path.

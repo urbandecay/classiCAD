@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace classiCAD {
 namespace {
@@ -88,6 +89,7 @@ void PointExtrudeTool::begin(ToolContext &context)
     stagedCurveSources_.clear();
     stagedControlPointSourcesRequested_ = false;
     sourcePoints_.clear();
+    completedExtrusionObjectIds_.clear();
     inputFrame_ = {};
     cursorPoint_ = {};
     lastInput_ = {};
@@ -311,6 +313,7 @@ bool PointExtrudeTool::handleKey(const ToolInput &input, ToolContext &context)
 void PointExtrudeTool::cancel(ToolContext &context)
 {
     sourcePoints_.clear();
+    completedExtrusionObjectIds_.clear();
     constraintAxisKey_ = 0;
     normalConstraint_ = false;
     hasLastInput_ = false;
@@ -505,6 +508,7 @@ void PointExtrudeTool::commit(ToolContext &context)
         }
     }
 
+    QVector<ObjectId> createdObjectIds;
     for (int index = 0; index < sourcePoints_.size(); ++index) {
         const SourcePoint &source = sourcePoints_[index];
         if (!source.surface.controlPoints.isEmpty()) {
@@ -537,12 +541,16 @@ void PointExtrudeTool::commit(ToolContext &context)
                 publish(context);
                 return;
             }
-        } else if (!transaction.addShape(lines[index]).isValid()) {
-            transaction.rollback();
-            status_.text = QStringLiteral("Extrude failed to create geometry");
-            status_.canCommit = false;
-            publish(context);
-            return;
+        } else {
+            const ObjectId createdObjectId = transaction.addShape(lines[index]);
+            if (!createdObjectId.isValid()) {
+                transaction.rollback();
+                status_.text = QStringLiteral("Extrude failed to create geometry");
+                status_.canCommit = false;
+                publish(context);
+                return;
+            }
+            createdObjectIds.append(createdObjectId);
         }
     }
     if (!context.commitTransaction(transaction)) {
@@ -552,6 +560,7 @@ void PointExtrudeTool::commit(ToolContext &context)
         return;
     }
 
+    completedExtrusionObjectIds_ = std::move(createdObjectIds);
     status_.state = ToolLifecycleState::Completed;
     status_.canCommit = false;
     status_.text = QStringLiteral("Extrude created %1 object%2")
@@ -592,6 +601,7 @@ ToolPreview PointExtrudeTool::preview() const
         }
     }
     if (status_.state == ToolLifecycleState::Completed) {
+        result.completedExtrusionObjectIds = completedExtrusionObjectIds_;
         for (const SourcePoint &source : sourcePoints_) {
             if (!source.surface.controlPoints.isEmpty() &&
                 source.objectId.isValid()) {

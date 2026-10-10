@@ -787,7 +787,8 @@ public:
         });
         toolContext_.setToolFinisher([this](ToolId tool) {
             if (activeTool_ == Tool::PointExtrude && tool == Tool::Select) {
-                selectExtrudedCapComponents(
+                selectExtrudedResultComponents(
+                    toolPreview_.completedExtrusionObjectIds,
                     toolPreview_.completedFaceExtrusionObjectIds);
             }
             setTool(tool);
@@ -1892,83 +1893,174 @@ public:
         return subdivisionTool_.prompt();
     }
 
-    void selectExtrudedCapComponents(const QVector<ObjectId> &extrudedObjectIds)
+    void selectExtrudedResultComponents(
+        const QVector<ObjectId> &createdObjectIds,
+        const QVector<ObjectId> &faceExtrusionObjectIds)
     {
+        QVector<ObjectId> resultObjectIds;
+        QSet<quint64> faceExtrusionObjectValues;
+        for (const ObjectId objectId : faceExtrusionObjectIds) {
+            if (objectId.isValid() && document_.shape(objectId) != nullptr) {
+                faceExtrusionObjectValues.insert(objectId.value());
+                if (!resultObjectIds.contains(objectId)) {
+                    resultObjectIds.append(objectId);
+                }
+            }
+        }
+        for (const ObjectId objectId : createdObjectIds) {
+            if (objectId.isValid() && document_.shape(objectId) != nullptr &&
+                !resultObjectIds.contains(objectId)) {
+                resultObjectIds.append(objectId);
+            }
+        }
+        if (resultObjectIds.isEmpty()) {
+            return;
+        }
+
+        selection_.setObjectIds(resultObjectIds, resultObjectIds.back());
+        clearComponentSelections();
+        componentSelectionObject_ = resultObjectIds.back();
         const int modeIndex = static_cast<int>(componentSelectionMode_);
-        for (const ObjectId objectId : extrudedObjectIds) {
-            const auto oldSelection =
-                componentSelections_[modeIndex].constFind(objectId.value());
-            if (oldSelection == componentSelections_[modeIndex].cend() ||
-                oldSelection.value().isEmpty()) {
-                continue;
-            }
+        for (const ObjectId objectId : resultObjectIds) {
             const Shape *shape = document_.shape(objectId);
-            if (shape == nullptr || shape->geometryType != GeometryType::NurbsSolid) {
+            if (shape == nullptr) {
                 continue;
             }
-            const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(*shape);
-            if (faces.size() < 2) {
-                continue;
-            }
-            QSet<int> capSelection;
-            if (componentSelectionMode_ == ComponentSelectionMode::Face) {
-                capSelection.insert(1);
-            } else {
-                Shape cap;
-                cap.geometryType = GeometryType::NurbsSurface;
-                cap.nurbsSurface = faces[1];
-                const ViewportDepthGeometry solidCage =
-                    selectedSurfaceControlNet(*shape);
-                const ViewportDepthGeometry capCage =
-                    selectedSurfaceControlNet(cap);
-                if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
-                    for (int capIndex = 0;
-                         capIndex < capCage.pointVertices.size(); ++capIndex) {
-                        const Point3D capPoint = duplicateCagePoint(
-                            capCage.pointVertices[capIndex]);
-                        for (int solidIndex = 0;
-                             solidIndex < solidCage.pointVertices.size(); ++solidIndex) {
-                            if (duplicatePointsEqual(
-                                    capPoint,
-                                    duplicateCagePoint(
-                                        solidCage.pointVertices[solidIndex]))) {
-                                capSelection.insert(solidIndex);
-                                break;
+            QSet<int> resultComponentSelection;
+            const bool faceExtrusion =
+                faceExtrusionObjectValues.contains(objectId.value());
+            if (faceExtrusion &&
+                shape->geometryType == GeometryType::NurbsSolid) {
+                const QVector<NurbsSurface3D> faces = shapeSurfaceFaces(*shape);
+                if (faces.size() >= 2) {
+                    if (componentSelectionMode_ ==
+                        ComponentSelectionMode::Face) {
+                        resultComponentSelection.insert(1);
+                    } else {
+                        Shape cap;
+                        cap.geometryType = GeometryType::NurbsSurface;
+                        cap.nurbsSurface = faces[1];
+                        const ViewportDepthGeometry solidCage =
+                            selectedSurfaceControlNet(*shape);
+                        const ViewportDepthGeometry capCage =
+                            selectedSurfaceControlNet(cap);
+                        if (componentSelectionMode_ ==
+                            ComponentSelectionMode::Vertex) {
+                            for (int capIndex = 0;
+                                 capIndex < capCage.pointVertices.size();
+                                 ++capIndex) {
+                                const Point3D capPoint = duplicateCagePoint(
+                                    capCage.pointVertices[capIndex]);
+                                for (int solidIndex = 0;
+                                     solidIndex <
+                                         solidCage.pointVertices.size();
+                                     ++solidIndex) {
+                                    if (duplicatePointsEqual(
+                                            capPoint,
+                                            duplicateCagePoint(
+                                                solidCage.pointVertices[
+                                                    solidIndex]))) {
+                                        resultComponentSelection.insert(
+                                            solidIndex);
+                                        break;
+                                    }
+                                }
                             }
-                        }
-                    }
-                } else {
-                    for (int capEdge = 0;
-                         capEdge + 1 < capCage.preciseLineVertices.size();
-                         capEdge += 2) {
-                        const Point3D first = duplicateCagePoint(
-                            capCage.preciseLineVertices[capEdge]);
-                        const Point3D second = duplicateCagePoint(
-                            capCage.preciseLineVertices[capEdge + 1]);
-                        for (int solidEdge = 0;
-                             solidEdge + 1 < solidCage.preciseLineVertices.size();
-                             solidEdge += 2) {
-                            const Point3D solidFirst = duplicateCagePoint(
-                                solidCage.preciseLineVertices[solidEdge]);
-                            const Point3D solidSecond = duplicateCagePoint(
-                                solidCage.preciseLineVertices[solidEdge + 1]);
-                            if ((duplicatePointsEqual(first, solidFirst) &&
-                                 duplicatePointsEqual(second, solidSecond)) ||
-                                (duplicatePointsEqual(first, solidSecond) &&
-                                 duplicatePointsEqual(second, solidFirst))) {
-                                capSelection.insert(solidEdge / 2);
-                                break;
+                        } else {
+                            for (int capEdge = 0;
+                                 capEdge + 1 <
+                                     capCage.preciseLineVertices.size();
+                                 capEdge += 2) {
+                                const Point3D first = duplicateCagePoint(
+                                    capCage.preciseLineVertices[capEdge]);
+                                const Point3D second = duplicateCagePoint(
+                                    capCage.preciseLineVertices[capEdge + 1]);
+                                for (int solidEdge = 0;
+                                     solidEdge + 1 <
+                                         solidCage.preciseLineVertices.size();
+                                     solidEdge += 2) {
+                                    const Point3D solidFirst =
+                                        duplicateCagePoint(
+                                            solidCage.preciseLineVertices[
+                                                solidEdge]);
+                                    const Point3D solidSecond =
+                                        duplicateCagePoint(
+                                            solidCage.preciseLineVertices[
+                                                solidEdge + 1]);
+                                    if ((duplicatePointsEqual(first,
+                                                              solidFirst) &&
+                                         duplicatePointsEqual(second,
+                                                              solidSecond)) ||
+                                        (duplicatePointsEqual(first,
+                                                              solidSecond) &&
+                                         duplicatePointsEqual(second,
+                                                              solidFirst))) {
+                                        resultComponentSelection.insert(
+                                            solidEdge / 2);
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
                 }
+            } else if (componentSelectionMode_ ==
+                       ComponentSelectionMode::Vertex) {
+                if (shape->geometryType == GeometryType::Line &&
+                    !shape->nurbs.controlPoints.isEmpty()) {
+                    resultComponentSelection.insert(
+                        shape->nurbs.controlPoints.size() - 1);
+                } else if (shape->geometryType ==
+                           GeometryType::NurbsSurface) {
+                    const int countU = shape->nurbsSurface.controlVertexCountU;
+                    const int countV = shape->nurbsSurface.controlVertexCountV;
+                    if (countU > 0 && countV > 0 &&
+                        shape->nurbsSurface.controlPoints.size() ==
+                            countU * countV) {
+                        for (int u = 0; u < countU; ++u) {
+                            resultComponentSelection.insert(
+                                u * countV + countV - 1);
+                        }
+                    }
+                }
+            } else if (componentSelectionMode_ ==
+                       ComponentSelectionMode::Edge) {
+                if (shape->geometryType == GeometryType::Line) {
+                    const int edgeCount =
+                        curveSampler_.curvesForShape(*shape).size();
+                    for (int edge = 0; edge < edgeCount; ++edge) {
+                        resultComponentSelection.insert(edge);
+                    }
+                } else if (shape->geometryType ==
+                           GeometryType::NurbsSurface) {
+                    const int countV = shape->nurbsSurface.controlVertexCountV;
+                    if (countV > 0) {
+                        const int topRowV = countV - 1;
+                        const QVector<QPair<int, int>> edgeVertices =
+                            nurbsSurfaceControlNetEdgeVertexIndices(
+                                shape->nurbsSurface);
+                        for (int edge = 0; edge < edgeVertices.size(); ++edge) {
+                            const auto endpoints = edgeVertices[edge];
+                            if (endpoints.first % countV == topRowV &&
+                                endpoints.second % countV == topRowV) {
+                                resultComponentSelection.insert(edge);
+                            }
+                        }
+                    }
+                }
+            } else if (shape->geometryType ==
+                       GeometryType::NurbsSurface) {
+                resultComponentSelection.insert(0);
             }
-            if (!capSelection.isEmpty()) {
-                componentSelections_[modeIndex][objectId.value()] = capSelection;
-                activeComponentIndices_[modeIndex] = -1;
-                componentSelectionObject_ = objectId;
+            if (!resultComponentSelection.isEmpty()) {
+                componentSelections_[modeIndex][objectId.value()] =
+                    resultComponentSelection;
             }
         }
+        clearSelectionDragState();
+        session_.notifySelectionChanged();
+        update();
+        emitCoordinateUpdate();
     }
 
     int beginPointExtrude()

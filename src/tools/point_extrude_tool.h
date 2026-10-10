@@ -56,6 +56,7 @@ private:
     QVector<SourcePoint> sourcePoints_;
     QVector<ControlPointSource> stagedControlPointSources_;
     QVector<CurveSource> stagedCurveSources_;
+    QVector<ObjectId> completedExtrusionObjectIds_;
     bool stagedControlPointSourcesRequested_ = false;
     WorkPlaneFrame inputFrame_;
     Point3D cursorPoint_;

@@ -285,9 +285,7 @@ bool PointExtrudeTool::handleKey(const ToolInput &input, ToolContext &context)
         return true;
     }
     if (input.key == Qt::Key_W) {
-        weldEnabled_ = !weldEnabled_;
-        updateStatus();
-        publish(context);
+        toggleWeld(context);
         return true;
     }
     if (input.key == Qt::Key_X || input.key == Qt::Key_Y ||
@@ -796,6 +794,13 @@ void PointExtrudeTool::updateStatus()
 bool PointExtrudeTool::weldEnabled() const
 {
     return weldEnabled_;
+}
+
+void PointExtrudeTool::toggleWeld(ToolContext &context)
+{
+    weldEnabled_ = !weldEnabled_;
+    updateStatus();
+    publish(context);
 }
 
 void PointExtrudeTool::publish(ToolContext &context)

@@ -8786,6 +8786,18 @@ protected:
         navigationController_.stopAnimation();
         const QPointF screenPosition = eventPosition(event);
         if (event->button() == Qt::LeftButton &&
+            activeTool_ == Tool::PointExtrude &&
+            ViewportHudRenderer::pointExtrudeWeldToggleRect(size())
+                .contains(screenPosition)) {
+            if (auto *extrudeTool = dynamic_cast<PointExtrudeTool *>(
+                    toolRegistry_.find(Tool::PointExtrude))) {
+                extrudeTool->toggleWeld(toolContext_);
+            }
+            update();
+            event->accept();
+            return;
+        }
+        if (event->button() == Qt::LeftButton &&
             navigationController_.handleGizmoPress(screenPosition, size())) {
             event->accept();
             return;

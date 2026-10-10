@@ -492,8 +492,8 @@ misread or implemented incorrectly.
   weld manager on the newly created vertices and edges. There is no matching
   extrusion-specific handler to copy directly. For classiCAD's selection-based
   Extrude, map that option to explicit weld groups between the source control
-  points and the extrusion's copied base boundary; keep the toggle visible in
-  the Extrude HUD and make `W` update the preview/status immediately.
+  points and the extrusion's copied base boundary; show it as a clickable
+  checkbox in the Extrude HUD and make `W` update the preview/status too.
 - A curve extrusion's base CVs occupy every other control point in its ruled
   surface net. Persist those weld groups on the surface and include surface and
   loose-point control points in the same linked-move path as curve CVs.

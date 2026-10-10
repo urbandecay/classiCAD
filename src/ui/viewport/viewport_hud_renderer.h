@@ -4,6 +4,7 @@
 #include "core/tool_id.h"
 
 #include <QPainter>
+#include <QRectF>
 #include <QSize>
 #include <QString>
 
@@ -41,6 +42,7 @@ public:
 
     static QString rotateSnapIncrementLabel(qreal incrementDegrees,
                                             bool useRadians);
+    static QRectF pointExtrudeWeldToggleRect(const QSize &viewportSize);
 };
 
 } // namespace classiCAD

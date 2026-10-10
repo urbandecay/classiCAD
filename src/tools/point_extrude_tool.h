@@ -32,6 +32,7 @@ public:
     ToolPreview preview() const override;
     ToolStatus status() const override;
     bool weldEnabled() const;
+    void toggleWeld(ToolContext &context);
 
 private:
     struct SourcePoint {

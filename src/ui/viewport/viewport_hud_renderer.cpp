@@ -17,6 +17,15 @@ QString ViewportHudRenderer::rotateSnapIncrementLabel(qreal incrementDegrees,
     return QStringLiteral("%1°").arg(incrementDegrees, 0, 'g', 4);
 }
 
+QRectF ViewportHudRenderer::pointExtrudeWeldToggleRect(
+    const QSize &viewportSize)
+{
+    return QRectF(14.0,
+                  viewportSize.height() - 36.0,
+                  88.0,
+                  24.0);
+}
+
 void ViewportHudRenderer::draw(QPainter &painter,
                                const QSize &viewportSize,
                                const ViewportHudState &state) const
@@ -70,12 +79,31 @@ void ViewportHudRenderer::draw(QPainter &painter,
 
     if (activeTool == Tool::PointExtrude) {
         painter.setPen(QColor(QStringLiteral("#777777")));
-        painter.drawText(18,
-                         viewportSize.height() - 18,
-                         QStringLiteral("Click endpoint  •  X/Y/Z locks axis  •  W Weld %1  •  Enter confirms  •  Esc/RMB cancels")
-                             .arg(state.pointExtrudeWeldEnabled
-                                      ? QStringLiteral("on")
-                                      : QStringLiteral("off")));
+        const qreal baseline = viewportSize.height() - 18.0;
+        const QRectF checkBox(19.0, baseline - 12.0, 12.0, 12.0);
+        painter.setPen(QPen(state.pointExtrudeWeldEnabled
+                                ? QColor(QStringLiteral("#5597df"))
+                                : QColor(QStringLiteral("#888888")),
+                            1.0));
+        painter.setBrush(state.pointExtrudeWeldEnabled
+                             ? QColor(QStringLiteral("#315f91"))
+                             : QColor(QStringLiteral("#292929")));
+        painter.drawRoundedRect(checkBox, 2.0, 2.0);
+        if (state.pointExtrudeWeldEnabled) {
+            painter.setPen(QPen(QColor(QStringLiteral("#ffffff")), 1.7));
+            painter.drawLine(QPointF(22.0, baseline - 6.0),
+                             QPointF(24.5, baseline - 3.5));
+            painter.drawLine(QPointF(24.5, baseline - 3.5),
+                             QPointF(29.0, baseline - 9.0));
+        }
+        painter.setPen(QColor(QStringLiteral("#b0b0b0")));
+        painter.drawText(37.0,
+                         baseline,
+                         QStringLiteral("Weld (W)"));
+        painter.setPen(QColor(QStringLiteral("#777777")));
+        painter.drawText(108.0,
+                         baseline,
+                         QStringLiteral("Click endpoint  •  X/Y/Z locks axis  •  Enter confirms  •  Esc/RMB cancels"));
     } else if (activeTool == Tool::Erase) {
         painter.setPen(QColor(QStringLiteral("#777777")));
         painter.drawText(18,

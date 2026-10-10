@@ -5,9 +5,9 @@
 
 namespace classiCAD {
 
-// Creates the exact ruled surface swept by translating a planar NURBS curve.
-// The curve's local control vertices are lifted through its workplane before
-// the translated row is added to the surface control net.
+// Creates the exact ruled surface swept by translating any planar or spatial
+// NURBS curve. Each local control vertex is lifted through the curve's frame
+// before the translated row is added to the surface control net.
 bool makeNurbsExtrusionSurface(const NurbsCurve2D &curve,
                               const WorkPlaneFrame &curveFrame,
                               const Point3D &displacement,

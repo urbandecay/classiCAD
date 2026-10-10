@@ -90,11 +90,14 @@ editing.
   Rhino/openNURBS import maps its surface CV net and knots into this model.
   Native classiCAD JSON retains the exact surface. A Blender mesh, when used as
   a display proxy, is derived from that surface and is not authoritative.
-- Extruding a selected planar NURBS curve creates an exact ruled surface:
+- Extruding any selected NURBS curve, planar or spatial, creates an exact
+  ruled surface:
   the U direction copies the curve's degree, order, knots, and control-point
-  weights; the V direction is clamped degree one over `[0, 1]`; each source
-  control vertex is paired with the same vertex translated by the extrusion
-  vector, with its weight duplicated. This creates an open sheet without caps.
+  weights; lift every control vertex's local `(u, v, w)` through its work-plane
+  frame before building the surface; the V direction is clamped degree one
+  over `[0, 1]`; each source control vertex is paired with the same vertex
+  translated by the extrusion vector, with its weight duplicated. This creates
+  an open sheet without caps.
   Multiple selected curves create separate surface objects in one history
   operation; never merge their components implicitly.
 - Extrude is one selection-driven tool: selected points create edges and

@@ -13,21 +13,12 @@ bool makeNurbsExtrusionSurface(const NurbsCurve2D &curve,
                                NurbsSurface3D *surface)
 {
     if (surface == nullptr || !validateNurbsCurve(curve) ||
-        !isNurbsCurvePlanarInWorkPlane(curve) ||
         !isValidWorkPlaneFrame(curveFrame) ||
         !std::isfinite(displacement.x) || !std::isfinite(displacement.y) ||
         !std::isfinite(displacement.z) ||
         std::hypot(displacement.x,
                    std::hypot(displacement.y, displacement.z)) <= 1.0e-12) {
         return false;
-    }
-
-    WorkPlaneFrame baseFrame = curveFrame;
-    if (curve.dimension == 3 && !curve.normalCoordinates.isEmpty()) {
-        const qreal offset = curve.normalCoordinates.first();
-        baseFrame.origin.x += baseFrame.normal.x * offset;
-        baseFrame.origin.y += baseFrame.normal.y * offset;
-        baseFrame.origin.z += baseFrame.normal.z * offset;
     }
 
     NurbsSurface3D result;
@@ -44,8 +35,11 @@ bool makeNurbsExtrusionSurface(const NurbsCurve2D &curve,
     result.weights.reserve(result.controlVertexCountU * 2);
 
     for (int index = 0; index < curve.controlPoints.size(); ++index) {
+        const qreal normalCoordinate = curve.dimension == 3
+                                           ? curve.normalCoordinates[index]
+                                           : 0.0;
         const Point3D base = workPlaneFramePointToWorld(
-            curve.controlPoints[index], baseFrame);
+            curve.controlPoints[index], normalCoordinate, curveFrame);
         const double weight = curve.weights[index];
         result.controlPoints.append(base);
         result.controlPoints.append({base.x + displacement.x,

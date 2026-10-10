@@ -156,12 +156,24 @@ void PointExtrudeTool::begin(ToolContext &context)
                 SourcePoint source;
                 source.objectId = selectedObjectId;
                 source.curve = curves[index];
+                const SceneObject *sceneObject =
+                    context.document().object(selectedObjectId);
+                const Point3D placement = sceneObject != nullptr
+                                              ? sceneObject->placementTranslation
+                                              : Point3D{};
                 source.workPlaneFrame = selectedShape->geometryType == GeometryType::PolyCurve
                     ? shapeComponentWorkPlaneFrame(*selectedShape, index)
                     : shapeWorkPlaneFrame(*selectedShape);
                 if (!isValidWorkPlaneFrame(source.workPlaneFrame)) continue;
+                source.workPlaneFrame.origin.x += placement.x;
+                source.workPlaneFrame.origin.y += placement.y;
+                source.workPlaneFrame.origin.z += placement.z;
+                const qreal normalCoordinate = source.curve.dimension == 3
+                                                   ? source.curve.normalCoordinates.first()
+                                                   : 0.0;
                 source.worldPoint = workPlaneFramePointToWorld(
-                    source.curve.controlPoints.first(), source.workPlaneFrame);
+                    source.curve.controlPoints.first(), normalCoordinate,
+                    source.workPlaneFrame);
                 sourcePoints_.append(source);
             }
         }

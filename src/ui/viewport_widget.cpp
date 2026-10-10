@@ -1976,8 +1976,18 @@ public:
         const QHash<quint64, QSet<int>> controlPointTargets =
             selectedVertexControlPointTargets();
         if (!controlPointTargets.isEmpty()) {
+            struct DeferredCurvePointSource {
+                quint64 weldGroup = 0;
+                PointExtrudeTool::ControlPointSource source;
+            };
+            struct ExtrudedWeldedPoint {
+                quint64 weldGroup = 0;
+                Point3D worldPoint;
+            };
             QVector<PointExtrudeTool::ControlPointSource> pointSources;
             QVector<PointExtrudeTool::CurveSource> curveSources;
+            QVector<DeferredCurvePointSource> deferredCurvePointSources;
+            QVector<ExtrudedWeldedPoint> curveExtrudedWeldPoints;
             for (int index = 0; index < document_.size(); ++index) {
                 const ObjectId objectId = document_.objectIdAt(index);
                 const auto selectedIt =
@@ -1991,8 +2001,12 @@ public:
                     continue;
                 }
                 const Point3D offset = sceneObject->placementTranslation;
-                const auto appendPointSource =
-                    [&](const Point3D &point, WorkPlaneFrame frame) {
+                const auto makePointSource =
+                    [&](const Point3D &point, WorkPlaneFrame frame,
+                        PointExtrudeTool::ControlPointSource *source) {
+                        if (source == nullptr) {
+                            return false;
+                        }
                         if (!isValidWorkPlaneFrame(frame)) {
                             frame = makeWorkPlaneFrameFromNormal(
                                 point, viewportTransform_.viewDirection(),
@@ -2000,13 +2014,19 @@ public:
                         }
                         frame.origin = point;
                         if (!isValidWorkPlaneFrame(frame)) {
-                            return;
+                            return false;
                         }
+                        source->objectId = objectId;
+                        source->worldPoint = point;
+                        source->workPlaneFrame = frame;
+                        return true;
+                    };
+                const auto appendPointSource =
+                    [&](const Point3D &point, WorkPlaneFrame frame) {
                         PointExtrudeTool::ControlPointSource source;
-                        source.objectId = objectId;
-                        source.worldPoint = point;
-                        source.workPlaneFrame = frame;
-                        pointSources.append(source);
+                        if (makePointSource(point, frame, &source)) {
+                            pointSources.append(source);
+                        }
                     };
 
                 if (shape->geometryType == GeometryType::Point) {
@@ -2049,89 +2069,428 @@ public:
                     continue;
                 }
 
-                QSet<int> curveControlPointsExtrudedAsCurves;
-                const QVector<Shape::NurbsCurve2D> curves =
-                    curveSampler_.curvesForShape(*shape);
-                const GeometryType sourceType = shape->geometryType;
-                const bool controlPointIndicesMatchCurves =
-                    sourceType == GeometryType::PolyCurve ||
-                    validateNurbsCurve(shape->nurbs) ||
-                    sourceType == GeometryType::Line ||
-                    sourceType == GeometryType::Bezier ||
-                    sourceType == GeometryType::Nurbs;
-                int firstCurveControlPoint = 0;
-                for (int curveIndex = 0;
-                     controlPointIndicesMatchCurves &&
-                     curveIndex < curves.size(); ++curveIndex) {
-                    const Shape::NurbsCurve2D &curve = curves[curveIndex];
-                    const int curveControlPointCount =
-                        curve.controlPoints.size();
-                    if (validateNurbsCurve(curve) &&
-                        curveControlPointCount >= 2) {
-                        bool allControlPointsSelected = true;
-                        for (int point = 0; point < curveControlPointCount;
-                             ++point) {
-                            allControlPointsSelected &= selectedIt.value().contains(
-                                firstCurveControlPoint + point);
+                struct CurveSelectionMapping {
+                    Shape::NurbsCurve2D curve;
+                    WorkPlaneFrame frame;
+                    QVector<QVector<int>> selectablePointsByControlPoint;
+                };
+                QVector<CurveSelectionMapping> curveMappings;
+                if (shape->geometryType == GeometryType::PolyCurve) {
+                    int firstSelectablePoint = 0;
+                    curveMappings.reserve(shape->components.size());
+                    for (int curveIndex = 0;
+                         curveIndex < shape->components.size(); ++curveIndex) {
+                        CurveSelectionMapping mapping;
+                        mapping.curve = shape->components[curveIndex];
+                        mapping.frame = shapeComponentWorkPlaneFrame(
+                            *shape, curveIndex);
+                        mapping.selectablePointsByControlPoint.resize(
+                            mapping.curve.controlPoints.size());
+                        const int lastPoint =
+                            mapping.curve.controlPoints.size() - 1;
+                        bool repeatedClosurePoint = false;
+                        if (lastPoint > 0 &&
+                            isValidWorkPlaneFrame(mapping.frame) &&
+                            validateNurbsCurve(mapping.curve)) {
+                            const qreal firstNormal =
+                                mapping.curve.dimension == 3
+                                    ? mapping.curve.normalCoordinates.first()
+                                    : 0.0;
+                            const qreal lastNormal =
+                                mapping.curve.dimension == 3
+                                    ? mapping.curve.normalCoordinates.last()
+                                    : 0.0;
+                            const Point3D first = workPlaneFramePointToWorld(
+                                mapping.curve.controlPoints.first(),
+                                firstNormal, mapping.frame);
+                            const Point3D last = workPlaneFramePointToWorld(
+                                mapping.curve.controlPoints.last(),
+                                lastNormal, mapping.frame);
+                            const qreal dx = first.x - last.x;
+                            const qreal dy = first.y - last.y;
+                            const qreal dz = first.z - last.z;
+                            repeatedClosurePoint =
+                                dx * dx + dy * dy + dz * dz <= 1.0e-12;
                         }
-                        qreal domainStart = 0.0;
-                        qreal domainEnd = 0.0;
-                        Point3D curveStart;
-                        Point3D curveEnd;
-                        const bool hasDomain = nurbsParameterDomain(
-                            curve, &domainStart, &domainEnd);
-                        const bool hasEndpoints = hasDomain &&
-                            evaluateNurbsPoint3D(curve, domainStart, &curveStart) &&
-                            evaluateNurbsPoint3D(curve, domainEnd, &curveEnd);
-                        const qreal dx = curveStart.x - curveEnd.x;
-                        const qreal dy = curveStart.y - curveEnd.y;
-                        const qreal dz = curveStart.z - curveEnd.z;
-                        const bool isClosed = hasEndpoints &&
-                            dx * dx + dy * dy + dz * dz <= 1.0e-12;
-                        const bool bothEndpointsSelected =
-                            selectedIt.value().contains(firstCurveControlPoint) &&
-                            selectedIt.value().contains(
-                                firstCurveControlPoint +
-                                curveControlPointCount - 1);
-                        const bool extrudeWholeCurve =
-                            allControlPointsSelected ||
-                            (!isClosed && bothEndpointsSelected);
-                        if (extrudeWholeCurve) {
-                            WorkPlaneFrame frame =
-                                sourceType == GeometryType::PolyCurve
-                                    ? shapeComponentWorkPlaneFrame(*shape,
-                                                                   curveIndex)
-                                    : shapeWorkPlaneFrame(*shape);
-                            frame.origin.x += offset.x;
-                            frame.origin.y += offset.y;
-                            frame.origin.z += offset.z;
-                            if (isValidWorkPlaneFrame(frame)) {
-                                PointExtrudeTool::CurveSource source;
-                                source.objectId = objectId;
-                                source.curve = curve;
-                                source.workPlaneFrame = frame;
-                                curveSources.append(std::move(source));
-                                for (int point = 0;
-                                     point < curveControlPointCount; ++point) {
-                                    curveControlPointsExtrudedAsCurves.insert(
-                                        firstCurveControlPoint + point);
+                        for (int point = 0;
+                             point < mapping.curve.controlPoints.size();
+                             ++point) {
+                            QVector<int> &selectableIndices =
+                                mapping.selectablePointsByControlPoint[point];
+                            if (repeatedClosurePoint &&
+                                (point == 0 || point == lastPoint)) {
+                                selectableIndices = {
+                                    firstSelectablePoint,
+                                    firstSelectablePoint + lastPoint};
+                            } else {
+                                selectableIndices.append(
+                                    firstSelectablePoint + point);
+                            }
+                        }
+                        curveMappings.append(std::move(mapping));
+                        firstSelectablePoint +=
+                            shape->components[curveIndex].controlPoints.size();
+                    }
+                } else {
+                    QVector<Shape::NurbsCurve2D> curves;
+                    if (shape->geometryType == GeometryType::Rectangle &&
+                        !validateNurbsCurve(shape->nurbs)) {
+                        QVector<QPointF> corners = controlPointsForShape(*shape);
+                        if (corners.size() >= 4) {
+                            corners.append(corners.first());
+                            curves.append(makeDegreeOneNurbs(corners));
+                        }
+                    } else {
+                        curves = curveSampler_.curvesForShape(*shape);
+                    }
+                    const QVector<QPair<int, Point3D>> selectableVertices =
+                        curveControlPointVertices(*shape, {});
+                    const WorkPlaneFrame frame = shapeWorkPlaneFrame(*shape);
+                    if (curves.size() == 1 &&
+                        validateNurbsCurve(curves.first())) {
+                        CurveSelectionMapping mapping;
+                        mapping.curve = curves.first();
+                        mapping.frame = frame;
+                        mapping.selectablePointsByControlPoint.resize(
+                            mapping.curve.controlPoints.size());
+                        const int controlPointCount =
+                            mapping.curve.controlPoints.size();
+                        const int selectablePointCount =
+                            selectableVertices.size();
+                        // Rectangle editing exposes four corner handles even
+                        // when a legacy or edited closed curve's final CV has
+                        // drifted from its first. Keep the fifth curve CV
+                        // aliased to corner zero so selecting a visible side
+                        // still maps to its real knot span.
+                        const bool rectangleClosureMapping =
+                            shape->geometryType == GeometryType::Rectangle &&
+                            controlPointCount == 5 &&
+                            selectablePointCount == 4;
+                        bool repeatedClosurePoint = false;
+                        if (controlPointCount > 1 &&
+                            isValidWorkPlaneFrame(mapping.frame) &&
+                            (controlPointCount == selectablePointCount ||
+                             controlPointCount == selectablePointCount + 1)) {
+                            const qreal firstNormal =
+                                mapping.curve.dimension == 3
+                                    ? mapping.curve.normalCoordinates.first()
+                                    : 0.0;
+                            const qreal lastNormal =
+                                mapping.curve.dimension == 3
+                                    ? mapping.curve.normalCoordinates.last()
+                                    : 0.0;
+                            const Point3D first = workPlaneFramePointToWorld(
+                                mapping.curve.controlPoints.first(),
+                                firstNormal, mapping.frame);
+                            const Point3D last = workPlaneFramePointToWorld(
+                                mapping.curve.controlPoints.last(),
+                                lastNormal, mapping.frame);
+                            const qreal dx = first.x - last.x;
+                            const qreal dy = first.y - last.y;
+                            const qreal dz = first.z - last.z;
+                            repeatedClosurePoint =
+                                dx * dx + dy * dy + dz * dz <= 1.0e-12;
+                        }
+                        const bool mappingCountsMatch =
+                            controlPointCount == selectablePointCount ||
+                            ((repeatedClosurePoint ||
+                              rectangleClosureMapping) &&
+                             controlPointCount == selectablePointCount + 1);
+                        if (mappingCountsMatch) {
+                            const int lastPoint = controlPointCount - 1;
+                            for (int point = 0; point < controlPointCount;
+                                 ++point) {
+                                QVector<int> &selectableIndices =
+                                    mapping.selectablePointsByControlPoint[point];
+                                if ((repeatedClosurePoint ||
+                                     rectangleClosureMapping) &&
+                                    (point == 0 || point == lastPoint)) {
+                                    selectableIndices.append(0);
+                                    if (selectablePointCount == controlPointCount) {
+                                        selectableIndices.append(lastPoint);
+                                    }
+                                } else if (point < selectablePointCount) {
+                                    selectableIndices.append(point);
                                 }
                             }
                         }
+                        curveMappings.append(std::move(mapping));
                     }
-                    firstCurveControlPoint += curveControlPointCount;
+                }
+
+                QSet<int> curveControlPointsExtrudedAsCurves;
+                const auto curveIsClosed = [](const CurveSelectionMapping &mapping) {
+                    if (!isValidWorkPlaneFrame(mapping.frame)) {
+                        return false;
+                    }
+                    qreal domainStart = 0.0;
+                    qreal domainEnd = 0.0;
+                    Point3D start;
+                    Point3D end;
+                    if (!nurbsParameterDomain(mapping.curve, &domainStart,
+                                              &domainEnd) ||
+                        !evaluateNurbsPoint3D(mapping.curve, domainStart,
+                                              &start) ||
+                        !evaluateNurbsPoint3D(mapping.curve, domainEnd, &end)) {
+                        return false;
+                    }
+                    const Point3D startWorld = workPlaneFramePointToWorld(
+                        {start.x, start.y}, start.z, mapping.frame);
+                    const Point3D endWorld = workPlaneFramePointToWorld(
+                        {end.x, end.y}, end.z, mapping.frame);
+                    const qreal dx = startWorld.x - endWorld.x;
+                    const qreal dy = startWorld.y - endWorld.y;
+                    const qreal dz = startWorld.z - endWorld.z;
+                    return dx * dx + dy * dy + dz * dz <= 1.0e-12;
+                };
+                const auto appendCurveSource =
+                    [&](const CurveSelectionMapping &mapping,
+                        const Shape::NurbsCurve2D &curve) {
+                        WorkPlaneFrame frame = mapping.frame;
+                        frame.origin.x += offset.x;
+                        frame.origin.y += offset.y;
+                        frame.origin.z += offset.z;
+                        if (!validateNurbsCurve(curve) ||
+                            !isValidWorkPlaneFrame(frame)) {
+                            return false;
+                        }
+                        PointExtrudeTool::CurveSource source;
+                        source.objectId = objectId;
+                        source.curve = curve;
+                        source.workPlaneFrame = frame;
+                        curveSources.append(std::move(source));
+                        return true;
+                    };
+                const auto selectedControlPoint =
+                    [&selectedIt](const QVector<int> &selectableIndices) {
+                        for (const int selectableIndex : selectableIndices) {
+                            if (selectedIt.value().contains(selectableIndex)) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                struct SelectedSpanRun {
+                    qreal startParameter = 0.0;
+                    qreal endParameter = 0.0;
+                    QSet<int> supportControlPoints;
+                };
+                for (const CurveSelectionMapping &mapping : curveMappings) {
+                    if (!validateNurbsCurve(mapping.curve) ||
+                        mapping.curve.controlPoints.size() < 2 ||
+                        mapping.selectablePointsByControlPoint.size() !=
+                            mapping.curve.controlPoints.size()) {
+                        continue;
+                    }
+                    const bool closed = curveIsClosed(mapping);
+                    bool allDistinctControlPointsSelected = true;
+                    for (int point = 0;
+                         point < mapping.curve.controlPoints.size(); ++point) {
+                        const QVector<int> &selectableIndices =
+                            mapping.selectablePointsByControlPoint[point];
+                        allDistinctControlPointsSelected =
+                            allDistinctControlPointsSelected &&
+                            !selectableIndices.isEmpty() &&
+                            selectedControlPoint(selectableIndices);
+                    }
+                    const QVector<int> &firstIndices =
+                        mapping.selectablePointsByControlPoint.first();
+                    const QVector<int> &lastIndices =
+                        mapping.selectablePointsByControlPoint.last();
+                    const auto anySelected = [&selectedIt](
+                                                const QVector<int> &indices) {
+                        for (const int index : indices) {
+                            if (selectedIt.value().contains(index)) {
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+                    const bool bothOpenEndpointsSelected = !closed &&
+                        anySelected(firstIndices) && anySelected(lastIndices);
+
+                    if (allDistinctControlPointsSelected ||
+                        bothOpenEndpointsSelected) {
+                        if (appendCurveSource(mapping, mapping.curve)) {
+                            for (const QVector<int> &selectableIndices :
+                                 mapping.selectablePointsByControlPoint) {
+                                for (const int selectableIndex :
+                                     selectableIndices) {
+                                    curveControlPointsExtrudedAsCurves.insert(
+                                        selectableIndex);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    const QVector<double> fullKnots =
+                        expandedNurbsKnotVector(mapping.curve);
+                    const int degree = mapping.curve.degree;
+                    const int controlPointCount =
+                        mapping.curve.controlPoints.size();
+                    if (fullKnots.size() !=
+                        controlPointCount + degree + 1) {
+                        continue;
+                    }
+                    // Multi-span PolyCurve components are highlighted from
+                    // their endpoints by the viewport renderer. Span support
+                    // selection is only equivalent to that highlight for
+                    // degree-one components.
+                    if (shape->geometryType == GeometryType::PolyCurve &&
+                        degree != 1) {
+                        continue;
+                    }
+                    QVector<SelectedSpanRun> selectedSpanRuns;
+                    bool previousNonzeroSpanSelected = false;
+                    for (int span = degree;
+                         span < controlPointCount &&
+                             span + 1 < fullKnots.size();
+                         ++span) {
+                        const qreal spanStart = fullKnots[span];
+                        const qreal spanEnd = fullKnots[span + 1];
+                        if (spanEnd - spanStart <= 1.0e-12) {
+                            continue;
+                        }
+                        SelectedSpanRun selectedSpan;
+                        selectedSpan.startParameter = spanStart;
+                        selectedSpan.endParameter = spanEnd;
+                        bool spanFullySelected = true;
+                        for (int controlPoint = span - degree;
+                             controlPoint <= span;
+                             ++controlPoint) {
+                            if (controlPoint < 0 ||
+                                controlPoint >=
+                                    mapping.selectablePointsByControlPoint.size()) {
+                                spanFullySelected = false;
+                                break;
+                            }
+                            if (!selectedControlPoint(
+                                    mapping.selectablePointsByControlPoint[
+                                        controlPoint])) {
+                                spanFullySelected = false;
+                                break;
+                            }
+                            selectedSpan.supportControlPoints.insert(
+                                controlPoint);
+                        }
+                        if (!spanFullySelected) {
+                            previousNonzeroSpanSelected = false;
+                            continue;
+                        }
+
+                        // Nonzero spans that touch share the exact knot value.
+                        // Merge only when the immediately preceding nonzero
+                        // span was also selected, so a narrow unselected span
+                        // can never be swallowed by a floating-point epsilon.
+                        if (previousNonzeroSpanSelected &&
+                            !selectedSpanRuns.isEmpty() &&
+                            selectedSpanRuns.last().endParameter == spanStart) {
+                            SelectedSpanRun &run = selectedSpanRuns.last();
+                            run.endParameter = spanEnd;
+                            run.supportControlPoints.unite(
+                                selectedSpan.supportControlPoints);
+                        } else {
+                            selectedSpanRuns.append(std::move(selectedSpan));
+                        }
+                        previousNonzeroSpanSelected = true;
+                    }
+
+                    for (const SelectedSpanRun &run : selectedSpanRuns) {
+                        Shape::NurbsCurve2D spanCurve;
+                        if (!trimNurbsCurve(mapping.curve,
+                                            run.startParameter,
+                                            run.endParameter,
+                                            &spanCurve) ||
+                            !appendCurveSource(mapping, spanCurve)) {
+                            continue;
+                        }
+                        for (const int controlPoint :
+                             run.supportControlPoints) {
+                            if (controlPoint < 0 ||
+                                controlPoint >=
+                                    mapping.selectablePointsByControlPoint.size()) {
+                                continue;
+                            }
+                            for (const int selectableIndex :
+                                 mapping.selectablePointsByControlPoint[
+                                     controlPoint]) {
+                                curveControlPointsExtrudedAsCurves.insert(
+                                    selectableIndex);
+                            }
+                        }
+                    }
                 }
 
                 const QVector<QPair<int, Point3D>> vertices =
                     curveControlPointVertices(*shape, offset);
                 for (const auto &vertex : vertices) {
+                    if (!curveControlPointsExtrudedAsCurves.contains(
+                            vertex.first) ||
+                        vertex.first < 0 ||
+                        vertex.first >= shape->controlPointWeldGroups.size()) {
+                        continue;
+                    }
+                    const quint64 weldGroup =
+                        shape->controlPointWeldGroups[vertex.first];
+                    if (weldGroup != 0) {
+                        curveExtrudedWeldPoints.append(
+                            {weldGroup, vertex.second});
+                    }
+                }
+                for (const auto &vertex : vertices) {
                     if (!selectedIt.value().contains(vertex.first) ||
                         curveControlPointsExtrudedAsCurves.contains(vertex.first)) {
                         continue;
                     }
-                    appendPointSource(
-                        vertex.second,
-                        controlPointWorkPlaneFrame(objectId, vertex.first));
+                    PointExtrudeTool::ControlPointSource source;
+                    if (!makePointSource(
+                            vertex.second,
+                            controlPointWorkPlaneFrame(objectId, vertex.first),
+                            &source)) {
+                        continue;
+                    }
+                    const quint64 weldGroup =
+                        vertex.first >= 0 &&
+                                vertex.first <
+                                    shape->controlPointWeldGroups.size()
+                            ? shape->controlPointWeldGroups[vertex.first]
+                            : 0;
+                    deferredCurvePointSources.append({weldGroup, source});
+                }
+            }
+
+            for (const DeferredCurvePointSource &deferred :
+                 deferredCurvePointSources) {
+                bool alreadySwept = false;
+                for (const ExtrudedWeldedPoint &extruded :
+                     curveExtrudedWeldPoints) {
+                    if (extruded.weldGroup != deferred.weldGroup) {
+                        continue;
+                    }
+                    const qreal dx = extruded.worldPoint.x -
+                                     deferred.source.worldPoint.x;
+                    const qreal dy = extruded.worldPoint.y -
+                                     deferred.source.worldPoint.y;
+                    const qreal dz = extruded.worldPoint.z -
+                                     deferred.source.worldPoint.z;
+                    const qreal coordinateScale = std::max<qreal>(
+                        {1.0, std::abs(extruded.worldPoint.x),
+                         std::abs(extruded.worldPoint.y),
+                         std::abs(extruded.worldPoint.z),
+                         std::abs(deferred.source.worldPoint.x),
+                         std::abs(deferred.source.worldPoint.y),
+                         std::abs(deferred.source.worldPoint.z)});
+                    const qreal weldTolerance = std::max<qreal>(
+                        1.0e-7, coordinateScale * 1.0e-10);
+                    if (dx * dx + dy * dy + dz * dz <=
+                        weldTolerance * weldTolerance) {
+                        alreadySwept = true;
+                        break;
+                    }
+                }
+                if (!alreadySwept) {
+                    pointSources.append(deferred.source);
                 }
             }
 

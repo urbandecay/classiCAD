@@ -9949,8 +9949,18 @@ protected:
         if (event != nullptr && event->type() == QEvent::ShortcutOverride &&
             activeTool_ == Tool::Arc) {
             const auto *keyEvent = static_cast<const QKeyEvent *>(event);
-            if (keyEvent->modifiers() == Qt::NoModifier &&
-                (keyEvent->key() == Qt::Key_A || keyEvent->key() == Qt::Key_R)) {
+            const bool arcTextEnter =
+                arcTool_.textInputMode() != ArcTextInputMode::None &&
+                (keyEvent->key() == Qt::Key_Return ||
+                 keyEvent->key() == Qt::Key_Enter);
+            const bool arcKeypadEnter =
+                (keyEvent->key() == Qt::Key_Return ||
+                 keyEvent->key() == Qt::Key_Enter) &&
+                keyEvent->modifiers().testFlag(Qt::KeypadModifier);
+            const bool arcModeShortcut =
+                keyEvent->modifiers() == Qt::NoModifier &&
+                (keyEvent->key() == Qt::Key_A || keyEvent->key() == Qt::Key_R);
+            if (arcTextEnter || arcKeypadEnter || arcModeShortcut) {
                 event->accept();
                 return true;
             }
@@ -9961,9 +9971,10 @@ protected:
     void keyPressEvent(QKeyEvent *event) override
     {
         navigationController_.stopAnimation();
-        DebugLog::instance().write(QStringLiteral("keyPress key=%1 text=%2 tool=%3 lineActive=%4 points=%5")
+        DebugLog::instance().write(QStringLiteral("keyPress key=%1 text=%2 modifiers=%3 tool=%4 lineActive=%5 points=%6")
                                        .arg(event->key())
                                        .arg(event->text())
+                                       .arg(static_cast<int>(event->modifiers()))
                                        .arg(toolName(activeTool_))
                                        .arg(lineCommandActive_)
                                        .arg(pendingPoints_.size()));
@@ -9983,6 +9994,21 @@ protected:
             return;
         }
         ToolInput keyInput = makeKeyToolInput(*event);
+        const bool keypadEnter =
+            activeTool_ == Tool::Arc &&
+            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
+            event->modifiers().testFlag(Qt::KeypadModifier) &&
+            (event->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier;
+        if (keypadEnter) {
+            // Numpad Enter carries KeypadModifier. Route it through the arc
+            // before generic key handlers, using the same command semantics
+            // as the main Enter key while preserving numeric-input priority.
+            ToolInput arcEnterInput = keyInput;
+            arcEnterInput.modifiers = Qt::NoModifier;
+            if (handleArcKeyInput(arcEnterInput, event)) {
+                return;
+            }
+        }
         if (activeTool_ == Tool::Rotate) {
             keyInput = makeRotateToolInput();
             keyInput.key = event->key();

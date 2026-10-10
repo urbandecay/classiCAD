@@ -44,6 +44,39 @@ Point3D vectorCross(const Point3D &first, const Point3D &second)
             first.x * second.y - first.y * second.x};
 }
 
+QString arcNumericKeyText(int key,
+                          const QString &text,
+                          Qt::KeyboardModifiers modifiers)
+{
+    if (!text.isEmpty() || !modifiers.testFlag(Qt::KeypadModifier)) {
+        return text;
+    }
+    if (key >= Qt::Key_0 && key <= Qt::Key_9) {
+        return QString(QChar(QLatin1Char('0').unicode() + (key - Qt::Key_0)));
+    }
+    switch (key) {
+    // With Num Lock off, Qt reports the navigation key assigned to each
+    // physical numpad key and leaves the text empty.
+    case Qt::Key_Insert: return QStringLiteral("0");
+    case Qt::Key_End: return QStringLiteral("1");
+    case Qt::Key_Down: return QStringLiteral("2");
+    case Qt::Key_PageDown: return QStringLiteral("3");
+    case Qt::Key_Left: return QStringLiteral("4");
+    case Qt::Key_Clear: return QStringLiteral("5");
+    case Qt::Key_Right: return QStringLiteral("6");
+    case Qt::Key_Home: return QStringLiteral("7");
+    case Qt::Key_Up: return QStringLiteral("8");
+    case Qt::Key_PageUp: return QStringLiteral("9");
+    case Qt::Key_Delete:
+    case Qt::Key_Period: return QStringLiteral(".");
+    case Qt::Key_Comma: return QStringLiteral(",");
+    case Qt::Key_Minus: return QStringLiteral("-");
+    case Qt::Key_Plus: return QStringLiteral("+");
+    case Qt::Key_Slash: return QStringLiteral("/");
+    default: return {};
+    }
+}
+
 bool makeOnePointArcFrameThroughRadius(const Point3D &center,
                                        const Point3D &radiusPoint,
                                        const Point3D &referenceNormal,
@@ -294,8 +327,10 @@ ArcKeyResult ArcTool::handleKeyInput(int key,
             return result(ArcKeyAction::ChangeTextInput);
         }
 
-        bool accepted = !text.isEmpty();
-        for (const QChar character : text) {
+        const QString inputText = arcNumericKeyText(key, text, modifiers);
+
+        bool accepted = !inputText.isEmpty();
+        for (const QChar character : inputText) {
             const bool numeric = character.isDigit() ||
                                  character == QLatin1Char('.') ||
                                  character == QLatin1Char(',') ||
@@ -312,10 +347,37 @@ ArcKeyResult ArcTool::handleKeyInput(int key,
             }
         }
         if (accepted) {
-            appendTextInput(text);
+            appendTextInput(inputText);
             return result(ArcKeyAction::ChangeTextInput);
         }
         return {};
+    }
+
+    const bool keypadOnlyModifier =
+        modifiers.testFlag(Qt::KeypadModifier) &&
+        (modifiers & ~Qt::KeypadModifier) == Qt::NoModifier;
+    if (onePointMode && !autoRepeat && pendingPointCount >= 2 &&
+        keypadOnlyModifier &&
+        (key == Qt::Key_Return || key == Qt::Key_Enter)) {
+        return result(ArcKeyAction::FinishArc);
+    }
+
+    if (onePointMode && !autoRepeat &&
+        (modifiers & ~Qt::KeypadModifier) == Qt::NoModifier &&
+        (inputStage() == ArcInputStage::SecondPoint ||
+         inputStage() == ArcInputStage::Complete)) {
+        const QString inputText = arcNumericKeyText(key, text, modifiers);
+        const bool startsRadius = !inputText.isEmpty() &&
+            (inputText.front().isDigit() || inputText.front() == QLatin1Char('.') ||
+             inputText.front() == QLatin1Char(','));
+        if (startsRadius && inputStage() == ArcInputStage::SecondPoint) {
+            beginTextInput(ArcTextInputMode::Radius, inputText, true);
+            return result(ArcKeyAction::BeginTextInput);
+        }
+        if (startsRadius && inputStage() == ArcInputStage::Complete) {
+            beginTextInput(ArcTextInputMode::Angle, inputText, true);
+            return result(ArcKeyAction::BeginTextInput);
+        }
     }
 
     if (autoRepeat || modifiers != Qt::NoModifier) {

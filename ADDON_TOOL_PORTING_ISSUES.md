@@ -351,6 +351,10 @@ misread or implemented incorrectly.
   edges. Keep the app's endpoint-only vertex display when CP Points is off,
   while allowing linked selection to include hidden interior CVs so Grab moves
   the selected spline as one connected unit.
+- Extrude weld groups can be attached to an interior CV of a closed single
+  NURBS curve, such as a rectangle. `L` must inspect every welded CV on each
+  connected curve component; checking only component endpoints or only
+  PolyCurve groups misses that connection.
 - [ ] Check linked pick in vertex, edge, and face modes on the cube, with
   overlapping disconnected surfaces, a connected PolyCurve, and a spline
   whose interior control points are hidden. Check visible-depth and X-ray

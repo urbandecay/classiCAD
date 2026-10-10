@@ -15142,8 +15142,7 @@ private:
                 int componentIndex = -1;
                 int firstControlPoint = 0;
                 int controlPointCount = 0;
-                quint64 startWeldGroup = 0;
-                quint64 endWeldGroup = 0;
+                QVector<quint64> weldGroups;
                 Point3D start;
                 Point3D end;
             };
@@ -15205,23 +15204,29 @@ private:
                         linked.firstControlPoint = firstControlPoint;
                         linked.controlPointCount =
                             component.curve.controlPoints.size();
-                        if (shape->geometryType == GeometryType::PolyCurve &&
-                            linked.controlPointCount > 0) {
-                            const int lastControlPoint =
-                                firstControlPoint + linked.controlPointCount - 1;
-                            if (firstControlPoint >= 0 &&
-                                firstControlPoint <
-                                    shape->controlPointWeldGroups.size()) {
-                                linked.startWeldGroup =
-                                    shape->controlPointWeldGroups[
-                                        firstControlPoint];
+                        if (shape->geometryType == GeometryType::PolyCurve) {
+                            const int controlPointEnd =
+                                firstControlPoint + linked.controlPointCount;
+                            for (int controlPoint = firstControlPoint;
+                                 controlPoint < controlPointEnd &&
+                                     controlPoint <
+                                         shape->controlPointWeldGroups.size();
+                                 ++controlPoint) {
+                                const quint64 group =
+                                    shape->controlPointWeldGroups[controlPoint];
+                                if (group != 0) {
+                                    linked.weldGroups.append(group);
+                                }
                             }
-                            if (lastControlPoint >= 0 &&
-                                lastControlPoint <
-                                    shape->controlPointWeldGroups.size()) {
-                                linked.endWeldGroup =
-                                    shape->controlPointWeldGroups[
-                                        lastControlPoint];
+                        } else {
+                            // Single-curve shapes can be welded at any CV,
+                            // including an interior CV on a closed curve.
+                            // Treat every stored group as part of this curve.
+                            for (const quint64 group :
+                                 shape->controlPointWeldGroups) {
+                                if (group != 0) {
+                                    linked.weldGroups.append(group);
+                                }
                             }
                         }
                         linked.start = start;
@@ -15258,13 +15263,13 @@ private:
                     // welding them. Cross-object links therefore come only
                     // from explicit weld groups; coordinate matching is kept
                     // for components already stored in one joined PolyCurve.
-                    const bool connectedByWeld =
-                        (current.startWeldGroup != 0 &&
-                         (current.startWeldGroup == candidate.startWeldGroup ||
-                          current.startWeldGroup == candidate.endWeldGroup)) ||
-                        (current.endWeldGroup != 0 &&
-                         (current.endWeldGroup == candidate.startWeldGroup ||
-                          current.endWeldGroup == candidate.endWeldGroup));
+                    bool connectedByWeld = false;
+                    for (const quint64 group : current.weldGroups) {
+                        if (candidate.weldGroups.contains(group)) {
+                            connectedByWeld = true;
+                            break;
+                        }
+                    }
                     const Shape *currentShape =
                         document_.shape(current.objectId);
                     const bool sameJoinedPolyCurve =

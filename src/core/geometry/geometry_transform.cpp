@@ -708,6 +708,42 @@ bool transformShapeControlPoints(
         }
         const int lastGlobalIndex =
             firstGlobalIndex + curve->controlPoints.size() - 1;
+        const bool rectangleHiddenClosure =
+            shape->geometryType == GeometryType::Rectangle &&
+            firstGlobalIndex == 0 && curve->degree == 1 &&
+            curve->controlPoints.size() == 5;
+        if (rectangleHiddenClosure) {
+            // Rectangle tools expose four handles but the clamped closed
+            // degree-one curve stores CV0 again as CV4. Treat this structural
+            // alias as one handle, even if a prior edit left the seam open.
+            bool repairedClosure =
+                curve->controlPoints.last() != curve->controlPoints.first();
+            if (curve->dimension == 3 &&
+                curve->normalCoordinates.size() == 5) {
+                repairedClosure = repairedClosure ||
+                    curve->normalCoordinates.last() !=
+                        curve->normalCoordinates.first();
+            }
+            if (curve->rational && curve->weights.size() == 5) {
+                repairedClosure = repairedClosure ||
+                    curve->weights.last() != curve->weights.first();
+            }
+            curve->controlPoints.last() = curve->controlPoints.first();
+            if (curve->dimension == 3 &&
+                curve->normalCoordinates.size() == 5) {
+                curve->normalCoordinates.last() =
+                    curve->normalCoordinates.first();
+            }
+            if (curve->rational && curve->weights.size() == 5) {
+                curve->weights.last() = curve->weights.first();
+            }
+            if (indicesToTransform.contains(firstGlobalIndex) ||
+                indicesToTransform.contains(lastGlobalIndex)) {
+                indicesToTransform.insert(firstGlobalIndex);
+                indicesToTransform.insert(lastGlobalIndex);
+            }
+            changed = changed || repairedClosure;
+        }
         if (curve->controlPoints.size() > 1) {
             const qreal firstNormal = curve->dimension == 3
                 ? curve->normalCoordinates.first() : 0.0;

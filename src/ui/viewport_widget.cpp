@@ -17677,6 +17677,41 @@ private:
             // between unrelated curves that merely share coordinates.
             const QVector<QPair<int, Point3D>> allControlPoints =
                 curveControlPointVertices(shape, offset);
+            const bool rectangleHasHiddenClosure =
+                shape.geometryType == GeometryType::Rectangle &&
+                validateNurbsCurve(shape.nurbs) &&
+                shape.nurbs.degree == 1 &&
+                shape.nurbs.controlPoints.size() == 5 &&
+                allControlPoints.size() == 4;
+            bool repairedRectangleClosure = false;
+            if (rectangleHasHiddenClosure) {
+                // Rectangle control-point display hides the repeated fifth
+                // CV. Make it match the first corner before applying edits;
+                // otherwise an earlier drag can leave the outline open.
+                repairedRectangleClosure =
+                    shape.nurbs.controlPoints.last() !=
+                    shape.nurbs.controlPoints.first();
+                if (shape.nurbs.dimension == 3) {
+                    repairedRectangleClosure = repairedRectangleClosure ||
+                        shape.nurbs.normalCoordinates.last() !=
+                            shape.nurbs.normalCoordinates.first();
+                }
+                if (shape.nurbs.rational) {
+                    repairedRectangleClosure = repairedRectangleClosure ||
+                        shape.nurbs.weights.last() !=
+                            shape.nurbs.weights.first();
+                }
+                shape.nurbs.controlPoints.last() =
+                    shape.nurbs.controlPoints.first();
+                if (shape.nurbs.dimension == 3 &&
+                    shape.nurbs.normalCoordinates.size() == 5) {
+                    shape.nurbs.normalCoordinates.last() =
+                        shape.nurbs.normalCoordinates.first();
+                }
+                if (shape.nurbs.rational && shape.nurbs.weights.size() == 5) {
+                    shape.nurbs.weights.last() = shape.nurbs.weights.first();
+                }
+            }
             const auto includeClosedSeam = [&](int firstIndex, int lastIndex) {
                 if (firstIndex < 0 || lastIndex <= firstIndex ||
                     lastIndex >= allControlPoints.size()) {
@@ -17704,6 +17739,11 @@ private:
                         firstIndex + component.controlPoints.size() - 1);
                     firstIndex += component.controlPoints.size();
                 }
+            } else if (rectangleHasHiddenClosure) {
+                if (indicesToMove.contains(0) || indicesToMove.contains(4)) {
+                    indicesToMove.insert(0);
+                    indicesToMove.insert(4);
+                }
             } else if (!allControlPoints.isEmpty()) {
                 includeClosedSeam(0, allControlPoints.size() - 1);
             }
@@ -17711,7 +17751,7 @@ private:
                 return false;
             }
 
-            bool changed = false;
+            bool changed = repairedRectangleClosure;
             const auto moveMatchingPoints = [&](QVector<QPointF> *points,
                                                 QVector<double> *normalCoordinates,
                                                 int *dimension,

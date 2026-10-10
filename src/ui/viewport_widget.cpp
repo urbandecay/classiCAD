@@ -6492,7 +6492,12 @@ protected:
                                              secondColor.blueF(), 1.0f);
                         }
                     }
-                    gpuStrokes.append(std::move(edgeCage));
+                    // Surface CV cages are an explicit display overlay. The
+                    // solid surface remains visible without it; show the net
+                    // only when the Control Points toggle is enabled.
+                    if (controlPointsVisible_) {
+                        gpuStrokes.append(std::move(edgeCage));
+                    }
                     ViewportSceneStroke vertexCage;
                     vertexCage.shape = &visibleShape;
                     vertexCage.color = selected && !hasComponentSelection
@@ -6509,8 +6514,10 @@ protected:
                     vertexCage.cacheableGeometry = renderObject.cacheable;
                     vertexCage.worldOffset = renderObject.placementTranslation;
                     vertexCage.preparedDepthGeometry = cage;
-                    if (vertexCage.pointDiameter > 0.0f)
+                    if (controlPointsVisible_ &&
+                        vertexCage.pointDiameter > 0.0f) {
                         gpuStrokes.append(std::move(vertexCage));
+                    }
 
                     if (selected && !objectComponentSelection.isEmpty()) {
                         const auto appendComponentStroke = [&](ViewportDepthGeometry geometry,

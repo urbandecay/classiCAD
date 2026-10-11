@@ -30,6 +30,7 @@ public:
     struct Snapshot {
         QVector<Layer> layers;
         QVector<SceneObject> objects;
+        QVector<DocumentMaterial> materials;
         LayerId activeLayerId = LayerId::invalid();
         quint64 nextObjectValue = 1;
         quint64 nextLayerValue = 1;
@@ -41,6 +42,7 @@ public:
     int size() const;
     bool isEmpty() const;
     const QVector<SceneObject> &objects() const;
+    const QVector<DocumentMaterial> &materials() const;
     const QVector<Layer> &layers() const;
     const DocumentSettings &settings() const;
     bool setSettings(const DocumentSettings &settings);
@@ -145,6 +147,8 @@ public:
 private:
     friend class DocumentTransaction;
 
+    bool addMaterial(const DocumentMaterial &material);
+
     ObjectId allocateObjectId();
     LayerId allocateLayerId();
     LayerId normalizedLayerId(LayerId requested) const;
@@ -159,6 +163,7 @@ private:
 
     QVector<Layer> layers_;
     QVector<SceneObject> objects_;
+    QVector<DocumentMaterial> materials_;
     QHash<quint64, int> objectIndices_;
     QHash<quint64, quint64> objectGeometryRevisions_;
     LayerId activeLayerId_ = LayerId::invalid();

@@ -115,6 +115,94 @@ Point3D candidateWorldPoint(const SnapCandidate &candidate,
                : workPlaneFramePointToWorld(candidate.point, fallbackFrame);
 }
 
+Point3D polygonMeshWorldPoint(const SceneObject &object, const Point3D &local)
+{
+    const auto &matrix = object.meshObjectTransform;
+    const qreal w = matrix[12] * local.x + matrix[13] * local.y +
+                    matrix[14] * local.z + matrix[15];
+    const qreal divisor = std::abs(w) > 1.0e-12 ? w : 1.0;
+    return {(matrix[0] * local.x + matrix[1] * local.y +
+             matrix[2] * local.z + matrix[3]) / divisor +
+                object.placementTranslation.x,
+            (matrix[4] * local.x + matrix[5] * local.y +
+             matrix[6] * local.z + matrix[7]) / divisor +
+                object.placementTranslation.y,
+            (matrix[8] * local.x + matrix[9] * local.y +
+             matrix[10] * local.z + matrix[11]) / divisor +
+                object.placementTranslation.z};
+}
+
+QPointF closestPointOnScreenTriangle(const QPointF &point,
+                                     const QPointF &a,
+                                     const QPointF &b,
+                                     const QPointF &c)
+{
+    const auto closestOnSegment = [&point](const QPointF &start,
+                                           const QPointF &end) {
+        const QPointF direction = end - start;
+        const qreal lengthSquared = QPointF::dotProduct(direction, direction);
+        const qreal fraction = lengthSquared <= 1.0e-18
+                                   ? 0.0
+                                   : std::clamp(
+                                         QPointF::dotProduct(point - start,
+                                                             direction) /
+                                             lengthSquared,
+                                         0.0, 1.0);
+        return start + direction * fraction;
+    };
+    const QPointF v0 = b - a;
+    const QPointF v1 = c - a;
+    const QPointF v2 = point - a;
+    const qreal d00 = QPointF::dotProduct(v0, v0);
+    const qreal d01 = QPointF::dotProduct(v0, v1);
+    const qreal d11 = QPointF::dotProduct(v1, v1);
+    const qreal d20 = QPointF::dotProduct(v2, v0);
+    const qreal d21 = QPointF::dotProduct(v2, v1);
+    const qreal denominator = d00 * d11 - d01 * d01;
+    if (std::abs(denominator) > 1.0e-18) {
+        const qreal beta = (d11 * d20 - d01 * d21) / denominator;
+        const qreal gamma = (d00 * d21 - d01 * d20) / denominator;
+        if (beta >= 0.0 && gamma >= 0.0 && beta + gamma <= 1.0) {
+            return point;
+        }
+    }
+    const QPointF ab = closestOnSegment(a, b);
+    const QPointF bc = closestOnSegment(b, c);
+    const QPointF ca = closestOnSegment(c, a);
+    const qreal dab = QPointF::dotProduct(point - ab, point - ab);
+    const qreal dbc = QPointF::dotProduct(point - bc, point - bc);
+    const qreal dca = QPointF::dotProduct(point - ca, point - ca);
+    return dab <= dbc && dab <= dca ? ab : (dbc <= dca ? bc : ca);
+}
+
+bool screenTriangleWeights(const QPointF &point,
+                          const QPointF &a,
+                          const QPointF &b,
+                          const QPointF &c,
+                          qreal *weightA,
+                          qreal *weightB,
+                          qreal *weightC)
+{
+    const QPointF v0 = b - a;
+    const QPointF v1 = c - a;
+    const QPointF v2 = point - a;
+    const qreal d00 = QPointF::dotProduct(v0, v0);
+    const qreal d01 = QPointF::dotProduct(v0, v1);
+    const qreal d11 = QPointF::dotProduct(v1, v1);
+    const qreal d20 = QPointF::dotProduct(v2, v0);
+    const qreal d21 = QPointF::dotProduct(v2, v1);
+    const qreal denominator = d00 * d11 - d01 * d01;
+    if (std::abs(denominator) <= 1.0e-18) {
+        return false;
+    }
+    const qreal beta = (d11 * d20 - d01 * d21) / denominator;
+    const qreal gamma = (d00 * d21 - d01 * d20) / denominator;
+    *weightA = 1.0 - beta - gamma;
+    *weightB = beta;
+    *weightC = gamma;
+    return true;
+}
+
 void appendCurveWorldCandidates(const NurbsCurve3D &curve,
                                 const WorkPlaneFrame &frame,
                                 int componentIndex,
@@ -1471,7 +1559,42 @@ SnapResult SnapEngine::findEdgeCenterSnapPoint(
         const Point3D worldOffset = sceneObject != nullptr
                                         ? sceneObject->placementTranslation
                                         : Point3D{};
-        for (const SnapCandidate &candidate : edgeCenterCandidatesForShape(shape)) {
+        QVector<SnapCandidate> shapeCandidates =
+            edgeCenterCandidatesForShape(shape);
+        if (shape.geometryType == GeometryType::PolygonMesh &&
+            sceneObject != nullptr && validatePolygonMesh(shape.polygonMesh)) {
+            QSet<quint64> emittedEdges;
+            for (const QVector<int> &face : shape.polygonMesh.faces) {
+                for (int corner = 0; corner < face.size(); ++corner) {
+                    const int firstIndex = face[corner];
+                    const int secondIndex = face[(corner + 1) % face.size()];
+                    const quint32 low = static_cast<quint32>(
+                        std::min(firstIndex, secondIndex));
+                    const quint32 high = static_cast<quint32>(
+                        std::max(firstIndex, secondIndex));
+                    const quint64 edgeKey = (quint64(low) << 32) | high;
+                    if (emittedEdges.contains(edgeKey)) {
+                        continue;
+                    }
+                    emittedEdges.insert(edgeKey);
+                    const Point3D &a = shape.polygonMesh.vertices[firstIndex];
+                    const Point3D &b = shape.polygonMesh.vertices[secondIndex];
+                    const Point3D midpoint{(a.x + b.x) * 0.5,
+                                           (a.y + b.y) * 0.5,
+                                           (a.z + b.z) * 0.5};
+                    SnapCandidate candidate{SnapType::Midpoint,
+                                            QPointF(midpoint.x, midpoint.y)};
+                    candidate.worldPoint =
+                        polygonMeshWorldPoint(*sceneObject, midpoint);
+                    candidate.worldPoint.x -= worldOffset.x;
+                    candidate.worldPoint.y -= worldOffset.y;
+                    candidate.worldPoint.z -= worldOffset.z;
+                    candidate.hasWorldPoint = true;
+                    shapeCandidates.append(candidate);
+                }
+            }
+        }
+        for (const SnapCandidate &candidate : shapeCandidates) {
             const WorkPlaneFrame &candidateFrame =
                 candidate.componentIndex >= 0
                     ? shapeComponentWorkPlaneFrame(shape,
@@ -1620,6 +1743,74 @@ QVector<SnapCandidate> SnapEngine::snapCandidatesForScene(
                                         ? sceneObject->placementTranslation
                                         : Point3D{};
         candidateWorldPositionGuard.worldOffset = worldOffset;
+        const bool polygonMesh = shape.geometryType == GeometryType::PolygonMesh &&
+                                 sceneObject != nullptr &&
+                                 validatePolygonMesh(shape.polygonMesh);
+        if (polygonMesh) {
+            const PolygonMesh3D &mesh = shape.polygonMesh;
+            QSet<quint64> emittedEdges;
+            if (settings_.endpoint) {
+                for (const Point3D &local : mesh.vertices) {
+                    SnapCandidate candidate{SnapType::Endpoint,
+                                            QPointF(local.x, local.y),
+                                            shapeIndex};
+                    candidate.worldPoint = polygonMeshWorldPoint(*sceneObject, local);
+                    candidate.hasWorldPoint = true;
+                    candidates.append(candidate);
+                }
+            }
+            if (settings_.midpoint) {
+                for (const QVector<int> &face : mesh.faces) {
+                    for (int corner = 0; corner < face.size(); ++corner) {
+                        const int firstIndex = face[corner];
+                        const int secondIndex = face[(corner + 1) % face.size()];
+                        const quint32 low = static_cast<quint32>(
+                            std::min(firstIndex, secondIndex));
+                        const quint32 high = static_cast<quint32>(
+                            std::max(firstIndex, secondIndex));
+                        const quint64 edgeKey = (quint64(low) << 32) | high;
+                        if (emittedEdges.contains(edgeKey)) {
+                            continue;
+                        }
+                        emittedEdges.insert(edgeKey);
+                        const Point3D &a = mesh.vertices[firstIndex];
+                        const Point3D &b = mesh.vertices[secondIndex];
+                        const Point3D midpoint{(a.x + b.x) * 0.5,
+                                               (a.y + b.y) * 0.5,
+                                               (a.z + b.z) * 0.5};
+                        SnapCandidate candidate{SnapType::Midpoint,
+                                                QPointF(midpoint.x, midpoint.y),
+                                                shapeIndex};
+                        candidate.worldPoint =
+                            polygonMeshWorldPoint(*sceneObject, midpoint);
+                        candidate.hasWorldPoint = true;
+                        candidates.append(candidate);
+                    }
+                }
+            }
+            if (settings_.center && !mesh.vertices.isEmpty()) {
+                SnapCandidate candidate{SnapType::Center, {}, shapeIndex};
+                Point3D minimum = polygonMeshWorldPoint(*sceneObject,
+                                                        mesh.vertices.first());
+                Point3D maximum = minimum;
+                for (int index = 1; index < mesh.vertices.size(); ++index) {
+                    const Point3D point =
+                        polygonMeshWorldPoint(*sceneObject, mesh.vertices[index]);
+                    minimum.x = std::min(minimum.x, point.x);
+                    minimum.y = std::min(minimum.y, point.y);
+                    minimum.z = std::min(minimum.z, point.z);
+                    maximum.x = std::max(maximum.x, point.x);
+                    maximum.y = std::max(maximum.y, point.y);
+                    maximum.z = std::max(maximum.z, point.z);
+                }
+                candidate.worldPoint = {(minimum.x + maximum.x) * 0.5,
+                                        (minimum.y + maximum.y) * 0.5,
+                                        (minimum.z + maximum.z) * 0.5};
+                candidate.hasWorldPoint = true;
+                candidates.append(candidate);
+            }
+            continue;
+        }
         const bool spatialSurface = shape.geometryType == GeometryType::NurbsSurface ||
                                     shape.geometryType == GeometryType::NurbsSolid;
         const bool usesDisplayedControlPointList =
@@ -2675,7 +2866,13 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         }
 
         const Shape &shape = document[shapeIndex];
-        if (!workPlaneMatches(shapeWorkPlaneFrame(shape),
+        const SceneObject *sceneObject =
+            document.object(document.objectIdAt(shapeIndex));
+        const bool polygonMesh = shape.geometryType == GeometryType::PolygonMesh &&
+                                 sceneObject != nullptr &&
+                                 validatePolygonMesh(shape.polygonMesh);
+        if (!polygonMesh &&
+            !workPlaneMatches(shapeWorkPlaneFrame(shape),
                               transform.workPlaneFrame())) {
             continue;
         }
@@ -2687,6 +2884,64 @@ QVector<SnapCandidate> SnapEngine::nearCandidatesForScene(
         Point3D nearestWorldPoint;
         bool hasNearestWorldPoint = false;
         int nearestComponentIndex = -1;
+        if (polygonMesh) {
+            const PolygonMesh3D &mesh = shape.polygonMesh;
+            for (const QVector<int> &face : mesh.faces) {
+                QVector<Point3D> worldLoop;
+                QVector<QPointF> screenLoop;
+                worldLoop.reserve(face.size());
+                screenLoop.reserve(face.size());
+                bool projected = true;
+                for (int vertexIndex : face) {
+                    const Point3D world = polygonMeshWorldPoint(
+                        *sceneObject, mesh.vertices[vertexIndex]);
+                    QPointF screen;
+                    if (!transform.worldPointToScreen(world, viewportSize,
+                                                      &screen)) {
+                        projected = false;
+                        break;
+                    }
+                    worldLoop.append(world);
+                    screenLoop.append(screen);
+                }
+                if (!projected) {
+                    continue;
+                }
+                for (const auto &triangle : triangulatePolygonLoop(worldLoop)) {
+                    const int ia = triangle[0];
+                    const int ib = triangle[1];
+                    const int ic = triangle[2];
+                    const QPointF closest = closestPointOnScreenTriangle(
+                        cursorScreen, screenLoop[ia], screenLoop[ib],
+                        screenLoop[ic]);
+                    const QPointF difference = closest - cursorScreen;
+                    const qreal distanceSquared =
+                        QPointF::dotProduct(difference, difference);
+                    if (distanceSquared >= nearestDistanceSquared) {
+                        continue;
+                    }
+                    qreal wa = 0.0;
+                    qreal wb = 0.0;
+                    qreal wc = 0.0;
+                    if (!screenTriangleWeights(closest, screenLoop[ia],
+                                               screenLoop[ib], screenLoop[ic],
+                                               &wa, &wb, &wc)) {
+                        continue;
+                    }
+                    nearestDistanceSquared = distanceSquared;
+                    nearestWorldPoint = {
+                        wa * worldLoop[ia].x + wb * worldLoop[ib].x +
+                            wc * worldLoop[ic].x,
+                        wa * worldLoop[ia].y + wb * worldLoop[ib].y +
+                            wc * worldLoop[ic].y,
+                        wa * worldLoop[ia].z + wb * worldLoop[ib].z +
+                            wc * worldLoop[ic].z};
+                    nearestPoint = worldPointToWorkPlaneFrame(
+                        nearestWorldPoint, transform.workPlaneFrame());
+                    hasNearestWorldPoint = true;
+                }
+            }
+        }
         const auto considerPoint = [&](const QPointF &worldPoint) {
             const QPointF screenPoint = transform.worldToScreen(worldPoint, viewportSize);
             const QPointF difference = screenPoint - cursorScreen;
@@ -2898,6 +3153,7 @@ SnapResult SnapEngine::findSpatialSnapPoint(const Document &document,
         snapObject.geometry = document[index];
         if (sourceObject != nullptr) {
             snapObject.placementTranslation = sourceObject->placementTranslation;
+            snapObject.meshObjectTransform = sourceObject->meshObjectTransform;
         }
         scenes[sceneIndex].document.insertObject(
             scenes[sceneIndex].document.size(), snapObject);
@@ -3163,8 +3419,12 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
         const SceneObject *sourceObject =
             document.object(document.objectIdAt(shapeIndex));
         const WorkPlaneFrame shapeFrame = shapeWorkPlaneFrame(shape);
+        const bool polygonMesh = shape.geometryType == GeometryType::PolygonMesh &&
+                                 sourceObject != nullptr &&
+                                 validatePolygonMesh(shape.polygonMesh);
         const bool spatialSurface = shape.geometryType == GeometryType::NurbsSurface ||
-                                    shape.geometryType == GeometryType::NurbsSolid;
+                                    shape.geometryType == GeometryType::NurbsSolid ||
+                                    polygonMesh;
         if (!spatialSurface &&
             !workPlaneFramesAreCoplanar(shapeFrame, activeFrame)) {
             continue;
@@ -3174,6 +3434,7 @@ SnapResult SnapEngine::findSnapPoint(const Document &document,
                                              : mapShapeBetweenFrames(shape, activeFrame);
         if (sourceObject != nullptr) {
             snapObject.placementTranslation = sourceObject->placementTranslation;
+            snapObject.meshObjectTransform = sourceObject->meshObjectTransform;
         }
         coplanarObjects.append(std::move(snapObject));
     }

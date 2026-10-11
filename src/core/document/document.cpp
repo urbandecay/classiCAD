@@ -7,6 +7,24 @@
 
 namespace classiCAD {
 
+bool isValidDocumentMaterial(const DocumentMaterial &material)
+{
+    if (material.id.isEmpty() || material.baseColorSceneLinear.size() != 4 ||
+        !std::isfinite(material.roughness) || material.roughness < 0.0f ||
+        material.roughness > 1.0f || !std::isfinite(material.metallic) ||
+        material.metallic < 0.0f || material.metallic > 1.0f ||
+        !std::isfinite(material.alpha) || material.alpha < 0.0f ||
+        material.alpha > 1.0f) {
+        return false;
+    }
+    for (const float component : material.baseColorSceneLinear) {
+        if (!std::isfinite(component) || component < 0.0f || component > 1.0f) {
+            return false;
+        }
+    }
+    return true;
+}
+
 Document::Document()
 {
     ensureDefaultLayer();
@@ -25,6 +43,27 @@ bool Document::isEmpty() const
 const QVector<SceneObject> &Document::objects() const
 {
     return objects_;
+}
+
+const QVector<DocumentMaterial> &Document::materials() const
+{
+    return materials_;
+}
+
+bool Document::addMaterial(const DocumentMaterial &material)
+{
+    if (!isValidDocumentMaterial(material)) return false;
+    for (const DocumentMaterial &existing : materials_) {
+        if (existing.id != material.id) continue;
+        return existing.name == material.name &&
+               existing.libraryPath == material.libraryPath &&
+               existing.baseColorSceneLinear == material.baseColorSceneLinear &&
+               existing.roughness == material.roughness &&
+               existing.metallic == material.metallic &&
+               existing.alpha == material.alpha;
+    }
+    materials_.append(material);
+    return true;
 }
 
 const QVector<Layer> &Document::layers() const
@@ -874,13 +913,14 @@ bool Document::isObjectEditable(ObjectId objectId) const
 
 Document::Snapshot Document::snapshot() const
 {
-    return Snapshot{layers_, objects_, activeLayerId_, nextObjectValue_, nextLayerValue_, settings_};
+    return Snapshot{layers_, objects_, materials_, activeLayerId_, nextObjectValue_, nextLayerValue_, settings_};
 }
 
 void Document::restoreSnapshot(const Snapshot &snapshot)
 {
     layers_ = snapshot.layers;
     objects_ = snapshot.objects;
+    materials_ = snapshot.materials;
     activeLayerId_ = snapshot.activeLayerId;
     nextObjectValue_ = snapshot.nextObjectValue;
     nextLayerValue_ = snapshot.nextLayerValue;

@@ -6,6 +6,7 @@
 #include "core/geometry/nurbs_curve.h"
 #include "core/geometry/nurbs_surface.h"
 #include "core/geometry/nurbs_solid.h"
+#include "core/geometry/polygon_mesh.h"
 #include "core/geometry/work_plane.h"
 
 #include <QByteArray>
@@ -54,6 +55,7 @@ struct Shape {
     using NurbsSurface3D = classiCAD::NurbsSurface3D;
     NurbsSurface3D nurbsSurface;
     NurbsExtrusionSolid3D nurbsSolid;
+    PolygonMesh3D polygonMesh;
 };
 
 inline QVector<NurbsSurface3D> shapeSurfaceFaces(const Shape &shape)

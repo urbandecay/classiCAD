@@ -483,6 +483,109 @@ private:
         }
     }
 
+    void importBlenderScene()
+    {
+        QString initialDirectory;
+        if (!currentProjectPath_.isEmpty()) {
+            initialDirectory = QFileInfo(currentProjectPath_).absolutePath();
+        } else {
+            QSettings settings;
+            initialDirectory = settings.value(QStringLiteral("files/lastProjectDirectory"),
+                                              QDir::homePath()).toString();
+        }
+        const QString path = QFileDialog::getOpenFileName(
+            this,
+            QStringLiteral("Import Blender Scene"),
+            initialDirectory,
+            QStringLiteral("Blender Scene (*.blend)"));
+        if (path.isEmpty()) {
+            return;
+        }
+
+        const QStringList modes{
+            QStringLiteral("Original mesh (do not apply modifiers)"),
+            QStringLiteral("Evaluated mesh (bake evaluated geometry)")};
+        bool modeAccepted = false;
+        const QString selectedMode = QInputDialog::getItem(
+            this,
+            QStringLiteral("Blender Mesh Import Mode"),
+            QStringLiteral("Choose which mesh geometry to import:"),
+            modes,
+            0,
+            false,
+            &modeAccepted);
+        if (!modeAccepted) {
+            return;
+        }
+        const QString importMode = selectedMode.startsWith(QStringLiteral("Evaluated"))
+            ? QStringLiteral("evaluated") : QStringLiteral("original");
+
+        QVector<SceneObject> importedObjects;
+        QVector<DocumentMaterial> importedMaterials;
+        BlenderSceneImportReport report;
+        QString errorMessage;
+        if (!classiCAD::importBlenderScene(path, importMode, &importedObjects,
+                                           &importedMaterials,
+                                           &report, &errorMessage)) {
+            QMessageBox::critical(
+                this,
+                QStringLiteral("Could Not Import Blender Scene"),
+                errorMessage.isEmpty()
+                    ? QStringLiteral("The Blender scene could not be imported.")
+                    : errorMessage);
+            return;
+        }
+
+        if (!importedObjects.isEmpty()) {
+            const LayerId targetLayer = session_.document().activeLayerId();
+            for (SceneObject &object : importedObjects) {
+                object.layerId = targetLayer;
+            }
+            DocumentTransaction transaction = session_.beginTransaction();
+            for (const DocumentMaterial &material : importedMaterials) {
+                if (!transaction.addMaterial(material)) {
+                    QMessageBox::critical(
+                        this,
+                        QStringLiteral("Could Not Import Blender Scene"),
+                        QStringLiteral("A Blender material identity conflicts with an existing material."));
+                    return;
+                }
+            }
+            transaction.insertObjects(session_.document().size(), importedObjects);
+            if (!transaction.commit()) {
+                QMessageBox::critical(
+                    this,
+                    QStringLiteral("Could Not Import Blender Scene"),
+                    QStringLiteral("The imported meshes could not be added to the document."));
+                return;
+            }
+            if (viewport_ != nullptr) {
+                viewport_->refreshAfterProjectImport();
+            }
+        }
+
+        QSettings settings;
+        settings.setValue(QStringLiteral("files/lastProjectDirectory"),
+                          QFileInfo(path).absolutePath());
+        const QString status = QStringLiteral("Imported %1 mesh object(s) from %2 using Blender %3 (%4 mode)")
+                                   .arg(report.importedObjectCount)
+                                   .arg(QFileInfo(path).fileName(),
+                                        report.blenderVersion,
+                                        report.importMode);
+        statusBar()->showMessage(status, 7000);
+        if (!report.warningMessage.isEmpty() || report.importedObjectCount == 0) {
+            QMessageBox::warning(
+                this,
+                QStringLiteral("Blender Scene Import Report"),
+                QStringLiteral("Imported %1 mesh object(s); skipped %2 object(s).\n\n%3")
+                    .arg(report.importedObjectCount)
+                    .arg(report.skippedObjectCount)
+                    .arg(report.warningMessage.isEmpty()
+                             ? QStringLiteral("No supported mesh objects were found.")
+                             : report.warningMessage));
+        }
+    }
+
     void newDocument()
     {
         if (viewport_ == nullptr || !maybeSaveDocument()) {
@@ -898,6 +1001,11 @@ private:
             QStringLiteral("Rhino 3DM…"));
         connect(importRhinoAction, &QAction::triggered, this, [this]() {
             importRhino3dm();
+        });
+        QAction *importBlenderSceneAction = importMenu->addAction(
+            QStringLiteral("Blender Scene…"));
+        connect(importBlenderSceneAction, &QAction::triggered, this, [this]() {
+            importBlenderScene();
         });
         fileMenu->addSeparator();
         QAction *saveDocumentAction = fileMenu->addAction(QStringLiteral("Save"));

@@ -1,0 +1,419 @@
+"""Extract Blender 5.2.2 scene meshes for classiCAD's mesh import bridge.
+
+Run in background Blender as:
+  blender --background --python blender_scene_extract.py -- \
+      extract INPUT.blend OUTPUT.json [original|evaluated]
+
+This emits transport data only. The classiCAD importer must validate every
+required mesh record before creating native scene objects.
+"""
+
+import json
+import math
+import os
+import sys
+import tempfile
+import traceback
+
+import bpy
+
+
+PINNED_BLENDER_VERSION = (5, 2, 2)
+BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
+BRIDGE_FORMAT_VERSION = 1
+
+
+def require_pinned_blender():
+    if tuple(bpy.app.version[:3]) != PINNED_BLENDER_VERSION:
+        raise RuntimeError(
+            "classiCAD scene extraction requires Blender 5.2.2; found "
+            + bpy.app.version_string
+        )
+
+
+def source_library_path(id_block):
+    library = getattr(id_block, "library", None)
+    return library.filepath if library is not None else ""
+
+
+def source_library_exists(id_block):
+    path = source_library_path(id_block)
+    if not path:
+        return None
+    return os.path.isfile(bpy.path.abspath(path))
+
+
+def stable_id(id_block):
+    return source_library_path(id_block) + "::" + id_block.name_full
+
+
+def finite_number(value):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite numeric value")
+    return number
+
+
+def vector_values(value):
+    return [finite_number(component) for component in value]
+
+
+def matrix_values(matrix):
+    return [vector_values(row) for row in matrix]
+
+
+def add_unsupported(report, item, feature, reason):
+    report.append({"item_id": item, "feature": feature, "reason": reason})
+
+
+def image_references(material):
+    references = []
+    if material is None or not getattr(material, "use_nodes", False):
+        return references
+    tree = getattr(material, "node_tree", None)
+    if tree is None:
+        return references
+    for node in tree.nodes:
+        image = getattr(node, "image", None)
+        if image is None:
+            continue
+        references.append(
+            {
+                "node_name": node.name,
+                "image_name": image.name_full,
+                "image_library_path": source_library_path(image),
+                "filepath": image.filepath,
+                "packed": image.packed_file is not None,
+                "source_file_exists": (
+                    True if image.packed_file is not None else
+                    (os.path.isfile(bpy.path.abspath(image.filepath))
+                     if image.filepath else False)
+                ),
+                "color_space": image.colorspace_settings.name,
+            }
+        )
+    return references
+
+
+def material_record(material):
+    if material is None:
+        return None
+    diffuse = material.diffuse_color
+    return {
+        "material_id": stable_id(material),
+        "name": material.name_full,
+        "library_path": source_library_path(material),
+        "library_path_exists": source_library_exists(material),
+        "diffuse_color_linear": vector_values(diffuse),
+        "roughness": finite_number(material.roughness),
+        "metallic": finite_number(material.metallic),
+        "alpha": finite_number(diffuse[3]),
+        "image_textures": image_references(material),
+    }
+
+
+def attribute_value(element, data_type):
+    if data_type in {"FLOAT_COLOR", "BYTE_COLOR"}:
+        value = {"color_linear": vector_values(element.color)}
+        if hasattr(element, "color_srgb"):
+            value["color_srgb"] = vector_values(element.color_srgb)
+        return value
+    if data_type in {"FLOAT", "INT", "BOOLEAN", "STRING"}:
+        return {"value": element.value}
+    if data_type in {"FLOAT_VECTOR", "FLOAT2", "FLOAT3"}:
+        if hasattr(element, "vector"):
+            return {"vector": vector_values(element.vector)}
+        if hasattr(element, "value"):
+            return {"value": vector_values(element.value)}
+    if data_type == "QUATERNION" and hasattr(element, "value"):
+        return {"quaternion": vector_values(element.value)}
+    raise NotImplementedError("unsupported Blender attribute data type " + data_type)
+
+
+def extract_attributes(mesh, item_id, unsupported):
+    result = []
+    supported_domains = {"POINT", "CORNER", "FACE"}
+    for attribute in mesh.attributes:
+        domain = attribute.domain
+        data_type = attribute.data_type
+        record = {
+            "name": attribute.name,
+            "domain": domain,
+            "data_type": data_type,
+            "color_space_interpretation": (
+                "linear" if data_type in {"FLOAT_COLOR", "BYTE_COLOR"}
+                else "not_color"
+            ),
+        }
+        try:
+            if domain not in supported_domains:
+                raise NotImplementedError("unsupported attribute domain " + domain)
+            record["values"] = [
+                attribute_value(value, data_type) for value in attribute.data
+            ]
+        except (NotImplementedError, AttributeError, ValueError) as error:
+            record["values"] = None
+            add_unsupported(unsupported, item_id,
+                            "attribute:" + attribute.name, str(error))
+        result.append(record)
+    return result
+
+
+def visibility_metadata(obj):
+    try:
+        hidden_in_viewport = bool(obj.hide_get())
+    except (RuntimeError, TypeError):
+        hidden_in_viewport = bool(obj.hide_viewport)
+    return {
+        "hide_viewport": bool(obj.hide_viewport),
+        "hide_render": bool(obj.hide_render),
+        "hidden_in_viewport": hidden_in_viewport,
+    }
+
+
+def object_metadata(obj, scene):
+    parent = obj.parent
+    return {
+        "object_id": stable_id(obj),
+        "name": obj.name_full,
+        "library_path": source_library_path(obj),
+        "library_path_exists": source_library_exists(obj),
+        "scene_name": scene.name_full,
+        "parent_id": stable_id(parent) if parent is not None else "",
+        "collection_names": sorted(collection.name_full for collection in obj.users_collection),
+        "visibility": visibility_metadata(obj),
+        "display_color_linear": vector_values(obj.color),
+        "classiCAD_geometry_type": obj.get("classiCAD_geometry_type", ""),
+        "classiCAD_proxy_geometry": obj.get("classiCAD_proxy_geometry", ""),
+        "classiCAD_data_block": obj.get("classiCAD_data_block", ""),
+    }
+
+
+def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
+    item_id = stable_id(obj)
+    item = object_metadata(obj, scene)
+    item["object_type"] = obj.type
+    item["import_mode"] = mode
+    if item["library_path_exists"] is False:
+        add_unsupported(unsupported, item_id, "linked_library",
+                        "linked Blender library file is missing: " + item["library_path"])
+    if mode == "evaluated":
+        evaluated_obj = obj.evaluated_get(depsgraph)
+        mesh = evaluated_obj.to_mesh(preserve_all_data_layers=True,
+                                     depsgraph=depsgraph)
+        transform = evaluated_obj.matrix_world
+    else:
+        evaluated_obj = None
+        mesh = obj.data
+        transform = obj.matrix_world
+    if mesh is None:
+        raise ValueError("Blender did not provide mesh data")
+    try:
+        item["transform_world"] = matrix_values(transform)
+        item["mesh_name"] = mesh.name_full
+        item["mesh_library_path"] = source_library_path(mesh)
+        item["vertices_local"] = [vector_values(vertex.co) for vertex in mesh.vertices]
+        item["polygons"] = [
+            [int(vertex_index) for vertex_index in polygon.vertices]
+            for polygon in mesh.polygons
+        ]
+        item["polygon_material_indices"] = [
+            int(polygon.material_index) for polygon in mesh.polygons
+        ]
+        item["loop_vertex_indices"] = [int(loop.vertex_index) for loop in mesh.loops]
+
+        source_obj = evaluated_obj if evaluated_obj is not None else obj
+        slots = []
+        for slot_index, slot in enumerate(source_obj.material_slots):
+            material = slot.material
+            record = material_record(material)
+            if record is not None:
+                materials[record["material_id"]] = record
+                if record["library_path_exists"] is False:
+                    add_unsupported(
+                        unsupported, item_id,
+                        "material_library:" + record["name"],
+                        "linked Blender material library file is missing: "
+                        + record["library_path"],
+                    )
+                for image in record["image_textures"]:
+                    if not image["source_file_exists"]:
+                        add_unsupported(
+                            unsupported, item_id,
+                            "image_texture:" + image["image_name"],
+                            "external image is missing or has no filepath: "
+                            + image["filepath"],
+                        )
+            slots.append({
+                "slot_index": slot_index,
+                "material_id": record["material_id"] if record else "",
+                "link_mode": slot.link,
+            })
+        item["material_slots"] = slots
+
+        item["uv_layers"] = [
+            {
+                "name": layer.name,
+                "active": bool(layer.active),
+                "active_render": bool(layer.active_render),
+                "domain": "CORNER",
+                "values": [vector_values(loop.uv) for loop in layer.data],
+            }
+            for layer in mesh.uv_layers
+        ]
+        item["active_uv_layer"] = (
+            mesh.uv_layers.active.name if mesh.uv_layers.active else ""
+        )
+        item["color_attributes"] = extract_attributes(mesh, item_id, unsupported)
+        active_color = getattr(mesh, "color_attributes", None)
+        item["active_color_attribute"] = (
+            active_color.active_color.name
+            if active_color is not None and active_color.active_color else ""
+        )
+        item["custom_split_normals_present"] = bool(
+            getattr(mesh, "has_custom_normals", False)
+        )
+        if item["custom_split_normals_present"]:
+            add_unsupported(unsupported, item_id, "custom_split_normals",
+                            "custom split normals are not represented by this bridge")
+        if mode == "evaluated":
+            item["evaluated_geometry_baked"] = True
+            add_unsupported(unsupported, item_id, "modifier_editability",
+                            "evaluated mesh is baked and no longer parametrically editable")
+        else:
+            item["evaluated_geometry_baked"] = False
+            for modifier in obj.modifiers:
+                add_unsupported(unsupported, item_id,
+                                "modifier:" + modifier.name,
+                                "original mode keeps source mesh; modifier was not applied")
+        for slot in source_obj.material_slots:
+            if slot.material is not None and slot.material.use_nodes:
+                add_unsupported(unsupported, item_id,
+                                "shader_nodes:" + slot.material.name_full,
+                                "node graphs are not converted; Workbench display values and image references are extracted")
+        return item
+    finally:
+        if evaluated_obj is not None:
+            evaluated_obj.to_mesh_clear()
+
+
+def unsupported_object_record(obj, scene):
+    record = object_metadata(obj, scene)
+    record["object_type"] = obj.type
+    if obj.type == "EMPTY" and obj.instance_collection is not None:
+        record["reason"] = "collection instance is metadata only; no geometry was fabricated"
+        record["instance_collection"] = obj.instance_collection.name_full
+    elif obj.type in {"CURVE", "SURFACE", "FONT"}:
+        record["reason"] = "requires the exact Blender NURBS/curve import path"
+    else:
+        record["reason"] = "no matching classiCAD scene-object geometry type"
+    return record
+
+
+def depsgraph_for_scene(scene):
+    if not scene.view_layers:
+        raise RuntimeError("scene has no view layer for evaluated mesh extraction")
+    view_layer = scene.view_layers[0]
+    with bpy.context.temp_override(scene=scene, view_layer=view_layer):
+        return bpy.context.evaluated_depsgraph_get()
+
+
+def extract_scene(input_path, mode):
+    require_pinned_blender()
+    if mode not in {"original", "evaluated"}:
+        raise ValueError("mode must be 'original' or 'evaluated'")
+    bpy.ops.wm.open_mainfile(filepath=os.path.abspath(input_path))
+    require_pinned_blender()
+
+    output = {
+        "format": BRIDGE_FORMAT,
+        "format_version": BRIDGE_FORMAT_VERSION,
+        "source": {
+            "filepath": bpy.data.filepath,
+            "blender_version": bpy.app.version_string,
+            "blender_version_tuple": list(bpy.app.version[:3]),
+            "import_mode": mode,
+        },
+        "scenes": [],
+        "items": [],
+        "unsupported_items": [],
+        "unsupported_features": [],
+        "materials": {},
+        "summary": {},
+    }
+    object_count = 0
+    mesh_count = 0
+    for scene in bpy.data.scenes:
+        depsgraph = depsgraph_for_scene(scene) if mode == "evaluated" else None
+        scene_record = {"name": scene.name_full, "object_ids": []}
+        for obj in scene.objects:
+            object_count += 1
+            object_id = stable_id(obj)
+            scene_record["object_ids"].append(object_id)
+            if obj.type != "MESH":
+                output["unsupported_items"].append(unsupported_object_record(obj, scene))
+                continue
+            try:
+                item = extract_mesh_object(obj, scene, mode, depsgraph,
+                                           output["materials"],
+                                           output["unsupported_features"])
+                output["items"].append(item)
+                mesh_count += 1
+            except Exception as error:
+                output["unsupported_items"].append({
+                    **object_metadata(obj, scene),
+                    "object_type": obj.type,
+                    "reason": "mesh extraction failed; whole object skipped: " + str(error),
+                })
+        output["scenes"].append(scene_record)
+    output["summary"] = {
+        "scene_count": len(output["scenes"]),
+        "source_object_occurrences": object_count,
+        "mesh_items_extracted": mesh_count,
+        "unsupported_item_occurrences": len(output["unsupported_items"]),
+        "unsupported_feature_count": len(output["unsupported_features"]),
+        "material_count": len(output["materials"]),
+    }
+    return output
+
+
+def write_json_atomic(path, document):
+    output_path = os.path.abspath(path)
+    output_dir = os.path.dirname(output_path)
+    os.makedirs(output_dir, exist_ok=True)
+    fd, temporary_path = tempfile.mkstemp(prefix=".classicad-scene-",
+                                         suffix=".json", dir=output_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(document, stream, ensure_ascii=False, allow_nan=False,
+                      separators=(",", ":"))
+        os.replace(temporary_path, output_path)
+    except Exception:
+        try:
+            os.unlink(temporary_path)
+        except OSError:
+            pass
+        raise
+
+
+def main():
+    require_pinned_blender()
+    if "--" not in sys.argv:
+        raise RuntimeError("missing arguments after Blender's -- separator")
+    arguments = sys.argv[sys.argv.index("--") + 1:]
+    if len(arguments) not in {3, 4} or arguments[0] != "extract":
+        raise RuntimeError(
+            "usage: blender --background --python blender_scene_extract.py -- "
+            "extract INPUT.blend OUTPUT.json [original|evaluated]"
+        )
+    mode = arguments[3].lower() if len(arguments) == 4 else "original"
+    document = extract_scene(arguments[1], mode)
+    write_json_atomic(arguments[2], document)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        traceback.print_exc()
+        sys.exit(2)

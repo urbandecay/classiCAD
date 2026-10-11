@@ -1,6 +1,7 @@
 #include "document_transaction.h"
 
 #include <QSet>
+#include <algorithm>
 
 #include <cmath>
 #include <utility>
@@ -145,6 +146,18 @@ bool DocumentTransaction::setObjectAppearance(
     return true;
 }
 
+bool DocumentTransaction::addMaterial(const DocumentMaterial &material)
+{
+    const bool alreadyPresent = std::any_of(
+        document_.materials().cbegin(), document_.materials().cend(),
+        [&material](const DocumentMaterial &existing) {
+            return existing.id == material.id;
+        });
+    if (!document_.addMaterial(material)) return false;
+    if (!alreadyPresent) changes_.materialsChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::translateObjects(const QVector<ObjectId> &objectIds,
                                            const Point3D &worldDelta)
 {
@@ -257,6 +270,7 @@ void DocumentTransaction::replaceDocument(const Document::Snapshot &snapshot)
     changes_.layerPropertiesChanged = true;
     changes_.visibilityChanged = true;
     changes_.settingsChanged = true;
+    changes_.materialsChanged = true;
     for (const SceneObject &object : snapshot.objects) {
         changes_.addObject(object.id);
     }

@@ -72,6 +72,11 @@ struct ViewportShadingSettings {
     ViewportBackgroundMode backgroundMode = ViewportBackgroundMode::Theme;
     ViewportCavityType cavityType = ViewportCavityType::Screen;
     QColor customColor = QColor::fromRgbF(0.8, 0.8, 0.8);
+    // Theme wire colors are separate from Workbench fill colors and from
+    // object/layer display colors, matching Blender's TH_WIRE and
+    // TH_WIRE_EDIT roles in the editable viewport.
+    QColor themeWireColor = QColor(Qt::black);
+    QColor themeEditWireColor = QColor(Qt::black);
     QColor outlineColor = QColor(Qt::black);
     QColor customBackgroundColor = QColor::fromRgb(48, 48, 48);
     QVector3D shadowDirection = QVector3D(0.57735026f, 0.57735026f,

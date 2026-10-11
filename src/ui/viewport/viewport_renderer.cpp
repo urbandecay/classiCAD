@@ -7,6 +7,7 @@
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/nurbs_surface.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
+#include "core/geometry/polygon_mesh.h"
 #include "blender_grid_scale.h"
 #include "blender_grid_frame.h"
 #include "line_type_style.h"
@@ -927,12 +928,15 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  std::optional<WorkbenchMaterialData>
                                      workbenchMaterial,
                                  const QString &displayName,
-                                 const QString &libraryPath) const
+                                 const QString &libraryPath,
+                                 const MeshObjectTransform &meshTransform) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
         !validateNurbsSurface(shape.nurbsSurface) &&
-        !validateNurbsSolid(shape.nurbsSolid)) {
+        !validateNurbsSolid(shape.nurbsSolid) &&
+        !(shape.geometryType == GeometryType::PolygonMesh &&
+          validatePolygonMesh(shape.polygonMesh))) {
         return;
     }
 
@@ -952,7 +956,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
     if (!selected && !preview &&
         shadingSettings_.mode == ViewportShadingMode::Solid &&
         isViewportCurveStrokeType(shape.geometryType)) {
-        curveColor = viewportEditWireThemeColor();
+        curveColor = shadingSettings_.themeEditWireColor;
+    } else if (!selected && !preview &&
+               shadingSettings_.mode == ViewportShadingMode::Wireframe &&
+               shadingSettings_.wireColorMode == ViewportWireColorMode::Theme) {
+        curveColor = shadingSettings_.themeWireColor;
     }
     if (shadingSettings_.xrayEnabled() && !preview) {
         curveColor.setAlphaF(curveColor.alphaF() * shadingSettings_.xrayAlpha);
@@ -979,6 +987,191 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     painter.setPen(layerPen);
     painter.setBrush(Qt::NoBrush);
+
+    if (shape.geometryType == GeometryType::PolygonMesh &&
+        validatePolygonMesh(shape.polygonMesh)) {
+        struct MeshTriangle {
+            QPolygonF points;
+            QColor color;
+            qreal depth = 0.0;
+        };
+        QVector<MeshTriangle> triangles;
+        const PolygonMesh3D &mesh = shape.polygonMesh;
+        int firstCorner = 0;
+        const MeshColorAttribute *activeAttribute = nullptr;
+        if (shadingSettings_.colorMode == ViewportColorMode::Attribute) {
+            for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
+                if (attribute.name == mesh.activeColorAttributeName) {
+                    activeAttribute = &attribute;
+                    break;
+                }
+            }
+        }
+        const auto materialColorForFace = [&](int faceIndex) {
+            QVector4D color(0.8f, 0.8f, 0.8f, 1.0f);
+            const int slotIndex = mesh.faceMaterialIndices.value(faceIndex, 0);
+            if (slotIndex >= 0 && slotIndex < mesh.materialSlots.size()) {
+                const PolygonMeshMaterialSlot &slot =
+                    mesh.materialSlots[slotIndex];
+                if (slot.baseColorSceneLinear.size() >= 3) {
+                    color = QVector4D(slot.baseColorSceneLinear[0],
+                                      slot.baseColorSceneLinear[1],
+                                      slot.baseColorSceneLinear[2],
+                                      // Import stores diffuse alpha in both
+                                      // payloads; material.alpha is canonical.
+                                      slot.alpha);
+                }
+            }
+            return color;
+        };
+        const auto attributeColor = [&](int faceIndex,
+                                        const QVector<int> &face,
+                                        const std::array<int, 3> &triangle)
+            -> std::optional<QVector4D> {
+            if (activeAttribute == nullptr ||
+                activeAttribute->componentCount < 1 ||
+                activeAttribute->componentCount > 4) {
+                return std::nullopt;
+            }
+            QVector4D color(0.0f, 0.0f, 0.0f, 0.0f);
+            for (int loopIndex : triangle) {
+                int element = faceIndex;
+                if (activeAttribute->domain == MeshAttributeDomain::Point) {
+                    element = face[loopIndex];
+                } else if (activeAttribute->domain == MeshAttributeDomain::Corner) {
+                    element = firstCorner + loopIndex;
+                }
+                const int base = element * activeAttribute->componentCount;
+                if (base < 0 || base + activeAttribute->componentCount >
+                                    activeAttribute->values.size()) {
+                    return std::nullopt;
+                }
+                QVector4D sample(0.0f, 0.0f, 0.0f, 1.0f);
+                if (activeAttribute->componentCount == 1) {
+                    sample = QVector4D(activeAttribute->values[base],
+                                       activeAttribute->values[base],
+                                       activeAttribute->values[base], 1.0f);
+                } else {
+                    sample.setX(activeAttribute->values[base]);
+                    sample.setY(activeAttribute->values[base + 1]);
+                    sample.setZ(activeAttribute->values[base + 2]);
+                    if (activeAttribute->componentCount == 4) {
+                        sample.setW(activeAttribute->values[base + 3]);
+                    }
+                }
+                color += sample;
+            }
+            return color / 3.0f;
+        };
+        for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
+            const QVector<int> &face = mesh.faces[faceIndex];
+            QColor faceColor = curveColor;
+            const bool useWorkbenchColor = !selected && !preview &&
+                shadingSettings_.mode == ViewportShadingMode::Solid;
+            QVector4D sourceColor = materialColorForFace(faceIndex);
+            if (useWorkbenchColor) {
+                switch (shadingSettings_.colorMode) {
+                case ViewportColorMode::Material:
+                case ViewportColorMode::Attribute:
+                case ViewportColorMode::Texture:
+                    // Texture mode uses Blender's material fallback until
+                    // imported image references can be decoded in the viewport.
+                    break;
+                case ViewportColorMode::Object:
+                    if (displayColorSceneLinear) {
+                        sourceColor = *displayColorSceneLinear;
+                    }
+                    break;
+                case ViewportColorMode::Random: {
+                    const QColor random = workbenchRandomColor(
+                        shapeObjectId, displayName, libraryPath);
+                    sourceColor = QVector4D(random.redF(), random.greenF(),
+                                            random.blueF(),
+                                            displayColorSceneLinear
+                                                ? displayColorSceneLinear->w()
+                                                : 1.0f);
+                    break;
+                }
+                case ViewportColorMode::Custom:
+                    sourceColor = QVector4D(
+                        shadingSettings_.customColor.redF(),
+                        shadingSettings_.customColor.greenF(),
+                        shadingSettings_.customColor.blueF(),
+                        workbenchCustomColorSourceAlpha);
+                    break;
+                }
+            }
+            if (useWorkbenchColor) {
+                faceColor = QColor::fromRgbF(
+                    std::clamp(qreal(sourceColor.x()), 0.0, 1.0),
+                    std::clamp(qreal(sourceColor.y()), 0.0, 1.0),
+                    std::clamp(qreal(sourceColor.z()), 0.0, 1.0),
+                    std::clamp(qreal(sourceColor.w()), 0.0, 1.0));
+            }
+            QVector<Point3D> world;
+            world.reserve(face.size());
+            for (int index : face) {
+                const Point3D &local = mesh.vertices[index];
+                const auto &m = meshTransform;
+                const qreal w = m[12] * local.x + m[13] * local.y +
+                                m[14] * local.z + m[15];
+                const qreal divisor = std::abs(w) > 1.0e-12 ? w : 1.0;
+                world.append({(m[0] * local.x + m[1] * local.y +
+                               m[2] * local.z + m[3]) / divisor + preparedOffset.x,
+                              (m[4] * local.x + m[5] * local.y +
+                               m[6] * local.z + m[7]) / divisor + preparedOffset.y,
+                              (m[8] * local.x + m[9] * local.y +
+                               m[10] * local.z + m[11]) / divisor + preparedOffset.z});
+            }
+            const auto faceTriangles = triangulatePolygonLoop(world);
+            for (const std::array<int, 3> &loopTriangle : faceTriangles) {
+                MeshTriangle triangle;
+                const Point3D vertices[] = {world[loopTriangle[0]],
+                                            world[loopTriangle[1]],
+                                            world[loopTriangle[2]]};
+                bool projected = true;
+                for (const Point3D &point : vertices) {
+                    QPointF screen;
+                    if (!transform_.worldPointToScreen(point, viewportSize, &screen)) {
+                        projected = false;
+                        break;
+                    }
+                    triangle.points.append(screen);
+                    triangle.depth +=
+                        transform_.worldDirectionToView(point).towardCamera / 3.0;
+                }
+                if (projected) {
+                    triangle.color = faceColor;
+                    if (useWorkbenchColor &&
+                        shadingSettings_.colorMode == ViewportColorMode::Attribute) {
+                        const std::optional<QVector4D> color =
+                            attributeColor(faceIndex, face, loopTriangle);
+                        if (color) {
+                            triangle.color = QColor::fromRgbF(
+                                std::clamp(qreal(color->x()), 0.0, 1.0),
+                                std::clamp(qreal(color->y()), 0.0, 1.0),
+                                std::clamp(qreal(color->z()), 0.0, 1.0),
+                                std::clamp(qreal(color->w()), 0.0, 1.0));
+                        }
+                    }
+                    triangles.append(std::move(triangle));
+                }
+            }
+            firstCorner += face.size();
+        }
+        std::stable_sort(triangles.begin(), triangles.end(),
+                         [](const MeshTriangle &a, const MeshTriangle &b) {
+                             return a.depth < b.depth;
+                         });
+        painter.save();
+        painter.setPen(selected ? QPen(curveColor, 1.5) : Qt::NoPen);
+        for (const MeshTriangle &triangle : triangles) {
+            painter.setBrush(triangle.color);
+            painter.drawPolygon(triangle.points);
+        }
+        painter.restore();
+        return;
+    }
 
     const bool canUsePreparedCurve =
         preparedGeometry != nullptr && smoothCurveDisplay_ &&

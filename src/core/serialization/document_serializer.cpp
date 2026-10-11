@@ -133,7 +133,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 7);
+    serialized.insert(QStringLiteral("version"), 9);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -165,6 +165,22 @@ QJsonObject documentToJson(const Document &document)
     }
     serialized.insert(QStringLiteral("layers"), layers);
 
+    QJsonArray materials;
+    for (const DocumentMaterial &material : document.materials()) {
+        QJsonObject record;
+        record.insert(QStringLiteral("id"), material.id);
+        record.insert(QStringLiteral("name"), material.name);
+        record.insert(QStringLiteral("libraryPath"), material.libraryPath);
+        QJsonArray color;
+        for (const float component : material.baseColorSceneLinear) color.append(component);
+        record.insert(QStringLiteral("baseColorSceneLinear"), color);
+        record.insert(QStringLiteral("roughness"), material.roughness);
+        record.insert(QStringLiteral("metallic"), material.metallic);
+        record.insert(QStringLiteral("alpha"), material.alpha);
+        materials.append(record);
+    }
+    serialized.insert(QStringLiteral("materials"), materials);
+
     QJsonArray objects;
     for (const SceneObject &sceneObject : document.objects()) {
         QJsonObject serializedObject;
@@ -172,6 +188,10 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("layerId"), idToJson(sceneObject.layerId.value()));
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
         serializedObject.insert(QStringLiteral("libraryPath"), sceneObject.libraryPath);
+        serializedObject.insert(QStringLiteral("blenderSourceVersion"),
+                                sceneObject.blenderSourceVersion);
+        serializedObject.insert(QStringLiteral("blenderMeshImportMode"),
+                                sceneObject.blenderMeshImportMode);
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
         QJsonObject placement;
         placement.insert(QStringLiteral("x"), sceneObject.placementTranslation.x);
@@ -193,6 +213,13 @@ QJsonObject documentToJson(const Document &document)
                                  sceneObject.workbenchMaterial.alpha);
         serializedObject.insert(QStringLiteral("workbenchMaterial"),
                                 workbenchMaterial);
+        if (sceneObject.geometry.geometryType == GeometryType::PolygonMesh) {
+            QJsonArray transform;
+            for (const double value : sceneObject.meshObjectTransform) {
+                transform.append(value);
+            }
+            serializedObject.insert(QStringLiteral("meshObjectTransform"), transform);
+        }
         objects.append(serializedObject);
     }
     serialized.insert(QStringLiteral("objects"), objects);
@@ -210,7 +237,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 7) {
+    if (version < 1 || version > 9) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -223,6 +250,56 @@ bool documentFromJson(const QJsonValue &value,
     }
 
     Document::Snapshot snapshot;
+    QSet<QString> materialIds;
+    if (version >= 9) {
+        const QJsonValue materialsValue = serialized.value(QStringLiteral("materials"));
+        if (!materialsValue.isArray()) {
+            setError(errorMessage, QStringLiteral("document materials must be an array"));
+            return false;
+        }
+        for (const QJsonValue &materialValue : materialsValue.toArray()) {
+            if (!materialValue.isObject()) {
+                setError(errorMessage, QStringLiteral("invalid document material"));
+                return false;
+            }
+            const QJsonObject record = materialValue.toObject();
+            const QJsonValue id = record.value(QStringLiteral("id"));
+            const QJsonValue name = record.value(QStringLiteral("name"));
+            const QJsonValue libraryPath = record.value(QStringLiteral("libraryPath"));
+            const QJsonValue color = record.value(QStringLiteral("baseColorSceneLinear"));
+            const QJsonValue roughness = record.value(QStringLiteral("roughness"));
+            const QJsonValue metallic = record.value(QStringLiteral("metallic"));
+            const QJsonValue alpha = record.value(QStringLiteral("alpha"));
+            if (!id.isString() || id.toString().isEmpty() || materialIds.contains(id.toString()) ||
+                !name.isString() || !libraryPath.isString() || !color.isArray() ||
+                color.toArray().size() != 4 || !roughness.isDouble() ||
+                !metallic.isDouble() || !alpha.isDouble()) {
+                setError(errorMessage, QStringLiteral("invalid document material"));
+                return false;
+            }
+            DocumentMaterial material;
+            material.id = id.toString();
+            material.name = name.toString();
+            material.libraryPath = libraryPath.toString();
+            material.baseColorSceneLinear.clear();
+            for (const QJsonValue &component : color.toArray()) {
+                if (!component.isDouble() || !std::isfinite(component.toDouble())) {
+                    setError(errorMessage, QStringLiteral("invalid document material color"));
+                    return false;
+                }
+                material.baseColorSceneLinear.append(static_cast<float>(component.toDouble()));
+            }
+            material.roughness = static_cast<float>(roughness.toDouble());
+            material.metallic = static_cast<float>(metallic.toDouble());
+            material.alpha = static_cast<float>(alpha.toDouble());
+            if (!isValidDocumentMaterial(material)) {
+                setError(errorMessage, QStringLiteral("invalid document material values"));
+                return false;
+            }
+            materialIds.insert(material.id);
+            snapshot.materials.append(std::move(material));
+        }
+    }
     if (version >= 4) {
         const QJsonValue settingsValue = serialized.value(QStringLiteral("settings"));
         if (!settingsValue.isObject()) {
@@ -371,6 +448,45 @@ bool documentFromJson(const QJsonValue &value,
             return false;
         }
 
+        if (shape.geometryType == GeometryType::PolygonMesh) {
+            PolygonMesh3D &mesh = shape.polygonMesh;
+            if (version == 8 && !mesh.materialSlots.isEmpty()) {
+                mesh.materialSlotIds.clear();
+                mesh.materialSlotIds.reserve(mesh.materialSlots.size());
+                for (int slotIndex = 0; slotIndex < mesh.materialSlots.size(); ++slotIndex) {
+                    const PolygonMeshMaterialSlot &legacySlot = mesh.materialSlots[slotIndex];
+                    DocumentMaterial material;
+                    material.id = QStringLiteral("legacy-v8:%1:%2")
+                                      .arg(objectValueId).arg(slotIndex);
+                    material.name = legacySlot.name;
+                    material.libraryPath = legacySlot.libraryPath;
+                    material.baseColorSceneLinear = legacySlot.baseColorSceneLinear;
+                    material.roughness = legacySlot.roughness;
+                    material.metallic = legacySlot.metallic;
+                    material.alpha = legacySlot.alpha;
+                    if (!isValidDocumentMaterial(material)) {
+                        setError(errorMessage, QStringLiteral("invalid legacy mesh material"));
+                        return false;
+                    }
+                    materialIds.insert(material.id);
+                    snapshot.materials.append(std::move(material));
+                    mesh.materialSlotIds.append(
+                        snapshot.materials.last().id);
+                }
+                mesh.materialSlots.clear();
+                if (!validatePolygonMesh(mesh)) {
+                    setError(errorMessage, QStringLiteral("invalid mesh material references"));
+                    return false;
+                }
+            }
+            for (const QString &materialId : mesh.materialSlotIds) {
+                if (!materialId.isEmpty() && !materialIds.contains(materialId)) {
+                    setError(errorMessage, QStringLiteral("mesh references missing material"));
+                    return false;
+                }
+            }
+        }
+
         Point3D placementTranslation;
         if (version >= 5) {
             const QJsonValue placementValue =
@@ -436,6 +552,45 @@ bool documentFromJson(const QJsonValue &value,
             }
             sceneObject.displayName = displayName.toString();
             sceneObject.libraryPath = libraryPath.toString();
+        }
+        if (version >= 9) {
+            const QJsonValue sourceVersion =
+                serializedObject.value(QStringLiteral("blenderSourceVersion"));
+            const QJsonValue importMode =
+                serializedObject.value(QStringLiteral("blenderMeshImportMode"));
+            if (!sourceVersion.isString() || !importMode.isString() ||
+                (!importMode.toString().isEmpty() &&
+                 importMode.toString() != QStringLiteral("original") &&
+                 importMode.toString() != QStringLiteral("evaluated"))) {
+                setError(errorMessage, QStringLiteral("invalid Blender import metadata"));
+                return false;
+            }
+            sceneObject.blenderSourceVersion = sourceVersion.toString();
+            sceneObject.blenderMeshImportMode = importMode.toString();
+        }
+        if (shape.geometryType == GeometryType::PolygonMesh) {
+            const QJsonValue transformValue =
+                serializedObject.value(QStringLiteral("meshObjectTransform"));
+            if (version < 8 || !transformValue.isArray() ||
+                transformValue.toArray().size() != 16) {
+                setError(errorMessage, QStringLiteral("invalid mesh object transform"));
+                return false;
+            }
+            for (int index = 0; index < 16; ++index) {
+                const QJsonValue component = transformValue.toArray()[index];
+                if (!component.isDouble() || !std::isfinite(component.toDouble())) {
+                    setError(errorMessage, QStringLiteral("invalid mesh object transform"));
+                    return false;
+                }
+                sceneObject.meshObjectTransform[static_cast<size_t>(index)] =
+                    component.toDouble();
+            }
+            const auto &matrix = sceneObject.meshObjectTransform;
+            if (matrix[12] != 0.0 || matrix[13] != 0.0 || matrix[14] != 0.0 ||
+                matrix[15] != 1.0) {
+                setError(errorMessage, QStringLiteral("mesh transform must be affine"));
+                return false;
+            }
         }
         sceneObject.geometry = std::move(shape);
         sceneObject.placementTranslation = placementTranslation;

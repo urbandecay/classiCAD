@@ -7,6 +7,8 @@
 
 #include <QSet>
 
+#include <algorithm>
+
 namespace classiCAD {
 
 const ViewportRenderObject *ViewportRenderFrame::find(
@@ -84,7 +86,35 @@ ViewportRenderFrame buildViewportRenderFrame(
 
         ViewportRenderObject entry;
         entry.shape = sceneObject.geometry;
+        // Resolve imported Blender material slots into this render snapshot.
+        // The inline slot array is only a transient viewport bridge; the
+        // document's material datablocks remain the persisted source of truth.
+        if (entry.shape.geometryType == GeometryType::PolygonMesh &&
+            !entry.shape.polygonMesh.materialSlotIds.isEmpty()) {
+            entry.shape.polygonMesh.materialSlots.clear();
+            entry.shape.polygonMesh.materialSlots.reserve(
+                entry.shape.polygonMesh.materialSlotIds.size());
+            for (const QString &materialId :
+                 entry.shape.polygonMesh.materialSlotIds) {
+                PolygonMeshMaterialSlot slot;
+                const auto found = std::find_if(
+                    document.materials().cbegin(), document.materials().cend(),
+                    [&materialId](const DocumentMaterial &material) {
+                        return material.id == materialId;
+                    });
+                if (found != document.materials().cend()) {
+                    slot.name = found->name;
+                    slot.libraryPath = found->libraryPath;
+                    slot.baseColorSceneLinear = found->baseColorSceneLinear;
+                    slot.roughness = found->roughness;
+                    slot.metallic = found->metallic;
+                    slot.alpha = found->alpha;
+                }
+                entry.shape.polygonMesh.materialSlots.append(std::move(slot));
+            }
+        }
         entry.placementTranslation = sceneObject.placementTranslation;
+        entry.meshObjectTransform = sceneObject.meshObjectTransform;
         entry.objectId = sceneObject.id;
         entry.displayName = sceneObject.displayName;
         entry.libraryPath = sceneObject.libraryPath;
@@ -94,6 +124,45 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.layerColor = layer->color;
         entry.displayColorSceneLinear = sceneObject.displayColorSceneLinear;
         entry.workbenchMaterial = sceneObject.workbenchMaterial;
+        if (sceneObject.geometry.geometryType == GeometryType::PolygonMesh) {
+            const PolygonMesh3D &mesh = sceneObject.geometry.polygonMesh;
+            if (!mesh.materialSlotIds.isEmpty()) {
+                entry.meshMaterials.reserve(mesh.materialSlotIds.size());
+                for (const QString &slotId : mesh.materialSlotIds) {
+                    WorkbenchMaterialData slotData;
+                    for (const DocumentMaterial &material : document.materials()) {
+                        if (material.id == slotId) {
+                            if (material.baseColorSceneLinear.size() >= 3) {
+                                slotData.baseColorSceneLinear = QVector3D(
+                                    material.baseColorSceneLinear[0],
+                                    material.baseColorSceneLinear[1],
+                                    material.baseColorSceneLinear[2]);
+                            }
+                            slotData.roughness = material.roughness;
+                            slotData.metallic = material.metallic;
+                            slotData.alpha = material.alpha;
+                            break;
+                        }
+                    }
+                    entry.meshMaterials.append(slotData);
+                }
+            } else {
+                entry.meshMaterials.reserve(mesh.materialSlots.size());
+                for (const PolygonMeshMaterialSlot &slot : mesh.materialSlots) {
+                    WorkbenchMaterialData slotData;
+                    if (slot.baseColorSceneLinear.size() >= 3) {
+                        slotData.baseColorSceneLinear = QVector3D(
+                            slot.baseColorSceneLinear[0],
+                            slot.baseColorSceneLinear[1],
+                            slot.baseColorSceneLinear[2]);
+                    }
+                    slotData.roughness = slot.roughness;
+                    slotData.metallic = slot.metallic;
+                    slotData.alpha = slot.alpha;
+                    entry.meshMaterials.append(slotData);
+                }
+            }
+        }
         entry.layerLineType = layer->lineType;
         entry.layerLineWeightMm = layer->lineWeightMm;
 

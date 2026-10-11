@@ -55,6 +55,7 @@ private:
         QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
         WorkbenchMaterialData workbenchMaterial;
         quint64 objectSeed = 0;
+        quint32 effectObjectId = 0;
         QString displayName;
         QString libraryPath;
         bool outlineHandledBySceneStroke = false;

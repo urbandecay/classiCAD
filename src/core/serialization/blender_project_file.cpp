@@ -3,22 +3,28 @@
 #include "core/document/document.h"
 #include "core/geometry/geometry_type.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
+#include "core/geometry/polygon_mesh.h"
 #include "core/serialization/document_serializer.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QJsonValue>
 #include <QProcess>
 #include <QSaveFile>
+#include <QSet>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -396,6 +402,530 @@ bool runBlenderAdapter(const QString &operation,
     return true;
 }
 
+bool runBlenderSceneExtractor(const QString &inputPath,
+                              const QString &outputPath,
+                              const QString &mode,
+                              QString *errorMessage)
+{
+    const QString executable = blenderExecutable();
+    if (executable.isEmpty()) {
+        setError(errorMessage,
+                 QStringLiteral("Blender %1 is required to import Blender scenes. "
+                                "Install that version or set CLASSICAD_BLENDER_EXECUTABLE.")
+                     .arg(QLatin1String(kPinnedBlenderVersion)));
+        return false;
+    }
+
+    QTemporaryDir scriptDirectory;
+    if (!scriptDirectory.isValid()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create a temporary Blender extraction directory"));
+        return false;
+    }
+    QFile scriptResource(
+        QStringLiteral(":/classiCAD/serialization/blender_scene_extract.py"));
+    if (!scriptResource.open(QIODevice::ReadOnly)) {
+        setError(errorMessage,
+                 QStringLiteral("The Blender scene extraction script is missing from this build"));
+        return false;
+    }
+    const QString scriptPath =
+        scriptDirectory.filePath(QStringLiteral("blender_scene_extract.py"));
+    if (!writeFile(scriptPath, scriptResource.readAll(), errorMessage)) {
+        return false;
+    }
+
+    QProcess process;
+    process.setProgram(executable);
+    process.setArguments({QStringLiteral("--background"),
+                          QStringLiteral("--factory-startup"),
+                          QStringLiteral("--python"),
+                          scriptPath,
+                          QStringLiteral("--"),
+                          QStringLiteral("extract"),
+                          QFileInfo(inputPath).absoluteFilePath(),
+                          outputPath,
+                          mode});
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start();
+    if (!process.waitForStarted(10000)) {
+        setError(errorMessage,
+                 QStringLiteral("Could not start Blender %1: %2")
+                     .arg(QLatin1String(kPinnedBlenderVersion), process.errorString()));
+        return false;
+    }
+    if (!process.waitForFinished(kBlenderTimeoutMilliseconds)) {
+        process.kill();
+        process.waitForFinished();
+        setError(errorMessage,
+                 QStringLiteral("Blender took too long to extract this scene"));
+        return false;
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        QByteArray diagnostic = process.readAllStandardError().trimmed();
+        if (diagnostic.isEmpty()) {
+            diagnostic = process.readAllStandardOutput().trimmed();
+        }
+        if (diagnostic.size() > 6000) {
+            diagnostic = diagnostic.right(6000);
+        }
+        const QString details = QString::fromUtf8(diagnostic).trimmed();
+        setError(errorMessage,
+                 details.isEmpty()
+                     ? QStringLiteral("Blender %1 could not extract the scene")
+                           .arg(QLatin1String(kPinnedBlenderVersion))
+                     : QStringLiteral("Blender %1 could not extract the scene:\n%2")
+                           .arg(QLatin1String(kPinnedBlenderVersion), details));
+        return false;
+    }
+    return true;
+}
+
+bool jsonFiniteNumber(const QJsonValue &value, double *number)
+{
+    if (number == nullptr || !value.isDouble()) {
+        return false;
+    }
+    const double parsed = value.toDouble();
+    if (!std::isfinite(parsed)) {
+        return false;
+    }
+    *number = parsed;
+    return true;
+}
+
+bool jsonInteger(const QJsonValue &value, int *number)
+{
+    double parsed = 0.0;
+    if (!jsonFiniteNumber(value, &parsed) ||
+        std::floor(parsed) != parsed ||
+        parsed < static_cast<double>(std::numeric_limits<int>::min()) ||
+        parsed > static_cast<double>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    *number = static_cast<int>(parsed);
+    return true;
+}
+
+bool jsonNumberArray(const QJsonValue &value,
+                     int requiredSize,
+                     QVector<double> *numbers)
+{
+    if (numbers == nullptr || !value.isArray()) {
+        return false;
+    }
+    const QJsonArray array = value.toArray();
+    if (requiredSize >= 0 && array.size() != requiredSize) {
+        return false;
+    }
+    QVector<double> parsed;
+    parsed.reserve(array.size());
+    for (const QJsonValue &entry : array) {
+        double number = 0.0;
+        if (!jsonFiniteNumber(entry, &number)) {
+            return false;
+        }
+        parsed.append(number);
+    }
+    *numbers = std::move(parsed);
+    return true;
+}
+
+QString blenderItemLabel(const QJsonObject &item)
+{
+    const QString name = item.value(QStringLiteral("name")).toString();
+    return name.isEmpty() ? item.value(QStringLiteral("object_id")).toString()
+                          : name;
+}
+
+bool parseBlenderMaterials(
+    const QJsonObject &sourceMaterials,
+    QVector<classiCAD::DocumentMaterial> *destination,
+    QHash<QString, classiCAD::DocumentMaterial> *byId,
+    QStringList *warnings)
+{
+    if (destination == nullptr || byId == nullptr) {
+        return false;
+    }
+    QVector<classiCAD::DocumentMaterial> parsedMaterials;
+    QHash<QString, classiCAD::DocumentMaterial> parsedById;
+    for (const QString &key : sourceMaterials.keys()) {
+        const QJsonObject source = sourceMaterials.value(key).toObject();
+        classiCAD::DocumentMaterial material;
+        material.id = source.value(QStringLiteral("material_id")).toString();
+        material.name = source.value(QStringLiteral("name")).toString();
+        material.libraryPath = source.value(QStringLiteral("library_path")).toString();
+        QVector<double> color;
+        double roughness = 0.0;
+        double metallic = 0.0;
+        double alpha = 0.0;
+        QString materialError;
+        if (material.id != key || material.id.isEmpty() ||
+            !jsonNumberArray(source.value(QStringLiteral("diffuse_color_linear")), 4,
+                             &color) ||
+            !jsonFiniteNumber(source.value(QStringLiteral("roughness")), &roughness) ||
+            !jsonFiniteNumber(source.value(QStringLiteral("metallic")), &metallic) ||
+            !jsonFiniteNumber(source.value(QStringLiteral("alpha")), &alpha)) {
+            materialError = QStringLiteral("invalid required datablock identity or material values");
+        } else {
+            material.baseColorSceneLinear = {
+                static_cast<float>(color[0]), static_cast<float>(color[1]),
+                static_cast<float>(color[2]), static_cast<float>(color[3])};
+            material.roughness = static_cast<float>(roughness);
+            material.metallic = static_cast<float>(metallic);
+            material.alpha = static_cast<float>(alpha);
+            if (!classiCAD::isValidDocumentMaterial(material)) {
+                materialError = QStringLiteral("material values are outside the supported range");
+            }
+        }
+        if (!materialError.isEmpty()) {
+            if (warnings != nullptr) {
+                warnings->append(QStringLiteral("Material %1 was omitted: %2")
+                                     .arg(key, materialError));
+            }
+            continue;
+        }
+        parsedById.insert(material.id, material);
+        parsedMaterials.append(std::move(material));
+    }
+    *destination = std::move(parsedMaterials);
+    *byId = std::move(parsedById);
+    return true;
+}
+
+bool parseBlenderMeshItem(const QJsonObject &item,
+                          const QJsonObject &sourceMaterials,
+                          const QHash<QString, classiCAD::DocumentMaterial> &materials,
+                          const QString &blenderVersion,
+                          const QString &importMode,
+                          classiCAD::SceneObject *sceneObject,
+                          QStringList *warnings,
+                          QString *errorMessage)
+{
+    if (sceneObject == nullptr) {
+        return false;
+    }
+    classiCAD::SceneObject result;
+    classiCAD::Shape shape;
+    shape.geometryType = classiCAD::GeometryType::PolygonMesh;
+    result.geometry = shape;
+    result.displayName = item.value(QStringLiteral("name")).toString();
+    result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.blenderSourceVersion = blenderVersion;
+    result.blenderMeshImportMode = importMode;
+
+    QVector<double> objectColor;
+    if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")), 4,
+                         &objectColor)) {
+        setError(errorMessage, QStringLiteral("object display color is invalid"));
+        return false;
+    }
+    result.displayColorSceneLinear = QVector4D(
+        static_cast<float>(objectColor[0]), static_cast<float>(objectColor[1]),
+        static_cast<float>(objectColor[2]), static_cast<float>(objectColor[3]));
+
+    const QJsonArray transform = item.value(QStringLiteral("transform_world")).toArray();
+    if (transform.size() != 4) {
+        setError(errorMessage, QStringLiteral("world transform is not a 4 by 4 matrix"));
+        return false;
+    }
+    for (int row = 0; row < 4; ++row) {
+        QVector<double> values;
+        if (!jsonNumberArray(transform[row], 4, &values)) {
+            setError(errorMessage, QStringLiteral("world transform contains invalid values"));
+            return false;
+        }
+        for (int column = 0; column < 4; ++column) {
+            result.meshObjectTransform[static_cast<size_t>(row * 4 + column)] =
+                values[column];
+        }
+    }
+    const auto &matrix = result.meshObjectTransform;
+    if (std::abs(matrix[12]) > 1.0e-9 || std::abs(matrix[13]) > 1.0e-9 ||
+        std::abs(matrix[14]) > 1.0e-9 || std::abs(matrix[15] - 1.0) > 1.0e-9) {
+        setError(errorMessage, QStringLiteral("world transform is not affine"));
+        return false;
+    }
+
+    classiCAD::PolygonMesh3D mesh;
+    const QJsonArray vertices = item.value(QStringLiteral("vertices_local")).toArray();
+    mesh.vertices.reserve(vertices.size());
+    for (const QJsonValue &vertexValue : vertices) {
+        QVector<double> coordinates;
+        if (!jsonNumberArray(vertexValue, 3, &coordinates)) {
+            setError(errorMessage, QStringLiteral("vertex coordinate is invalid"));
+            return false;
+        }
+        mesh.vertices.append({coordinates[0], coordinates[1], coordinates[2]});
+    }
+    const QJsonArray faces = item.value(QStringLiteral("polygons")).toArray();
+    mesh.faces.reserve(faces.size());
+    for (const QJsonValue &faceValue : faces) {
+        if (!faceValue.isArray()) {
+            setError(errorMessage, QStringLiteral("polygon loop is not an array"));
+            return false;
+        }
+        const QJsonArray sourceFace = faceValue.toArray();
+        QVector<int> face;
+        face.reserve(sourceFace.size());
+        for (const QJsonValue &indexValue : sourceFace) {
+            int index = -1;
+            if (!jsonInteger(indexValue, &index)) {
+                setError(errorMessage, QStringLiteral("polygon index is not an integer"));
+                return false;
+            }
+            face.append(index);
+        }
+        mesh.faces.append(std::move(face));
+    }
+    const QJsonArray sourceLoopVertexIndices =
+        item.value(QStringLiteral("loop_vertex_indices")).toArray();
+    int expectedLoopCount = 0;
+    for (const QVector<int> &face : mesh.faces) {
+        expectedLoopCount += face.size();
+    }
+    if (sourceLoopVertexIndices.size() != expectedLoopCount) {
+        setError(errorMessage, QStringLiteral("mesh loop vertex list does not match polygon loops"));
+        return false;
+    }
+    int loopIndex = 0;
+    for (const QVector<int> &face : mesh.faces) {
+        for (const int vertexIndex : face) {
+            int recordedVertex = -1;
+            if (!jsonInteger(sourceLoopVertexIndices[loopIndex++],
+                             &recordedVertex) || recordedVertex != vertexIndex) {
+                setError(errorMessage,
+                         QStringLiteral("mesh loop ordering disagrees with polygon loops"));
+                return false;
+            }
+        }
+    }
+    const QJsonArray materialIndices =
+        item.value(QStringLiteral("polygon_material_indices")).toArray();
+    mesh.faceMaterialIndices.reserve(materialIndices.size());
+    for (const QJsonValue &indexValue : materialIndices) {
+        int index = -1;
+        if (!jsonInteger(indexValue, &index)) {
+            setError(errorMessage, QStringLiteral("polygon material index is invalid"));
+            return false;
+        }
+        mesh.faceMaterialIndices.append(index);
+    }
+
+    const QJsonArray sourceSlots = item.value(QStringLiteral("material_slots")).toArray();
+    mesh.materialSlotIds.reserve(sourceSlots.size());
+    bool fallbackMaterialSet = false;
+    for (int slotIndex = 0; slotIndex < sourceSlots.size(); ++slotIndex) {
+        const QJsonObject sourceSlot = sourceSlots[slotIndex].toObject();
+        int recordedIndex = -1;
+        if (!jsonInteger(sourceSlot.value(QStringLiteral("slot_index")),
+                         &recordedIndex) || recordedIndex != slotIndex) {
+            setError(errorMessage, QStringLiteral("material slot order is invalid"));
+            return false;
+        }
+        const QString materialId = sourceSlot.value(QStringLiteral("material_id")).toString();
+        const classiCAD::DocumentMaterial material = materials.value(materialId);
+        if (!materialId.isEmpty() && material.id.isEmpty()) {
+            if (warnings != nullptr) {
+                warnings->append(QStringLiteral("%1: missing material data for slot %2")
+                                     .arg(blenderItemLabel(item)).arg(slotIndex));
+            }
+        }
+        mesh.materialSlotIds.append(material.id.isEmpty() ? QString{} : materialId);
+        if (!material.id.isEmpty()) {
+            if (!fallbackMaterialSet) {
+                result.workbenchMaterial.baseColorSceneLinear = QVector3D(
+                    material.baseColorSceneLinear[0],
+                    material.baseColorSceneLinear[1],
+                    material.baseColorSceneLinear[2]);
+                result.workbenchMaterial.roughness = material.roughness;
+                result.workbenchMaterial.metallic = material.metallic;
+                result.workbenchMaterial.alpha = material.alpha;
+                fallbackMaterialSet = true;
+            }
+            const QJsonObject sourceMaterial = sourceMaterials.value(materialId).toObject();
+            if (!sourceMaterial.value(QStringLiteral("image_textures")).toArray().isEmpty() &&
+                warnings != nullptr) {
+                warnings->append(QStringLiteral("%1: image texture references are not stored by the current material schema")
+                                     .arg(blenderItemLabel(item)));
+            }
+        }
+    }
+
+    const QJsonArray sourceUvMaps = item.value(QStringLiteral("uv_layers")).toArray();
+    mesh.uvMaps.reserve(sourceUvMaps.size());
+    for (const QJsonValue &uvValue : sourceUvMaps) {
+        const QJsonObject sourceUv = uvValue.toObject();
+        classiCAD::MeshUvMap uvMap;
+        uvMap.name = sourceUv.value(QStringLiteral("name")).toString();
+        const QJsonArray coordinates = sourceUv.value(QStringLiteral("values")).toArray();
+        uvMap.cornerValues.reserve(coordinates.size());
+        for (const QJsonValue &coordinateValue : coordinates) {
+            QVector<double> coordinate;
+            if (!jsonNumberArray(coordinateValue, 2, &coordinate)) {
+                setError(errorMessage, QStringLiteral("UV coordinate is invalid"));
+                return false;
+            }
+            uvMap.cornerValues.append(QPointF(coordinate[0], coordinate[1]));
+        }
+        mesh.uvMaps.append(std::move(uvMap));
+    }
+
+    const QJsonArray sourceAttributes =
+        item.value(QStringLiteral("color_attributes")).toArray();
+    for (const QJsonValue &attributeValue : sourceAttributes) {
+        const QJsonObject sourceAttribute = attributeValue.toObject();
+        const QString dataType = sourceAttribute.value(QStringLiteral("data_type")).toString();
+        if (dataType != QLatin1String("FLOAT_COLOR") &&
+            dataType != QLatin1String("BYTE_COLOR")) {
+            continue;
+        }
+        classiCAD::MeshColorAttribute attribute;
+        attribute.name = sourceAttribute.value(QStringLiteral("name")).toString();
+        attribute.dataType = dataType;
+        attribute.colorSpace = QStringLiteral("scene_linear");
+        attribute.componentCount = 4;
+        const QString domain = sourceAttribute.value(QStringLiteral("domain")).toString();
+        if (domain == QLatin1String("POINT")) {
+            attribute.domain = classiCAD::MeshAttributeDomain::Point;
+        } else if (domain == QLatin1String("FACE")) {
+            attribute.domain = classiCAD::MeshAttributeDomain::Face;
+        } else if (domain == QLatin1String("CORNER")) {
+            attribute.domain = classiCAD::MeshAttributeDomain::Corner;
+        } else {
+            if (warnings != nullptr) {
+                warnings->append(QStringLiteral("%1: color attribute %2 has unsupported domain %3")
+                                     .arg(blenderItemLabel(item), attribute.name, domain));
+            }
+            continue;
+        }
+        const QJsonArray values = sourceAttribute.value(QStringLiteral("values")).toArray();
+        bool validAttribute = sourceAttribute.value(QStringLiteral("values")).isArray();
+        for (const QJsonValue &entryValue : values) {
+            const QJsonObject entry = entryValue.toObject();
+            QVector<double> color;
+            if (!jsonNumberArray(entry.value(QStringLiteral("color_linear")), 4, &color)) {
+                validAttribute = false;
+                break;
+            }
+            for (double component : color) {
+                attribute.values.append(static_cast<float>(component));
+            }
+        }
+        if (!validAttribute) {
+            if (warnings != nullptr) {
+                warnings->append(QStringLiteral("%1: color attribute %2 could not be represented")
+                                     .arg(blenderItemLabel(item), attribute.name));
+            }
+            continue;
+        }
+        int expectedAttributeElements = -1;
+        switch (attribute.domain) {
+        case classiCAD::MeshAttributeDomain::Point:
+            expectedAttributeElements = mesh.vertices.size();
+            break;
+        case classiCAD::MeshAttributeDomain::Face:
+            expectedAttributeElements = mesh.faces.size();
+            break;
+        case classiCAD::MeshAttributeDomain::Corner:
+            expectedAttributeElements = expectedLoopCount;
+            break;
+        }
+        const bool duplicateAttribute = std::any_of(
+            mesh.colorAttributes.cbegin(), mesh.colorAttributes.cend(),
+            [&attribute](const classiCAD::MeshColorAttribute &existing) {
+                return existing.name == attribute.name;
+            });
+        if (attribute.name.isEmpty() || duplicateAttribute ||
+            expectedAttributeElements < 0 ||
+            attribute.values.size() != expectedAttributeElements *
+                                          attribute.componentCount) {
+            if (warnings != nullptr) {
+                warnings->append(QStringLiteral("%1: malformed color attribute %2 was omitted")
+                                     .arg(blenderItemLabel(item), attribute.name));
+            }
+            continue;
+        }
+        mesh.colorAttributes.append(std::move(attribute));
+    }
+
+    const QString activeUvName = item.value(QStringLiteral("active_uv_layer")).toString();
+    if (!activeUvName.isEmpty()) {
+        const bool found = std::any_of(
+            mesh.uvMaps.cbegin(), mesh.uvMaps.cend(),
+            [&activeUvName](const classiCAD::MeshUvMap &uvMap) {
+                return uvMap.name == activeUvName;
+            });
+        if (found) {
+            mesh.activeUvMapName = activeUvName;
+        } else if (warnings != nullptr) {
+            warnings->append(QStringLiteral("%1: active UV map %2 was not retained")
+                                 .arg(blenderItemLabel(item), activeUvName));
+        }
+    }
+    const QString activeColorName =
+        item.value(QStringLiteral("active_color_attribute")).toString();
+    if (!activeColorName.isEmpty()) {
+        const bool found = std::any_of(
+            mesh.colorAttributes.cbegin(), mesh.colorAttributes.cend(),
+            [&activeColorName](const classiCAD::MeshColorAttribute &attribute) {
+                return attribute.name == activeColorName;
+            });
+        if (found) {
+            mesh.activeColorAttributeName = activeColorName;
+        } else if (warnings != nullptr) {
+            warnings->append(QStringLiteral("%1: active color attribute %2 was not retained")
+                                 .arg(blenderItemLabel(item), activeColorName));
+        }
+    }
+
+    QString validationError;
+    if (!classiCAD::validatePolygonMesh(mesh, &validationError)) {
+        setError(errorMessage, validationError);
+        return false;
+    }
+    result.geometry.polygonMesh = std::move(mesh);
+    const QJsonObject visibility = item.value(QStringLiteral("visibility")).toObject();
+    if ((visibility.value(QStringLiteral("hide_viewport")).toBool() ||
+         visibility.value(QStringLiteral("hide_render")).toBool() ||
+         visibility.value(QStringLiteral("hidden_in_viewport")).toBool()) &&
+        warnings != nullptr) {
+        warnings->append(QStringLiteral("%1: object geometry was included; its hidden state is not retained by the current scene model")
+                             .arg(blenderItemLabel(item)));
+    }
+    if (!item.value(QStringLiteral("collection_names")).toArray().isEmpty() &&
+        warnings != nullptr) {
+        warnings->append(QStringLiteral("%1: Blender collection membership is not represented by the current layer schema")
+                             .arg(blenderItemLabel(item)));
+    }
+    *sceneObject = std::move(result);
+    return true;
+}
+
+QString conciseImportWarnings(const QStringList &warnings,
+                              int skippedObjects,
+                              int unsupportedFeatures)
+{
+    QStringList lines;
+    if (skippedObjects > 0) {
+        lines.append(QStringLiteral("Skipped %1 unsupported or invalid object(s).")
+                         .arg(skippedObjects));
+    }
+    if (unsupportedFeatures > 0) {
+        lines.append(QStringLiteral("%1 unsupported feature(s) could not be represented.")
+                         .arg(unsupportedFeatures));
+    }
+    constexpr int maximumExamples = 8;
+    for (int index = 0; index < warnings.size() && index < maximumExamples; ++index) {
+        lines.append(QStringLiteral("• %1").arg(warnings[index]));
+    }
+    if (warnings.size() > maximumExamples) {
+        lines.append(QStringLiteral("• and %1 more item details")
+                         .arg(warnings.size() - maximumExamples));
+    }
+    return lines.join(QLatin1Char('\n'));
+}
+
 bool hasBlenderFileHeader(const QString &path)
 {
     QFile file(path);
@@ -623,6 +1153,195 @@ bool loadVignolaDocument(const QString &path,
     if (cameraSettings != nullptr) {
         *cameraSettings = restoredCameraSettings;
     }
+    return true;
+}
+
+bool importBlenderScene(const QString &path,
+                        const QString &mode,
+                        QVector<SceneObject> *objects,
+                        QVector<DocumentMaterial> *materials,
+                        BlenderSceneImportReport *report,
+                        QString *errorMessage)
+{
+    if (report != nullptr) {
+        *report = BlenderSceneImportReport{};
+    }
+    if (objects == nullptr || materials == nullptr || path.trimmed().isEmpty() ||
+        (mode != QLatin1String("original") &&
+         mode != QLatin1String("evaluated"))) {
+        setError(errorMessage,
+                 QStringLiteral("A Blender .blend path, import mode, and object destination are required"));
+        return false;
+    }
+    const QFileInfo sourceInfo(path);
+    if (!sourceInfo.isFile() ||
+        sourceInfo.suffix().compare(QStringLiteral("blend"), Qt::CaseInsensitive) != 0) {
+        setError(errorMessage,
+                 QStringLiteral("Choose a Blender .blend file to import as a scene"));
+        return false;
+    }
+
+    QTemporaryDir temporaryDirectory;
+    if (!temporaryDirectory.isValid()) {
+        setError(errorMessage,
+                 QStringLiteral("Could not create temporary Blender scene data"));
+        return false;
+    }
+    const QString extractedPath =
+        temporaryDirectory.filePath(QStringLiteral("scene.json"));
+    if (!runBlenderSceneExtractor(sourceInfo.absoluteFilePath(), extractedPath,
+                                  mode, errorMessage)) {
+        return false;
+    }
+    QFile extractedFile(extractedPath);
+    if (!extractedFile.open(QIODevice::ReadOnly)) {
+        setError(errorMessage,
+                 QStringLiteral("Blender did not return extracted scene data"));
+        return false;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument extraction =
+        QJsonDocument::fromJson(extractedFile.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !extraction.isObject()) {
+        setError(errorMessage,
+                 QStringLiteral("The Blender scene extraction JSON is invalid: %1")
+                     .arg(parseError.errorString()));
+        return false;
+    }
+    const QJsonObject root = extraction.object();
+    int bridgeVersion = -1;
+    if (root.value(QStringLiteral("format")).toString() !=
+            QLatin1String("classiCAD.blender-scene-extract") ||
+        !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
+        bridgeVersion != 1) {
+        setError(errorMessage,
+                 QStringLiteral("The Blender scene extraction format is unsupported"));
+        return false;
+    }
+    const QJsonObject source = root.value(QStringLiteral("source")).toObject();
+    const QJsonArray version =
+        source.value(QStringLiteral("blender_version_tuple")).toArray();
+    int major = -1;
+    int minor = -1;
+    int patch = -1;
+    if (version.size() != 3 || !jsonInteger(version[0], &major) ||
+        !jsonInteger(version[1], &minor) || !jsonInteger(version[2], &patch) ||
+        major != 5 || minor != 2 || patch != 2 ||
+        source.value(QStringLiteral("blender_version")).toString() !=
+            QLatin1String(kPinnedBlenderVersion) ||
+        source.value(QStringLiteral("import_mode")).toString() != mode) {
+        setError(errorMessage,
+                 QStringLiteral("The extraction was not produced by Blender 5.2.2 in the requested mode"));
+        return false;
+    }
+    const QJsonObject sourceMaterials = root.value(QStringLiteral("materials")).toObject();
+    if (!root.value(QStringLiteral("items")).isArray() ||
+        !root.value(QStringLiteral("unsupported_items")).isArray() ||
+        !root.value(QStringLiteral("unsupported_features")).isArray() ||
+        !root.value(QStringLiteral("materials")).isObject()) {
+        setError(errorMessage,
+                 QStringLiteral("The Blender scene extraction is missing required collections"));
+        return false;
+    }
+    const QJsonArray sourceItems = root.value(QStringLiteral("items")).toArray();
+    const QJsonArray unsupportedItems =
+        root.value(QStringLiteral("unsupported_items")).toArray();
+    const QJsonArray unsupportedFeatures =
+        root.value(QStringLiteral("unsupported_features")).toArray();
+    QStringList warnings;
+    QVector<SceneObject> imported;
+    QVector<DocumentMaterial> importedMaterials;
+    QHash<QString, DocumentMaterial> materialsById;
+    QSet<QString> importedIds;
+    int skippedCount = unsupportedItems.size();
+    for (const QJsonValue &unsupportedValue : unsupportedItems) {
+        const QJsonObject unsupported = unsupportedValue.toObject();
+        warnings.append(QStringLiteral("%1: %2")
+                            .arg(blenderItemLabel(unsupported),
+                                 unsupported.value(QStringLiteral("reason")).toString()));
+    }
+    int unsupportedFeatureCount = unsupportedFeatures.size();
+    for (const QJsonValue &featureValue : unsupportedFeatures) {
+        const QJsonObject feature = featureValue.toObject();
+        warnings.append(QStringLiteral("%1: %2")
+                            .arg(feature.value(QStringLiteral("item_id")).toString(),
+                                 feature.value(QStringLiteral("reason")).toString()));
+    }
+    const int warningsBeforeMaterials = warnings.size();
+    if (!parseBlenderMaterials(sourceMaterials, &importedMaterials,
+                               &materialsById, &warnings)) {
+        setError(errorMessage,
+                 QStringLiteral("The extracted Blender material table is invalid"));
+        return false;
+    }
+    unsupportedFeatureCount += warnings.size() - warningsBeforeMaterials;
+    for (const QJsonValue &itemValue : sourceItems) {
+        const QJsonObject item = itemValue.toObject();
+        const QString objectId = item.value(QStringLiteral("object_id")).toString();
+        if (objectId.isEmpty() ||
+            item.value(QStringLiteral("object_type")).toString() !=
+                QLatin1String("MESH")) {
+            ++skippedCount;
+            warnings.append(QStringLiteral("A Blender mesh record has missing identity or an unexpected object type and was skipped"));
+            continue;
+        }
+        if (importedIds.contains(objectId)) {
+            warnings.append(QStringLiteral("%1: linked into more than one Blender scene; imported once")
+                                .arg(blenderItemLabel(item)));
+            continue;
+        }
+        const QString proxyType =
+            item.value(QStringLiteral("classiCAD_proxy_geometry")).toString();
+        if (!proxyType.isEmpty()) {
+            ++skippedCount;
+            warnings.append(QStringLiteral("%1: classiCAD %2 display proxy was skipped to preserve its authoritative geometry")
+                                .arg(blenderItemLabel(item), proxyType));
+            continue;
+        }
+        const int warningCountBeforeItem = warnings.size();
+        SceneObject sceneObject;
+        QString itemError;
+        if (!parseBlenderMeshItem(item, sourceMaterials, materialsById,
+                                  source.value(QStringLiteral("blender_version")).toString(),
+                                  mode,
+                                  &sceneObject,
+                                  &warnings, &itemError)) {
+            ++skippedCount;
+            warnings.append(QStringLiteral("%1: mesh skipped: %2")
+                                .arg(blenderItemLabel(item), itemError));
+            continue;
+        }
+        unsupportedFeatureCount += warnings.size() - warningCountBeforeItem;
+        importedIds.insert(objectId);
+        imported.append(std::move(sceneObject));
+    }
+
+    if (report != nullptr) {
+        report->importedObjectCount = imported.size();
+        report->skippedObjectCount = skippedCount;
+        report->unsupportedFeatureCount = unsupportedFeatureCount;
+        report->blenderVersion = source.value(QStringLiteral("blender_version")).toString();
+        report->importMode = mode;
+        report->warningMessage = conciseImportWarnings(
+            warnings, skippedCount, unsupportedFeatureCount);
+    }
+    QSet<QString> usedMaterialIds;
+    for (const SceneObject &object : imported) {
+        for (const QString &materialId : object.geometry.polygonMesh.materialSlotIds) {
+            if (!materialId.isEmpty()) {
+                usedMaterialIds.insert(materialId);
+            }
+        }
+    }
+    QVector<DocumentMaterial> usedMaterials;
+    usedMaterials.reserve(importedMaterials.size());
+    for (const DocumentMaterial &material : importedMaterials) {
+        if (usedMaterialIds.contains(material.id)) {
+            usedMaterials.append(material);
+        }
+    }
+    *objects = std::move(imported);
+    *materials = std::move(usedMaterials);
     return true;
 }
 

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QString>
+#include <QVector>
+
+#include "core/document/scene_object.h"
 
 namespace classiCAD {
 
@@ -40,6 +43,25 @@ struct ProjectViewportCameraSettings {
     ProjectViewportViewState view;
     bool storedInProject = false;
 };
+
+struct BlenderSceneImportReport {
+    int importedObjectCount = 0;
+    int skippedObjectCount = 0;
+    int unsupportedFeatureCount = 0;
+    QString blenderVersion;
+    QString importMode;
+    QString warningMessage;
+};
+
+// Extracts Blender mesh objects through the pinned Blender Python runtime.
+// The returned meshes are authoritative local-space polygon geometry with
+// transforms kept on SceneObject. No project document is replaced here.
+bool importBlenderScene(const QString &path,
+                        const QString &mode,
+                        QVector<SceneObject> *objects,
+                        QVector<DocumentMaterial> *materials,
+                        BlenderSceneImportReport *report = nullptr,
+                        QString *errorMessage = nullptr);
 
 // .vignola and .blend projects are native Blender files produced by the pinned
 // Blender runtime. The exact classiCAD document snapshot is stored in a

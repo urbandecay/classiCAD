@@ -17,6 +17,8 @@ bool nurbsFromJson(const QJsonValue &value, Shape::NurbsCurve2D *curve);
 QJsonObject nurbsSurfaceToJson(const Shape::NurbsSurface3D &surface);
 bool nurbsSurfaceFromJson(const QJsonValue &value,
                           Shape::NurbsSurface3D *surface);
+QJsonObject polygonMeshToJson(const PolygonMesh3D &mesh);
+bool polygonMeshFromJson(const QJsonValue &value, PolygonMesh3D *mesh);
 QJsonObject shapeToJson(const Shape &shape);
 bool shapeFromJson(const QJsonValue &value, Shape *shape);
 

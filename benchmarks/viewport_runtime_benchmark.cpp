@@ -182,6 +182,7 @@ bool isNurbsGeometry(const Shape &shape)
     case GeometryType::LinearDimension:
     case GeometryType::AngularDimension:
     case GeometryType::Picture:
+    case GeometryType::PolygonMesh:
         return false;
     }
     return false;

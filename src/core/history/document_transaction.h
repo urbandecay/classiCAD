@@ -29,6 +29,7 @@ public:
     bool setObjectAppearance(ObjectId objectId,
                              const QVector4D &displayColorSceneLinear,
                              const WorkbenchMaterialData &workbenchMaterial);
+    bool addMaterial(const DocumentMaterial &material);
     bool translateObjects(const QVector<ObjectId> &objectIds,
                           const Point3D &worldDelta);
     bool removeObject(ObjectId objectId);

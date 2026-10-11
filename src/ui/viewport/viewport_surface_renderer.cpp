@@ -7,6 +7,7 @@
 #include "blender_grid_renderer.h"
 #include "viewport_line_weight.h"
 #include "workbench_lighting.h"
+#include "core/geometry/polygon_mesh.h"
 
 #include <QDataStream>
 #include <QByteArray>
@@ -75,6 +76,12 @@ bool hasNurbsSurfaceGeometry(const ViewportRenderObject &object)
 {
     return object.shape.geometryType == GeometryType::NurbsSurface ||
            object.shape.geometryType == GeometryType::NurbsSolid;
+}
+
+bool hasPolygonMeshGeometry(const ViewportRenderObject &object)
+{
+    return object.shape.geometryType == GeometryType::PolygonMesh &&
+           validatePolygonMesh(object.shape.polygonMesh);
 }
 
 constexpr int kWorkbenchCavityMaxSamples = 512;
@@ -863,48 +870,156 @@ void ViewportSurfaceRenderer::prepareGeometry(
     QByteArray key;
     QDataStream keyStream(&key, QIODevice::WriteOnly);
     keyStream << qint32(objects.size());
-    for (const ViewportRenderObject &object : objects) {
+    for (int objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {
+        const ViewportRenderObject &object = objects[objectIndex];
         const bool hasSurface = hasNurbsSurfaceGeometry(object);
+        const bool hasMesh = hasPolygonMeshGeometry(object);
         const ViewportDepthGeometry *geometry =
             hasSurface ? object.preparedDepthGeometry.data() : nullptr;
         keyStream << quint64(object.objectId.value())
                   << quint64(object.geometryRevision)
-                  << quint8(hasSurface ? 1 : 0)
+                  << quint8(hasSurface ? 1 : (hasMesh ? 2 : 0))
                   << quint64(reinterpret_cast<quintptr>(geometry))
                   << qint32(geometry != nullptr
                                 ? geometry->surfaceVertices.size()
                                 : 0);
+        if (hasMesh) {
+            const PolygonMesh3D &mesh = object.shape.polygonMesh;
+            keyStream << qint32(mesh.vertices.size()) << qint32(mesh.faces.size());
+            for (const Point3D &point : mesh.vertices) {
+                keyStream << double(point.x) << double(point.y) << double(point.z);
+            }
+            for (const QVector<int> &face : mesh.faces) {
+                keyStream << qint32(face.size());
+                for (int index : face) keyStream << qint32(index);
+            }
+            for (double value : object.meshObjectTransform) keyStream << value;
+        }
     }
     const bool changed = key != geometryKey_;
-    // Appearance is copied into the per-draw ranges below even when the
-    // cached vertex buffer is reusable, so it does not invalidate geometry.
     ranges_.clear();
     ranges_.reserve(objects.size());
-    if (!changed) {
-        for (int index = 0; index < objects.size(); ++index) {
-            const ViewportRenderObject &object = objects[index];
-            const ViewportDepthGeometry *geometry =
-                hasNurbsSurfaceGeometry(object)
-                    ? object.preparedDepthGeometry.data()
-                    : nullptr;
+    if (changed) {
+        geometryKey_ = std::move(key);
+        geometryDirty_ = true;
+        vertices_.clear();
+    }
+    for (int objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {
+        const ViewportRenderObject &object = objects[objectIndex];
+        const ViewportDepthGeometry *geometry =
+            hasNurbsSurfaceGeometry(object)
+                ? object.preparedDepthGeometry.data()
+                : nullptr;
+        const auto makeRange = [&object, objectIndex](int first, int count) {
             DrawRange range;
-            range.first = ranges_.isEmpty()
-                              ? 0
-                              : ranges_.last().first + ranges_.last().count;
-            range.count = geometry != nullptr
-                              ? static_cast<int>(std::min(
-                                    geometry->surfaceVertices.size(),
-                                    geometry->surfaceNormals.size()))
-                              : 0;
+            range.first = first;
+            range.count = count;
             range.offset = object.preparedGeometryOffset;
             range.selected = object.selected;
             range.displayColorSceneLinear = object.displayColorSceneLinear;
             range.workbenchMaterial = object.workbenchMaterial;
             range.objectSeed = object.objectId.value();
+            range.effectObjectId = static_cast<quint32>(objectIndex + 1) &
+                                   0x7fffffffu;
             range.displayName = object.displayName;
             range.libraryPath = object.libraryPath;
             range.outlineHandledBySceneStroke =
                 object.outlineHandledBySceneStroke;
+            return range;
+        };
+        if (hasPolygonMeshGeometry(object)) {
+            const PolygonMesh3D &mesh = object.shape.polygonMesh;
+            const auto &matrix = object.meshObjectTransform;
+            const qreal linearDeterminant =
+                matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9]) -
+                matrix[1] * (matrix[4] * matrix[10] - matrix[6] * matrix[8]) +
+                matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8]);
+            const bool reflected = std::isfinite(linearDeterminant) &&
+                                   linearDeterminant < -1.0e-12;
+            for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
+                const QVector<int> &face = mesh.faces[faceIndex];
+                QVector<Point3D> localLoop;
+                QVector<Point3D> worldLoop;
+                localLoop.reserve(face.size());
+                worldLoop.reserve(face.size());
+                for (int index : face) {
+                    const Point3D &p = mesh.vertices[index];
+                    localLoop.append(p);
+                    const qreal w = matrix[12] * p.x + matrix[13] * p.y +
+                                    matrix[14] * p.z + matrix[15];
+                    const qreal divisor = std::abs(w) > 1.0e-12 ? w : 1.0;
+                    worldLoop.append({(matrix[0] * p.x + matrix[1] * p.y +
+                                       matrix[2] * p.z + matrix[3]) / divisor,
+                                      (matrix[4] * p.x + matrix[5] * p.y +
+                                       matrix[6] * p.z + matrix[7]) / divisor,
+                                      (matrix[8] * p.x + matrix[9] * p.y +
+                                       matrix[10] * p.z + matrix[11]) / divisor});
+                }
+                const auto triangles = triangulatePolygonLoop(localLoop);
+                const int first = changed
+                    ? vertices_.size()
+                    : (ranges_.isEmpty() ? 0
+                                         : ranges_.last().first + ranges_.last().count);
+                int count = 0;
+                for (const auto &triangle : triangles) {
+                    const int indexA = triangle[0];
+                    const int indexB = reflected ? triangle[2] : triangle[1];
+                    const int indexC = reflected ? triangle[1] : triangle[2];
+                    const Point3D &a = worldLoop[indexA];
+                    const Point3D &b = worldLoop[indexB];
+                    const Point3D &c = worldLoop[indexC];
+                    QVector3D normal(
+                        static_cast<float>((b.y - a.y) * (c.z - a.z) -
+                                           (b.z - a.z) * (c.y - a.y)),
+                        static_cast<float>((b.z - a.z) * (c.x - a.x) -
+                                           (b.x - a.x) * (c.z - a.z)),
+                        static_cast<float>((b.x - a.x) * (c.y - a.y) -
+                                           (b.y - a.y) * (c.x - a.x)));
+                    if (normal.lengthSquared() <= 1.0e-16f) continue;
+                    normal.normalize();
+                    if (changed) {
+                        for (const Point3D *point : {&a, &b, &c}) {
+                            vertices_.append({static_cast<float>(point->x),
+                                              static_cast<float>(point->y),
+                                              static_cast<float>(point->z),
+                                              normal.x(), normal.y(), normal.z()});
+                        }
+                    }
+                    count += 3;
+                }
+                DrawRange range = makeRange(first, count);
+                const int slotIndex = mesh.faceMaterialIndices.value(faceIndex, -1);
+                if (slotIndex >= 0 && slotIndex < object.meshMaterials.size()) {
+                    range.workbenchMaterial = object.meshMaterials[slotIndex];
+                } else if (slotIndex >= 0 && slotIndex < mesh.materialSlots.size()) {
+                    const PolygonMeshMaterialSlot &slot = mesh.materialSlots[slotIndex];
+                    if (slot.baseColorSceneLinear.size() >= 3) {
+                        range.workbenchMaterial.baseColorSceneLinear = QVector3D(
+                            slot.baseColorSceneLinear[0], slot.baseColorSceneLinear[1],
+                            slot.baseColorSceneLinear[2]);
+                    }
+                    range.workbenchMaterial.roughness = slot.roughness;
+                    range.workbenchMaterial.metallic = slot.metallic;
+                    range.workbenchMaterial.alpha = slot.alpha;
+                }
+                ranges_.append(std::move(range));
+            }
+        } else {
+            const int first = changed ? vertices_.size() :
+                (ranges_.isEmpty() ? 0 : ranges_.last().first + ranges_.last().count);
+            const int count = geometry != nullptr
+                                  ? static_cast<int>(std::min(
+                                        geometry->surfaceVertices.size(),
+                                        geometry->surfaceNormals.size())) : 0;
+            if (changed) {
+                for (int index = 0; index < count; ++index) {
+                    const QVector3D &position = geometry->surfaceVertices[index];
+                    const QVector3D &normal = geometry->surfaceNormals[index];
+                    vertices_.append({position.x(), position.y(), position.z(),
+                                      normal.x(), normal.y(), normal.z()});
+                }
+            }
+            DrawRange range = makeRange(first, count);
             if (object.shape.geometryType == GeometryType::NurbsSolid &&
                 geometry != nullptr && geometry->shadowCasterMesh.valid) {
                 range.shadowVolumeSupported = true;
@@ -913,48 +1028,6 @@ void ViewportSurfaceRenderer::prepareGeometry(
             }
             ranges_.append(std::move(range));
         }
-        return;
-    }
-
-    geometryKey_ = std::move(key);
-    geometryDirty_ = true;
-    vertices_.clear();
-    for (const ViewportRenderObject &object : objects) {
-        const ViewportDepthGeometry *geometry =
-            hasNurbsSurfaceGeometry(object)
-                ? object.preparedDepthGeometry.data()
-                : nullptr;
-        const int first = vertices_.size();
-        const int count = geometry != nullptr
-                              ? static_cast<int>(std::min(
-                                    geometry->surfaceVertices.size(),
-                                    geometry->surfaceNormals.size()))
-                              : 0;
-        for (int index = 0; index < count; ++index) {
-            const QVector3D &position = geometry->surfaceVertices[index];
-            const QVector3D &normal = geometry->surfaceNormals[index];
-            vertices_.append({position.x(), position.y(), position.z(),
-                              normal.x(), normal.y(), normal.z()});
-        }
-        DrawRange range;
-        range.first = first;
-        range.count = count;
-        range.offset = object.preparedGeometryOffset;
-        range.selected = object.selected;
-        range.displayColorSceneLinear = object.displayColorSceneLinear;
-        range.workbenchMaterial = object.workbenchMaterial;
-        range.objectSeed = object.objectId.value();
-        range.displayName = object.displayName;
-        range.libraryPath = object.libraryPath;
-        range.outlineHandledBySceneStroke =
-            object.outlineHandledBySceneStroke;
-        if (object.shape.geometryType == GeometryType::NurbsSolid &&
-            geometry != nullptr && geometry->shadowCasterMesh.valid) {
-            range.shadowVolumeSupported = true;
-            range.shadowVertices = geometry->shadowCasterMesh.vertices;
-            range.shadowTriangles = geometry->shadowCasterMesh.triangles;
-        }
-        ranges_.append(std::move(range));
     }
 }
 
@@ -1280,8 +1353,7 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
         if (range.count <= 0) {
             continue;
         }
-        const GLuint objectId = static_cast<GLuint>(rangeIndex + 1) &
-                                0x7fffffffu;
+        const GLuint objectId = range.effectObjectId;
         GLuint outlineObjectId = range.outlineHandledBySceneStroke
                                      ? 0u
                                      : objectId;
@@ -2484,9 +2556,13 @@ bool ViewportSurfaceRenderer::draw(
                 0.0f, 0.4f, static_cast<float>(sourceAlpha));
             return workbenchEffectiveAlpha(packed.alpha, settings, false);
         };
+        struct TransparentTriangle {
+            int rangeIndex = -1;
+            int firstVertex = 0;
+            qreal projectedDepth = 0.0;
+        };
         QVector<int> opaqueRangeIndices;
-        QVector<int> transparentRangeIndices;
-        QVector<qreal> transparentDepths(ranges_.size(), 0.0);
+        QVector<TransparentTriangle> transparentTriangles;
         for (int index = 0; index < ranges_.size(); ++index) {
             const DrawRange &range = ranges_[index];
             if (range.count <= 0) {
@@ -2496,36 +2572,50 @@ bool ViewportSurfaceRenderer::draw(
                 opaqueRangeIndices.append(index);
                 continue;
             }
-            QVector4D center;
-            for (int vertexIndex = range.first;
-                 vertexIndex < range.first + range.count; ++vertexIndex) {
-                const SurfaceVertex &vertex = vertices_[vertexIndex];
-                center += QVector4D(vertex.x, vertex.y, vertex.z, 1.0f);
+            // A range can cover a large or concave tessellated NURBS surface.
+            // Sorting one average for the whole object lets distant parts
+            // incorrectly occlude nearer parts, so order its display triangles
+            // independently while keeping the saved NURBS and shared display
+            // tessellation unchanged.
+            for (int first = range.first;
+                 first + 2 < range.first + range.count; first += 3) {
+                QVector4D center;
+                for (int vertexIndex = first; vertexIndex < first + 3;
+                     ++vertexIndex) {
+                    const SurfaceVertex &vertex = vertices_[vertexIndex];
+                    center += QVector4D(vertex.x, vertex.y, vertex.z, 1.0f);
+                }
+                center /= 3.0f;
+                center.setX(center.x() + static_cast<float>(range.offset.x));
+                center.setY(center.y() + static_cast<float>(range.offset.y));
+                center.setZ(center.z() + static_cast<float>(range.offset.z));
+                const QVector4D clip = viewProjection * center;
+                const qreal depth = std::abs(clip.w()) > 1.0e-8f
+                    ? static_cast<qreal>(clip.z() / clip.w())
+                    : static_cast<qreal>(clip.z());
+                transparentTriangles.append(
+                    {index, first, std::isfinite(depth) ? depth : 0.0});
             }
-            center /= static_cast<float>(range.count);
-            center.setX(center.x() + static_cast<float>(range.offset.x));
-            center.setY(center.y() + static_cast<float>(range.offset.y));
-            center.setZ(center.z() + static_cast<float>(range.offset.z));
-            const QVector4D clip = viewProjection * center;
-            const qreal depth = std::abs(clip.w()) > 1.0e-8f
-                ? static_cast<qreal>(clip.z() / clip.w())
-                : static_cast<qreal>(clip.z());
-            transparentDepths[index] = std::isfinite(depth) ? depth : 0.0;
-            transparentRangeIndices.append(index);
         }
-        std::stable_sort(transparentRangeIndices.begin(),
-                         transparentRangeIndices.end(),
-                         [&transparentDepths](int left, int right) {
-                             if (transparentDepths[left] !=
-                                 transparentDepths[right]) {
-                                 return transparentDepths[left] >
-                                        transparentDepths[right];
+        std::stable_sort(transparentTriangles.begin(),
+                         transparentTriangles.end(),
+                         [](const TransparentTriangle &left,
+                            const TransparentTriangle &right) {
+                             if (left.projectedDepth !=
+                                 right.projectedDepth) {
+                                 return left.projectedDepth >
+                                        right.projectedDepth;
                              }
-                             return left < right;
+                             if (left.rangeIndex != right.rangeIndex) {
+                                 return left.rangeIndex < right.rangeIndex;
+                             }
+                             return left.firstVertex < right.firstVertex;
                          });
 
         const auto drawRange = [&](const DrawRange &range,
-                                   bool volumeShadowed) {
+                                   bool volumeShadowed,
+                                   int firstVertex,
+                                   int vertexCount) {
             program_.setUniformValue("uShadowVolumeShadowed",
                                      volumeShadowed);
             const QVector3D offset(static_cast<float>(range.offset.x),
@@ -2599,7 +2689,7 @@ bool ViewportSurfaceRenderer::draw(
                 "uBaseColor",
                 QVector4D(baseColorLinear.x(), baseColorLinear.y(),
                           baseColorLinear.z(), alpha));
-            glDrawArrays(GL_TRIANGLES, range.first, range.count);
+            glDrawArrays(GL_TRIANGLES, firstVertex, vertexCount);
         };
         const auto drawSurfaceRanges = [&](bool volumeShadowed) {
             if (hasPartialAlpha) {
@@ -2610,7 +2700,9 @@ bool ViewportSurfaceRenderer::draw(
                 glDepthMask(GL_TRUE);
                 glDisable(GL_BLEND);
                 for (int index : opaqueRangeIndices) {
-                    drawRange(ranges_[index], volumeShadowed);
+                    const DrawRange &range = ranges_[index];
+                    drawRange(range, volumeShadowed, range.first,
+                              range.count);
                 }
                 glEnable(GL_DEPTH_TEST);
                 glDepthFunc(GL_LEQUAL);
@@ -2619,15 +2711,18 @@ bool ViewportSurfaceRenderer::draw(
                 glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                                     GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-                for (int index : transparentRangeIndices) {
-                    drawRange(ranges_[index], volumeShadowed);
+                for (const TransparentTriangle &triangle :
+                     transparentTriangles) {
+                    drawRange(ranges_[triangle.rangeIndex], volumeShadowed,
+                              triangle.firstVertex, 3);
                 }
                 glDepthFunc(GL_LESS);
                 return;
             }
             for (const DrawRange &range : ranges_) {
                 if (range.count > 0) {
-                    drawRange(range, volumeShadowed);
+                    drawRange(range, volumeShadowed, range.first,
+                              range.count);
                 }
             }
         };
@@ -2783,8 +2878,7 @@ bool ViewportSurfaceRenderer::draw(
                     if (range.count <= 0) {
                         continue;
                     }
-                    GLuint objectId = static_cast<GLuint>(rangeIndex + 1) &
-                                      0x7fffffffu;
+                    GLuint objectId = range.effectObjectId;
                     if (range.outlineHandledBySceneStroke) {
                         // Keep depth from suppressing outlines behind this
                         // surface, while leaving its own perimeter to the

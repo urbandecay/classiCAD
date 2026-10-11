@@ -112,6 +112,7 @@
 #include <QKeyEvent>
 #include <QMap>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPen>
@@ -831,6 +832,125 @@ QString precisePointText(const QPointF &point)
 struct ArcHudDisplay {
     QString dimensionsLine;
     QString instructionsLine;
+};
+
+// Compact radial mode chooser for Blender's hold-Z shading interaction.
+// The four directions mirror Blender's familiar Solid/Wireframe/X-Ray
+// controls while retaining a direct entry to this viewport's settings.
+class ShadingPieMenu final : public QWidget {
+public:
+    explicit ShadingPieMenu(std::function<void(int)> activate,
+                            QWidget *parent = nullptr)
+        : QWidget(parent, Qt::Popup | Qt::FramelessWindowHint)
+        , activate_(std::move(activate))
+    {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setFocusPolicy(Qt::StrongFocus);
+        setMouseTracking(true);
+        setFixedSize(224, 224);
+    }
+
+    void showAt(const QPoint &globalPosition)
+    {
+        move(globalPosition - QPoint(width() / 2, height() / 2));
+        show();
+        raise();
+        setFocus(Qt::PopupFocusReason);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QPointF center(width() / 2.0, height() / 2.0);
+        const qreal radius = 92.0;
+        const std::array<QString, 4> labels{
+            QStringLiteral("Solid"), QStringLiteral("Wireframe"),
+            QStringLiteral("X-Ray"), QStringLiteral("Shading Settings")};
+        for (int item = 0; item < 4; ++item) {
+            // Top, right, bottom, left, in that order.
+            const int startAngle = (45 - item * 90) * 16;
+            QPainterPath wedge;
+            wedge.moveTo(center);
+            wedge.arcTo(QRectF(center.x() - radius, center.y() - radius,
+                               radius * 2, radius * 2), startAngle, 90 * 16);
+            wedge.closeSubpath();
+            painter.setPen(QPen(QColor(20, 20, 20, 230), 1.2));
+            painter.setBrush(item == hovered_
+                                 ? QColor(68, 119, 165, 245)
+                                 : QColor(43, 43, 43, 238));
+            painter.drawPath(wedge);
+
+            const qreal angle = qDegreesToRadians(-90.0 + item * 90.0);
+            const QPointF labelPoint(center.x() + std::cos(angle) * 57.0,
+                                     center.y() + std::sin(angle) * 57.0);
+            QRectF labelRect(labelPoint.x() - 42, labelPoint.y() - 12, 84, 24);
+            painter.setPen(QColor(245, 245, 245));
+            painter.drawText(labelRect, Qt::AlignCenter, labels[item]);
+        }
+        painter.setPen(QPen(QColor(15, 15, 15, 230), 1.0));
+        painter.setBrush(QColor(31, 31, 31, 250));
+        painter.drawEllipse(center, 22, 22);
+        painter.setPen(QColor(220, 220, 220));
+        painter.drawText(QRectF(center.x() - 19, center.y() - 10, 38, 20),
+                         Qt::AlignCenter, QStringLiteral("Z"));
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        updateHovered(event->position());
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        updateHovered(event->position());
+        activateHovered();
+    }
+
+    void keyReleaseEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_Z && !event->isAutoRepeat()) {
+            activateHovered();
+            return;
+        }
+        QWidget::keyReleaseEvent(event);
+    }
+
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_Escape) {
+            close();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+    }
+
+private:
+    void updateHovered(const QPointF &position)
+    {
+        const QPointF delta = position - QPointF(width() / 2.0, height() / 2.0);
+        const qreal distance = std::hypot(delta.x(), delta.y());
+        int next = -1;
+        if (distance >= 24.0) {
+            const qreal degrees = qRadiansToDegrees(std::atan2(delta.y(), delta.x()));
+            next = (static_cast<int>(std::floor(
+                        (degrees + 90.0 + 45.0) / 90.0)) % 4 + 4) % 4;
+        }
+        if (hovered_ != next) {
+            hovered_ = next;
+            update();
+        }
+    }
+
+    void activateHovered()
+    {
+        if (hovered_ >= 0 && activate_) activate_(hovered_);
+        close();
+    }
+
+    std::function<void(int)> activate_;
+    int hovered_ = -1;
 };
 
 class ViewportWidget final : public ViewportWidgetApi {
@@ -3808,8 +3928,27 @@ public:
                                   point.z + placement.z});
             }
         };
+        const auto appendMeshPoints = [&](const PolygonMesh3D &mesh,
+                                          const MeshObjectTransform &matrix) {
+            for (const Point3D &local : mesh.vertices) {
+                const qreal w = matrix[12] * local.x + matrix[13] * local.y +
+                                matrix[14] * local.z + matrix[15];
+                const qreal divisor = std::abs(w) > 1.0e-12 ? w : 1.0;
+                appendWorldPoint({(matrix[0] * local.x + matrix[1] * local.y +
+                                   matrix[2] * local.z + matrix[3]) / divisor + placement.x,
+                                  (matrix[4] * local.x + matrix[5] * local.y +
+                                   matrix[6] * local.z + matrix[7]) / divisor + placement.y,
+                                  (matrix[8] * local.x + matrix[9] * local.y +
+                                   matrix[10] * local.z + matrix[11]) / divisor + placement.z});
+            }
+        };
 
-        if (shape.geometryType == GeometryType::NurbsSurface) {
+        if (shape.geometryType == GeometryType::PolygonMesh) {
+            const SceneObject *object = document_.object(objectId);
+            if (object != nullptr && validatePolygonMesh(shape.polygonMesh)) {
+                appendMeshPoints(shape.polygonMesh, object->meshObjectTransform);
+            }
+        } else if (shape.geometryType == GeometryType::NurbsSurface) {
             appendSurfacePoints(shape.nurbsSurface);
         } else if (shape.geometryType == GeometryType::NurbsSolid) {
             for (const NurbsSurface3D &face : shapeSurfaceFaces(shape))
@@ -6660,9 +6799,48 @@ protected:
                     [this, index] {
                         viewportShadingSettings_.wireColorMode =
                             static_cast<ViewportWireColorMode>(index);
+                        refreshShadingPopover();
                         update();
                     });
         }
+        const auto addThemeColorButton = [this, layout](
+                                              const QString &title,
+                                              const QString &objectName,
+                                              QColor ViewportShadingSettings::*field,
+                                              const QString &dialogTitle) {
+            auto *row = new QWidget(shadingPopover_);
+            auto *rowLayout = new QHBoxLayout(row);
+            rowLayout->setContentsMargins(55, 0, 0, 0);
+            rowLayout->setSpacing(5);
+            auto *label = new QLabel(title, row);
+            auto *button = new QToolButton(row);
+            button->setObjectName(objectName);
+            button->setFixedSize(76, 20);
+            rowLayout->addWidget(label);
+            rowLayout->addStretch(1);
+            rowLayout->addWidget(button);
+            layout->addWidget(row);
+            connect(button, &QToolButton::clicked, this,
+                    [this, field, dialogTitle] {
+                        const QColor chosen = QColorDialog::getColor(
+                            viewportShadingSettings_.*field, this, dialogTitle,
+                            QColorDialog::ShowAlphaChannel);
+                        if (chosen.isValid()) {
+                            viewportShadingSettings_.*field = chosen;
+                            refreshShadingPopover();
+                            update();
+                        }
+                    });
+            return button;
+        };
+        themeWireColorButton_ = addThemeColorButton(
+            QStringLiteral("Theme Wire"), QStringLiteral("ThemeWireColor"),
+            &ViewportShadingSettings::themeWireColor,
+            QStringLiteral("Theme Wire Color"));
+        themeEditWireColorButton_ = addThemeColorButton(
+            QStringLiteral("Edit Wire"), QStringLiteral("ThemeEditWireColor"),
+            &ViewportShadingSettings::themeEditWireColor,
+            QStringLiteral("Edit Wire Theme Color"));
 
         auto *objectLabel = new QLabel(QStringLiteral("Object"), shadingPopover_);
         layout->addWidget(objectLabel);
@@ -7263,6 +7441,24 @@ protected:
         outlineColorButton_->setStyleSheet(QStringLiteral(
             "QToolButton { background: %1; border: 1px solid #111; }")
             .arg(viewportShadingSettings_.outlineColor.name()));
+        const auto updateThemeColorButton = [](
+                                                  QToolButton *button,
+                                                  const QColor &color) {
+            if (button == nullptr) return;
+            button->setStyleSheet(QStringLiteral(
+                "QToolButton { background: %1; border: 1px solid #111; }")
+                .arg(color.name(QColor::HexArgb)));
+            button->setToolTip(color.name(QColor::HexArgb));
+        };
+        updateThemeColorButton(themeWireColorButton_,
+                               viewportShadingSettings_.themeWireColor);
+        updateThemeColorButton(themeEditWireColorButton_,
+                               viewportShadingSettings_.themeEditWireColor);
+        if (themeWireColorButton_ != nullptr) {
+            themeWireColorButton_->setEnabled(
+                viewportShadingSettings_.wireColorMode ==
+                ViewportWireColorMode::Theme);
+        }
         backfaceCullingCheck_->setEnabled(
             viewportShadingSettings_.mode == ViewportShadingMode::Solid);
         specularLightingCheck_->setEnabled(
@@ -8327,7 +8523,7 @@ protected:
                         selected && !objectVertexSelection.isEmpty();
                     edgeCage.color = selected && !hasComponentSelection
                                          ? viewportSelectionColor()
-                                         : QColor(Qt::black);
+                                         : viewportShadingSettings_.themeEditWireColor;
                     edgeCage.width = 1.0f;
                     edgeCage.smoothWireCategory =
                         ViewportSmoothWireCategory::EditMode;
@@ -8352,7 +8548,8 @@ protected:
                         };
                         const QColor selectedVertexColor(
                             QStringLiteral("#ff9900"));
-                        const QColor wireColor(Qt::black);
+                        const QColor wireColor =
+                            viewportShadingSettings_.themeEditWireColor;
                         for (int edgeVertex = 0;
                              edgeVertex + 1 < cage->lineVertices.size();
                              edgeVertex += 2) {
@@ -8383,7 +8580,7 @@ protected:
                     vertexCage.shape = &visibleShape;
                     vertexCage.color = selected && !hasComponentSelection
                                            ? QColor(QStringLiteral("#ff7a00"))
-                                           : QColor(12, 12, 12);
+                                           : viewportShadingSettings_.themeEditWireColor;
                     vertexCage.pointDiameter =
                         componentSelectionMode_ == ComponentSelectionMode::Vertex
                             ? static_cast<float>(
@@ -8667,7 +8864,8 @@ protected:
                         selectedSurfaceCage(visibleShape));
                 if (!boundaryGeometry->lineVertices.isEmpty()) {
                     ViewportSceneStroke boundaryStroke;
-                    boundaryStroke.color = viewportEditWireThemeColor();
+                    boundaryStroke.color =
+                        viewportShadingSettings_.themeEditWireColor;
                     boundaryStroke.width = 1.0f;
                     boundaryStroke.editModeWire = true;
                     boundaryStroke.smoothWireCategory =
@@ -9027,8 +9225,17 @@ protected:
                     if (!selected && !scalePreview && !rotatePreview &&
                         !selectedCurveComponents &&
                         !selectedCurveVertexOverlay) {
-                        sceneStroke.color = viewportEditWireThemeColor();
+                        sceneStroke.color =
+                            viewportShadingSettings_.themeEditWireColor;
                     }
+                }
+                if (viewportShadingSettings_.mode ==
+                        ViewportShadingMode::Wireframe &&
+                    viewportShadingSettings_.wireColorMode ==
+                        ViewportWireColorMode::Theme && !selected &&
+                    !scalePreview && !rotatePreview) {
+                    sceneStroke.color =
+                        viewportShadingSettings_.themeWireColor;
                 }
                 if (controlPointsVisible_ && controlGuide.shape != nullptr) {
                     gpuStrokes.append(std::move(controlGuide));
@@ -9677,7 +9884,7 @@ protected:
                 previewCage.shape = &preview.shape;
                 previewCage.color = preview.highlighted
                                         ? viewportSelectionColor()
-                                        : QColor(Qt::black);
+                                        : viewportShadingSettings_.themeEditWireColor;
                 previewCage.width = 1.0f;
                 previewCage.editModeWire = true;
                 previewCage.worldOffset = preview.worldOffset;
@@ -9705,7 +9912,7 @@ protected:
                          previewCage.preparedDepthGeometry->lineVertices) {
                         const QColor color = isCapVertex(endpoint)
                             ? QColor(QStringLiteral("#ff9900"))
-                            : QColor(Qt::black);
+                            : viewportShadingSettings_.themeEditWireColor;
                         previewCage.lineVertexColors.append(QVector4D(
                             color.redF(), color.greenF(), color.blueF(), 1.0f));
                     }
@@ -10114,8 +10321,10 @@ protected:
             }
             if (!surfacesDrawn) {
                 for (const ViewportRenderObject &renderObject : visibleShapes) {
-                    if (renderObject.shape.geometryType == GeometryType::NurbsSurface ||
-                        renderObject.shape.geometryType == GeometryType::NurbsSolid) {
+                    const GeometryType type = renderObject.shape.geometryType;
+                    if (type == GeometryType::NurbsSurface ||
+                        type == GeometryType::NurbsSolid ||
+                        type == GeometryType::PolygonMesh) {
                         drawShape(painter, renderObject.shape, false,
                                   renderObject.selected, true,
                                   renderObject.layerColor,
@@ -10128,7 +10337,8 @@ protected:
                                   renderObject.displayColorSceneLinear,
                                   renderObject.workbenchMaterial,
                                   renderObject.displayName,
-                                  renderObject.libraryPath);
+                                  renderObject.libraryPath,
+                                  renderObject.meshObjectTransform);
                     }
                 }
             }
@@ -12238,30 +12448,22 @@ protected:
             event->accept();
             return;
         }
-        // Blender's Z shading shortcut opens a quick mode chooser. Keep it
-        // available from idle selection, where Z is not an axis constraint.
+        // Blender's hold-Z shading pie is available from idle selection,
+        // where Z is not an axis constraint. Direction choices map to the
+        // existing shading controls and do not change tool shortcut priority.
         if (!event->isAutoRepeat() && event->key() == Qt::Key_Z &&
             event->modifiers() == Qt::NoModifier &&
             activeTool_ == Tool::Select && !grabTool_.isActive() &&
             !duplicateTool_.isActive() && !objectSelectionDragActive()) {
-            QMenu shadingMenu(this);
-            QAction *wireframe = shadingMenu.addAction(
-                QStringLiteral("Wireframe"));
-            QAction *solid = shadingMenu.addAction(QStringLiteral("Solid"));
-            shadingMenu.addSeparator();
-            QAction *xray = shadingMenu.addAction(QStringLiteral("Toggle X-Ray"));
-            QAction *settings = shadingMenu.addAction(
-                QStringLiteral("Shading Settings…"));
-            QAction *chosen = shadingMenu.exec(QCursor::pos());
-            if (chosen == wireframe) {
-                activateViewportShadingControl(1);
-            } else if (chosen == solid) {
-                activateViewportShadingControl(2);
-            } else if (chosen == xray) {
-                activateViewportShadingControl(0);
-            } else if (chosen == settings) {
-                showShadingPopover();
-            }
+            auto *pie = new ShadingPieMenu(
+                [this](int item) {
+                    static constexpr int controls[] = {2, 1, 0, 3};
+                    if (item >= 0 && item < 4) {
+                        activateViewportShadingControl(controls[item]);
+                    }
+                }, this);
+            pie->setAttribute(Qt::WA_DeleteOnClose);
+            pie->showAt(QCursor::pos());
             event->accept();
             return;
         }
@@ -17893,6 +18095,58 @@ private:
                                                                viewportTransform_,
                                                                size(),
                                                                true);
+        int meshHit = -1;
+        qreal meshBest = 9.0;
+        for (int shapeIndex = 0; shapeIndex < document_.size(); ++shapeIndex) {
+            const ObjectId objectId = document_.objectIdAt(shapeIndex);
+            const SceneObject *object = document_.object(objectId);
+            const Shape &shape = document_[shapeIndex];
+            if (object == nullptr || shape.geometryType != GeometryType::PolygonMesh ||
+                !document_.isObjectVisible(objectId) ||
+                !validatePolygonMesh(shape.polygonMesh)) {
+                continue;
+            }
+            const auto projectVertex = [&](int vertexIndex, QPointF *screen) {
+                const Point3D &local = shape.polygonMesh.vertices[vertexIndex];
+                const auto &m = object->meshObjectTransform;
+                const qreal w = m[12] * local.x + m[13] * local.y +
+                                m[14] * local.z + m[15];
+                const qreal d = std::abs(w) > 1.0e-12 ? w : 1.0;
+                Point3D world{(m[0] * local.x + m[1] * local.y + m[2] * local.z + m[3]) / d,
+                              (m[4] * local.x + m[5] * local.y + m[6] * local.z + m[7]) / d,
+                              (m[8] * local.x + m[9] * local.y + m[10] * local.z + m[11]) / d};
+                world.x += object->placementTranslation.x;
+                world.y += object->placementTranslation.y;
+                world.z += object->placementTranslation.z;
+                return viewportTransform_.worldPointToScreen(world, size(), screen);
+            };
+            for (const QVector<int> &face : shape.polygonMesh.faces) {
+                QPolygonF polygon;
+                bool valid = true;
+                for (const int vertexIndex : face) {
+                    QPointF projected;
+                    if (!projectVertex(vertexIndex, &projected)) {
+                        valid = false;
+                        break;
+                    }
+                    polygon.append(projected);
+                }
+                if (!valid) continue;
+                qreal distance = polygon.containsPoint(screenPosition, Qt::OddEvenFill)
+                                     ? 0.0 : std::numeric_limits<qreal>::infinity();
+                for (int i = 0; i < polygon.size(); ++i) {
+                    distance = qMin(distance, curveHitTester_.distanceToSegment(
+                        screenPosition, polygon[i], polygon[(i + 1) % polygon.size()]));
+                }
+                if (distance < meshBest) {
+                    meshBest = distance;
+                    meshHit = shapeIndex;
+                }
+            }
+        }
+        if (meshHit >= 0 && (hitShapeIndex < 0 || meshBest <= 3.0)) {
+            return meshHit;
+        }
         if (qEnvironmentVariable("CLASSICAD_SNAP_TRACE") ==
             QStringLiteral("1")) {
             constexpr qreal selectionRadiusPixels = 9.0;
@@ -22004,7 +22258,9 @@ private:
                    std::optional<WorkbenchMaterialData> workbenchMaterial =
                        std::nullopt,
                    const QString &displayName = QString(),
-                   const QString &libraryPath = QString())
+                   const QString &libraryPath = QString(),
+                   const MeshObjectTransform &meshTransform =
+                       identityMeshObjectTransform)
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -22023,7 +22279,8 @@ private:
                                     displayColorSceneLinear,
                                     workbenchMaterial,
                                     displayName,
-                                    libraryPath);
+                                    libraryPath,
+                                    meshTransform);
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 
@@ -22224,6 +22481,8 @@ private:
     QSlider *studioLightRotationSlider_ = nullptr;
     QLabel *studioLightRotationLabel_ = nullptr;
     QButtonGroup *wireColorGroup_ = nullptr;
+    QToolButton *themeWireColorButton_ = nullptr;
+    QToolButton *themeEditWireColorButton_ = nullptr;
     QButtonGroup *solidColorGroup_ = nullptr;
     QButtonGroup *backgroundGroup_ = nullptr;
     QVector<QToolButton *> wireColorButtons_;

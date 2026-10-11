@@ -48,7 +48,9 @@ public:
                    std::optional<WorkbenchMaterialData> workbenchMaterial =
                        std::nullopt,
                    const QString &displayName = QString(),
-                   const QString &libraryPath = QString()) const;
+                   const QString &libraryPath = QString(),
+                   const MeshObjectTransform &meshTransform =
+                       identityMeshObjectTransform) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,

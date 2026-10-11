@@ -54,6 +54,7 @@ set(CLASSICAD_GEOMETRY_SOURCES
     src/core/geometry/nurbs_surface_evaluator.cpp
     src/core/geometry/nurbs_surface_factory.cpp
     src/core/geometry/nurbs_solid.cpp
+    src/core/geometry/polygon_mesh.cpp
     src/core/geometry/nurbs_surface_tessellator.cpp
     src/core/geometry/arc_curve_factory.cpp
     src/core/geometry/interpolating_curve_factory.cpp

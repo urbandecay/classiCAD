@@ -198,6 +198,10 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings)
                   static_cast<int>(settings.cavityType));
     object.insert(QStringLiteral("customColor"),
                   settings.customColor.name(QColor::HexArgb));
+    object.insert(QStringLiteral("themeWireColor"),
+                  settings.themeWireColor.name(QColor::HexArgb));
+    object.insert(QStringLiteral("themeEditWireColor"),
+                  settings.themeEditWireColor.name(QColor::HexArgb));
     object.insert(QStringLiteral("outlineColor"),
                   settings.outlineColor.name(QColor::HexArgb));
     object.insert(QStringLiteral("customBackgroundColor"),
@@ -333,6 +337,11 @@ bool viewportShadingFromJson(const QJsonValue &value,
     }
     restored.cavityType = static_cast<ViewportCavityType>(parsed);
     if (!color(QStringLiteral("customColor"), &restored.customColor) ||
+        (object.contains(QStringLiteral("themeWireColor")) &&
+         !color(QStringLiteral("themeWireColor"), &restored.themeWireColor)) ||
+        (object.contains(QStringLiteral("themeEditWireColor")) &&
+         !color(QStringLiteral("themeEditWireColor"),
+                &restored.themeEditWireColor)) ||
         !color(QStringLiteral("outlineColor"), &restored.outlineColor) ||
         !color(QStringLiteral("customBackgroundColor"),
                &restored.customBackgroundColor)) {

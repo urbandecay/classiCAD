@@ -370,6 +370,188 @@ bool nurbsSurfaceFromJson(const QJsonValue &value,
     return true;
 }
 
+QJsonObject polygonMeshToJson(const PolygonMesh3D &mesh)
+{
+    QJsonObject object;
+    QJsonArray vertices;
+    for (const Point3D &point : mesh.vertices) {
+        vertices.append(point3DToJson(point));
+    }
+    object.insert(QStringLiteral("vertices"), vertices);
+    QJsonArray faces;
+    for (const QVector<int> &face : mesh.faces) {
+        QJsonArray indices;
+        for (const int index : face) indices.append(index);
+        faces.append(indices);
+    }
+    object.insert(QStringLiteral("faces"), faces);
+    QJsonArray materialIndices;
+    for (const int index : mesh.faceMaterialIndices) materialIndices.append(index);
+    object.insert(QStringLiteral("faceMaterialIndices"), materialIndices);
+    QJsonArray materialSlotIds;
+    for (const QString &materialId : mesh.materialSlotIds) {
+        materialSlotIds.append(materialId);
+    }
+    object.insert(QStringLiteral("materialSlotIds"), materialSlotIds);
+    QJsonArray uvMaps;
+    for (const MeshUvMap &uvMap : mesh.uvMaps) {
+        QJsonObject serialized;
+        serialized.insert(QStringLiteral("name"), uvMap.name);
+        QJsonArray values;
+        for (const QPointF &uv : uvMap.cornerValues) {
+            values.append(QJsonArray{uv.x(), uv.y()});
+        }
+        serialized.insert(QStringLiteral("cornerValues"), values);
+        uvMaps.append(serialized);
+    }
+    object.insert(QStringLiteral("uvMaps"), uvMaps);
+    QJsonArray attributes;
+    for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
+        QJsonObject serialized;
+        serialized.insert(QStringLiteral("name"), attribute.name);
+        serialized.insert(QStringLiteral("domain"), static_cast<int>(attribute.domain));
+        serialized.insert(QStringLiteral("dataType"), attribute.dataType);
+        serialized.insert(QStringLiteral("colorSpace"), attribute.colorSpace);
+        serialized.insert(QStringLiteral("componentCount"), attribute.componentCount);
+        QJsonArray values;
+        for (const float value : attribute.values) values.append(value);
+        serialized.insert(QStringLiteral("values"), values);
+        attributes.append(serialized);
+    }
+    object.insert(QStringLiteral("colorAttributes"), attributes);
+    object.insert(QStringLiteral("activeUvMapName"), mesh.activeUvMapName);
+    object.insert(QStringLiteral("activeColorAttributeName"),
+                  mesh.activeColorAttributeName);
+    return object;
+}
+
+bool polygonMeshFromJson(const QJsonValue &value, PolygonMesh3D *mesh)
+{
+    if (mesh == nullptr || !value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    const QJsonValue verticesValue = object.value(QStringLiteral("vertices"));
+    const QJsonValue facesValue = object.value(QStringLiteral("faces"));
+    const QJsonValue materialIndicesValue = object.value(QStringLiteral("faceMaterialIndices"));
+    const QJsonValue materialSlotsValue = object.value(QStringLiteral("materialSlots"));
+    const QJsonValue materialSlotIdsValue = object.value(QStringLiteral("materialSlotIds"));
+    const QJsonValue uvMapsValue = object.value(QStringLiteral("uvMaps"));
+    const QJsonValue attributesValue = object.value(QStringLiteral("colorAttributes"));
+    if (!verticesValue.isArray() || !facesValue.isArray() ||
+        !materialIndicesValue.isArray() ||
+        (!materialSlotsValue.isArray() && !materialSlotIdsValue.isArray()) ||
+        !uvMapsValue.isArray() ||
+        !attributesValue.isArray()) return false;
+
+    PolygonMesh3D result;
+    for (const QJsonValue &vertexValue : verticesValue.toArray()) {
+        Point3D point;
+        if (!point3DFromJson(vertexValue, &point)) return false;
+        result.vertices.append(point);
+    }
+    for (const QJsonValue &faceValue : facesValue.toArray()) {
+        if (!faceValue.isArray()) return false;
+        QVector<int> face;
+        for (const QJsonValue &indexValue : faceValue.toArray()) {
+            if (!indexValue.isDouble() || !std::isfinite(indexValue.toDouble()) ||
+                std::floor(indexValue.toDouble()) != indexValue.toDouble() ||
+                indexValue.toInt(-1) < 0) return false;
+            face.append(indexValue.toInt());
+        }
+        result.faces.append(face);
+    }
+    for (const QJsonValue &indexValue : materialIndicesValue.toArray()) {
+        if (!indexValue.isDouble() || !std::isfinite(indexValue.toDouble()) ||
+            std::floor(indexValue.toDouble()) != indexValue.toDouble() ||
+            indexValue.toInt(-1) < 0) return false;
+        result.faceMaterialIndices.append(indexValue.toInt());
+    }
+    for (const QJsonValue &slotIdValue : materialSlotIdsValue.toArray()) {
+        if (!slotIdValue.isString()) return false;
+        result.materialSlotIds.append(slotIdValue.toString());
+    }
+    for (const QJsonValue &slotValue : materialSlotsValue.toArray()) {
+        if (!slotValue.isObject()) return false;
+        const QJsonObject slotObject = slotValue.toObject();
+        const QJsonValue color = slotObject.value(QStringLiteral("baseColorSceneLinear"));
+        const QJsonValue roughness = slotObject.value(QStringLiteral("roughness"));
+        const QJsonValue metallic = slotObject.value(QStringLiteral("metallic"));
+        const QJsonValue alpha = slotObject.value(QStringLiteral("alpha"));
+        if (!slotObject.value(QStringLiteral("name")).isString() ||
+            !slotObject.value(QStringLiteral("libraryPath")).isString() ||
+            !color.isArray() || color.toArray().size() != 4 ||
+            !roughness.isDouble() || !metallic.isDouble() || !alpha.isDouble()) return false;
+        PolygonMeshMaterialSlot slot;
+        slot.name = slotObject.value(QStringLiteral("name")).toString();
+        slot.libraryPath = slotObject.value(QStringLiteral("libraryPath")).toString();
+        slot.baseColorSceneLinear.clear();
+        for (const QJsonValue &component : color.toArray()) {
+            if (!component.isDouble() || !std::isfinite(component.toDouble())) return false;
+            slot.baseColorSceneLinear.append(static_cast<float>(component.toDouble()));
+        }
+        if (!std::isfinite(roughness.toDouble()) || !std::isfinite(metallic.toDouble()) ||
+            !std::isfinite(alpha.toDouble())) return false;
+        slot.roughness = static_cast<float>(roughness.toDouble());
+        slot.metallic = static_cast<float>(metallic.toDouble());
+        slot.alpha = static_cast<float>(alpha.toDouble());
+        result.materialSlots.append(std::move(slot));
+    }
+    for (const QJsonValue &uvMapValue : uvMapsValue.toArray()) {
+        if (!uvMapValue.isObject()) return false;
+        const QJsonObject uvObject = uvMapValue.toObject();
+        if (!uvObject.value(QStringLiteral("name")).isString() ||
+            !uvObject.value(QStringLiteral("cornerValues")).isArray()) return false;
+        MeshUvMap uvMap;
+        uvMap.name = uvObject.value(QStringLiteral("name")).toString();
+        for (const QJsonValue &uvValue : uvObject.value(QStringLiteral("cornerValues")).toArray()) {
+            if (!uvValue.isArray() || uvValue.toArray().size() != 2 ||
+                !uvValue.toArray()[0].isDouble() || !uvValue.toArray()[1].isDouble() ||
+                !std::isfinite(uvValue.toArray()[0].toDouble()) ||
+                !std::isfinite(uvValue.toArray()[1].toDouble())) return false;
+            uvMap.cornerValues.append(QPointF(uvValue.toArray()[0].toDouble(),
+                                               uvValue.toArray()[1].toDouble()));
+        }
+        result.uvMaps.append(std::move(uvMap));
+    }
+    for (const QJsonValue &attributeValue : attributesValue.toArray()) {
+        if (!attributeValue.isObject()) return false;
+        const QJsonObject attributeObject = attributeValue.toObject();
+        const QJsonValue name = attributeObject.value(QStringLiteral("name"));
+        const QJsonValue domain = attributeObject.value(QStringLiteral("domain"));
+        const QJsonValue dataType = attributeObject.value(QStringLiteral("dataType"));
+        const QJsonValue colorSpace = attributeObject.value(QStringLiteral("colorSpace"));
+        const QJsonValue components = attributeObject.value(QStringLiteral("componentCount"));
+        const QJsonValue values = attributeObject.value(QStringLiteral("values"));
+        if (!name.isString() || !domain.isDouble() || !dataType.isString() ||
+            !colorSpace.isString() || !components.isDouble() ||
+            !values.isArray()) return false;
+        MeshColorAttribute attribute;
+        const int domainValue = domain.toInt(-1);
+        if (domainValue < static_cast<int>(MeshAttributeDomain::Point) ||
+            domainValue > static_cast<int>(MeshAttributeDomain::Corner)) return false;
+        attribute.name = name.toString();
+        attribute.domain = static_cast<MeshAttributeDomain>(domainValue);
+        attribute.dataType = dataType.toString();
+        attribute.colorSpace = colorSpace.toString();
+        attribute.componentCount = components.toInt(0);
+        for (const QJsonValue &component : values.toArray()) {
+            if (!component.isDouble() || !std::isfinite(component.toDouble())) return false;
+            attribute.values.append(static_cast<float>(component.toDouble()));
+        }
+        result.colorAttributes.append(std::move(attribute));
+    }
+    const QJsonValue activeUvMapName = object.value(QStringLiteral("activeUvMapName"));
+    const QJsonValue activeColorAttributeName =
+        object.value(QStringLiteral("activeColorAttributeName"));
+    if ((!activeUvMapName.isUndefined() && !activeUvMapName.isString()) ||
+        (!activeColorAttributeName.isUndefined() &&
+         !activeColorAttributeName.isString())) return false;
+    result.activeUvMapName = activeUvMapName.toString();
+    result.activeColorAttributeName = activeColorAttributeName.toString();
+    if (!validatePolygonMesh(result)) return false;
+    *mesh = std::move(result);
+    return true;
+}
+
 QJsonObject shapeToJson(const Shape &shape)
 {
     QJsonObject object;
@@ -383,6 +565,9 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
     object.insert(QStringLiteral("nurbsSurface"),
                   nurbsSurfaceToJson(shape.nurbsSurface));
+    if (shape.geometryType == GeometryType::PolygonMesh) {
+        object.insert(QStringLiteral("polygonMesh"), polygonMeshToJson(shape.polygonMesh));
+    }
     if (shape.geometryType == GeometryType::NurbsSolid) {
         QJsonObject solid;
         solid.insert(QStringLiteral("baseSurface"),
@@ -553,6 +738,12 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     }
     if (geometryType == GeometryType::NurbsSurface &&
         !validateNurbsSurface(nurbsSurface)) {
+        return false;
+    }
+    PolygonMesh3D polygonMesh;
+    const QJsonValue polygonMeshValue = object.value(QStringLiteral("polygonMesh"));
+    if (geometryType == GeometryType::PolygonMesh &&
+        !polygonMeshFromJson(polygonMeshValue, &polygonMesh)) {
         return false;
     }
     QImage pictureImage;
@@ -793,6 +984,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->nurbs = nurbs;
     shape->nurbsSurface = nurbsSurface;
     shape->nurbsSolid = nurbsSolid;
+    shape->polygonMesh = std::move(polygonMesh);
     shape->arcMode = static_cast<ArcMode>(arcModeValue);
     shape->arcSweep = arcSweepValue.toDouble();
     shape->subdivisionParameters = subdivisionParameters;

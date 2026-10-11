@@ -51,6 +51,9 @@ struct PolygonMeshMaterialSlot {
 struct PolygonMesh3D {
     QVector<Point3D> vertices;
     QVector<QVector<int>> faces;
+    // Optional custom split normals, one XYZ vector per face loop in the same
+    // flattened order used by UV corner data. Empty means derive normals.
+    QVector<Point3D> cornerNormals;
     QVector<int> faceMaterialIndices;
     QVector<QString> materialSlotIds;
     // Read-only migration aid for v8 inline material records; never written by

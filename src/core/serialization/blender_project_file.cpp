@@ -729,6 +729,29 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     for (const QVector<int> &face : mesh.faces) {
         expectedLoopCount += face.size();
     }
+    const QJsonValue sourceCornerNormals = item.value(QStringLiteral("corner_normals"));
+    const bool customNormalsPresent =
+        item.value(QStringLiteral("custom_split_normals_present")).toBool(false);
+    if (customNormalsPresent && !sourceCornerNormals.isArray()) {
+        setError(errorMessage, QStringLiteral("custom mesh corner normals are missing"));
+        return false;
+    }
+    if (!sourceCornerNormals.isUndefined()) {
+        if (!sourceCornerNormals.isArray() ||
+            sourceCornerNormals.toArray().size() != expectedLoopCount) {
+            setError(errorMessage, QStringLiteral("mesh corner normal count does not match loops"));
+            return false;
+        }
+        mesh.cornerNormals.reserve(expectedLoopCount);
+        for (const QJsonValue &normalValue : sourceCornerNormals.toArray()) {
+            QVector<double> normal;
+            if (!jsonNumberArray(normalValue, 3, &normal)) {
+                setError(errorMessage, QStringLiteral("mesh corner normal is invalid"));
+                return false;
+            }
+            mesh.cornerNormals.append({normal[0], normal[1], normal[2]});
+        }
+    }
     if (sourceLoopVertexIndices.size() != expectedLoopCount) {
         setError(errorMessage, QStringLiteral("mesh loop vertex list does not match polygon loops"));
         return false;
@@ -929,6 +952,7 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();
     result.hiddenInViewport = visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
     result.hideSelect = visibility.value(QStringLiteral("hide_select")).toBool();
+    result.viewLayerHidden = item.value(QStringLiteral("view_layer_hidden")).toObject();
     *sceneObject = std::move(result);
     return true;
 }
@@ -1294,11 +1318,6 @@ bool importBlenderScene(const QString &path,
         const QJsonObject scene = sceneValue.toObject();
         sceneLibraryPaths.insert(scene.value(QStringLiteral("name")).toString(),
                                  scene.value(QStringLiteral("library_path")).toString());
-        const QJsonArray viewLayers = scene.value(QStringLiteral("view_layer_names")).toArray();
-        if (!viewLayers.isEmpty()) {
-            warnings.append(QStringLiteral("Scene %1: Blender view-layer membership and per-view-layer collection exclusions/visibility are not retained")
-                                .arg(scene.value(QStringLiteral("name")).toString()));
-        }
     }
     const QJsonArray sourceCollections = root.value(QStringLiteral("collections")).toArray();
     importedCollections.reserve(sourceCollections.size());
@@ -1321,6 +1340,7 @@ bool importBlenderScene(const QString &path,
         collection.libraryPath = record.value(QStringLiteral("library_path")).toString();
         collection.hideViewport = record.value(QStringLiteral("hide_viewport")).toBool();
         collection.hideRender = record.value(QStringLiteral("hide_render")).toBool();
+        collection.viewLayerStates = record.value(QStringLiteral("view_layer_states")).toArray();
         const QJsonArray sourceSceneNames = record.value(QStringLiteral("source_scene_names")).toArray();
         if (!sourceSceneNames.isEmpty()) {
             for (const QJsonValue &sceneNameValue : sourceSceneNames) {
@@ -1402,6 +1422,12 @@ bool importBlenderScene(const QString &path,
             warnings.append(QStringLiteral("%1: mesh skipped: %2")
                                 .arg(blenderItemLabel(item), itemError));
             continue;
+        }
+        sceneObject.defaultViewLayerKey =
+            item.value(QStringLiteral("default_view_layer_key")).toString();
+        if (!sceneObject.defaultViewLayerKey.isEmpty() &&
+            sceneObject.viewLayerHidden.contains(sceneObject.defaultViewLayerKey)) {
+            sceneObject.hiddenInViewport = false;
         }
         unsupportedFeatureCount += warnings.size() - warningCountBeforeItem;
         importedIds.insert(objectId);

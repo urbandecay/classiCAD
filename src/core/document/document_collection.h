@@ -2,6 +2,7 @@
 
 #include "collection_id.h"
 #include <QString>
+#include <QJsonArray>
 #include <QStringList>
 #include <QVector>
 
@@ -17,5 +18,6 @@ struct DocumentCollection {
     QVector<CollectionId> parentIds;
     bool hideViewport = false;
     bool hideRender = false;
+    QJsonArray viewLayerStates;
 };
 } // namespace classiCAD

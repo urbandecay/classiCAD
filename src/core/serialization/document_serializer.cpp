@@ -134,7 +134,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 11);
+    serialized.insert(QStringLiteral("version"), 12);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -188,6 +188,7 @@ QJsonObject documentToJson(const Document &document)
         record.insert(QStringLiteral("parentIds"), parentIds);
         record.insert(QStringLiteral("hideViewport"), collection.hideViewport);
         record.insert(QStringLiteral("hideRender"), collection.hideRender);
+        record.insert(QStringLiteral("viewLayerStates"), collection.viewLayerStates);
         collections.append(record);
     }
     serialized.insert(QStringLiteral("collections"), collections);
@@ -237,6 +238,8 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("hideRender"), sceneObject.hideRender);
         serializedObject.insert(QStringLiteral("hiddenInViewport"), sceneObject.hiddenInViewport);
         serializedObject.insert(QStringLiteral("hideSelect"), sceneObject.hideSelect);
+        serializedObject.insert(QStringLiteral("viewLayerHidden"), sceneObject.viewLayerHidden);
+        serializedObject.insert(QStringLiteral("defaultViewLayerKey"), sceneObject.defaultViewLayerKey);
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
         serializedObject.insert(QStringLiteral("libraryPath"), sceneObject.libraryPath);
         serializedObject.insert(QStringLiteral("blenderSourceVersion"),
@@ -288,7 +291,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 11) {
+    if (version < 1 || version > 12) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -352,6 +355,14 @@ bool documentFromJson(const QJsonValue &value,
             collection.libraryPath = libraryPath.toString();
             collection.hideViewport = record.value(QStringLiteral("hideViewport")).toBool();
             collection.hideRender = record.value(QStringLiteral("hideRender")).toBool();
+            if (version >= 12) {
+                const QJsonValue states = record.value(QStringLiteral("viewLayerStates"));
+                if (!states.isArray()) {
+                    setError(errorMessage, QStringLiteral("invalid collection view-layer states"));
+                    return false;
+                }
+                collection.viewLayerStates = states.toArray();
+            }
             for (const QJsonValue &parentValue : parentIdsValue.toArray()) {
                 quint64 parentId = 0;
                 if (!idFromJson(parentValue, &parentId)) {
@@ -653,6 +664,8 @@ bool documentFromJson(const QJsonValue &value,
         bool hideRender = false;
         bool hiddenInViewport = false;
         bool hideSelect = false;
+        QJsonObject viewLayerHidden;
+        QString defaultViewLayerKey;
         if (version >= 10) {
             const QJsonValue collectionIdsValue =
                 serializedObject.value(QStringLiteral("collectionIds"));
@@ -685,6 +698,20 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             hideSelect = serializedObject.value(QStringLiteral("hideSelect")).toBool();
+            if (version >= 12) {
+                const QJsonValue states = serializedObject.value(QStringLiteral("viewLayerHidden"));
+                if (!states.isObject()) {
+                    setError(errorMessage, QStringLiteral("invalid object view-layer visibility"));
+                    return false;
+                }
+                viewLayerHidden = states.toObject();
+                const QJsonValue key = serializedObject.value(QStringLiteral("defaultViewLayerKey"));
+                if (!key.isString()) {
+                    setError(errorMessage, QStringLiteral("invalid default view-layer key"));
+                    return false;
+                }
+                defaultViewLayerKey = key.toString();
+            }
         }
 
         if (shape.geometryType == GeometryType::PolygonMesh) {
@@ -787,6 +814,8 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.hideRender = hideRender;
         sceneObject.hiddenInViewport = hiddenInViewport;
         sceneObject.hideSelect = hideSelect;
+        sceneObject.viewLayerHidden = viewLayerHidden;
+        sceneObject.defaultViewLayerKey = defaultViewLayerKey;
         if (version >= 7) {
             const QJsonValue displayName = serializedObject.value(QStringLiteral("displayName"));
             const QJsonValue libraryPath = serializedObject.value(QStringLiteral("libraryPath"));

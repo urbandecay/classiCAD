@@ -78,6 +78,25 @@ QVector3D asVector(const Point3D &point)
             static_cast<float>(point.z)};
 }
 
+QVector3D transformMeshNormal(const std::array<double, 16> &m,
+                              const Point3D &normal)
+{
+    const double a=m[0], b=m[1], c=m[2], d=m[4], e=m[5], f=m[6];
+    const double g=m[8], h=m[9], i=m[10];
+    const double cof[9] = {e*i-f*h, f*g-d*i, d*h-e*g,
+                           c*h-b*i, a*i-c*g, b*g-a*h,
+                           b*f-c*e, c*d-a*f, a*e-b*d};
+    const double determinant = a*cof[0] + b*cof[1] + c*cof[2];
+    if (!std::isfinite(determinant) || std::abs(determinant) <= 1.0e-15)
+        return {};
+    QVector3D result(
+        static_cast<float>((cof[0]*normal.x + cof[1]*normal.y + cof[2]*normal.z) / determinant),
+        static_cast<float>((cof[3]*normal.x + cof[4]*normal.y + cof[5]*normal.z) / determinant),
+        static_cast<float>((cof[6]*normal.x + cof[7]*normal.y + cof[8]*normal.z) / determinant));
+    if (result.lengthSquared() <= 1.0e-16f) return {};
+    return result.normalized();
+}
+
 bool hasNurbsSurfaceGeometry(const ViewportRenderObject &object)
 {
     return object.shape.geometryType == GeometryType::NurbsSurface ||
@@ -938,6 +957,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 keyStream << qint32(face.size());
                 for (int index : face) keyStream << qint32(index);
             }
+            for (const Point3D &normal : mesh.cornerNormals)
+                keyStream << double(normal.x) << double(normal.y) << double(normal.z);
             keyStream << mesh.activeColorAttributeName;
             keyStream << mesh.activeUvMapName;
             for (const MeshUvMap &uvMap : mesh.uvMaps) {
@@ -1118,10 +1139,18 @@ void ViewportSurfaceRenderer::prepareGeometry(
                         for (int corner = 0; corner < 3; ++corner) {
                             const Point3D *point = trianglePoints[corner];
                             const QVector3D &color = triangleColors[corner];
+                            QVector3D vertexNormal = normal;
+                            if (!mesh.cornerNormals.isEmpty()) {
+                                const int loopIndex = triangle[corner];
+                                vertexNormal = transformMeshNormal(
+                                    matrix, mesh.cornerNormals[faceFirstCorner + loopIndex]);
+                                if (vertexNormal.lengthSquared() <= 1.0e-16f)
+                                    vertexNormal = normal;
+                            }
                             vertices_.append({static_cast<float>(point->x),
                                               static_cast<float>(point->y),
                                               static_cast<float>(point->z),
-                                              normal.x(), normal.y(), normal.z(),
+                                              vertexNormal.x(), vertexNormal.y(), vertexNormal.z(),
                                               color.x(), color.y(), color.z(),
                                               static_cast<float>(triangleUvs[corner].x()),
                                               static_cast<float>(triangleUvs[corner].y())});

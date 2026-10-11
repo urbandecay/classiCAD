@@ -1,5 +1,7 @@
 #include "document.h"
 
+#include <QJsonArray>
+#include <QStringList>
 #include <QSet>
 
 #include <algorithm>
@@ -1060,6 +1062,9 @@ bool Document::isObjectVisible(ObjectId objectId) const
     const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
     if (objectLayer == nullptr || !objectLayer->visible || objectLayer->frozen ||
         sceneObject->hideViewport || sceneObject->hiddenInViewport) return false;
+    if (!sceneObject->defaultViewLayerKey.isEmpty() &&
+        sceneObject->viewLayerHidden.contains(sceneObject->defaultViewLayerKey) &&
+        sceneObject->viewLayerHidden.value(sceneObject->defaultViewLayerKey).toBool()) return false;
     const auto hasVisibleCollectionPath = [&](const auto &self, CollectionId id,
                                               QSet<quint64> path) -> bool {
         if (path.contains(id.value())) return false;
@@ -1073,6 +1078,65 @@ bool Document::isObjectVisible(ObjectId objectId) const
         return false;
     };
     if (!sceneObject->collectionIds.isEmpty()) {
+        if (!sceneObject->defaultViewLayerKey.isEmpty()) {
+            const QString key = sceneObject->defaultViewLayerKey;
+            const auto pathMatches = [](const QJsonArray &stored, const QStringList &expected) {
+                if (stored.size() != expected.size()) return false;
+                for (int i = 0; i < expected.size(); ++i)
+                    if (!stored[i].isString() || stored[i].toString() != expected[i]) return false;
+                return true;
+            };
+            for (CollectionId membershipId : sceneObject->collectionIds) {
+                const DocumentCollection *membership = collection(membershipId);
+                if (membership == nullptr) continue;
+                for (const QJsonValue &membershipStateValue : membership->viewLayerStates) {
+                    const QJsonObject membershipState = membershipStateValue.toObject();
+                    if (membershipState.value(QStringLiteral("view_layer_key")).toString() != key)
+                        continue;
+                    const QJsonArray pathArray = membershipState.value(QStringLiteral("path")).toArray();
+                    QStringList sourcePath;
+                    for (const QJsonValue &part : pathArray) sourcePath.append(part.toString());
+                    if (sourcePath.isEmpty() || sourcePath.last() != membership->sourceId) continue;
+                    bool visible = true;
+                    CollectionId previous = CollectionId::invalid();
+                    for (int index = 0; index < sourcePath.size(); ++index) {
+                        const QString &sourceId = sourcePath[index];
+                        const auto node = std::find_if(collections_.cbegin(), collections_.cend(),
+                            [&sourceId](const DocumentCollection &candidate) {
+                                return candidate.sourceId == sourceId;
+                            });
+                        if (node == collections_.cend() ||
+                            (previous.isValid() && !node->parentIds.contains(previous)) ||
+                            node->hideViewport) {
+                            visible = false;
+                            break;
+                        }
+                        QJsonObject nodeState;
+                        bool foundNodeState = false;
+                        for (const QJsonValue &stateValue : node->viewLayerStates) {
+                            const QJsonObject state = stateValue.toObject();
+                            QStringList prefix;
+                            for (int prefixIndex = 0; prefixIndex <= index; ++prefixIndex)
+                                prefix.append(sourcePath[prefixIndex]);
+                            if (state.value(QStringLiteral("view_layer_key")).toString() == key &&
+                                pathMatches(state.value(QStringLiteral("path")).toArray(), prefix)) {
+                                nodeState = state;
+                                foundNodeState = true;
+                                break;
+                            }
+                        }
+                        if (!foundNodeState || nodeState.value(QStringLiteral("exclude")).toBool() ||
+                            nodeState.value(QStringLiteral("hide_viewport")).toBool()) {
+                            visible = false;
+                            break;
+                        }
+                        previous = node->id;
+                    }
+                    if (visible) return true;
+                }
+            }
+            return false;
+        }
         for (CollectionId id : sceneObject->collectionIds)
             if (hasVisibleCollectionPath(hasVisibleCollectionPath, id, {})) return true;
         return false;

@@ -385,6 +385,12 @@ QJsonObject polygonMeshToJson(const PolygonMesh3D &mesh)
         faces.append(indices);
     }
     object.insert(QStringLiteral("faces"), faces);
+    if (!mesh.cornerNormals.isEmpty()) {
+        QJsonArray normals;
+        for (const Point3D &normal : mesh.cornerNormals)
+            normals.append(QJsonArray{normal.x, normal.y, normal.z});
+        object.insert(QStringLiteral("cornerNormals"), normals);
+    }
     QJsonArray materialIndices;
     for (const int index : mesh.faceMaterialIndices) materialIndices.append(index);
     object.insert(QStringLiteral("faceMaterialIndices"), materialIndices);
@@ -458,6 +464,13 @@ bool polygonMeshFromJson(const QJsonValue &value, PolygonMesh3D *mesh)
             face.append(indexValue.toInt());
         }
         result.faces.append(face);
+    }
+    const QJsonValue cornerNormalsValue = object.value(QStringLiteral("cornerNormals"));
+    if (!cornerNormalsValue.isUndefined() && !cornerNormalsValue.isArray()) return false;
+    for (const QJsonValue &normalValue : cornerNormalsValue.toArray()) {
+        Point3D normal;
+        if (!point3DFromJson(normalValue, &normal)) return false;
+        result.cornerNormals.append(normal);
     }
     for (const QJsonValue &indexValue : materialIndicesValue.toArray()) {
         if (!indexValue.isDouble() || !std::isfinite(indexValue.toDouble()) ||

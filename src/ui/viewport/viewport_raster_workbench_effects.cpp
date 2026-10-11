@@ -24,7 +24,36 @@ struct RasterSample {
 QVector3D normalized(const QVector3D &value)
 {
     const float length = value.length();
-    return length > 1.0e-12f ? value / length : QVector3D();
+    return std::isfinite(length) && length > 1.0e-12f
+               ? value / length
+               : QVector3D();
+}
+
+QVector3D transformMeshNormal(const std::array<double, 16> &m,
+                              const Point3D &normal)
+{
+    const double a = m[0], b = m[1], c = m[2];
+    const double d = m[4], e = m[5], f = m[6];
+    const double g = m[8], h = m[9], i = m[10];
+    const double cofactors[9] = {
+        e * i - f * h, f * g - d * i, d * h - e * g,
+        c * h - b * i, a * i - c * g, b * g - a * h,
+        b * f - c * e, c * d - a * f, a * e - b * d};
+    const double determinant = a * cofactors[0] + b * cofactors[1] +
+                               c * cofactors[2];
+    if (!std::isfinite(determinant) || std::abs(determinant) <= 1.0e-15)
+        return {};
+    const QVector3D transformed(
+        static_cast<float>((cofactors[0] * normal.x +
+                            cofactors[1] * normal.y +
+                            cofactors[2] * normal.z) / determinant),
+        static_cast<float>((cofactors[3] * normal.x +
+                            cofactors[4] * normal.y +
+                            cofactors[5] * normal.z) / determinant),
+        static_cast<float>((cofactors[6] * normal.x +
+                            cofactors[7] * normal.y +
+                            cofactors[8] * normal.z) / determinant));
+    return normalized(transformed);
 }
 
 float saturate(float value)
@@ -117,7 +146,9 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
                     static_cast<float>((m[8] * local.x + m[9] * local.y +
                                         m[10] * local.z + m[11]) / divisor));
             };
+            int firstCorner = 0;
             for (const QVector<int> &face : mesh.faces) {
+                const int faceFirstCorner = firstCorner;
                 QVector<Point3D> points;
                 points.reserve(face.size());
                 for (int vertex : face) points.append(mesh.vertices[vertex]);
@@ -129,8 +160,19 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
                     const QVector3D normal = normalized(
                         QVector3D::crossProduct(b - a, c - a));
                     fallback.surfaceVertices << a << b << c;
-                    fallback.surfaceNormals << normal << normal << normal;
+                    for (int corner = 0; corner < 3; ++corner) {
+                        QVector3D cornerNormal;
+                        const int loopIndex = faceFirstCorner + triangle[corner];
+                        if (loopIndex >= 0 && loopIndex < mesh.cornerNormals.size()) {
+                            cornerNormal = transformMeshNormal(
+                                m, mesh.cornerNormals[loopIndex]);
+                        }
+                        if (cornerNormal.lengthSquared() <= 1.0e-16f)
+                            cornerNormal = normal;
+                        fallback.surfaceNormals.append(cornerNormal);
+                    }
                 }
+                firstCorner += face.size();
             }
             geometry = &fallback;
         }

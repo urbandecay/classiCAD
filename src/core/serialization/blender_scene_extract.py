@@ -21,7 +21,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 2
+BRIDGE_FORMAT_VERSION = 3
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -225,6 +225,35 @@ def object_metadata(obj, scene):
     }
 
 
+def view_layer_key(scene, view_layer):
+    return stable_id(scene) + "::view-layer::" + view_layer.name
+
+
+def layer_collection_records(scene, view_layer):
+    records = []
+    def visit(node, path):
+        collection_id = stable_id(node.collection)
+        current_path = path + [collection_id]
+        records.append({
+            "collection_id": collection_id,
+            "path": current_path,
+            "exclude": bool(node.exclude),
+            "hide_viewport": bool(node.hide_viewport),
+            "hide_render": bool(node.hide_render),
+        })
+        for child in node.children:
+            visit(child, current_path)
+    visit(view_layer.layer_collection, [])
+    return records
+
+
+def object_hidden_in_layer(obj, view_layer):
+    try:
+        return bool(obj.hide_get(view_layer=view_layer))
+    except (RuntimeError, TypeError):
+        return bool(obj.hide_get())
+
+
 def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
     item_id = stable_id(obj)
     item = object_metadata(obj, scene)
@@ -315,9 +344,12 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
         item["custom_split_normals_present"] = bool(
             getattr(mesh, "has_custom_normals", False)
         )
-        if item["custom_split_normals_present"]:
-            add_unsupported(unsupported, item_id, "custom_split_normals",
-                            "custom split normals are not represented by this bridge")
+        # Blender exposes the evaluated split normal per loop even when the
+        # mesh has no separately authored custom-normal layer. Retaining this
+        # array preserves smooth/sharp seams in the imported display mesh.
+        item["corner_normals"] = [
+            vector_values(loop.normal) for loop in mesh.loops
+        ]
         if mode == "evaluated":
             item["evaluated_geometry_baked"] = True
             add_unsupported(unsupported, item_id, "modifier_editability",
@@ -389,6 +421,7 @@ def extract_scene(input_path, mode):
     collections_by_id = {stable_id(collection): collection
                          for collection in bpy.data.collections}
     scene_names_by_collection = {}
+    states_by_collection = {}
     for scene in bpy.data.scenes:
         pending = [scene.collection]
         visited = set()
@@ -401,6 +434,18 @@ def extract_scene(input_path, mode):
             collections_by_id[collection_id] = collection
             scene_names_by_collection.setdefault(collection_id, set()).add(scene.name_full)
             pending.extend(collection.children)
+        for view_layer in scene.view_layers:
+            key = view_layer_key(scene, view_layer)
+            for state in layer_collection_records(scene, view_layer):
+                states_by_collection.setdefault(state["collection_id"], []).append({
+                    "view_layer_key": key,
+                    "scene_name": scene.name_full,
+                    "view_layer_name": view_layer.name,
+                    "path": state["path"],
+                    "exclude": state["exclude"],
+                    "hide_viewport": state["hide_viewport"],
+                    "hide_render": state["hide_render"],
+                })
     for collection in collections_by_id.values():
         parent_ids = sorted(
             stable_id(parent) for parent in collections_by_id.values()
@@ -414,6 +459,7 @@ def extract_scene(input_path, mode):
             "source_scene_names": sorted(scene_names_by_collection.get(stable_id(collection), set())),
             "hide_viewport": bool(collection.hide_viewport),
             "hide_render": bool(collection.hide_render),
+            "view_layer_states": states_by_collection.get(stable_id(collection), []),
         })
     for scene in bpy.data.scenes:
         depsgraph = depsgraph_for_scene(scene) if mode == "evaluated" else None
@@ -421,6 +467,11 @@ def extract_scene(input_path, mode):
             "name": scene.name_full,
             "library_path": source_library_path(scene),
             "view_layer_names": [view_layer.name for view_layer in scene.view_layers],
+            "view_layers": [{
+                "name": view_layer.name,
+                "key": view_layer_key(scene, view_layer),
+                "collection_instances": layer_collection_records(scene, view_layer),
+            } for view_layer in scene.view_layers],
             "collection_ids": sorted(
                 collection_id for collection_id, scene_names in scene_names_by_collection.items()
                 if scene.name_full in scene_names
@@ -438,6 +489,14 @@ def extract_scene(input_path, mode):
                 item = extract_mesh_object(obj, scene, mode, depsgraph,
                                            output["materials"],
                                            output["unsupported_features"])
+                item["view_layer_hidden"] = {
+                    view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                    for view_layer in scene.view_layers
+                }
+                item["default_view_layer_key"] = (
+                    view_layer_key(scene, scene.view_layers[0])
+                    if len(scene.view_layers) else ""
+                )
                 output["items"].append(item)
                 mesh_count += 1
             except Exception as error:

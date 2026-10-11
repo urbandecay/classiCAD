@@ -40,6 +40,16 @@ bool validatePolygonMesh(const PolygonMesh3D &mesh, QString *error)
         }
         cornerCount += face.size();
     }
+    if (!mesh.cornerNormals.isEmpty() && mesh.cornerNormals.size() != cornerCount) {
+        return fail(error, QStringLiteral("mesh corner normal count does not match face loops"));
+    }
+    for (const Point3D &normal : mesh.cornerNormals) {
+        if (!std::isfinite(normal.x) || !std::isfinite(normal.y) ||
+            !std::isfinite(normal.z) ||
+            normal.x * normal.x + normal.y * normal.y + normal.z * normal.z <= 1.0e-24) {
+            return fail(error, QStringLiteral("mesh corner normal is invalid"));
+        }
+    }
     if (mesh.faceMaterialIndices.size() != mesh.faces.size()) {
         return fail(error, QStringLiteral("mesh material index count does not match faces"));
     }

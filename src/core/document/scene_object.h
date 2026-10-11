@@ -6,6 +6,7 @@
 #include "shape.h"
 
 #include <QVector3D>
+#include <QJsonObject>
 #include <QVector4D>
 #include <QString>
 #include <array>
@@ -75,6 +76,8 @@ struct SceneObject {
     bool hideRender = false;
     bool hiddenInViewport = false;
     bool hideSelect = false;
+    QJsonObject viewLayerHidden;
+    QString defaultViewLayerKey;
     // Blender ID identity used by Workbench Random color. Imported linked
     // objects retain the source library path when the importer provides it.
     QString displayName;

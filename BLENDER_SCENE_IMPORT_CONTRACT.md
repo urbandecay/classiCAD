@@ -56,9 +56,13 @@ polygons. Unsupported Blender attribute domains/types are retained as opaque
 import metadata if feasible and listed in the import report; they must not be
 misrepresented as corner or point data.
 
-Mesh normals are derived from topology and positions unless Blender supplies
-custom split normals that the classiCAD model explicitly supports. If custom
-normals are unsupported, report the loss and use deterministic derived normals.
+Custom split normals are stored one per face loop in polygon order. The Blender
+bridge extracts loop normals for custom-normal meshes in both original and
+evaluated modes; native JSON omits the array when absent, preserving older
+documents. Rendering transforms these local normals with the inverse transpose
+of the mesh object's linear transform, so nonuniform scale and reflections do
+not distort their directions. Meshes without stored loop normals use derived
+topology normals.
 Do not change NURBS storage: `NurbsSurface3D` and `NurbsExtrusionSolid3D` remain
 the source of truth for those object types, and their tessellated meshes remain
 derived proxies.
@@ -140,18 +144,21 @@ An import operation is one undoable document transaction. Each imported mesh
 receives the active CAD layer assignment required by the document model, while
 its Blender collection links remain independent. Direct membership in multiple
 collections, the collection parent hierarchy (including multiple parents),
-global collection viewport/render hide flags, object viewport hide flags, and
-the object's `hide_select` selection lock are retained. The Collections panel
-controls viewport visibility separately from the Layers panel. Per-view-layer
-exclusions/visibility remain unsupported. The importer reports imported, skipped, baked,
+global collection viewport/render hide flags, per-view-layer collection-instance
+paths and exclusions/visibility, object viewport hide flags, per-view-layer
+object hide state, and the object's `hide_select` selection lock are retained.
+The first imported view layer controls viewport visibility, with visibility
+resolved across all collection paths for each direct object membership. The
+Collections panel controls global collection visibility separately from the
+Layers panel. An active view-layer selector remains pending. The importer reports imported, skipped, baked,
 and unsupported item counts with per-item reasons.
 
 ## Implementation phases
 
 1. **Schema and validation — implemented:** `PolygonMesh3D`, validation,
-   document version 11, shared material records and slot references, affine
+   document version 12, shared material records and slot references, affine
    object transforms, active UV/color selectors, Blender version/import mode
-   metadata, collections, and selection locks are serialized. Versions 1–10
+   metadata, collections, view-layer visibility, and selection locks are serialized. Versions 1–11
    remain readable.
 2. **Blender extraction — implemented:** File > Import > Blender Scene invokes
    a Blender 5.2.2 version-checked bridge. Original/evaluated mesh extraction,
@@ -181,8 +188,8 @@ and unsupported item counts with per-item reasons.
    collection viewport hide flags affect viewport visibility; `hide_select`
    prevents imported objects from being selected or edited.
    Collection membership and hierarchy are shown in a Collections panel,
-   separate from CAD layers. Blender per-view-layer exclusions/visibility
-   remain unsupported.
+   separate from CAD layers. The first imported Blender view layer drives
+   path-aware visibility; switching the active view layer remains pending.
 5. **Round-trip and parity — pending review:** native JSON preserves the mesh
    data, but save/reopen and Blender 5.2.2 visual parity have not been checked
    as a comparison matrix. Blender mesh export from native classiCAD documents

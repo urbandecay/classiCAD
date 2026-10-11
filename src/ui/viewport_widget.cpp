@@ -650,6 +650,119 @@ QVector<QPair<int, int>> selectedSurfaceControlNetEdgeVertexIndices(
     return endpoints;
 }
 
+// Boundary components keep the existing CV index identities for history and
+// connected edits, but their geometry is the exact curve, never its polygon.
+struct SurfaceBoundaryComponent {
+    NurbsSurfaceBoundaryCurve boundary;
+    QVector<int> vertices;
+    QVector<int> edges;
+    QVector<Point3D> samples;
+    int firstVertex = -1;
+    int lastVertex = -1;
+    int edge = -1;
+};
+
+QVector<SurfaceBoundaryComponent> surfaceBoundaryComponents(const Shape &shape)
+{
+    QVector<SurfaceBoundaryComponent> result;
+    const auto cage = selectedSurfaceControlNet(shape);
+    const auto edgeVertices = selectedSurfaceControlNetEdgeVertexIndices(shape);
+    const auto findVertex = [&cage](const Point3D &point) {
+        for (int i = 0; i < cage.precisePointVertices.size(); ++i) {
+            const auto &p = cage.precisePointVertices[i];
+            if (std::hypot(std::hypot(p.x - point.x, p.y - point.y),
+                           p.z - point.z) <= 1.0e-8) return i;
+        }
+        return -1;
+    };
+    for (const auto &face : shapeSurfaceFaces(shape)) {
+        for (const auto &boundary : nurbsSurfaceBoundaryCurves(face)) {
+            SurfaceBoundaryComponent component;
+            component.boundary = boundary;
+            component.firstVertex = findVertex(boundary.startPoint);
+            component.lastVertex = findVertex(boundary.endPoint);
+            for (int cv : boundary.sourceControlPointIndices) {
+                const int vertex = findVertex(face.controlPoints[cv]);
+                if (vertex >= 0) component.vertices.append(vertex);
+            }
+            for (int i = 0; i < edgeVertices.size(); ++i) {
+                if (component.vertices.contains(edgeVertices[i].first) &&
+                    component.vertices.contains(edgeVertices[i].second)) {
+                    component.edges.append(i);
+                }
+            }
+            if (component.edges.isEmpty()) continue;
+            component.edge = component.edges.first();
+            qreal start = 0.0, end = 0.0;
+            if (!nurbsParameterDomain(boundary.curve, &start, &end)) continue;
+            for (int i = 0; i <= 96; ++i) {
+                Point3D point;
+                if (evaluateNurbsPoint3D(boundary.curve,
+                                        start + (end - start) * i / 96.0,
+                                        &point)) component.samples.append(point);
+            }
+            const bool duplicate = std::any_of(result.cbegin(), result.cend(),
+                [&component](const SurfaceBoundaryComponent &existing) {
+                    if (existing.samples.size() != component.samples.size()) return false;
+                    for (bool reversed : {false, true}) {
+                        bool matches = true;
+                        for (int i = 0; matches && i < component.samples.size(); ++i) {
+                            const auto &a = existing.samples[i];
+                            const auto &b = component.samples[reversed
+                                ? component.samples.size() - 1 - i : i];
+                            matches = std::hypot(std::hypot(a.x - b.x, a.y - b.y),
+                                                 a.z - b.z) <= 1.0e-8;
+                        }
+                        if (matches) return true;
+                    }
+                    return false;
+                });
+            if (!duplicate) result.append(std::move(component));
+        }
+    }
+    return result;
+}
+
+bool boundaryEdgeSelected(const SurfaceBoundaryComponent &boundary,
+                          const QSet<int> &selection)
+{
+    return std::any_of(boundary.edges.cbegin(), boundary.edges.cend(),
+                       [&selection](int edge) { return selection.contains(edge); });
+}
+
+ViewportDepthGeometry surfaceBoundaryPickGeometry(
+    const Shape &shape, QSet<int> *endpoints, QVector<int> *segmentEdges)
+{
+    auto geometry = selectedSurfaceControlNet(shape);
+    geometry.lineVertices.clear();
+    geometry.preciseLineVertices.clear();
+    for (const auto &boundary : surfaceBoundaryComponents(shape)) {
+        endpoints->insert(boundary.firstVertex);
+        endpoints->insert(boundary.lastVertex);
+        for (int i = 1; i < boundary.samples.size(); ++i) {
+            for (const Point3D &point : {boundary.samples[i - 1], boundary.samples[i]}) {
+                geometry.preciseLineVertices.append(point);
+                geometry.lineVertices.append(QVector3D(point.x, point.y, point.z));
+            }
+            segmentEdges->append(boundary.edge);
+        }
+    }
+    return geometry;
+}
+
+QVector<QPair<int, int>> surfaceComponentEdgeVertices(const Shape &shape,
+                                                    bool controlPoints)
+{
+    auto edges = selectedSurfaceControlNetEdgeVertexIndices(shape);
+    if (controlPoints) return edges;
+    std::fill(edges.begin(), edges.end(), QPair<int, int>{-1, -1});
+    for (const auto &boundary : surfaceBoundaryComponents(shape)) {
+        for (int edge : boundary.edges)
+            edges[edge] = {boundary.firstVertex, boundary.lastVertex};
+    }
+    return edges;
+}
+
 } // namespace
 
 struct TransientPreviewStroke {
@@ -1498,6 +1611,40 @@ public:
 
     void setControlPointsVisible(bool visible)
     {
+        if (visible != controlPointsVisible_) {
+            for (int mode = 0; mode < 2; ++mode) {
+                auto &selections = componentSelections_[mode];
+                for (auto it = selections.begin(); it != selections.end(); ++it) {
+                    const Shape *shape = document_.shape(ObjectId::fromValue(it.key()));
+                    if (shape == nullptr || (shape->geometryType != GeometryType::NurbsSurface &&
+                                            shape->geometryType != GeometryType::NurbsSolid)) continue;
+                    const auto boundaries = surfaceBoundaryComponents(*shape);
+                    QSet<int> mapped;
+                    if (visible && mode == static_cast<int>(ComponentSelectionMode::Vertex))
+                        mapped = it.value();
+                    for (const auto &boundary : boundaries) {
+                        if (mode == static_cast<int>(ComponentSelectionMode::Vertex)) {
+                            if (!visible) {
+                                if (it.value().contains(boundary.firstVertex)) mapped.insert(boundary.firstVertex);
+                                if (it.value().contains(boundary.lastVertex)) mapped.insert(boundary.lastVertex);
+                            }
+                        } else if (boundaryEdgeSelected(boundary, it.value())) {
+                            if (visible) for (int edge : boundary.edges) mapped.insert(edge);
+                            else mapped.insert(boundary.edge);
+                        }
+                    }
+                    if (componentSelectionObject_.value() == it.key()) {
+                        int &active = activeComponentIndices_[mode];
+                        if (mode == static_cast<int>(ComponentSelectionMode::Edge) && !visible) {
+                            for (const auto &boundary : boundaries)
+                                if (boundary.edges.contains(active)) { active = boundary.edge; break; }
+                        }
+                        if (!mapped.contains(active)) active = mapped.isEmpty() ? -1 : *mapped.cbegin();
+                    }
+                    it.value() = std::move(mapped);
+                }
+            }
+        }
         controlPointsVisible_ = visible;
         if (!visible) {
             clearSelectionDragState();
@@ -2428,6 +2575,21 @@ public:
                             for (int controlPoint = 0; controlPoint < 4;
                                  ++controlPoint) {
                                 consumedControlPoints.insert(controlPoint);
+                            }
+                        }
+
+                        if (!controlPointsVisible_ && !allFaceControlPointsSelected) {
+                            for (const auto &boundary : surfaceBoundaryComponents(*shape)) {
+                                if (!selectedIt.value().contains(boundary.firstVertex) ||
+                                    !selectedIt.value().contains(boundary.lastVertex)) continue;
+                                PointExtrudeTool::CurveSource source;
+                                source.objectId = objectId;
+                                source.curve = boundary.boundary.curve;
+                                source.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+                                source.workPlaneFrame.origin = offset;
+                                source.sourceControlPointIndices = boundary.vertices;
+                                curveSources.append(std::move(source));
+                                for (int vertex : boundary.vertices) consumedControlPoints.insert(vertex);
                             }
                         }
 
@@ -3969,7 +4131,23 @@ public:
                         if (vertex >= 0 && vertex < cage.pointVertices.size())
                             selectedWorldVertices.append(cage.pointVertices[vertex] + placement);
                     }
+                    if (!controlPointsVisible_) {
+                        for (const auto &boundary : surfaceBoundaryComponents(*shape)) {
+                            if (!components.contains(boundary.firstVertex) ||
+                                !components.contains(boundary.lastVertex)) continue;
+                            for (int vertex : boundary.vertices)
+                                selectedWorldVertices.append(cage.pointVertices[vertex] + placement);
+                        }
+                    }
                 } else {
+                    if (!controlPointsVisible_) {
+                        for (const auto &boundary : surfaceBoundaryComponents(*shape)) {
+                            if (!boundaryEdgeSelected(boundary, components)) continue;
+                            for (int vertex : boundary.vertices)
+                                selectedWorldVertices.append(cage.pointVertices[vertex] + placement);
+                        }
+                        continue;
+                    }
                     // An edge grab moves both ends together. Expanding the edge
                     // to its world-space endpoints lets the same connected-CV
                     // lookup used for vertex grabs deform every adjoining face.
@@ -4734,6 +4912,47 @@ public:
                     }
                 } else {
                     appendSnapshot(*source, shape);
+                }
+                continue;
+            }
+
+            if (!controlPointsVisible_ &&
+                componentSelectionMode_ != ComponentSelectionMode::Face) {
+                const auto boundaries = surfaceBoundaryComponents(shape);
+                const bool wholeSurface = !boundaries.isEmpty() &&
+                    std::all_of(boundaries.cbegin(), boundaries.cend(),
+                        [&](const SurfaceBoundaryComponent &boundary) {
+                            return componentSelectionMode_ == ComponentSelectionMode::Edge
+                                ? boundaryEdgeSelected(boundary, selectedIt.value())
+                                : selectedIt.value().contains(boundary.firstVertex) &&
+                                  selectedIt.value().contains(boundary.lastVertex);
+                        });
+                if (wholeSurface) {
+                    appendSnapshot(*source, shape);
+                    continue;
+                }
+                QSet<int> copiedEndpoints;
+                QSet<int> boundaryEndpoints;
+                for (const auto &boundary : boundaries) {
+                    boundaryEndpoints.insert(boundary.firstVertex);
+                    boundaryEndpoints.insert(boundary.lastVertex);
+                    const bool selected = componentSelectionMode_ == ComponentSelectionMode::Edge
+                        ? boundaryEdgeSelected(boundary, selectedIt.value())
+                        : selectedIt.value().contains(boundary.firstVertex) &&
+                          selectedIt.value().contains(boundary.lastVertex);
+                    if (!selected) continue;
+                    appendCurveObject(*source, boundary.boundary.curve,
+                                      makeWorkPlaneFrame(WorkPlane::XY), shape);
+                    copiedEndpoints.insert(boundary.firstVertex);
+                    copiedEndpoints.insert(boundary.lastVertex);
+                }
+                if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                    const auto cage = selectedSurfaceControlNet(shape);
+                    for (int vertex : selectedIt.value()) {
+                        if (vertex >= 0 && vertex < cage.precisePointVertices.size() &&
+                            boundaryEndpoints.contains(vertex) && !copiedEndpoints.contains(vertex))
+                            appendPoint(*source, cage.precisePointVertices[vertex]);
+                    }
                 }
                 continue;
             }
@@ -6887,7 +7106,7 @@ protected:
                 }
 
                 const QVector<QPair<int, int>> edgeVertices =
-                    selectedSurfaceControlNetEdgeVertexIndices(shape);
+                    surfaceComponentEdgeVertices(shape, controlPointsVisible_);
                 QSet<int> &vertices = selectedVertices[objectIt.key()];
                 const int activeEdge = activeComponentIndices_[
                     static_cast<int>(ComponentSelectionMode::Edge)];
@@ -6936,7 +7155,7 @@ protected:
                 }
 
                 const QVector<QPair<int, int>> edgeVertices =
-                    selectedSurfaceControlNetEdgeVertexIndices(shape);
+                    surfaceComponentEdgeVertices(shape, controlPointsVisible_);
                 QSet<int> &edges = selectedEdges[objectIt.key()];
                 for (int edgeIndex = 0; edgeIndex < edgeVertices.size(); ++edgeIndex) {
                     const QPair<int, int> endpoints = edgeVertices[edgeIndex];
@@ -7017,6 +7236,34 @@ protected:
                     faceShape.nurbsSurface = faces[faceIndex];
                     const ViewportDepthGeometry faceCage =
                         selectedSurfaceControlNet(faceShape);
+                    if (!controlPointsVisible_) {
+                        const auto boundaries = surfaceBoundaryComponents(faceShape);
+                        bool fullySelected = !boundaries.isEmpty();
+                        for (const auto &boundary : boundaries) {
+                            const int firstVertex = findParentVertex(boundary.boundary.startPoint);
+                            const int lastVertex = findParentVertex(boundary.boundary.endPoint);
+                            const int edgeOffset = boundary.edge * 2;
+                            const int edge = findParentEdge(faceCage.preciseLineVertices[edgeOffset],
+                                                           faceCage.preciseLineVertices[edgeOffset + 1]);
+                            if (sourceMode == ComponentSelectionMode::Face) {
+                                if (!objectIt.value().contains(faceIndex)) continue;
+                                if (mode == ComponentSelectionMode::Vertex) {
+                                    if (firstVertex >= 0) target.insert(firstVertex);
+                                    if (lastVertex >= 0) target.insert(lastVertex);
+                                } else if (edge >= 0) target.insert(edge);
+                            } else {
+                                fullySelected = fullySelected &&
+                                    (sourceMode == ComponentSelectionMode::Vertex
+                                        ? firstVertex >= 0 && lastVertex >= 0 &&
+                                          objectIt.value().contains(firstVertex) &&
+                                          objectIt.value().contains(lastVertex)
+                                        : edge >= 0 && objectIt.value().contains(edge));
+                            }
+                        }
+                        if (sourceMode != ComponentSelectionMode::Face && fullySelected)
+                            target.insert(faceIndex);
+                        continue;
+                    }
                     if (sourceMode == ComponentSelectionMode::Face) {
                         if (!objectIt.value().contains(faceIndex)) {
                             continue;
@@ -7860,6 +8107,9 @@ protected:
                         gpuStrokes.append(std::move(vertexCage));
                     }
 
+                    // Component highlights remain visible independently from
+                    // the optional base control cage. This preserves the
+                    // faded links for explicitly selected surface vertices.
                     if (selected && !objectComponentSelection.isEmpty()) {
                         const auto appendComponentStroke = [&](ViewportDepthGeometry geometry,
                                                                const QColor &color,
@@ -7904,21 +8154,56 @@ protected:
                                     std::move(geometry));
                             gpuStrokes.append(std::move(stroke));
                         };
-                        if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
-                            const QColor selectedVertexColor(QStringLiteral("#ff7a00"));
-                            QMap<QRgb, ViewportDepthGeometry> fadedPoints;
-                            for (int component : objectComponentSelection) {
-                                if (component < 0 || component >= cage->pointVertices.size()) continue;
-                                const QVector3D &point = cage->pointVertices[component];
-                                const QColor baseColor = component == objectActiveComponentIndex
-                                                             ? QColor(Qt::white)
-                                                             : selectedVertexColor;
-                                fadedPoints[baseColor.rgba()].pointVertices.append(point);
+                        if (!controlPointsVisible_ &&
+                            componentSelectionMode_ != ComponentSelectionMode::Face) {
+                            for (const auto &boundary : surfaceBoundaryComponents(visibleShape)) {
+                                const bool firstSelected = objectVertexSelection.contains(boundary.firstVertex);
+                                const bool lastSelected = objectVertexSelection.contains(boundary.lastVertex);
+                                const bool edgeMode = componentSelectionMode_ == ComponentSelectionMode::Edge;
+                                if (edgeMode ? !boundaryEdgeSelected(boundary, objectComponentSelection)
+                                             : !firstSelected && !lastSelected) continue;
+                                ViewportDepthGeometry geometry;
+                                QVector<QVector4D> colors;
+                                for (int i = 1; i < boundary.samples.size(); ++i) {
+                                    for (int sample : {i - 1, i}) {
+                                        const auto &point = boundary.samples[sample];
+                                        geometry.preciseLineVertices.append(point);
+                                        geometry.lineVertices.append(QVector3D(point.x, point.y, point.z));
+                                        const float t = float(sample) / float(boundary.samples.size() - 1);
+                                        const float influence = (firstSelected ? 1.0f - t : 0.0f) +
+                                                                (lastSelected ? t : 0.0f);
+                                        colors.append(QVector4D(influence, influence, influence, 1.0f));
+                                    }
+                                }
+                                appendComponentStroke(std::move(geometry), viewportSelectionColor(),
+                                                      1.0f, 0.0f,
+                                                      edgeMode ? QVector<QVector4D>{} : std::move(colors));
                             }
-                            for (auto it = fadedPoints.begin(); it != fadedPoints.end(); ++it) {
-                                appendComponentStroke(std::move(it.value()),
-                                                      QColor::fromRgba(it.key()),
-                                                      1.0f, 4.0f, {});
+                        } else if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                            const QColor selectedVertexColor(QStringLiteral("#ff7a00"));
+                            if (controlPointsVisible_) {
+                                QMap<QRgb, ViewportDepthGeometry> fadedPoints;
+                                for (int component : objectComponentSelection) {
+                                    if (component < 0 ||
+                                        component >= cage->pointVertices.size()) {
+                                        continue;
+                                    }
+                                    const QVector3D &point =
+                                        cage->pointVertices[component];
+                                    const QColor baseColor =
+                                        component == objectActiveComponentIndex
+                                            ? QColor(Qt::white)
+                                            : selectedVertexColor;
+                                    fadedPoints[baseColor.rgba()]
+                                        .pointVertices.append(point);
+                                }
+                                for (auto it = fadedPoints.begin();
+                                     it != fadedPoints.end(); ++it) {
+                                    appendComponentStroke(
+                                        std::move(it.value()),
+                                        QColor::fromRgba(it.key()),
+                                        1.0f, 4.0f, {});
+                                }
                             }
                             if (visibleShape.geometryType ==
                                     GeometryType::NurbsSurface ||
@@ -7934,12 +8219,15 @@ protected:
                                     const QPair<int, int> endpoints =
                                         edgeEndpoints[edge];
                                     const int first = edge * 2;
+                                    const bool firstSelected =
+                                        objectVertexSelection.contains(
+                                            endpoints.first);
+                                    const bool secondSelected =
+                                        objectVertexSelection.contains(
+                                            endpoints.second);
                                     if (endpoints.first < 0 ||
                                         endpoints.second < 0 ||
-                                        (!objectVertexSelection.contains(
-                                             endpoints.first) &&
-                                         !objectVertexSelection.contains(
-                                             endpoints.second)) ||
+                                        (!firstSelected && !secondSelected) ||
                                         first + 1 >= cage->lineVertices.size() ||
                                         first + 1 >=
                                             cage->preciseLineVertices.size()) {
@@ -7960,16 +8248,14 @@ protected:
                                     connectedEdgeColors
                                         << QVector4D(firstInfluence,
                                                      firstInfluence,
-                                                     firstInfluence, 1.0f)
+                                                     firstInfluence,
+                                                     1.0f)
                                         << QVector4D(secondInfluence,
                                                      secondInfluence,
-                                                     secondInfluence, 1.0f);
+                                                     secondInfluence,
+                                                     1.0f);
                                 }
                                 if (!connectedEdges.lineVertices.isEmpty()) {
-                                    // One selected endpoint fades along each
-                                    // connected edge; selecting both makes it
-                                    // solid. The base control-net stroke can be
-                                    // hidden when CP Points is toggled off.
                                     appendComponentStroke(
                                         std::move(connectedEdges),
                                         viewportSelectionColor(),
@@ -13390,8 +13676,12 @@ private:
                         continue;
                     }
 
-                    const ViewportDepthGeometry cage =
-                        selectedSurfaceControlNet(candidateShape);
+                    QSet<int> boundaryEndpoints;
+                    QVector<int> boundarySegmentEdges;
+                    const ViewportDepthGeometry cage = controlPointsVisible_
+                        ? selectedSurfaceControlNet(candidateShape)
+                        : surfaceBoundaryPickGeometry(candidateShape, &boundaryEndpoints,
+                                                      &boundarySegmentEdges);
                     qreal cageScale = 1.0;
                     if (!cage.pointVertices.isEmpty()) {
                         const QVector3D origin = cage.pointVertices.first();
@@ -13653,6 +13943,7 @@ private:
                             selectionBox.adjusted(-2.0, -2.0, 2.0, 2.0);
                         for (int vertex = 0;
                              vertex < cage.pointVertices.size(); ++vertex) {
+                            if (!controlPointsVisible_ && !boundaryEndpoints.contains(vertex)) continue;
                             const QVector3D &point = cage.pointVertices[vertex];
                             const Point3D worldPoint{
                                 point.x() + offset.x, point.y() + offset.y,
@@ -13698,6 +13989,7 @@ private:
                                 }
                                 return false;
                             };
+                        QSet<int> outsideBoundaryEdges;
                         for (int edge = 0;
                              edge * 2 + 1 < cage.preciseLineVertices.size();
                              ++edge) {
@@ -13722,7 +14014,11 @@ private:
                                                            ? intersectsBox
                                                            : selectionBox.contains(screenA) &&
                                                                  selectionBox.contains(screenB);
-                            if (!selectedByBox) continue;
+                            if (!selectedByBox) {
+                                if (!controlPointsVisible_ && !crossingSelection)
+                                    outsideBoundaryEdges.insert(boundarySegmentEdges[edge]);
+                                continue;
+                            }
                             bool visible = viewportShadingSettings_.xrayEnabled();
                             if (!visible) {
                                 // Check interior edge points against their
@@ -13743,8 +14039,10 @@ private:
                                     }
                                 }
                             }
-                            if (visible) candidateComponents.insert(edge);
+                            if (visible) candidateComponents.insert(controlPointsVisible_
+                                ? edge : boundarySegmentEdges[edge]);
                         }
+                        for (int edge : outsideBoundaryEdges) candidateComponents.remove(edge);
                     }
                     if (!candidateComponents.isEmpty()) {
                         if (!boxedComponentsByObject.contains(candidateId.value())) {
@@ -16887,8 +17185,11 @@ private:
             const Point3D offset = object != nullptr
                                        ? object->placementTranslation
                                        : Point3D{};
+            QSet<int> boundaryEndpoints;
+            QVector<int> boundarySegmentEdges;
             const ViewportDepthGeometry cage =
-                selectedSurfaceControlNet(shape);
+                controlPointsVisible_ ? selectedSurfaceControlNet(shape)
+                    : surfaceBoundaryPickGeometry(shape, &boundaryEndpoints, &boundarySegmentEdges);
             qreal cageScale = 1.0;
             if (!cage.pointVertices.isEmpty()) {
                 const QVector3D origin = cage.pointVertices.first();
@@ -16900,6 +17201,7 @@ private:
 
             if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
                 for (int vertex = 0; vertex < cage.pointVertices.size(); ++vertex) {
+                    if (!controlPointsVisible_ && !boundaryEndpoints.contains(vertex)) continue;
                     const QVector3D &sourcePoint = cage.pointVertices[vertex];
                     const Point3D worldPoint{sourcePoint.x() + offset.x,
                                              sourcePoint.y() + offset.y,
@@ -16957,7 +17259,7 @@ private:
                     const QPointF projectedPoint = screenA + direction * fraction;
                     PendingComponent candidate;
                     candidate.shapeIndex = shapeIndex;
-                    candidate.componentIndex = edge;
+                    candidate.componentIndex = controlPointsVisible_ ? edge : boundarySegmentEdges[edge];
                     candidate.edge = true;
                     candidate.first = worldA;
                     candidate.second = worldB;

@@ -9,6 +9,93 @@
 #include <limits>
 
 namespace classiCAD {
+namespace {
+QVector<double> endpointBasis(const QVector<double> &reducedKnots,
+                              int degree, int count, bool atEnd)
+{
+    const QVector<double> knots = expandedNurbsSurfaceKnotVector(reducedKnots);
+    const double parameter = knots[atEnd ? count : degree];
+    int span = count - 1;
+    if (!atEnd) {
+        span = degree;
+        while (span + 1 < count && knots[span + 1] <= parameter) ++span;
+    }
+    QVector<double> local(degree + 1, 0.0), left(degree + 1), right(degree + 1);
+    local[0] = 1.0;
+    for (int order = 1; order <= degree; ++order) {
+        left[order] = parameter - knots[span + 1 - order];
+        right[order] = knots[span + order] - parameter;
+        double saved = 0.0;
+        for (int index = 0; index < order; ++index) {
+            const double denominator = right[index + 1] + left[order - index];
+            const double term = denominator > 0.0 ? local[index] / denominator : 0.0;
+            local[index] = saved + right[index + 1] * term;
+            saved = left[order - index] * term;
+        }
+        local[order] = saved;
+    }
+    QVector<double> result(count, 0.0);
+    for (int index = 0; index <= degree; ++index)
+        result[span - degree + index] = local[index];
+    return result;
+}
+} // namespace
+
+QVector<NurbsSurfaceBoundaryCurve> nurbsSurfaceBoundaryCurves(
+    const NurbsSurface3D &surface)
+{
+    QVector<NurbsSurfaceBoundaryCurve> boundaries;
+    if (!validateNurbsSurface(surface) || !surface.trimLoops.isEmpty()) return boundaries;
+    for (int side = 0; side < 4; ++side) {
+        const bool varyingU = side == 0 || side == 2;
+        const bool fixedEnd = side == 1 || side == 2;
+        const int varyingCount = varyingU ? surface.controlVertexCountU : surface.controlVertexCountV;
+        const int fixedCount = varyingU ? surface.controlVertexCountV : surface.controlVertexCountU;
+        const auto basis = endpointBasis(varyingU ? surface.knotsV : surface.knotsU,
+            varyingU ? surface.degreeV : surface.degreeU, fixedCount, fixedEnd);
+        NurbsSurfaceBoundaryCurve boundary;
+        auto &curve = boundary.curve;
+        curve.dimension = 3;
+        curve.degree = varyingU ? surface.degreeU : surface.degreeV;
+        curve.order = curve.degree + 1;
+        curve.rational = surface.rational;
+        curve.knots = varyingU ? surface.knotsU : surface.knotsV;
+        for (int varying = 0; varying < varyingCount; ++varying) {
+            Point3D numerator{};
+            double denominator = 0.0;
+            int onlySourceIndex = -1;
+            int contributingCount = 0;
+            for (int fixed = 0; fixed < fixedCount; ++fixed) {
+                if (basis[fixed] == 0.0) continue;
+                const int index = varyingU ? varying * fixedCount + fixed
+                                           : fixed * varyingCount + varying;
+                const double weight = basis[fixed] * (surface.rational ? surface.weights[index] : 1.0);
+                const auto &point = surface.controlPoints[index];
+                numerator.x += weight * point.x;
+                numerator.y += weight * point.y;
+                numerator.z += weight * point.z;
+                denominator += weight;
+                boundary.sourceControlPointIndices.append(index);
+                onlySourceIndex = index;
+                ++contributingCount;
+            }
+            if (!(denominator > 0.0) || !std::isfinite(denominator)) return {};
+            const Point3D point = contributingCount == 1
+                ? surface.controlPoints[onlySourceIndex]
+                : Point3D{numerator.x / denominator, numerator.y / denominator, numerator.z / denominator};
+            curve.controlPoints.append(QPointF(point.x, point.y));
+            curve.normalCoordinates.append(point.z);
+            curve.weights.append(denominator);
+        }
+        qreal start = 0.0, end = 0.0;
+        if (!validateNurbsCurve(curve) || !nurbsParameterDomain(curve, &start, &end) ||
+            !evaluateNurbsPoint3D(curve, start, &boundary.startPoint) ||
+            !evaluateNurbsPoint3D(curve, end, &boundary.endPoint)) return {};
+        boundaries.append(std::move(boundary));
+    }
+    return boundaries;
+}
+
 QVector<double> expandedNurbsSurfaceKnotVector(const QVector<double> &knots)
 {
     QVector<double> expanded;

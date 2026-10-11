@@ -410,6 +410,9 @@ if (CLASSICAD_BUILD_TESTS)
         classicad_viewport_support_objects)
     add_test(NAME solid_extrusion_contracts COMMAND classicad_solid_extrusion_contracts_test)
     set_tests_properties(solid_extrusion_contracts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_test(NAME surface_boundary_geometry COMMAND classicad_solid_extrusion_contracts_test)
+    set_tests_properties(surface_boundary_geometry PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_SURFACE_BOUNDARY_GEOMETRY_ONLY=1")
 
     add_executable(classicad_viewport_render_contracts_test
         tests/viewport_render_contracts.cpp
@@ -474,6 +477,9 @@ if (CLASSICAD_BUILD_TESTS)
         classicad_viewport_widget_objects
     )
     add_test(NAME viewport_interaction COMMAND classicad_viewport_interaction_test)
+    add_test(NAME viewport_surface_boundary COMMAND classicad_viewport_interaction_test)
+    set_tests_properties(viewport_surface_boundary PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_SURFACE_BOUNDARY_ONLY=1")
     set_tests_properties(viewport_interaction PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )

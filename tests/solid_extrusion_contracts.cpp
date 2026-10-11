@@ -127,6 +127,55 @@ int main(int argc, char **argv)
     const QSize size(640,480);
     const auto frame = makeWorkPlaneFrame(WorkPlane::XY);
     const auto circle = makeCircleNurbs({{0,0}, {3,0}});
+    NurbsSurface3D ruled;
+    passed &= check(makeNurbsExtrusionSurface(circle, frame, {1,2,5}, &ruled),
+                    "rational boundary fixture");
+    const auto ruledBoundaries = nurbsSurfaceBoundaryCurves(ruled);
+    passed &= check(ruledBoundaries.size() == 4, "four exact ruled surface boundaries");
+    if (ruledBoundaries.size() == 4) {
+        const auto &top = ruledBoundaries[2];
+        passed &= check(top.curve.degree == circle.degree &&
+                            top.curve.knots == circle.knots &&
+                            top.curve.weights == circle.weights &&
+                            top.curve.controlPoints.size() == circle.controlPoints.size(),
+                        "copied curved boundary preserves NURBS degree knots weights");
+        for (int i = 0; i < circle.controlPoints.size(); ++i) {
+            passed &= check(top.curve.controlPoints[i] == circle.controlPoints[i] + QPointF(1,2) &&
+                                top.curve.normalCoordinates[i] == 5 &&
+                                top.sourceControlPointIndices[i] == i * 2 + 1,
+                            "boundary copies translated rational CV row rather than CV polygon edges");
+        }
+    }
+    NurbsSurface3D nonclamped;
+    nonclamped.degreeU = nonclamped.degreeV = 2;
+    nonclamped.orderU = nonclamped.orderV = 3;
+    nonclamped.controlVertexCountU = nonclamped.controlVertexCountV = 3;
+    nonclamped.rational = true;
+    nonclamped.knotsU = nonclamped.knotsV = {0,1,2,3};
+    for (int u = 0; u < 3; ++u) {
+        for (int v = 0; v < 3; ++v) {
+            nonclamped.controlPoints.append({double(u), double(v), double(u*v)});
+            nonclamped.weights.append(1.0 + 0.2*u + 0.1*v);
+        }
+    }
+    const auto nonclampedBoundaries = nurbsSurfaceBoundaryCurves(nonclamped);
+    passed &= check(nonclampedBoundaries.size() == 4, "nonclamped exact boundary extraction");
+    if (nonclampedBoundaries.size() == 4) {
+        for (int side = 0; side < 4; ++side) {
+            for (int sample = 0; sample <= 8; ++sample) {
+                const double parameter = 1.0 + sample / 8.0;
+                const double u = side == 0 || side == 2 ? parameter : side == 1 ? 2.0 : 1.0;
+                const double v = side == 1 || side == 3 ? parameter : side == 2 ? 2.0 : 1.0;
+                Point3D expected, actual;
+                passed &= check(evaluateNurbsSurfacePoint(nonclamped, u, v, &expected) &&
+                                    evaluateNurbsPoint3D(nonclampedBoundaries[side].curve, parameter, &actual) &&
+                                    near(expected, actual),
+                                "nonclamped boundary contracts homogeneous basis exactly");
+            }
+        }
+    }
+    if (qEnvironmentVariableIsSet("CLASSICAD_SURFACE_BOUNDARY_GEOMETRY_ONLY"))
+        return passed ? 0 : 1;
     NurbsSurface3D face;
     passed &= check(makeNurbsPlanarFillSurface(circle, frame, &face), "circle fill");
     Shape solid;

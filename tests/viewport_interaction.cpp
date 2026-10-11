@@ -7,6 +7,7 @@
 
 #include "core/document/document.h"
 #include "core/geometry/curve_construction.h"
+#include "core/geometry/arc_curve_factory.h"
 #include "core/geometry/curve_evaluator.h"
 #include "core/geometry/shape_mapping.h"
 #include "core/geometry/nurbs_surface_factory.h"
@@ -1092,6 +1093,300 @@ bool verifyLineToolSquareDuplicate(QApplication &application)
     return passed;
 }
 
+bool verifySurfaceBoundarySplineDuplicate(QApplication &application)
+{
+    bool passed = true;
+    const QSize viewportSize(640, 480);
+    CircularArc2D circularArc;
+    passed &= check(makeCircularArcFromCenterSweep(
+                        {0, -12}, 12 * std::sqrt(2.0),
+                        3.0 * std::acos(-1.0) / 4.0,
+                        -std::acos(-1.0) / 2.0, &circularArc),
+                    "boundary fixture must be an exact circular arc");
+    const Shape::NurbsCurve3D curve = circularArc.curve;
+    for (int testCase = 0; testCase < 4; ++testCase) {
+        ApplicationSession session;
+        Shape sheet;
+        sheet.geometryType = GeometryType::NurbsSurface;
+        sheet.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+        passed &= check(makeNurbsExtrusionSurface(
+                            curve, sheet.workPlaneFrame, {0, -18, 0},
+                            &sheet.nurbsSurface),
+                        "boundary duplicate fixture must be an exact rational ruled surface");
+        const ObjectId sourceId = session.document().append(sheet);
+        std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+        viewport->resize(viewportSize);
+        viewport->show();
+        application.processEvents();
+        viewport->setViewPreset(ViewportViewPreset::Top);
+        passed &= check(waitForViewPreset(viewport.get(), ViewportViewPreset::Top),
+                        "boundary duplicate camera must settle");
+        viewport->setTool(ToolId::Select);
+        viewport->setControlPointsVisible(testCase == 1);
+        viewport->setOsnapEnabled(false);
+        viewport->setOrthoEnabled(false);
+        viewport->setComponentSelectionMode(testCase >= 2 ? 0 : 1);
+        ViewportTransform projection;
+        projection.setCameraPreferences(viewport->cameraPreferences());
+        projection.setViewPreset(ViewportViewPreset::Top);
+        Point3D target{-12, 0, 0};
+        if (testCase == 0) {
+            QPointF evaluated;
+            passed &= check(evaluateNurbsPoint(curve, 0.5, &evaluated),
+                            "rational boundary midpoint must evaluate");
+            target = {evaluated.x(), evaluated.y(), 0};
+        } else if (testCase == 1) {
+            target = {-6, 6, 0};
+        }
+        QPointF anchor;
+        projection.worldPointToScreen(target, viewportSize, &anchor);
+        const auto click = [&](const QPointF &position,
+                               Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            sendMouse(viewport.get(), QEvent::MouseButtonPress, position,
+                      Qt::LeftButton, Qt::LeftButton, modifiers);
+            sendMouse(viewport.get(), QEvent::MouseButtonRelease, position,
+                      Qt::LeftButton, Qt::NoButton, modifiers);
+            application.processEvents();
+        };
+        click(anchor);
+        if (testCase == 3) {
+            projection.worldPointToScreen({12, 0, 0}, viewportSize, &anchor);
+            click(anchor, Qt::ShiftModifier);
+        }
+        if (testCase == 0 || testCase == 3) {
+            QPointF cageMiddle;
+            projection.worldPointToScreen({-6, 6, 0}, viewportSize, &cageMiddle);
+            const QImage selected = captureViewport(viewport.get());
+            const QImage cageRegion = selected.copy(QRect(
+                cageMiddle.toPoint() - QPoint(3, 3), QSize(7, 7)));
+            int orangeCount = 0;
+            for (int y = 0; y < cageRegion.height(); ++y) {
+                for (int x = 0; x < cageRegion.width(); ++x) {
+                    const QColor color = cageRegion.pixelColor(x, y);
+                    orangeCount += color.red() > 95 && color.green() > 45 &&
+                                   color.green() < color.red() &&
+                                   color.blue() < color.green();
+                }
+            }
+            passed &= check(orangeCount == 0,
+                            "Control Points off selection must not draw the detached CV cage");
+        }
+        QCursor::setPos(viewport->mapToGlobal(anchor.toPoint()));
+        QKeyEvent duplicateKey(QEvent::KeyPress, Qt::Key_D, Qt::ShiftModifier);
+        QApplication::sendEvent(viewport.get(), &duplicateKey);
+        application.processEvents();
+        const QPointF destination = anchor + QPointF(48, -32);
+        sendMouse(viewport.get(), QEvent::MouseMove, destination,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        click(destination);
+        const Document &document = session.document();
+        passed &= check(document.size() == 2,
+                        "surface boundary component Shift+D must create exactly one copy");
+        if (document.size() != 2) continue;
+        const Shape &copy = document.objects().last().geometry;
+        const SceneObject *source = document.object(sourceId);
+        bool unchanged = source != nullptr;
+        if (source != nullptr) {
+            const auto &actual = source->geometry.nurbsSurface.controlPoints;
+            unchanged = actual.size() == sheet.nurbsSurface.controlPoints.size();
+            for (int i = 0; unchanged && i < actual.size(); ++i) {
+                const Point3D &expected = sheet.nurbsSurface.controlPoints[i];
+                unchanged = actual[i].x == expected.x && actual[i].y == expected.y &&
+                            actual[i].z == expected.z;
+            }
+        }
+        passed &= check(unchanged,
+                        "boundary component duplication must leave the source control net unchanged");
+        if (testCase == 0 || testCase == 3) {
+            passed &= check(validateNurbsCurve(copy.nurbs) &&
+                                copy.nurbs.degree == curve.degree &&
+                                copy.nurbs.order == curve.order &&
+                                copy.nurbs.knots == curve.knots &&
+                                copy.nurbs.weights == curve.weights &&
+                                copy.nurbs.controlPoints.size() == 3,
+                            "Control Points off must duplicate the exact curved boundary, never its cage");
+        } else if (testCase == 1) {
+            passed &= check(validateNurbsCurve(copy.nurbs) && copy.nurbs.degree == 1 &&
+                                copy.nurbs.controlPoints.size() == 2,
+                            "Control Points on must retain selection of the raw control-net segment");
+        } else {
+            passed &= check(copy.geometryType == GeometryType::Point && copy.points.size() == 1,
+                            "Control Points off must retain selectable boundary endpoints");
+        }
+    }
+    return passed;
+}
+
+bool verifyArcToolExtrudeBoundary(QApplication &application)
+{
+    const QSize size(640, 480);
+    bool passed = true;
+    ApplicationSession session;
+    std::unique_ptr<ViewportWidgetApi> viewport(createViewportWidget(session));
+    viewport->resize(size);
+    viewport->show();
+    application.processEvents();
+    viewport->setViewPreset(ViewportViewPreset::Top);
+    passed &= check(waitForViewPreset(viewport.get(), ViewportViewPreset::Top),
+                    "arc extrusion camera must settle");
+    viewport->setOsnapEnabled(false);
+    viewport->setOrthoEnabled(false);
+    viewport->setControlPointsVisible(false);
+    viewport->setTool(ToolId::Arc);
+    viewport->setArcMode(ArcMode::OnePoint);
+    ViewportTransform projection;
+    projection.setCameraPreferences(viewport->cameraPreferences());
+    projection.setViewPreset(ViewportViewPreset::Top);
+    const auto screen = [&](Point3D point) {
+        QPointF result;
+        projection.worldPointToScreen(point, size, &result);
+        return result;
+    };
+    const auto click = [&](QPointF point) {
+        sendMouse(viewport.get(), QEvent::MouseMove, point,
+                  Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        sendMouse(viewport.get(), QEvent::MouseButtonPress, point,
+                  Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        sendMouse(viewport.get(), QEvent::MouseButtonRelease, point,
+                  Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        application.processEvents();
+    };
+    click(screen({0, 0, 0}));
+    click(screen({6, 0, 0}));
+    click(screen({0, 6, 0}));
+    passed &= check(session.document().size() == 1,
+                    "Arc tool three clicks must create one actual circular arc");
+    if (session.document().size() != 1) return false;
+    const Shape arc = session.document().objects().first().geometry;
+    passed &= check(validateNurbsCurve(arc.nurbs) && arc.nurbs.rational &&
+                        arc.nurbs.degree == 2,
+                    "drawn arc must use exact rational quadratic geometry");
+    viewport->setViewPreset(ViewportViewPreset::Front);
+    passed &= check(waitForViewPreset(viewport.get(), ViewportViewPreset::Front),
+                    "vertical arc extrusion front camera must settle");
+    projection.setViewPreset(ViewportViewPreset::Front);
+    viewport->setTool(ToolId::Select);
+    QKeyEvent selectAll(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+    QApplication::sendEvent(viewport.get(), &selectAll);
+    const auto started = viewport->executeCommand(ViewportCommand::BeginPointExtrude);
+    passed &= check(started.accepted && started.count == 1,
+                    "Extrude tool must accept the drawn arc");
+    QKeyEvent axis(QEvent::KeyPress, Qt::Key_Z, Qt::NoModifier);
+    QApplication::sendEvent(viewport.get(), &axis);
+    const Point3D anchor = shapePointToWorld(arc, arc.nurbs.controlPoints.first());
+    const QPointF destination = screen({anchor.x, anchor.y, anchor.z + 6});
+    click(destination);
+    passed &= check(session.document().size() == 2,
+                    "Extrude tool must commit one ruled surface from the drawn arc");
+    if (session.document().size() != 2) return false;
+    const Shape sheet = session.document().objects().last().geometry;
+    passed &= check(validateNurbsSurface(sheet.nurbsSurface) &&
+                        sheet.nurbsSurface.degreeU == arc.nurbs.degree &&
+                        sheet.nurbsSurface.knotsU == arc.nurbs.knots &&
+                        sheet.nurbsSurface.controlVertexCountV == 2,
+                    "drawn arc extrusion must preserve exact rational curve structure");
+    for (int i = 0; i < arc.nurbs.weights.size(); ++i) {
+        passed &= check(sheet.nurbsSurface.weights[2*i] == arc.nurbs.weights[i] &&
+                            sheet.nurbsSurface.weights[2*i+1] == arc.nurbs.weights[i],
+                        "drawn arc extrusion must preserve both control-row weights");
+    }
+    viewport->setViewPreset(ViewportViewPreset::Isometric);
+    passed &= check(waitForViewPreset(viewport.get(), ViewportViewPreset::Isometric),
+                    "vertical arc boundary oblique camera must settle");
+    projection.setViewPreset(ViewportViewPreset::Isometric);
+    viewport->setTool(ToolId::Select);
+    const qreal first = arc.nurbs.knots[arc.nurbs.degree - 1];
+    const qreal last = arc.nurbs.knots[arc.nurbs.controlPoints.size() - 1];
+    QPointF middle;
+    passed &= check(evaluateNurbsPoint(arc.nurbs, (first + last) * 0.5, &middle),
+                    "drawn arc midpoint must evaluate");
+    Point3D edgeMiddle = shapePointToWorld(arc, middle);
+    const Point3D sweep{
+        sheet.nurbsSurface.controlPoints[1].x - sheet.nurbsSurface.controlPoints[0].x,
+        sheet.nurbsSurface.controlPoints[1].y - sheet.nurbsSurface.controlPoints[0].y,
+        sheet.nurbsSurface.controlPoints[1].z - sheet.nurbsSurface.controlPoints[0].z};
+    passed &= check(std::abs(sweep.x) < 1.0e-8 && std::abs(sweep.y) < 1.0e-8 &&
+                        sweep.z > 1.0,
+                    "actual arc extrusion must create a vertical wall");
+    viewport->setComponentSelectionMode(0);
+    const Point3D topEndpoint = sheet.nurbsSurface.controlPoints.last();
+    click(screen(topEndpoint));
+    const Point3D firstCV = shapePointToWorld(arc, arc.nurbs.controlPoints.last());
+    const Point3D secondCV = shapePointToWorld(arc, arc.nurbs.controlPoints[arc.nurbs.controlPoints.size()-2]);
+    const QPointF cageHit = screen({(firstCV.x + secondCV.x) * 0.5 + sweep.x,
+                                   (firstCV.y + secondCV.y) * 0.5 + sweep.y,
+                                   (firstCV.z + secondCV.z) * 0.5 + sweep.z});
+    const QImage selectedEndpoint = captureViewport(viewport.get());
+    const bool nativeRendering = QApplication::platformName() == QStringLiteral("xcb");
+    if (nativeRendering)
+        selectedEndpoint.save(QStringLiteral("/tmp/classicad-arc-boundary-endpoint.png"));
+    QPointF fadedCurvePoint;
+    passed &= check(evaluateNurbsPoint(arc.nurbs, first + (last-first)*0.75,
+                                      &fadedCurvePoint),
+                    "selected endpoint incident arc must evaluate");
+    const Point3D fadedWorld = shapePointToWorld(arc, fadedCurvePoint);
+    const QPointF fadedHit = screen({fadedWorld.x+sweep.x, fadedWorld.y+sweep.y,
+                                    fadedWorld.z+sweep.z});
+    const QImage fadedRegion = selectedEndpoint.copy(QRect(
+        fadedHit.toPoint() - QPoint(4, 4), QSize(9, 9)));
+    int fadedCount = 0;
+    for (int y = 0; y < fadedRegion.height(); ++y) {
+        for (int x = 0; x < fadedRegion.width(); ++x) {
+            const QColor color = fadedRegion.pixelColor(x, y);
+            fadedCount += color.red() > color.green()+20 &&
+                          color.green() > color.blue()+10 && color.red() > 50;
+        }
+    }
+    // Qt's offscreen platform has no native OpenGL surface. The desktop run
+    // checks pixels; the headless run still checks the exact component copy.
+    passed &= check(!nativeRendering || fadedCount > 0,
+                    "selected vertical arc endpoint must retain faded highlights on the actual curve");
+    const QImage cageRegion = selectedEndpoint.copy(QRect(
+        cageHit.toPoint() - QPoint(3, 3), QSize(7, 7)));
+    int orangeCount = 0;
+    for (int y = 0; y < cageRegion.height(); ++y) {
+        for (int x = 0; x < cageRegion.width(); ++x) {
+            const QColor color = cageRegion.pixelColor(x, y);
+            orangeCount += color.red() > 95 && color.green() > 45 &&
+                           color.green() < color.red() && color.blue() < color.green();
+        }
+    }
+    passed &= check(orangeCount == 0,
+                    "selecting the vertical arc wall endpoint must never reveal its control cage");
+    viewport->setComponentSelectionMode(1);
+    edgeMiddle.x += sweep.x;
+    edgeMiddle.y += sweep.y;
+    edgeMiddle.z += sweep.z;
+    const QPointF edgeHit = screen(edgeMiddle);
+    passed &= check(QRectF(QPointF(8, 8), QSizeF(size.width()-16, size.height()-16))
+                        .contains(edgeHit),
+                    "actual extruded arc boundary target must be visible inside the viewport");
+    click(edgeHit);
+    if (nativeRendering)
+        captureViewport(viewport.get()).save(QStringLiteral("/tmp/classicad-arc-boundary-edge.png"));
+    QCursor::setPos(viewport->mapToGlobal(edgeHit.toPoint()));
+    QKeyEvent duplicate(QEvent::KeyPress, Qt::Key_D, Qt::ShiftModifier);
+    QApplication::sendEvent(viewport.get(), &duplicate);
+    application.processEvents();
+    click(edgeHit + QPointF(48, -32));
+    passed &= check(session.document().size() == 3,
+                    "Shift+D must duplicate the extruded arc boundary");
+    if (session.document().size() == 3) {
+        const Shape &copy = session.document().objects().last().geometry;
+        passed &= check(validateNurbsCurve(copy.nurbs) &&
+                            copy.nurbs.dimension == 3 &&
+                            copy.nurbs.normalCoordinates.size() == arc.nurbs.controlPoints.size() &&
+                            std::all_of(copy.nurbs.normalCoordinates.cbegin(),
+                                        copy.nurbs.normalCoordinates.cend(),
+                                        [&](qreal z) { return std::abs(z - topEndpoint.z) < 1.0e-8; }) &&
+                            copy.nurbs.degree == arc.nurbs.degree &&
+                            copy.nurbs.knots == arc.nurbs.knots &&
+                            copy.nurbs.weights == arc.nurbs.weights,
+                        "Shift+D after actual Arc and Extrude tools must copy the exact arc, never the cage");
+    }
+    return passed;
+}
+
 bool verifyMeshLikeNurbsDuplicateModes(QApplication &application)
 {
     const QSize viewportSize(640, 480);
@@ -1636,6 +1931,11 @@ bool verifyContinuousNearDrag(QApplication &application)
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_SURFACE_BOUNDARY_ONLY")) {
+        const bool boundary = verifySurfaceBoundarySplineDuplicate(application);
+        const bool arcExtrusion = verifyArcToolExtrudeBoundary(application);
+        return boundary && arcExtrusion ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_NEAR_DRAG_ONLY"))
         return verifyContinuousNearDrag(application) ? 0 : 1;
     if (qEnvironmentVariableIsSet("CLASSICAD_ARC_SNAP_ONLY"))

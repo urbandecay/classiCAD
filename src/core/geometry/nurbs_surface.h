@@ -38,6 +38,20 @@ struct NurbsSurface3D {
     QVector<NurbsSurfaceTrimLoop> trimLoops;
 };
 
+// Exact untrimmed isoparametric boundary in the identity world XY frame:
+// curve CV xy stores world xy and normalCoordinates stores world z.
+struct NurbsSurfaceBoundaryCurve {
+    NurbsCurve3D curve;
+    QVector<int> sourceControlPointIndices;
+    Point3D startPoint;
+    Point3D endPoint;
+};
+
+// V minimum, U maximum, V maximum, U minimum; each curve has an increasing
+// parameter domain. Trimmed or invalid surfaces return no boundaries.
+QVector<NurbsSurfaceBoundaryCurve> nurbsSurfaceBoundaryCurves(
+    const NurbsSurface3D &surface);
+
 QVector<double> expandedNurbsSurfaceKnotVector(const QVector<double> &knots);
 bool validateNurbsSurface(const NurbsSurface3D &surface,
                           QString *error = nullptr);

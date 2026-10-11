@@ -59,14 +59,15 @@ int main(int argc, char *argv[])
     const qreal heavyLineWidth = viewportLineWeightPixels(1.0);
     const qreal maxLineWidth = viewportLineWeightPixels(2.11);
     passed &= check(std::abs(defaultLineWidth - 1.0) < 1.0e-9 &&
-                        std::abs(lightLineWidth - 1.78) < 1.0e-9 &&
-                        std::abs(heavyLineWidth - 7.0) < 1.0e-9 &&
-                        std::abs(maxLineWidth - 13.66) < 1.0e-9 &&
-                        defaultLineWidth < lightLineWidth &&
+                        std::abs(lightLineWidth - 1.0) < 1.0e-9 &&
+                        std::abs(mediumLineWidth - 1.5) < 1.0e-9 &&
+                        std::abs(heavyLineWidth - 6.0) < 1.0e-9 &&
+                        std::abs(maxLineWidth - 12.66) < 1.0e-9 &&
+                        defaultLineWidth == lightLineWidth &&
                         lightLineWidth < mediumLineWidth &&
                         mediumLineWidth < heavyLineWidth &&
                         heavyLineWidth < maxLineWidth,
-                    "default and the supported viewport line-weight presets must render at distinct widths");
+                    "default and 0.13 mm must match Blender's thin outline while heavier line weights grow predictably");
 
     ViewportRenderObject splineStyleObject;
     splineStyleObject.shape.geometryType = GeometryType::Line;
@@ -105,6 +106,29 @@ int main(int argc, char *argv[])
     passed &= check(planarOutline &&
                         planarOutline->lineVertices.size() == 8,
                     "a planar two-triangle surface outline must include its four boundary edges and omit the hidden triangulation diagonal");
+
+    ViewportDepthGeometry subdividedSurfaceMesh;
+    constexpr int outlineSubdivisions = 16;
+    for (int u = 0; u < outlineSubdivisions; ++u) {
+        for (int v = 0; v < outlineSubdivisions; ++v) {
+            const float x0 = float(u) / outlineSubdivisions;
+            const float x1 = float(u + 1) / outlineSubdivisions;
+            const float y0 = float(v) / outlineSubdivisions;
+            const float y1 = float(v + 1) / outlineSubdivisions;
+            subdividedSurfaceMesh.surfaceVertices
+                << QVector3D(x0, y0, 0.0f)
+                << QVector3D(x1, y0, 0.0f)
+                << QVector3D(x0, y1, 0.0f)
+                << QVector3D(x1, y0, 0.0f)
+                << QVector3D(x1, y1, 0.0f)
+                << QVector3D(x0, y1, 0.0f);
+        }
+    }
+    const auto subdividedOutline = makeViewportSurfaceOutlineGeometry(
+        subdividedSurfaceMesh, surfaceOutlineCamera);
+    passed &= check(subdividedOutline &&
+                        subdividedOutline->lineVertices.size() == 8,
+                    "a subdivided planar surface must merge each straight boundary into one stroke without overlapping internal end caps");
 
     ViewportDepthGeometry foldedSurfaceMesh;
     foldedSurfaceMesh.surfaceVertices
@@ -561,6 +585,22 @@ int main(int argc, char *argv[])
                     passed &= check(wireDrawSucceeded &&
                                         gpuWireLinearBlendMatches,
                                     "smooth edit-wire coverage must blend in linear display space on an sRGB target");
+                    // Regular curve and surface-outline strokes must use the
+                    // same coverage blending, not darker display-space alpha.
+                    editWire.editModeWire = false;
+                    functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    const bool objectWireDrawSucceeded = wireRenderer.draw(
+                        {editWire}, wireTransform, glSize, 1.0, false,
+                        1.0, true, true);
+                    functions.glFinish();
+                    unsigned char objectWireRawPixel[4] = {};
+                    functions.glReadPixels(300, 239, 1, 1, GL_RGBA,
+                                          GL_UNSIGNED_BYTE, objectWireRawPixel);
+                    passed &= check(objectWireDrawSucceeded &&
+                                        std::abs(int(objectWireRawPixel[0]) -
+                                                 int(wireRawPixel[0])) <= 1,
+                                    "curve and surface-outline antialias pixels must match edit-wire linear blending");
                     wireFramebuffer.release();
                 }
             }

@@ -561,9 +561,15 @@ makeViewportSurfaceOutlineGeometry(const ViewportDepthGeometry &surfaceMesh,
         }
     }
 
-    auto outline = QSharedPointer<ViewportDepthGeometry>::create();
-    outline->lineVertices.reserve(static_cast<int>(edges.size()) * 2);
-    outline->preciseLineVertices.reserve(static_cast<int>(edges.size()) * 2);
+    struct OutlineSegment {
+        SurfaceVertexKey firstKey;
+        SurfaceVertexKey secondKey;
+        Point3D first;
+        Point3D second;
+        bool visited = false;
+    };
+    std::vector<OutlineSegment> segments;
+    std::map<SurfaceVertexKey, std::vector<std::size_t>> incidentSegments;
     for (const auto &entry : edges) {
         const SurfaceOutlineEdge &edge = entry.second;
         const bool boundaryEdge = edge.triangleCount == 1;
@@ -572,14 +578,87 @@ makeViewportSurfaceOutlineGeometry(const ViewportDepthGeometry &surfaceMesh,
         if (!boundaryEdge && !silhouetteEdge) {
             continue;
         }
-        outline->preciseLineVertices.append(edge.first);
-        outline->preciseLineVertices.append(edge.second);
+        const std::size_t index = segments.size();
+        segments.push_back({entry.first.first, entry.first.second,
+                            edge.first, edge.second, false});
+        incidentSegments[entry.first.first].push_back(index);
+        incidentSegments[entry.first.second].push_back(index);
+    }
+
+    auto outline = QSharedPointer<ViewportDepthGeometry>::create();
+    outline->lineVertices.reserve(static_cast<int>(segments.size()) * 2);
+    outline->preciseLineVertices.reserve(static_cast<int>(segments.size()) * 2);
+    // Tessellation splits straight boundaries into many independent lines.
+    // Merge their collinear runs so overlapping antialiased end caps cannot
+    // darken the boundary. Stop at corners and branches, retaining silhouettes.
+    const auto extendRun = [&](SurfaceVertexKey &endKey, Point3D &end,
+                               const Point3D &oppositeEnd) {
+        for (;;) {
+            const auto incident = incidentSegments.find(endKey);
+            if (incident == incidentSegments.end() ||
+                incident->second.size() != 2) {
+                return;
+            }
+            std::size_t nextIndex = segments.size();
+            for (const std::size_t candidate : incident->second) {
+                if (!segments[candidate].visited) {
+                    nextIndex = candidate;
+                }
+            }
+            if (nextIndex == segments.size()) {
+                return;
+            }
+            OutlineSegment &next = segments[nextIndex];
+            const bool forward = next.firstKey == endKey;
+            const Point3D nextEnd = forward ? next.second : next.first;
+            const Point3D direction{end.x - oppositeEnd.x,
+                                    end.y - oppositeEnd.y,
+                                    end.z - oppositeEnd.z};
+            const Point3D continuation{nextEnd.x - end.x,
+                                       nextEnd.y - end.y,
+                                       nextEnd.z - end.z};
+            const double dot = direction.x * continuation.x +
+                               direction.y * continuation.y +
+                               direction.z * continuation.z;
+            const double directionSquared = direction.x * direction.x +
+                                            direction.y * direction.y +
+                                            direction.z * direction.z;
+            const double continuationSquared =
+                continuation.x * continuation.x +
+                continuation.y * continuation.y +
+                continuation.z * continuation.z;
+            const Point3D cross{
+                direction.y * continuation.z - direction.z * continuation.y,
+                direction.z * continuation.x - direction.x * continuation.z,
+                direction.x * continuation.y - direction.y * continuation.x};
+            const double crossSquared = cross.x * cross.x + cross.y * cross.y +
+                                        cross.z * cross.z;
+            if (dot <= 0.0 || crossSquared >
+                    1.0e-12 * directionSquared * continuationSquared) {
+                return;
+            }
+            next.visited = true;
+            end = nextEnd;
+            endKey = forward ? next.secondKey : next.firstKey;
+        }
+    };
+    for (OutlineSegment &segment : segments) {
+        if (segment.visited) {
+            continue;
+        }
+        segment.visited = true;
+        Point3D first = segment.first;
+        Point3D second = segment.second;
+        SurfaceVertexKey firstKey = segment.firstKey;
+        SurfaceVertexKey secondKey = segment.secondKey;
+        extendRun(firstKey, first, second);
+        extendRun(secondKey, second, first);
+        outline->preciseLineVertices.append(first);
+        outline->preciseLineVertices.append(second);
         outline->lineVertices.append(
-            QVector3D(float(edge.first.x), float(edge.first.y),
-                      float(edge.first.z)));
+            QVector3D(float(first.x), float(first.y), float(first.z)));
         outline->lineVertices.append(
-            QVector3D(float(edge.second.x), float(edge.second.y),
-                      float(edge.second.z)));
+            QVector3D(float(second.x), float(second.y), float(second.z)));
     }
     return outline->lineVertices.isEmpty()
                ? QSharedPointer<const ViewportDepthGeometry>{}
@@ -1072,8 +1151,9 @@ bool ViewportSceneRenderer::draw(
             const bool smoothWire = stroke.editModeWire
                                         ? smoothEditModeWires
                                         : smoothOverlayWires;
-            const bool linearDisplayBlend =
-                stroke.editModeWire && linearDisplayBlendAvailable;
+            // Antialias coverage has the same color-space meaning for curve
+            // wires and surface boundaries as it does for edit wires.
+            const bool linearDisplayBlend = linearDisplayBlendAvailable;
             if (linearDisplayBlend) {
                 glEnable(GL_FRAMEBUFFER_SRGB);
             } else {

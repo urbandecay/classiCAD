@@ -180,7 +180,7 @@ void Document::applyChanges(const DocumentChangeSet &changes)
     if (changes.collectionsChanged || !changes.collectionIds.isEmpty()) {
         bumpRevision(&revisions_.collection);
     }
-    if (changes.visibilityChanged) {
+    if (changes.visibilityChanged || changes.settingsChanged) {
         bumpRevision(&revisions_.visibility);
     }
     if (changes.settingsChanged) {
@@ -1062,9 +1062,11 @@ bool Document::isObjectVisible(ObjectId objectId) const
     const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
     if (objectLayer == nullptr || !objectLayer->visible || objectLayer->frozen ||
         sceneObject->hideViewport || sceneObject->hiddenInViewport) return false;
-    if (!sceneObject->defaultViewLayerKey.isEmpty() &&
-        sceneObject->viewLayerHidden.contains(sceneObject->defaultViewLayerKey) &&
-        sceneObject->viewLayerHidden.value(sceneObject->defaultViewLayerKey).toBool()) return false;
+    const QString activeViewLayerKey = settings_.activeViewLayerKey.isEmpty()
+        ? sceneObject->defaultViewLayerKey : settings_.activeViewLayerKey;
+    if (!activeViewLayerKey.isEmpty() &&
+        sceneObject->viewLayerHidden.contains(activeViewLayerKey) &&
+        sceneObject->viewLayerHidden.value(activeViewLayerKey).toBool()) return false;
     const auto hasVisibleCollectionPath = [&](const auto &self, CollectionId id,
                                               QSet<quint64> path) -> bool {
         if (path.contains(id.value())) return false;
@@ -1078,8 +1080,8 @@ bool Document::isObjectVisible(ObjectId objectId) const
         return false;
     };
     if (!sceneObject->collectionIds.isEmpty()) {
-        if (!sceneObject->defaultViewLayerKey.isEmpty()) {
-            const QString key = sceneObject->defaultViewLayerKey;
+        if (!activeViewLayerKey.isEmpty()) {
+            const QString key = activeViewLayerKey;
             const auto pathMatches = [](const QJsonArray &stored, const QStringList &expected) {
                 if (stored.size() != expected.size()) return false;
                 for (int i = 0; i < expected.size(); ++i)

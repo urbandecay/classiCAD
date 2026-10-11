@@ -19,6 +19,9 @@ enum class DocumentLengthUnit {
 struct DocumentSettings {
     DocumentLengthUnit lengthUnit = DocumentLengthUnit::Millimeter;
     qreal gridSpacing = 1.0;
+    // Active imported Blender view layer. Empty keeps legacy documents on
+    // each object's first imported view layer.
+    QString activeViewLayerKey;
 
     bool operator==(const DocumentSettings &) const = default;
 };

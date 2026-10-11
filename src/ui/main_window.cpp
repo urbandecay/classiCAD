@@ -617,6 +617,18 @@ private:
                     return;
                 }
             }
+            DocumentSettings settings = session_.document().settings();
+            if (settings.activeViewLayerKey.isEmpty()) {
+                for (const SceneObject &object : importedObjects) {
+                    if (!object.defaultViewLayerKey.isEmpty()) {
+                        settings.activeViewLayerKey = object.defaultViewLayerKey;
+                        break;
+                    }
+                }
+                if (!settings.activeViewLayerKey.isEmpty()) {
+                    transaction.setSettings(settings);
+                }
+            }
             transaction.insertObjects(session_.document().size(), importedObjects);
             if (!session_.commitTransaction(transaction)) {
                 QMessageBox::critical(
@@ -2961,6 +2973,50 @@ private:
                         4000);
                 }
             };
+        collectionCallbacks.viewLayers = [this]() {
+            QHash<QString, BlenderViewLayerChoice> byKey;
+            for (const DocumentCollection &collection :
+                 session_.document().collections()) {
+                for (const QJsonValue &value : collection.viewLayerStates) {
+                    const QJsonObject state = value.toObject();
+                    const QString key =
+                        state.value(QStringLiteral("view_layer_key")).toString();
+                    if (key.isEmpty() || byKey.contains(key)) continue;
+                    byKey.insert(key, BlenderViewLayerChoice{
+                        key,
+                        state.value(QStringLiteral("scene_name")).toString(),
+                        state.value(QStringLiteral("view_layer_name")).toString()});
+                }
+            }
+            QVector<BlenderViewLayerChoice> result = byKey.values().toVector();
+            std::sort(result.begin(), result.end(),
+                      [](const BlenderViewLayerChoice &left,
+                         const BlenderViewLayerChoice &right) {
+                if (left.sceneName != right.sceneName)
+                    return left.sceneName < right.sceneName;
+                if (left.viewLayerName != right.viewLayerName)
+                    return left.viewLayerName < right.viewLayerName;
+                return left.key < right.key;
+            });
+            return result;
+        };
+        collectionCallbacks.activeViewLayerKey = [this]() {
+            return session_.document().settings().activeViewLayerKey;
+        };
+        collectionCallbacks.setActiveViewLayerKey = [this](const QString &key) {
+            DocumentSettings settings = session_.document().settings();
+            if (settings.activeViewLayerKey == key) return;
+            settings.activeViewLayerKey = key;
+            DocumentTransaction transaction = session_.beginTransaction();
+            if (!transaction.setSettings(settings) ||
+                !session_.commitTransaction(transaction)) {
+                statusBar()->showMessage(
+                    QStringLiteral("Could not change Blender view layer"), 4000);
+                refreshCollections();
+                return;
+            }
+            if (viewport_ != nullptr) viewport_->refreshAfterProjectImport();
+        };
         collectionsPanel_ = new CollectionsPanel(collectionCallbacks);
 
         auto *tabs = new QTabWidget;

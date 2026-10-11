@@ -134,11 +134,13 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 12);
+    serialized.insert(QStringLiteral("version"), 13);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
     settings.insert(QStringLiteral("gridSpacing"), document.settings().gridSpacing);
+    settings.insert(QStringLiteral("activeViewLayerKey"),
+                    document.settings().activeViewLayerKey);
     serialized.insert(QStringLiteral("settings"), settings);
     serialized.insert(QStringLiteral("activeLayerId"),
                       idToJson(document.activeLayerId().value()));
@@ -291,7 +293,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 12) {
+    if (version < 1 || version > 13) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -531,6 +533,16 @@ bool documentFromJson(const QJsonValue &value,
             return false;
         }
         settings.gridSpacing = gridSpacingValue.toDouble();
+        if (version >= 13) {
+            const QJsonValue activeViewLayerKey =
+                settingsObject.value(QStringLiteral("activeViewLayerKey"));
+            if (!activeViewLayerKey.isString()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid active Blender view-layer setting"));
+                return false;
+            }
+            settings.activeViewLayerKey = activeViewLayerKey.toString();
+        }
         if (!isValidDocumentSettings(settings)) {
             setError(errorMessage, QStringLiteral("invalid document grid settings"));
             return false;

@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "collections_panel.h"
 
+#include <QComboBox>
 #include <QHeaderView>
+#include <QLabel>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
@@ -23,6 +25,18 @@ void CollectionsPanel::createLayout()
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
+    auto *viewLayerLabel = new QLabel(QStringLiteral("Blender View Layer"), this);
+    layout->addWidget(viewLayerLabel);
+    viewLayerCombo_ = new QComboBox(this);
+    viewLayerCombo_->setToolTip(QStringLiteral(
+        "Choose which imported Blender view layer controls viewport visibility."));
+    layout->addWidget(viewLayerCombo_);
+    connect(viewLayerCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+        if (refreshing_ || index < 0 || !callbacks_.setActiveViewLayerKey) return;
+        callbacks_.setActiveViewLayerKey(
+            viewLayerCombo_->itemData(index).toString());
+    });
     tree_ = new QTreeWidget(this);
     tree_->setColumnCount(2);
     tree_->setHeaderLabels({QStringLiteral("Collection"),
@@ -88,6 +102,23 @@ void CollectionsPanel::refresh()
 {
     if (tree_ == nullptr || !callbacks_.entries) return;
     refreshing_ = true;
+    viewLayerCombo_->clear();
+    viewLayerCombo_->addItem(QStringLiteral("Default (per scene)"), QString());
+    const QVector<BlenderViewLayerChoice> viewLayers = callbacks_.viewLayers
+        ? callbacks_.viewLayers() : QVector<BlenderViewLayerChoice>{};
+    for (const BlenderViewLayerChoice &choice : viewLayers) {
+        const QString label = choice.sceneName.isEmpty()
+            ? choice.viewLayerName
+            : QStringLiteral("%1 / %2").arg(choice.sceneName,
+                                             choice.viewLayerName);
+        viewLayerCombo_->addItem(label, choice.key);
+    }
+    viewLayerCombo_->setEnabled(!viewLayers.isEmpty());
+    const QString activeKey = callbacks_.activeViewLayerKey
+        ? callbacks_.activeViewLayerKey() : QString();
+    int activeIndex = viewLayerCombo_->findData(activeKey);
+    if (activeIndex < 0) activeIndex = 0;
+    viewLayerCombo_->setCurrentIndex(activeIndex);
     tree_->clear();
     const QVector<CollectionPanelEntry> entries = callbacks_.entries();
     for (const CollectionPanelEntry &entry : entries) {

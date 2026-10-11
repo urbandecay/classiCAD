@@ -1311,6 +1311,7 @@ bool importBlenderScene(const QString &path,
     QVector<DocumentMaterial> importedMaterials;
     QHash<QString, DocumentMaterial> materialsById;
     QSet<QString> importedIds;
+    QHash<QString, int> importedIndexBySourceId;
     QHash<QString, CollectionId> collectionIdsBySource;
     QHash<QString, QString> sceneLibraryPaths;
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
@@ -1398,7 +1399,24 @@ bool importBlenderScene(const QString &path,
             continue;
         }
         if (importedIds.contains(objectId)) {
-            warnings.append(QStringLiteral("%1: linked into more than one Blender scene; imported once")
+            const auto existingIndex = importedIndexBySourceId.constFind(objectId);
+            if (existingIndex != importedIndexBySourceId.cend()) {
+                SceneObject &existing = imported[*existingIndex];
+                for (const QJsonValue &collectionValue :
+                     item.value(QStringLiteral("collection_ids")).toArray()) {
+                    const QString sourceId = collectionValue.toString();
+                    if (collectionIdsBySource.contains(sourceId)) {
+                        const CollectionId id = collectionIdsBySource.value(sourceId);
+                        if (!existing.collectionIds.contains(id))
+                            existing.collectionIds.append(id);
+                    }
+                }
+                const QJsonObject hidden =
+                    item.value(QStringLiteral("view_layer_hidden")).toObject();
+                for (auto it = hidden.begin(); it != hidden.end(); ++it)
+                    existing.viewLayerHidden.insert(it.key(), it.value());
+            }
+            warnings.append(QStringLiteral("%1: linked into more than one Blender scene; shared memberships and view-layer states were combined")
                                 .arg(blenderItemLabel(item)));
             continue;
         }
@@ -1431,6 +1449,7 @@ bool importBlenderScene(const QString &path,
         }
         unsupportedFeatureCount += warnings.size() - warningCountBeforeItem;
         importedIds.insert(objectId);
+        importedIndexBySourceId.insert(objectId, imported.size());
         imported.append(std::move(sceneObject));
     }
 

@@ -47,7 +47,7 @@ struct DocumentChangeSet {
     {
         return structureChanged || layerPropertiesChanged ||
                visibilityChanged || collectionsChanged || !layerIds.isEmpty() ||
-               !collectionIds.isEmpty();
+               !collectionIds.isEmpty() || settingsChanged;
     }
 
     void addObject(ObjectId id)

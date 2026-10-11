@@ -147,18 +147,21 @@ collections, the collection parent hierarchy (including multiple parents),
 global collection viewport/render hide flags, per-view-layer collection-instance
 paths and exclusions/visibility, object viewport hide flags, per-view-layer
 object hide state, and the object's `hide_select` selection lock are retained.
-The first imported view layer controls viewport visibility, with visibility
-resolved across all collection paths for each direct object membership. The
+The Collections panel's Blender View Layer selector controls viewport
+visibility, with visibility resolved across all collection paths for each
+direct object membership. The selected view layer is saved with the document;
+the "Default (per scene)" option preserves legacy first-layer behavior. The
 Collections panel controls global collection visibility separately from the
-Layers panel. An active view-layer selector remains pending. The importer reports imported, skipped, baked,
-and unsupported item counts with per-item reasons.
+Layers panel. The importer reports imported, skipped, baked, and unsupported
+item counts with per-item reasons.
 
 ## Implementation phases
 
 1. **Schema and validation — implemented:** `PolygonMesh3D`, validation,
-   document version 12, shared material records and slot references, affine
+   document version 13, shared material records and slot references, affine
    object transforms, active UV/color selectors, Blender version/import mode
-   metadata, collections, view-layer visibility, and selection locks are serialized. Versions 1–11
+   metadata, collections, view-layer visibility, selected view layer, and
+   selection locks are serialized. Versions 1–12
    remain readable.
 2. **Blender extraction — implemented:** File > Import > Blender Scene invokes
    a Blender 5.2.2 version-checked bridge. Original/evaluated mesh extraction,
@@ -188,8 +191,8 @@ and unsupported item counts with per-item reasons.
    collection viewport hide flags affect viewport visibility; `hide_select`
    prevents imported objects from being selected or edited.
    Collection membership and hierarchy are shown in a Collections panel,
-   separate from CAD layers. The first imported Blender view layer drives
-   path-aware visibility; switching the active view layer remains pending.
+   separate from CAD layers. Its Blender View Layer selector switches
+   path-aware visibility and persists the selection in the native document.
 5. **Round-trip and parity — pending review:** native JSON preserves the mesh
    data, but save/reopen and Blender 5.2.2 visual parity have not been checked
    as a comparison matrix. Blender mesh export from native classiCAD documents

@@ -2179,25 +2179,22 @@ public:
                    const SceneObject &sceneObject, int firstIndex,
                    int secondIndex,
                    PointExtrudeTool::CurveSource *source) {
+                const NurbsSurface3D &surface = shape.nurbsSurface;
+                const int countU = surface.controlVertexCountU;
+                const int countV = surface.controlVertexCountV;
                 if (source == nullptr ||
                     shape.geometryType != GeometryType::NurbsSurface ||
-                    shape.nurbsSurface.controlVertexCountU != 2 ||
-                    shape.nurbsSurface.controlVertexCountV != 2 ||
-                    shape.nurbsSurface.degreeU != 1 ||
-                    shape.nurbsSurface.degreeV != 1 ||
-                    shape.nurbsSurface.orderU != 2 ||
-                    shape.nurbsSurface.orderV != 2 ||
-                    !shape.nurbsSurface.trimLoops.isEmpty() ||
-                    shape.nurbsSurface.controlPoints.size() != 4 ||
-                    shape.nurbsSurface.weights.size() != 4 ||
-                    firstIndex < 0 || firstIndex >= 4 ||
-                    secondIndex < 0 || secondIndex >= 4) {
+                    countU < 2 || countV < 2 ||
+                    surface.controlPoints.size() != countU * countV ||
+                    surface.weights.size() != countU * countV ||
+                    firstIndex < 0 || firstIndex >= countU * countV ||
+                    secondIndex < 0 || secondIndex >= countU * countV) {
                     return false;
                 }
-                const int firstU = firstIndex / 2;
-                const int firstV = firstIndex % 2;
-                const int secondU = secondIndex / 2;
-                const int secondV = secondIndex % 2;
+                const int firstU = firstIndex / countV;
+                const int firstV = firstIndex % countV;
+                const int secondU = secondIndex / countV;
+                const int secondV = secondIndex % countV;
                 if (!((firstU == secondU &&
                        std::abs(firstV - secondV) == 1) ||
                       (firstV == secondV &&
@@ -2205,16 +2202,18 @@ public:
                     return false;
                 }
                 const bool variesV = firstU == secondU;
-                const QVector<double> &edgeKnots = variesV
-                    ? shape.nurbsSurface.knotsV
-                    : shape.nurbsSurface.knotsU;
-                if (edgeKnots.size() != 2) {
-                    return false;
-                }
+                const bool exactSurfaceIsoEdge = variesV
+                    ? countV == 2 && surface.degreeV == 1 &&
+                          surface.orderV == 2 && surface.knotsV.size() == 2
+                    : countU == 2 && surface.degreeU == 1 &&
+                          surface.orderU == 2 && surface.knotsU.size() == 2;
+                const QVector<double> edgeKnots = exactSurfaceIsoEdge
+                    ? (variesV ? surface.knotsV : surface.knotsU)
+                    : QVector<double>{0.0, 1.0};
 
                 const Point3D placement = sceneObject.placementTranslation;
-                Point3D first = shape.nurbsSurface.controlPoints[firstIndex];
-                Point3D second = shape.nurbsSurface.controlPoints[secondIndex];
+                Point3D first = surface.controlPoints[firstIndex];
+                Point3D second = surface.controlPoints[secondIndex];
                 first.x += placement.x;
                 first.y += placement.y;
                 first.z += placement.z;
@@ -2235,11 +2234,13 @@ public:
                 edge.degree = 1;
                 edge.order = 2;
                 edge.knots = edgeKnots;
-                edge.rational = shape.nurbsSurface.rational;
+                edge.rational = exactSurfaceIsoEdge && surface.rational;
                 edge.controlPoints.reserve(2);
                 edge.normalCoordinates.reserve(2);
-                edge.weights = {shape.nurbsSurface.weights[firstIndex],
-                                shape.nurbsSurface.weights[secondIndex]};
+                edge.weights = exactSurfaceIsoEdge
+                    ? QVector<double>{surface.weights[firstIndex],
+                                      surface.weights[secondIndex]}
+                    : QVector<double>{1.0, 1.0};
                 qreal firstNormal = 0.0;
                 qreal secondNormal = 0.0;
                 edge.controlPoints.append(worldPointToWorkPlaneFrame(
@@ -2572,6 +2573,86 @@ public:
                                 solidCapSources.append(std::move(capSource));
                                 consumedControlPoints =
                                     completeCaps.first().second;
+                            }
+                        }
+                        // A connected pair on a solid's derived face is an
+                        // edge extrusion. The solid cage uses deduplicated
+                        // world-local points, so map the face's CVs back to
+                        // that cage before promoting the edge to a curve.
+                        if (consumedControlPoints.isEmpty() &&
+                            selectedIt.value().size() == 2) {
+                            bool promotedEdge = false;
+                            for (const NurbsSurface3D &face : faces) {
+                                Shape faceShape;
+                                faceShape.geometryType =
+                                    GeometryType::NurbsSurface;
+                                faceShape.nurbsSurface = face;
+                                QVector<int> facePointToCage(
+                                    face.controlPoints.size(), -1);
+                                for (int facePoint = 0;
+                                     facePoint < face.controlPoints.size();
+                                     ++facePoint) {
+                                    for (int cagePoint = 0;
+                                         cagePoint <
+                                             cage.precisePointVertices.size();
+                                         ++cagePoint) {
+                                        if (duplicatePointsEqual(
+                                                face.controlPoints[facePoint],
+                                                cage.precisePointVertices[
+                                                    cagePoint])) {
+                                            facePointToCage[facePoint] =
+                                                cagePoint;
+                                            break;
+                                        }
+                                    }
+                                }
+                                const QVector<QPair<int, int>> faceEdges =
+                                    nurbsSurfaceControlNetEdgeVertexIndices(
+                                        face);
+                                for (const QPair<int, int> &faceEdge :
+                                     faceEdges) {
+                                    if (faceEdge.first < 0 ||
+                                        faceEdge.second < 0 ||
+                                        faceEdge.first >=
+                                            facePointToCage.size() ||
+                                        faceEdge.second >=
+                                            facePointToCage.size()) {
+                                        continue;
+                                    }
+                                    const int firstCagePoint =
+                                        facePointToCage[faceEdge.first];
+                                    const int secondCagePoint =
+                                        facePointToCage[faceEdge.second];
+                                    if (firstCagePoint < 0 ||
+                                        secondCagePoint < 0 ||
+                                        !selectedIt.value().contains(
+                                            firstCagePoint) ||
+                                        !selectedIt.value().contains(
+                                            secondCagePoint)) {
+                                        continue;
+                                    }
+                                    PointExtrudeTool::CurveSource edgeSource;
+                                    if (!makeSurfaceControlEdgeSource(
+                                            objectId, faceShape, *sceneObject,
+                                            faceEdge.first, faceEdge.second,
+                                            &edgeSource)) {
+                                        continue;
+                                    }
+                                    // The new sheet is a separate scene
+                                    // object. Solid cage indices are not
+                                    // source NURBS control-point indices.
+                                    edgeSource.sourceControlPointIndices.clear();
+                                    curveSources.append(std::move(edgeSource));
+                                    consumedControlPoints.insert(
+                                        firstCagePoint);
+                                    consumedControlPoints.insert(
+                                        secondCagePoint);
+                                    promotedEdge = true;
+                                    break;
+                                }
+                                if (promotedEdge) {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -7721,6 +7802,48 @@ protected:
                                 appendComponentStroke(std::move(it.value()),
                                                       QColor::fromRgba(it.key()),
                                                       1.0f, 4.0f, {});
+                            }
+                            if (visibleShape.geometryType ==
+                                    GeometryType::NurbsSurface ||
+                                visibleShape.geometryType ==
+                                    GeometryType::NurbsSolid) {
+                                const QVector<QPair<int, int>> edgeEndpoints =
+                                    selectedSurfaceControlNetEdgeVertexIndices(
+                                        visibleShape);
+                                ViewportDepthGeometry connectedEdges;
+                                for (int edge = 0;
+                                     edge < edgeEndpoints.size(); ++edge) {
+                                    const QPair<int, int> endpoints =
+                                        edgeEndpoints[edge];
+                                    const int first = edge * 2;
+                                    if (endpoints.first < 0 ||
+                                        endpoints.second < 0 ||
+                                        !objectVertexSelection.contains(
+                                            endpoints.first) ||
+                                        !objectVertexSelection.contains(
+                                            endpoints.second) ||
+                                        first + 1 >= cage->lineVertices.size() ||
+                                        first + 1 >=
+                                            cage->preciseLineVertices.size()) {
+                                        continue;
+                                    }
+                                    connectedEdges.lineVertices
+                                        << cage->lineVertices[first]
+                                        << cage->lineVertices[first + 1];
+                                    connectedEdges.preciseLineVertices
+                                        << cage->preciseLineVertices[first]
+                                        << cage->preciseLineVertices[first + 1];
+                                }
+                                if (!connectedEdges.lineVertices.isEmpty()) {
+                                    // In Vertex mode, make the edge between
+                                    // selected connected corners visible too.
+                                    // The base control-net stroke can be hidden
+                                    // when CP Points is toggled off.
+                                    appendComponentStroke(
+                                        std::move(connectedEdges),
+                                        QColor(QStringLiteral("#ff7a00")),
+                                        2.0f, 0.0f, {});
+                                }
                             }
                         } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
                             QMap<QRgb, ViewportDepthGeometry> selectedEdges;

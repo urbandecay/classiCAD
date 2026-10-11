@@ -300,6 +300,14 @@ misread or implemented incorrectly.
   control vertices represents its edge. Route those selections through face
   or edge extrusion so they do not become independent point edges. Partial or
   non-adjacent vertex selections remain point extrusions.
+- On a larger control net, two adjacent CVs still form one displayed cage edge
+  and must extrude together as one degree-one curve. Preserve the surface knot
+  range and rational weights when that pair is an exact degree-one iso-edge.
+- The same adjacent-pair rule applies to the derived planar faces of an affine
+  NURBS solid. Map the selected global cage vertices back to a shared face
+  edge before extruding; otherwise two connected vertices incorrectly become
+  two upright lines. In Vertex mode, draw the connecting edge highlight when
+  both endpoints are selected, even if the full control-net display is hidden.
 - Face/edge/cap promotion consumes any welded seam points on that selected
   patch. Do not also promote a linked source curve or its endpoints into a
   second extrusion; compare weld-group identity and world position while

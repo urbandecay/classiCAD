@@ -33,8 +33,9 @@ struct ViewportControlPointHandle {
 };
 
 // Draws control-point markers into the currently bound viewport framebuffer.
-// The caller must have a current OpenGL 3.3 core context. Markers are overlays:
-// depth testing is temporarily disabled so they stay visible over scene lines.
+// The caller must have a current OpenGL 3.3 core context. The caller selects
+// whether markers respect scene depth (normal edit display) or draw through it
+// (X-Ray display).
 class ViewportControlPointRenderer final
     : protected QOpenGLFunctions_3_3_Core {
 public:
@@ -52,7 +53,8 @@ public:
     bool draw(const QVector<ViewportControlPointHandle> &handles,
               const ViewportTransform &transform,
               const QSize &viewportSize,
-              qreal devicePixelRatio = 1.0);
+              qreal devicePixelRatio = 1.0,
+              bool depthTest = false);
 
     // Free GL resources. Call while the context used for draw() is current,
     // preferably from the viewport's context-destruction callback. Returns

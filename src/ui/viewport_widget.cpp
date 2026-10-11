@@ -414,6 +414,31 @@ ViewportDepthGeometry selectedSurfaceControlNet(const Shape &shape)
     return geometry;
 }
 
+QVector<int> nurbsSurfaceCornerControlPointIndices(
+    const NurbsSurface3D &surface)
+{
+    QVector<int> corners;
+    if (!surface.trimLoops.isEmpty()) {
+        return corners;
+    }
+    const int countU = surface.controlVertexCountU;
+    const int countV = surface.controlVertexCountV;
+    if (countU < 2 || countV < 2 ||
+        surface.controlPoints.size() != countU * countV) {
+        return corners;
+    }
+    const QVector<int> cornerIndices{
+        0, countV - 1, (countU - 1) * countV,
+        countU * countV - 1};
+    for (const int index : cornerIndices) {
+        if (index >= 0 && index < surface.controlPoints.size() &&
+            !corners.contains(index)) {
+            corners.append(index);
+        }
+    }
+    return corners;
+}
+
 ViewportDepthGeometry selectedSurfaceCage(const Shape &shape)
 {
     ViewportDepthGeometry geometry;
@@ -7256,6 +7281,45 @@ protected:
         const bool showCurveEndpointVertices =
             componentSelectionMode_ == ComponentSelectionMode::Vertex &&
             !controlPointsVisible_;
+        const auto appendSurfaceCornerHandles =
+            [&gpuControlPointHandles](const Shape &shape,
+                                     const Point3D &placement,
+                                     const QSet<int> &selectedPoints,
+                                     int activePoint,
+                                     bool selectAll) {
+                if (shape.geometryType != GeometryType::NurbsSurface) {
+                    return;
+                }
+                for (const int pointIndex :
+                     nurbsSurfaceCornerControlPointIndices(
+                         shape.nurbsSurface)) {
+                    if (pointIndex < 0 ||
+                        pointIndex >= shape.nurbsSurface.controlPoints.size()) {
+                        continue;
+                    }
+                    const Point3D &point =
+                        shape.nurbsSurface.controlPoints[pointIndex];
+                    const bool selected = selectAll ||
+                        selectedPoints.contains(pointIndex);
+                    const bool active = selected &&
+                        pointIndex == activePoint;
+                    ViewportControlPointHandle handle;
+                    handle.worldPosition = QVector3D(
+                        static_cast<float>(point.x + placement.x),
+                        static_cast<float>(point.y + placement.y),
+                        static_cast<float>(point.z + placement.z));
+                    handle.fillColor = active
+                        ? QColor(Qt::white)
+                        : selected ? QColor(QStringLiteral("#ff7a00"))
+                                   : QColor(12, 12, 12);
+                    handle.outlineColor = handle.fillColor;
+                    handle.diameterPixels = static_cast<float>(
+                        kViewportPointVertexMarkerDiameterPixels);
+                    handle.outlineWidthPixels = 0.0f;
+                    handle.shape = ViewportControlPointShape::Circle;
+                    gpuControlPointHandles.append(handle);
+                }
+            };
         if ((controlPointsVisible_ || showCurveEndpointVertices) &&
             controlPointRenderer != nullptr) {
             const QColor handleOutline(QStringLiteral("#77b7e6"));
@@ -7362,6 +7426,25 @@ protected:
                         handle.shape = ViewportControlPointShape::Square;
                     }
                     gpuControlPointHandles.append(handle);
+                }
+            }
+            if (showCurveEndpointVertices) {
+                for (const ViewportRenderObject &renderObject : visibleShapes) {
+                    if (renderObject.shape.geometryType !=
+                        GeometryType::NurbsSurface) {
+                        continue;
+                    }
+                    const QSet<int> &selection =
+                        componentSelectionForObject(renderObject.objectId);
+                    const int activePoint =
+                        componentSelectionObject_ == renderObject.objectId
+                            ? activeComponentIndex()
+                            : -1;
+                    appendSurfaceCornerHandles(
+                        renderObject.shape,
+                        renderObject.placementTranslation,
+                        selection, activePoint,
+                        renderObject.selected && selection.isEmpty());
                 }
             }
         }
@@ -7811,6 +7894,7 @@ protected:
                                     selectedSurfaceControlNetEdgeVertexIndices(
                                         visibleShape);
                                 ViewportDepthGeometry connectedEdges;
+                                QVector<QVector4D> connectedEdgeColors;
                                 for (int edge = 0;
                                      edge < edgeEndpoints.size(); ++edge) {
                                     const QPair<int, int> endpoints =
@@ -7818,10 +7902,10 @@ protected:
                                     const int first = edge * 2;
                                     if (endpoints.first < 0 ||
                                         endpoints.second < 0 ||
-                                        !objectVertexSelection.contains(
-                                            endpoints.first) ||
-                                        !objectVertexSelection.contains(
-                                            endpoints.second) ||
+                                        (!objectVertexSelection.contains(
+                                             endpoints.first) &&
+                                         !objectVertexSelection.contains(
+                                             endpoints.second)) ||
                                         first + 1 >= cage->lineVertices.size() ||
                                         first + 1 >=
                                             cage->preciseLineVertices.size()) {
@@ -7833,16 +7917,30 @@ protected:
                                     connectedEdges.preciseLineVertices
                                         << cage->preciseLineVertices[first]
                                         << cage->preciseLineVertices[first + 1];
+                                    const float firstInfluence =
+                                        objectVertexSelection.contains(
+                                            endpoints.first) ? 1.0f : 0.0f;
+                                    const float secondInfluence =
+                                        objectVertexSelection.contains(
+                                            endpoints.second) ? 1.0f : 0.0f;
+                                    connectedEdgeColors
+                                        << QVector4D(firstInfluence,
+                                                     firstInfluence,
+                                                     firstInfluence, 1.0f)
+                                        << QVector4D(secondInfluence,
+                                                     secondInfluence,
+                                                     secondInfluence, 1.0f);
                                 }
                                 if (!connectedEdges.lineVertices.isEmpty()) {
-                                    // In Vertex mode, make the edge between
-                                    // selected connected corners visible too.
-                                    // The base control-net stroke can be hidden
-                                    // when CP Points is toggled off.
+                                    // One selected endpoint fades along each
+                                    // connected edge; selecting both makes it
+                                    // solid. The base control-net stroke can be
+                                    // hidden when CP Points is toggled off.
                                     appendComponentStroke(
                                         std::move(connectedEdges),
                                         QColor(QStringLiteral("#ff7a00")),
-                                        2.0f, 0.0f, {});
+                                        2.0f, 0.0f,
+                                        std::move(connectedEdgeColors));
                                 }
                             }
                         } else if (componentSelectionMode_ == ComponentSelectionMode::Edge) {
@@ -8545,23 +8643,31 @@ protected:
                             gpuControlPointHandles.append(handle);
                         }
                     }
-                    if (componentSelectionMode_ == ComponentSelectionMode::Vertex &&
+                    if (componentSelectionMode_ ==
+                            ComponentSelectionMode::Vertex &&
                         (preview.geometryType == GeometryType::NurbsSurface ||
                          preview.geometryType == GeometryType::NurbsSolid)) {
-                        const ViewportDepthGeometry cage =
-                            selectedSurfaceControlNet(preview);
-                        for (const QVector3D &cagePoint : cage.pointVertices) {
-                            ViewportControlPointHandle handle;
-                            handle.worldPosition = QVector3D(
-                                cagePoint.x() + float(placement.x),
-                                cagePoint.y() + float(placement.y),
-                                cagePoint.z() + float(placement.z));
-                            handle.fillColor = viewportSelectionColor();
-                            handle.outlineColor = viewportSelectionColor();
-                            handle.diameterPixels = 4.0f;
-                            handle.outlineWidthPixels = 0.0f;
-                            handle.shape = ViewportControlPointShape::Circle;
-                            gpuControlPointHandles.append(handle);
+                        if (controlPointsVisible_) {
+                            const ViewportDepthGeometry markers =
+                                selectedSurfaceControlNet(preview);
+                            for (const QVector3D &cagePoint :
+                                 markers.pointVertices) {
+                                ViewportControlPointHandle handle;
+                                handle.worldPosition = QVector3D(
+                                    cagePoint.x() + float(placement.x),
+                                    cagePoint.y() + float(placement.y),
+                                    cagePoint.z() + float(placement.z));
+                                handle.fillColor = viewportSelectionColor();
+                                handle.outlineColor = viewportSelectionColor();
+                                handle.diameterPixels = 4.0f;
+                                handle.outlineWidthPixels = 0.0f;
+                                handle.shape = ViewportControlPointShape::Circle;
+                                gpuControlPointHandles.append(handle);
+                            }
+                        } else if (preview.geometryType ==
+                                   GeometryType::NurbsSurface) {
+                            appendSurfaceCornerHandles(
+                                preview, placement, {}, -1, true);
                         }
                     }
                 }
@@ -8942,7 +9048,11 @@ protected:
                     }
                 }
                 surfacePreviewStrokes.append(std::move(previewCage));
-                if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
+                if (componentSelectionMode_ ==
+                        ComponentSelectionMode::Vertex &&
+                    controlPointsVisible_) {
+                    ViewportDepthGeometry markerGeometry =
+                        selectedSurfaceControlNet(preview.shape);
                     ViewportSceneStroke previewVertices;
                     previewVertices.shape = &preview.shape;
                     previewVertices.color = preview.highlighted
@@ -8953,8 +9063,17 @@ protected:
                     previewVertices.editModeWire = true;
                     previewVertices.worldOffset = preview.worldOffset;
                     previewVertices.preparedDepthGeometry =
-                        surfacePreviewStrokes.back().preparedDepthGeometry;
+                        QSharedPointer<ViewportDepthGeometry>::create(
+                            std::move(markerGeometry));
                     surfacePreviewStrokes.append(std::move(previewVertices));
+                } else if (componentSelectionMode_ ==
+                               ComponentSelectionMode::Vertex &&
+                           !controlPointsVisible_ &&
+                           preview.shape.geometryType ==
+                               GeometryType::NurbsSurface) {
+                    appendSurfaceCornerHandles(
+                        preview.shape, preview.worldOffset, {}, -1,
+                        preview.highlighted);
                 }
                 continue;
             }
@@ -9149,7 +9268,8 @@ protected:
                 gpuControlPointsDrawn = controlPointRenderer->draw(
                     gpuControlPointHandles, renderFrame.camera,
                     renderFrame.viewportSize,
-                    devicePixelRatioF());
+                    devicePixelRatioF(),
+                    !viewportShadingSettings_.xrayEnabled());
             }
             if (gpuArcToolPreview && previewRenderer != nullptr) {
                 gpuArcOverlayRendered =

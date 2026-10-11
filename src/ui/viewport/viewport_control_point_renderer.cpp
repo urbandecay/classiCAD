@@ -151,7 +151,8 @@ bool ViewportControlPointRenderer::draw(
     const QVector<ViewportControlPointHandle> &handles,
     const ViewportTransform &transform,
     const QSize &viewportSize,
-    qreal devicePixelRatio)
+    qreal devicePixelRatio,
+    bool depthTest)
 {
     if (handles.isEmpty() || viewportSize.width() <= 0 ||
         viewportSize.height() <= 0) {
@@ -212,6 +213,7 @@ bool ViewportControlPointRenderer::draw(
     GLint previousVertexArray = 0;
     GLint previousArrayBuffer = 0;
     GLint previousViewport[4] = {0, 0, 0, 0};
+    GLint previousDepthFunction = GL_LESS;
     GLint previousBlendSrcRgb = GL_ONE;
     GLint previousBlendDstRgb = GL_ZERO;
     GLint previousBlendSrcAlpha = GL_ONE;
@@ -222,6 +224,9 @@ bool ViewportControlPointRenderer::draw(
     glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
     glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    GLboolean previousDepthMask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
     glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSrcRgb);
     glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDstRgb);
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &previousBlendSrcAlpha);
@@ -238,7 +243,13 @@ bool ViewportControlPointRenderer::draw(
     const GLsizei pixelHeight = static_cast<GLsizei>(
         std::max(1, qRound(viewportSize.height() * safeDpr)));
     glViewport(0, 0, pixelWidth, pixelHeight);
-    glDisable(GL_DEPTH_TEST);
+    if (depthTest) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+    } else {
+        glDisable(GL_DEPTH_TEST);
+    }
+    glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -290,6 +301,8 @@ bool ViewportControlPointRenderer::draw(
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(previousArrayBuffer));
     glViewport(previousViewport[0], previousViewport[1],
                previousViewport[2], previousViewport[3]);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    glDepthMask(previousDepthMask);
     glBlendFuncSeparate(static_cast<GLenum>(previousBlendSrcRgb),
                         static_cast<GLenum>(previousBlendDstRgb),
                         static_cast<GLenum>(previousBlendSrcAlpha),

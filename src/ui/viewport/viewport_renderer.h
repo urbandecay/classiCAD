@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/document/object_id.h"
+#include "core/document/scene_object.h"
 #include "core/document/shape.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/sampling/surface_tessellation_cache.h"
@@ -11,6 +12,8 @@
 #include <QPainter>
 #include <QColor>
 #include <QSize>
+
+#include <optional>
 
 namespace classiCAD {
 
@@ -26,6 +29,7 @@ public:
     void drawOrigin(QPainter &painter, const QSize &viewportSize) const;
     void setGridAppearance(const BlenderGridAppearance &appearance);
     void setShadingSettings(const ViewportShadingSettings &settings);
+    void setSmoothWirePreferences(bool overlay, bool editMode);
     void setGridBaseStep(qreal baseGridStep);
     void drawShape(QPainter &painter,
                    const Shape &shape,
@@ -39,7 +43,10 @@ public:
                    ObjectId shapeObjectId = ObjectId::invalid(),
                    quint64 geometryRevision = 0,
                    const ViewportDepthGeometry *preparedGeometry = nullptr,
-                   const Point3D &preparedOffset = {}) const;
+                   const Point3D &preparedOffset = {},
+                   std::optional<QVector4D> displayColorSceneLinear = std::nullopt,
+                   std::optional<WorkbenchMaterialData> workbenchMaterial =
+                       std::nullopt) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
@@ -58,7 +65,11 @@ public:
                           bool preview = false,
                           bool selected = false,
                           bool reverseOrientation = false,
-                          const QColor &objectColor = QColor()) const;
+                          const QColor &objectColor = QColor(),
+                          std::optional<QVector4D> displayColorSceneLinear =
+                              std::nullopt,
+                          std::optional<WorkbenchMaterialData> workbenchMaterial =
+                              std::nullopt) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,
@@ -111,6 +122,8 @@ private:
     const CurveHitTester &curveHitTester_;
     const SurfaceTessellationCache *surfaceTessellationCache_ = nullptr;
     bool smoothCurveDisplay_ = true;
+    bool smoothWiresOverlay_ = true;
+    bool smoothWiresEditMode_ = true;
     bool architecturalDimensionFont_ = false;
     BlenderGridAppearance gridAppearance_;
     ViewportShadingSettings shadingSettings_;

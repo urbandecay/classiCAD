@@ -54,12 +54,86 @@ bool idFromJson(const QJsonValue &value, quint64 *id)
     return false;
 }
 
+QJsonArray vector3ToJson(const QVector3D &value)
+{
+    return {value.x(), value.y(), value.z()};
+}
+
+QJsonArray vector4ToJson(const QVector4D &value)
+{
+    return {value.x(), value.y(), value.z(), value.w()};
+}
+
+bool unitIntervalArrayFromJson(const QJsonValue &value,
+                               int componentCount,
+                               float *components)
+{
+    if (!value.isArray() || components == nullptr) {
+        return false;
+    }
+    const QJsonArray array = value.toArray();
+    if (array.size() != componentCount) {
+        return false;
+    }
+    for (int index = 0; index < componentCount; ++index) {
+        if (!array[index].isDouble()) {
+            return false;
+        }
+        const double component = array[index].toDouble();
+        if (!std::isfinite(component) || component < 0.0 || component > 1.0) {
+            return false;
+        }
+        components[index] = static_cast<float>(component);
+    }
+    return true;
+}
+
+bool workbenchMaterialFromJson(const QJsonValue &value,
+                               WorkbenchMaterialData *material)
+{
+    if (material == nullptr || !value.isObject()) {
+        return false;
+    }
+
+    const QJsonObject object = value.toObject();
+    float baseColor[3] = {};
+    if (!unitIntervalArrayFromJson(
+            object.value(QStringLiteral("baseColorSceneLinear")), 3,
+            baseColor)) {
+        return false;
+    }
+
+    const auto scalar = [&object](const QString &key, qreal *result) {
+        const QJsonValue value = object.value(key);
+        if (result == nullptr || !value.isDouble()) {
+            return false;
+        }
+        const double parsed = value.toDouble();
+        if (!std::isfinite(parsed) || parsed < 0.0 || parsed > 1.0) {
+            return false;
+        }
+        *result = parsed;
+        return true;
+    };
+
+    WorkbenchMaterialData restored;
+    restored.baseColorSceneLinear =
+        QVector3D(baseColor[0], baseColor[1], baseColor[2]);
+    if (!scalar(QStringLiteral("roughness"), &restored.roughness) ||
+        !scalar(QStringLiteral("metallic"), &restored.metallic) ||
+        !scalar(QStringLiteral("alpha"), &restored.alpha)) {
+        return false;
+    }
+    *material = restored;
+    return true;
+}
+
 } // namespace
 
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 5);
+    serialized.insert(QStringLiteral("version"), 6);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -102,6 +176,21 @@ QJsonObject documentToJson(const Document &document)
         placement.insert(QStringLiteral("y"), sceneObject.placementTranslation.y);
         placement.insert(QStringLiteral("z"), sceneObject.placementTranslation.z);
         serializedObject.insert(QStringLiteral("placementTranslation"), placement);
+        serializedObject.insert(
+            QStringLiteral("displayColorSceneLinear"),
+            vector4ToJson(sceneObject.displayColorSceneLinear));
+        QJsonObject workbenchMaterial;
+        workbenchMaterial.insert(
+            QStringLiteral("baseColorSceneLinear"),
+            vector3ToJson(sceneObject.workbenchMaterial.baseColorSceneLinear));
+        workbenchMaterial.insert(QStringLiteral("roughness"),
+                                 sceneObject.workbenchMaterial.roughness);
+        workbenchMaterial.insert(QStringLiteral("metallic"),
+                                 sceneObject.workbenchMaterial.metallic);
+        workbenchMaterial.insert(QStringLiteral("alpha"),
+                                 sceneObject.workbenchMaterial.alpha);
+        serializedObject.insert(QStringLiteral("workbenchMaterial"),
+                                workbenchMaterial);
         objects.append(serializedObject);
     }
     serialized.insert(QStringLiteral("objects"), objects);
@@ -119,7 +208,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 5) {
+    if (version < 1 || version > 6) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -313,11 +402,33 @@ bool documentFromJson(const QJsonValue &value,
             }
         }
 
+        QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
+        WorkbenchMaterialData workbenchMaterial;
+        if (version >= 6) {
+            float displayColor[4] = {};
+            if (!unitIntervalArrayFromJson(
+                    serializedObject.value(
+                        QStringLiteral("displayColorSceneLinear")),
+                    4, displayColor) ||
+                !workbenchMaterialFromJson(
+                    serializedObject.value(QStringLiteral("workbenchMaterial")),
+                    &workbenchMaterial)) {
+                setError(errorMessage,
+                         QStringLiteral("invalid scene object appearance"));
+                return false;
+            }
+            displayColorSceneLinear = QVector4D(
+                displayColor[0], displayColor[1], displayColor[2],
+                displayColor[3]);
+        }
+
         SceneObject sceneObject;
         sceneObject.id = ObjectId::fromValue(objectValueId);
         sceneObject.layerId = LayerId::fromValue(objectLayerValue);
         sceneObject.geometry = std::move(shape);
         sceneObject.placementTranslation = placementTranslation;
+        sceneObject.displayColorSceneLinear = displayColorSceneLinear;
+        sceneObject.workbenchMaterial = workbenchMaterial;
         snapshot.objects.append(std::move(sceneObject));
         objectIds.insert(objectValueId);
         if (objectValueId < std::numeric_limits<quint64>::max()) {

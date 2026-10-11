@@ -1189,4 +1189,14 @@ void ViewportTransform::zoomAt(const QPointF &screenPosition,
     }
 }
 
+QPointF ViewportTransform::renderJitterPixels() const
+{
+    return renderJitterPixels_;
+}
+
+void ViewportTransform::setRenderJitterPixels(const QPointF &offset)
+{
+    renderJitterPixels_ = offset;
+}
+
 } // namespace classiCAD

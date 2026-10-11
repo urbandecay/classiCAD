@@ -4,6 +4,7 @@
 
 #include "viewport_shading.h"
 #include "viewport_render_frame.h"
+#include "viewport_render_targets.h"
 
 #include <QOpenGLBuffer>
 #include <QOpenGLFunctions_3_3_Core>
@@ -11,7 +12,10 @@
 #include <QOpenGLVertexArrayObject>
 #include <QMatrix4x4>
 #include <QVector3D>
+#include <QVector4D>
 #include <QString>
+
+#include <array>
 
 namespace classiCAD {
 
@@ -29,7 +33,9 @@ public:
               const ViewportShadingSettings &settings,
               bool previewOverlay = false,
               bool clearDepth = true,
-              bool selectionOverlay = false);
+              bool selectionOverlay = false,
+              const ViewportRenderTargets *sharedTargets = nullptr,
+              quint32 *populatedAttachments = nullptr);
 
 private:
     struct SurfaceVertex {
@@ -46,37 +52,68 @@ private:
         int count = 0;
         Point3D offset;
         bool selected = false;
-        QColor objectColor;
+        QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
+        WorkbenchMaterialData workbenchMaterial;
         quint64 objectSeed = 0;
         bool outlineHandledBySceneStroke = false;
+        bool shadowVolumeSupported = false;
+        QVector<QVector3D> shadowVertices;
+        QVector<std::array<int, 3>> shadowTriangles;
     };
 
     bool initialize();
     void prepareGeometry(const QVector<ViewportRenderObject> &objects);
     bool renderShadowMap(const ViewportTransform &transform,
                          const QSize &viewportSize,
-                         const ViewportShadingSettings &settings);
+                         const ViewportShadingSettings &settings,
+                         bool fallbackOnly);
+    bool renderShadowVolumes(const QVector3D &lightDirection,
+                             const QMatrix4x4 &viewProjection,
+                             const QSize &viewportSize,
+                             qreal devicePixelRatio);
     bool ensureShadowMap();
     bool ensureObjectIdFramebuffer(const QSize &pixelSize);
+    bool ensureWorkbenchEffectFramebuffers(
+        const QSize &pixelSize,
+        const ViewportRenderTargets &targets);
+    bool renderWorkbenchEffectPrepass(
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const ViewportShadingSettings &settings,
+        const ViewportRenderTargets &targets,
+        bool snapshotDepth,
+        bool *snapshotDepthReady);
     bool ensureMatcapTexture(const QString &presetName);
     bool ensureAgxDisplayTexture();
+    bool ensureCavityJitterTexture(int totalSamples);
 
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram outlineProgram_;
     QOpenGLShaderProgram objectIdProgram_;
+    QOpenGLShaderProgram workbenchEffectProgram_;
     QOpenGLShaderProgram shadowProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject outlineVertexArray_;
+    QOpenGLVertexArrayObject shadowVolumeVertexArray_;
     QOpenGLBuffer vertexBuffer_{QOpenGLBuffer::VertexBuffer};
+    QOpenGLBuffer shadowVolumeVertexBuffer_{QOpenGLBuffer::VertexBuffer};
     GLuint objectIdFramebuffer_ = 0;
     GLuint objectIdTexture_ = 0;
     GLuint objectIdDepthStencil_ = 0;
     QSize objectIdFramebufferSize_;
     bool objectIdFramebufferAttempted_ = false;
+    GLuint workbenchEffectFramebuffer_ = 0;
+    GLuint workbenchOutlineIdTexture_ = 0;
+    GLuint cavityDepthFramebuffer_ = 0;
+    GLuint cavityDepthTexture_ = 0;
+    QSize workbenchEffectFramebufferSize_;
     QVector<SurfaceVertex> vertices_;
     QVector<DrawRange> ranges_;
     unsigned int matcapTexture_ = 0;
     unsigned int agxDisplayTexture_ = 0;
+    GLuint cavityJitterTexture_ = 0;
+    int cavityJitterSampleCount_ = 0;
     unsigned int shadowTexture_ = 0;
     unsigned int shadowFramebuffer_ = 0;
     QMatrix4x4 shadowViewProjection_;

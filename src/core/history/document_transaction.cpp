@@ -2,6 +2,7 @@
 
 #include <QSet>
 
+#include <cmath>
 #include <utility>
 
 namespace classiCAD {
@@ -92,6 +93,55 @@ bool DocumentTransaction::setObjectPlacementTranslation(
     }
     changes_.addObject(objectId);
     changes_.placementChanged = true;
+    return true;
+}
+
+bool DocumentTransaction::setObjectAppearance(
+    ObjectId objectId,
+    const QVector4D &displayColorSceneLinear,
+    const WorkbenchMaterialData &workbenchMaterial)
+{
+    SceneObject *object = document_.mutableObject(objectId);
+    if (object == nullptr || !document_.isObjectEditable(objectId)) {
+        return false;
+    }
+
+    const auto unitInterval = [](float value) {
+        return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
+    };
+    if (!unitInterval(displayColorSceneLinear.x()) ||
+        !unitInterval(displayColorSceneLinear.y()) ||
+        !unitInterval(displayColorSceneLinear.z()) ||
+        !unitInterval(displayColorSceneLinear.w()) ||
+        !unitInterval(workbenchMaterial.baseColorSceneLinear.x()) ||
+        !unitInterval(workbenchMaterial.baseColorSceneLinear.y()) ||
+        !unitInterval(workbenchMaterial.baseColorSceneLinear.z()) ||
+        !std::isfinite(workbenchMaterial.roughness) ||
+        workbenchMaterial.roughness < 0.0 || workbenchMaterial.roughness > 1.0 ||
+        !std::isfinite(workbenchMaterial.metallic) ||
+        workbenchMaterial.metallic < 0.0 || workbenchMaterial.metallic > 1.0 ||
+        !std::isfinite(workbenchMaterial.alpha) ||
+        workbenchMaterial.alpha < 0.0 || workbenchMaterial.alpha > 1.0) {
+        return false;
+    }
+
+    const WorkbenchMaterialData &currentMaterial = object->workbenchMaterial;
+    const bool sameDisplayColor =
+        object->displayColorSceneLinear == displayColorSceneLinear;
+    const bool sameMaterial =
+        currentMaterial.baseColorSceneLinear ==
+            workbenchMaterial.baseColorSceneLinear &&
+        currentMaterial.roughness == workbenchMaterial.roughness &&
+        currentMaterial.metallic == workbenchMaterial.metallic &&
+        currentMaterial.alpha == workbenchMaterial.alpha;
+    if (sameDisplayColor && sameMaterial) {
+        return false;
+    }
+
+    object->displayColorSceneLinear = displayColorSceneLinear;
+    object->workbenchMaterial = workbenchMaterial;
+    changes_.addObject(objectId);
+    changes_.objectAppearanceChanged = true;
     return true;
 }
 

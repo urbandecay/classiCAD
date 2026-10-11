@@ -5,6 +5,8 @@
 #include "core/document/shape.h"
 #include "core/document/object_id.h"
 #include "services/sampling/surface_tessellation_cache.h"
+
+#include <array>
 #include "viewport_render_frame.h"
 
 #include <QVector>
@@ -26,6 +28,14 @@ struct ViewportDepthGeometry {
     QVector<QVector3D> surfaceVertices;
     // One smooth normal per expanded GL_TRIANGLES vertex.
     QVector<QVector3D> surfaceNormals;
+    // A closed, indexed display mesh derived only for validated NurbsSolids.
+    // It reuses the cap tessellation's shared vertices and adds walls along
+    // the cap mesh boundary so shadow volumes have explicit manifold topology.
+    struct ShadowCasterMesh {
+        QVector<QVector3D> vertices;
+        QVector<std::array<int, 3>> triangles;
+        bool valid = false;
+    } shadowCasterMesh;
     struct SurfaceBuildTiming {
         int faceIndex = -1;
         int degreeU = 0;

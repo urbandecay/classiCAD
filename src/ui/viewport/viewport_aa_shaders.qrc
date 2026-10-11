@@ -1,0 +1,10 @@
+<RCC>
+    <!-- SMAA area/search data: Blender v5.2.2 smaa_textures.cc, MIT license. -->
+    <qresource prefix="/classiCAD/shaders">
+        <file alias="viewport_smaa_lib.glsl">shaders/viewport_smaa_lib.glsl</file>
+        <file alias="viewport_smaa_vertex.glsl">shaders/viewport_smaa_vertex.glsl</file>
+        <file alias="viewport_smaa_fragment.glsl">shaders/viewport_smaa_fragment.glsl</file>
+        <file alias="viewport_smaa_area.b64">shaders/viewport_smaa_area.b64</file>
+        <file alias="viewport_smaa_search.b64">shaders/viewport_smaa_search.b64</file>
+    </qresource>
+</RCC>

@@ -48,9 +48,9 @@ enum class ViewportBackgroundMode {
 };
 
 enum class ViewportCavityType {
-    World,
-    Screen,
-    Both,
+    World = 0,  // Blender's world-space SSAO cavity.
+    Screen = 1, // Blender's screen-space normal curvature.
+    Both = 2,
 };
 
 // Blender keeps wireframe X-Ray separate from the solid X-Ray setting. The
@@ -81,6 +81,15 @@ struct ViewportShadingSettings {
     bool shadows = false;
     bool depthOfField = false;
     bool cavity = false;
+    // Blender stores the screen-space AO controls on SceneDisplay and the
+    // ridge/valley factors on View3DShading. Keep their matching defaults.
+    qreal cavityDistance = 0.2;
+    qreal cavityAttenuation = 1.0;
+    int cavitySamples = 16;
+    qreal cavityRidgeFactor = 1.0;
+    qreal cavityValleyFactor = 1.0;
+    qreal curvatureRidgeFactor = 1.0;
+    qreal curvatureValleyFactor = 1.0;
     qreal xrayAlpha = 0.5;
     qreal shadowIntensity = 0.5;
     qreal shadowOffset = 0.1;

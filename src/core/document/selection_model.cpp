@@ -2,7 +2,21 @@
 
 #include "document.h"
 
+#include <utility>
+
 namespace classiCAD {
+
+void SelectionModel::setChangeNotifier(ChangeNotifier notifier)
+{
+    changeNotifier_ = std::move(notifier);
+}
+
+void SelectionModel::notifyChanged()
+{
+    if (changeNotifier_) {
+        changeNotifier_();
+    }
+}
 
 const QVector<ObjectId> &SelectionModel::objectIds() const
 {
@@ -21,14 +35,20 @@ bool SelectionModel::contains(ObjectId objectId) const
 
 void SelectionModel::clear()
 {
+    const bool changed = !objectIds_.isEmpty() || primaryObjectId_.isValid();
     objectIds_.clear();
     primaryObjectId_ = ObjectId::invalid();
-    clearActiveControlPoint();
+    activeControlPoint_ = ControlPointReference{};
+    if (changed) {
+        notifyChanged();
+    }
 }
 
 void SelectionModel::setObjectIds(const QVector<ObjectId> &objectIds,
                                   ObjectId primaryObjectId)
 {
+    const QVector<ObjectId> previousObjectIds = objectIds_;
+    const ObjectId previousPrimaryObjectId = primaryObjectId_;
     objectIds_.clear();
     for (const ObjectId objectId : objectIds) {
         if (objectId.isValid() && !objectIds_.contains(objectId)) {
@@ -46,12 +66,17 @@ void SelectionModel::setObjectIds(const QVector<ObjectId> &objectIds,
 
     if (!activeControlPoint_.isValid() ||
         !objectIds_.contains(activeControlPoint_.objectId)) {
-        clearActiveControlPoint();
+        activeControlPoint_ = ControlPointReference{};
+    }
+    if (previousObjectIds != objectIds_ ||
+        previousPrimaryObjectId != primaryObjectId_) {
+        notifyChanged();
     }
 }
 
 void SelectionModel::setPrimaryObjectId(ObjectId objectId)
 {
+    const ObjectId previousPrimaryObjectId = primaryObjectId_;
     if (objectId.isValid() && objectIds_.contains(objectId)) {
         primaryObjectId_ = objectId;
     } else {
@@ -60,7 +85,10 @@ void SelectionModel::setPrimaryObjectId(ObjectId objectId)
                                : objectIds_.back();
     }
     if (primaryObjectId_ != objectId) {
-        clearActiveControlPoint();
+        activeControlPoint_ = ControlPointReference{};
+    }
+    if (previousPrimaryObjectId != primaryObjectId_) {
+        notifyChanged();
     }
 }
 
@@ -69,20 +97,31 @@ void SelectionModel::add(ObjectId objectId)
     if (!objectId.isValid()) {
         return;
     }
-    if (!objectIds_.contains(objectId)) {
+    const bool wasSelected = objectIds_.contains(objectId);
+    const ObjectId previousPrimaryObjectId = primaryObjectId_;
+    if (!wasSelected) {
         objectIds_.append(objectId);
     }
     primaryObjectId_ = objectId;
+    if (!wasSelected || previousPrimaryObjectId != primaryObjectId_) {
+        notifyChanged();
+    }
 }
 
 void SelectionModel::remove(ObjectId objectId)
 {
+    const QVector<ObjectId> previousObjectIds = objectIds_;
+    const ObjectId previousPrimaryObjectId = primaryObjectId_;
     objectIds_.removeOne(objectId);
     if (primaryObjectId_ == objectId) {
         primaryObjectId_ = objectIds_.isEmpty() ? ObjectId::invalid() : objectIds_.back();
     }
     if (activeControlPoint_.objectId == objectId) {
-        clearActiveControlPoint();
+        activeControlPoint_ = ControlPointReference{};
+    }
+    if (previousObjectIds != objectIds_ ||
+        previousPrimaryObjectId != primaryObjectId_) {
+        notifyChanged();
     }
 }
 
@@ -97,6 +136,8 @@ void SelectionModel::toggle(ObjectId objectId)
 
 void SelectionModel::prune(const Document &document)
 {
+    const QVector<ObjectId> previousObjectIds = objectIds_;
+    const ObjectId previousPrimaryObjectId = primaryObjectId_;
     for (auto iterator = objectIds_.begin(); iterator != objectIds_.end();) {
         if (!document.isObjectEditable(*iterator)) {
             iterator = objectIds_.erase(iterator);
@@ -110,7 +151,11 @@ void SelectionModel::prune(const Document &document)
     }
     if (!document.isObjectEditable(activeControlPoint_.objectId) ||
         !objectIds_.contains(activeControlPoint_.objectId)) {
-        clearActiveControlPoint();
+        activeControlPoint_ = ControlPointReference{};
+    }
+    if (previousObjectIds != objectIds_ ||
+        previousPrimaryObjectId != primaryObjectId_) {
+        notifyChanged();
     }
 }
 
@@ -124,7 +169,7 @@ void SelectionModel::setActiveControlPoint(ObjectId objectId, int index)
     if (objectId.isValid() && objectIds_.contains(objectId) && index >= 0) {
         activeControlPoint_ = ControlPointReference{objectId, index};
     } else {
-        clearActiveControlPoint();
+        activeControlPoint_ = ControlPointReference{};
     }
 }
 

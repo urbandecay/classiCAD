@@ -14,6 +14,7 @@
 #include "viewport_line_weight.h"
 #include "viewport_marker_style.h"
 #include "workbench_lighting.h"
+#include "viewport_wire_color.h"
 #include "services/dimensions/dimension_font.h"
 #include "services/dimensions/dimension_layout.h"
 
@@ -34,6 +35,23 @@ namespace {
 
 constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
+
+QColor workbenchRandomColor(ObjectId objectId)
+{
+    // Blender hashes ID.name and, for linked objects, the library filepath.
+    // classiCAD has neither identity field, so hash its persistent ObjectId
+    // deterministically and use Blender's Random-mode HSV palette values.
+    const quint64 objectValue = objectId.value();
+    quint32 hash = static_cast<quint32>(objectValue) ^
+                   static_cast<quint32>(objectValue >> 32);
+    hash ^= hash >> 16;
+    hash *= 0x7feb352dU;
+    hash ^= hash >> 15;
+    hash *= 0x846ca68bU;
+    hash ^= hash >> 16;
+    const qreal hue = static_cast<qreal>(hash) / 4294967296.0;
+    return QColor::fromHsvF(hue, 0.5, 0.8);
+}
 
 using FadedLineBins = std::array<QVector<QLineF>, kFadeBucketCount>;
 
@@ -332,6 +350,12 @@ void ViewportRenderer::setShadingSettings(
     const ViewportShadingSettings &settings)
 {
     shadingSettings_ = settings;
+}
+
+void ViewportRenderer::setSmoothWirePreferences(bool overlay, bool editMode)
+{
+    smoothWiresOverlay_ = overlay;
+    smoothWiresEditMode_ = editMode;
 }
 
 void ViewportRenderer::setGridBaseStep(qreal baseGridStep)
@@ -859,7 +883,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  ObjectId shapeObjectId,
                                  quint64 geometryRevision,
                                  const ViewportDepthGeometry *preparedGeometry,
-                                 const Point3D &preparedOffset) const
+                                 const Point3D &preparedOffset,
+                                 std::optional<QVector4D> displayColorSceneLinear,
+                                 std::optional<WorkbenchMaterialData>
+                                     workbenchMaterial) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -881,6 +908,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
         curveColor = QColor::fromHsv(
             static_cast<int>((seed * 2654435761u) % 360u), 160, 230);
     }
+    if (!selected && !preview &&
+        shadingSettings_.mode == ViewportShadingMode::Solid &&
+        isViewportCurveStrokeType(shape.geometryType)) {
+        curveColor = viewportEditWireThemeColor();
+    }
     if (shadingSettings_.xrayEnabled() && !preview) {
         curveColor.setAlphaF(curveColor.alphaF() * shadingSettings_.xrayAlpha);
     }
@@ -890,6 +922,19 @@ void ViewportRenderer::drawShape(QPainter &painter,
     const QPen layerPen = selected || preview
                               ? QPen(curveColor, curveWidth)
                               : layerLineTypePen(curveColor, curveWidth, layerLineType);
+
+    const auto drawWithWireHint = [&painter, this, preview](
+                                     bool editModeWire,
+                                     const auto &draw) {
+        painter.save();
+        if (!preview) {
+            painter.setRenderHint(
+                QPainter::Antialiasing,
+                editModeWire ? smoothWiresEditMode_ : smoothWiresOverlay_);
+        }
+        draw();
+        painter.restore();
+    };
 
     painter.setPen(layerPen);
     painter.setBrush(Qt::NoBrush);
@@ -1006,15 +1051,17 @@ void ViewportRenderer::drawShape(QPainter &painter,
             drawNurbsSurface(painter, faces.first(), viewportSize,
                              shapeObjectId, geometryRevision, preparedGeometry,
                              preparedOffset, preview, selected, false,
-                             layerColor);
+                             layerColor, displayColorSceneLinear,
+                             workbenchMaterial);
         } else {
             for (int index = 0; index < faces.size(); ++index)
                 drawNurbsSurface(painter, faces[index], viewportSize,
-                                 ObjectId::invalid(), 0, nullptr, {},
+                                 shapeObjectId, 0, nullptr, {},
                                  preview, selected,
                                  nurbsSolidFaceReversed(shape.nurbsSolid,
                                                         index),
-                                 layerColor);
+                                 layerColor, displayColorSceneLinear,
+                                 workbenchMaterial);
         }
         return;
     }
@@ -1025,7 +1072,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          preview ? ObjectId::invalid() : shapeObjectId,
                          preview ? 0 : geometryRevision,
                          preparedGeometry, preparedOffset, preview, selected,
-                         false, layerColor);
+                         false, layerColor, displayColorSceneLinear,
+                         workbenchMaterial);
         return;
     }
 
@@ -1056,26 +1104,30 @@ void ViewportRenderer::drawShape(QPainter &painter,
         if (isValidNurbsCurve(shape.nurbs)) {
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else {
-            for (int index = 0; index + 1 < shape.points.size(); ++index) {
-                painter.drawLine(worldToScreen(shape.points[index], viewportSize),
-                                 worldToScreen(shape.points[index + 1], viewportSize));
-            }
+            drawWithWireHint(false, [&] {
+                for (int index = 0; index + 1 < shape.points.size(); ++index) {
+                    painter.drawLine(worldToScreen(shape.points[index], viewportSize),
+                                     worldToScreen(shape.points[index + 1], viewportSize));
+                }
+            });
         }
     } else if (shape.geometryType == GeometryType::Rectangle && shape.points.size() >= 2) {
         if (isValidNurbsCurve(shape.nurbs)) {
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
             return;
         }
-        const QVector<QPointF> vertices = rectangleVertices(shape);
-        if (vertices.size() >= 4) {
-            QPainterPath rectanglePath;
-            rectanglePath.moveTo(worldToScreen(vertices.first(), viewportSize));
-            for (int index = 1; index < vertices.size(); ++index) {
-                rectanglePath.lineTo(worldToScreen(vertices[index], viewportSize));
+        drawWithWireHint(false, [&] {
+            const QVector<QPointF> vertices = rectangleVertices(shape);
+            if (vertices.size() >= 4) {
+                QPainterPath rectanglePath;
+                rectanglePath.moveTo(worldToScreen(vertices.first(), viewportSize));
+                for (int index = 1; index < vertices.size(); ++index) {
+                    rectanglePath.lineTo(worldToScreen(vertices[index], viewportSize));
+                }
+                rectanglePath.closeSubpath();
+                painter.drawPath(rectanglePath);
             }
-            rectanglePath.closeSubpath();
-            painter.drawPath(rectanglePath);
-        }
+        });
     } else if (shape.geometryType == GeometryType::Polygon) {
         if (isValidNurbsCurve(shape.nurbs)) {
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
@@ -1084,11 +1136,13 @@ void ViewportRenderer::drawShape(QPainter &painter,
         if (isValidNurbsCurve(shape.nurbs)) {
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else {
-            const QPointF center = worldToScreen(shape.points[0], viewportSize);
-            const QPointF edge = worldToScreen(shape.points[1], viewportSize);
-            const qreal radius =
-                std::hypot(edge.x() - center.x(), edge.y() - center.y());
-            painter.drawEllipse(center, radius, radius);
+            drawWithWireHint(false, [&] {
+                const QPointF center = worldToScreen(shape.points[0], viewportSize);
+                const QPointF edge = worldToScreen(shape.points[1], viewportSize);
+                const qreal radius =
+                    std::hypot(edge.x() - center.x(), edge.y() - center.y());
+                painter.drawEllipse(center, radius, radius);
+            });
         }
     } else if (shape.geometryType == GeometryType::Ellipse) {
         if (isValidNurbsCurve(shape.nurbs)) {
@@ -1098,25 +1152,29 @@ void ViewportRenderer::drawShape(QPainter &painter,
         if (isValidNurbsCurve(shape.nurbs)) {
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else if (shape.arcMode == ArcMode::OnePoint) {
-            if (std::abs(shape.arcSweep) > 1e-9) {
-                drawCenterArcWithSweep(painter,
-                                       shape.points[0],
-                                       shape.points[1],
-                                       shape.arcSweep,
-                                       viewportSize);
-            } else {
-                drawCenterArc(painter,
-                              shape.points[0],
-                              shape.points[1],
-                              shape.points[2],
-                              viewportSize);
-            }
+            drawWithWireHint(false, [&] {
+                if (std::abs(shape.arcSweep) > 1e-9) {
+                    drawCenterArcWithSweep(painter,
+                                           shape.points[0],
+                                           shape.points[1],
+                                           shape.arcSweep,
+                                           viewportSize);
+                } else {
+                    drawCenterArc(painter,
+                                  shape.points[0],
+                                  shape.points[1],
+                                  shape.points[2],
+                                  viewportSize);
+                }
+            });
         } else {
-            drawCircularArc(painter,
-                            shape.points[0],
-                            shape.points[1],
-                            shape.points[2],
-                            viewportSize);
+            drawWithWireHint(false, [&] {
+                drawCircularArc(painter,
+                                shape.points[0],
+                                shape.points[1],
+                                shape.points[2],
+                                viewportSize);
+            });
         }
     } else if (shape.geometryType == GeometryType::Bezier ||
                shape.geometryType == GeometryType::Nurbs) {
@@ -1141,35 +1199,43 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                                        &screen);
                 return screen;
             };
-            painter.setPen(QPen(controlColor, 1, Qt::DashLine));
-            for (int index = 0; index + 1 < controlPoints.size(); ++index) {
-                painter.drawLine(projectControlPoint(index),
-                                 projectControlPoint(index + 1));
-            }
+            drawWithWireHint(true, [&] {
+                painter.setPen(QPen(controlColor, 1, Qt::DashLine));
+                for (int index = 0; index + 1 < controlPoints.size(); ++index) {
+                    painter.drawLine(projectControlPoint(index),
+                                     projectControlPoint(index + 1));
+                }
+            });
         }
 
         painter.setPen(layerPen);
         if (hasStoredCurve) {
             drawCurve(shape.nurbs, shapeWorkPlaneFrame(shape));
         } else if (shape.geometryType == GeometryType::Bezier && shape.points.size() >= 4) {
-            QPainterPath curve;
-            curve.moveTo(worldToScreen(shape.points[0], viewportSize));
-            curve.cubicTo(worldToScreen(shape.points[1], viewportSize),
-                          worldToScreen(shape.points[2], viewportSize),
-                          worldToScreen(shape.points[3], viewportSize));
-            painter.drawPath(curve);
+            drawWithWireHint(false, [&] {
+                QPainterPath curve;
+                curve.moveTo(worldToScreen(shape.points[0], viewportSize));
+                curve.cubicTo(worldToScreen(shape.points[1], viewportSize),
+                              worldToScreen(shape.points[2], viewportSize),
+                              worldToScreen(shape.points[3], viewportSize));
+                painter.drawPath(curve);
+            });
         } else if (shape.geometryType == GeometryType::Nurbs) {
-            for (int index = 0; index + 1 < controlPoints.size(); ++index) {
-                painter.drawLine(worldToScreen(controlPoints[index], viewportSize),
-                                 worldToScreen(controlPoints[index + 1], viewportSize));
-            }
+            drawWithWireHint(false, [&] {
+                for (int index = 0; index + 1 < controlPoints.size(); ++index) {
+                    painter.drawLine(worldToScreen(controlPoints[index], viewportSize),
+                                     worldToScreen(controlPoints[index + 1], viewportSize));
+                }
+            });
         }
     } else {
-        painter.setPen(QPen(controlColor, 1, Qt::DashLine));
-        for (int index = 0; index + 1 < shape.points.size(); ++index) {
-            painter.drawLine(worldToScreen(shape.points[index], viewportSize),
-                             worldToScreen(shape.points[index + 1], viewportSize));
-        }
+        drawWithWireHint(true, [&] {
+            painter.setPen(QPen(controlColor, 1, Qt::DashLine));
+            for (int index = 0; index + 1 < shape.points.size(); ++index) {
+                painter.drawLine(worldToScreen(shape.points[index], viewportSize),
+                                 worldToScreen(shape.points[index + 1], viewportSize));
+            }
+        });
     }
 
     if (preview && drawPreviewPoints && !isDimensionGeometryType(shape.geometryType)) {
@@ -1234,9 +1300,13 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
             return screen;
         };
 
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing,
+                              smoothWiresEditMode_);
         for (int index = 0; index + 1 < controlPoints.size(); ++index) {
             painter.drawLine(screenPosition(index), screenPosition(index + 1));
         }
+        painter.restore();
 
         for (int index = 0; index < controlPoints.size(); ++index) {
             if (!drawMarkers) {
@@ -1275,6 +1345,9 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
     if ((shape.geometryType == GeometryType::Rectangle ||
          shape.geometryType == GeometryType::Polygon) &&
         controlPoints.size() > 2) {
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing,
+                              smoothWiresEditMode_);
         painter.setPen(QPen(handleColor, 1.0, Qt::DashLine));
         painter.setBrush(Qt::NoBrush);
         painter.drawLine(transform_.workPlaneToScreen(controlPoints.last(),
@@ -1283,6 +1356,7 @@ void ViewportRenderer::drawControlPoints(QPainter &painter,
                          transform_.workPlaneToScreen(controlPoints.first(),
                                                        viewportSize,
                                                        frame));
+        painter.restore();
     }
 }
 
@@ -1563,29 +1637,99 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         bool preview,
                                         bool selected,
                                         bool reverseOrientation,
-                                        const QColor &objectColor) const
+                                        const QColor &objectColor,
+                                        std::optional<QVector4D> displayColorSceneLinear,
+                                        std::optional<WorkbenchMaterialData>
+                                            workbenchMaterial) const
 {
     Q_UNUSED(selected);
     if (shadingSettings_.mode == ViewportShadingMode::Solid) {
-        QColor sourceColor = QColor(Qt::white);
-        if (shadingSettings_.colorMode == ViewportColorMode::Custom) {
-            sourceColor = shadingSettings_.customColor;
-        } else if (shadingSettings_.colorMode == ViewportColorMode::Object &&
-                   objectColor.isValid()) {
-            sourceColor = objectColor;
-        } else if (shadingSettings_.colorMode == ViewportColorMode::Random) {
-            const quint32 seed = static_cast<quint32>(objectId.value());
-            sourceColor = QColor::fromHsv(
-                static_cast<int>((seed * 2654435761u) % 360u), 96, 204);
+        const WorkbenchMaterialData fallbackMaterial;
+        const WorkbenchMaterialData &material = workbenchMaterial
+                                                    ? *workbenchMaterial
+                                                    : fallbackMaterial;
+        QVector3D sourceColorLinear = workbenchDefaultSolidMaterialDiffuseColor();
+        qreal sourceAlpha = 1.0;
+        qreal roughness = 0.4;
+        qreal metallic = 0.0;
+
+        switch (shadingSettings_.colorMode) {
+        case ViewportColorMode::Material:
+        case ViewportColorMode::Attribute:
+        case ViewportColorMode::Texture:
+            // Attribute and Texture have no color-attribute, UV, or image
+            // texture inputs in classiCAD yet, so Blender's Material fallback
+            // is used until those scene inputs exist.
+            sourceColorLinear = workbenchMaterial
+                                    ? material.baseColorSceneLinear
+                                    : workbenchDefaultSolidMaterialDiffuseColor();
+            sourceAlpha = workbenchMaterial ? material.alpha : 1.0;
+            roughness = workbenchMaterial ? material.roughness : 0.4;
+            metallic = workbenchMaterial ? material.metallic : 0.0;
+            break;
+        case ViewportColorMode::Object:
+            if (displayColorSceneLinear) {
+                sourceColorLinear = QVector3D(displayColorSceneLinear->x(),
+                                              displayColorSceneLinear->y(),
+                                              displayColorSceneLinear->z());
+                sourceAlpha = displayColorSceneLinear->w();
+            } else if (objectColor.isValid()) {
+                // Legacy callers pass Qt/layer colors in sRGB. Keep that path
+                // working while scene objects migrate to the linear payload.
+                sourceColorLinear = workbenchSrgbToSceneLinear(
+                    QVector3D(objectColor.redF(), objectColor.greenF(),
+                              objectColor.blueF()));
+                sourceAlpha = objectColor.alphaF();
+            }
+            break;
+        case ViewportColorMode::Random: {
+            const QColor randomColor = workbenchRandomColor(objectId);
+            sourceColorLinear = workbenchRec709ToSceneLinear(
+                QVector3D(randomColor.redF(), randomColor.greenF(),
+                          randomColor.blueF()));
+            sourceAlpha = displayColorSceneLinear
+                              ? displayColorSceneLinear->w()
+                              : objectColor.isValid()
+                                    ? objectColor.alphaF()
+                                    : 1.0;
+            break;
         }
-        const QColor baseColor = preview
-                                     ? QColor(QStringLiteral("#d89a4e"))
-                                     : sourceColor;
-        const qreal alpha = preview
-                                ? 0.5
-                                : shadingSettings_.xrayEnabled()
-                                      ? shadingSettings_.xrayAlpha
-                                : 1.0;
+        case ViewportColorMode::Custom:
+            sourceColorLinear = workbenchSrgbToSceneLinear(
+                QVector3D(shadingSettings_.customColor.redF(),
+                          shadingSettings_.customColor.greenF(),
+                          shadingSettings_.customColor.blueF()));
+            sourceAlpha = workbenchCustomColorSourceAlpha;
+            break;
+        }
+
+        if (preview) {
+            const QColor previewColor(QStringLiteral("#d89a4e"));
+            sourceColorLinear = workbenchSrgbToSceneLinear(
+                QVector3D(previewColor.redF(), previewColor.greenF(),
+                          previewColor.blueF()));
+            sourceAlpha = 0.5;
+            roughness = 0.4;
+            metallic = 0.0;
+        }
+        const WorkbenchPackedMaterialData packed =
+            workbenchPackMaterialData(static_cast<float>(metallic),
+                                      static_cast<float>(roughness),
+                                      static_cast<float>(sourceAlpha));
+        roughness = packed.roughness;
+        metallic = packed.metallic;
+        if (!preview) {
+            sourceAlpha = packed.alpha;
+        }
+        const qreal alpha = std::clamp(
+            sourceAlpha * (preview || !shadingSettings_.xrayEnabled()
+                               ? 1.0
+                               : shadingSettings_.xrayAlpha),
+            0.0, 1.0);
+        QColor baseColor = QColor::fromRgbF(
+            std::clamp<qreal>(sourceColorLinear.x(), 0.0, 1.0),
+            std::clamp<qreal>(sourceColorLinear.y(), 0.0, 1.0),
+            std::clamp<qreal>(sourceColorLinear.z(), 0.0, 1.0), alpha);
         const Point3D viewDirection = transform_.viewDirection();
         const Point3D viewUp = transform_.viewUp();
         const Point3D viewRight{
@@ -1606,15 +1750,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const QVector3D camera(static_cast<float>(cameraPosition.x),
                                static_cast<float>(cameraPosition.y),
                                static_cast<float>(cameraPosition.z));
-        const QVector3D baseColorVector = preview ||
-                shadingSettings_.colorMode == ViewportColorMode::Custom ||
-                shadingSettings_.colorMode == ViewportColorMode::Random ||
-                (shadingSettings_.colorMode == ViewportColorMode::Object &&
-                 objectColor.isValid())
-            ? workbenchSrgbToSceneLinear(
-                  QVector3D(baseColor.redF(), baseColor.greenF(),
-                            baseColor.blueF()))
-            : workbenchDefaultSolidMaterialDiffuseColor();
+        const QVector3D baseColorVector = sourceColorLinear;
         const auto shade = [&](const QVector3D &sourceNormal,
                                const Point3D &sourcePosition) {
             const QVector3D normalWorld = workbenchNormalize(
@@ -1666,8 +1802,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         shadingSettings_.worldSpaceLighting,
                         worldRight, worldUp, worldFacing);
                 shadedLinear = workbenchStudioShade(
-                    baseColorVector, normalView, incidentView, 161.0f / 255.0f,
-                    0.0f, viewLighting);
+                    baseColorVector, normalView, incidentView,
+                    static_cast<float>(roughness),
+                    static_cast<float>(metallic), viewLighting);
             } else if (shadingSettings_.lightingMode ==
                        ViewportLightingMode::MatCap) {
                 shadedLinear = workbenchMatcapShade(
@@ -1824,7 +1961,12 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         }
     }
     if (!screenLines.isEmpty()) {
+        painter.save();
+        if (!preview) {
+            painter.setRenderHint(QPainter::Antialiasing, smoothWiresOverlay_);
+        }
         painter.drawLines(screenLines.constData(), screenLines.size());
+        painter.restore();
     }
 }
 

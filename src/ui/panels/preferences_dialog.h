@@ -4,6 +4,8 @@
 
 #include "ui/viewport_widget_api.h"
 
+#include <functional>
+
 namespace classiCAD {
 
 struct PreferencesDialogValues {
@@ -15,7 +17,7 @@ struct PreferencesDialogValues {
     ViewportCameraPreferences cameraPreferences;
     ViewportNavigationPreferences navigationPreferences;
     RotateToolPreferences rotateToolPreferences;
-    int viewportAaSamples = 0;
+    int viewportAaMode = 8;
     bool smoothWiresOverlay = true;
     bool smoothWiresEditMode = true;
 };
@@ -23,6 +25,8 @@ struct PreferencesDialogValues {
 // Returns true when the user accepts the dialog and writes the selected values.
 bool showPreferencesDialog(QWidget *parent,
                            const PreferencesDialogValues &initialValues,
-                           PreferencesDialogValues *selectedValues);
+                           PreferencesDialogValues *selectedValues,
+                           std::function<void(int, bool, bool)>
+                               viewportQualityPreview = {});
 
 } // namespace classiCAD

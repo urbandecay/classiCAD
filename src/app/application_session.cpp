@@ -7,6 +7,7 @@ namespace classiCAD {
 ApplicationSession::ApplicationSession()
     : history_(document_)
 {
+    selection_.setChangeNotifier([this]() { notifySelectionChanged(); });
 }
 
 Document &ApplicationSession::document()
@@ -83,7 +84,8 @@ bool ApplicationSession::commitTransaction(DocumentTransaction &transaction)
     if (changes.affectsPersistentDocument()) {
         notifyHistoryChanged();
     }
-    if (changes.affectsLayerPresentation()) {
+    if (changes.affectsLayerPresentation() ||
+        changes.objectAppearanceChanged) {
         notifyLayersChanged();
     }
     if (changes.selectionChanged) {

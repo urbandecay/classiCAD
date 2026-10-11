@@ -418,6 +418,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
         (geometryType == GeometryType::Bezier ||
          geometryType == GeometryType::Nurbs)) {
         *controlGuide = {&shape, QColor(QStringLiteral("#8aa7c7")), 1.0f, true};
+        controlGuide->smoothWireCategory =
+            ViewportSmoothWireCategory::EditMode;
         controlGuide->editModeWire = true;
         controlGuide->worldOffset = object.preparedGeometryOffset;
         controlGuide->objectId = object.objectId;
@@ -1148,9 +1150,11 @@ bool ViewportSceneRenderer::draw(
             glDrawArrays(GL_POINTS, range.first, range.second);
         } else {
             const float widthPixels = stroke.width * float(dpr);
-            const bool smoothWire = stroke.editModeWire
-                                        ? smoothEditModeWires
-                                        : smoothOverlayWires;
+            const bool smoothWire =
+                stroke.smoothWireCategory ==
+                        ViewportSmoothWireCategory::EditMode
+                    ? smoothEditModeWires
+                    : smoothOverlayWires;
             // Antialias coverage has the same color-space meaning for curve
             // wires and surface boundaries as it does for edit wires.
             const bool linearDisplayBlend = linearDisplayBlendAvailable;
@@ -1176,6 +1180,7 @@ bool ViewportSceneRenderer::draw(
                     if (next.pointDiameter > 0 || next.color != stroke.color ||
                         next.width != stroke.width || nextRange.first != range.first + count ||
                         next.editModeWire != stroke.editModeWire ||
+                        next.smoothWireCategory != stroke.smoothWireCategory ||
                         QVector3D(next.worldOffset.x, next.worldOffset.y, next.worldOffset.z) != offset ||
                         viewportSceneStrokePattern(next, widthPixels).style !=
                             ViewportSceneLineStyle::Solid) break;

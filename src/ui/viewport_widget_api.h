@@ -112,8 +112,26 @@ public:
     virtual ViewportNavigationPreferences navigationPreferences() const = 0;
     virtual void setNavigationPreferences(
         const ViewportNavigationPreferences &preferences) = 0;
+    // Keep the previous interface for existing viewport adapters and tests.
+    // New preference code uses the Blender-aligned mode API below.
     virtual int viewportAntiAliasingSamples() const = 0;
     virtual void setViewportAntiAliasingSamples(int samples) = 0;
+    virtual int viewportAntiAliasingMode() const
+    {
+        return viewportAntiAliasingSamples();
+    }
+    virtual void setViewportAntiAliasingMode(int mode)
+    {
+        setViewportAntiAliasingSamples(mode);
+    }
+    // Optional input from a timeline/playback owner. No application caller is
+    // wired yet. A caller must keep this true during playback, clear it when
+    // playback stops, and schedule the viewport frames; this only requests a
+    // redraw when the state changes. The default preserves older adapters.
+    virtual void setViewportPlaybackActive(bool active)
+    {
+        (void)active;
+    }
     virtual bool smoothWiresOverlay() const = 0;
     virtual bool smoothWiresEditMode() const = 0;
     virtual void setSmoothWirePreferences(bool overlay, bool editMode) = 0;

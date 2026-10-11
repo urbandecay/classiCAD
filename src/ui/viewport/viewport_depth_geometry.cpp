@@ -472,6 +472,276 @@ void writeCurve(QDataStream &stream, const Shape::NurbsCurve2D &curve)
     }
 }
 
+quint64 shadowMeshEdgeKey(int first, int second)
+{
+    const quint32 low = static_cast<quint32>(std::min(first, second));
+    const quint32 high = static_cast<quint32>(std::max(first, second));
+    return (quint64(low) << 32u) | high;
+}
+
+struct ShadowMeshEdgeUse {
+    int count = 0;
+    int orientation = 0;
+    int firstFrom = -1;
+    int firstTo = -1;
+};
+
+bool orientAndValidateClosedShadowMesh(
+    ViewportDepthGeometry::ShadowCasterMesh *mesh)
+{
+    if (mesh == nullptr || mesh->vertices.isEmpty() ||
+        mesh->triangles.isEmpty()) {
+        return false;
+    }
+    QHash<quint64, ShadowMeshEdgeUse> edges;
+    const QVector3D origin = mesh->vertices.first();
+    QVector3D minimum(std::numeric_limits<float>::max(),
+                      std::numeric_limits<float>::max(),
+                      std::numeric_limits<float>::max());
+    QVector3D maximum(std::numeric_limits<float>::lowest(),
+                      std::numeric_limits<float>::lowest(),
+                      std::numeric_limits<float>::lowest());
+    for (const QVector3D &point : mesh->vertices) {
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) ||
+            !std::isfinite(point.z())) {
+            return false;
+        }
+        minimum.setX(std::min(minimum.x(), point.x()));
+        minimum.setY(std::min(minimum.y(), point.y()));
+        minimum.setZ(std::min(minimum.z(), point.z()));
+        maximum.setX(std::max(maximum.x(), point.x()));
+        maximum.setY(std::max(maximum.y(), point.y()));
+        maximum.setZ(std::max(maximum.z(), point.z()));
+    }
+    const qreal meshScale = std::max<qreal>((maximum - minimum).length(),
+                                            1.0e-20);
+    const qreal minimumNormalLength = meshScale * meshScale * 1.0e-12;
+    qreal signedVolumeTimesSix = 0.0;
+    for (const auto &triangle : mesh->triangles) {
+        for (const int index : triangle) {
+            if (index < 0 || index >= mesh->vertices.size()) return false;
+        }
+        const QVector3D &a = mesh->vertices[triangle[0]];
+        const QVector3D &b = mesh->vertices[triangle[1]];
+        const QVector3D &c = mesh->vertices[triangle[2]];
+        const QVector3D normal = QVector3D::crossProduct(b - a, c - a);
+        if (!std::isfinite(normal.lengthSquared()) ||
+            normal.length() <= minimumNormalLength) {
+            return false;
+        }
+        const QVector3D relativeA = a - origin;
+        const QVector3D relativeB = b - origin;
+        const QVector3D relativeC = c - origin;
+        signedVolumeTimesSix += QVector3D::dotProduct(
+            relativeA, QVector3D::crossProduct(relativeB, relativeC));
+        const int directedEdges[][2] = {
+            {triangle[0], triangle[1]},
+            {triangle[1], triangle[2]},
+            {triangle[2], triangle[0]}};
+        for (const auto &edge : directedEdges) {
+            ShadowMeshEdgeUse &use = edges[shadowMeshEdgeKey(edge[0], edge[1])];
+            ++use.count;
+            use.orientation += edge[0] < edge[1] ? 1 : -1;
+        }
+    }
+    const qreal volumeTolerance = meshScale * meshScale * meshScale * 1.0e-12;
+    if (!std::isfinite(signedVolumeTimesSix) ||
+        std::abs(signedVolumeTimesSix) <= volumeTolerance) {
+        return false;
+    }
+    for (const ShadowMeshEdgeUse &edge : edges) {
+        if (edge.count != 2 || edge.orientation != 0) return false;
+    }
+    if (signedVolumeTimesSix < 0.0) {
+        for (auto &triangle : mesh->triangles) {
+            std::swap(triangle[1], triangle[2]);
+        }
+    }
+    mesh->valid = true;
+    return true;
+}
+
+bool prepareNurbsSolidShadowMesh(
+    const NurbsExtrusionSolid3D &solid,
+    const SurfaceTessellationCache *surfaceCache,
+    ObjectId objectId,
+    quint64 geometryRevision,
+    ViewportDepthGeometry::ShadowCasterMesh *mesh)
+{
+    if (mesh == nullptr || !validateNurbsSolid(solid)) return false;
+    *mesh = {};
+
+    if (!solid.boundaryFaces.isEmpty()) {
+        // Materialized vertex edits persist a connected set of bilinear face
+        // patches. Shadow volumes support the planar quad subset; a deformed
+        // non-planar patch falls back to the disclosed depth-map pass.
+        QVector<Point3D> points;
+        const auto addPoint = [&points](const Point3D &point) -> int {
+            int found = -1;
+            for (int index = 0; index < points.size(); ++index) {
+                const Point3D &existing = points[index];
+                const qreal distance = std::hypot(
+                    std::hypot(existing.x - point.x, existing.y - point.y),
+                    existing.z - point.z);
+                if (distance < 1.0e-7) {
+                    if (found >= 0) return -1;
+                    found = index;
+                }
+            }
+            if (found >= 0) return found;
+            points.append(point);
+            return static_cast<int>(points.size() - 1);
+        };
+        for (int faceIndex = 0; faceIndex < solid.boundaryFaces.size();
+             ++faceIndex) {
+            const NurbsSurface3D &face = solid.boundaryFaces[faceIndex];
+            if (face.controlPoints.size() != 4 || face.rational ||
+                !face.trimLoops.isEmpty()) {
+                return false;
+            }
+            const Point3D &p0 = face.controlPoints[0];
+            const Point3D &p1 = face.controlPoints[1];
+            const Point3D &p2 = face.controlPoints[2];
+            const Point3D &p3 = face.controlPoints[3];
+            const auto subtract = [](const Point3D &a, const Point3D &b) {
+                return Point3D{a.x - b.x, a.y - b.y, a.z - b.z};
+            };
+            const auto cross = [](const Point3D &a, const Point3D &b) {
+                return Point3D{a.y * b.z - a.z * b.y,
+                               a.z * b.x - a.x * b.z,
+                               a.x * b.y - a.y * b.x};
+            };
+            const auto dot = [](const Point3D &a, const Point3D &b) {
+                return a.x * b.x + a.y * b.y + a.z * b.z;
+            };
+            const auto length = [](const Point3D &a) {
+                return std::hypot(a.x, std::hypot(a.y, a.z));
+            };
+            const Point3D naturalNormal = cross(subtract(p2, p0),
+                                                subtract(p1, p0));
+            const qreal normalLength = length(naturalNormal);
+            const qreal faceScale = std::max({length(subtract(p1, p0)),
+                                              length(subtract(p2, p0)),
+                                              length(subtract(p3, p0))});
+            if (faceScale <= 0.0 ||
+                normalLength <= faceScale * faceScale * 1.0e-12 ||
+                std::abs(dot(subtract(p3, p0), naturalNormal)) /
+                        normalLength > faceScale * 1.0e-8) {
+                return false;
+            }
+            const Point3D firstNormal = cross(subtract(p2, p0),
+                                              subtract(p3, p0));
+            const Point3D secondNormal = cross(subtract(p3, p0),
+                                               subtract(p1, p0));
+            if (dot(firstNormal, secondNormal) <= 0.0) return false;
+
+            int corner[4] = {};
+            for (int index = 0; index < 4; ++index) {
+                corner[index] = addPoint(face.controlPoints[index]);
+                if (corner[index] < 0) return false;
+            }
+            const bool reversed = solid.boundaryFaceReversed[faceIndex];
+            const auto appendTriangle = [&](int a, int b, int c) {
+                mesh->triangles.append(reversed
+                    ? std::array<int, 3>{a, c, b}
+                    : std::array<int, 3>{a, b, c});
+            };
+            appendTriangle(corner[0], corner[2], corner[3]);
+            appendTriangle(corner[0], corner[3], corner[1]);
+        }
+        mesh->vertices.reserve(points.size());
+        for (const Point3D &point : points) mesh->vertices.append(asVector(point));
+        return orientAndValidateClosedShadowMesh(mesh);
+    }
+
+    PreparedNurbsSurfaceTessellation localTessellation;
+    QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
+    const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+    if (surfaceCache != nullptr) {
+        cachedTessellation = surfaceCache->acquire(
+            objectId, geometryRevision, solid.baseSurface, 0);
+        tessellation = cachedTessellation.data();
+    } else if (localTessellation.prepare(solid.baseSurface)) {
+        tessellation = &localTessellation;
+    }
+    if (tessellation == nullptr || !tessellation->isValid() ||
+        tessellation->triangles().isEmpty()) {
+        return false;
+    }
+
+    QHash<quint64, ShadowMeshEdgeUse> capEdges;
+    for (const auto &triangle : tessellation->triangles()) {
+        const int directedEdges[][2] = {
+            {triangle[0], triangle[1]},
+            {triangle[1], triangle[2]},
+            {triangle[2], triangle[0]}};
+        for (const auto &edge : directedEdges) {
+            ShadowMeshEdgeUse &use = capEdges[
+                shadowMeshEdgeKey(edge[0], edge[1])];
+            if (use.count == 0) {
+                use.firstFrom = edge[0];
+                use.firstTo = edge[1];
+            }
+            ++use.count;
+            use.orientation += edge[0] < edge[1] ? 1 : -1;
+        }
+    }
+    QVector<ShadowMeshEdgeUse> boundaryEdges;
+    QVector<int> boundaryDegree(tessellation->vertices().size(), 0);
+    for (const ShadowMeshEdgeUse &edge : capEdges) {
+        if (edge.count == 1) {
+            boundaryEdges.append(edge);
+            ++boundaryDegree[edge.firstFrom];
+            ++boundaryDegree[edge.firstTo];
+        } else if (edge.count != 2 || edge.orientation != 0) {
+            return false;
+        }
+    }
+    if (boundaryEdges.size() < 3 ||
+        std::any_of(boundaryDegree.cbegin(), boundaryDegree.cend(),
+                    [](int degree) { return degree != 0 && degree != 2; })) {
+        return false;
+    }
+
+    const int capVertexCount = tessellation->vertices().size();
+    mesh->vertices.reserve(capVertexCount * 2);
+    for (const Point3D &point : tessellation->vertices()) {
+        mesh->vertices.append(asVector(point));
+    }
+    for (const Point3D &point : tessellation->vertices()) {
+        mesh->vertices.append(asVector({point.x + solid.displacement.x,
+                                        point.y + solid.displacement.y,
+                                        point.z + solid.displacement.z}));
+    }
+    const bool reverseBottom = nurbsSolidFaceReversed(solid, 0);
+    const bool reverseTop = nurbsSolidFaceReversed(solid, 1);
+    if (reverseBottom == reverseTop) return false;
+    mesh->triangles.reserve(tessellation->triangles().size() * 2 +
+                            boundaryEdges.size() * 2);
+    for (const auto &triangle : tessellation->triangles()) {
+        mesh->triangles.append(reverseBottom
+            ? std::array<int, 3>{triangle[0], triangle[2], triangle[1]}
+            : triangle);
+        const std::array<int, 3> top{
+            triangle[0] + capVertexCount,
+            triangle[1] + capVertexCount,
+            triangle[2] + capVertexCount};
+        mesh->triangles.append(reverseTop
+            ? std::array<int, 3>{top[0], top[2], top[1]}
+            : top);
+    }
+    for (const ShadowMeshEdgeUse &edge : boundaryEdges) {
+        int first = edge.firstFrom;
+        int second = edge.firstTo;
+        if (reverseBottom) std::swap(first, second);
+        const int firstTop = first + capVertexCount;
+        const int secondTop = second + capVertexCount;
+        mesh->triangles.append({second, first, firstTop});
+        mesh->triangles.append({second, firstTop, secondTop});
+    }
+    return orientAndValidateClosedShadowMesh(mesh);
+}
+
 } // namespace
 
 namespace {
@@ -517,6 +787,11 @@ void appendShapeDepthGeometry(const Shape &shape,
                                                 nurbsSolidFaceReversed(
                                                     shape.nurbsSolid, index),
                                             collectSurfaceBuildTimings);
+            }
+            if (shape.geometryType == GeometryType::NurbsSolid) {
+                prepareNurbsSolidShadowMesh(
+                    shape.nurbsSolid, surfaceCache, objectId,
+                    geometryRevision, &geometry.shadowCasterMesh);
             }
             return;
         }

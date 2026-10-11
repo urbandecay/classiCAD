@@ -113,13 +113,27 @@ bool applyJoinCommand(const Document &document,
             return false;
         }
     }
+
+    SceneObject joinedObject = plan.joinedObject;
+    const SceneObject *appearanceSource =
+        document.object(plan.sourceObjectIds.first());
+    if (appearanceSource == nullptr) {
+        return false;
+    }
+    // A joined object has one material input in this model. Use the first
+    // selected (reference) object's appearance as a deterministic rule; this
+    // does not reproduce Blender's per-face material slots for mixed sources.
+    joinedObject.displayColorSceneLinear =
+        appearanceSource->displayColorSceneLinear;
+    joinedObject.workbenchMaterial = appearanceSource->workbenchMaterial;
+
     for (const ObjectId sourceObjectId : plan.sourceObjectIds) {
         if (!transaction.removeObject(sourceObjectId)) {
             return false;
         }
     }
     const ObjectId result = transaction.insertObject(plan.insertionIndex,
-                                                     plan.joinedObject);
+                                                     joinedObject);
     if (!result.isValid()) {
         return false;
     }

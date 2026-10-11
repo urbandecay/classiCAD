@@ -30,6 +30,7 @@
 #include "../core/geometry/work_plane.h"
 #include "../core/history/history.h"
 #include "../core/serialization/document_serializer.h"
+#include "../core/serialization/shape_json_codec.h"
 #include "../core/serialization/blender_project_file.h"
 #include "../core/serialization/rhino3dm_interchange.h"
 #include "../services/hit_testing/curve_hit_tester.h"
@@ -61,6 +62,7 @@
 #include "input_helpers.h"
 #include "input/tool_input_translator.h"
 #include "viewport/blender_grid_renderer.h"
+#include "viewport/viewport_anti_aliasing.h"
 #include "viewport/viewport_shading.h"
 #include "viewport/navigation_controller.h"
 #include "viewport/viewport_control_point_renderer.h"
@@ -74,8 +76,10 @@
 #include "viewport/viewport_renderer.h"
 #include "viewport/viewport_render_frame.h"
 #include "viewport/viewport_geometry_cache.h"
+#include "viewport/viewport_wire_color.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QBuffer>
@@ -83,6 +87,7 @@
 #include <QColorDialog>
 #include <QCursor>
 #include <QDateTime>
+#include <QDataStream>
 #include <QDebug>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -118,6 +123,7 @@
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSpinBox>
 #include <QStringList>
 #include <QStyle>
 #include <QTextStream>
@@ -131,6 +137,7 @@
 #include <array>
 #include <cmath>
 #include <functional>
+#include <optional>
 
 namespace classiCAD {
 
@@ -1221,15 +1228,16 @@ public:
             gpuSurface_->setSurfaceTessellationCache(
                 &surfaceTessellationCache_);
             gpuSurface_->setGeometry(rect());
-            gpuSurface_->setAntiAliasingSamples(
-                blenderGridRenderer_.antiAliasingSamples());
+            gpuSurface_->setAntiAliasingMode(viewportAaMode_);
             gpuSurface_->setDrawCallback(
                 [this](QPainter &painter, BlenderGridRenderer &gridRenderer,
+                       ViewportAaRenderer &aaRenderer,
                        ViewportSceneRenderer &sceneRenderer,
                        ViewportSceneRenderer &previewRenderer,
                        ViewportControlPointRenderer &controlPointRenderer,
                        ViewportSurfaceRenderer &surfaceRenderer) {
-                    paintViewport(painter, &gridRenderer, &sceneRenderer,
+                    paintViewport(painter, &gridRenderer, &aaRenderer,
+                                  &sceneRenderer,
                                   &previewRenderer, &controlPointRenderer,
                                   &surfaceRenderer);
                 });
@@ -1835,17 +1843,42 @@ public:
         update();
     }
 
+    int viewportAntiAliasingMode() const override
+    {
+        return viewportAaMode_;
+    }
+
     int viewportAntiAliasingSamples() const override
     {
-        return blenderGridRenderer_.antiAliasingSamples();
+        if (viewportAaMode_ == 0) return 0;
+        if (viewportAaMode_ == 1) return 2;
+        if (viewportAaMode_ == 5) return 4;
+        return 8;
+    }
+
+    void setViewportAntiAliasingMode(int mode) override
+    {
+        viewportAaMode_ = normalizedViewportAntiAliasingMode(mode);
+        if (gpuSurface_ != nullptr) {
+            gpuSurface_->setAntiAliasingMode(viewportAaMode_);
+        }
+        update();
     }
 
     void setViewportAntiAliasingSamples(int samples) override
     {
-        blenderGridRenderer_.setAntiAliasingSamples(samples);
-        if (gpuSurface_ != nullptr) {
-            gpuSurface_->setAntiAliasingSamples(samples);
+        // Compatibility shim for older callers of the classiCAD-only MSAA
+        // interface. New preferences store the Blender mode values directly.
+        const int mode = samples == 2 ? 1 : samples == 4 ? 5 : samples;
+        setViewportAntiAliasingMode(mode);
+    }
+
+    void setViewportPlaybackActive(bool active) override
+    {
+        if (viewportPlaybackActive_ == active) {
+            return;
         }
+        viewportPlaybackActive_ = active;
         update();
     }
 
@@ -1858,6 +1891,7 @@ public:
             return;
         smoothWiresOverlay_ = overlay;
         smoothWiresEditMode_ = editMode;
+        viewportRenderer_.setSmoothWirePreferences(overlay, editMode);
         update();
     }
 
@@ -6210,7 +6244,8 @@ protected:
         }
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        paintViewport(painter, nullptr, nullptr, nullptr, nullptr, nullptr);
+        paintViewport(painter, nullptr, nullptr, nullptr, nullptr, nullptr,
+                      nullptr);
     }
 
     void resizeEvent(QResizeEvent *event) override
@@ -6680,6 +6715,10 @@ protected:
         shadowLayout->setContentsMargins(0, 0, 0, 0);
         shadowsCheck_ = new QCheckBox(QStringLiteral("Shadow"), shadowRow);
         shadowsCheck_->setObjectName(QStringLiteral("WorkbenchShadows"));
+        shadowsCheck_->setToolTip(QStringLiteral(
+            "Closed, validated NurbsSolids use stencil-volume shadows. Open "
+            "surfaces, partial-alpha scenes, and unsupported edited solids "
+            "fall back to approximate depth-map shadows."));
         shadowLayout->addWidget(shadowsCheck_);
         shadowIntensitySlider_ = new QSlider(Qt::Horizontal, shadowRow);
         shadowIntensitySlider_->setObjectName(QStringLiteral("ShadowIntensity"));
@@ -6733,7 +6772,7 @@ protected:
             offset->setDecimals(3);
             offset->setSingleStep(0.01);
             offset->setValue(viewportShadingSettings_.shadowOffset);
-            form->addRow(QStringLiteral("Offset"), offset);
+            form->addRow(QStringLiteral("Shift"), offset);
             auto *focus = new QDoubleSpinBox(&dialog);
             focus->setRange(0.0, 1.0);
             focus->setDecimals(3);
@@ -6761,6 +6800,10 @@ protected:
             QStringLiteral("Depth of Field"),
             QStringLiteral("ViewportDepthOfField"),
             &ViewportShadingSettings::depthOfField);
+        depthOfFieldCheck_->setEnabled(false);
+        depthOfFieldCheck_->setToolTip(QStringLiteral(
+            "Unavailable until classiCAD has a scene camera with "
+            "depth-of-field settings."));
         auto *cavityRow = new QWidget(shadingPopover_);
         auto *cavityLayout = new QHBoxLayout(cavityRow);
         cavityLayout->setContentsMargins(0, 0, 0, 0);
@@ -6772,19 +6815,33 @@ protected:
         cavityTypeButton->setText(QStringLiteral("Type: Screen"));
         cavityTypeButton->setPopupMode(QToolButton::InstantPopup);
         auto *cavityMenu = new QMenu(cavityTypeButton);
-        const QStringList cavityNames{QStringLiteral("Screen"),
-                                      QStringLiteral("World"),
-                                      QStringLiteral("Both")};
-        for (int index = 0; index < cavityNames.size(); ++index) {
-            QAction *action = cavityMenu->addAction(cavityNames[index]);
+        auto *cavityActionGroup = new QActionGroup(cavityMenu);
+        cavityActionGroup->setExclusive(true);
+        struct CavityModeEntry {
+            QString label;
+            ViewportCavityType type;
+            QString description;
+        };
+        const std::array<CavityModeEntry, 3> cavityModes{{
+            {QStringLiteral("Screen"), ViewportCavityType::Screen,
+             QStringLiteral("Normal-based curvature for fine surface detail.")},
+            {QStringLiteral("World"), ViewportCavityType::World,
+             QStringLiteral("SSAO for larger-scale world-space occlusion.")},
+            {QStringLiteral("Both"), ViewportCavityType::Both,
+             QStringLiteral("Use SSAO and curvature together.")},
+        }};
+        for (const CavityModeEntry &entry : cavityModes) {
+            const ViewportCavityType cavityType = entry.type;
+            QAction *action = cavityMenu->addAction(entry.label);
+            action->setToolTip(entry.description);
             action->setCheckable(true);
-            action->setData(index);
-            action->setChecked(index == static_cast<int>(
-                                           viewportShadingSettings_.cavityType));
-            connect(action, &QAction::triggered, this, [this, action,
-                                                        cavityTypeButton] {
-                viewportShadingSettings_.cavityType =
-                    static_cast<ViewportCavityType>(action->data().toInt());
+            action->setData(static_cast<int>(cavityType));
+            cavityActionGroup->addAction(action);
+            action->setChecked(cavityType ==
+                               viewportShadingSettings_.cavityType);
+            connect(action, &QAction::triggered, this,
+                    [this, action, cavityType, cavityTypeButton] {
+                viewportShadingSettings_.cavityType = cavityType;
                 cavityTypeButton->setText(QStringLiteral("Type: %1")
                                               .arg(action->text()));
                 update();
@@ -6792,7 +6849,89 @@ protected:
         }
         cavityTypeButton->setMenu(cavityMenu);
         cavityLayout->addWidget(cavityTypeButton);
+        auto *cavitySettingsButton = new QToolButton(cavityRow);
+        cavitySettingsButton->setObjectName(
+            QStringLiteral("CavitySettings"));
+        cavitySettingsButton->setText(QString::fromUtf8("⚙"));
+        cavitySettingsButton->setFixedSize(22, 22);
+        cavityLayout->addWidget(cavitySettingsButton);
         layout->addWidget(cavityRow);
+        connect(cavitySettingsButton, &QToolButton::clicked, this, [this] {
+            QDialog dialog(this);
+            dialog.setWindowTitle(QStringLiteral("Cavity Settings"));
+            auto *dialogLayout = new QVBoxLayout(&dialog);
+            auto *screenGroup = new QGroupBox(
+                QStringLiteral("World (SSAO)"), &dialog);
+            auto *screenForm = new QFormLayout(screenGroup);
+            auto makeCavitySpin = [](QWidget *parent, qreal minimum,
+                                     qreal maximum, qreal value,
+                                     qreal step) {
+                auto *spin = new QDoubleSpinBox(parent);
+                spin->setRange(minimum, maximum);
+                spin->setDecimals(3);
+                spin->setSingleStep(step);
+                spin->setValue(value);
+                return spin;
+            };
+            auto *distance = makeCavitySpin(
+                screenGroup, 0.0, 100000.0,
+                viewportShadingSettings_.cavityDistance, 0.1);
+            screenForm->addRow(QStringLiteral("Distance"), distance);
+            auto *attenuation = makeCavitySpin(
+                screenGroup, 0.0, 100000.0,
+                viewportShadingSettings_.cavityAttenuation, 0.1);
+            screenForm->addRow(QStringLiteral("Attenuation"), attenuation);
+            auto *samples = new QSpinBox(screenGroup);
+            samples->setRange(1, 500);
+            samples->setValue(viewportShadingSettings_.cavitySamples);
+            screenForm->addRow(QStringLiteral("Samples"), samples);
+            auto *cavityRidge = makeCavitySpin(
+                screenGroup, 0.0, 250.0,
+                viewportShadingSettings_.cavityRidgeFactor, 0.1);
+            screenForm->addRow(QStringLiteral("Cavity Ridge"), cavityRidge);
+            auto *cavityValley = makeCavitySpin(
+                screenGroup, 0.0, 250.0,
+                viewportShadingSettings_.cavityValleyFactor, 0.1);
+            screenForm->addRow(QStringLiteral("Cavity Valley"), cavityValley);
+            dialogLayout->addWidget(screenGroup);
+
+            auto *worldGroup = new QGroupBox(
+                QStringLiteral("Screen (Curvature)"), &dialog);
+            auto *worldForm = new QFormLayout(worldGroup);
+            auto *curvatureRidge = makeCavitySpin(
+                worldGroup, 0.0, 2.0,
+                viewportShadingSettings_.curvatureRidgeFactor, 0.05);
+            worldForm->addRow(QStringLiteral("Curvature Ridge"),
+                              curvatureRidge);
+            auto *curvatureValley = makeCavitySpin(
+                worldGroup, 0.0, 2.0,
+                viewportShadingSettings_.curvatureValleyFactor, 0.05);
+            worldForm->addRow(QStringLiteral("Curvature Valley"),
+                              curvatureValley);
+            dialogLayout->addWidget(worldGroup);
+            auto *buttons = new QDialogButtonBox(
+                QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+            dialogLayout->addWidget(buttons);
+            connect(buttons, &QDialogButtonBox::accepted,
+                    &dialog, &QDialog::accept);
+            connect(buttons, &QDialogButtonBox::rejected,
+                    &dialog, &QDialog::reject);
+            if (dialog.exec() == QDialog::Accepted) {
+                viewportShadingSettings_.cavityDistance = distance->value();
+                viewportShadingSettings_.cavityAttenuation =
+                    attenuation->value();
+                viewportShadingSettings_.cavitySamples = samples->value();
+                viewportShadingSettings_.cavityRidgeFactor =
+                    cavityRidge->value();
+                viewportShadingSettings_.cavityValleyFactor =
+                    cavityValley->value();
+                viewportShadingSettings_.curvatureRidgeFactor =
+                    curvatureRidge->value();
+                viewportShadingSettings_.curvatureValleyFactor =
+                    curvatureValley->value();
+                update();
+            }
+        });
         connect(cavityCheck_, &QCheckBox::toggled, this, [this](bool enabled) {
             viewportShadingSettings_.cavity = enabled;
             refreshShadingPopover();
@@ -6939,6 +7078,25 @@ protected:
                       static_cast<int>(viewportShadingSettings_.colorMode));
         setModeButton(backgroundButtons_,
                       static_cast<int>(viewportShadingSettings_.backgroundMode));
+        if (QToolButton *cavityTypeButton =
+                shadingPopover_->findChild<QToolButton *>(
+                    QStringLiteral("CavityType"))) {
+            QAction *selectedCavityAction = nullptr;
+            if (QMenu *cavityMenu = cavityTypeButton->menu()) {
+                for (QAction *action : cavityMenu->actions()) {
+                    if (action->data().toInt() ==
+                        static_cast<int>(viewportShadingSettings_.cavityType)) {
+                        selectedCavityAction = action;
+                    }
+                    action->setChecked(action == selectedCavityAction);
+                }
+            }
+            cavityTypeButton->setText(
+                QStringLiteral("Type: %1")
+                    .arg(selectedCavityAction != nullptr
+                             ? selectedCavityAction->text()
+                             : QStringLiteral("Screen")));
+        }
         const auto setChecked = [](QCheckBox *box, bool checked) {
             if (box == nullptr) {
                 return;
@@ -6979,7 +7137,10 @@ protected:
         shadowIntensitySlider_->setEnabled(viewportShadingSettings_.shadows &&
                                            !xrayActive);
         shadowSettingsButton_->setEnabled(!xrayActive);
-        depthOfFieldCheck_->setEnabled(!xrayActive);
+        // This setting is not rendered: classiCAD has no scene camera or
+        // camera depth-of-field inputs yet. Keep the control disabled even
+        // when the popover refreshes or X-Ray changes.
+        depthOfFieldCheck_->setEnabled(false);
         cavityCheck_->setEnabled(!xrayActive);
         outlineColorButton_->setEnabled(viewportShadingSettings_.outline);
         outlineColorButton_->setStyleSheet(QStringLiteral(
@@ -7422,6 +7583,7 @@ protected:
 
     void paintViewport(QPainter &painter,
                        BlenderGridRenderer *nativeRenderer,
+                       ViewportAaRenderer *aaRenderer,
                        ViewportSceneRenderer *sceneRenderer,
                        ViewportSceneRenderer *previewRenderer,
                        ViewportControlPointRenderer *controlPointRenderer,
@@ -7446,6 +7608,8 @@ protected:
         viewportRenderer_.setGridBaseStep(baseGridStep);
         viewportRenderer_.setGridAppearance(gridAppearance_);
         viewportRenderer_.setShadingSettings(viewportShadingSettings_);
+        viewportRenderer_.setSmoothWirePreferences(
+            smoothWiresOverlay_, smoothWiresEditMode_);
         const ViewportRenderFrame renderFrame = viewportRenderFrame();
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
         QHash<quint64, QSet<int>> weldedVertexSelections;
@@ -7716,8 +7880,9 @@ protected:
             committedSceneLayer.setDevicePixelRatio(devicePixelRatio);
             committedSceneLayer.fill(Qt::transparent);
             rasterScenePainter.begin(&committedSceneLayer);
-            rasterScenePainter.setRenderHint(QPainter::Antialiasing, true);
-        } else {
+            rasterScenePainter.setRenderHint(QPainter::Antialiasing,
+                                             viewportAaMode_ != 0);
+        } else if (aaRenderer == nullptr) {
             painter.beginNativePainting();
             const bool backgroundDrawn =
                 nativeRenderer->renderBackgroundToCurrentFramebuffer(
@@ -8038,6 +8203,8 @@ protected:
                                          ? viewportSelectionColor()
                                          : QColor(Qt::black);
                     edgeCage.width = 1.0f;
+                    edgeCage.smoothWireCategory =
+                        ViewportSmoothWireCategory::EditMode;
                     edgeCage.editModeWire = true;
                     edgeCage.objectId = objectId;
                     edgeCage.geometryRevision = renderObject.geometryRevision;
@@ -8096,6 +8263,8 @@ protected:
                             ? static_cast<float>(
                                   kViewportPointVertexMarkerDiameterPixels)
                             : 0.0f;
+                    vertexCage.smoothWireCategory =
+                        ViewportSmoothWireCategory::EditMode;
                     vertexCage.editModeWire = true;
                     vertexCage.objectId = objectId;
                     vertexCage.geometryRevision = renderObject.geometryRevision;
@@ -8144,6 +8313,8 @@ protected:
                             stroke.width = width;
                             stroke.pointDiameter = pointDiameter;
                             stroke.lineVertexColors = std::move(lineVertexColors);
+                            stroke.smoothWireCategory =
+                                ViewportSmoothWireCategory::EditMode;
                             stroke.editModeWire = true;
                             stroke.objectId = objectId;
                             stroke.geometryRevision = dynamicGeometryRevision;
@@ -8361,7 +8532,34 @@ protected:
             }
             ViewportSceneStroke sceneStroke;
             ViewportSceneStroke controlGuide;
-            if (makeViewportSceneStrokes(renderObject,
+            const bool drawSolidEditBoundaries =
+                viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                geometryType == GeometryType::NurbsSolid;
+            if (drawSolidEditBoundaries && sceneRenderer != nullptr) {
+                auto boundaryGeometry =
+                    QSharedPointer<ViewportDepthGeometry>::create(
+                        selectedSurfaceCage(visibleShape));
+                if (!boundaryGeometry->lineVertices.isEmpty()) {
+                    ViewportSceneStroke boundaryStroke;
+                    boundaryStroke.color = viewportEditWireThemeColor();
+                    boundaryStroke.width = 1.0f;
+                    boundaryStroke.editModeWire = true;
+                    boundaryStroke.smoothWireCategory =
+                        ViewportSmoothWireCategory::EditMode;
+                    boundaryStroke.objectId = objectId;
+                    boundaryStroke.geometryRevision =
+                        renderObject.preparedGeometryRevision != 0
+                            ? renderObject.preparedGeometryRevision
+                            : renderObject.geometryRevision;
+                    boundaryStroke.cacheableGeometry = renderObject.cacheable;
+                    boundaryStroke.preparedDepthGeometry = boundaryGeometry;
+                    boundaryStroke.worldOffset =
+                        renderObject.preparedGeometryOffset;
+                    gpuStrokes.append(std::move(boundaryStroke));
+                }
+            }
+            if (!drawSolidEditBoundaries &&
+                makeViewportSceneStrokes(renderObject,
                                          sceneRenderer != nullptr,
                                          &sceneStroke,
                                          &controlGuide)) {
@@ -8697,6 +8895,15 @@ protected:
                         }
                     }
                 }
+                if (viewportShadingSettings_.mode ==
+                        ViewportShadingMode::Solid &&
+                    isViewportCurveStrokeType(visibleShape.geometryType)) {
+                    if (!selected && !scalePreview && !rotatePreview &&
+                        !selectedCurveComponents &&
+                        !selectedCurveVertexOverlay) {
+                        sceneStroke.color = viewportEditWireThemeColor();
+                    }
+                }
                 if (controlPointsVisible_ && controlGuide.shape != nullptr) {
                     gpuStrokes.append(std::move(controlGuide));
                 }
@@ -8747,6 +8954,8 @@ protected:
                             QColor(QStringLiteral("#ff7a00"));
                         componentStroke.width = static_cast<float>(
                             viewportLineWeightPixels(layerLineWeightMm));
+                        componentStroke.smoothWireCategory =
+                            ViewportSmoothWireCategory::EditMode;
                         componentStroke.editModeWire = true;
                         componentStroke.objectId = objectId;
                         componentStroke.geometryRevision =
@@ -8771,10 +8980,12 @@ protected:
                           layerColor,
                           layerLineType,
                           layerLineWeightMm,
-                          ObjectId::invalid(),
-                          0,
+                          objectId,
+                          renderObject.geometryRevision,
                           renderObject.preparedDepthGeometry.data(),
-                          renderObject.preparedGeometryOffset);
+                          renderObject.preparedGeometryOffset,
+                          renderObject.displayColorSceneLinear,
+                          renderObject.workbenchMaterial);
             } else {
                 drawShape(scenePainter,
                           visibleShape,
@@ -8787,7 +8998,9 @@ protected:
                           objectId,
                           renderObject.geometryRevision,
                           renderObject.preparedDepthGeometry.data(),
-                          renderObject.preparedGeometryOffset);
+                          renderObject.preparedGeometryOffset,
+                          renderObject.displayColorSceneLinear,
+                          renderObject.workbenchMaterial);
             }
         }
 
@@ -9446,38 +9659,124 @@ protected:
         QVector<const Shape *> failedScenePicturePreviews;
         if (nativeRenderer != nullptr) {
             painter.beginNativePainting();
-            if (sceneRenderer != nullptr) {
+            ViewportTransform overlayCamera = renderFrame.camera;
+            overlayCamera.setRenderJitterPixels({});
+            ViewportTransform sceneCamera = overlayCamera;
+            bool aaSceneSampleActive = false;
+            bool cachedScenePresented = false;
+            bool aaNeedsAnotherSample = false;
+            bool sceneDrawn = true;
+            bool surfacesDrawn = true;
+            if (aaRenderer != nullptr) {
+                // Only committed picture images are drawn into the Workbench
+                // scene before its AA resolve. Tool/duplicate/mirror previews,
+                // strokes, cages, selection overlays and the grid are later
+                // overlay passes and must not reset scene accumulation.
+                QByteArray sceneContentStateKey;
+                QDataStream sceneStateStream(&sceneContentStateKey,
+                                             QIODevice::WriteOnly);
+                int scenePictureCount = 0;
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
-                    if (preview.sceneShapeIndex >= 0 &&
-                        !sceneRenderer->drawPicture(preview.image,
-                                                    renderFrame.camera,
-                                                    renderFrame.viewportSize,
-                                                    devicePixelRatioF(),
-                                                    preview.opacity)) {
-                        failedScenePicturePreviews.append(&preview.image);
+                    if (preview.sceneShapeIndex >= 0) {
+                        ++scenePictureCount;
                     }
                 }
-            }
-            QVector<ViewportRenderObject> surfaceDrawObjects = visibleShapes;
-            for (ViewportRenderObject &object : surfaceDrawObjects) {
-                object.outlineHandledBySceneStroke =
-                    surfaceOutlineStrokeObjectIds.contains(
-                        object.objectId.value());
-                if (!componentSelectionForObject(object.objectId).isEmpty()) {
-                    // Suppress object tint only in the surface pass. Component
-                    // overlays still need the real selection state.
-                    object.selected = false;
+                sceneStateStream << qint32(scenePictureCount);
+                for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
+                    if (preview.sceneShapeIndex < 0) {
+                        continue;
+                    }
+                    sceneStateStream << qint32(preview.sceneShapeIndex)
+                                     << preview.opacity
+                                     << QJsonDocument(shapeToJson(preview.image))
+                                            .toJson(QJsonDocument::Compact)
+                                     << QJsonDocument(shapeToJson(preview.frame))
+                                            .toJson(QJsonDocument::Compact);
+                }
+
+                const QByteArray historyKey = viewportAaHistoryKey(
+                    renderFrame, viewportShadingSettings_, viewportAaMode_,
+                    devicePixelRatioF(), sceneContentStateKey);
+                aaSceneSampleActive = aaRenderer->beginSceneSample(
+                    renderFrame.viewportSize, devicePixelRatioF(),
+                    renderFrame.camera, historyKey,
+                    navigationController_.isNavigating() ||
+                        viewportPlaybackActive_);
+                if (aaSceneSampleActive) {
+                    sceneCamera = aaRenderer->sampleCamera();
+                    nativeRenderer->renderBackgroundToCurrentFramebuffer(
+                        renderFrame.viewportSize, devicePixelRatioF(),
+                        viewportShadingBackgroundColor(
+                            viewportShadingSettings_));
+                } else if (aaRenderer->hasCachedHistory()) {
+                    aaRenderer->presentCachedHistory();
+                    cachedScenePresented = true;
+                } else {
+                    nativeRenderer->renderBackgroundToCurrentFramebuffer(
+                        renderFrame.viewportSize, devicePixelRatioF(),
+                        viewportShadingBackgroundColor(
+                            viewportShadingSettings_));
                 }
             }
-            const bool surfacesDrawn = surfaceRenderer == nullptr ||
-                surfaceRenderer->draw(surfaceDrawObjects,
-                                      renderFrame.camera,
-                                      renderFrame.viewportSize,
-                                      devicePixelRatioF(),
-                                      viewportShadingSettings_);
+
+            if (!cachedScenePresented) {
+                if (sceneRenderer != nullptr) {
+                    for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
+                        if (preview.sceneShapeIndex >= 0 &&
+                            !sceneRenderer->drawPicture(preview.image,
+                                                        sceneCamera,
+                                                        renderFrame.viewportSize,
+                                                        devicePixelRatioF(),
+                                                        preview.opacity)) {
+                            failedScenePicturePreviews.append(&preview.image);
+                        }
+                    }
+                }
+                QVector<ViewportRenderObject> surfaceDrawObjects = visibleShapes;
+                for (ViewportRenderObject &object : surfaceDrawObjects) {
+                    object.outlineHandledBySceneStroke =
+                        surfaceOutlineStrokeObjectIds.contains(
+                            object.objectId.value());
+                    if (!componentSelectionForObject(object.objectId).isEmpty()) {
+                        // Suppress object tint only in the surface pass. Component
+                        // overlays still need the real selection state.
+                        object.selected = false;
+                    }
+                }
+                quint32 populatedAttachments = 0;
+                surfacesDrawn = surfaceRenderer != nullptr &&
+                    surfaceRenderer->draw(
+                        surfaceDrawObjects, sceneCamera,
+                        renderFrame.viewportSize, devicePixelRatioF(),
+                        viewportShadingSettings_, false, true, false,
+                        aaRenderer != nullptr ? &aaRenderer->targets() : nullptr,
+                        &populatedAttachments);
+                if (aaRenderer != nullptr && surfacesDrawn) {
+                    aaRenderer->markCurrentSampleAttachmentsValid(
+                        populatedAttachments);
+                }
+            } else {
+                sceneDrawn = true;
+                surfacesDrawn = true;
+            }
+
+            if (aaSceneSampleActive) {
+                aaNeedsAnotherSample = aaRenderer->finishSceneSample();
+                if (aaNeedsAnotherSample) {
+                    update();
+                }
+            }
+            if (aaRenderer != nullptr) {
+                nativeRenderer->renderUnjitteredSceneDepthToCurrentFramebuffer(
+                    overlayCamera, renderFrame.viewportSize,
+                    devicePixelRatioF(), visibleShapes);
+            }
+            // Selected-face highlighting is also an edit-mode overlay. Draw it
+            // after resolve/history presentation against the unjittered scene
+            // depth; the selectionOverlay path depth-tests without writing it.
             if (surfaceRenderer != nullptr && !gpuVertexSelectedFaces.isEmpty()) {
                 surfaceRenderer->draw(gpuVertexSelectedFaces,
-                                      renderFrame.camera,
+                                      overlayCamera,
                                       renderFrame.viewportSize,
                                       devicePixelRatioF(),
                                       viewportShadingSettings_,
@@ -9485,38 +9784,42 @@ protected:
                                       false,
                                       true);
             }
-            const bool xrayEnabled = viewportShadingSettings_.xrayEnabled();
-            bool sceneDrawn = sceneRenderer == nullptr;
-            if (sceneRenderer != nullptr && xrayEnabled) {
-                // Blender draws edit wires through X-Ray, fading the part
-                // behind the surface to half opacity, then draws visible
-                // wires at full opacity against the surface depth buffer.
-                const bool backWiresDrawn = sceneRenderer->draw(
-                    gpuStrokes, renderFrame.camera, renderFrame.viewportSize,
-                    devicePixelRatioF(), false, 0.5,
-                    smoothWiresOverlay_, smoothWiresEditMode_);
-                const bool frontWiresDrawn = sceneRenderer->draw(
-                    gpuStrokes, renderFrame.camera, renderFrame.viewportSize,
-                    devicePixelRatioF(), true, 1.0,
-                    smoothWiresOverlay_, smoothWiresEditMode_);
-                sceneDrawn = backWiresDrawn && frontWiresDrawn;
-            } else if (sceneRenderer != nullptr) {
-                sceneDrawn = sceneRenderer->draw(
-                    gpuStrokes, renderFrame.camera, renderFrame.viewportSize,
-                    devicePixelRatioF(), true, 1.0,
-                    smoothWiresOverlay_, smoothWiresEditMode_);
+            // Scene strokes are overlay-like: draw them after the scene resolve
+            // with the unjittered camera, including when the color image came
+            // from cached AA history. They depth-test against the regenerated
+            // unjittered surface depth but never write into it.
+            if (sceneRenderer != nullptr) {
+                const bool xrayEnabled = viewportShadingSettings_.xrayEnabled();
+                if (xrayEnabled) {
+                    // Preserve Blender's X-Ray wire behavior: show hidden
+                    // portions at half opacity, then visible portions at full
+                    // opacity against the scene depth buffer.
+                    const bool backWiresDrawn = sceneRenderer->draw(
+                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
+                        devicePixelRatioF(), false, 0.5,
+                        smoothWiresOverlay_, smoothWiresEditMode_);
+                    const bool frontWiresDrawn = sceneRenderer->draw(
+                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
+                        devicePixelRatioF(), true, 1.0,
+                        smoothWiresOverlay_, smoothWiresEditMode_);
+                    sceneDrawn = backWiresDrawn && frontWiresDrawn;
+                } else {
+                    sceneDrawn = sceneRenderer->draw(
+                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
+                        devicePixelRatioF(), true, 1.0,
+                        smoothWiresOverlay_, smoothWiresEditMode_);
+                }
             }
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
-                renderFrame.camera, renderFrame.viewportSize,
-                devicePixelRatioF(),
-                visibleShapes, baseGridStep, gridAppearance_);
+                overlayCamera, renderFrame.viewportSize,
+                devicePixelRatioF(), visibleShapes, baseGridStep, gridAppearance_);
             if (previewRenderer != nullptr) {
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
                     if (preview.sceneShapeIndex >= 0) {
                         continue;
                     }
                     if (!previewRenderer->drawPicture(preview.image,
-                                                      renderFrame.camera,
+                                                      overlayCamera,
                                                       renderFrame.viewportSize,
                                                       devicePixelRatioF(),
                                                       preview.opacity)) {
@@ -9543,7 +9846,7 @@ protected:
             if (surfaceRenderer != nullptr &&
                 !gpuPreviewSurfaceObjects.isEmpty()) {
                 surfaceRenderer->draw(gpuPreviewSurfaceObjects,
-                                     renderFrame.camera,
+                                     overlayCamera,
                                      renderFrame.viewportSize,
                                      devicePixelRatioF(),
                                      viewportShadingSettings_,
@@ -9554,7 +9857,7 @@ protected:
                 !gpuOpaquePreviewSurfaceObjects.isEmpty()) {
                 gpuOpaqueExtrudePreviewRendered = surfaceRenderer->draw(
                     gpuOpaquePreviewSurfaceObjects,
-                    renderFrame.camera,
+                    overlayCamera,
                     renderFrame.viewportSize,
                     devicePixelRatioF(),
                     viewportShadingSettings_,
@@ -9564,7 +9867,7 @@ protected:
             if (surfaceRenderer != nullptr &&
                 !gpuExtrudeSelectedFaces.isEmpty()) {
                 surfaceRenderer->draw(gpuExtrudeSelectedFaces,
-                                      renderFrame.camera,
+                                      overlayCamera,
                                       renderFrame.viewportSize,
                                       devicePixelRatioF(),
                                       viewportShadingSettings_,
@@ -9574,14 +9877,14 @@ protected:
             }
             gpuPreviewRendered = previewRenderer != nullptr &&
                                  previewRenderer->draw(gpuPreviewStrokes,
-                                                       renderFrame.camera,
+                                                       overlayCamera,
                                                        renderFrame.viewportSize,
                                                        devicePixelRatioF());
             if (previewRenderer != nullptr &&
                 !gpuDepthTestedPreviewStrokes.isEmpty()) {
                 gpuPreviewRendered = previewRenderer->draw(
                     gpuDepthTestedPreviewStrokes,
-                    renderFrame.camera,
+                    overlayCamera,
                     renderFrame.viewportSize,
                     devicePixelRatioF(),
                     true) || gpuPreviewRendered;
@@ -9589,7 +9892,7 @@ protected:
             if ((controlPointsVisible_ || showCurveEndpointVertices) &&
                 controlPointRenderer != nullptr) {
                 gpuControlPointsDrawn = controlPointRenderer->draw(
-                    gpuControlPointHandles, renderFrame.camera,
+                    gpuControlPointHandles, overlayCamera,
                     renderFrame.viewportSize,
                     devicePixelRatioF(),
                     !viewportShadingSettings_.xrayEnabled());
@@ -9597,7 +9900,7 @@ protected:
             if (gpuArcToolPreview && previewRenderer != nullptr) {
                 gpuArcOverlayRendered =
                     previewRenderer->drawArcToolOverlay(
-                        renderFrame.camera,
+                        overlayCamera,
                         renderFrame.viewportSize,
                         devicePixelRatioF(),
                         viewportTransform_.workPlaneFrame(),
@@ -9616,48 +9919,62 @@ protected:
             }
             painter.endNativePainting();
             if (!sceneDrawn) {
+                const auto drawPreparedStroke =
+                    [this, &painter](const ViewportSceneStroke &stroke) {
+                    if (!stroke.preparedDepthGeometry ||
+                        stroke.preparedDepthGeometry->preciseLineVertices.isEmpty()) {
+                        return false;
+                    }
+                    painter.save();
+                    painter.setRenderHint(
+                        QPainter::Antialiasing,
+                        stroke.smoothWireCategory ==
+                                ViewportSmoothWireCategory::EditMode
+                            ? smoothWiresEditMode_
+                            : smoothWiresOverlay_);
+                    QPen pen(stroke.color);
+                    pen.setWidthF(std::max(1.0f, stroke.width));
+                    pen.setCapStyle(Qt::RoundCap);
+                    pen.setJoinStyle(Qt::RoundJoin);
+                    painter.setPen(pen);
+                    const QVector<Point3D> &segments =
+                        stroke.preparedDepthGeometry->preciseLineVertices;
+                    for (int pointIndex = 0;
+                         pointIndex + 1 < segments.size();
+                         pointIndex += 2) {
+                        Point3D first = segments[pointIndex];
+                        Point3D second = segments[pointIndex + 1];
+                        first.x += stroke.worldOffset.x;
+                        first.y += stroke.worldOffset.y;
+                        first.z += stroke.worldOffset.z;
+                        second.x += stroke.worldOffset.x;
+                        second.y += stroke.worldOffset.y;
+                        second.z += stroke.worldOffset.z;
+                        QPointF firstScreen;
+                        QPointF secondScreen;
+                        if (viewportTransform_.worldPointToScreen(
+                                first, size(), &firstScreen) &&
+                            viewportTransform_.worldPointToScreen(
+                                second, size(), &secondScreen)) {
+                            painter.drawLine(firstScreen, secondScreen);
+                        }
+                    }
+                    painter.restore();
+                    return true;
+                };
                 for (const ViewportSceneStroke &stroke : gpuStrokes) {
-                    if (stroke.shape != nullptr && !stroke.controlGuide) {
+                    if (stroke.controlGuide) {
+                        continue;
+                    }
+                    if (drawPreparedStroke(stroke)) {
+                        continue;
+                    }
+                    if (stroke.shape != nullptr) {
                         drawShape(painter, *stroke.shape, false,
                                   stroke.color == viewportSelectionColor(),
                                   true, stroke.color, QString(), 0.0,
                                   ObjectId::invalid(), 0, nullptr,
                                   stroke.worldOffset);
-                    } else if (stroke.shape == nullptr &&
-                               stroke.preparedDepthGeometry &&
-                               !stroke.controlGuide &&
-                               !stroke.preparedDepthGeometry->preciseLineVertices
-                                    .isEmpty()) {
-                        painter.save();
-                        painter.setRenderHint(QPainter::Antialiasing, true);
-                        QPen pen(stroke.color);
-                        pen.setWidthF(std::max(1.0f, stroke.width));
-                        pen.setCapStyle(Qt::RoundCap);
-                        pen.setJoinStyle(Qt::RoundJoin);
-                        painter.setPen(pen);
-                        const QVector<Point3D> &segments =
-                            stroke.preparedDepthGeometry->preciseLineVertices;
-                        for (int pointIndex = 0;
-                             pointIndex + 1 < segments.size();
-                             pointIndex += 2) {
-                            Point3D first = segments[pointIndex];
-                            Point3D second = segments[pointIndex + 1];
-                            first.x += stroke.worldOffset.x;
-                            first.y += stroke.worldOffset.y;
-                            first.z += stroke.worldOffset.z;
-                            second.x += stroke.worldOffset.x;
-                            second.y += stroke.worldOffset.y;
-                            second.z += stroke.worldOffset.z;
-                            QPointF firstScreen;
-                            QPointF secondScreen;
-                            if (viewportTransform_.worldPointToScreen(
-                                    first, size(), &firstScreen) &&
-                                viewportTransform_.worldPointToScreen(
-                                    second, size(), &secondScreen)) {
-                                painter.drawLine(firstScreen, secondScreen);
-                            }
-                        }
-                        painter.restore();
                     }
                 }
             }
@@ -9670,9 +9987,12 @@ protected:
                                   renderObject.layerColor,
                                   renderObject.layerLineType,
                                   renderObject.layerLineWeightMm,
-                                  ObjectId::invalid(), 0,
+                                  renderObject.objectId,
+                                  renderObject.geometryRevision,
                                   renderObject.preparedDepthGeometry.data(),
-                                  renderObject.preparedGeometryOffset);
+                                  renderObject.preparedGeometryOffset,
+                                  renderObject.displayColorSceneLinear,
+                                  renderObject.workbenchMaterial);
                     }
                 }
             }
@@ -21511,7 +21831,11 @@ private:
                    ObjectId shapeObjectId = ObjectId::invalid(),
                    quint64 geometryRevision = 0,
                    const ViewportDepthGeometry *preparedGeometry = nullptr,
-                   const Point3D &preparedOffset = {})
+                   const Point3D &preparedOffset = {},
+                   std::optional<QVector4D> displayColorSceneLinear =
+                       std::nullopt,
+                   std::optional<WorkbenchMaterialData> workbenchMaterial =
+                       std::nullopt)
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -21526,7 +21850,9 @@ private:
                                     layerLineWeightMm,
                                     shapeObjectId,
                                     geometryRevision,
-                                    preparedGeometry, preparedOffset);
+                                    preparedGeometry, preparedOffset,
+                                    displayColorSceneLinear,
+                                    workbenchMaterial);
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 
@@ -21688,6 +22014,7 @@ private:
     bool controlPointsVisible_ = false;
     bool smoothWiresOverlay_ = true;
     bool smoothWiresEditMode_ = true;
+    bool viewportPlaybackActive_ = false;
     ComponentSelectionMode componentSelectionMode_ = ComponentSelectionMode::Vertex;
     bool componentBoxSelectionActive_ = false;
     bool componentBoxStartedOnBlank_ = false;
@@ -21850,6 +22177,7 @@ private:
     bool tangentSnapEnabled_ = false;
     bool nearSnapEnabled_ = false;
     bool controlPointSnapEnabled_ = false;
+    int viewportAaMode_ = 8;
     RotateToolPreferences rotateToolPreferences_;
 };
 

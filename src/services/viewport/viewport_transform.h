@@ -194,6 +194,11 @@ public:
                 qreal factor,
                 const QSize &viewportSize);
 
+    // Rendering-only subpixel offset used by the viewport's temporal AA.
+    // Input projection and picking continue to use an unjittered transform.
+    QPointF renderJitterPixels() const;
+    void setRenderJitterPixels(const QPointF &offset);
+
 private:
     qreal zoom_ = 1.0;
     QPointF pan_{0.0, 0.0};
@@ -212,6 +217,7 @@ private:
     Point3D trackballStartVector_{};
     ViewportOrientation trackballStartOrientation_;
     bool orbitGestureActive_ = false;
+    QPointF renderJitterPixels_;
 };
 
 } // namespace classiCAD

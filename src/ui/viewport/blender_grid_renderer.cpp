@@ -219,7 +219,17 @@ QMatrix4x4 gridViewProjection(const ViewportTransform &transform,
 QMatrix4x4 viewportViewProjection(const ViewportTransform &transform,
                                    const QSize &viewportSize)
 {
-    return viewProjection(transform, viewportSize, nullptr);
+    QMatrix4x4 result = viewProjection(transform, viewportSize, nullptr);
+    const QPointF jitter = transform.renderJitterPixels();
+    if (!jitter.isNull() && !viewportSize.isEmpty()) {
+        QMatrix4x4 jitterTranslation;
+        jitterTranslation(0, 3) =
+            static_cast<float>(2.0 * jitter.x() / viewportSize.width());
+        jitterTranslation(1, 3) =
+            static_cast<float>(-2.0 * jitter.y() / viewportSize.height());
+        result = jitterTranslation * result;
+    }
+    return result;
 }
 
 BlenderGridRenderer::~BlenderGridRenderer()
@@ -596,6 +606,61 @@ bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
         glDisable(GL_SCISSOR_TEST);
     }
     glUseProgram(static_cast<GLuint>(previousProgram));
+    return true;
+}
+
+bool BlenderGridRenderer::renderUnjitteredSceneDepthToCurrentFramebuffer(
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector<ViewportRenderObject> &visibleSceneShapes)
+{
+    if (viewportSize.isEmpty() || QOpenGLContext::currentContext() == nullptr) {
+        return false;
+    }
+    if (!initializationAttempted_) {
+        initializationAttempted_ = true;
+        usingWidgetContext_ = true;
+        if (!initializeResources()) {
+            return false;
+        }
+    }
+    if (!initialized_) {
+        return false;
+    }
+
+    updateSceneDepthGeometry(visibleSceneShapes);
+    GLint previousViewport[4] = {};
+    GLint previousDepthFunction = GL_LESS;
+    GLdouble previousClearDepth = 1.0;
+    GLboolean previousDepthMask = GL_TRUE;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetDoublev(GL_DEPTH_CLEAR_VALUE, &previousClearDepth);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    glViewport(0, 0, qRound(viewportSize.width() * dpr),
+               qRound(viewportSize.height() * dpr));
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthMask(GL_TRUE);
+    glClearDepth(1.0);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
+
+    glColorMask(previousColorMask[0], previousColorMask[1],
+                previousColorMask[2], previousColorMask[3]);
+    glDepthMask(previousDepthMask);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    glClearDepth(previousClearDepth);
+    if (previousDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (previousBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
     return true;
 }
 

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/document/object_id.h"
+#include "core/document/scene_object.h"
 #include "core/document/shape.h"
 #include "core/tool_id.h"
 #include "core/geometry/work_plane.h"
@@ -67,6 +68,8 @@ struct ViewportRenderObject {
     Point3D preparedGeometryOffset;
 
     QColor layerColor;
+    QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
+    WorkbenchMaterialData workbenchMaterial;
     QString layerLineType;
     qreal layerLineWeightMm = 0.0;
     // Solid surface perimeter is rendered through ViewportSceneRenderer so

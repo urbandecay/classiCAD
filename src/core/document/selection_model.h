@@ -4,6 +4,8 @@
 
 #include <QVector>
 
+#include <functional>
+
 namespace classiCAD {
 
 class Document;
@@ -20,6 +22,9 @@ struct ControlPointReference {
 
 class SelectionModel final {
 public:
+    using ChangeNotifier = std::function<void()>;
+
+    void setChangeNotifier(ChangeNotifier notifier);
     const QVector<ObjectId> &objectIds() const;
 
     const ObjectId &primaryObjectId() const;
@@ -39,9 +44,12 @@ public:
     void clearActiveControlPoint();
 
 private:
+    void notifyChanged();
+
     QVector<ObjectId> objectIds_;
     ObjectId primaryObjectId_ = ObjectId::invalid();
     ControlPointReference activeControlPoint_;
+    ChangeNotifier changeNotifier_;
 };
 
 } // namespace classiCAD

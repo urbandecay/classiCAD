@@ -68,6 +68,15 @@ inline QVector3D workbenchSrgbToSceneLinear(const QVector3D &color)
             workbenchSrgbToSceneLinear(color.z())};
 }
 
+inline QVector3D workbenchRec709ToSceneLinear(const QVector3D &color)
+{
+    // Blender's IMB_colormanagement_rec709_to_scene_linear converts linear
+    // Rec.709 primaries to the scene-linear working primaries. classiCAD uses
+    // Blender's default Rec.709 scene-linear space, so this gamut conversion
+    // is the identity; do not apply the sRGB transfer curve here.
+    return color;
+}
+
 inline QVector3D workbenchSceneLinearToSrgb(const QVector3D &color)
 {
     return {workbenchSceneLinearToSrgb(color.x()),
@@ -156,6 +165,38 @@ inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()
     // Blender's factory-startup material uses diffuse_color = (0.8, 0.8, 0.8).
     // This value is already scene-linear; it must not be decoded as sRGB.
     return {0.8f, 0.8f, 0.8f};
+}
+
+// Blender's Workbench Custom/single-color source is RGB; Material(float3)
+// supplies the opaque alpha packed into the material payload.
+inline constexpr float workbenchCustomColorSourceAlpha = 1.0f;
+
+struct WorkbenchPackedMaterialData {
+    float metallic = 0.0f;
+    float roughness = 0.0f;
+    float alpha = 1.0f;
+};
+
+inline float workbenchPackUnitFloatToUnorm8(float value)
+{
+    const float nonNanValue = std::isnan(value) ? 0.0f : value;
+    const float clamped = std::clamp(nonNanValue, 0.0f, 1.0f);
+    // Blender's unit_float_to_uchar_clamp rounds to nearest UNorm8 value.
+    const float packedByte = std::floor(clamped * 255.0f + 0.5f);
+    return packedByte / 255.0f;
+}
+
+inline WorkbenchPackedMaterialData workbenchPackMaterialData(float metallic,
+                                                              float roughness,
+                                                              float alpha)
+{
+    const float nonNanRoughness = std::isnan(roughness) ? 0.0f : roughness;
+    const float clampedRoughness = std::clamp(nonNanRoughness, 0.0f, 1.0f);
+    return {
+        workbenchPackUnitFloatToUnorm8(metallic),
+        workbenchPackUnitFloatToUnorm8(std::sqrt(clampedRoughness)),
+        workbenchPackUnitFloatToUnorm8(alpha),
+    };
 }
 
 inline WorkbenchStudioLighting workbenchStudioLightingPreset(

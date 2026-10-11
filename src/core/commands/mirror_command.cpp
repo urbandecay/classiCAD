@@ -37,8 +37,11 @@ bool MirrorCommand::apply(const Document &document,
             continue;
         }
 
-        SceneObject mirroredObject;
-        mirroredObject.layerId = sourceObject->layerId;
+        SceneObject mirroredObject = *sourceObject;
+        mirroredObject.id = ObjectId::invalid();
+        // Placement was baked into the geometry before mirroring, so the
+        // derived object must start with no remaining object translation.
+        mirroredObject.placementTranslation = {};
         mirroredObject.geometry = std::move(mirroredShape);
         mirroredObjects.append(std::move(mirroredObject));
     }

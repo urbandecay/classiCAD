@@ -212,6 +212,15 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings)
     object.insert(QStringLiteral("shadowIntensity"), settings.shadowIntensity);
     object.insert(QStringLiteral("shadowOffset"), settings.shadowOffset);
     object.insert(QStringLiteral("shadowFocus"), settings.shadowFocus);
+    object.insert(QStringLiteral("cavityDistance"), settings.cavityDistance);
+    object.insert(QStringLiteral("cavityAttenuation"), settings.cavityAttenuation);
+    object.insert(QStringLiteral("cavitySamples"), settings.cavitySamples);
+    object.insert(QStringLiteral("cavityRidgeFactor"), settings.cavityRidgeFactor);
+    object.insert(QStringLiteral("cavityValleyFactor"), settings.cavityValleyFactor);
+    object.insert(QStringLiteral("curvatureRidgeFactor"),
+                  settings.curvatureRidgeFactor);
+    object.insert(QStringLiteral("curvatureValleyFactor"),
+                  settings.curvatureValleyFactor);
     return object;
 }
 
@@ -256,6 +265,10 @@ bool viewportShadingFromJson(const QJsonValue &value,
         }
         *result = parsed;
         return true;
+    };
+    const auto optionalNumber = [&object, &number](const QString &key,
+                                                   qreal *result) {
+        return !object.contains(key) || number(key, result);
     };
     const auto color = [&object](const QString &key, QColor *result) {
         const QJsonValue value = object.value(key);
@@ -352,9 +365,35 @@ bool viewportShadingFromJson(const QJsonValue &value,
                 &restored.shadowIntensity) ||
         !number(QStringLiteral("shadowOffset"), &restored.shadowOffset) ||
         !number(QStringLiteral("shadowFocus"), &restored.shadowFocus) ||
+        !optionalNumber(QStringLiteral("cavityDistance"),
+                        &restored.cavityDistance) ||
+        !optionalNumber(QStringLiteral("cavityAttenuation"),
+                        &restored.cavityAttenuation) ||
+        !optionalNumber(QStringLiteral("cavityRidgeFactor"),
+                        &restored.cavityRidgeFactor) ||
+        !optionalNumber(QStringLiteral("cavityValleyFactor"),
+                        &restored.cavityValleyFactor) ||
+        !optionalNumber(QStringLiteral("curvatureRidgeFactor"),
+                        &restored.curvatureRidgeFactor) ||
+        !optionalNumber(QStringLiteral("curvatureValleyFactor"),
+                        &restored.curvatureValleyFactor) ||
+        (object.contains(QStringLiteral("cavitySamples")) &&
+         !integer(QStringLiteral("cavitySamples"), 1, 500,
+                  &restored.cavitySamples)) ||
         restored.xrayAlpha < 0.0 || restored.xrayAlpha > 1.0 ||
         restored.shadowIntensity < 0.0 || restored.shadowIntensity > 1.0 ||
-        restored.shadowOffset < 0.0) {
+        restored.shadowOffset < 0.0 ||
+        restored.cavityDistance < 0.0 || restored.cavityDistance > 100000.0 ||
+        restored.cavityAttenuation < 0.0 ||
+        restored.cavityAttenuation > 100000.0 ||
+        restored.cavityRidgeFactor < 0.0 ||
+        restored.cavityRidgeFactor > 250.0 ||
+        restored.cavityValleyFactor < 0.0 ||
+        restored.cavityValleyFactor > 250.0 ||
+        restored.curvatureRidgeFactor < 0.0 ||
+        restored.curvatureRidgeFactor > 2.0 ||
+        restored.curvatureValleyFactor < 0.0 ||
+        restored.curvatureValleyFactor > 2.0) {
         return false;
     }
 

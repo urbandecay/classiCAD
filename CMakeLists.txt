@@ -196,6 +196,8 @@ set(CLASSICAD_VIEWPORT_ADAPTER_SUPPORT_SOURCES
     src/ui/input_helpers.cpp
     src/ui/input/tool_input_translator.cpp
     src/ui/viewport/navigation_controller.cpp
+    src/ui/viewport/viewport_aa_renderer.cpp
+    src/ui/viewport/viewport_aa_shaders.qrc
     src/ui/viewport/viewport_gpu_surface.cpp
     src/ui/viewport/viewport_control_point_renderer.cpp
     src/ui/viewport/viewport_scene_renderer.cpp

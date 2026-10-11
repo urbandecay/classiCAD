@@ -32,7 +32,7 @@ void saveGridAppearancePreference(const BlenderGridAppearance &appearance);
 void saveCameraPreferences(const ViewportCameraPreferences &preferences);
 void saveNavigationPreferences(const ViewportNavigationPreferences &preferences);
 void saveRotateToolPreferences(const RotateToolPreferences &preferences);
-void saveViewportAaSamplesPreference(int samples);
+void saveViewportAaModePreference(int mode);
 void saveSmoothWirePreferences(bool overlay, bool editMode);
 void saveOrthoPreference(bool enabled);
 void saveOsnapEnabledPreference(bool enabled);

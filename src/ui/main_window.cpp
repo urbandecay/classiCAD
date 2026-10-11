@@ -1985,7 +1985,7 @@ private:
         if (!viewport_->setRotateToolPreferences(preferences.rotateToolPreferences)) {
             viewport_->setRotateToolPreferences(RotateToolPreferences{});
         }
-        viewport_->setViewportAntiAliasingSamples(preferences.viewportAaSamples);
+        viewport_->setViewportAntiAliasingMode(preferences.viewportAaMode);
         viewport_->setSmoothWirePreferences(preferences.smoothWiresOverlay,
                                             preferences.smoothWiresEditMode);
         viewport_->setArchitecturalDimensionFont(
@@ -2028,12 +2028,27 @@ private:
         initialValues.cameraPreferences = viewport_->cameraPreferences();
         initialValues.navigationPreferences = viewport_->navigationPreferences();
         initialValues.rotateToolPreferences = viewport_->rotateToolPreferences();
-        initialValues.viewportAaSamples = viewport_->viewportAntiAliasingSamples();
+        initialValues.viewportAaMode = viewport_->viewportAntiAliasingMode();
         initialValues.smoothWiresOverlay = viewport_->smoothWiresOverlay();
         initialValues.smoothWiresEditMode = viewport_->smoothWiresEditMode();
 
         PreferencesDialogValues selectedValues;
-        if (!showPreferencesDialog(this, initialValues, &selectedValues)) {
+        const auto previewViewportQuality =
+            [this](int mode, bool overlay, bool editMode) {
+                if (viewport_ == nullptr) {
+                    return;
+                }
+                viewport_->setViewportAntiAliasingMode(mode);
+                viewport_->setSmoothWirePreferences(overlay, editMode);
+            };
+        if (!showPreferencesDialog(this, initialValues, &selectedValues,
+                                   previewViewportQuality)) {
+            // Preview changes are temporary until OK. Cancel returns the
+            // active viewport to the values it had when the dialog opened.
+            viewport_->setViewportAntiAliasingMode(initialValues.viewportAaMode);
+            viewport_->setSmoothWirePreferences(
+                initialValues.smoothWiresOverlay,
+                initialValues.smoothWiresEditMode);
             return;
         }
         applyPanButton(selectedValues.panButton, true);
@@ -2044,7 +2059,7 @@ private:
         applyCameraPreferences(selectedValues.cameraPreferences, true);
         applyNavigationPreferences(selectedValues.navigationPreferences, true);
         applyRotateToolPreferences(selectedValues.rotateToolPreferences, true);
-        applyViewportAntiAliasingSamples(selectedValues.viewportAaSamples, true);
+        applyViewportAntiAliasingMode(selectedValues.viewportAaMode, true);
         applySmoothWirePreferences(selectedValues.smoothWiresOverlay,
                                    selectedValues.smoothWiresEditMode, true);
     }
@@ -2138,14 +2153,14 @@ private:
         }
     }
 
-    void applyViewportAntiAliasingSamples(int samples, bool save)
+    void applyViewportAntiAliasingMode(int mode, bool save)
     {
         if (viewport_ == nullptr) {
             return;
         }
-        viewport_->setViewportAntiAliasingSamples(samples);
+        viewport_->setViewportAntiAliasingMode(mode);
         if (save) {
-            saveViewportAaSamplesPreference(samples);
+            saveViewportAaModePreference(mode);
         }
     }
 
@@ -2624,7 +2639,6 @@ private:
         callbacks.layersRefreshed = [this](const QVector<ViewportLayerInfo> &infos) {
             refreshLayerToolbar(infos);
         };
-
         layersPanel_ = new LayersPanel(callbacks);
         return layersPanel_;
     }

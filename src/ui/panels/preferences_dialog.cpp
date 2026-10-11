@@ -22,6 +22,7 @@
 #include <QtMath>
 
 #include <algorithm>
+#include <functional>
 
 namespace classiCAD {
 namespace {
@@ -36,11 +37,14 @@ public:
                                const ViewportCameraPreferences &cameraPreferences,
                                const ViewportNavigationPreferences &navigationPreferences,
                                const RotateToolPreferences &rotateToolPreferences,
-                               int viewportAaSamples,
+                               int viewportAaMode,
                                bool smoothWiresOverlay,
                                bool smoothWiresEditMode,
+                               std::function<void(int, bool, bool)>
+                                   viewportQualityPreview,
                                QWidget *parent = nullptr)
         : QDialog(parent)
+        , viewportQualityPreview_(std::move(viewportQualityPreview))
     {
         setWindowTitle(QStringLiteral("Preferences"));
         resize(800, 660);
@@ -86,7 +90,7 @@ public:
                                                      gridAppearance,
                                                      cameraPreferences,
                                                      rotateToolPreferences,
-                                                     viewportAaSamples,
+                                                     viewportAaMode,
                                                      smoothWiresOverlay,
                                                      smoothWiresEditMode));
             } else if (category == QStringLiteral("Dimensions")) {
@@ -189,7 +193,7 @@ public:
         return preferences;
     }
 
-    int viewportAaSamples() const
+    int viewportAaMode() const
     {
         return viewportAaCombo_->currentData().toInt();
     }
@@ -348,7 +352,7 @@ private:
                                 const BlenderGridAppearance &gridAppearance,
                                 const ViewportCameraPreferences &cameraPreferences,
                                 const RotateToolPreferences &rotateToolPreferences,
-                                int viewportAaSamples,
+                                int viewportAaMode,
                                 bool smoothWiresOverlay,
                                 bool smoothWiresEditMode)
     {
@@ -369,10 +373,14 @@ private:
         auto *qualityLayout = new QFormLayout(qualityBox);
         viewportAaCombo_ = new QComboBox;
         viewportAaCombo_->addItem(QStringLiteral("Off"), 0);
-        viewportAaCombo_->addItem(QStringLiteral("2 Samples"), 2);
-        viewportAaCombo_->addItem(QStringLiteral("4 Samples"), 4);
+        viewportAaCombo_->addItem(QStringLiteral("Single Pass Anti-Aliasing"), 1);
+        viewportAaCombo_->addItem(QStringLiteral("5 Samples"), 5);
         viewportAaCombo_->addItem(QStringLiteral("8 Samples"), 8);
-        viewportAaCombo_->setCurrentIndex(viewportAaCombo_->findData(viewportAaSamples));
+        viewportAaCombo_->addItem(QStringLiteral("11 Samples"), 11);
+        viewportAaCombo_->addItem(QStringLiteral("16 Samples"), 16);
+        viewportAaCombo_->addItem(QStringLiteral("32 Samples"), 32);
+        viewportAaCombo_->setCurrentIndex(
+            viewportAaCombo_->findData(viewportAaMode));
         viewportAaCombo_->setObjectName(QStringLiteral("viewportAntiAliasingPreference"));
         qualityLayout->addRow(QStringLiteral("Viewport Anti-Aliasing"), viewportAaCombo_);
         smoothWiresOverlayCheckBox_ = new QCheckBox(QStringLiteral("Overlay"));
@@ -386,6 +394,19 @@ private:
         smoothWiresEditModeCheckBox_->setObjectName(
             QStringLiteral("smoothWiresEditModePreference"));
         qualityLayout->addRow(QString(), smoothWiresEditModeCheckBox_);
+        const auto previewQuality = [this] {
+            if (viewportQualityPreview_) {
+                viewportQualityPreview_(this->viewportAaMode(),
+                                        this->smoothWiresOverlay(),
+                                        this->smoothWiresEditMode());
+            }
+        };
+        connect(viewportAaCombo_, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, [previewQuality](int) { previewQuality(); });
+        connect(smoothWiresOverlayCheckBox_, &QCheckBox::toggled,
+                this, [previewQuality](bool) { previewQuality(); });
+        connect(smoothWiresEditModeCheckBox_, &QCheckBox::toggled,
+                this, [previewQuality](bool) { previewQuality(); });
         layout->addWidget(qualityBox);
 
         auto *feedbackBox = new QGroupBox(QStringLiteral("Snap Feedback"));
@@ -805,13 +826,16 @@ private:
     QComboBox *viewportAaCombo_ = nullptr;
     QCheckBox *smoothWiresOverlayCheckBox_ = nullptr;
     QCheckBox *smoothWiresEditModeCheckBox_ = nullptr;
+    std::function<void(int, bool, bool)> viewportQualityPreview_;
 };
 
 } // namespace
 
 bool showPreferencesDialog(QWidget *parent,
                            const PreferencesDialogValues &initialValues,
-                           PreferencesDialogValues *selectedValues)
+                           PreferencesDialogValues *selectedValues,
+                           std::function<void(int, bool, bool)>
+                               viewportQualityPreview)
 {
     if (selectedValues == nullptr) {
         return false;
@@ -825,9 +849,10 @@ bool showPreferencesDialog(QWidget *parent,
                              initialValues.cameraPreferences,
                              initialValues.navigationPreferences,
                              initialValues.rotateToolPreferences,
-                             initialValues.viewportAaSamples,
+                             initialValues.viewportAaMode,
                              initialValues.smoothWiresOverlay,
                              initialValues.smoothWiresEditMode,
+                             std::move(viewportQualityPreview),
                              parent);
     if (dialog.exec() != QDialog::Accepted) {
         return false;
@@ -842,7 +867,7 @@ bool showPreferencesDialog(QWidget *parent,
     selectedValues->cameraPreferences = dialog.cameraPreferences();
     selectedValues->navigationPreferences = dialog.navigationPreferences();
     selectedValues->rotateToolPreferences = dialog.rotateToolPreferences();
-    selectedValues->viewportAaSamples = dialog.viewportAaSamples();
+    selectedValues->viewportAaMode = dialog.viewportAaMode();
     selectedValues->smoothWiresOverlay = dialog.smoothWiresOverlay();
     selectedValues->smoothWiresEditMode = dialog.smoothWiresEditMode();
     return true;

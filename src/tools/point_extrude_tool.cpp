@@ -622,7 +622,18 @@ void PointExtrudeTool::commit(ToolContext &context)
                 return;
             }
         } else {
-            const ObjectId createdObjectId = transaction.addShape(lines[index]);
+            SceneObject derivedObject;
+            if (const SceneObject *sourceObject =
+                    context.document().object(source.objectId)) {
+                derivedObject = *sourceObject;
+                derivedObject.id = ObjectId::invalid();
+                // The generated edge/surface already uses world-space
+                // coordinates through its work-plane frame.
+                derivedObject.placementTranslation = {};
+            }
+            derivedObject.geometry = lines[index];
+            const ObjectId createdObjectId = transaction.insertObject(
+                context.document().size(), derivedObject);
             if (!createdObjectId.isValid()) {
                 transaction.rollback();
                 status_.text = QStringLiteral("Extrude failed to create geometry");

@@ -79,6 +79,7 @@ public:
     QPointF hoverPosition() const;
     bool hasPressedGizmo() const;
     bool isPanning() const;
+    bool isNavigating() const;
     bool panMoved() const;
 
 private:

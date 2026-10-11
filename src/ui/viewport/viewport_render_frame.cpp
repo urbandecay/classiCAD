@@ -90,6 +90,8 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());
         entry.layerColor = layer->color;
+        entry.displayColorSceneLinear = sceneObject.displayColorSceneLinear;
+        entry.workbenchMaterial = sceneObject.workbenchMaterial;
         entry.layerLineType = layer->lineType;
         entry.layerLineWeightMm = layer->lineWeightMm;
 

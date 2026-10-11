@@ -59,6 +59,11 @@ public:
     bool renderBackgroundToCurrentFramebuffer(const QSize &viewportSize,
                                               qreal devicePixelRatio,
                                               const QColor &solidColor = QColor());
+    bool renderUnjitteredSceneDepthToCurrentFramebuffer(
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const QVector<ViewportRenderObject> &visibleSceneShapes);
     bool pickScenePoint(const QPointF &screenPosition,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,

@@ -153,8 +153,8 @@ bool buildExplodeCommandPlan(const Document &document,
                     ? shapeComponentWorkPlaneFrame(source, componentIndex)
                     : shapeWorkPlaneFrame(source);
             const int newIndex = plan->replacementObjects.size();
-            SceneObject componentObject;
-            componentObject.layerId = sourceObject.layerId;
+            SceneObject componentObject = sourceObject;
+            componentObject.id = ObjectId::invalid();
             if (source.geometryType == GeometryType::Rectangle) {
                 componentObject.geometry.geometryType = GeometryType::Line;
                 componentObject.geometry.points = component.controlPoints;

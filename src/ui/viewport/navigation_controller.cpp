@@ -478,6 +478,12 @@ bool NavigationController::isPanning() const
     return panning_;
 }
 
+bool NavigationController::isNavigating() const
+{
+    return panning_ || orbiting_ || pressedAction_ != BlenderNavigationAction::None ||
+           (animation_ && animation_->state() == QAbstractAnimation::Running);
+}
+
 bool NavigationController::panMoved() const
 {
     return panMoved_;

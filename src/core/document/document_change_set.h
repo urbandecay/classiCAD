@@ -19,6 +19,7 @@ struct DocumentChangeSet {
     bool layerPropertiesChanged = false;
     bool visibilityChanged = false;
     bool settingsChanged = false;
+    bool objectAppearanceChanged = false;
     bool selectionChanged = false;
 
     bool isEmpty() const
@@ -26,13 +27,15 @@ struct DocumentChangeSet {
         return objectIds.isEmpty() && layerIds.isEmpty() &&
                !geometryChanged && !placementChanged && !structureChanged &&
                !layerPropertiesChanged && !visibilityChanged &&
-               !settingsChanged && !selectionChanged;
+               !settingsChanged && !objectAppearanceChanged &&
+               !selectionChanged;
     }
 
     bool affectsPersistentDocument() const
     {
         return geometryChanged || placementChanged || structureChanged ||
-               layerPropertiesChanged || visibilityChanged || settingsChanged;
+               layerPropertiesChanged || visibilityChanged || settingsChanged ||
+               objectAppearanceChanged;
     }
 
     bool affectsLayerPresentation() const

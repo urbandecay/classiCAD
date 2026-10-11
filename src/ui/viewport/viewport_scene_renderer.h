@@ -37,6 +37,11 @@ enum class ViewportSceneLineStyle : int {
     Pattern = 3,
 };
 
+enum class ViewportSmoothWireCategory : int {
+    Overlay = 0,
+    EditMode = 1,
+};
+
 struct ViewportSceneStroke {
     ViewportSceneStroke() = default;
     ViewportSceneStroke(const Shape *strokeShape,
@@ -63,6 +68,10 @@ struct ViewportSceneStroke {
     float pointDiameter = 0.0f;
     bool dashed = false;
     bool pointOutline = false;
+    // Determines which Smooth Wires preference controls coverage. This is
+    // independent from editModeWire, which selects the geometry/color style.
+    ViewportSmoothWireCategory smoothWireCategory =
+        ViewportSmoothWireCategory::Overlay;
     bool editModeWire = false;
     ViewportSceneLineStyle lineStyle = ViewportSceneLineStyle::Solid;
     float linePatternScale = 1.0f;

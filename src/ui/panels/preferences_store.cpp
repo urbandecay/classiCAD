@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "preferences_store.h"
 
+#include "ui/viewport/viewport_anti_aliasing.h"
+
 #include "ui/viewport/blender_grid_appearance.h"
 
 #include <QColor>
@@ -154,12 +156,22 @@ StoredPreferences loadStoredPreferences()
                                        rotate.useRadians).toBool();
     dialog.rotateToolPreferences = rotate;
 
-    const int requestedAaSamples = settings.value(
-        QStringLiteral("system/viewportAaSamples"), 8).toInt();
-    dialog.viewportAaSamples = requestedAaSamples == 2 || requestedAaSamples == 4 ||
-                                       requestedAaSamples == 8
-                                   ? requestedAaSamples
-                                   : 0;
+    if (settings.contains(QStringLiteral("system/viewportAaMode"))) {
+        dialog.viewportAaMode = normalizedViewportAntiAliasingMode(
+            settings.value(QStringLiteral("system/viewportAaMode"), 8).toInt());
+    } else {
+        // Migrate the previous classiCAD-only MSAA values to the closest
+        // Blender preference. The old 2x and 4x modes have no direct match.
+        const int legacyAaSamples = settings.value(
+            QStringLiteral("system/viewportAaSamples"), 8).toInt();
+        switch (legacyAaSamples) {
+        case 0: dialog.viewportAaMode = 0; break;
+        case 2: dialog.viewportAaMode = 1; break;
+        case 4: dialog.viewportAaMode = 5; break;
+        case 8: dialog.viewportAaMode = 8; break;
+        default: dialog.viewportAaMode = 8; break;
+        }
+    }
     dialog.smoothWiresOverlay = settings.value(
         QStringLiteral("viewport/smoothWiresOverlay"), true).toBool();
     dialog.smoothWiresEditMode = settings.value(
@@ -291,10 +303,11 @@ void saveRotateToolPreferences(const RotateToolPreferences &preferences)
     });
 }
 
-void saveViewportAaSamplesPreference(int samples)
+void saveViewportAaModePreference(int mode)
 {
-    writeSettings([samples](QSettings &settings) {
-        settings.setValue(QStringLiteral("system/viewportAaSamples"), samples);
+    const int normalizedMode = normalizedViewportAntiAliasingMode(mode);
+    writeSettings([normalizedMode](QSettings &settings) {
+        settings.setValue(QStringLiteral("system/viewportAaMode"), normalizedMode);
     });
 }
 

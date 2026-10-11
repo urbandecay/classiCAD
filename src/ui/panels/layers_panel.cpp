@@ -151,7 +151,7 @@ void LayersPanel::createLayout()
     table_->horizontalHeader()->setFont(headerFont);
     table_->setHorizontalHeaderLabels(
         {QString(), QStringLiteral("Name"), QString(), QString(), QString(), QString(),
-         QStringLiteral("Linetype"), QStringLiteral("Lineweight"), QString(),
+         QStringLiteral("Lineweight"), QStringLiteral("Linetype"), QString(),
          QStringLiteral("Description")});
     const auto setIconHeader = [this](int column, LayerHeaderIcon icon,
                                       const QString &tooltip) {
@@ -173,7 +173,7 @@ void LayersPanel::createLayout()
     }
     table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
     table_->horizontalHeader()->setSectionResizeMode(9, QHeaderView::Stretch);
-    const int widths[] = {22, 110, 22, 22, 22, 22, 68, 72, 22, 75};
+    const int widths[] = {22, 110, 22, 22, 22, 22, 72, 68, 22, 75};
     for (int column = 0; column < 10; ++column) {
         table_->setColumnWidth(column, widths[column]);
     }
@@ -433,8 +433,8 @@ void LayersPanel::refresh()
                     table_->setItem(row, column, item);
                 }
             }
-            table_->setCellWidget(row, 6, lineTypeCombo);
-            table_->setCellWidget(row, 7, lineWeightCombo);
+            table_->setCellWidget(row, 6, lineWeightCombo);
+            table_->setCellWidget(row, 7, lineTypeCombo);
 
             connect(lineTypeCombo, qOverload<int>(&QComboBox::activated),
                     this, [this, id = info.id, lineTypeCombo](int index) {

@@ -1033,8 +1033,9 @@ private:
         layerLineWeightCombo_->setObjectName(QStringLiteral("layerLineWeightCombo"));
         layerLineWeightCombo_->setMinimumWidth(125);
         layerLineWeightCombo_->setToolTip(
-            QStringLiteral("Active layer lineweight used by ByLayer geometry"));
-        layerLineWeightCombo_->addItem(QStringLiteral("ByLayer"), 0.0);
+            QStringLiteral("Active layer line weight in millimeters; Default matches surface wire thickness"));
+        bar->addWidget(new QLabel(QStringLiteral("Line weight:"), bar));
+        layerLineWeightCombo_->addItem(QStringLiteral("Default (1 px)"), 0.0);
         for (const auto &lineWeight : QList<QPair<QString, qreal>>{
                  {QStringLiteral("0.13 mm"), 0.13},
                  {QStringLiteral("0.18 mm"), 0.18},

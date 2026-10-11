@@ -9,6 +9,7 @@
 #include "core/geometry/shape_mapping.h"
 #include "line_type_style.h"
 #include "viewport_depth_geometry.h"
+#include "viewport_line_weight.h"
 #include "viewport_marker_style.h"
 #include "viewport_render_frame.h"
 #include "viewport_shading.h"
@@ -25,7 +26,9 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
+#include <map>
 
 namespace classiCAD {
 
@@ -46,6 +49,38 @@ struct OverlayVertex {
     float u = 0.0f;
     float v = 0.0f;
 };
+
+using SurfaceVertexKey = std::array<quint32, 3>;
+
+struct SurfaceEdgeKey {
+    SurfaceVertexKey first;
+    SurfaceVertexKey second;
+
+    auto operator<=>(const SurfaceEdgeKey &) const = default;
+};
+
+struct SurfaceOutlineEdge {
+    Point3D first;
+    Point3D second;
+    int triangleCount = 0;
+    bool hasFrontFacingTriangle = false;
+    bool hasBackFacingTriangle = false;
+};
+
+SurfaceVertexKey surfaceVertexKey(const QVector3D &point)
+{
+    const auto componentKey = [](float component) {
+        const float canonical = component == 0.0f ? 0.0f : component;
+        return std::bit_cast<quint32>(canonical);
+    };
+    return {componentKey(point.x()), componentKey(point.y()),
+            componentKey(point.z())};
+}
+
+Point3D surfacePoint(const QVector3D &point)
+{
+    return {point.x(), point.y(), point.z()};
+}
 
 void appendOverlayVertex(QVector<OverlayVertex> &vertices,
                          const QPointF &point,
@@ -377,10 +412,8 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
 
     const bool highlighted =
         object.selected || object.scalePreview || object.rotatePreview;
-    const qreal storedWidth = object.layerLineWeightMm > 0.0
-                                  ? std::clamp(object.layerLineWeightMm * 6.0,
-                                               1.0, 10.0)
-                                  : 2.0;
+    const qreal storedWidth =
+        viewportLineWeightPixels(object.layerLineWeightMm);
     if (controlGuide != nullptr &&
         (geometryType == GeometryType::Bezier ||
          geometryType == GeometryType::Nurbs)) {
@@ -398,7 +431,7 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
                     : object.layerColor.isValid()
                           ? object.layerColor
                           : QColor(QStringLiteral("#000000")),
-        static_cast<float>(highlighted ? 3.5 : storedWidth),
+        static_cast<float>(storedWidth),
         false,
         geometryType == GeometryType::Point
             ? static_cast<float>(kViewportPointVertexMarkerDiameterPixels)
@@ -439,6 +472,158 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
                 static_cast<float>(layerPattern.segments[index]);
         }
     }
+    return true;
+}
+
+QSharedPointer<const ViewportDepthGeometry>
+makeViewportSurfaceOutlineGeometry(const ViewportDepthGeometry &surfaceMesh,
+                                   const ViewportTransform &camera,
+                                   const Point3D &worldOffset)
+{
+    if (surfaceMesh.surfaceVertices.size() < 3 ||
+        surfaceMesh.surfaceVertices.size() % 3 != 0) {
+        return {};
+    }
+
+    Point3D cameraPosition;
+    Point3D orthographicFacing;
+    if (camera.isPerspectiveEnabled()) {
+        cameraPosition = camera.cameraPosition(QSize(1, 1));
+    } else {
+        const Point3D viewDirection = camera.viewDirection();
+        orthographicFacing = {-viewDirection.x, -viewDirection.y,
+                              -viewDirection.z};
+    }
+
+    std::map<SurfaceEdgeKey, SurfaceOutlineEdge> edges;
+    for (int triangle = 0; triangle + 2 < surfaceMesh.surfaceVertices.size();
+         triangle += 3) {
+        const QVector3D &a = surfaceMesh.surfaceVertices[triangle];
+        const QVector3D &b = surfaceMesh.surfaceVertices[triangle + 1];
+        const QVector3D &c = surfaceMesh.surfaceVertices[triangle + 2];
+        if (!std::isfinite(a.x()) || !std::isfinite(a.y()) ||
+            !std::isfinite(a.z()) || !std::isfinite(b.x()) ||
+            !std::isfinite(b.y()) || !std::isfinite(b.z()) ||
+            !std::isfinite(c.x()) || !std::isfinite(c.y()) ||
+            !std::isfinite(c.z())) {
+            continue;
+        }
+
+        const QVector3D normal = QVector3D::crossProduct(b - a, c - a);
+        const float normalLength = normal.length();
+        if (!std::isfinite(normalLength) || normalLength <= 1.0e-12f) {
+            continue;
+        }
+        const Point3D center{(double(a.x()) + b.x() + c.x()) / 3.0 +
+                                 worldOffset.x,
+                             (double(a.y()) + b.y() + c.y()) / 3.0 +
+                                 worldOffset.y,
+                             (double(a.z()) + b.z() + c.z()) / 3.0 +
+                                 worldOffset.z};
+        Point3D towardCamera = orthographicFacing;
+        if (camera.isPerspectiveEnabled()) {
+            towardCamera = {cameraPosition.x - center.x,
+                            cameraPosition.y - center.y,
+                            cameraPosition.z - center.z};
+        }
+        const double towardCameraLength = std::sqrt(
+            towardCamera.x * towardCamera.x +
+            towardCamera.y * towardCamera.y +
+            towardCamera.z * towardCamera.z);
+        const double facing = towardCameraLength > 1.0e-15
+            ? (normal.x() * towardCamera.x +
+               normal.y() * towardCamera.y +
+               normal.z() * towardCamera.z) /
+                  (double(normalLength) * towardCameraLength)
+            : 0.0;
+        constexpr double grazingTolerance = 1.0e-5;
+        const bool frontFacing = facing > grazingTolerance;
+        const bool backFacing = facing < -grazingTolerance;
+
+        const QVector3D points[] = {a, b, c};
+        for (int edgeIndex = 0; edgeIndex < 3; ++edgeIndex) {
+            const QVector3D &first = points[edgeIndex];
+            const QVector3D &second = points[(edgeIndex + 1) % 3];
+            SurfaceVertexKey firstKey = surfaceVertexKey(first);
+            SurfaceVertexKey secondKey = surfaceVertexKey(second);
+            const bool reversed = secondKey < firstKey;
+            if (reversed) {
+                std::swap(firstKey, secondKey);
+            }
+            SurfaceOutlineEdge &edge = edges[{firstKey, secondKey}];
+            if (edge.triangleCount == 0) {
+                edge.first = surfacePoint(reversed ? second : first);
+                edge.second = surfacePoint(reversed ? first : second);
+            }
+            ++edge.triangleCount;
+            edge.hasFrontFacingTriangle |= frontFacing;
+            edge.hasBackFacingTriangle |= backFacing;
+        }
+    }
+
+    auto outline = QSharedPointer<ViewportDepthGeometry>::create();
+    outline->lineVertices.reserve(static_cast<int>(edges.size()) * 2);
+    outline->preciseLineVertices.reserve(static_cast<int>(edges.size()) * 2);
+    for (const auto &entry : edges) {
+        const SurfaceOutlineEdge &edge = entry.second;
+        const bool boundaryEdge = edge.triangleCount == 1;
+        const bool silhouetteEdge = edge.hasFrontFacingTriangle &&
+                                    edge.hasBackFacingTriangle;
+        if (!boundaryEdge && !silhouetteEdge) {
+            continue;
+        }
+        outline->preciseLineVertices.append(edge.first);
+        outline->preciseLineVertices.append(edge.second);
+        outline->lineVertices.append(
+            QVector3D(float(edge.first.x), float(edge.first.y),
+                      float(edge.first.z)));
+        outline->lineVertices.append(
+            QVector3D(float(edge.second.x), float(edge.second.y),
+                      float(edge.second.z)));
+    }
+    return outline->lineVertices.isEmpty()
+               ? QSharedPointer<const ViewportDepthGeometry>{}
+               : outline;
+}
+
+bool makeViewportSurfaceOutlineStroke(
+    const ViewportRenderObject &object,
+    bool rendererAvailable,
+    const QColor &outlineColor,
+    const QSharedPointer<const ViewportDepthGeometry> &boundary,
+    ViewportSceneStroke *sceneStroke)
+{
+    if (!rendererAvailable || sceneStroke == nullptr ||
+        object.shape.geometryType != GeometryType::NurbsSurface ||
+        !boundary || boundary->lineVertices.isEmpty()) {
+        return false;
+    }
+
+    const QColor color = object.selected
+                             ? viewportSelectionColor()
+                             : outlineColor.isValid()
+                                   ? outlineColor
+                                   : QColor(Qt::black);
+    *sceneStroke = {nullptr,
+                    color,
+                    static_cast<float>(viewportLineWeightPixels(
+                        object.layerLineWeightMm)),
+                    false};
+    sceneStroke->objectId = object.objectId;
+    sceneStroke->cacheableGeometry = false;
+    sceneStroke->preparedDepthGeometry = boundary;
+    sceneStroke->worldOffset = object.preparedGeometryOffset;
+    QByteArray geometryKey;
+    QDataStream geometryKeyStream(&geometryKey, QIODevice::WriteOnly);
+    geometryKeyStream.setFloatingPointPrecision(QDataStream::SinglePrecision);
+    geometryKeyStream << quint32(boundary->lineVertices.size());
+    for (const QVector3D &point : boundary->lineVertices) {
+        geometryKeyStream << point.x() << point.y() << point.z();
+    }
+    sceneStroke->geometryCacheKey = std::move(geometryKey);
+    // Match standalone spline wires: use the regular smooth overlay pass,
+    // rather than the thinner edit-wire path used by the control-point cage.
+    sceneStroke->editModeWire = false;
     return true;
 }
 
@@ -639,7 +824,9 @@ bool ViewportSceneRenderer::draw(
     for (const ViewportSceneStroke &stroke : strokes) {
         QByteArray key;
         QDataStream keyStream(&key, QIODevice::WriteOnly);
-        if (stroke.cacheableGeometry && stroke.objectId.isValid() &&
+        if (!stroke.geometryCacheKey.isEmpty()) {
+            keyStream << quint8(2) << stroke.geometryCacheKey;
+        } else if (stroke.cacheableGeometry && stroke.objectId.isValid() &&
             stroke.geometryRevision != 0) {
             keyStream << quint8(1) << quint64(stroke.objectId.value())
                       << stroke.geometryRevision;

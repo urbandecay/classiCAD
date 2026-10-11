@@ -1,6 +1,7 @@
 #include "ui/viewport/line_type_style.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "ui/viewport/viewport_depth_geometry.h"
+#include "ui/viewport/viewport_line_weight.h"
 #include "ui/viewport/viewport_render_frame.h"
 #include "ui/viewport/viewport_shading.h"
 #include "ui/viewport/viewport_scene_renderer.h"
@@ -51,6 +52,73 @@ int main(int argc, char *argv[])
     QSurfaceFormat::setDefaultFormat(format);
     QGuiApplication application(argc, argv);
     bool passed = true;
+
+    const qreal defaultLineWidth = viewportLineWeightPixels(0.0);
+    const qreal lightLineWidth = viewportLineWeightPixels(0.13);
+    const qreal mediumLineWidth = viewportLineWeightPixels(0.25);
+    const qreal heavyLineWidth = viewportLineWeightPixels(1.0);
+    const qreal maxLineWidth = viewportLineWeightPixels(2.11);
+    passed &= check(std::abs(defaultLineWidth - 1.0) < 1.0e-9 &&
+                        std::abs(lightLineWidth - 1.78) < 1.0e-9 &&
+                        std::abs(heavyLineWidth - 7.0) < 1.0e-9 &&
+                        std::abs(maxLineWidth - 13.66) < 1.0e-9 &&
+                        defaultLineWidth < lightLineWidth &&
+                        lightLineWidth < mediumLineWidth &&
+                        mediumLineWidth < heavyLineWidth &&
+                        heavyLineWidth < maxLineWidth,
+                    "default and the supported viewport line-weight presets must render at distinct widths");
+
+    ViewportRenderObject splineStyleObject;
+    splineStyleObject.shape.geometryType = GeometryType::Line;
+    splineStyleObject.layerLineWeightMm = 0.25;
+    ViewportSceneStroke splineStyle;
+    const bool splineStyleReady = makeViewportSceneStrokes(
+        splineStyleObject, true, &splineStyle);
+    ViewportRenderObject surfaceStyleObject;
+    surfaceStyleObject.shape.geometryType = GeometryType::NurbsSurface;
+    surfaceStyleObject.layerLineWeightMm = splineStyleObject.layerLineWeightMm;
+    auto boundaryGeometry = QSharedPointer<ViewportDepthGeometry>::create();
+    boundaryGeometry->lineVertices << QVector3D(0.0f, 0.0f, 0.0f)
+                                   << QVector3D(1.0f, 0.0f, 0.0f);
+    ViewportSceneStroke surfaceOutlineStyle;
+    const bool surfaceOutlineReady = makeViewportSurfaceOutlineStroke(
+        surfaceStyleObject, true, QColor(Qt::black), boundaryGeometry,
+        &surfaceOutlineStyle);
+    passed &= check(splineStyleReady && surfaceOutlineReady &&
+                        std::abs(splineStyle.width -
+                                 surfaceOutlineStyle.width) < 1.0e-6f &&
+                        !surfaceOutlineStyle.editModeWire,
+                    "surface perimeters must use the same pixel width and smooth overlay path as spline strokes");
+
+    ViewportTransform surfaceOutlineCamera;
+    surfaceOutlineCamera.setViewDirection({0.0, 0.0, -1.0});
+    ViewportDepthGeometry planarSurfaceMesh;
+    planarSurfaceMesh.surfaceVertices
+        << QVector3D(0.0f, 0.0f, 0.0f)
+        << QVector3D(1.0f, 0.0f, 0.0f)
+        << QVector3D(0.0f, 1.0f, 0.0f)
+        << QVector3D(1.0f, 0.0f, 0.0f)
+        << QVector3D(1.0f, 1.0f, 0.0f)
+        << QVector3D(0.0f, 1.0f, 0.0f);
+    const auto planarOutline = makeViewportSurfaceOutlineGeometry(
+        planarSurfaceMesh, surfaceOutlineCamera);
+    passed &= check(planarOutline &&
+                        planarOutline->lineVertices.size() == 8,
+                    "a planar two-triangle surface outline must include its four boundary edges and omit the hidden triangulation diagonal");
+
+    ViewportDepthGeometry foldedSurfaceMesh;
+    foldedSurfaceMesh.surfaceVertices
+        << QVector3D(0.0f, 0.0f, 0.0f)
+        << QVector3D(1.0f, 0.0f, 0.0f)
+        << QVector3D(0.0f, 1.0f, 0.0f)
+        << QVector3D(1.0f, 0.0f, 0.0f)
+        << QVector3D(0.0f, 1.0f, 0.0f)
+        << QVector3D(1.0f, 1.0f, 0.0f);
+    const auto foldedOutline = makeViewportSurfaceOutlineGeometry(
+        foldedSurfaceMesh, surfaceOutlineCamera);
+    passed &= check(foldedOutline &&
+                        foldedOutline->lineVertices.size() == 10,
+                    "a folded surface outline must retain its view-dependent silhouette edge");
 
     const QPixmap xrayIcon(QStringLiteral(":/blender-shading/xray.png"));
     const QPixmap wireframeIcon(
@@ -316,6 +384,7 @@ int main(int argc, char *argv[])
                             "NURBS solid display test must initialize OpenGL 3.3");
             QImage gpuImage;
             QImage gpuWithoutOutlineImage;
+            QImage gpuSceneStrokeManagedOutlineImage;
             QImage gpuUnselectedOutlineImage;
             QImage gpuBottomImage;
             QImage gpuShadowImage;
@@ -324,6 +393,7 @@ int main(int argc, char *argv[])
             bool gpuMatcapDrawSucceeded = false;
             bool gpuBottomDrawSucceeded = false;
             bool gpuShadowDrawSucceeded = false;
+            bool gpuSceneStrokeSuppressesPostOutline = false;
             bool gpuWireLinearBlendMatches = false;
             const QSize glSize(640, 480);
             ViewportTransform gpuTransform;
@@ -374,6 +444,14 @@ int main(int argc, char *argv[])
                                             glSize, 1.0, noOutline);
                     functions.glFinish();
                     gpuWithoutOutlineImage = framebuffer.toImage();
+
+                    surfaceObject.outlineHandledBySceneStroke = true;
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    gpuSurfaceRenderer.draw({surfaceObject}, gpuTransform,
+                                            glSize, 1.0, gpuSolidShading);
+                    functions.glFinish();
+                    gpuSceneStrokeManagedOutlineImage = framebuffer.toImage();
+                    surfaceObject.outlineHandledBySceneStroke = false;
 
                     surfaceObject.selected = false;
                     functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -636,6 +714,9 @@ int main(int argc, char *argv[])
                     countChangedPixels(gpuImage, gpuWithoutOutlineImage) > 100 &&
                     countChangedPixels(gpuUnselectedOutlineImage,
                                        gpuWithoutOutlineImage) > 100;
+                gpuSceneStrokeSuppressesPostOutline =
+                    countChangedPixels(gpuSceneStrokeManagedOutlineImage,
+                                       gpuWithoutOutlineImage) == 0;
                 int bottomFacePixels = 0;
                 for (int y = 0; y < gpuBottomImage.height(); ++y) {
                     for (int x = 0; x < gpuBottomImage.width(); ++x) {
@@ -673,6 +754,7 @@ int main(int argc, char *argv[])
                                 !gpuMatcapImage.isNull() &&
                                 gpuMatcapMatchesWorkbench &&
                                 gpuOutlineRendered &&
+                                gpuSceneStrokeSuppressesPostOutline &&
                                 gpuBottomDrawSucceeded &&
                                 gpuBackfaceCullingKeepsOutwardFaces &&
                                 gpuShadowDrawSucceeded &&

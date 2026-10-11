@@ -67,6 +67,7 @@
 #include "viewport/viewport_marker_style.h"
 #include "viewport/viewport_gpu_surface.h"
 #include "viewport/viewport_hud_renderer.h"
+#include "viewport/viewport_line_weight.h"
 #include "viewport/viewport_scene_renderer.h"
 #include "viewport/viewport_overlay.h"
 #include "viewport/viewport_erase_overlay_renderer.h"
@@ -107,6 +108,7 @@
 #include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPen>
 #include <QPaintEvent>
 #include <QPushButton>
 #include <QResizeEvent>
@@ -7487,6 +7489,7 @@ protected:
                                      : painter;
         QVector<ViewportSceneStroke> gpuStrokes;
         QVector<ViewportSceneStroke> gpuDepthTestedPreviewStrokes;
+        QSet<quint64> surfaceOutlineStrokeObjectIds;
         QVector<ViewportRenderObject> gpuVertexSelectedFaces;
         QVector<ViewportRenderObject> gpuExtrudeSelectedFaces;
         QVector<Shape> gpuExtrudePreviewCapShapes;
@@ -7535,6 +7538,37 @@ protected:
                                 componentSelectionMode_ == ComponentSelectionMode::Edge
                             ? selectedSurfaceControlNet(visibleShape)
                             : selectedSurfaceCage(visibleShape));
+                    if (geometryType == GeometryType::NurbsSurface &&
+                        viewportShadingSettings_.outline &&
+                        !viewportShadingSettings_.xrayEnabled()) {
+                        QSharedPointer<const ViewportDepthGeometry> boundary;
+                        if (renderObject.preparedDepthGeometry) {
+                            boundary = makeViewportSurfaceOutlineGeometry(
+                                *renderObject.preparedDepthGeometry,
+                                viewportTransform_,
+                                renderObject.preparedGeometryOffset);
+                        }
+                        if (!boundary) {
+                            boundary = QSharedPointer<ViewportDepthGeometry>::create(
+                                selectedSurfaceCage(visibleShape));
+                        }
+                        ViewportRenderObject outlineObject = renderObject;
+                        if (!objectComponentSelection.isEmpty()) {
+                            // Component selection colors the selected control
+                            // elements; the surface perimeter keeps its normal
+                            // object-outline color, like the surface ID pass.
+                            outlineObject.selected = false;
+                        }
+                        ViewportSceneStroke outlineStroke;
+                        if (makeViewportSurfaceOutlineStroke(
+                                outlineObject, true,
+                                viewportShadingSettings_.outlineColor,
+                                boundary, &outlineStroke)) {
+                            gpuStrokes.append(std::move(outlineStroke));
+                            surfaceOutlineStrokeObjectIds.insert(
+                                objectId.value());
+                        }
+                    }
                     if (selected &&
                         (componentSelectionMode_ == ComponentSelectionMode::Vertex ||
                          componentSelectionMode_ == ComponentSelectionMode::Edge) &&
@@ -7938,8 +7972,8 @@ protected:
                                     // hidden when CP Points is toggled off.
                                     appendComponentStroke(
                                         std::move(connectedEdges),
-                                        QColor(QStringLiteral("#ff7a00")),
-                                        2.0f, 0.0f,
+                                        viewportSelectionColor(),
+                                        1.0f, 0.0f,
                                         std::move(connectedEdgeColors));
                                 }
                             }
@@ -8058,9 +8092,7 @@ protected:
                                             ? layerColor
                                             : QColor(QStringLiteral("#000000"));
                     sceneStroke.width = static_cast<float>(
-                        layerLineWeightMm > 0.0
-                            ? std::clamp(layerLineWeightMm * 6.0, 1.0, 10.0)
-                            : 2.0);
+                        viewportLineWeightPixels(layerLineWeightMm));
                 }
                 const bool selectedCurveVertexOverlay =
                     showCurveEndpointVertices &&
@@ -8073,7 +8105,8 @@ protected:
                     // thickness and colors each wire from its control-point
                     // selection, instead of applying object selection color
                     // to the entire spline.
-                    sceneStroke.width = 1.0f;
+                    sceneStroke.width = static_cast<float>(
+                        viewportLineWeightPixels(layerLineWeightMm));
                     const QSet<int> linkedEndpointSelection =
                         weldedVertexSelections.value(
                             renderObject.objectId.value());
@@ -8426,7 +8459,8 @@ protected:
                         componentStroke.shape = &visibleShape;
                         componentStroke.color =
                             QColor(QStringLiteral("#ff7a00"));
-                        componentStroke.width = 2.0f;
+                        componentStroke.width = static_cast<float>(
+                            viewportLineWeightPixels(layerLineWeightMm));
                         componentStroke.editModeWire = true;
                         componentStroke.objectId = objectId;
                         componentStroke.geometryRevision =
@@ -9140,6 +9174,9 @@ protected:
             }
             QVector<ViewportRenderObject> surfaceDrawObjects = visibleShapes;
             for (ViewportRenderObject &object : surfaceDrawObjects) {
+                object.outlineHandledBySceneStroke =
+                    surfaceOutlineStrokeObjectIds.contains(
+                        object.objectId.value());
                 if (!componentSelectionForObject(object.objectId).isEmpty()) {
                     // Suppress object tint only in the surface pass. Component
                     // overlays still need the real selection state.
@@ -9300,6 +9337,41 @@ protected:
                                   true, stroke.color, QString(), 0.0,
                                   ObjectId::invalid(), 0, nullptr,
                                   stroke.worldOffset);
+                    } else if (stroke.shape == nullptr &&
+                               stroke.preparedDepthGeometry &&
+                               !stroke.controlGuide &&
+                               !stroke.preparedDepthGeometry->preciseLineVertices
+                                    .isEmpty()) {
+                        painter.save();
+                        painter.setRenderHint(QPainter::Antialiasing, true);
+                        QPen pen(stroke.color);
+                        pen.setWidthF(std::max(1.0f, stroke.width));
+                        pen.setCapStyle(Qt::RoundCap);
+                        pen.setJoinStyle(Qt::RoundJoin);
+                        painter.setPen(pen);
+                        const QVector<Point3D> &segments =
+                            stroke.preparedDepthGeometry->preciseLineVertices;
+                        for (int pointIndex = 0;
+                             pointIndex + 1 < segments.size();
+                             pointIndex += 2) {
+                            Point3D first = segments[pointIndex];
+                            Point3D second = segments[pointIndex + 1];
+                            first.x += stroke.worldOffset.x;
+                            first.y += stroke.worldOffset.y;
+                            first.z += stroke.worldOffset.z;
+                            second.x += stroke.worldOffset.x;
+                            second.y += stroke.worldOffset.y;
+                            second.z += stroke.worldOffset.z;
+                            QPointF firstScreen;
+                            QPointF secondScreen;
+                            if (viewportTransform_.worldPointToScreen(
+                                    first, size(), &firstScreen) &&
+                                viewportTransform_.worldPointToScreen(
+                                    second, size(), &secondScreen)) {
+                                painter.drawLine(firstScreen, secondScreen);
+                            }
+                        }
+                        painter.restore();
                     }
                 }
             }

@@ -11,6 +11,7 @@
 #include "blender_grid_frame.h"
 #include "line_type_style.h"
 #include "viewport_depth_geometry.h"
+#include "viewport_line_weight.h"
 #include "viewport_marker_style.h"
 #include "workbench_lighting.h"
 #include "services/dimensions/dimension_font.h"
@@ -884,10 +885,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
         curveColor.setAlphaF(curveColor.alphaF() * shadingSettings_.xrayAlpha);
     }
     const QColor controlColor = QColor(QStringLiteral("#8aa7c7"));
-    const qreal storedWidth = layerLineWeightMm > 0.0
-                                  ? std::clamp(layerLineWeightMm * 6.0, 1.0, 10.0)
-                                  : 2.0;
-    const qreal curveWidth = selected ? 3.5 : (preview ? 1.5 : storedWidth);
+    const qreal storedWidth = viewportLineWeightPixels(layerLineWeightMm);
+    const qreal curveWidth = preview ? 1.5 : storedWidth;
     const QPen layerPen = selected || preview
                               ? QPen(curveColor, curveWidth)
                               : layerLineTypePen(curveColor, curveWidth, layerLineType);

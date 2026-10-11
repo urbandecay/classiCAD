@@ -75,6 +75,9 @@ struct ViewportSceneStroke {
     ObjectId objectId = ObjectId::invalid();
     quint64 geometryRevision = 0;
     bool cacheableGeometry = false;
+    // Optional exact key for transient geometry such as view-dependent
+    // surface silhouettes. It takes precedence over object/revision caching.
+    QByteArray geometryCacheKey;
     QSharedPointer<const ViewportDepthGeometry> preparedDepthGeometry;
     Point3D worldOffset;
 };
@@ -93,6 +96,22 @@ bool makeViewportSceneStrokes(const ViewportRenderObject &object,
                               bool rendererAvailable,
                               ViewportSceneStroke *sceneStroke,
                               ViewportSceneStroke *controlGuide = nullptr);
+
+// Surface perimeters in Solid mode use the same screen-space stroke renderer
+// as curves, so layer line weight and antialiasing stay consistent.
+bool makeViewportSurfaceOutlineStroke(
+    const ViewportRenderObject &object,
+    bool rendererAvailable,
+    const QColor &outlineColor,
+    const QSharedPointer<const ViewportDepthGeometry> &boundary,
+    ViewportSceneStroke *sceneStroke);
+
+// Build the visible NURBS surface boundary and view-dependent silhouette from
+// the same tessellated triangles used by the surface renderer.
+QSharedPointer<const ViewportDepthGeometry> makeViewportSurfaceOutlineGeometry(
+    const ViewportDepthGeometry &surfaceMesh,
+    const ViewportTransform &camera,
+    const Point3D &worldOffset = {});
 
 // Keep the legacy dashed flag and control-guide strokes dashed while allowing
 // scene callers to select the explicit solid/dashed/dotted line style.

@@ -4,6 +4,7 @@
 
 #include "viewport_depth_geometry.h"
 #include "blender_grid_renderer.h"
+#include "viewport_line_weight.h"
 #include "workbench_lighting.h"
 
 #include <QDataStream>
@@ -507,7 +508,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                             object.preparedGeometryOffset,
                             object.selected,
                             object.layerColor,
-                            object.objectId.value()});
+                            object.objectId.value(),
+                            object.outlineHandledBySceneStroke});
         }
         return;
     }
@@ -534,7 +536,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
         }
         ranges_.append({first, count, object.preparedGeometryOffset,
                         object.selected, object.layerColor,
-                        object.objectId.value()});
+                        object.objectId.value(),
+                        object.outlineHandledBySceneStroke});
     }
 }
 
@@ -1252,7 +1255,13 @@ bool ViewportSurfaceRenderer::draw(
                 }
                 GLuint objectId = static_cast<GLuint>(rangeIndex + 1) &
                                   0x7fffffffu;
-                if (range.selected) {
+                if (range.outlineHandledBySceneStroke) {
+                    // Keep writing depth for this surface so its filled face
+                    // still occludes outlines behind it, but omit its ID from
+                    // the postprocessed outline mask. Its perimeter is drawn
+                    // with the shared scene-stroke renderer instead.
+                    objectId = 0u;
+                } else if (range.selected) {
                     objectId |= 0x80000000u;
                 }
                 glUniform1ui(objectIdUniformLocation, objectId);

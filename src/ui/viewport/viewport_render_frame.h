@@ -69,6 +69,9 @@ struct ViewportRenderObject {
     QColor layerColor;
     QString layerLineType;
     qreal layerLineWeightMm = 0.0;
+    // Solid surface perimeter is rendered through ViewportSceneRenderer so
+    // it shares the same pixel width and antialiasing as spline strokes.
+    bool outlineHandledBySceneStroke = false;
     bool selected = false;
     bool scalePreview = false;
     bool rotatePreview = false;

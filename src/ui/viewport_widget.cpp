@@ -8697,7 +8697,7 @@ protected:
                         }
                     }
                 }
-                if (controlGuide.shape != nullptr) {
+                if (controlPointsVisible_ && controlGuide.shape != nullptr) {
                     gpuStrokes.append(std::move(controlGuide));
                 }
                 gpuStrokes.append(sceneStroke);

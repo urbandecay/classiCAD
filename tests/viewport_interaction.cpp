@@ -1341,6 +1341,20 @@ bool verifyArcToolExtrudeBoundary(QApplication &application)
     // checks pixels; the headless run still checks the exact component copy.
     passed &= check(!nativeRendering || fadedCount > 0,
                     "selected vertical arc endpoint must retain faded highlights on the actual curve");
+    const QPointF sourceGuideHit = screen(shapePointToWorld(
+        arc, arc.nurbs.controlPoints[1]));
+    const QImage sourceGuideRegion = selectedEndpoint.copy(QRect(
+        sourceGuideHit.toPoint() - QPoint(4, 4), QSize(9, 9)));
+    int sourceGuidePixels = 0;
+    for (int y = 0; y < sourceGuideRegion.height(); ++y) {
+        for (int x = 0; x < sourceGuideRegion.width(); ++x) {
+            const QColor color = sourceGuideRegion.pixelColor(x, y);
+            sourceGuidePixels += color.blue() > color.red() + 16 &&
+                                 color.green() > color.red() + 8;
+        }
+    }
+    passed &= check(!nativeRendering || sourceGuidePixels == 0,
+                    "Control Points off must hide the source arc's detached control guide during boundary selection");
     const QImage cageRegion = selectedEndpoint.copy(QRect(
         cageHit.toPoint() - QPoint(3, 3), QSize(7, 7)));
     int orangeCount = 0;

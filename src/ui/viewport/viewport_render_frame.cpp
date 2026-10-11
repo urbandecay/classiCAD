@@ -77,8 +77,7 @@ ViewportRenderFrame buildViewportRenderFrame(
 
     int objectIndex = 0;
     for (const SceneObject &sceneObject : document.objects()) {
-        const Layer *layer = document.layer(sceneObject.layerId);
-        if (layer == nullptr || !layer->visible || layer->frozen ||
+        if (!document.isObjectVisible(sceneObject.id) ||
             hiddenPreviewIds.contains(sceneObject.id.value())) {
             ++objectIndex;
             continue;
@@ -86,6 +85,7 @@ ViewportRenderFrame buildViewportRenderFrame(
 
         ViewportRenderObject entry;
         entry.shape = sceneObject.geometry;
+        const Layer *layer = document.layer(sceneObject.layerId);
         // Resolve imported Blender material slots into this render snapshot.
         // The inline slot array is only a transient viewport bridge; the
         // document's material datablocks remain the persisted source of truth.
@@ -121,7 +121,9 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.objectIndex = objectIndex++;
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());
-        entry.layerColor = layer->color;
+        if (layer != nullptr) {
+            entry.layerColor = layer->color;
+        }
         entry.displayColorSceneLinear = sceneObject.displayColorSceneLinear;
         entry.workbenchMaterial = sceneObject.workbenchMaterial;
         if (sceneObject.geometry.geometryType == GeometryType::PolygonMesh) {

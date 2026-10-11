@@ -30,6 +30,10 @@ public:
                              const QVector4D &displayColorSceneLinear,
                              const WorkbenchMaterialData &workbenchMaterial);
     bool addMaterial(const DocumentMaterial &material);
+    CollectionId insertCollection(const DocumentCollection &collection);
+    bool setCollectionVisibility(CollectionId collectionId,
+                                 bool hideViewport,
+                                 bool hideRender);
     bool translateObjects(const QVector<ObjectId> &objectIds,
                           const Point3D &worldDelta);
     bool removeObject(ObjectId objectId);

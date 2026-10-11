@@ -215,6 +215,7 @@ set(CLASSICAD_VIEWPORT_SUPPORT_SOURCES
 set(CLASSICAD_UI_SOURCES
     ${CLASSICAD_VIEWPORT_SUPPORT_SOURCES}
     src/ui/panels/document_grid_dialog.cpp
+    src/ui/panels/collections_panel.cpp
     src/ui/panels/layer_style_widgets.cpp
     src/ui/panels/layers_panel.cpp
     src/ui/panels/preferences_dialog.cpp
@@ -278,6 +279,7 @@ classicad_add_ui_object_module(classicad_viewport_widget_objects
 )
 classicad_add_ui_object_module(classicad_main_window_objects
     src/ui/panels/document_grid_dialog.cpp
+    src/ui/panels/collections_panel.cpp
     src/ui/panels/layer_style_widgets.cpp
     src/ui/panels/layers_panel.cpp
     src/ui/panels/preferences_dialog.cpp

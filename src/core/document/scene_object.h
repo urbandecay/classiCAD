@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layer_id.h"
+#include "collection_id.h"
 #include "object_id.h"
 #include "shape.h"
 
@@ -69,6 +70,10 @@ bool isValidDocumentMaterial(const DocumentMaterial &material);
 struct SceneObject {
     ObjectId id = ObjectId::invalid();
     LayerId layerId = LayerId::invalid();
+    QVector<CollectionId> collectionIds;
+    bool hideViewport = false;
+    bool hideRender = false;
+    bool hiddenInViewport = false;
     // Blender ID identity used by Workbench Random color. Imported linked
     // objects retain the source library path when the importer provides it.
     QString displayName;

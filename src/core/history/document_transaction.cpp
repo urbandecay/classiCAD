@@ -158,6 +158,48 @@ bool DocumentTransaction::addMaterial(const DocumentMaterial &material)
     return true;
 }
 
+CollectionId DocumentTransaction::insertCollection(
+    const DocumentCollection &collection)
+{
+    const CollectionId existingId = collection.sourceId.isEmpty()
+        ? CollectionId::invalid()
+        : [&]() {
+              for (const DocumentCollection &candidate : document_.collections()) {
+                  if (candidate.sourceId == collection.sourceId &&
+                      candidate.libraryPath == collection.libraryPath) {
+                      return candidate.id;
+                  }
+              }
+              return CollectionId::invalid();
+          }();
+    if (existingId.isValid()) return existingId;
+
+    const CollectionId id = document_.insertCollection(collection);
+    if (!id.isValid()) return id;
+    changes_.addCollection(id);
+    changes_.collectionsChanged = true;
+    changes_.structureChanged = true;
+    for (const CollectionId parentId : collection.parentIds) {
+        changes_.addCollection(parentId);
+    }
+    if (collection.hideViewport) changes_.visibilityChanged = true;
+    return id;
+}
+
+bool DocumentTransaction::setCollectionVisibility(CollectionId collectionId,
+                                                   bool hideViewport,
+                                                   bool hideRender)
+{
+    if (!document_.setCollectionVisibility(collectionId, hideViewport,
+                                           hideRender)) {
+        return false;
+    }
+    changes_.addCollection(collectionId);
+    changes_.collectionsChanged = true;
+    changes_.visibilityChanged = true;
+    return true;
+}
+
 bool DocumentTransaction::translateObjects(const QVector<ObjectId> &objectIds,
                                            const Point3D &worldDelta)
 {

@@ -4,6 +4,7 @@
 #include "../app/update_controller.h"
 #include "viewport_widget_api.h"
 #include "panels/document_grid_dialog.h"
+#include "panels/collections_panel.h"
 #include "panels/layers_panel.h"
 #include "panels/layer_style_widgets.h"
 #include "panels/preferences_dialog.h"
@@ -31,6 +32,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QIcon>
@@ -47,6 +49,7 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QTabWidget>
 #include <QStatusBar>
 #include <QTimer>
 #include <QToolBar>
@@ -69,10 +72,12 @@ public:
             switch (change) {
             case ApplicationSessionChange::History:
                 updateHistoryActions();
+                refreshCollections();
                 markDocumentModified();
                 break;
             case ApplicationSessionChange::Layers:
                 refreshLayers();
+                refreshCollections();
                 markDocumentModified();
                 break;
             case ApplicationSessionChange::Selection:
@@ -85,6 +90,7 @@ public:
             case ApplicationSessionChange::DocumentReplaced:
                 updateHistoryActions();
                 refreshLayers();
+                refreshCollections();
                 markDocumentModified();
                 break;
             }
@@ -521,10 +527,12 @@ private:
             ? QStringLiteral("evaluated") : QStringLiteral("original");
 
         QVector<SceneObject> importedObjects;
+        QVector<DocumentCollection> importedCollections;
         QVector<DocumentMaterial> importedMaterials;
         BlenderSceneImportReport report;
         QString errorMessage;
         if (!classiCAD::importBlenderScene(path, importMode, &importedObjects,
+                                           &importedCollections,
                                            &importedMaterials,
                                            &report, &errorMessage)) {
             QMessageBox::critical(
@@ -536,12 +544,70 @@ private:
             return;
         }
 
-        if (!importedObjects.isEmpty()) {
+        if (!importedObjects.isEmpty() || !importedCollections.isEmpty() ||
+            !importedMaterials.isEmpty()) {
             const LayerId targetLayer = session_.document().activeLayerId();
+            DocumentTransaction transaction = session_.beginTransaction();
+            QHash<quint64, CollectionId> collectionRemap;
+            QVector<DocumentCollection> pendingCollections = importedCollections;
+            while (!pendingCollections.isEmpty()) {
+                QVector<DocumentCollection> deferred;
+                bool insertedAny = false;
+                for (DocumentCollection collection : pendingCollections) {
+                    const bool parentsReady = std::all_of(
+                        collection.parentIds.cbegin(),
+                        collection.parentIds.cend(),
+                        [&collectionRemap](CollectionId parentId) {
+                            return collectionRemap.contains(parentId.value());
+                        });
+                    if (!parentsReady) {
+                        deferred.append(std::move(collection));
+                        continue;
+                    }
+                    for (CollectionId &parentId : collection.parentIds) {
+                        const auto parent = collectionRemap.constFind(parentId.value());
+                        if (parent == collectionRemap.cend()) {
+                            continue;
+                        }
+                        parentId = parent.value();
+                    }
+                    const quint64 sourceValue = collection.id.value();
+                    collection.id = CollectionId::invalid();
+                    const CollectionId inserted =
+                        transaction.insertCollection(collection);
+                    if (!inserted.isValid()) {
+                        QMessageBox::critical(
+                            this,
+                            QStringLiteral("Could Not Import Blender Scene"),
+                            QStringLiteral("A Blender collection could not be added to the document."));
+                        return;
+                    }
+                    collectionRemap.insert(sourceValue, inserted);
+                    insertedAny = true;
+                }
+                if (!insertedAny) {
+                    QMessageBox::critical(
+                        this,
+                        QStringLiteral("Could Not Import Blender Scene"),
+                        QStringLiteral("The Blender collection hierarchy contains an unresolved parent."));
+                    return;
+                }
+                pendingCollections = std::move(deferred);
+            }
             for (SceneObject &object : importedObjects) {
                 object.layerId = targetLayer;
+                for (CollectionId &collectionId : object.collectionIds) {
+                    const auto mapped = collectionRemap.constFind(collectionId.value());
+                    if (mapped == collectionRemap.cend()) {
+                        QMessageBox::critical(
+                            this,
+                            QStringLiteral("Could Not Import Blender Scene"),
+                            QStringLiteral("An imported mesh refers to an unresolved Blender collection."));
+                        return;
+                    }
+                    collectionId = mapped.value();
+                }
             }
-            DocumentTransaction transaction = session_.beginTransaction();
             for (const DocumentMaterial &material : importedMaterials) {
                 if (!transaction.addMaterial(material)) {
                     QMessageBox::critical(
@@ -552,7 +618,7 @@ private:
                 }
             }
             transaction.insertObjects(session_.document().size(), importedObjects);
-            if (!transaction.commit()) {
+            if (!session_.commitTransaction(transaction)) {
                 QMessageBox::critical(
                     this,
                     QStringLiteral("Could Not Import Blender Scene"),
@@ -1490,6 +1556,7 @@ private:
                                           viewport_->workPlaneOffset(),
                                           viewport_->viewPreset());
         refreshLayers();
+        refreshCollections();
         updateHistoryActions();
     }
 
@@ -2529,6 +2596,13 @@ private:
         }
     }
 
+    void refreshCollections()
+    {
+        if (collectionsPanel_ != nullptr) {
+            collectionsPanel_->refresh();
+        }
+    }
+
     bool executeLayerCommand(const ViewportLayerCommandRequest &request,
                              const QString &successMessage,
                              const QString &failureMessage)
@@ -2856,7 +2930,43 @@ private:
             refreshLayerToolbar(infos);
         };
         layersPanel_ = new LayersPanel(callbacks);
-        return layersPanel_;
+
+        CollectionsPanelCallbacks collectionCallbacks;
+        collectionCallbacks.entries = [this]() {
+            QVector<CollectionPanelEntry> entries;
+            const Document &document = session_.document();
+            entries.reserve(document.collections().size());
+            for (const DocumentCollection &collection : document.collections()) {
+                int objectCount = 0;
+                for (const SceneObject &object : document.objects()) {
+                    if (object.collectionIds.contains(collection.id)) {
+                        ++objectCount;
+                    }
+                }
+                entries.append({collection, objectCount});
+            }
+            return entries;
+        };
+        collectionCallbacks.setViewportVisibility =
+            [this](CollectionId id, bool hideViewport) {
+                const DocumentCollection *collection =
+                    session_.document().collection(id);
+                if (collection == nullptr) return;
+                DocumentTransaction transaction = session_.beginTransaction();
+                if (!transaction.setCollectionVisibility(
+                        id, hideViewport, collection->hideRender) ||
+                    !session_.commitTransaction(transaction)) {
+                    statusBar()->showMessage(
+                        QStringLiteral("Could not update collection visibility"),
+                        4000);
+                }
+            };
+        collectionsPanel_ = new CollectionsPanel(collectionCallbacks);
+
+        auto *tabs = new QTabWidget;
+        tabs->addTab(layersPanel_, QStringLiteral("Layers"));
+        tabs->addTab(collectionsPanel_, QStringLiteral("Collections"));
+        return tabs;
     }
 
     void applyTheme()
@@ -2896,6 +3006,7 @@ private:
     QComboBox *layerLineTypeCombo_ = nullptr;
     QComboBox *layerLineWeightCombo_ = nullptr;
     LayersPanel *layersPanel_ = nullptr;
+    CollectionsPanel *collectionsPanel_ = nullptr;
     QString currentProjectPath_;
     bool documentModified_ = false;
     bool suppressDirtyTracking_ = false;

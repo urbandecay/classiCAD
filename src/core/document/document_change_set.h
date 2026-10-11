@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layer_id.h"
+#include "collection_id.h"
 #include "object_id.h"
 
 #include <QSet>
@@ -13,6 +14,7 @@ namespace classiCAD {
 struct DocumentChangeSet {
     QVector<ObjectId> objectIds;
     QVector<LayerId> layerIds;
+    QVector<CollectionId> collectionIds;
     bool geometryChanged = false;
     bool placementChanged = false;
     bool structureChanged = false;
@@ -21,15 +23,16 @@ struct DocumentChangeSet {
     bool settingsChanged = false;
     bool objectAppearanceChanged = false;
     bool materialsChanged = false;
+    bool collectionsChanged = false;
     bool selectionChanged = false;
 
     bool isEmpty() const
     {
-        return objectIds.isEmpty() && layerIds.isEmpty() &&
+        return objectIds.isEmpty() && layerIds.isEmpty() && collectionIds.isEmpty() &&
                !geometryChanged && !placementChanged && !structureChanged &&
                !layerPropertiesChanged && !visibilityChanged &&
                !settingsChanged && !objectAppearanceChanged &&
-               !materialsChanged &&
+               !materialsChanged && !collectionsChanged &&
                !selectionChanged;
     }
 
@@ -37,13 +40,14 @@ struct DocumentChangeSet {
     {
         return geometryChanged || placementChanged || structureChanged ||
                layerPropertiesChanged || visibilityChanged || settingsChanged ||
-               objectAppearanceChanged || materialsChanged;
+               objectAppearanceChanged || materialsChanged || collectionsChanged;
     }
 
     bool affectsLayerPresentation() const
     {
         return structureChanged || layerPropertiesChanged ||
-               visibilityChanged || !layerIds.isEmpty();
+               visibilityChanged || collectionsChanged || !layerIds.isEmpty() ||
+               !collectionIds.isEmpty();
     }
 
     void addObject(ObjectId id)
@@ -62,9 +66,18 @@ struct DocumentChangeSet {
         }
     }
 
+    void addCollection(CollectionId id)
+    {
+        if (id.isValid() && !collectionIdValues_.contains(id.value())) {
+            collectionIdValues_.insert(id.value());
+            collectionIds.append(id);
+        }
+    }
+
 private:
     QSet<quint64> objectIdValues_;
     QSet<quint64> layerIdValues_;
+    QSet<quint64> collectionIdValues_;
 };
 
 } // namespace classiCAD

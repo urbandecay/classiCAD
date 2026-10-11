@@ -71,6 +71,11 @@ const QVector<Layer> &Document::layers() const
     return layers_;
 }
 
+const QVector<DocumentCollection> &Document::collections() const
+{
+    return collections_;
+}
+
 const DocumentSettings &Document::settings() const
 {
     return settings_;
@@ -166,8 +171,12 @@ void Document::applyChanges(const DocumentChangeSet &changes)
         bumpRevision(&revisions_.structure);
     }
     if (changes.layerPropertiesChanged || changes.visibilityChanged ||
-        !changes.layerIds.isEmpty() || changes.structureChanged) {
+        !changes.layerIds.isEmpty() || !changes.collectionIds.isEmpty() ||
+        changes.structureChanged) {
         bumpRevision(&revisions_.layer);
+    }
+    if (changes.collectionsChanged || !changes.collectionIds.isEmpty()) {
+        bumpRevision(&revisions_.collection);
     }
     if (changes.visibilityChanged) {
         bumpRevision(&revisions_.visibility);
@@ -597,6 +606,155 @@ LayerId Document::createLayer(const QString &name)
     return layer.id;
 }
 
+const DocumentCollection *Document::collection(CollectionId id) const
+{
+    for (const DocumentCollection &candidate : collections_) {
+        if (candidate.id == id) return &candidate;
+    }
+    return nullptr;
+}
+
+CollectionId Document::createCollection(const QString &name)
+{
+    DocumentCollection value;
+    value.id = allocateCollectionId();
+    value.name = name.trimmed().isEmpty()
+                     ? QStringLiteral("Collection %1").arg(value.id.value())
+                     : name.trimmed();
+    return insertCollection(value);
+}
+
+CollectionId Document::insertCollection(DocumentCollection value)
+{
+    if (!value.id.isValid()) value.id = allocateCollectionId();
+    if (!value.sourceId.isEmpty()) {
+        for (DocumentCollection &existing : collections_) {
+            if (existing.sourceId == value.sourceId &&
+                existing.libraryPath == value.libraryPath) {
+                for (const QString &scene : value.sourceSceneNames)
+                    if (!existing.sourceSceneNames.contains(scene)) existing.sourceSceneNames.append(scene);
+                if (!value.sourceSceneName.isEmpty() && !existing.sourceSceneNames.contains(value.sourceSceneName))
+                    existing.sourceSceneNames.append(value.sourceSceneName);
+                return existing.id;
+            }
+        }
+    }
+    if (value.name.trimmed().isEmpty() || collection(value.id) != nullptr) return CollectionId::invalid();
+    for (CollectionId parent : value.parentIds) {
+        if (parent.isValid() && parent == value.id) return CollectionId::invalid();
+    }
+    value.name = value.name.trimmed();
+    collections_.append(value);
+    nextCollectionValue_ = qMax(nextCollectionValue_, value.id.value() + 1);
+    DocumentChangeSet changes;
+    changes.addCollection(value.id);
+    changes.structureChanged = true;
+    changes.collectionsChanged = true;
+    applyChanges(changes);
+    return value.id;
+}
+
+bool Document::removeCollection(CollectionId id)
+{
+    const int index = [&]() {
+        for (int i = 0; i < collections_.size(); ++i)
+            if (collections_[i].id == id) return i;
+        return -1;
+    }();
+    if (index < 0) return false;
+    collections_.removeAt(index);
+    for (DocumentCollection &candidate : collections_) candidate.parentIds.removeAll(id);
+    for (SceneObject &object : objects_) object.collectionIds.removeAll(id);
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.collectionsChanged = true;
+    changes.visibilityChanged = true;
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::renameCollection(CollectionId id, const QString &name)
+{
+    DocumentCollection *candidate = mutableCollection(id);
+    const QString trimmed = name.trimmed();
+    if (candidate == nullptr || trimmed.isEmpty()) return false;
+    if (candidate->name == trimmed) return true;
+    candidate->name = trimmed;
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.collectionsChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::setCollectionParents(CollectionId id, const QVector<CollectionId> &parentIds)
+{
+    DocumentCollection *candidate = mutableCollection(id);
+    if (candidate == nullptr) return false;
+    QVector<CollectionId> unique;
+    for (CollectionId parent : parentIds) {
+        if (!parent.isValid() || parent == id || collection(parent) == nullptr) return false;
+        if (!unique.contains(parent)) unique.append(parent);
+    }
+    const auto reachesId = [&](const auto &self, CollectionId current,
+                               QSet<quint64> &visited) -> bool {
+        if (current == id) return true;
+        if (visited.contains(current.value())) return false;
+        visited.insert(current.value());
+        const DocumentCollection *node = collection(current);
+        if (node == nullptr) return false;
+        for (CollectionId parent : node->parentIds)
+            if (self(self, parent, visited)) return true;
+        return false;
+    };
+    for (CollectionId parent : unique) {
+        QSet<quint64> visited;
+        if (reachesId(reachesId, parent, visited)) return false;
+    }
+    if (candidate->parentIds == unique) return true;
+    candidate->parentIds = unique;
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.collectionsChanged = true;
+    changes.structureChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::setCollectionVisibility(CollectionId id, bool hideViewport, bool hideRender)
+{
+    DocumentCollection *candidate = mutableCollection(id);
+    if (candidate == nullptr) return false;
+    if (candidate->hideViewport == hideViewport && candidate->hideRender == hideRender) return true;
+    candidate->hideViewport = hideViewport;
+    candidate->hideRender = hideRender;
+    DocumentChangeSet changes;
+    changes.addCollection(id);
+    changes.collectionsChanged = true;
+    changes.visibilityChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
+bool Document::setObjectCollections(ObjectId objectId, const QVector<CollectionId> &collectionIds)
+{
+    SceneObject *candidate = mutableObject(objectId);
+    if (candidate == nullptr) return false;
+    QVector<CollectionId> unique;
+    for (CollectionId id : collectionIds) {
+        if (!id.isValid() || collection(id) == nullptr) return false;
+        if (!unique.contains(id)) unique.append(id);
+    }
+    if (candidate->collectionIds == unique) return true;
+    candidate->collectionIds = unique;
+    DocumentChangeSet changes;
+    changes.addObject(objectId);
+    changes.visibilityChanged = true;
+    applyChanges(changes);
+    return true;
+}
+
 bool Document::removeLayer(LayerId id)
 {
     if (layers_.size() <= 1) {
@@ -900,30 +1058,52 @@ bool Document::isObjectVisible(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
     const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
-    return objectLayer != nullptr && objectLayer->visible && !objectLayer->frozen;
+    if (objectLayer == nullptr || !objectLayer->visible || objectLayer->frozen ||
+        sceneObject->hideViewport || sceneObject->hiddenInViewport) return false;
+    const auto hasVisibleCollectionPath = [&](const auto &self, CollectionId id,
+                                              QSet<quint64> path) -> bool {
+        if (path.contains(id.value())) return false;
+        path.insert(id.value());
+        const DocumentCollection *entry = collection(id);
+        if (entry == nullptr) return false;
+        if (entry->hideViewport) return false;
+        if (entry->parentIds.isEmpty()) return true;
+        for (CollectionId parent : entry->parentIds)
+            if (self(self, parent, path)) return true;
+        return false;
+    };
+    if (!sceneObject->collectionIds.isEmpty()) {
+        for (CollectionId id : sceneObject->collectionIds)
+            if (hasVisibleCollectionPath(hasVisibleCollectionPath, id, {})) return true;
+        return false;
+    }
+    return true;
 }
 
 bool Document::isObjectEditable(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);
     const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
-    return objectLayer != nullptr && objectLayer->visible && !objectLayer->frozen &&
+    return objectLayer != nullptr && isObjectVisible(objectId) &&
            !objectLayer->locked;
 }
 
 Document::Snapshot Document::snapshot() const
 {
-    return Snapshot{layers_, objects_, materials_, activeLayerId_, nextObjectValue_, nextLayerValue_, settings_};
+    return Snapshot{layers_, collections_, objects_, materials_, activeLayerId_,
+                    nextObjectValue_, nextLayerValue_, nextCollectionValue_, settings_};
 }
 
 void Document::restoreSnapshot(const Snapshot &snapshot)
 {
     layers_ = snapshot.layers;
+    collections_ = snapshot.collections;
     objects_ = snapshot.objects;
     materials_ = snapshot.materials;
     activeLayerId_ = snapshot.activeLayerId;
     nextObjectValue_ = snapshot.nextObjectValue;
     nextLayerValue_ = snapshot.nextLayerValue;
+    nextCollectionValue_ = snapshot.nextCollectionValue;
     settings_ = isValidDocumentSettings(snapshot.settings)
                     ? snapshot.settings
                     : DocumentSettings{};
@@ -935,6 +1115,7 @@ void Document::restoreSnapshot(const Snapshot &snapshot)
     changes.geometryChanged = true;
     changes.structureChanged = true;
     changes.layerPropertiesChanged = true;
+    changes.collectionsChanged = true;
     changes.visibilityChanged = true;
     changes.settingsChanged = true;
     changes.placementChanged = true;
@@ -943,6 +1124,9 @@ void Document::restoreSnapshot(const Snapshot &snapshot)
     }
     for (const Layer &layer : layers_) {
         changes.addLayer(layer.id);
+    }
+    for (const DocumentCollection &collection : collections_) {
+        changes.addCollection(collection.id);
     }
     applyChanges(changes);
 }
@@ -977,6 +1161,19 @@ LayerId Document::allocateLayerId()
         nextLayerValue_ = 1;
     }
     return LayerId::fromValue(nextLayerValue_++);
+}
+
+CollectionId Document::allocateCollectionId()
+{
+    if (nextCollectionValue_ == 0) nextCollectionValue_ = 1;
+    return CollectionId::fromValue(nextCollectionValue_++);
+}
+
+DocumentCollection *Document::mutableCollection(CollectionId id)
+{
+    for (DocumentCollection &candidate : collections_)
+        if (candidate.id == id) return &candidate;
+    return nullptr;
 }
 
 LayerId Document::normalizedLayerId(LayerId requested) const

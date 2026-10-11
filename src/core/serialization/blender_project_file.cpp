@@ -1,6 +1,8 @@
 #include "blender_project_file.h"
 
 #include "core/document/document.h"
+#include "core/document/collection_id.h"
+#include "core/document/document_collection.h"
 #include "core/geometry/geometry_type.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
 #include "core/geometry/polygon_mesh.h"
@@ -628,6 +630,7 @@ bool parseBlenderMaterials(
 }
 
 bool parseBlenderMeshItem(const QJsonObject &item,
+                          const QHash<QString, classiCAD::CollectionId> &collectionIds,
                           const QHash<QString, classiCAD::DocumentMaterial> &materials,
                           const QString &blenderVersion,
                           const QString &importMode,
@@ -646,6 +649,15 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     result.libraryPath = item.value(QStringLiteral("library_path")).toString();
     result.blenderSourceVersion = blenderVersion;
     result.blenderMeshImportMode = importMode;
+    const QJsonArray sourceCollectionIds = item.value(QStringLiteral("collection_ids")).toArray();
+    for (const QJsonValue &collectionValue : sourceCollectionIds) {
+        const QString sourceId = collectionValue.toString();
+        if (sourceId.isEmpty() || !collectionIds.contains(sourceId)) {
+            setError(errorMessage, QStringLiteral("object references an unknown Blender collection"));
+            return false;
+        }
+        result.collectionIds.append(collectionIds.value(sourceId));
+    }
 
     QVector<double> objectColor;
     if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")), 4,
@@ -913,16 +925,12 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     }
     result.geometry.polygonMesh = std::move(mesh);
     const QJsonObject visibility = item.value(QStringLiteral("visibility")).toObject();
-    if ((visibility.value(QStringLiteral("hide_viewport")).toBool() ||
-         visibility.value(QStringLiteral("hide_render")).toBool() ||
-         visibility.value(QStringLiteral("hidden_in_viewport")).toBool()) &&
-        warnings != nullptr) {
-        warnings->append(QStringLiteral("%1: object visibility flags are not retained by the current scene model")
-                             .arg(blenderItemLabel(item)));
-    }
-    if (!item.value(QStringLiteral("collection_names")).toArray().isEmpty() &&
-        warnings != nullptr) {
-        warnings->append(QStringLiteral("%1: Blender collection membership is not represented by the current layer schema")
+    result.hideViewport = visibility.value(QStringLiteral("hide_viewport")).toBool();
+    result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();
+    result.hiddenInViewport = visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
+    if (warnings != nullptr &&
+        visibility.value(QStringLiteral("hide_select")).toBool()) {
+        warnings->append(QStringLiteral("%1: Blender view-layer-specific object visibility or selection state is not retained")
                              .arg(blenderItemLabel(item)));
     }
     *sceneObject = std::move(result);
@@ -1186,6 +1194,7 @@ bool loadVignolaDocument(const QString &path,
 bool importBlenderScene(const QString &path,
                         const QString &mode,
                         QVector<SceneObject> *objects,
+                        QVector<DocumentCollection> *collections,
                         QVector<DocumentMaterial> *materials,
                         BlenderSceneImportReport *report,
                         QString *errorMessage)
@@ -1193,7 +1202,7 @@ bool importBlenderScene(const QString &path,
     if (report != nullptr) {
         *report = BlenderSceneImportReport{};
     }
-    if (objects == nullptr || materials == nullptr || path.trimmed().isEmpty() ||
+    if (objects == nullptr || collections == nullptr || materials == nullptr || path.trimmed().isEmpty() ||
         (mode != QLatin1String("original") &&
          mode != QLatin1String("evaluated"))) {
         setError(errorMessage,
@@ -1240,7 +1249,7 @@ bool importBlenderScene(const QString &path,
     if (root.value(QStringLiteral("format")).toString() !=
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
-        bridgeVersion != 1) {
+        bridgeVersion != 2) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -1263,6 +1272,7 @@ bool importBlenderScene(const QString &path,
     }
     const QJsonObject sourceMaterials = root.value(QStringLiteral("materials")).toObject();
     if (!root.value(QStringLiteral("items")).isArray() ||
+        !root.value(QStringLiteral("collections")).isArray() ||
         !root.value(QStringLiteral("unsupported_items")).isArray() ||
         !root.value(QStringLiteral("unsupported_features")).isArray() ||
         !root.value(QStringLiteral("materials")).isObject()) {
@@ -1277,9 +1287,68 @@ bool importBlenderScene(const QString &path,
         root.value(QStringLiteral("unsupported_features")).toArray();
     QStringList warnings;
     QVector<SceneObject> imported;
+    QVector<DocumentCollection> importedCollections;
     QVector<DocumentMaterial> importedMaterials;
     QHash<QString, DocumentMaterial> materialsById;
     QSet<QString> importedIds;
+    QHash<QString, CollectionId> collectionIdsBySource;
+    QHash<QString, QString> sceneLibraryPaths;
+    const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
+    for (const QJsonValue &sceneValue : sourceScenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        sceneLibraryPaths.insert(scene.value(QStringLiteral("name")).toString(),
+                                 scene.value(QStringLiteral("library_path")).toString());
+        const QJsonArray viewLayers = scene.value(QStringLiteral("view_layer_names")).toArray();
+        if (!viewLayers.isEmpty()) {
+            warnings.append(QStringLiteral("Scene %1: Blender view-layer membership and per-view-layer collection exclusions/visibility are not retained")
+                                .arg(scene.value(QStringLiteral("name")).toString()));
+        }
+    }
+    const QJsonArray sourceCollections = root.value(QStringLiteral("collections")).toArray();
+    importedCollections.reserve(sourceCollections.size());
+    quint64 nextCollectionId = 1;
+    for (const QJsonValue &collectionValue : sourceCollections) {
+        if (!collectionValue.isObject()) {
+            setError(errorMessage, QStringLiteral("A Blender collection record is invalid"));
+            return false;
+        }
+        const QJsonObject record = collectionValue.toObject();
+        const QString sourceId = record.value(QStringLiteral("collection_id")).toString();
+        if (sourceId.isEmpty() || collectionIdsBySource.contains(sourceId)) {
+            setError(errorMessage, QStringLiteral("A Blender collection identity is missing or duplicated"));
+            return false;
+        }
+        DocumentCollection collection;
+        collection.id = CollectionId::fromValue(nextCollectionId++);
+        collection.sourceId = sourceId;
+        collection.name = record.value(QStringLiteral("name")).toString();
+        collection.libraryPath = record.value(QStringLiteral("library_path")).toString();
+        collection.hideViewport = record.value(QStringLiteral("hide_viewport")).toBool();
+        collection.hideRender = record.value(QStringLiteral("hide_render")).toBool();
+        const QJsonArray sourceSceneNames = record.value(QStringLiteral("source_scene_names")).toArray();
+        if (!sourceSceneNames.isEmpty()) {
+            for (const QJsonValue &sceneNameValue : sourceSceneNames) {
+                collection.sourceSceneNames.append(sceneNameValue.toString());
+            }
+            collection.sourceSceneName = collection.sourceSceneNames.first();
+            collection.sourceSceneLibraryPath = sceneLibraryPaths.value(collection.sourceSceneName);
+        }
+        collectionIdsBySource.insert(sourceId, collection.id);
+        importedCollections.append(std::move(collection));
+    }
+    for (int index = 0; index < sourceCollections.size(); ++index) {
+        const QJsonObject record = sourceCollections[index].toObject();
+        DocumentCollection &collection = importedCollections[index];
+        const QJsonArray parentSourceIds = record.value(QStringLiteral("parent_ids")).toArray();
+        for (const QJsonValue &parentValue : parentSourceIds) {
+            const QString parentSourceId = parentValue.toString();
+            if (!collectionIdsBySource.contains(parentSourceId)) {
+                setError(errorMessage, QStringLiteral("A Blender collection references an unknown parent"));
+                return false;
+            }
+            collection.parentIds.append(collectionIdsBySource.value(parentSourceId));
+        }
+    }
     int skippedCount = unsupportedItems.size();
     for (const QJsonValue &unsupportedValue : unsupportedItems) {
         const QJsonObject unsupported = unsupportedValue.toObject();
@@ -1328,7 +1397,7 @@ bool importBlenderScene(const QString &path,
         const int warningCountBeforeItem = warnings.size();
         SceneObject sceneObject;
         QString itemError;
-        if (!parseBlenderMeshItem(item, materialsById,
+        if (!parseBlenderMeshItem(item, collectionIdsBySource, materialsById,
                                   source.value(QStringLiteral("blender_version")).toString(),
                                   mode,
                                   &sceneObject,
@@ -1368,6 +1437,7 @@ bool importBlenderScene(const QString &path,
         }
     }
     *objects = std::move(imported);
+    *collections = std::move(importedCollections);
     *materials = std::move(usedMaterials);
     return true;
 }

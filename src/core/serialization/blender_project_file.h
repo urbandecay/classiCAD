@@ -4,6 +4,7 @@
 #include <QVector>
 
 #include "core/document/scene_object.h"
+#include "core/document/document_collection.h"
 
 namespace classiCAD {
 
@@ -59,6 +60,7 @@ struct BlenderSceneImportReport {
 bool importBlenderScene(const QString &path,
                         const QString &mode,
                         QVector<SceneObject> *objects,
+                        QVector<DocumentCollection> *collections,
                         QVector<DocumentMaterial> *materials,
                         BlenderSceneImportReport *report = nullptr,
                         QString *errorMessage = nullptr);

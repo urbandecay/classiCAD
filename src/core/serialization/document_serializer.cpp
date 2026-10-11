@@ -134,7 +134,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 9);
+    serialized.insert(QStringLiteral("version"), 10);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -165,6 +165,32 @@ QJsonObject documentToJson(const Document &document)
         layers.append(serializedLayer);
     }
     serialized.insert(QStringLiteral("layers"), layers);
+
+    QJsonArray collections;
+    for (const DocumentCollection &collection : document.collections()) {
+        QJsonObject record;
+        record.insert(QStringLiteral("id"), idToJson(collection.id.value()));
+        record.insert(QStringLiteral("name"), collection.name);
+        record.insert(QStringLiteral("sourceId"), collection.sourceId);
+        record.insert(QStringLiteral("sourceSceneName"), collection.sourceSceneName);
+        QJsonArray sourceSceneNames;
+        for (const QString &sceneName : collection.sourceSceneNames) {
+            sourceSceneNames.append(sceneName);
+        }
+        record.insert(QStringLiteral("sourceSceneNames"), sourceSceneNames);
+        record.insert(QStringLiteral("sourceSceneLibraryPath"),
+                      collection.sourceSceneLibraryPath);
+        record.insert(QStringLiteral("libraryPath"), collection.libraryPath);
+        QJsonArray parentIds;
+        for (const CollectionId parentId : collection.parentIds) {
+            parentIds.append(idToJson(parentId.value()));
+        }
+        record.insert(QStringLiteral("parentIds"), parentIds);
+        record.insert(QStringLiteral("hideViewport"), collection.hideViewport);
+        record.insert(QStringLiteral("hideRender"), collection.hideRender);
+        collections.append(record);
+    }
+    serialized.insert(QStringLiteral("collections"), collections);
 
     QJsonArray materials;
     for (const DocumentMaterial &material : document.materials()) {
@@ -202,6 +228,14 @@ QJsonObject documentToJson(const Document &document)
         QJsonObject serializedObject;
         serializedObject.insert(QStringLiteral("id"), idToJson(sceneObject.id.value()));
         serializedObject.insert(QStringLiteral("layerId"), idToJson(sceneObject.layerId.value()));
+        QJsonArray collectionIds;
+        for (const CollectionId collectionId : sceneObject.collectionIds) {
+            collectionIds.append(idToJson(collectionId.value()));
+        }
+        serializedObject.insert(QStringLiteral("collectionIds"), collectionIds);
+        serializedObject.insert(QStringLiteral("hideViewport"), sceneObject.hideViewport);
+        serializedObject.insert(QStringLiteral("hideRender"), sceneObject.hideRender);
+        serializedObject.insert(QStringLiteral("hiddenInViewport"), sceneObject.hiddenInViewport);
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
         serializedObject.insert(QStringLiteral("libraryPath"), sceneObject.libraryPath);
         serializedObject.insert(QStringLiteral("blenderSourceVersion"),
@@ -253,7 +287,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 9) {
+    if (version < 1 || version > 10) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -267,6 +301,108 @@ bool documentFromJson(const QJsonValue &value,
 
     Document::Snapshot snapshot;
     QSet<QString> materialIds;
+    QSet<quint64> collectionIds;
+    if (version >= 10) {
+        const QJsonValue collectionsValue = serialized.value(QStringLiteral("collections"));
+        if (!collectionsValue.isArray()) {
+            setError(errorMessage, QStringLiteral("document collections must be an array"));
+            return false;
+        }
+        quint64 nextCollectionValue = 1;
+        for (const QJsonValue &collectionValue : collectionsValue.toArray()) {
+            if (!collectionValue.isObject()) {
+                setError(errorMessage, QStringLiteral("invalid document collection"));
+                return false;
+            }
+            const QJsonObject record = collectionValue.toObject();
+            quint64 collectionValueId = 0;
+            const QString name = record.value(QStringLiteral("name")).toString().trimmed();
+            const QJsonValue sourceId = record.value(QStringLiteral("sourceId"));
+            const QJsonValue sourceSceneNamesValue =
+                record.value(QStringLiteral("sourceSceneNames"));
+            const QJsonValue parentIdsValue = record.value(QStringLiteral("parentIds"));
+            const QJsonValue sourceSceneName = record.value(QStringLiteral("sourceSceneName"));
+            const QJsonValue sourceSceneLibraryPath =
+                record.value(QStringLiteral("sourceSceneLibraryPath"));
+            const QJsonValue libraryPath = record.value(QStringLiteral("libraryPath"));
+            if (!idFromJson(record.value(QStringLiteral("id")), &collectionValueId) ||
+                collectionIds.contains(collectionValueId) || name.isEmpty() ||
+                !parentIdsValue.isArray() || !sourceId.isString() ||
+                !sourceSceneNamesValue.isArray() || !sourceSceneName.isString() ||
+                !sourceSceneLibraryPath.isString() || !libraryPath.isString() ||
+                !record.value(QStringLiteral("hideViewport")).isBool() ||
+                !record.value(QStringLiteral("hideRender")).isBool()) {
+                setError(errorMessage, QStringLiteral("invalid document collection"));
+                return false;
+            }
+            DocumentCollection collection;
+            collection.id = CollectionId::fromValue(collectionValueId);
+            collection.name = name;
+            collection.sourceId = sourceId.toString();
+            collection.sourceSceneName = sourceSceneName.toString();
+            for (const QJsonValue &sceneNameValue : sourceSceneNamesValue.toArray()) {
+                if (!sceneNameValue.isString() || sceneNameValue.toString().isEmpty()) {
+                    setError(errorMessage, QStringLiteral("invalid collection scene name"));
+                    return false;
+                }
+                collection.sourceSceneNames.append(sceneNameValue.toString());
+            }
+            collection.sourceSceneLibraryPath = sourceSceneLibraryPath.toString();
+            collection.libraryPath = libraryPath.toString();
+            collection.hideViewport = record.value(QStringLiteral("hideViewport")).toBool();
+            collection.hideRender = record.value(QStringLiteral("hideRender")).toBool();
+            for (const QJsonValue &parentValue : parentIdsValue.toArray()) {
+                quint64 parentId = 0;
+                if (!idFromJson(parentValue, &parentId)) {
+                    setError(errorMessage, QStringLiteral("invalid collection parent id"));
+                    return false;
+                }
+                collection.parentIds.append(CollectionId::fromValue(parentId));
+            }
+            snapshot.collections.append(std::move(collection));
+            collectionIds.insert(collectionValueId);
+            if (collectionValueId < std::numeric_limits<quint64>::max()) {
+                nextCollectionValue = std::max(nextCollectionValue, collectionValueId + 1);
+            }
+        }
+        // Check references after loading all records so collection order is immaterial.
+        for (const DocumentCollection &collection : snapshot.collections) {
+            QSet<quint64> parents;
+            for (const CollectionId parentId : collection.parentIds) {
+                if (!collectionIds.contains(parentId.value()) ||
+                    parentId == collection.id || parents.contains(parentId.value())) {
+                    setError(errorMessage, QStringLiteral("invalid collection parent reference"));
+                    return false;
+                }
+                parents.insert(parentId.value());
+            }
+        }
+        QSet<quint64> visiting;
+        QSet<quint64> visited;
+        const auto hasCycle = [&](const auto &self, quint64 id) -> bool {
+            if (visiting.contains(id)) return true;
+            if (visited.contains(id)) return false;
+            visiting.insert(id);
+            const auto record = std::find_if(
+                snapshot.collections.cbegin(), snapshot.collections.cend(),
+                [id](const DocumentCollection &item) { return item.id.value() == id; });
+            if (record != snapshot.collections.cend()) {
+                for (const CollectionId parentId : record->parentIds) {
+                    if (self(self, parentId.value())) return true;
+                }
+            }
+            visiting.remove(id);
+            visited.insert(id);
+            return false;
+        };
+        for (const DocumentCollection &collection : snapshot.collections) {
+            if (hasCycle(hasCycle, collection.id.value())) {
+                setError(errorMessage, QStringLiteral("collection hierarchy contains a cycle"));
+                return false;
+            }
+        }
+        snapshot.nextCollectionValue = nextCollectionValue;
+    }
     if (version >= 9) {
         const QJsonValue materialsValue = serialized.value(QStringLiteral("materials"));
         if (!materialsValue.isArray()) {
@@ -511,6 +647,37 @@ bool documentFromJson(const QJsonValue &value,
             return false;
         }
 
+        QVector<CollectionId> objectCollectionIds;
+        bool hideViewport = false;
+        bool hideRender = false;
+        bool hiddenInViewport = false;
+        if (version >= 10) {
+            const QJsonValue collectionIdsValue =
+                serializedObject.value(QStringLiteral("collectionIds"));
+            if (!collectionIdsValue.isArray() ||
+                !serializedObject.value(QStringLiteral("hideViewport")).isBool() ||
+                !serializedObject.value(QStringLiteral("hideRender")).isBool() ||
+                !serializedObject.value(QStringLiteral("hiddenInViewport")).isBool()) {
+                setError(errorMessage, QStringLiteral("invalid scene object collection visibility"));
+                return false;
+            }
+            QSet<quint64> seenCollectionIds;
+            for (const QJsonValue &collectionIdValue : collectionIdsValue.toArray()) {
+                quint64 collectionId = 0;
+                if (!idFromJson(collectionIdValue, &collectionId) ||
+                    !collectionIds.contains(collectionId) ||
+                    seenCollectionIds.contains(collectionId)) {
+                    setError(errorMessage, QStringLiteral("invalid scene object collection membership"));
+                    return false;
+                }
+                seenCollectionIds.insert(collectionId);
+                objectCollectionIds.append(CollectionId::fromValue(collectionId));
+            }
+            hideViewport = serializedObject.value(QStringLiteral("hideViewport")).toBool();
+            hideRender = serializedObject.value(QStringLiteral("hideRender")).toBool();
+            hiddenInViewport = serializedObject.value(QStringLiteral("hiddenInViewport")).toBool();
+        }
+
         if (shape.geometryType == GeometryType::PolygonMesh) {
             PolygonMesh3D &mesh = shape.polygonMesh;
             if (version == 8 && !mesh.materialSlots.isEmpty()) {
@@ -606,6 +773,10 @@ bool documentFromJson(const QJsonValue &value,
         SceneObject sceneObject;
         sceneObject.id = ObjectId::fromValue(objectValueId);
         sceneObject.layerId = LayerId::fromValue(objectLayerValue);
+        sceneObject.collectionIds = std::move(objectCollectionIds);
+        sceneObject.hideViewport = hideViewport;
+        sceneObject.hideRender = hideRender;
+        sceneObject.hiddenInViewport = hiddenInViewport;
         if (version >= 7) {
             const QJsonValue displayName = serializedObject.value(QStringLiteral("displayName"));
             const QJsonValue libraryPath = serializedObject.value(QStringLiteral("libraryPath"));

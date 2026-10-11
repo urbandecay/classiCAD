@@ -21,7 +21,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 1
+BRIDGE_FORMAT_VERSION = 2
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -203,6 +203,7 @@ def visibility_metadata(obj):
         "hide_viewport": bool(obj.hide_viewport),
         "hide_render": bool(obj.hide_render),
         "hidden_in_viewport": hidden_in_viewport,
+        "hide_select": bool(obj.hide_select),
     }
 
 
@@ -215,7 +216,7 @@ def object_metadata(obj, scene):
         "library_path_exists": source_library_exists(obj),
         "scene_name": scene.name_full,
         "parent_id": stable_id(parent) if parent is not None else "",
-        "collection_names": sorted(collection.name_full for collection in obj.users_collection),
+        "collection_ids": sorted(stable_id(collection) for collection in obj.users_collection),
         "visibility": visibility_metadata(obj),
         "display_color_linear": vector_values(obj.color),
         "classiCAD_geometry_type": obj.get("classiCAD_geometry_type", ""),
@@ -376,6 +377,7 @@ def extract_scene(input_path, mode):
             "import_mode": mode,
         },
         "scenes": [],
+        "collections": [],
         "items": [],
         "unsupported_items": [],
         "unsupported_features": [],
@@ -384,9 +386,47 @@ def extract_scene(input_path, mode):
     }
     object_count = 0
     mesh_count = 0
+    collections_by_id = {stable_id(collection): collection
+                         for collection in bpy.data.collections}
+    scene_names_by_collection = {}
+    for scene in bpy.data.scenes:
+        pending = [scene.collection]
+        visited = set()
+        while pending:
+            collection = pending.pop()
+            collection_id = stable_id(collection)
+            if collection_id in visited:
+                continue
+            visited.add(collection_id)
+            collections_by_id[collection_id] = collection
+            scene_names_by_collection.setdefault(collection_id, set()).add(scene.name_full)
+            pending.extend(collection.children)
+    for collection in collections_by_id.values():
+        parent_ids = sorted(
+            stable_id(parent) for parent in collections_by_id.values()
+            if collection in parent.children
+        )
+        output["collections"].append({
+            "collection_id": stable_id(collection),
+            "name": collection.name_full,
+            "library_path": source_library_path(collection),
+            "parent_ids": parent_ids,
+            "source_scene_names": sorted(scene_names_by_collection.get(stable_id(collection), set())),
+            "hide_viewport": bool(collection.hide_viewport),
+            "hide_render": bool(collection.hide_render),
+        })
     for scene in bpy.data.scenes:
         depsgraph = depsgraph_for_scene(scene) if mode == "evaluated" else None
-        scene_record = {"name": scene.name_full, "object_ids": []}
+        scene_record = {
+            "name": scene.name_full,
+            "library_path": source_library_path(scene),
+            "view_layer_names": [view_layer.name for view_layer in scene.view_layers],
+            "collection_ids": sorted(
+                collection_id for collection_id, scene_names in scene_names_by_collection.items()
+                if scene.name_full in scene_names
+            ),
+            "object_ids": [],
+        }
         for obj in scene.objects:
             object_count += 1
             object_id = stable_id(obj)

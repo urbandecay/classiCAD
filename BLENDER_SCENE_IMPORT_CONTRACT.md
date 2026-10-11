@@ -136,22 +136,29 @@ silently convert them into points or curves.
 - Linked library paths and missing external files are reported. Never rewrite
   source paths silently.
 
-An import operation is one undoable document transaction. It preserves layer
-membership and object separation where available, and reports imported,
-skipped, baked, and unsupported item counts with per-item reasons.
+An import operation is one undoable document transaction. Each imported mesh
+receives the active CAD layer assignment required by the document model, while
+its Blender collection links remain independent. Direct membership in multiple
+collections, the collection parent hierarchy (including multiple parents),
+global collection viewport/render hide flags, and object viewport hide flags
+are retained. The Collections panel controls viewport visibility separately
+from the Layers panel. Per-view-layer exclusions/visibility and `hide_select`
+are reported as unsupported. The importer reports imported, skipped, baked,
+and unsupported item counts with per-item reasons.
 
 ## Implementation phases
 
 1. **Schema and validation — implemented:** `PolygonMesh3D`, validation,
-   document version 9, shared material records and slot references, affine
-   object transforms, active UV/color selectors, and Blender version/import
-   mode metadata are serialized. Versions 1–8 remain readable.
+   document version 10, shared material records and slot references, affine
+   object transforms, active UV/color selectors, Blender version/import mode
+   metadata, and collections are serialized. Versions 1–9 remain readable.
 2. **Blender extraction — implemented:** File > Import > Blender Scene invokes
    a Blender 5.2.2 version-checked bridge. Original/evaluated mesh extraction,
    per-object validation, unsupported-feature reporting, and one undoable
    import transaction are wired. Tagged classiCAD NURBS display proxies are
-   skipped. External image references persist with materials, but image pixels,
-   collections, and hidden state are not persisted; nonmesh object types are
+   skipped. External image references persist with materials; packed image
+   bytes up to 32 MiB per image, collection hierarchy/membership, and global
+   object/collection hide state are persisted. Nonmesh object types are
    reported as unsupported.
 3. **Basic viewport — implemented for object-level interaction:** mesh
    triangles are derived from authoritative polygon loops and rendered
@@ -168,9 +175,11 @@ skipped, baked, and unsupported item counts with per-item reasons.
    samples external images with affine per-triangle mapping and repeat
    wrapping; packed images, texture alpha, perspective correction, and filtering
    differ from the GPU path. Shader-node evaluation remains unsupported. UV
-   maps and active selectors are retained as mesh data. Blender object
-   visibility flags and collection membership are currently reported but not
-   retained or applied by the classiCAD viewport.
+   maps and active selectors are retained as mesh data. Object viewport hide
+   flags and global collection viewport hide flags affect viewport visibility.
+   Collection membership and hierarchy are shown in a Collections panel,
+   separate from CAD layers. Blender per-view-layer exclusions/visibility and
+   `hide_select` remain unsupported.
 5. **Round-trip and parity — pending review:** native JSON preserves the mesh
    data, but save/reopen and Blender 5.2.2 visual parity have not been checked
    as a comparison matrix. Blender mesh export from native classiCAD documents

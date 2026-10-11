@@ -394,14 +394,16 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 
 ## Stage 7 progress
 
-- Blender mesh material image-texture references are now retained through mesh
-  import and native document save/load. Each material stores source node and
-  image names, library/path strings, color-space name, and packed/file-exists
-  flags; paths remain unchanged. This makes the source references available to
-  a future Workbench Texture color-mode renderer. Texture color mode still
-  falls back to the existing non-texture material color because the viewport
-  renderer does not yet bind these references, resolve packed images, or sample
-  mesh UVs. Blender shader-node graphs are not evaluated.
+- Blender mesh Texture mode now uses the active Image Texture Node and active
+  UV map for per-fragment GPU sampling of supported external raster images.
+  Missing active image, readable file, or active UV data falls back to the
+  face Material color. Images are limited to common raster formats, 256 MiB
+  files, and 64-megapixel dimensions; pixels load on demand and are not
+  embedded. Packed images, node-graph evaluation, Blender filtering parity,
+  sampled texture alpha, premultiplied-alpha unpremultiplication, Blender's
+  image transparency cutoff remain unsupported. QPainter samples external
+  images using an affine mapping per triangle and repeat wrapping; perspective
+  correction and image filtering differ from the GPU Workbench pass.
 
 - A `QOpenGLWidget` now presents the viewport on desktop OpenGL systems. The
   procedural grid remains in a GPU framebuffer and is resolved/composited into

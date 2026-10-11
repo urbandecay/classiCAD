@@ -3,6 +3,7 @@
 #include "viewport_raster_workbench_effects.h"
 
 #include "viewport_depth_geometry.h"
+#include "core/geometry/polygon_mesh.h"
 
 #include <QVector3D>
 
@@ -50,7 +51,9 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
     // scene-wide transparent-scene restriction in this fallback as well.
     for (const ViewportRenderObject &object : objects) {
         if (object.shape.geometryType != GeometryType::NurbsSurface &&
-            object.shape.geometryType != GeometryType::NurbsSolid) {
+            object.shape.geometryType != GeometryType::NurbsSolid &&
+            !(object.shape.geometryType == GeometryType::PolygonMesh &&
+              validatePolygonMesh(object.shape.polygonMesh))) {
             continue;
         }
         const float alpha = settings.colorMode == ViewportColorMode::Custom
@@ -61,6 +64,18 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
                                 ? object.workbenchMaterial.alpha
                                 : object.displayColorSceneLinear.w();
         if (alpha < 0.999f) return;
+        if (object.shape.geometryType == GeometryType::PolygonMesh &&
+            (settings.colorMode == ViewportColorMode::Material ||
+             settings.colorMode == ViewportColorMode::Attribute ||
+             settings.colorMode == ViewportColorMode::Texture)) {
+            for (const WorkbenchMaterialData &material : object.meshMaterials) {
+                if (material.alpha < 0.999f) return;
+            }
+            for (const PolygonMeshMaterialSlot &slot :
+                 object.shape.polygonMesh.materialSlots) {
+                if (slot.alpha < 0.999f) return;
+            }
+        }
     }
 
     const int outputWidth = colorImage->width();
@@ -76,12 +91,49 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
 
     for (const ViewportRenderObject &object : objects) {
         if (object.shape.geometryType != GeometryType::NurbsSurface &&
-            object.shape.geometryType != GeometryType::NurbsSolid) {
+            object.shape.geometryType != GeometryType::NurbsSolid &&
+            !(object.shape.geometryType == GeometryType::PolygonMesh &&
+              validatePolygonMesh(object.shape.polygonMesh))) {
             continue;
         }
         ViewportDepthGeometry fallback;
         const ViewportDepthGeometry *geometry =
             object.preparedDepthGeometry.data();
+        if (object.shape.geometryType == GeometryType::PolygonMesh) {
+            // Imported meshes have no NURBS tessellation cache. Expand their
+            // triangulated faces into the same per-corner buffers used by
+            // the NURBS fallback, applying the scene-object transform first.
+            const PolygonMesh3D &mesh = object.shape.polygonMesh;
+            const auto &m = object.meshObjectTransform;
+            const auto worldPoint = [&](const Point3D &local) {
+                const qreal w = m[12] * local.x + m[13] * local.y +
+                                m[14] * local.z + m[15];
+                const qreal divisor = std::abs(w) > 1.0e-12 ? w : 1.0;
+                return QVector3D(
+                    static_cast<float>((m[0] * local.x + m[1] * local.y +
+                                        m[2] * local.z + m[3]) / divisor),
+                    static_cast<float>((m[4] * local.x + m[5] * local.y +
+                                        m[6] * local.z + m[7]) / divisor),
+                    static_cast<float>((m[8] * local.x + m[9] * local.y +
+                                        m[10] * local.z + m[11]) / divisor));
+            };
+            for (const QVector<int> &face : mesh.faces) {
+                QVector<Point3D> points;
+                points.reserve(face.size());
+                for (int vertex : face) points.append(mesh.vertices[vertex]);
+                for (const std::array<int, 3> &triangle :
+                     triangulatePolygonLoop(points)) {
+                    const QVector3D a = worldPoint(points[triangle[0]]);
+                    const QVector3D b = worldPoint(points[triangle[1]]);
+                    const QVector3D c = worldPoint(points[triangle[2]]);
+                    const QVector3D normal = normalized(
+                        QVector3D::crossProduct(b - a, c - a));
+                    fallback.surfaceVertices << a << b << c;
+                    fallback.surfaceNormals << normal << normal << normal;
+                }
+            }
+            geometry = &fallback;
+        }
         if (geometry == nullptr) {
             fallback = buildViewportDepthGeometry(object);
             geometry = &fallback;

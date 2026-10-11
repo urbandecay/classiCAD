@@ -50,7 +50,8 @@ public:
                    const QString &displayName = QString(),
                    const QString &libraryPath = QString(),
                    const MeshObjectTransform &meshTransform =
-                       identityMeshObjectTransform) const;
+                       identityMeshObjectTransform,
+                   const QVector<WorkbenchMaterialData> &meshMaterials = {}) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,

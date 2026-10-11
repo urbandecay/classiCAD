@@ -28,6 +28,9 @@ struct WorkbenchMaterialData {
     qreal roughness = 0.4;
     qreal metallic = 0.0;
     qreal alpha = 1.0;
+    // First external image reference retained for the Workbench Texture mode.
+    QString textureImagePath;
+    bool textureImageSrgb = true;
 };
 
 // Shared imported material datablock. Mesh slots refer to this record by id.
@@ -49,8 +52,8 @@ struct DocumentMaterial {
     float roughness = 0.4f;
     float metallic = 0.0f;
     float alpha = 1.0f;
-    // Source image references are retained for future Texture color-mode
-    // rendering. They do not imply node-graph evaluation or image sampling.
+    // Source image references are retained without evaluating node graphs.
+    // The GPU Texture path currently consumes only an active external image.
     QVector<DocumentImageTextureReference> imageTextures;
 };
 

@@ -10338,7 +10338,8 @@ protected:
                                   renderObject.workbenchMaterial,
                                   renderObject.displayName,
                                   renderObject.libraryPath,
-                                  renderObject.meshObjectTransform);
+                                  renderObject.meshObjectTransform,
+                                  renderObject.meshMaterials);
                     }
                 }
             }
@@ -22260,7 +22261,8 @@ private:
                    const QString &displayName = QString(),
                    const QString &libraryPath = QString(),
                    const MeshObjectTransform &meshTransform =
-                       identityMeshObjectTransform)
+                       identityMeshObjectTransform,
+                   const QVector<WorkbenchMaterialData> &meshMaterials = {})
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -22280,7 +22282,8 @@ private:
                                     workbenchMaterial,
                                     displayName,
                                     libraryPath,
-                                    meshTransform);
+                                    meshTransform,
+                                    meshMaterials);
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 

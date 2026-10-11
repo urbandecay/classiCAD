@@ -73,7 +73,12 @@ def image_references(material):
     tree = getattr(material, "node_tree", None)
     if tree is None:
         return references
-    for node in tree.nodes:
+    # Workbench's Texture color source uses the active Image Texture Node.
+    # Do not guess from node-tree iteration order or evaluate a node graph.
+    active_node = getattr(tree.nodes, "active", None)
+    for node in ([active_node] if active_node is not None else []):
+        if getattr(node, "type", "") != "TEX_IMAGE":
+            continue
         image = getattr(node, "image", None)
         if image is None:
             continue
@@ -82,7 +87,10 @@ def image_references(material):
                 "node_name": node.name,
                 "image_name": image.name_full,
                 "image_library_path": source_library_path(image),
-                "filepath": image.filepath,
+                # Resolve Blender's // path against the source .blend while
+                # still in Blender; classiCAD never interprets Blender paths.
+                "filepath": (bpy.path.abspath(image.filepath)
+                             if image.filepath else ""),
                 "packed": image.packed_file is not None,
                 "source_file_exists": (
                     True if image.packed_file is not None else

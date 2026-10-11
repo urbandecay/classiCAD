@@ -25,6 +25,9 @@
 #include <QPainterPath>
 #include <QPolygonF>
 #include <QTransform>
+#include <QImage>
+#include <QFileInfo>
+#include <QHash>
 
 #include <algorithm>
 #include <array>
@@ -929,7 +932,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                      workbenchMaterial,
                                  const QString &displayName,
                                  const QString &libraryPath,
-                                 const MeshObjectTransform &meshTransform) const
+                                 const MeshObjectTransform &meshTransform,
+                                 const QVector<WorkbenchMaterialData> &meshMaterials) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -994,9 +998,19 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QPolygonF points;
             QColor color;
             qreal depth = 0.0;
+            QImage texture;
+            std::array<QPointF, 3> uvs{};
         };
         QVector<MeshTriangle> triangles;
         const PolygonMesh3D &mesh = shape.polygonMesh;
+        const MeshUvMap *activeUvMap = nullptr;
+        for (const MeshUvMap &uvMap : mesh.uvMaps) {
+            if (uvMap.name == mesh.activeUvMapName) {
+                activeUvMap = &uvMap;
+                break;
+            }
+        }
+        QHash<QString, QImage> textureImages;
         int firstCorner = 0;
         const MeshColorAttribute *activeAttribute = nullptr;
         if (shadingSettings_.colorMode == ViewportColorMode::Attribute) {
@@ -1023,6 +1037,20 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 }
             }
             return color;
+        };
+        const auto textureForFace = [&](int faceIndex) -> const QImage * {
+            if (activeUvMap == nullptr) return nullptr;
+            const int slot = mesh.faceMaterialIndices.value(faceIndex, 0);
+            if (slot < 0 || slot >= meshMaterials.size()) return nullptr;
+            const QString path = meshMaterials[slot].textureImagePath;
+            if (path.isEmpty() || !QFileInfo(path).isFile()) return nullptr;
+            auto found = textureImages.find(path);
+            if (found == textureImages.end()) {
+                QImage loaded(path);
+                if (loaded.isNull()) return nullptr;
+                found = textureImages.insert(path, std::move(loaded));
+            }
+            return &found.value();
         };
         const auto attributeColor = [&](int faceIndex,
                                         const QVector<int> &face,
@@ -1155,6 +1183,23 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     }
                 }
                 bool projected = true;
+                std::array<QPointF, 3> triangleUvs;
+                bool hasUvs = activeUvMap != nullptr;
+                if (hasUvs) {
+                    for (int corner = 0; corner < 3; ++corner) {
+                        const int uvIndex = firstCorner + loopTriangle[corner];
+                        if (uvIndex < 0 || uvIndex >= activeUvMap->cornerValues.size()) {
+                            hasUvs = false;
+                            break;
+                        }
+                        const QPointF uv = activeUvMap->cornerValues[uvIndex];
+                        if (!std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
+                            hasUvs = false;
+                            break;
+                        }
+                        triangleUvs[corner] = QPointF(uv.x(), 1.0 - uv.y());
+                    }
+                }
                 for (const Point3D &point : vertices) {
                     QPointF screen;
                     if (!transform_.worldPointToScreen(point, viewportSize, &screen)) {
@@ -1167,6 +1212,12 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 }
                 if (projected) {
                     triangle.color = faceColor;
+                    if (useWorkbenchColor && shadingSettings_.colorMode ==
+                            ViewportColorMode::Texture && hasUvs &&
+                        textureForFace(faceIndex) != nullptr) {
+                        triangle.texture = *textureForFace(faceIndex);
+                        triangle.uvs = triangleUvs;
+                    }
                     if (useWorkbenchColor &&
                         shadingSettings_.colorMode == ViewportColorMode::Attribute) {
                         const std::optional<QVector4D> color =
@@ -1191,8 +1242,35 @@ void ViewportRenderer::drawShape(QPainter &painter,
         painter.save();
         painter.setPen(selected ? QPen(curveColor, 1.5) : Qt::NoPen);
         for (const MeshTriangle &triangle : triangles) {
-            painter.setBrush(triangle.color);
-            painter.drawPolygon(triangle.points);
+            if (!triangle.texture.isNull() && triangle.points.size() == 3) {
+                const QPolygonF source{triangle.uvs[0], triangle.uvs[1],
+                                       triangle.uvs[2]};
+                const QPolygonF screen = triangle.points;
+                QPolygonF sourceQuad = source;
+                QPolygonF screenQuad = screen;
+                sourceQuad.append(source[0] + source[2] - source[1]);
+                screenQuad.append(screen[0] + screen[2] - screen[1]);
+                QTransform map;
+                if (QTransform::quadToQuad(sourceQuad, screenQuad, map)) {
+                    QBrush textureBrush(triangle.texture);
+                    QTransform brushTransform;
+                    brushTransform.scale(1.0 / triangle.texture.width(),
+                                         1.0 / triangle.texture.height());
+                    textureBrush.setTransform(brushTransform);
+                    QPolygonF uvTriangle = source;
+                    painter.save();
+                    painter.setTransform(map, true);
+                    painter.setBrush(textureBrush);
+                    painter.drawPolygon(uvTriangle);
+                    painter.restore();
+                } else {
+                    painter.setBrush(triangle.color);
+                    painter.drawPolygon(triangle.points);
+                }
+            } else {
+                painter.setBrush(triangle.color);
+                painter.drawPolygon(triangle.points);
+            }
         }
         painter.restore();
         return;

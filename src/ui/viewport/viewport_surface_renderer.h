@@ -14,6 +14,7 @@
 #include <QVector3D>
 #include <QVector4D>
 #include <QString>
+#include <QHash>
 
 #include <array>
 
@@ -48,6 +49,8 @@ private:
         float attributeR = 1.0f;
         float attributeG = 1.0f;
         float attributeB = 1.0f;
+        float u = 0.0f;
+        float v = 0.0f;
     };
 
     struct DrawRange {
@@ -58,6 +61,9 @@ private:
         QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
         WorkbenchMaterialData workbenchMaterial;
         bool useAttributeColor = false;
+        bool useTextureColor = false;
+        QString textureImagePath;
+        bool textureImageSrgb = true;
         quint64 objectSeed = 0;
         quint32 effectObjectId = 0;
         QString displayName;
@@ -94,6 +100,7 @@ private:
     bool ensureMatcapTexture(const QString &presetName);
     bool ensureAgxDisplayTexture();
     bool ensureCavityJitterTexture(int totalSamples);
+    GLuint ensureImageTexture(const QString &path, bool srgb);
 
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram outlineProgram_;
@@ -123,6 +130,7 @@ private:
     int cavityJitterSampleCount_ = 0;
     unsigned int shadowTexture_ = 0;
     unsigned int shadowFramebuffer_ = 0;
+    QHash<QString, GLuint> imageTextures_;
     QMatrix4x4 shadowViewProjection_;
     QString matcapTextureName_;
     QByteArray geometryKey_;

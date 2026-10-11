@@ -150,8 +150,9 @@ skipped, baked, and unsupported item counts with per-item reasons.
    a Blender 5.2.2 version-checked bridge. Original/evaluated mesh extraction,
    per-object validation, unsupported-feature reporting, and one undoable
    import transaction are wired. Tagged classiCAD NURBS display proxies are
-   skipped. Collections, hidden state, and image paths are reported but not
-   persisted; nonmesh object types are reported as unsupported.
+   skipped. External image references persist with materials, but image pixels,
+   collections, and hidden state are not persisted; nonmesh object types are
+   reported as unsupported.
 3. **Basic viewport — implemented for object-level interaction:** mesh
    triangles are derived from authoritative polygon loops and rendered
    through the GPU Workbench surface renderer, with QPainter fallback, object
@@ -161,8 +162,11 @@ skipped, baked, and unsupported item counts with per-item reasons.
    Material/Object/Random/Custom/Attribute color sources, and material alpha
    reach the GPU and QPainter paths. Point, face, and corner color attributes
    use their stored domains. Image-texture references persist with materials,
-   but Texture mode does not resolve image pixels or sample UVs. UV maps and
-   active selectors are retained for future Texture sampling.
+   and GPU Texture mode samples the active UV map per fragment when an
+   external image path resolves. QPainter Texture mode uses affine per-triangle
+   sampling with repeat wrapping, so perspective and filtering may differ.
+   Packed images, sampled texture alpha, and shader-node evaluation remain
+   unsupported. UV maps and active selectors are retained as mesh data.
 5. **Round-trip and parity — pending review:** native JSON preserves the mesh
    data, but save/reopen and Blender 5.2.2 visual parity have not been checked
    as a comparison matrix. Blender mesh export from native classiCAD documents

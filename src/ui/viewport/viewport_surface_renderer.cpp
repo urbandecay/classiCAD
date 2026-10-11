@@ -12,7 +12,11 @@
 #include <QDataStream>
 #include <QByteArray>
 #include <QHash>
+#include <QSet>
 #include <QIODevice>
+#include <QImage>
+#include <QImageReader>
+#include <QFileInfo>
 #include <QOpenGLContext>
 #include <QVector2D>
 #include <QVector3D>
@@ -198,6 +202,10 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         glDeleteTextures(1, &matcapTexture_);
         matcapTexture_ = 0;
     }
+    for (GLuint texture : imageTextures_) {
+        if (texture != 0) glDeleteTextures(1, &texture);
+    }
+    imageTextures_.clear();
     if (agxDisplayTexture_ != 0) {
         glDeleteTextures(1, &agxDisplayTexture_);
         agxDisplayTexture_ = 0;
@@ -260,11 +268,13 @@ bool ViewportSurfaceRenderer::initialize()
         layout(location = 0) in vec3 aPosition;
         layout(location = 1) in vec3 aNormal;
         layout(location = 2) in vec3 aAttributeColor;
+        layout(location = 3) in vec2 aUv;
         uniform mat4 uViewProjection;
         uniform vec3 uWorldOffset;
         uniform mat4 uShadowViewProjection;
         out vec3 vNormalView;
         out vec3 vAttributeColor;
+        out vec2 vUv;
         out vec3 vWorldPosition;
         out vec4 vShadowPosition;
         uniform vec3 uViewRight;
@@ -277,6 +287,7 @@ bool ViewportSurfaceRenderer::initialize()
                                dot(aNormal, uViewUp),
                                dot(aNormal, uViewFacing));
             vAttributeColor = aAttributeColor;
+            vUv = aUv;
             vWorldPosition = position;
             vShadowPosition = uShadowViewProjection * vec4(position, 1.0);
             gl_Position = uViewProjection * vec4(position, 1.0);
@@ -288,10 +299,13 @@ bool ViewportSurfaceRenderer::initialize()
         #version 330 core
         in vec3 vNormalView;
         in vec3 vAttributeColor;
+        in vec2 vUv;
         in vec3 vWorldPosition;
         in vec4 vShadowPosition;
         uniform vec4 uBaseColor;
         uniform bool uUseAttributeColor;
+        uniform bool uUseTextureColor;
+        uniform sampler2D uWorkbenchImage;
         uniform bool uEditModeSelected;
         uniform vec3 uEditSelectionColor;
         uniform float uEditSelectionMix;
@@ -624,9 +638,10 @@ bool ViewportSurfaceRenderer::initialize()
                                           dot(incidentWorld, uViewUp),
                                           dot(incidentWorld, uViewFacing)));
             }
-            vec3 baseColor = uUseAttributeColor
-                                 ? vAttributeColor
-                                 : uBaseColor.rgb;
+            vec3 baseColor = uUseTextureColor
+                                 ? texture(uWorkbenchImage, vUv).rgb
+                                 : (uUseAttributeColor ? vAttributeColor
+                                                       : uBaseColor.rgb);
             vec3 color = baseColor;
             if (uLightingMode == 0) {
                 color = workbenchStudioLighting(baseColor,
@@ -861,6 +876,9 @@ bool ViewportSurfaceRenderer::initialize()
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex),
                           reinterpret_cast<const void *>(offsetof(SurfaceVertex, attributeR)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex),
+                          reinterpret_cast<const void *>(offsetof(SurfaceVertex, u)));
     vertexBuffer_.release();
     vertexArray_.release();
 
@@ -905,6 +923,14 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 for (int index : face) keyStream << qint32(index);
             }
             keyStream << mesh.activeColorAttributeName;
+            keyStream << mesh.activeUvMapName;
+            for (const MeshUvMap &uvMap : mesh.uvMaps) {
+                if (uvMap.name != mesh.activeUvMapName) continue;
+                for (const QPointF &uv : uvMap.cornerValues)
+                    keyStream << double(uv.x()) << double(uv.y());
+            }
+            for (const WorkbenchMaterialData &material : object.meshMaterials)
+                keyStream << material.textureImagePath << material.textureImageSrgb;
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
                 if (attribute.name != mesh.activeColorAttributeName) continue;
                 keyStream << attribute.name << qint32(attribute.domain)
@@ -964,6 +990,13 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8]);
             const bool reflected = std::isfinite(linearDeterminant) &&
                                    linearDeterminant < -1.0e-12;
+            const MeshUvMap *activeUvMap = nullptr;
+            for (const MeshUvMap &uvMap : mesh.uvMaps) {
+                if (uvMap.name == mesh.activeUvMapName) {
+                    activeUvMap = &uvMap;
+                    break;
+                }
+            }
             for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
                 const QVector<int> &face = mesh.faces[faceIndex];
                 QVector<Point3D> localLoop;
@@ -986,6 +1019,13 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 const auto triangles = triangulatePolygonLoop(localLoop);
                 const int faceFirstCorner = firstCorner;
                 firstCorner += face.size();
+                const int faceSlot = mesh.faceMaterialIndices.value(faceIndex, -1);
+                const QString imagePath = faceSlot >= 0 &&
+                        faceSlot < object.meshMaterials.size()
+                    ? object.meshMaterials[faceSlot].textureImagePath : QString{};
+                const bool textureAvailable = !imagePath.isEmpty() &&
+                    activeUvMap != nullptr &&
+                    faceFirstCorner + face.size() <= activeUvMap->cornerValues.size();
                 const int first = changed
                     ? vertices_.size()
                     : (ranges_.isEmpty() ? 0
@@ -1011,6 +1051,12 @@ void ViewportSurfaceRenderer::prepareGeometry(
                         QVector3D(1.0f, 1.0f, 1.0f),
                         QVector3D(1.0f, 1.0f, 1.0f),
                         QVector3D(1.0f, 1.0f, 1.0f)};
+                    QPointF triangleUvs[3] = {};
+                    if (textureAvailable) {
+                        for (int corner = 0; corner < 3; ++corner)
+                            triangleUvs[corner] = activeUvMap->cornerValues[
+                                faceFirstCorner + triangle[corner]];
+                    }
                     bool triangleHasAttribute = activeAttribute != nullptr &&
                         activeAttribute->componentCount >= 1 &&
                         activeAttribute->componentCount <= 4;
@@ -1052,7 +1098,9 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                               static_cast<float>(point->y),
                                               static_cast<float>(point->z),
                                               normal.x(), normal.y(), normal.z(),
-                                              color.x(), color.y(), color.z()});
+                                              color.x(), color.y(), color.z(),
+                                              static_cast<float>(triangleUvs[corner].x()),
+                                              static_cast<float>(triangleUvs[corner].y())});
                         }
                     }
                     count += 3;
@@ -1061,6 +1109,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 range.useAttributeColor = activeAttribute != nullptr &&
                     activeAttribute->componentCount >= 1 &&
                     activeAttribute->componentCount <= 4;
+                range.useTextureColor = textureAvailable;
+                range.textureImagePath = textureAvailable ? imagePath : QString{};
                 const int slotIndex = mesh.faceMaterialIndices.value(faceIndex, -1);
                 if (slotIndex >= 0 && slotIndex < object.meshMaterials.size()) {
                     range.workbenchMaterial = object.meshMaterials[slotIndex];
@@ -1075,6 +1125,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     range.workbenchMaterial.metallic = slot.metallic;
                     range.workbenchMaterial.alpha = slot.alpha;
                 }
+                range.textureImageSrgb = range.workbenchMaterial.textureImageSrgb;
                 ranges_.append(std::move(range));
             }
         } else {
@@ -1935,6 +1986,54 @@ bool ViewportSurfaceRenderer::ensureMatcapTexture(const QString &presetName)
     return matcapTexture_ != 0;
 }
 
+GLuint ViewportSurfaceRenderer::ensureImageTexture(const QString &path, bool srgb)
+{
+    if (path.isEmpty()) return 0;
+    const QString cacheKey = path + (srgb ? QStringLiteral("\nSRGB")
+                                          : QStringLiteral("\nLINEAR"));
+    const auto cached = imageTextures_.constFind(cacheKey);
+    if (cached != imageTextures_.cend()) return cached.value();
+    const QFileInfo info(path);
+    const QByteArray suffix = info.suffix().toLower().toLatin1();
+    static const QSet<QByteArray> allowedFormats{
+        "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
+    if (!info.isFile() || !allowedFormats.contains(suffix) ||
+        info.size() <= 0 || info.size() > 256LL * 1024LL * 1024LL) {
+        imageTextures_.insert(cacheKey, 0);
+        return 0;
+    }
+    QImageReader reader(path);
+    const QSize size = reader.size();
+    if (!size.isValid() || size.width() > 16384 || size.height() > 16384 ||
+        static_cast<quint64>(size.width()) * size.height() > 67108864ULL) {
+        imageTextures_.insert(cacheKey, 0);
+        return 0;
+    }
+    QImage image = reader.read();
+    if (image.isNull()) {
+        imageTextures_.insert(cacheKey, 0);
+        return 0;
+    }
+    image = image.convertToFormat(QImage::Format_RGBA8888)
+                 .mirrored(false, true);
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    if (texture == 0) {
+        imageTextures_.insert(cacheKey, 0);
+        return 0;
+    }
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexImage2D(GL_TEXTURE_2D, 0, srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8,
+                 image.width(), image.height(),
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, image.constBits());
+    imageTextures_.insert(cacheKey, texture);
+    return texture;
+}
+
 bool ViewportSurfaceRenderer::ensureAgxDisplayTexture()
 {
     if (agxDisplayTexture_ != 0) {
@@ -2550,6 +2649,7 @@ bool ViewportSurfaceRenderer::draw(
         GLint previousCavityObjectIdTextureBinding = 0;
         GLint previousCavityDepthTextureBinding = 0;
         GLint previousCavityJitterTextureBinding = 0;
+        GLint previousImageTextureBinding = 0;
         glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
         glActiveTexture(GL_TEXTURE0);
         if (matcapAvailable) {
@@ -2594,6 +2694,9 @@ bool ViewportSurfaceRenderer::draw(
         glBindTexture(GL_TEXTURE_2D,
                       cavityDepthReady ? cavityDepthTexture_ : 0);
         program_.setUniformValue("uCavityDepth", 5);
+        glActiveTexture(GL_TEXTURE6);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousImageTextureBinding);
+        program_.setUniformValue("uWorkbenchImage", 6);
         glActiveTexture(GL_TEXTURE7);
         glGetIntegerv(GL_TEXTURE_BINDING_2D,
                       &previousCavityJitterTextureBinding);
@@ -2695,6 +2798,13 @@ bool ViewportSurfaceRenderer::draw(
                 "uUseAttributeColor",
                 settings.colorMode == ViewportColorMode::Attribute &&
                     range.useAttributeColor);
+            const GLuint imageTexture = settings.colorMode == ViewportColorMode::Texture &&
+                    range.useTextureColor
+                ? ensureImageTexture(range.textureImagePath,
+                                     range.textureImageSrgb) : 0;
+            program_.setUniformValue("uUseTextureColor", imageTexture != 0);
+            glActiveTexture(GL_TEXTURE6);
+            glBindTexture(GL_TEXTURE_2D, imageTexture);
             const QVector3D offset(static_cast<float>(range.offset.x),
                                    static_cast<float>(range.offset.y),
                                    static_cast<float>(range.offset.z));
@@ -2897,6 +3007,9 @@ bool ViewportSurfaceRenderer::draw(
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D,
                       static_cast<GLuint>(previousCavityDepthTextureBinding));
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D,
+                      static_cast<GLuint>(previousImageTextureBinding));
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D,
                       static_cast<GLuint>(previousCavityJitterTextureBinding));

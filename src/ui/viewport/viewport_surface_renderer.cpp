@@ -17,6 +17,8 @@
 #include <QImage>
 #include <QImageReader>
 #include <QFileInfo>
+#include <QCryptographicHash>
+#include <QBuffer>
 #include <QOpenGLContext>
 #include <QVector2D>
 #include <QVector3D>
@@ -306,6 +308,8 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uUseAttributeColor;
         uniform bool uUseTextureColor;
         uniform sampler2D uWorkbenchImage;
+        uniform bool uTexturePremultiplied;
+        uniform bool uTextureAlphaCutoff;
         uniform bool uEditModeSelected;
         uniform vec3 uEditSelectionColor;
         uniform float uEditSelectionMix;
@@ -638,8 +642,20 @@ bool ViewportSurfaceRenderer::initialize()
                                           dot(incidentWorld, uViewUp),
                                           dot(incidentWorld, uViewFacing)));
             }
+            vec3 textureColor = vec3(1.0);
+            if (uUseTextureColor) {
+                vec4 imageColor = texture(uWorkbenchImage, vUv);
+                if (uTextureAlphaCutoff && imageColor.a < 0.1) {
+                    discard;
+                }
+                if (uTexturePremultiplied && imageColor.a != 0.0 &&
+                    imageColor.a != 1.0) {
+                    imageColor.rgb /= imageColor.a;
+                }
+                textureColor = imageColor.rgb;
+            }
             vec3 baseColor = uUseTextureColor
-                                 ? texture(uWorkbenchImage, vUv).rgb
+                                 ? textureColor
                                  : (uUseAttributeColor ? vAttributeColor
                                                        : uBaseColor.rgb);
             vec3 color = baseColor;
@@ -930,7 +946,12 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     keyStream << double(uv.x()) << double(uv.y());
             }
             for (const WorkbenchMaterialData &material : object.meshMaterials)
-                keyStream << material.textureImagePath << material.textureImageSrgb;
+                keyStream << material.textureImagePath
+                          << QCryptographicHash::hash(
+                                 material.textureImagePackedDataBase64.toLatin1(),
+                                 QCryptographicHash::Sha256)
+                          << material.textureImageSrgb
+                          << material.textureImageAlphaMode;
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
                 if (attribute.name != mesh.activeColorAttributeName) continue;
                 keyStream << attribute.name << qint32(attribute.domain)
@@ -1023,7 +1044,10 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 const QString imagePath = faceSlot >= 0 &&
                         faceSlot < object.meshMaterials.size()
                     ? object.meshMaterials[faceSlot].textureImagePath : QString{};
-                const bool textureAvailable = !imagePath.isEmpty() &&
+                const bool packedImageAvailable = faceSlot >= 0 &&
+                        faceSlot < object.meshMaterials.size() &&
+                    !object.meshMaterials[faceSlot].textureImagePackedDataBase64.isEmpty();
+                const bool textureAvailable = (!imagePath.isEmpty() || packedImageAvailable) &&
                     activeUvMap != nullptr &&
                     faceFirstCorner + face.size() <= activeUvMap->cornerValues.size();
                 const int first = changed
@@ -1988,34 +2012,69 @@ bool ViewportSurfaceRenderer::ensureMatcapTexture(const QString &presetName)
 
 GLuint ViewportSurfaceRenderer::ensureImageTexture(const QString &path, bool srgb)
 {
-    if (path.isEmpty()) return 0;
-    const QString cacheKey = path + (srgb ? QStringLiteral("\nSRGB")
-                                          : QStringLiteral("\nLINEAR"));
+    return ensureImageTexture(path, {}, srgb);
+}
+
+GLuint ViewportSurfaceRenderer::ensureImageTexture(
+    const QString &path, const QString &packedDataBase64, bool srgb)
+{
+    if (path.isEmpty() && packedDataBase64.isEmpty()) return 0;
+    const QString sourceKey = !packedDataBase64.isEmpty()
+        ? QStringLiteral("PACKED\n") + QString::fromLatin1(
+              QCryptographicHash::hash(packedDataBase64.toLatin1(),
+                                       QCryptographicHash::Sha256).toHex())
+        : path;
+    const QString cacheKey = sourceKey + (srgb ? QStringLiteral("\nSRGB")
+                                               : QStringLiteral("\nLINEAR"));
     const auto cached = imageTextures_.constFind(cacheKey);
     if (cached != imageTextures_.cend()) return cached.value();
-    const QFileInfo info(path);
-    const QByteArray suffix = info.suffix().toLower().toLatin1();
-    static const QSet<QByteArray> allowedFormats{
-        "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
-    if (!info.isFile() || !allowedFormats.contains(suffix) ||
-        info.size() <= 0 || info.size() > 256LL * 1024LL * 1024LL) {
-        imageTextures_.insert(cacheKey, 0);
-        return 0;
+    QImage image;
+    if (!packedDataBase64.isEmpty()) {
+        const QByteArray encoded = packedDataBase64.toLatin1();
+        if (encoded.size() > 44 * 1024 * 1024) return 0;
+        const QByteArray bytes = QByteArray::fromBase64(encoded);
+        if (bytes.size() > 32 * 1024 * 1024) return 0;
+        QBuffer buffer;
+        buffer.setData(bytes);
+        if (!buffer.open(QIODevice::ReadOnly)) return 0;
+        QImageReader reader(&buffer);
+        const QSize size = reader.size();
+        if (!size.isValid() || size.width() > 16384 || size.height() > 16384 ||
+            static_cast<quint64>(size.width()) * size.height() > 67108864ULL) {
+            imageTextures_.insert(cacheKey, 0);
+            return 0;
+        }
+        image = reader.read();
+    } else {
+        const QFileInfo info(path);
+        const QByteArray suffix = info.suffix().toLower().toLatin1();
+        static const QSet<QByteArray> allowedFormats{
+            "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
+        if (!info.isFile() || !allowedFormats.contains(suffix) ||
+            info.size() <= 0 || info.size() > 256LL * 1024LL * 1024LL) {
+            imageTextures_.insert(cacheKey, 0);
+            return 0;
+        }
+        QImageReader reader(path);
+        const QSize size = reader.size();
+        if (!size.isValid() || size.width() > 16384 || size.height() > 16384 ||
+            static_cast<quint64>(size.width()) * size.height() > 67108864ULL) {
+            imageTextures_.insert(cacheKey, 0);
+            return 0;
+        }
+        image = reader.read();
     }
-    QImageReader reader(path);
-    const QSize size = reader.size();
-    if (!size.isValid() || size.width() > 16384 || size.height() > 16384 ||
-        static_cast<quint64>(size.width()) * size.height() > 67108864ULL) {
-        imageTextures_.insert(cacheKey, 0);
-        return 0;
-    }
-    QImage image = reader.read();
     if (image.isNull()) {
         imageTextures_.insert(cacheKey, 0);
         return 0;
     }
     image = image.convertToFormat(QImage::Format_RGBA8888)
                  .mirrored(false, true);
+    if (image.width() > 16384 || image.height() > 16384 ||
+        static_cast<quint64>(image.width()) * image.height() > 67108864ULL) {
+        imageTextures_.insert(cacheKey, 0);
+        return 0;
+    }
     GLuint texture = 0;
     glGenTextures(1, &texture);
     if (texture == 0) {
@@ -2801,8 +2860,17 @@ bool ViewportSurfaceRenderer::draw(
             const GLuint imageTexture = settings.colorMode == ViewportColorMode::Texture &&
                     range.useTextureColor
                 ? ensureImageTexture(range.textureImagePath,
+                                     range.workbenchMaterial.textureImagePackedDataBase64,
                                      range.textureImageSrgb) : 0;
             program_.setUniformValue("uUseTextureColor", imageTexture != 0);
+            const QString alphaMode = range.workbenchMaterial.textureImageAlphaMode;
+            const bool ignoreTextureAlpha =
+                alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
+                alphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
+                alphaMode.compare(QStringLiteral("CHANNEL_PACKED"), Qt::CaseInsensitive) == 0;
+            program_.setUniformValue("uTexturePremultiplied",
+                alphaMode.compare(QStringLiteral("PREMUL"), Qt::CaseInsensitive) == 0);
+            program_.setUniformValue("uTextureAlphaCutoff", !ignoreTextureAlpha);
             glActiveTexture(GL_TEXTURE6);
             glBindTexture(GL_TEXTURE_2D, imageTexture);
             const QVector3D offset(static_cast<float>(range.offset.x),

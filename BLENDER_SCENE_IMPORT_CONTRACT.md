@@ -162,11 +162,15 @@ skipped, baked, and unsupported item counts with per-item reasons.
    Material/Object/Random/Custom/Attribute color sources, and material alpha
    reach the GPU and QPainter paths. Point, face, and corner color attributes
    use their stored domains. Image-texture references persist with materials,
-   and GPU Texture mode samples the active UV map per fragment when an
-   external image path resolves. QPainter Texture mode uses affine per-triangle
-   sampling with repeat wrapping, so perspective and filtering may differ.
-   Packed images, sampled texture alpha, and shader-node evaluation remain
-   unsupported. UV maps and active selectors are retained as mesh data.
+   and GPU Texture mode samples the active UV map per fragment for supported
+   external images and packed image bytes up to 32 MiB per image. GPU sampling
+   applies Blender's alpha-mode handling and cutoff. QPainter Texture mode
+   samples external images with affine per-triangle mapping and repeat
+   wrapping; packed images, texture alpha, perspective correction, and filtering
+   differ from the GPU path. Shader-node evaluation remains unsupported. UV
+   maps and active selectors are retained as mesh data. Blender object
+   visibility flags and collection membership are currently reported but not
+   retained or applied by the classiCAD viewport.
 5. **Round-trip and parity — pending review:** native JSON preserves the mesh
    data, but save/reopen and Blender 5.2.2 visual parity have not been checked
    as a comparison matrix. Blender mesh export from native classiCAD documents

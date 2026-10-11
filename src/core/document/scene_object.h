@@ -31,6 +31,8 @@ struct WorkbenchMaterialData {
     // First external image reference retained for the Workbench Texture mode.
     QString textureImagePath;
     bool textureImageSrgb = true;
+    QString textureImageAlphaMode = QStringLiteral("STRAIGHT");
+    QString textureImagePackedDataBase64;
 };
 
 // Shared imported material datablock. Mesh slots refer to this record by id.
@@ -40,6 +42,11 @@ struct DocumentImageTextureReference {
     QString imageLibraryPath;
     QString filepath;
     QString colorSpace;
+    // Blender Image.alpha_mode: STRAIGHT, PREMUL, CHANNEL_PACKED, or NONE.
+    QString alphaMode = QStringLiteral("STRAIGHT");
+    // Base64 packed image bytes from Blender scene import, empty for external
+    // images or packed data omitted by the transport size limit.
+    QString packedDataBase64;
     bool packed = false;
     bool sourceFileExists = false;
 };

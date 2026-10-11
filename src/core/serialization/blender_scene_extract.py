@@ -8,6 +8,7 @@ This emits transport data only. The classiCAD importer must validate every
 required mesh record before creating native scene objects.
 """
 
+import base64
 import json
 import math
 import os
@@ -21,6 +22,9 @@ import bpy
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
 BRIDGE_FORMAT_VERSION = 1
+# Keep a single packed image from expanding the extractor's JSON transport
+# without bound. The limit applies to the decoded image bytes.
+MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
 
 
 def require_pinned_blender():
@@ -82,6 +86,26 @@ def image_references(material):
         image = getattr(node, "image", None)
         if image is None:
             continue
+        packed_data_base64 = ""
+        packed_data_error = ""
+        packed_file = getattr(image, "packed_file", None)
+        if packed_file is not None:
+            packed_size = int(getattr(packed_file, "size", len(packed_file.data)))
+            if packed_size > MAX_PACKED_IMAGE_BYTES:
+                packed_data_error = (
+                    "packed image exceeds the %d-byte transport limit"
+                    % MAX_PACKED_IMAGE_BYTES
+                )
+            else:
+                packed_data = bytes(packed_file.data)
+                if len(packed_data) > MAX_PACKED_IMAGE_BYTES:
+                    packed_data_error = (
+                        "packed image exceeds the %d-byte transport limit"
+                        % MAX_PACKED_IMAGE_BYTES
+                    )
+                    packed_data = b""
+            if not packed_data_error:
+                packed_data_base64 = base64.b64encode(packed_data).decode("ascii")
         references.append(
             {
                 "node_name": node.name,
@@ -91,13 +115,16 @@ def image_references(material):
                 # still in Blender; classiCAD never interprets Blender paths.
                 "filepath": (bpy.path.abspath(image.filepath)
                              if image.filepath else ""),
-                "packed": image.packed_file is not None,
+                "packed": packed_file is not None,
+                "packed_data_base64": packed_data_base64,
+                "packed_data_error": packed_data_error,
                 "source_file_exists": (
                     True if image.packed_file is not None else
                     (os.path.isfile(bpy.path.abspath(image.filepath))
                      if image.filepath else False)
                 ),
                 "color_space": image.colorspace_settings.name,
+                "alpha_mode": image.alpha_mode,
             }
         )
     return references
@@ -245,6 +272,12 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
                         + record["library_path"],
                     )
                 for image in record["image_textures"]:
+                    if image["packed_data_error"]:
+                        add_unsupported(
+                            unsupported, item_id,
+                            "image_texture:" + image["image_name"],
+                            image["packed_data_error"],
+                        )
                     if not image["source_file_exists"]:
                         add_unsupported(
                             unsupported, item_id,

@@ -2,6 +2,7 @@
 
 #include "core/serialization/shape_json_codec.h"
 
+#include <QByteArray>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
@@ -185,6 +186,8 @@ QJsonObject documentToJson(const Document &document)
             image.insert(QStringLiteral("imageLibraryPath"), reference.imageLibraryPath);
             image.insert(QStringLiteral("filepath"), reference.filepath);
             image.insert(QStringLiteral("colorSpace"), reference.colorSpace);
+            image.insert(QStringLiteral("alphaMode"), reference.alphaMode);
+            image.insert(QStringLiteral("packedDataBase64"), reference.packedDataBase64);
             image.insert(QStringLiteral("packed"), reference.packed);
             image.insert(QStringLiteral("sourceFileExists"), reference.sourceFileExists);
             imageTextures.append(image);
@@ -318,11 +321,14 @@ bool documentFromJson(const QJsonValue &value,
                     }
                     const QJsonObject image = imageValue.toObject();
                     const QStringList stringKeys{QStringLiteral("nodeName"), QStringLiteral("imageName"),
-                        QStringLiteral("imageLibraryPath"), QStringLiteral("filepath"), QStringLiteral("colorSpace")};
+                        QStringLiteral("imageLibraryPath"), QStringLiteral("filepath"),
+                        QStringLiteral("colorSpace")};
                     bool validImage = true;
                     for (const QString &key : stringKeys) validImage &= image.value(key).isString();
+                    const QJsonValue packedDataValue = image.value(QStringLiteral("packedDataBase64"));
                     if (!validImage || !image.value(QStringLiteral("packed")).isBool() ||
                         !image.value(QStringLiteral("sourceFileExists")).isBool() ||
+                        (!packedDataValue.isUndefined() && !packedDataValue.isString()) ||
                         image.value(QStringLiteral("imageName")).toString().isEmpty()) {
                         setError(errorMessage, QStringLiteral("invalid document image texture reference"));
                         return false;
@@ -333,6 +339,17 @@ bool documentFromJson(const QJsonValue &value,
                     reference.imageLibraryPath = image.value(QStringLiteral("imageLibraryPath")).toString();
                     reference.filepath = image.value(QStringLiteral("filepath")).toString();
                     reference.colorSpace = image.value(QStringLiteral("colorSpace")).toString();
+                    reference.alphaMode = image.value(QStringLiteral("alphaMode"))
+                                              .toString(QStringLiteral("STRAIGHT"));
+                    reference.packedDataBase64 = image.value(QStringLiteral("packedDataBase64"))
+                                                     .toString();
+                    if (reference.packedDataBase64.size() > 44 * 1024 * 1024 ||
+                        QByteArray::fromBase64(reference.packedDataBase64.toLatin1()).size() >
+                            32 * 1024 * 1024) {
+                        setError(errorMessage,
+                                 QStringLiteral("document packed image exceeds the size limit"));
+                        return false;
+                    }
                     reference.packed = image.value(QStringLiteral("packed")).toBool();
                     reference.sourceFileExists = image.value(QStringLiteral("sourceFileExists")).toBool();
                     material.imageTextures.append(std::move(reference));

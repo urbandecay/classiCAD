@@ -395,14 +395,21 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 ## Stage 7 progress
 
 - Blender mesh Texture mode now uses the active Image Texture Node and active
-  UV map for per-fragment GPU sampling of supported external raster images.
-  Missing active image, readable file, or active UV data falls back to the
-  face Material color. Images are limited to common raster formats, 256 MiB
-  files, and 64-megapixel dimensions; pixels load on demand and are not
-  embedded. Packed images, node-graph evaluation, Blender filtering parity,
-  sampled texture alpha, premultiplied-alpha unpremultiplication, Blender's
-  image transparency cutoff remain unsupported. QPainter samples external
-  images using an affine mapping per triangle and repeat wrapping; perspective
+  UV map for per-fragment GPU sampling of supported external raster images
+  and packed image bytes up to 32 MiB per image. Missing active image,
+  readable file, or active UV data falls back to the face Material color.
+  External images are limited to common raster formats, 256 MiB files, and
+  64-megapixel dimensions; pixels load on demand. Packed bytes persist with
+  the document and are sampled by the GPU path. Node-graph evaluation remains
+  unsupported. The
+  Blender 5.2.2 Workbench texture shader samples RGBA, unpremultiplies when
+  the image is marked premultiplied, then discards fragments below a cutoff.
+  The Workbench pass sets that cutoff to 0.1 for image alpha modes other than
+  Ignore and Channel Packed, and disables it for those two modes. classiCAD
+  transports image alpha mode, unpremultiplies PREMUL samples except at alpha
+  0 or 1, and discards fragments below 0.1 except for NONE (Ignore) and
+  CHANNEL_PACKED modes. QPainter samples
+  external images using an affine mapping per triangle and repeat wrapping; perspective
   correction and image filtering differ from the GPU Workbench pass.
 
 - A `QOpenGLWidget` now presents the viewport on desktop OpenGL systems. The

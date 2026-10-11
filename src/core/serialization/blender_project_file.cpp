@@ -584,7 +584,27 @@ bool parseBlenderMaterials(
                 reference.imageLibraryPath = image.value(QStringLiteral("image_library_path")).toString();
                 reference.filepath = image.value(QStringLiteral("filepath")).toString();
                 reference.colorSpace = image.value(QStringLiteral("color_space")).toString();
+                reference.alphaMode = image.value(QStringLiteral("alpha_mode"))
+                                          .toString(QStringLiteral("STRAIGHT"));
                 reference.packed = image.value(QStringLiteral("packed")).toBool();
+                reference.packedDataBase64 = image.value(QStringLiteral("packed_data_base64"))
+                                                 .toString();
+                if (reference.packedDataBase64.size() > 44 * 1024 * 1024 ||
+                    (!reference.packedDataBase64.isEmpty() && !reference.packed)) {
+                    if (warnings != nullptr) {
+                        warnings->append(QStringLiteral("%1: packed image data is invalid or exceeds the size limit")
+                                              .arg(reference.imageName));
+                    }
+                    return false;
+                }
+                if (QByteArray::fromBase64(reference.packedDataBase64.toLatin1()).size() >
+                    32 * 1024 * 1024) {
+                    if (warnings != nullptr) {
+                        warnings->append(QStringLiteral("%1: packed image data exceeds the size limit")
+                                              .arg(reference.imageName));
+                    }
+                    return false;
+                }
                 reference.sourceFileExists = image.value(QStringLiteral("source_file_exists")).toBool();
                 if (!reference.imageName.isEmpty()) material.imageTextures.append(std::move(reference));
             }
@@ -897,7 +917,7 @@ bool parseBlenderMeshItem(const QJsonObject &item,
          visibility.value(QStringLiteral("hide_render")).toBool() ||
          visibility.value(QStringLiteral("hidden_in_viewport")).toBool()) &&
         warnings != nullptr) {
-        warnings->append(QStringLiteral("%1: object geometry was included; its hidden state is not retained by the current scene model")
+        warnings->append(QStringLiteral("%1: object visibility flags are not retained by the current scene model")
                              .arg(blenderItemLabel(item)));
     }
     if (!item.value(QStringLiteral("collection_names")).toArray().isEmpty() &&

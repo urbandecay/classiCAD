@@ -101,6 +101,9 @@ private:
     bool ensureAgxDisplayTexture();
     bool ensureCavityJitterTexture(int totalSamples);
     GLuint ensureImageTexture(const QString &path, bool srgb);
+    GLuint ensureImageTexture(const QString &path,
+                              const QString &packedDataBase64,
+                              bool srgb);
 
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram outlineProgram_;

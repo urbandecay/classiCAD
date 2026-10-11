@@ -142,12 +142,21 @@ ViewportRenderFrame buildViewportRenderFrame(
                             slotData.metallic = material.metallic;
                             slotData.alpha = material.alpha;
                             for (const DocumentImageTextureReference &image : material.imageTextures) {
-                                if (image.sourceFileExists && !image.packed &&
-                                    !image.filepath.isEmpty()) {
+                                if (image.packed && !image.packedDataBase64.isEmpty()) {
+                                    slotData.textureImagePackedDataBase64 =
+                                        image.packedDataBase64;
+                                    slotData.textureImageSrgb =
+                                        image.colorSpace.compare(QStringLiteral("sRGB"),
+                                                                 Qt::CaseInsensitive) == 0;
+                                    slotData.textureImageAlphaMode = image.alphaMode;
+                                    break;
+                                }
+                                if (image.sourceFileExists && !image.filepath.isEmpty()) {
                                     slotData.textureImagePath = image.filepath;
                                     slotData.textureImageSrgb =
                                         image.colorSpace.compare(QStringLiteral("sRGB"),
                                                                  Qt::CaseInsensitive) == 0;
+                                    slotData.textureImageAlphaMode = image.alphaMode;
                                     break;
                                 }
                             }

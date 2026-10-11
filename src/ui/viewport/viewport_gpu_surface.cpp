@@ -6,8 +6,12 @@
 #include <QGuiApplication>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
+#include <QOpenGLFramebufferObject>
+#include <QOpenGLFunctions_3_3_Core>
 #include <QPainter>
 #include <QSurfaceFormat>
+
+#include <algorithm>
 
 namespace classiCAD {
 
@@ -131,6 +135,74 @@ void ViewportGpuSurface::setSurfaceTessellationCache(
     const SurfaceTessellationCache *surfaceTessellationCache)
 {
     gridRenderer_->setSurfaceTessellationCache(surfaceTessellationCache);
+}
+
+bool ViewportGpuSurface::renderOffscreen(
+    const QSize &pixelSize,
+    const OffscreenDrawCallback &draw,
+    QImage *combined,
+    QVector<float> *depth,
+    QString *errorMessage)
+{
+    if (!isValid() || pixelSize.isEmpty() || !draw || combined == nullptr ||
+        depth == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Offscreen render request is invalid");
+        }
+        return false;
+    }
+    makeCurrent();
+    QOpenGLFunctions_3_3_Core functions;
+    functions.initializeOpenGLFunctions();
+    GLint previousFramebuffer = 0;
+    functions.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    QOpenGLFramebufferObjectFormat format;
+    format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+    format.setInternalTextureFormat(GL_RGBA8);
+    format.setSamples(0);
+    QOpenGLFramebufferObject target(pixelSize, format);
+    if (!target.isValid() || !target.bind()) {
+        doneCurrent();
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("Could not allocate the render target");
+        }
+        return false;
+    }
+
+    functions.glViewport(0, 0, pixelSize.width(), pixelSize.height());
+    functions.glDisable(GL_SCISSOR_TEST);
+    functions.glDisable(GL_BLEND);
+    functions.glEnable(GL_DEPTH_TEST);
+    functions.glDepthMask(GL_TRUE);
+    functions.glClearDepth(1.0);
+    functions.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+                      GL_STENCIL_BUFFER_BIT);
+    const bool drawn = draw(pixelSize, *gridRenderer_, *sceneRenderer_,
+                            *surfaceRenderer_);
+    if (drawn) {
+        depth->resize(pixelSize.width() * pixelSize.height());
+        QVector<float> bottomUp(depth->size());
+        functions.glReadPixels(0, 0, pixelSize.width(), pixelSize.height(),
+                               GL_DEPTH_COMPONENT, GL_FLOAT,
+                               bottomUp.data());
+        const qsizetype rowLength = pixelSize.width();
+        for (int row = 0; row < pixelSize.height(); ++row) {
+            std::copy_n(bottomUp.constData() +
+                            (pixelSize.height() - 1 - row) * rowLength,
+                        rowLength, depth->data() + row * rowLength);
+        }
+        *combined = target.toImage(true).convertToFormat(QImage::Format_RGBA8888);
+    }
+    functions.glBindFramebuffer(GL_FRAMEBUFFER,
+                                static_cast<GLuint>(previousFramebuffer));
+    doneCurrent();
+    if (!drawn && errorMessage != nullptr) {
+        *errorMessage = QStringLiteral("The offscreen scene renderer failed");
+    } else if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return drawn;
 }
 
 bool ViewportGpuSurface::pickScenePoint(

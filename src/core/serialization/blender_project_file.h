@@ -33,6 +33,10 @@ struct ProjectViewportCameraSettings {
     double focalLengthMillimeters = 50.0;
     double clipStart = 0.01;
     double clipEnd = 1000.0;
+    bool sceneCameraEnabled = false;
+    double focusDistance = 10000.0;
+    double fStop = 2.8;
+    double sensorWidthMillimeters = 36.0;
     ProjectViewportViewState view;
     bool storedInProject = false;
 };

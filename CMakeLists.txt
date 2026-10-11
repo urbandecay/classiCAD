@@ -180,12 +180,14 @@ set(CLASSICAD_VIEWPORT_SHARED_SOURCES
     src/ui/viewport/viewport_erase_overlay_renderer.cpp
     src/ui/viewport/viewport_geometry_cache.cpp
     src/ui/viewport/viewport_render_frame.cpp
+    src/ui/viewport/viewport_raster_workbench_effects.cpp
     src/ui/viewport/navigation_gizmo.cpp
     src/ui/viewport/viewport_arc_compass_renderer.cpp
     src/ui/viewport/viewport_hud_renderer.cpp
     src/ui/viewport/viewport_snap_marker_renderer.cpp
     src/ui/viewport/viewport_tool_preview_renderer.cpp
     src/ui/viewport/viewport_renderer.cpp
+    src/ui/viewport/workbench_render_result.cpp
     src/ui/viewport/viewport_overlay.cpp
     src/ui/viewport/blender_navigation_icons.qrc
     src/ui/viewport/blender_shading_icons.qrc

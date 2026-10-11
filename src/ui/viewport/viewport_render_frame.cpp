@@ -86,6 +86,8 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.shape = sceneObject.geometry;
         entry.placementTranslation = sceneObject.placementTranslation;
         entry.objectId = sceneObject.id;
+        entry.displayName = sceneObject.displayName;
+        entry.libraryPath = sceneObject.libraryPath;
         entry.objectIndex = objectIndex++;
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());

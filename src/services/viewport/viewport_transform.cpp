@@ -756,7 +756,15 @@ bool ViewportTransform::setCameraPreferences(
         preferences.clipStart < 0.000001 ||
         !std::isfinite(preferences.clipEnd) ||
         preferences.clipEnd <= preferences.clipStart ||
-        preferences.clipEnd > 1.0e9) {
+        preferences.clipEnd > 1.0e9 ||
+        !std::isfinite(preferences.focusDistance) ||
+        preferences.focusDistance <= 0.0 ||
+        preferences.focusDistance > 1.0e9 ||
+        !std::isfinite(preferences.fStop) || preferences.fStop < 0.1 ||
+        preferences.fStop > 128.0 ||
+        !std::isfinite(preferences.sensorWidthMillimeters) ||
+        preferences.sensorWidthMillimeters < 1.0 ||
+        preferences.sensorWidthMillimeters > 100.0) {
         return false;
     }
     cameraPreferences_ = preferences;

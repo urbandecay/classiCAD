@@ -107,6 +107,16 @@ StoredPreferences loadStoredPreferences()
                                       camera.clipStart).toDouble();
     camera.clipEnd = settings.value(QStringLiteral("viewport/clipEnd"),
                                     camera.clipEnd).toDouble();
+    camera.sceneCameraEnabled = settings.value(
+        QStringLiteral("viewport/sceneCameraEnabled"),
+        camera.sceneCameraEnabled).toBool();
+    camera.focusDistance = settings.value(
+        QStringLiteral("viewport/focusDistance"), camera.focusDistance).toDouble();
+    camera.fStop = settings.value(QStringLiteral("viewport/fStop"),
+                                  camera.fStop).toDouble();
+    camera.sensorWidthMillimeters = settings.value(
+        QStringLiteral("viewport/sensorWidthMillimeters"),
+        camera.sensorWidthMillimeters).toDouble();
     dialog.cameraPreferences = camera;
 
     ViewportNavigationPreferences navigation;
@@ -258,6 +268,13 @@ void saveCameraPreferences(const ViewportCameraPreferences &preferences)
                           preferences.focalLengthMillimeters);
         settings.setValue(QStringLiteral("viewport/clipStart"), preferences.clipStart);
         settings.setValue(QStringLiteral("viewport/clipEnd"), preferences.clipEnd);
+        settings.setValue(QStringLiteral("viewport/sceneCameraEnabled"),
+                          preferences.sceneCameraEnabled);
+        settings.setValue(QStringLiteral("viewport/focusDistance"),
+                          preferences.focusDistance);
+        settings.setValue(QStringLiteral("viewport/fStop"), preferences.fStop);
+        settings.setValue(QStringLiteral("viewport/sensorWidthMillimeters"),
+                          preferences.sensorWidthMillimeters);
     });
 }
 

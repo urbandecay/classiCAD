@@ -38,6 +38,11 @@ struct ViewportCameraPreferences {
     qreal focalLengthMillimeters = 50.0;
     qreal clipStart = 0.01;
     qreal clipEnd = 1000.0;
+    // Optional scene-camera optics, independent of the orbit-view controls.
+    bool sceneCameraEnabled = false;
+    qreal focusDistance = 10000.0;
+    qreal fStop = 2.8;
+    qreal sensorWidthMillimeters = 36.0;
 };
 
 struct ViewportNavigationPreferences {

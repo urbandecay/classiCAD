@@ -16,7 +16,13 @@ bool validCameraPreferences(const ProjectViewportCameraSettings &settings)
            settings.focalLengthMillimeters <= 2000.0 &&
            std::isfinite(settings.clipStart) && settings.clipStart >= 0.000001 &&
            std::isfinite(settings.clipEnd) &&
-           settings.clipEnd > settings.clipStart && settings.clipEnd <= 1.0e9;
+           settings.clipEnd > settings.clipStart && settings.clipEnd <= 1.0e9 &&
+           std::isfinite(settings.focusDistance) && settings.focusDistance > 0.0 &&
+           settings.focusDistance <= 1.0e9 && std::isfinite(settings.fStop) &&
+           settings.fStop >= 0.1 && settings.fStop <= 128.0 &&
+           std::isfinite(settings.sensorWidthMillimeters) &&
+           settings.sensorWidthMillimeters >= 1.0 &&
+           settings.sensorWidthMillimeters <= 100.0;
 }
 
 } // namespace

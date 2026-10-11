@@ -149,7 +149,11 @@ public:
     {
         return {focalLengthSpinBox_->value(),
                 clipStartSpinBox_->value(),
-                clipEndSpinBox_->value()};
+                clipEndSpinBox_->value(),
+                sceneCameraCheckBox_->isChecked(),
+                focusDistanceSpinBox_->value(),
+                fStopSpinBox_->value(),
+                sensorWidthSpinBox_->value()};
     }
 
     ViewportNavigationPreferences navigationPreferences() const
@@ -542,6 +546,30 @@ private:
         focalLengthSpinBox_->setObjectName(QStringLiteral("viewportFocalLengthPreference"));
         cameraLayout->addRow(QStringLiteral("Focal length"), focalLengthSpinBox_);
 
+        sceneCameraCheckBox_ = new QCheckBox(QStringLiteral("Use as scene camera"));
+        sceneCameraCheckBox_->setChecked(cameraPreferences.sceneCameraEnabled);
+        sceneCameraCheckBox_->setObjectName(QStringLiteral("sceneCameraEnabledPreference"));
+        cameraLayout->addRow(QString(), sceneCameraCheckBox_);
+        focusDistanceSpinBox_ = new QDoubleSpinBox;
+        focusDistanceSpinBox_->setRange(0.000001, 1.0e9);
+        focusDistanceSpinBox_->setDecimals(4);
+        focusDistanceSpinBox_->setValue(cameraPreferences.focusDistance);
+        focusDistanceSpinBox_->setSuffix(QStringLiteral(" mm"));
+        focusDistanceSpinBox_->setObjectName(QStringLiteral("sceneCameraFocusDistancePreference"));
+        cameraLayout->addRow(QStringLiteral("Focus distance"), focusDistanceSpinBox_);
+        fStopSpinBox_ = new QDoubleSpinBox;
+        fStopSpinBox_->setRange(0.1, 128.0);
+        fStopSpinBox_->setDecimals(1);
+        fStopSpinBox_->setValue(cameraPreferences.fStop);
+        fStopSpinBox_->setObjectName(QStringLiteral("sceneCameraFStopPreference"));
+        cameraLayout->addRow(QStringLiteral("F-stop"), fStopSpinBox_);
+        sensorWidthSpinBox_ = new QDoubleSpinBox;
+        sensorWidthSpinBox_->setRange(1.0, 100.0);
+        sensorWidthSpinBox_->setDecimals(1);
+        sensorWidthSpinBox_->setValue(cameraPreferences.sensorWidthMillimeters);
+        sensorWidthSpinBox_->setSuffix(QStringLiteral(" mm"));
+        cameraLayout->addRow(QStringLiteral("Sensor width"), sensorWidthSpinBox_);
+
         clipStartSpinBox_ = new QDoubleSpinBox;
         clipStartSpinBox_->setRange(0.000001, 1.0e8);
         clipStartSpinBox_->setDecimals(6);
@@ -810,6 +838,10 @@ private:
     QDoubleSpinBox *gridOpacitySpinBox_ = nullptr;
     QCheckBox *gridStippleCheckBox_ = nullptr;
     QDoubleSpinBox *focalLengthSpinBox_ = nullptr;
+    QCheckBox *sceneCameraCheckBox_ = nullptr;
+    QDoubleSpinBox *focusDistanceSpinBox_ = nullptr;
+    QDoubleSpinBox *fStopSpinBox_ = nullptr;
+    QDoubleSpinBox *sensorWidthSpinBox_ = nullptr;
     QDoubleSpinBox *clipStartSpinBox_ = nullptr;
     QDoubleSpinBox *clipEndSpinBox_ = nullptr;
     QCheckBox *autoPerspectiveCheckBox_ = nullptr;

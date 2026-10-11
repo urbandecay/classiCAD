@@ -74,6 +74,7 @@
 #include "viewport/viewport_overlay.h"
 #include "viewport/viewport_erase_overlay_renderer.h"
 #include "viewport/viewport_renderer.h"
+#include "viewport/viewport_raster_workbench_effects.h"
 #include "viewport/viewport_render_frame.h"
 #include "viewport/viewport_geometry_cache.h"
 #include "viewport/viewport_wire_color.h"
@@ -6099,6 +6100,10 @@ public:
         cameraSettings.focalLengthMillimeters = preferences.focalLengthMillimeters;
         cameraSettings.clipStart = preferences.clipStart;
         cameraSettings.clipEnd = preferences.clipEnd;
+        cameraSettings.sceneCameraEnabled = preferences.sceneCameraEnabled;
+        cameraSettings.focusDistance = preferences.focusDistance;
+        cameraSettings.fStop = preferences.fStop;
+        cameraSettings.sensorWidthMillimeters = preferences.sensorWidthMillimeters;
         const ViewportCameraState viewState = viewportTransform_.cameraState();
         const Point3D target = viewportTransform_.viewTarget();
         ProjectViewportViewState &storedView = cameraSettings.view;
@@ -6126,6 +6131,90 @@ public:
         return cameraSettings;
     }
 
+    QSize viewportPixelSize() const override
+    {
+        return size() * devicePixelRatioF();
+    }
+
+    WorkbenchRenderResult renderWorkbenchResult(const QSize &outputSize) override
+    {
+        WorkbenchRenderResult result;
+        if (gpuSurface_ == nullptr || outputSize.isEmpty()) {
+            return result;
+        }
+        result.camera = projectCameraSettings();
+        ViewportTransform renderCamera = viewportTransform_;
+        ViewportRenderFrameInput input;
+        ViewportRenderFrame renderFrame = buildViewportRenderFrame(
+            document_, renderCamera, outputSize, input);
+        QVector<ViewportSceneStroke> strokes;
+        strokes.reserve(renderFrame.objects.size());
+        for (const ViewportRenderObject &object : renderFrame.objects) {
+            if (isDimensionGeometryType(object.shape.geometryType)) {
+                continue;
+            }
+            ViewportSceneStroke stroke;
+            ViewportSceneStroke controlGuide;
+            if (makeViewportSceneStrokes(object, true, &stroke, &controlGuide)) {
+                strokes.append(std::move(stroke));
+            }
+        }
+        const ViewportShadingSettings settings = viewportShadingSettings_;
+        gpuSurface_->renderOffscreen(
+            outputSize,
+            [this, &renderFrame, &strokes, &settings, &renderCamera](
+                const QSize &pixelSize, BlenderGridRenderer &grid,
+                ViewportSceneRenderer &scene, ViewportSurfaceRenderer &surface) {
+                if (!grid.renderBackgroundToCurrentFramebuffer(
+                        pixelSize, 1.0,
+                        viewportShadingBackgroundColor(settings))) {
+                    return false;
+                }
+                const bool surfacesDrawn = surface.draw(
+                    renderFrame.objects, renderCamera, pixelSize, 1.0,
+                    settings, false, true, false);
+                const bool strokesDrawn = strokes.isEmpty() || scene.draw(
+                    strokes, renderCamera, pixelSize, 1.0, true, 1.0,
+                    smoothWiresOverlay_, smoothWiresEditMode_);
+                return surfacesDrawn && strokesDrawn;
+            },
+            &result.combined, &result.depth, nullptr);
+        if (result.isValid()) {
+            bool invertible = false;
+            const QMatrix4x4 inverse = viewportViewProjection(
+                renderCamera, outputSize).inverted(&invertible);
+            if (invertible) {
+                const Point3D eyePoint = renderCamera.cameraPosition(outputSize);
+                const Point3D direction = renderCamera.viewDirection();
+                const QVector3D eye(float(eyePoint.x), float(eyePoint.y),
+                                    float(eyePoint.z));
+                const QVector3D view(float(direction.x), float(direction.y),
+                                     float(direction.z));
+                for (int y = 0; y < outputSize.height(); ++y) {
+                    for (int x = 0; x < outputSize.width(); ++x) {
+                        const qsizetype index =
+                            qsizetype(y) * outputSize.width() + x;
+                        const float depth = result.depth[index];
+                        if (depth >= 0.999999f) {
+                            result.depth[index] = 0.0f;
+                            continue;
+                        }
+                        const QVector3D ndc(
+                            2.0f * (float(x) + 0.5f) / outputSize.width() - 1.0f,
+                            1.0f - 2.0f * (float(y) + 0.5f) / outputSize.height(),
+                            2.0f * depth - 1.0f);
+                        const QVector3D world = inverse.map(ndc);
+                        result.depth[index] = QVector3D::dotProduct(world - eye,
+                                                                   view);
+                    }
+                }
+            }
+        }
+        result.camera.view.perspective = renderCamera.isPerspectiveEnabled();
+        result.outputFormat = QStringLiteral("PNG + PFM depth");
+        return result;
+    }
+
     void prepareForDocumentReplacement() override
     {
         if (grabTool_.isActive()) {
@@ -6149,7 +6238,11 @@ public:
             const ViewportCameraPreferences preferences{
                 cameraSettings.focalLengthMillimeters,
                 cameraSettings.clipStart,
-                cameraSettings.clipEnd};
+                cameraSettings.clipEnd,
+                cameraSettings.sceneCameraEnabled,
+                cameraSettings.focusDistance,
+                cameraSettings.fStop,
+                cameraSettings.sensorWidthMillimeters};
             viewportTransform_.setCameraPreferences(preferences);
         }
         if (cameraSettings.view.storedInProject) {
@@ -6448,6 +6541,17 @@ protected:
                 this, [this] { showLightingPresetMenu(); });
         layout->addWidget(previewFrame);
 
+        matcapFlipXCheck_ = new QCheckBox(QStringLiteral("Flip MatCap Horizontally"),
+                                          shadingPopover_);
+        matcapFlipXCheck_->setObjectName(QStringLiteral("MatCapFlipX"));
+        layout->addWidget(matcapFlipXCheck_);
+        connect(matcapFlipXCheck_, &QCheckBox::toggled,
+                this, [this](bool enabled) {
+                    viewportShadingSettings_.matcapFlipX = enabled;
+                    updateStudioLightPreview();
+                    update();
+                });
+
         auto *rotationRow = new QWidget(shadingPopover_);
         auto *rotationLayout = new QHBoxLayout(rotationRow);
         rotationLayout->setContentsMargins(0, 0, 0, 0);
@@ -6575,7 +6679,10 @@ protected:
                                     QStringLiteral("Custom")}) {
             auto *button = new QToolButton(attributeRow);
             button->setObjectName(QStringLiteral("SolidColor%1").arg(name));
-            button->setText(name);
+            // Blender calls this Workbench color source "Single"; keep the
+            // internal setting name descriptive for classiCAD's color picker.
+            button->setText(name == QStringLiteral("Custom")
+                                ? QStringLiteral("Single") : name);
             button->setCheckable(true);
             button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             button->setFixedHeight(22);
@@ -6800,10 +6907,12 @@ protected:
             QStringLiteral("Depth of Field"),
             QStringLiteral("ViewportDepthOfField"),
             &ViewportShadingSettings::depthOfField);
-        depthOfFieldCheck_->setEnabled(false);
+        depthOfFieldCheck_->setEnabled(
+            gpuSurface_ != nullptr &&
+            viewportTransform_.cameraPreferences().sceneCameraEnabled &&
+            viewportTransform_.isPerspectiveEnabled());
         depthOfFieldCheck_->setToolTip(QStringLiteral(
-            "Unavailable until classiCAD has a scene camera with "
-            "depth-of-field settings."));
+            "Blurs the viewport only when the active scene camera is enabled."));
         auto *cavityRow = new QWidget(shadingPopover_);
         auto *cavityLayout = new QHBoxLayout(cavityRow);
         cavityLayout->setContentsMargins(0, 0, 0, 0);
@@ -7001,7 +7110,9 @@ protected:
                     color = workbenchMatcapShade(matcapPreset,
                                                  QVector3D(1.0f, 1.0f, 1.0f),
                                                  normal,
-                                                 QVector3D(0.0f, 0.0f, 1.0f));
+                                                 QVector3D(0.0f, 0.0f, 1.0f),
+                                                 true,
+                                                 viewportShadingSettings_.matcapFlipX);
                 } else {
                     color = baseColor;
                 }
@@ -7065,6 +7176,12 @@ protected:
         studioLightRotationSlider_->setEnabled(
             viewportShadingSettings_.worldSpaceLighting &&
             viewportShadingSettings_.lightingMode == ViewportLightingMode::Studio);
+        {
+            const QSignalBlocker blocker(matcapFlipXCheck_);
+            matcapFlipXCheck_->setChecked(viewportShadingSettings_.matcapFlipX);
+        }
+        matcapFlipXCheck_->setEnabled(
+            viewportShadingSettings_.lightingMode == ViewportLightingMode::MatCap);
         const auto setModeButton = [](const QVector<QToolButton *> &buttons,
                                       int current) {
             for (int index = 0; index < buttons.size(); ++index) {
@@ -7137,10 +7254,10 @@ protected:
         shadowIntensitySlider_->setEnabled(viewportShadingSettings_.shadows &&
                                            !xrayActive);
         shadowSettingsButton_->setEnabled(!xrayActive);
-        // This setting is not rendered: classiCAD has no scene camera or
-        // camera depth-of-field inputs yet. Keep the control disabled even
-        // when the popover refreshes or X-Ray changes.
-        depthOfFieldCheck_->setEnabled(false);
+        depthOfFieldCheck_->setEnabled(
+            gpuSurface_ != nullptr &&
+            viewportTransform_.cameraPreferences().sceneCameraEnabled &&
+            viewportTransform_.isPerspectiveEnabled());
         cavityCheck_->setEnabled(!xrayActive);
         outlineColorButton_->setEnabled(viewportShadingSettings_.outline);
         outlineColorButton_->setStyleSheet(QStringLiteral(
@@ -7872,12 +7989,21 @@ protected:
                 baseGridStep, gridAppearance_);
             const qreal devicePixelRatio =
                 std::max<qreal>(devicePixelRatioF(), 1.0);
+            // The QPainter fallback cannot accumulate temporal Workbench
+            // samples. Render its committed scene into a supersampled target
+            // instead so the available AA choices retain increasing quality.
+            const int rasterAaScale = viewportAaMode_ >= 32 ? 6
+                                      : viewportAaMode_ >= 16 ? 4
+                                      : viewportAaMode_ >= 8 ? 3
+                                      : viewportAaMode_ > 0 ? 2 : 1;
+            const qreal rasterDevicePixelRatio =
+                devicePixelRatio * rasterAaScale;
             const QSize scenePixelSize(
-                qRound(renderFrame.viewportSize.width() * devicePixelRatio),
-                qRound(renderFrame.viewportSize.height() * devicePixelRatio));
+                qRound(renderFrame.viewportSize.width() * rasterDevicePixelRatio),
+                qRound(renderFrame.viewportSize.height() * rasterDevicePixelRatio));
             committedSceneLayer = QImage(scenePixelSize,
                                          QImage::Format_ARGB32_Premultiplied);
-            committedSceneLayer.setDevicePixelRatio(devicePixelRatio);
+            committedSceneLayer.setDevicePixelRatio(rasterDevicePixelRatio);
             committedSceneLayer.fill(Qt::transparent);
             rasterScenePainter.begin(&committedSceneLayer);
             rasterScenePainter.setRenderHint(QPainter::Antialiasing,
@@ -8985,7 +9111,9 @@ protected:
                           renderObject.preparedDepthGeometry.data(),
                           renderObject.preparedGeometryOffset,
                           renderObject.displayColorSceneLinear,
-                          renderObject.workbenchMaterial);
+                          renderObject.workbenchMaterial,
+                          renderObject.displayName,
+                          renderObject.libraryPath);
             } else {
                 drawShape(scenePainter,
                           visibleShape,
@@ -9000,7 +9128,9 @@ protected:
                           renderObject.preparedDepthGeometry.data(),
                           renderObject.preparedGeometryOffset,
                           renderObject.displayColorSceneLinear,
-                          renderObject.workbenchMaterial);
+                          renderObject.workbenchMaterial,
+                          renderObject.displayName,
+                          renderObject.libraryPath);
             }
         }
 
@@ -9697,6 +9827,10 @@ protected:
                 const QByteArray historyKey = viewportAaHistoryKey(
                     renderFrame, viewportShadingSettings_, viewportAaMode_,
                     devicePixelRatioF(), sceneContentStateKey);
+                aaRenderer->setDepthOfField(
+                    viewportShadingSettings_.depthOfField,
+                    viewportTransform_.cameraPreferences(),
+                    viewportTransform_.isPerspectiveEnabled());
                 aaSceneSampleActive = aaRenderer->beginSceneSample(
                     renderFrame.viewportSize, devicePixelRatioF(),
                     renderFrame.camera, historyKey,
@@ -9992,7 +10126,9 @@ protected:
                                   renderObject.preparedDepthGeometry.data(),
                                   renderObject.preparedGeometryOffset,
                                   renderObject.displayColorSceneLinear,
-                                  renderObject.workbenchMaterial);
+                                  renderObject.workbenchMaterial,
+                                  renderObject.displayName,
+                                  renderObject.libraryPath);
                     }
                 }
             }
@@ -10007,6 +10143,10 @@ protected:
             }
         } else {
             rasterScenePainter.end();
+            applyRasterWorkbenchCavity(
+                &committedSceneLayer, visibleShapes, viewportTransform_,
+                renderFrame.viewportSize, devicePixelRatioF(),
+                viewportShadingSettings_);
             fillViewportBackground(
                 painter, rect(),
                 viewportShadingBackgroundColor(viewportShadingSettings_));
@@ -12095,6 +12235,33 @@ protected:
         if (!event->isAutoRepeat() && event->key() == Qt::Key_Z &&
             event->modifiers().testFlag(Qt::AltModifier)) {
             activateViewportShadingControl(0);
+            event->accept();
+            return;
+        }
+        // Blender's Z shading shortcut opens a quick mode chooser. Keep it
+        // available from idle selection, where Z is not an axis constraint.
+        if (!event->isAutoRepeat() && event->key() == Qt::Key_Z &&
+            event->modifiers() == Qt::NoModifier &&
+            activeTool_ == Tool::Select && !grabTool_.isActive() &&
+            !duplicateTool_.isActive() && !objectSelectionDragActive()) {
+            QMenu shadingMenu(this);
+            QAction *wireframe = shadingMenu.addAction(
+                QStringLiteral("Wireframe"));
+            QAction *solid = shadingMenu.addAction(QStringLiteral("Solid"));
+            shadingMenu.addSeparator();
+            QAction *xray = shadingMenu.addAction(QStringLiteral("Toggle X-Ray"));
+            QAction *settings = shadingMenu.addAction(
+                QStringLiteral("Shading Settings…"));
+            QAction *chosen = shadingMenu.exec(QCursor::pos());
+            if (chosen == wireframe) {
+                activateViewportShadingControl(1);
+            } else if (chosen == solid) {
+                activateViewportShadingControl(2);
+            } else if (chosen == xray) {
+                activateViewportShadingControl(0);
+            } else if (chosen == settings) {
+                showShadingPopover();
+            }
             event->accept();
             return;
         }
@@ -21835,7 +22002,9 @@ private:
                    std::optional<QVector4D> displayColorSceneLinear =
                        std::nullopt,
                    std::optional<WorkbenchMaterialData> workbenchMaterial =
-                       std::nullopt)
+                       std::nullopt,
+                   const QString &displayName = QString(),
+                   const QString &libraryPath = QString())
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -21852,7 +22021,9 @@ private:
                                     geometryRevision,
                                     preparedGeometry, preparedOffset,
                                     displayColorSceneLinear,
-                                    workbenchMaterial);
+                                    workbenchMaterial,
+                                    displayName,
+                                    libraryPath);
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 
@@ -22048,6 +22219,7 @@ private:
     QButtonGroup *lightingModeGroup_ = nullptr;
     std::array<QToolButton *, 3> lightingModeButtons_{};
     QToolButton *studioLightPreviewButton_ = nullptr;
+    QCheckBox *matcapFlipXCheck_ = nullptr;
     QToolButton *worldSpaceLightingButton_ = nullptr;
     QSlider *studioLightRotationSlider_ = nullptr;
     QLabel *studioLightRotationLabel_ = nullptr;

@@ -24,6 +24,9 @@ public:
 
     void setMode(int mode);
     int mode() const noexcept;
+    void setDepthOfField(bool enabled,
+                         const ViewportCameraPreferences &optics,
+                         bool perspectiveView);
 
     // Returns true after binding a single-sample scene target. The supplied
     // history key must change whenever pixels in the Workbench scene change.
@@ -52,7 +55,9 @@ private:
     void drawSmaaResolve(float mixFactor);
     void drawPresentation(GLuint sourceTexture,
                           GLuint destinationFramebuffer,
-                          const GLint destinationViewport[4]);
+                          const GLint destinationViewport[4],
+                          bool encodeDisplay = true,
+                          bool applyDepthOfField = false);
     void copyDepthToFramebuffer(GLuint destinationFramebuffer,
                                 const GLint destinationViewport[4]);
 
@@ -75,6 +80,8 @@ private:
     GLuint historyColorTexture_ = 0;
     GLuint resolveFramebuffer_ = 0;
     GLuint resolvedColorTexture_ = 0;
+    GLuint depthOfFieldFramebuffer_ = 0;
+    GLuint depthOfFieldColorTexture_ = 0;
     GLuint smaaEdgeFramebuffer_ = 0;
     GLuint smaaEdgeTexture_ = 0;
     GLuint smaaWeightFramebuffer_ = 0;
@@ -82,6 +89,9 @@ private:
     GLuint smaaAreaTexture_ = 0;
     GLuint smaaSearchTexture_ = 0;
     QSize targetSize_;
+    ViewportCameraPreferences depthOfFieldOptics_;
+    bool depthOfFieldEnabled_ = false;
+    bool depthOfFieldPerspective_ = false;
     GLuint destinationFramebuffer_ = 0;
     GLint destinationViewport_[4] = {};
     int requestedSampleCount_ = 1;

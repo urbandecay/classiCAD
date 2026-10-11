@@ -58,6 +58,8 @@ struct ViewportRenderFrameInput {
 struct ViewportRenderObject {
     Shape shape;
     ObjectId objectId = ObjectId::invalid();
+    QString displayName;
+    QString libraryPath;
     int objectIndex = -1;
     quint64 geometryRevision = 0;
     bool cacheable = true;

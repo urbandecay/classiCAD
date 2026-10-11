@@ -6,6 +6,7 @@
 
 #include <QVector3D>
 #include <QVector4D>
+#include <QString>
 
 namespace classiCAD {
 
@@ -22,6 +23,10 @@ struct WorkbenchMaterialData {
 struct SceneObject {
     ObjectId id = ObjectId::invalid();
     LayerId layerId = LayerId::invalid();
+    // Blender ID identity used by Workbench Random color. Imported linked
+    // objects retain the source library path when the importer provides it.
+    QString displayName;
+    QString libraryPath;
     Shape geometry;
     // World-space translation applied after evaluating spatial NURBS surface
     // or solid geometry. Planar curves keep their existing workplane mapping.

@@ -182,6 +182,7 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings)
                   static_cast<int>(settings.lightingMode));
     object.insert(QStringLiteral("studioLightPreset"), settings.studioLightPreset);
     object.insert(QStringLiteral("matcapPreset"), settings.matcapPreset);
+    object.insert(QStringLiteral("matcapFlipX"), settings.matcapFlipX);
     object.insert(QStringLiteral("studioLightRotationDegrees"),
                   settings.studioLightRotationDegrees);
     object.insert(QStringLiteral("worldSpaceLighting"), settings.worldSpaceLighting);
@@ -304,6 +305,11 @@ bool viewportShadingFromJson(const QJsonValue &value,
     }
     restored.studioLightPreset = studioPresetValue.toString();
     restored.matcapPreset = matcapPresetValue.toString();
+    // Older session files predate MatCap orientation and use the default.
+    if (object.contains(QStringLiteral("matcapFlipX")) &&
+        !boolean(QStringLiteral("matcapFlipX"), &restored.matcapFlipX)) {
+        return false;
+    }
     if (!integer(QStringLiteral("studioLightRotationDegrees"), -3600, 3600,
                  &restored.studioLightRotationDegrees) ||
         !boolean(QStringLiteral("worldSpaceLighting"),
@@ -438,6 +444,14 @@ bool SessionSerializer::write(const QString &path,
                              view.cameraPreferences.clipStart);
     cameraPreferences.insert(QStringLiteral("clipEnd"),
                              view.cameraPreferences.clipEnd);
+    cameraPreferences.insert(QStringLiteral("sceneCameraEnabled"),
+                             view.cameraPreferences.sceneCameraEnabled);
+    cameraPreferences.insert(QStringLiteral("focusDistance"),
+                             view.cameraPreferences.focusDistance);
+    cameraPreferences.insert(QStringLiteral("fStop"),
+                             view.cameraPreferences.fStop);
+    cameraPreferences.insert(QStringLiteral("sensorWidthMillimeters"),
+                             view.cameraPreferences.sensorWidthMillimeters);
     root.insert(QStringLiteral("cameraPreferences"), cameraPreferences);
 
     QJsonArray selectedObjectIds;
@@ -532,10 +546,21 @@ bool SessionSerializer::read(const QString &path,
             preferences.value(QStringLiteral("focalLengthMillimeters"));
         const QJsonValue clipStartValue = preferences.value(QStringLiteral("clipStart"));
         const QJsonValue clipEndValue = preferences.value(QStringLiteral("clipEnd"));
+        const QJsonValue sceneCameraEnabledValue =
+            preferences.value(QStringLiteral("sceneCameraEnabled"));
+        const QJsonValue focusDistanceValue =
+            preferences.value(QStringLiteral("focusDistance"));
+        const QJsonValue fStopValue = preferences.value(QStringLiteral("fStop"));
+        const QJsonValue sensorWidthValue =
+            preferences.value(QStringLiteral("sensorWidthMillimeters"));
         restored.view.cameraPreferences = {
             focalLengthValue.toDouble(std::numeric_limits<qreal>::quiet_NaN()),
             clipStartValue.toDouble(std::numeric_limits<qreal>::quiet_NaN()),
-            clipEndValue.toDouble(std::numeric_limits<qreal>::quiet_NaN())};
+            clipEndValue.toDouble(std::numeric_limits<qreal>::quiet_NaN()),
+            sceneCameraEnabledValue.toBool(false),
+            focusDistanceValue.toDouble(10000.0),
+            fStopValue.toDouble(2.8),
+            sensorWidthValue.toDouble(36.0)};
         if (!focalLengthValue.isDouble() || !clipStartValue.isDouble() ||
             !clipEndValue.isDouble() ||
             !std::isfinite(restored.view.cameraPreferences.focalLengthMillimeters) ||
@@ -545,7 +570,17 @@ bool SessionSerializer::read(const QString &path,
             restored.view.cameraPreferences.clipStart < 0.000001 ||
             !std::isfinite(restored.view.cameraPreferences.clipEnd) ||
             restored.view.cameraPreferences.clipEnd <= restored.view.cameraPreferences.clipStart ||
-            restored.view.cameraPreferences.clipEnd > 1.0e9) {
+            restored.view.cameraPreferences.clipEnd > 1.0e9 ||
+            !std::isfinite(restored.view.cameraPreferences.focusDistance) ||
+            restored.view.cameraPreferences.focusDistance <= 0.0 ||
+            !std::isfinite(restored.view.cameraPreferences.fStop) ||
+            restored.view.cameraPreferences.fStop < 0.1 ||
+            restored.view.cameraPreferences.fStop > 128.0 ||
+            !std::isfinite(restored.view.cameraPreferences.sensorWidthMillimeters) ||
+            restored.view.cameraPreferences.sensorWidthMillimeters < 1.0 ||
+            restored.view.cameraPreferences.sensorWidthMillimeters > 100.0 ||
+            (preferences.contains(QStringLiteral("sceneCameraEnabled")) &&
+             !sceneCameraEnabledValue.isBool())) {
             return fail(errorMessage, QStringLiteral("Invalid camera preferences."));
         }
 

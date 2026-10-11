@@ -383,7 +383,8 @@ inline QImage workbenchMatcapSpecularImage(const QString &presetName)
 }
 
 inline QVector2D workbenchMatcapUv(const QVector3D &sourceIncident,
-                                   const QVector3D &sourceNormal)
+                                   const QVector3D &sourceNormal,
+                                   bool flipHorizontal = false)
 {
     const QVector3D incident = workbenchNormalize(sourceIncident,
                                                    {0.0f, 0.0f, 1.0f});
@@ -397,37 +398,57 @@ inline QVector2D workbenchMatcapUv(const QVector3D &sourceIncident,
     const QVector3D basis2(b,
                            1.0f - incident.y() * incident.y() * a,
                            -incident.y());
-    return {QVector3D::dotProduct(basis1, normal) * 0.496f + 0.5f,
+    const float u = QVector3D::dotProduct(basis1, normal) *
+                    (flipHorizontal ? -0.496f : 0.496f) + 0.5f;
+    return {u,
             QVector3D::dotProduct(basis2, normal) * 0.496f + 0.5f};
+}
+
+inline QVector3D workbenchMatcapSampleLinear(const QImage &image,
+                                            float u,
+                                            float v)
+{
+    // Match Blender's linear-filtered sRGB texture sampling: decode each
+    // texel first, then interpolate its scene-linear values.
+    const float x = std::clamp(u, 0.0f, 1.0f) * (image.width() - 1);
+    const float y = std::clamp(v, 0.0f, 1.0f) * (image.height() - 1);
+    const int x0 = static_cast<int>(x);
+    const int y0 = static_cast<int>(y);
+    const int x1 = std::min(x0 + 1, image.width() - 1);
+    const int y1 = std::min(y0 + 1, image.height() - 1);
+    const float tx = x - x0;
+    const float ty = y - y0;
+    const auto texel = [&image](int ix, int iy) {
+        const QColor color = image.pixelColor(ix, iy);
+        return workbenchSrgbToSceneLinear(
+            QVector3D(color.redF(), color.greenF(), color.blueF()));
+    };
+    const QVector3D top = texel(x0, y0) * (1.0f - tx) +
+                          texel(x1, y0) * tx;
+    const QVector3D bottom = texel(x0, y1) * (1.0f - tx) +
+                             texel(x1, y1) * tx;
+    return top * (1.0f - ty) + bottom * ty;
 }
 
 inline QVector3D workbenchMatcapShade(const QString &presetName,
                                       const QVector3D &baseColor,
                                       const QVector3D &normal,
                                       const QVector3D &incident,
-                                      bool useSpecular = true)
+                                      bool useSpecular = true,
+                                      bool flipHorizontal = false)
 {
     const QImage diffuseImage = workbenchMatcapDiffuseImage(presetName);
     const QImage specularImage = workbenchMatcapSpecularImage(presetName);
     if (diffuseImage.isNull() || specularImage.isNull()) {
         return baseColor;
     }
-    const QVector2D uv = workbenchMatcapUv(incident, normal);
-    const int x = std::clamp(qRound(uv.x() * (diffuseImage.width() - 1)),
-                             0, diffuseImage.width() - 1);
-    const int y = std::clamp(qRound((1.0f - uv.y()) *
-                                    (diffuseImage.height() - 1)),
-                             0, diffuseImage.height() - 1);
-    const QColor diffuseSample = diffuseImage.pixelColor(x, y);
-    const QColor specularSample = useSpecular
-                                      ? specularImage.pixelColor(x, y)
-                                      : QColor(Qt::black);
-    const QVector3D diffuse = workbenchSrgbToSceneLinear(
-        QVector3D(diffuseSample.redF(), diffuseSample.greenF(),
-                  diffuseSample.blueF()));
-    const QVector3D specular = workbenchSrgbToSceneLinear(
-        QVector3D(specularSample.redF(), specularSample.greenF(),
-                  specularSample.blueF()));
+    const QVector2D uv = workbenchMatcapUv(incident, normal, flipHorizontal);
+    const QVector3D diffuse = workbenchMatcapSampleLinear(
+        diffuseImage, uv.x(), 1.0f - uv.y());
+    const QVector3D specular = useSpecular
+                                   ? workbenchMatcapSampleLinear(
+                                         specularImage, uv.x(), 1.0f - uv.y())
+                                   : QVector3D();
     return {diffuse.x() * baseColor.x() + specular.x(),
             diffuse.y() * baseColor.y() + specular.y(),
             diffuse.z() * baseColor.z() + specular.z()};

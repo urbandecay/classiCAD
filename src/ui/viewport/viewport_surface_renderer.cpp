@@ -79,18 +79,56 @@ bool hasNurbsSurfaceGeometry(const ViewportRenderObject &object)
 
 constexpr int kWorkbenchCavityMaxSamples = 512;
 
-QColor workbenchRandomColor(quint64 objectId)
+quint32 blenderStringHash(const QByteArray &bytes, quint32 seed = 0)
 {
-    // Blender hashes ID.name and, for linked objects, the library filepath.
-    // classiCAD has neither identity field, so hash its persistent ObjectId
-    // deterministically and use Blender's Random-mode HSV palette values.
-    quint32 hash = static_cast<quint32>(objectId) ^
-                   static_cast<quint32>(objectId >> 32);
-    hash ^= hash >> 16;
-    hash *= 0x7feb352dU;
+    constexpr quint32 multiplier = 0x5bd1e995U;
+    const uchar *data = reinterpret_cast<const uchar *>(bytes.constData());
+    int remaining = bytes.size();
+    quint32 hash = seed ^ static_cast<quint32>(remaining);
+    while (remaining >= 4) {
+        quint32 chunk = static_cast<quint32>(data[0]) |
+                        (static_cast<quint32>(data[1]) << 8) |
+                        (static_cast<quint32>(data[2]) << 16) |
+                        (static_cast<quint32>(data[3]) << 24);
+        chunk *= multiplier;
+        chunk ^= chunk >> 24;
+        chunk *= multiplier;
+        hash *= multiplier;
+        hash ^= chunk;
+        data += 4;
+        remaining -= 4;
+    }
+    if (remaining == 3) hash ^= static_cast<quint32>(data[2]) << 16;
+    if (remaining >= 2) hash ^= static_cast<quint32>(data[1]) << 8;
+    if (remaining >= 1) {
+        hash ^= data[0];
+        hash *= multiplier;
+    }
+    hash ^= hash >> 13;
+    hash *= multiplier;
     hash ^= hash >> 15;
-    hash *= 0x846ca68bU;
-    hash ^= hash >> 16;
+    return hash;
+}
+
+QColor workbenchRandomColor(quint64 objectId,
+                            const QString &displayName,
+                            const QString &libraryPath)
+{
+    quint32 hash = 0;
+    if (!displayName.isEmpty()) {
+        hash = blenderStringHash(QByteArrayLiteral("OB") + displayName.toUtf8());
+        if (!libraryPath.isEmpty()) {
+            hash = blenderStringHash(libraryPath.toUtf8(), hash);
+        }
+    } else {
+        hash = static_cast<quint32>(objectId) ^
+               static_cast<quint32>(objectId >> 32);
+        hash ^= hash >> 16;
+        hash *= 0x7feb352dU;
+        hash ^= hash >> 15;
+        hash *= 0x846ca68bU;
+        hash ^= hash >> 16;
+    }
     const qreal hue = static_cast<qreal>(hash) / 4294967296.0;
     return QColor::fromHsvF(hue, 0.5, 0.8);
 }
@@ -253,6 +291,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform int uLightingMode;
         uniform sampler2DArray uMatcapTexture;
         uniform bool uMatcapAvailable;
+        uniform bool uMatcapFlipX;
         uniform sampler3D uAgxDisplayTexture;
         uniform bool uAgxDisplayAvailable;
         uniform vec3 uLightDirection[4];
@@ -582,6 +621,9 @@ bool ViewportSurfaceRenderer::initialize()
                                                 incident);
             } else if (uLightingMode == 1 && uMatcapAvailable) {
                 vec2 uv = workbenchMatcapUv(incident, normal);
+                if (uMatcapFlipX) {
+                    uv.x = 1.0 - uv.x;
+                }
                 vec3 diffuse = texture(uMatcapTexture, vec3(uv, 0.0)).rgb;
                 vec3 specular = uUseSpecular
                                     ? texture(uMatcapTexture,
@@ -859,6 +901,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
             range.displayColorSceneLinear = object.displayColorSceneLinear;
             range.workbenchMaterial = object.workbenchMaterial;
             range.objectSeed = object.objectId.value();
+            range.displayName = object.displayName;
+            range.libraryPath = object.libraryPath;
             range.outlineHandledBySceneStroke =
                 object.outlineHandledBySceneStroke;
             if (object.shape.geometryType == GeometryType::NurbsSolid &&
@@ -900,6 +944,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
         range.displayColorSceneLinear = object.displayColorSceneLinear;
         range.workbenchMaterial = object.workbenchMaterial;
         range.objectSeed = object.objectId.value();
+        range.displayName = object.displayName;
+        range.libraryPath = object.libraryPath;
         range.outlineHandledBySceneStroke =
             object.outlineHandledBySceneStroke;
         if (object.shape.geometryType == GeometryType::NurbsSolid &&
@@ -1960,9 +2006,8 @@ bool ViewportSurfaceRenderer::draw(
             glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                                 GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         } else if (hasPartialAlpha) {
-            // QPainter's fallback composites each surface with its source
-            // alpha. Match that behavior for transparent appearance data; the
-            // current scene model has no transparent sorting contract.
+            // The surface-range draw below renders opaque ranges first and
+            // blends transparent ranges back-to-front against opaque depth.
             glDisable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
             glEnable(GL_BLEND);
@@ -2262,6 +2307,7 @@ bool ViewportSurfaceRenderer::draw(
                                            ? 1
                                            : 2;
         program_.setUniformValue("uLightingMode", lightingMode);
+        program_.setUniformValue("uMatcapFlipX", settings.matcapFlipX);
         const bool matcapAvailable =
             settings.lightingMode == ViewportLightingMode::MatCap &&
             ensureMatcapTexture(settings.matcapPreset);
@@ -2430,83 +2476,159 @@ bool ViewportSurfaceRenderer::draw(
                                        static_cast<int>(sizeof(SurfaceVertex)));
             geometryDirty_ = false;
         }
-        const auto drawSurfaceRanges = [&](bool volumeShadowed) {
+        const auto rangeAlpha = [&](const DrawRange &range) {
+            const qreal sourceAlpha = workbenchSourceAlpha(
+                settings.colorMode, range.displayColorSceneLinear.w(),
+                range.workbenchMaterial, settings.customColor);
+            const WorkbenchPackedMaterialData packed = workbenchPackMaterialData(
+                0.0f, 0.4f, static_cast<float>(sourceAlpha));
+            return workbenchEffectiveAlpha(packed.alpha, settings, false);
+        };
+        QVector<int> opaqueRangeIndices;
+        QVector<int> transparentRangeIndices;
+        QVector<qreal> transparentDepths(ranges_.size(), 0.0);
+        for (int index = 0; index < ranges_.size(); ++index) {
+            const DrawRange &range = ranges_[index];
+            if (range.count <= 0) {
+                continue;
+            }
+            if (rangeAlpha(range) >= 1.0 - 1.0e-6) {
+                opaqueRangeIndices.append(index);
+                continue;
+            }
+            QVector4D center;
+            for (int vertexIndex = range.first;
+                 vertexIndex < range.first + range.count; ++vertexIndex) {
+                const SurfaceVertex &vertex = vertices_[vertexIndex];
+                center += QVector4D(vertex.x, vertex.y, vertex.z, 1.0f);
+            }
+            center /= static_cast<float>(range.count);
+            center.setX(center.x() + static_cast<float>(range.offset.x));
+            center.setY(center.y() + static_cast<float>(range.offset.y));
+            center.setZ(center.z() + static_cast<float>(range.offset.z));
+            const QVector4D clip = viewProjection * center;
+            const qreal depth = std::abs(clip.w()) > 1.0e-8f
+                ? static_cast<qreal>(clip.z() / clip.w())
+                : static_cast<qreal>(clip.z());
+            transparentDepths[index] = std::isfinite(depth) ? depth : 0.0;
+            transparentRangeIndices.append(index);
+        }
+        std::stable_sort(transparentRangeIndices.begin(),
+                         transparentRangeIndices.end(),
+                         [&transparentDepths](int left, int right) {
+                             if (transparentDepths[left] !=
+                                 transparentDepths[right]) {
+                                 return transparentDepths[left] >
+                                        transparentDepths[right];
+                             }
+                             return left < right;
+                         });
+
+        const auto drawRange = [&](const DrawRange &range,
+                                   bool volumeShadowed) {
             program_.setUniformValue("uShadowVolumeShadowed",
                                      volumeShadowed);
-            for (const DrawRange &range : ranges_) {
-                if (range.count <= 0) {
-                    continue;
+            const QVector3D offset(static_cast<float>(range.offset.x),
+                                   static_cast<float>(range.offset.y),
+                                   static_cast<float>(range.offset.z));
+            program_.setUniformValue("uWorldOffset", offset);
+            program_.setUniformValue("uEditModeSelected",
+                                     range.selected && !previewOverlay);
+            const WorkbenchMaterialData &material = range.workbenchMaterial;
+            QVector3D baseColorLinear =
+                workbenchDefaultSolidMaterialDiffuseColor();
+            float roughness = 0.4f;
+            float metallic = 0.0f;
+            if (previewOverlay) {
+                const QColor previewColor(QStringLiteral("#d89a4e"));
+                baseColorLinear = workbenchSrgbToSceneLinear(
+                    QVector3D(previewColor.redF(), previewColor.greenF(),
+                              previewColor.blueF()));
+            } else {
+                switch (settings.colorMode) {
+                case ViewportColorMode::Material:
+                case ViewportColorMode::Attribute:
+                case ViewportColorMode::Texture:
+                    // Attribute and Texture have no color-attribute, UV,
+                    // or image inputs in the scene model yet; Blender
+                    // falls back to the Material source for these modes.
+                    baseColorLinear = material.baseColorSceneLinear;
+                    roughness = static_cast<float>(material.roughness);
+                    metallic = static_cast<float>(material.metallic);
+                    break;
+                case ViewportColorMode::Object:
+                    baseColorLinear = QVector3D(
+                        range.displayColorSceneLinear.x(),
+                        range.displayColorSceneLinear.y(),
+                        range.displayColorSceneLinear.z());
+                    break;
+                case ViewportColorMode::Random: {
+                    const QColor randomColor =
+                        workbenchRandomColor(range.objectSeed,
+                                             range.displayName,
+                                             range.libraryPath);
+                    baseColorLinear = workbenchRec709ToSceneLinear(
+                        QVector3D(randomColor.redF(), randomColor.greenF(),
+                                  randomColor.blueF()));
+                    break;
                 }
-                const QVector3D offset(static_cast<float>(range.offset.x),
-                                       static_cast<float>(range.offset.y),
-                                       static_cast<float>(range.offset.z));
-                program_.setUniformValue("uWorldOffset", offset);
-                program_.setUniformValue("uEditModeSelected",
-                                         range.selected && !previewOverlay);
-                const WorkbenchMaterialData &material = range.workbenchMaterial;
-                QVector3D baseColorLinear =
-                    workbenchDefaultSolidMaterialDiffuseColor();
-                float roughness = 0.4f;
-                float metallic = 0.0f;
-                if (previewOverlay) {
-                    const QColor previewColor(QStringLiteral("#d89a4e"));
+                case ViewportColorMode::Custom:
                     baseColorLinear = workbenchSrgbToSceneLinear(
-                        QVector3D(previewColor.redF(), previewColor.greenF(),
-                                  previewColor.blueF()));
-                } else {
-                    switch (settings.colorMode) {
-                    case ViewportColorMode::Material:
-                    case ViewportColorMode::Attribute:
-                    case ViewportColorMode::Texture:
-                        // Attribute and Texture have no color-attribute, UV,
-                        // or image inputs in the scene model yet; Blender
-                        // falls back to the Material source for these modes.
-                        baseColorLinear = material.baseColorSceneLinear;
-                        roughness = static_cast<float>(material.roughness);
-                        metallic = static_cast<float>(material.metallic);
-                        break;
-                    case ViewportColorMode::Object:
-                        baseColorLinear = QVector3D(
-                            range.displayColorSceneLinear.x(),
-                            range.displayColorSceneLinear.y(),
-                            range.displayColorSceneLinear.z());
-                        break;
-                    case ViewportColorMode::Random: {
-                        const QColor randomColor =
-                            workbenchRandomColor(range.objectSeed);
-                        baseColorLinear = workbenchRec709ToSceneLinear(
-                            QVector3D(randomColor.redF(), randomColor.greenF(),
-                                      randomColor.blueF()));
-                        break;
-                    }
-                    case ViewportColorMode::Custom:
-                        baseColorLinear = workbenchSrgbToSceneLinear(
-                            QVector3D(settings.customColor.redF(),
-                                      settings.customColor.greenF(),
-                                      settings.customColor.blueF()));
-                        break;
-                    }
+                        QVector3D(settings.customColor.redF(),
+                                  settings.customColor.greenF(),
+                                  settings.customColor.blueF()));
+                    break;
                 }
-                qreal sourceAlpha = workbenchSourceAlpha(
-                    settings.colorMode, range.displayColorSceneLinear.w(),
-                    material, settings.customColor);
-                const WorkbenchPackedMaterialData packed =
-                    workbenchPackMaterialData(metallic, roughness,
-                                              static_cast<float>(sourceAlpha));
-                roughness = packed.roughness;
-                metallic = packed.metallic;
-                if (!previewOverlay) {
-                    sourceAlpha = packed.alpha;
+            }
+            qreal sourceAlpha = workbenchSourceAlpha(
+                settings.colorMode, range.displayColorSceneLinear.w(),
+                material, settings.customColor);
+            const WorkbenchPackedMaterialData packed =
+                workbenchPackMaterialData(metallic, roughness,
+                                          static_cast<float>(sourceAlpha));
+            roughness = packed.roughness;
+            metallic = packed.metallic;
+            if (!previewOverlay) {
+                sourceAlpha = packed.alpha;
+            }
+            const float alpha = static_cast<float>(workbenchEffectiveAlpha(
+                sourceAlpha, settings, previewOverlay));
+            program_.setUniformValue("uRoughness", roughness);
+            program_.setUniformValue("uMetallic", metallic);
+            program_.setUniformValue(
+                "uBaseColor",
+                QVector4D(baseColorLinear.x(), baseColorLinear.y(),
+                          baseColorLinear.z(), alpha));
+            glDrawArrays(GL_TRIANGLES, range.first, range.count);
+        };
+        const auto drawSurfaceRanges = [&](bool volumeShadowed) {
+            if (hasPartialAlpha) {
+                // Render opaque surfaces first to establish depth, then blend
+                // translucent surfaces back-to-front without updating depth.
+                glEnable(GL_DEPTH_TEST);
+                glDepthFunc(GL_LESS);
+                glDepthMask(GL_TRUE);
+                glDisable(GL_BLEND);
+                for (int index : opaqueRangeIndices) {
+                    drawRange(ranges_[index], volumeShadowed);
                 }
-                const float alpha = static_cast<float>(workbenchEffectiveAlpha(
-                    sourceAlpha, settings, previewOverlay));
-                program_.setUniformValue("uRoughness", roughness);
-                program_.setUniformValue("uMetallic", metallic);
-                program_.setUniformValue(
-                    "uBaseColor",
-                    QVector4D(baseColorLinear.x(), baseColorLinear.y(),
-                              baseColorLinear.z(), alpha));
-                glDrawArrays(GL_TRIANGLES, range.first, range.count);
+                glEnable(GL_DEPTH_TEST);
+                glDepthFunc(GL_LEQUAL);
+                glDepthMask(GL_FALSE);
+                glEnable(GL_BLEND);
+                glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+                for (int index : transparentRangeIndices) {
+                    drawRange(ranges_[index], volumeShadowed);
+                }
+                glDepthFunc(GL_LESS);
+                return;
+            }
+            for (const DrawRange &range : ranges_) {
+                if (range.count > 0) {
+                    drawRange(range, volumeShadowed);
+                }
             }
         };
         if (shadowVolumesAvailable) {
@@ -2611,7 +2733,7 @@ bool ViewportSurfaceRenderer::draw(
 
     if (settings.mode == ViewportShadingMode::Solid &&
         settings.outline && !previewOverlay && !selectionOverlay &&
-        !settings.xrayEnabled() && !hasPartialAlpha && !vertices_.isEmpty()) {
+        !settings.xrayEnabled() && !vertices_.isEmpty()) {
         const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
         const QSize pixelSize(qRound(viewportSize.width() * dpr),
                               qRound(viewportSize.height() * dpr));

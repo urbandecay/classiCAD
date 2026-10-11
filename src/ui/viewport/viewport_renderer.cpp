@@ -19,6 +19,7 @@
 #include "services/dimensions/dimension_layout.h"
 
 #include <QFont>
+#include <QByteArray>
 #include <QLineF>
 #include <QPainterPath>
 #include <QPolygonF>
@@ -36,19 +37,57 @@ namespace {
 constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
 
-QColor workbenchRandomColor(ObjectId objectId)
+quint32 blenderStringHash(const QByteArray &bytes, quint32 seed = 0)
 {
-    // Blender hashes ID.name and, for linked objects, the library filepath.
-    // classiCAD has neither identity field, so hash its persistent ObjectId
-    // deterministically and use Blender's Random-mode HSV palette values.
-    const quint64 objectValue = objectId.value();
-    quint32 hash = static_cast<quint32>(objectValue) ^
-                   static_cast<quint32>(objectValue >> 32);
-    hash ^= hash >> 16;
-    hash *= 0x7feb352dU;
+    constexpr quint32 multiplier = 0x5bd1e995U;
+    const uchar *data = reinterpret_cast<const uchar *>(bytes.constData());
+    int remaining = bytes.size();
+    quint32 hash = seed ^ static_cast<quint32>(remaining);
+    while (remaining >= 4) {
+        quint32 chunk = static_cast<quint32>(data[0]) |
+                        (static_cast<quint32>(data[1]) << 8) |
+                        (static_cast<quint32>(data[2]) << 16) |
+                        (static_cast<quint32>(data[3]) << 24);
+        chunk *= multiplier;
+        chunk ^= chunk >> 24;
+        chunk *= multiplier;
+        hash *= multiplier;
+        hash ^= chunk;
+        data += 4;
+        remaining -= 4;
+    }
+    if (remaining == 3) hash ^= static_cast<quint32>(data[2]) << 16;
+    if (remaining >= 2) hash ^= static_cast<quint32>(data[1]) << 8;
+    if (remaining >= 1) {
+        hash ^= data[0];
+        hash *= multiplier;
+    }
+    hash ^= hash >> 13;
+    hash *= multiplier;
     hash ^= hash >> 15;
-    hash *= 0x846ca68bU;
-    hash ^= hash >> 16;
+    return hash;
+}
+
+QColor workbenchRandomColor(ObjectId objectId,
+                            const QString &displayName,
+                            const QString &libraryPath)
+{
+    quint32 hash = 0;
+    if (!displayName.isEmpty()) {
+        hash = blenderStringHash(QByteArrayLiteral("OB") + displayName.toUtf8());
+        if (!libraryPath.isEmpty()) {
+            hash = blenderStringHash(libraryPath.toUtf8(), hash);
+        }
+    } else {
+        const quint64 objectValue = objectId.value();
+        hash = static_cast<quint32>(objectValue) ^
+               static_cast<quint32>(objectValue >> 32);
+        hash ^= hash >> 16;
+        hash *= 0x7feb352dU;
+        hash ^= hash >> 15;
+        hash *= 0x846ca68bU;
+        hash ^= hash >> 16;
+    }
     const qreal hue = static_cast<qreal>(hash) / 4294967296.0;
     return QColor::fromHsvF(hue, 0.5, 0.8);
 }
@@ -886,7 +925,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  const Point3D &preparedOffset,
                                  std::optional<QVector4D> displayColorSceneLinear,
                                  std::optional<WorkbenchMaterialData>
-                                     workbenchMaterial) const
+                                     workbenchMaterial,
+                                 const QString &displayName,
+                                 const QString &libraryPath) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -1052,7 +1093,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                              shapeObjectId, geometryRevision, preparedGeometry,
                              preparedOffset, preview, selected, false,
                              layerColor, displayColorSceneLinear,
-                             workbenchMaterial);
+                             workbenchMaterial, displayName, libraryPath);
         } else {
             for (int index = 0; index < faces.size(); ++index)
                 drawNurbsSurface(painter, faces[index], viewportSize,
@@ -1061,7 +1102,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  nurbsSolidFaceReversed(shape.nurbsSolid,
                                                         index),
                                  layerColor, displayColorSceneLinear,
-                                 workbenchMaterial);
+                                 workbenchMaterial, displayName, libraryPath);
         }
         return;
     }
@@ -1073,7 +1114,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          preview ? 0 : geometryRevision,
                          preparedGeometry, preparedOffset, preview, selected,
                          false, layerColor, displayColorSceneLinear,
-                         workbenchMaterial);
+                         workbenchMaterial, displayName, libraryPath);
         return;
     }
 
@@ -1640,7 +1681,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         const QColor &objectColor,
                                         std::optional<QVector4D> displayColorSceneLinear,
                                         std::optional<WorkbenchMaterialData>
-                                            workbenchMaterial) const
+                                            workbenchMaterial,
+                                        const QString &displayName,
+                                        const QString &libraryPath) const
 {
     Q_UNUSED(selected);
     if (shadingSettings_.mode == ViewportShadingMode::Solid) {
@@ -1657,9 +1700,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         case ViewportColorMode::Material:
         case ViewportColorMode::Attribute:
         case ViewportColorMode::Texture:
-            // Attribute and Texture have no color-attribute, UV, or image
-            // texture inputs in classiCAD yet, so Blender's Material fallback
-            // is used until those scene inputs exist.
+            // Blender falls back to Material mode when an object lacks the
+            // corresponding color-attribute or UV input. classiCAD has no
+            // attribute, UV, or image-texture data, so mirror that fallback.
             sourceColorLinear = workbenchMaterial
                                     ? material.baseColorSceneLinear
                                     : workbenchDefaultSolidMaterialDiffuseColor();
@@ -1683,7 +1726,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             }
             break;
         case ViewportColorMode::Random: {
-            const QColor randomColor = workbenchRandomColor(objectId);
+            const QColor randomColor = workbenchRandomColor(
+                objectId, displayName, libraryPath);
             sourceColorLinear = workbenchRec709ToSceneLinear(
                 QVector3D(randomColor.redF(), randomColor.greenF(),
                           randomColor.blueF()));

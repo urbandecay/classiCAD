@@ -1155,6 +1155,11 @@ bool ViewportSceneRenderer::draw(
                         ViewportSmoothWireCategory::EditMode
                     ? smoothEditModeWires
                     : smoothOverlayWires;
+            // Blender's Overlay wire pass enables its custom depth bias only
+            // when Smooth Wires is enabled. Keep the same gating here; points
+            // retain their existing overlay depth bias above.
+            boundProgram->setUniformValue(
+                "uDepthBias", depthTest && smoothWire ? 1.0e-5f : 0.0f);
             // Antialias coverage has the same color-space meaning for curve
             // wires and surface boundaries as it does for edit wires.
             const bool linearDisplayBlend = linearDisplayBlendAvailable;

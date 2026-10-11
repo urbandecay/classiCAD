@@ -62,6 +62,7 @@ struct ViewportShadingSettings {
     ViewportLightingMode lightingMode = ViewportLightingMode::Studio;
     QString studioLightPreset = QStringLiteral("Default");
     QString matcapPreset = QStringLiteral("basic_grey");
+    bool matcapFlipX = false;
     int studioLightRotationDegrees = 0;
     bool worldSpaceLighting = false;
     bool xray = false;
@@ -76,7 +77,9 @@ struct ViewportShadingSettings {
     QVector3D shadowDirection = QVector3D(0.57735026f, 0.57735026f,
                                           0.57735026f);
     bool backfaceCulling = false;
-    bool outline = true;
+    // Blender 5.2.2 initializes View3DShading with specular enabled, while
+    // object outline, shadows, and cavity are opt-in shading flags.
+    bool outline = false;
     bool specularLighting = true;
     bool shadows = false;
     bool depthOfField = false;

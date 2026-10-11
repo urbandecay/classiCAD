@@ -133,7 +133,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 6);
+    serialized.insert(QStringLiteral("version"), 7);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -170,6 +170,8 @@ QJsonObject documentToJson(const Document &document)
         QJsonObject serializedObject;
         serializedObject.insert(QStringLiteral("id"), idToJson(sceneObject.id.value()));
         serializedObject.insert(QStringLiteral("layerId"), idToJson(sceneObject.layerId.value()));
+        serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
+        serializedObject.insert(QStringLiteral("libraryPath"), sceneObject.libraryPath);
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
         QJsonObject placement;
         placement.insert(QStringLiteral("x"), sceneObject.placementTranslation.x);
@@ -208,7 +210,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 6) {
+    if (version < 1 || version > 7) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -425,6 +427,16 @@ bool documentFromJson(const QJsonValue &value,
         SceneObject sceneObject;
         sceneObject.id = ObjectId::fromValue(objectValueId);
         sceneObject.layerId = LayerId::fromValue(objectLayerValue);
+        if (version >= 7) {
+            const QJsonValue displayName = serializedObject.value(QStringLiteral("displayName"));
+            const QJsonValue libraryPath = serializedObject.value(QStringLiteral("libraryPath"));
+            if (!displayName.isString() || !libraryPath.isString()) {
+                setError(errorMessage, QStringLiteral("invalid Blender object identity"));
+                return false;
+            }
+            sceneObject.displayName = displayName.toString();
+            sceneObject.libraryPath = libraryPath.toString();
+        }
         sceneObject.geometry = std::move(shape);
         sceneObject.placementTranslation = placementTranslation;
         sceneObject.displayColorSceneLinear = displayColorSceneLinear;

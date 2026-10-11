@@ -115,7 +115,13 @@ bool isValidProjectViewportCameraSettings(
         settings.focalLengthMillimeters > 2000.0 ||
         !std::isfinite(settings.clipStart) || settings.clipStart < 0.000001 ||
         !std::isfinite(settings.clipEnd) || settings.clipEnd <= settings.clipStart ||
-        settings.clipEnd > 1.0e9) {
+        settings.clipEnd > 1.0e9 || !std::isfinite(settings.focusDistance) ||
+        settings.focusDistance <= 0.0 || settings.focusDistance > 1.0e9 ||
+        !std::isfinite(settings.fStop) || settings.fStop < 0.1 ||
+        settings.fStop > 128.0 ||
+        !std::isfinite(settings.sensorWidthMillimeters) ||
+        settings.sensorWidthMillimeters < 1.0 ||
+        settings.sensorWidthMillimeters > 100.0) {
         return false;
     }
     if (!settings.view.storedInProject) {
@@ -151,6 +157,12 @@ QJsonObject projectViewportCameraSettingsToJson(
                       settings.focalLengthMillimeters);
     serialized.insert(QStringLiteral("clipStart"), settings.clipStart);
     serialized.insert(QStringLiteral("clipEnd"), settings.clipEnd);
+    serialized.insert(QStringLiteral("sceneCameraEnabled"),
+                      settings.sceneCameraEnabled);
+    serialized.insert(QStringLiteral("focusDistance"), settings.focusDistance);
+    serialized.insert(QStringLiteral("fStop"), settings.fStop);
+    serialized.insert(QStringLiteral("sensorWidthMillimeters"),
+                      settings.sensorWidthMillimeters);
     if (settings.view.storedInProject) {
         const classiCAD::ProjectViewportViewState &view = settings.view;
         QJsonObject viewState;
@@ -210,6 +222,15 @@ bool projectViewportCameraSettingsFromJson(
     settings->focalLengthMillimeters = focalLength.toDouble();
     settings->clipStart = clipStart.toDouble();
     settings->clipEnd = clipEnd.toDouble();
+    const QJsonValue sceneCameraEnabled = camera.value(QStringLiteral("sceneCameraEnabled"));
+    if (!sceneCameraEnabled.isUndefined() && !sceneCameraEnabled.isBool()) {
+        setError(errorMessage, QStringLiteral("Project scene camera state is invalid"));
+        return false;
+    }
+    settings->sceneCameraEnabled = sceneCameraEnabled.toBool(false);
+    settings->focusDistance = camera.value(QStringLiteral("focusDistance")).toDouble(10000.0);
+    settings->fStop = camera.value(QStringLiteral("fStop")).toDouble(2.8);
+    settings->sensorWidthMillimeters = camera.value(QStringLiteral("sensorWidthMillimeters")).toDouble(36.0);
     settings->storedInProject = true;
 
     const QJsonValue viewValue = camera.value(QStringLiteral("viewState"));

@@ -9,6 +9,7 @@
 #include "viewport_aa_renderer.h"
 
 #include <QOpenGLWidget>
+#include <QVector>
 
 #include <functional>
 #include <memory>
@@ -45,6 +46,14 @@ public:
     void setAntiAliasingSamples(int samples);
     void setSurfaceTessellationCache(
         const SurfaceTessellationCache *surfaceTessellationCache);
+    using OffscreenDrawCallback = std::function<bool(
+        const QSize &, BlenderGridRenderer &, ViewportSceneRenderer &,
+        ViewportSurfaceRenderer &)>;
+    bool renderOffscreen(const QSize &pixelSize,
+                         const OffscreenDrawCallback &draw,
+                         QImage *combined,
+                         QVector<float> *depth,
+                         QString *errorMessage = nullptr);
     bool pickScenePoint(const QPointF &screenPosition,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,

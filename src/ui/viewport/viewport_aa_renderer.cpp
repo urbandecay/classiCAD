@@ -322,6 +322,16 @@ int ViewportAaRenderer::mode() const noexcept
     return mode_;
 }
 
+void ViewportAaRenderer::setDepthOfField(
+    bool enabled,
+    const ViewportCameraPreferences &optics,
+    bool perspectiveView)
+{
+    depthOfFieldOptics_ = optics;
+    depthOfFieldEnabled_ = enabled && optics.sceneCameraEnabled;
+    depthOfFieldPerspective_ = perspectiveView;
+}
+
 bool ViewportAaRenderer::initialize()
 {
     if (initialized_) {
@@ -361,7 +371,78 @@ bool ViewportAaRenderer::initialize()
         #version 330 core
         in vec2 vUv;
         uniform sampler2D uSource;
+        uniform sampler2D uDepth;
+        uniform bool uUseDepthOfField;
+        uniform vec2 uNearFar;
+        uniform float uFocusDistance;
+        uniform float uFocalLengthMillimeters;
+        uniform float uSensorWidthMillimeters;
+        uniform float uFStop;
+        uniform vec2 uPixelSize;
+        uniform bool uEncodeDisplay;
         layout(location = 0) out vec4 fragmentColor;
+        float cocRadius(vec2 uv)
+        {
+            float depth = texture(uDepth, uv).r;
+            float z = (uNearFar.x * uNearFar.y) /
+                max(uNearFar.y - depth * (uNearFar.y - uNearFar.x), 1e-6);
+            // View-space distances use the document's millimeter model units,
+            // matching the camera focal length and sensor dimensions here.
+            float f = uFocalLengthMillimeters;
+            float focus = uFocusDistance;
+            float coc = abs((f * f / max(uFStop * (focus - f), 1e-6)) *
+                            ((z - focus) / max(z, 1e-6)));
+            return clamp(coc * (uPixelSize.x /
+                max(uSensorWidthMillimeters, 1e-6)), 0.0, 12.0);
+        }
+        vec3 median3(vec3 a, vec3 b, vec3 c)
+        {
+            return max(min(a, b), min(max(a, b), c));
+        }
+        vec4 dofGather(vec2 uv)
+        {
+            // CoC-aware 2x2 downsample: retain the largest blur footprint
+            // while averaging the scene-linear source colors.
+            vec2 halfPixel = 0.5 * uPixelSize;
+            vec2 offsets[4] = vec2[4](vec2(-1.0, -1.0), vec2(1.0, -1.0),
+                                      vec2(-1.0, 1.0), vec2(1.0, 1.0));
+            vec3 downsampled = vec3(0.0);
+            float radius = 0.0;
+            for (int j = 0; j < 4; ++j) {
+                vec2 tapUv = clamp(uv + offsets[j] * halfPixel,
+                                   halfPixel, vec2(1.0) - halfPixel);
+                downsampled += texture(uSource, tapUv).rgb * 0.25;
+                radius = max(radius, cocRadius(tapUv));
+            }
+            if (radius < 0.75) return texture(uSource, uv);
+            const vec2 disk[12] = vec2[12](
+                vec2(0.0, 0.0), vec2(0.527, 0.085), vec2(-0.040, 0.536),
+                vec2(-0.670, -0.179), vec2(0.244, -0.647), vec2(0.765, 0.429),
+                vec2(-0.315, 0.847), vec2(-0.897, 0.310), vec2(0.493, 0.749),
+                vec2(0.901, -0.312), vec2(-0.527, -0.757), vec2(0.089, -0.956));
+            vec4 sum = vec4(0.0);
+            float weight = 0.0;
+            for (int i = 0; i < 12; ++i) {
+                vec2 sampleUv = clamp(uv + disk[i] * radius * uPixelSize,
+                                      uPixelSize * 0.5, vec2(1.0) - uPixelSize * 0.5);
+                float centerDepth = texture(uDepth, uv).r;
+                float sampleDepth = texture(uDepth, sampleUv).r;
+                if (sampleDepth < centerDepth - 0.002) continue;
+                sum += texture(uSource, sampleUv);
+                weight += 1.0;
+            }
+            vec3 gathered = weight > 0.0 ? (sum / weight).rgb : downsampled;
+            // Three-tap median cleanup suppresses isolated gather outliers.
+            vec3 medianColor = median3(
+                gathered,
+                texture(uSource, clamp(uv + vec2(uPixelSize.x, 0.0),
+                                       halfPixel, vec2(1.0) - halfPixel)).rgb,
+                texture(uSource, clamp(uv - vec2(uPixelSize.x, 0.0),
+                                       halfPixel, vec2(1.0) - halfPixel)).rgb);
+            vec4 original = texture(uSource, uv);
+            float cocMix = clamp(radius / 6.0, 0.0, 1.0);
+            return vec4(mix(original.rgb, medianColor, cocMix), original.a);
+        }
         vec3 linearToSrgb(vec3 color)
         {
             color = max(color, vec3(0.0));
@@ -371,8 +452,9 @@ bool ViewportAaRenderer::initialize()
         }
         void main()
         {
-            vec4 source = texture(uSource, vUv);
-            fragmentColor = vec4(linearToSrgb(source.rgb), source.a);
+            vec4 source = uUseDepthOfField ? dofGather(vUv) : texture(uSource, vUv);
+            fragmentColor = vec4(uEncodeDisplay ? linearToSrgb(source.rgb) : source.rgb,
+                                 source.a);
         }
     )glsl";
     QByteArray smaaLibrary;
@@ -430,6 +512,14 @@ bool ViewportAaRenderer::initialize()
 
 void ViewportAaRenderer::destroyTargets()
 {
+    if (depthOfFieldFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &depthOfFieldFramebuffer_);
+        depthOfFieldFramebuffer_ = 0;
+    }
+    if (depthOfFieldColorTexture_ != 0) {
+        glDeleteTextures(1, &depthOfFieldColorTexture_);
+        depthOfFieldColorTexture_ = 0;
+    }
     if (resolveFramebuffer_ != 0) {
         glDeleteFramebuffers(1, &resolveFramebuffer_);
         resolveFramebuffer_ = 0;
@@ -618,6 +708,22 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     const bool resolveComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
+    glGenTextures(1, &depthOfFieldColorTexture_);
+    glBindTexture(GL_TEXTURE_2D, depthOfFieldColorTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, pixelSize.width(),
+                 pixelSize.height(), 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &depthOfFieldFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, depthOfFieldColorTexture_, 0);
+    glDrawBuffers(1, &drawAttachment);
+    const bool depthOfFieldComplete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
     glGenTextures(1, &smaaEdgeTexture_);
     glBindTexture(GL_TEXTURE_2D, smaaEdgeTexture_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, pixelSize.width(),
@@ -693,7 +799,7 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     if (!sceneComplete || !attachmentsComplete || !historyComplete ||
-        !resolveComplete || !edgeComplete || !weightComplete ||
+        !resolveComplete || !depthOfFieldComplete || !edgeComplete || !weightComplete ||
         !textureDataValid) {
         qWarning() << "Viewport AA target allocation failed"
                    << "scene=" << sceneComplete
@@ -958,7 +1064,9 @@ void ViewportAaRenderer::drawSmaaResolve(float mixFactor)
 
 void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
                                           GLuint destinationFramebuffer,
-                                          const GLint destinationViewport[4])
+                                          const GLint destinationViewport[4],
+                                          bool encodeDisplay,
+                                          bool applyDepthOfField)
 {
     if (sourceTexture == 0) {
         return;
@@ -968,6 +1076,7 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     GLint previousVertexArray = 0;
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousTexture = 0;
+    GLint previousDepthTexture = 0;
     const GLboolean previousBlend = glIsEnabled(GL_BLEND);
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
@@ -981,6 +1090,8 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+    glActiveTexture(GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousDepthTexture);
 
     glBindFramebuffer(GL_FRAMEBUFFER, destinationFramebuffer);
     glViewport(destinationViewport[0], destinationViewport[1],
@@ -992,12 +1103,38 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, sourceTexture);
     presentProgram_.setUniformValue("uSource", 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, depthTexture_);
+    presentProgram_.setUniformValue("uDepth", 1);
+    presentProgram_.setUniformValue(
+        "uUseDepthOfField", applyDepthOfField && depthOfFieldEnabled_ &&
+                                depthOfFieldPerspective_ && depthTexture_ != 0);
+    presentProgram_.setUniformValue("uEncodeDisplay", encodeDisplay);
+    presentProgram_.setUniformValue(
+        "uNearFar", QVector2D(float(depthOfFieldOptics_.clipStart),
+                              float(depthOfFieldOptics_.clipEnd)));
+    presentProgram_.setUniformValue("uFocusDistance",
+                                    float(depthOfFieldOptics_.focusDistance));
+    presentProgram_.setUniformValue(
+        "uFocalLengthMillimeters",
+        float(depthOfFieldOptics_.focalLengthMillimeters));
+    presentProgram_.setUniformValue(
+        "uSensorWidthMillimeters",
+        float(depthOfFieldOptics_.sensorWidthMillimeters));
+    presentProgram_.setUniformValue("uFStop", float(depthOfFieldOptics_.fStop));
+    presentProgram_.setUniformValue(
+        "uPixelSize", QVector2D(1.0f / std::max(1, targetSize_.width()),
+                                1.0f / std::max(1, targetSize_.height())));
+    glActiveTexture(GL_TEXTURE0);
     {
         QOpenGLVertexArrayObject::Binder binder(&vertexArray_);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     presentProgram_.release();
 
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousDepthTexture));
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glBindVertexArray(static_cast<GLuint>(previousVertexArray));
@@ -1038,7 +1175,19 @@ bool ViewportAaRenderer::finishSceneSample()
     }
     sceneSampleActive_ = false;
     const bool accumulate = mode_ != static_cast<int>(ViewportAntiAliasingMode::Off);
-    GLuint presentTexture = sceneColorTexture_;
+    GLuint sampleColorTexture = sceneColorTexture_;
+    const bool useDepthOfField = depthOfFieldEnabled_ &&
+                                 depthOfFieldPerspective_ &&
+                                 depthTexture_ != 0 &&
+                                 depthOfFieldFramebuffer_ != 0;
+    if (useDepthOfField) {
+        const GLint dofViewport[4] = {0, 0, targetSize_.width(),
+                                      targetSize_.height()};
+        drawPresentation(sceneColorTexture_, depthOfFieldFramebuffer_,
+                         dofViewport, false, true);
+        sampleColorTexture = depthOfFieldColorTexture_;
+    }
+    GLuint presentTexture = sampleColorTexture;
     if (accumulate) {
         const JitterPoint offset = temporalSample_
                                        ? samplePositions(requestedSampleCount_)
@@ -1097,7 +1246,7 @@ bool ViewportAaRenderer::finishSceneSample()
         glBlendFunc(GL_ONE, GL_ONE);
         accumulateProgram_.bind();
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, sceneColorTexture_);
+        glBindTexture(GL_TEXTURE_2D, sampleColorTexture);
         accumulateProgram_.setUniformValue("uSampleColor", 0);
         accumulateProgram_.setUniformValue(
             "uInvSize", QVector2D(1.0f / std::max(1, targetSize_.width()),
@@ -1153,7 +1302,8 @@ bool ViewportAaRenderer::finishSceneSample()
         targets_.validAttachments |= ViewportRenderTargets::HistoryColor;
     }
 
-    drawPresentation(presentTexture, destinationFramebuffer_, destinationViewport_);
+    drawPresentation(presentTexture, destinationFramebuffer_, destinationViewport_,
+                     true, false);
     copyDepthToFramebuffer(destinationFramebuffer_, destinationViewport_);
     return temporalSample_ && accumulatedSampleCount_ < requestedSampleCount_;
 }
@@ -1217,6 +1367,10 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
     stream << aaMode << devicePixelRatio
            << qint32(frame.viewportSize.width())
            << qint32(frame.viewportSize.height());
+    const ViewportCameraPreferences optics = frame.camera.cameraPreferences();
+    stream << optics.sceneCameraEnabled << optics.focusDistance << optics.fStop
+           << optics.sensorWidthMillimeters
+           << optics.focalLengthMillimeters << optics.clipStart << optics.clipEnd;
     stream << sceneContentStateKey;
     const QMatrix4x4 viewProjection =
         viewportViewProjection(frame.camera, frame.viewportSize);
@@ -1225,6 +1379,7 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
     }
     stream << quint8(shading.mode) << quint8(shading.lightingMode)
            << shading.studioLightPreset << shading.matcapPreset
+           << shading.matcapFlipX
            << shading.studioLightRotationDegrees << shading.worldSpaceLighting
            << shading.xray
            << quint8(shading.colorMode) << quint8(shading.backgroundMode)

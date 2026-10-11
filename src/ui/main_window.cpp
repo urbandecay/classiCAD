@@ -276,6 +276,109 @@ private:
         return true;
     }
 
+    void saveWorkbenchRenderResult()
+    {
+        if (viewport_ == nullptr) {
+            return;
+        }
+        const QSize viewportSize = viewport_->viewportPixelSize();
+        QStringList labels{
+            QStringLiteral("Viewport (%1 × %2)").arg(viewportSize.width()).arg(viewportSize.height()),
+            QStringLiteral("1280 × 720 (HD)"),
+            QStringLiteral("1920 × 1080 (Full HD)"),
+            QStringLiteral("2560 × 1440 (QHD)"),
+            QStringLiteral("3840 × 2160 (4K)"),
+            QStringLiteral("Custom…")};
+        bool accepted = false;
+        const QString choice = QInputDialog::getItem(
+            this, QStringLiteral("Render Result Resolution"),
+            QStringLiteral("Output size"), labels, 0, false, &accepted);
+        if (!accepted) {
+            return;
+        }
+        QSize outputSize = viewportSize;
+        if (choice == labels[1]) outputSize = QSize(1280, 720);
+        else if (choice == labels[2]) outputSize = QSize(1920, 1080);
+        else if (choice == labels[3]) outputSize = QSize(2560, 1440);
+        else if (choice == labels[4]) outputSize = QSize(3840, 2160);
+        else if (choice == labels[5]) {
+            QSettings settings;
+            bool widthAccepted = false;
+            const int width = QInputDialog::getInt(
+                this, QStringLiteral("Render Output Settings"),
+                QStringLiteral("Resolution X (pixels)"),
+                settings.value(QStringLiteral("render/workbenchWidth"),
+                               viewportSize.width()).toInt(),
+                64, 8192, 1, &widthAccepted);
+            if (!widthAccepted) return;
+            bool heightAccepted = false;
+            const int height = QInputDialog::getInt(
+                this, QStringLiteral("Render Output Settings"),
+                QStringLiteral("Resolution Y (pixels)"),
+                settings.value(QStringLiteral("render/workbenchHeight"),
+                               viewportSize.height()).toInt(),
+                64, 8192, 1, &heightAccepted);
+            if (!heightAccepted) return;
+            outputSize = QSize(width, height);
+            settings.setValue(QStringLiteral("render/workbenchWidth"), width);
+            settings.setValue(QStringLiteral("render/workbenchHeight"), height);
+        }
+        const WorkbenchRenderResult result =
+            viewport_->renderWorkbenchResult(outputSize);
+        if (!result.isValid()) {
+            QMessageBox::warning(
+                this, QStringLiteral("Render Result Unavailable"),
+                QStringLiteral("The offscreen scene render failed."));
+            return;
+        }
+        QDialog window(this);
+        window.setWindowTitle(QStringLiteral("Workbench Render Result — %1 × %2")
+                                  .arg(outputSize.width()).arg(outputSize.height()));
+        window.resize(1000, 760);
+        auto *layout = new QVBoxLayout(&window);
+        auto *info = new QLabel(
+            QStringLiteral("Combined: %1 × %2 PNG   •   Depth: linear camera distance PFM")
+                .arg(outputSize.width()).arg(outputSize.height()), &window);
+        layout->addWidget(info);
+        auto *preview = new QLabel(&window);
+        preview->setAlignment(Qt::AlignCenter);
+        preview->setMinimumSize(640, 480);
+        preview->setPixmap(QPixmap::fromImage(result.combined).scaled(
+            960, 680, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        layout->addWidget(preview, 1);
+        auto *buttons = new QHBoxLayout;
+        auto *saveCombined = new QPushButton(QStringLiteral("Save Combined PNG…"), &window);
+        auto *saveDepth = new QPushButton(QStringLiteral("Save Depth PFM…"), &window);
+        auto *close = new QPushButton(QStringLiteral("Close"), &window);
+        buttons->addWidget(saveCombined);
+        buttons->addWidget(saveDepth);
+        buttons->addStretch();
+        buttons->addWidget(close);
+        layout->addLayout(buttons);
+        connect(saveCombined, &QPushButton::clicked, &window, [this, &result]() {
+            QString path = QFileDialog::getSaveFileName(
+                this, QStringLiteral("Save Combined Render"),
+                QStringLiteral("WorkbenchRender.png"),
+                QStringLiteral("PNG Image (*.png)"));
+            if (path.isEmpty()) return;
+            if (QFileInfo(path).suffix().isEmpty()) path += QStringLiteral(".png");
+            QString error;
+            if (!result.savePng(path, &error)) QMessageBox::critical(this, QStringLiteral("Save Failed"), error);
+        });
+        connect(saveDepth, &QPushButton::clicked, &window, [this, &result]() {
+            QString path = QFileDialog::getSaveFileName(
+                this, QStringLiteral("Save Depth Pass"),
+                QStringLiteral("WorkbenchRender_Depth.pfm"),
+                QStringLiteral("Portable Float Map (*.pfm)"));
+            if (path.isEmpty()) return;
+            if (QFileInfo(path).suffix().isEmpty()) path += QStringLiteral(".pfm");
+            QString error;
+            if (!result.saveDepthPfm(path, &error)) QMessageBox::critical(this, QStringLiteral("Save Failed"), error);
+        });
+        connect(close, &QPushButton::clicked, &window, &QDialog::accept);
+        window.exec();
+    }
+
     void openDocument()
     {
         QString initialPath = currentProjectPath_;
@@ -807,6 +910,11 @@ private:
         connect(saveAsDocumentAction, &QAction::triggered, this, [this]() {
             saveDocument(true);
         });
+        QAction *renderResultAction = fileMenu->addAction(
+            QStringLiteral("Render Workbench Result…"));
+        renderResultAction->setShortcut(QKeySequence(Qt::Key_F12));
+        connect(renderResultAction, &QAction::triggered,
+                this, [this]() { saveWorkbenchRenderResult(); });
         fileMenu->addSeparator();
         fileMenu->addAction(QStringLiteral("Quit"), this, &QWidget::close);
 

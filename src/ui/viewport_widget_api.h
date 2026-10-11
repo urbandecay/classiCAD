@@ -10,6 +10,7 @@
 #include "core/tool_id.h"
 #include "services/viewport/viewport_transform.h"
 #include "viewport/blender_grid_appearance.h"
+#include "viewport/workbench_render_result.h"
 
 #include <QString>
 #include <QColor>
@@ -158,6 +159,8 @@ public:
     virtual bool restoreUpdateSession(const QString &path) = 0;
 
     virtual ProjectViewportCameraSettings projectCameraSettings() const = 0;
+    virtual QSize viewportPixelSize() const = 0;
+    virtual WorkbenchRenderResult renderWorkbenchResult(const QSize &outputSize) = 0;
     virtual void prepareForDocumentReplacement() = 0;
     virtual void applyProjectCameraSettings(
         const ProjectViewportCameraSettings &settings) = 0;

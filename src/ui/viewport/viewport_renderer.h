@@ -46,7 +46,9 @@ public:
                    const Point3D &preparedOffset = {},
                    std::optional<QVector4D> displayColorSceneLinear = std::nullopt,
                    std::optional<WorkbenchMaterialData> workbenchMaterial =
-                       std::nullopt) const;
+                       std::nullopt,
+                   const QString &displayName = QString(),
+                   const QString &libraryPath = QString()) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
@@ -69,7 +71,9 @@ public:
                           std::optional<QVector4D> displayColorSceneLinear =
                               std::nullopt,
                           std::optional<WorkbenchMaterialData> workbenchMaterial =
-                              std::nullopt) const;
+                              std::nullopt,
+                          const QString &displayName = QString(),
+                          const QString &libraryPath = QString()) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,

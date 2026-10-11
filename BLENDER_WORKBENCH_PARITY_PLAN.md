@@ -84,6 +84,30 @@ Relevant classiCAD files include:
 
 ## Blender behavior to reproduce
 
+### Findings from the original Solid viewport comparison
+
+This checklist preserves the specific differences reported in the initial comparison and updates their status after subsequent ports. It is intentionally separate from the broader parity stages so an earlier finding does not disappear when its implementation changes.
+
+#### 1. Geometry and render pipeline
+
+- **Still an architectural difference:** classiCAD shades exact NURBS surfaces and solids through display tessellation and renders curves as strokes. Blender Workbench draws evaluated scene geometry through its own object and render-pass paths. classiCAD keeps exact NURBS data authoritative; parity is about the displayed result, not replacing that model with Blender's mesh representation.
+- **Still different:** the QPainter fallback is a separate renderer. Its cavity sampling, outlines, antialiasing, and transparency handling remain approximate or unavailable compared with the GPU path.
+- **Still different:** cavity/effect processing is skipped for partial-alpha scenes in parts of the pipeline. Blender composes its effects through dedicated Workbench passes. The GPU outline pass now includes partial-alpha content, so the original blanket outline limitation is no longer current.
+
+#### 2. Color, materials, and shading effects
+
+- **Ported since the initial comparison:** Attribute and Texture color inputs now reach imported polygon meshes; material records and per-face material slots are retained and used by both renderers. These findings should not be described as missing mesh inputs. Shader-node graph evaluation and NURBS Texture remain unsupported, and QPainter texture interpolation can differ.
+- **Ported since the initial comparison:** Blender Random color uses imported object names and library paths when available, with `ObjectId` as the fallback for objects without Blender identity metadata. Configurable theme wire/edit colors are supported. Verify both against Blender during the parity comparison.
+- **Still different:** shadows use validated stencil volumes only for supported closed `NurbsSolid` geometry and a depth-map fallback for other cases. Outline detection uses classiCAD's object-ID edge pass. QPainter effects remain approximate. GPU depth of field is camera-gated but uses an approximate sampling pipeline; QPainter depth of field is unavailable.
+- **Corrected defaults:** outline, shadows, and cavity default off, matching Blender 5.2.2. Keep these defaults checked in persisted settings as well as in a fresh viewport.
+
+#### 3. Controls and rendered output
+
+- **Still different:** `Render Workbench Result` is classiCAD's own offscreen viewport render. It offers preset/custom pixel sizes, renders using the current viewport camera/projection, and exports Combined PNG plus linear camera-distance Depth PFM. It does not evaluate Blender scene render/output settings, a Blender camera, or Blender's registered render-pass system.
+- **Resolved since the initial comparison:** the viewport now has a hold-Z shading pie. Solid/Wireframe and X-Ray controls remain available through classiCAD's viewport UI, but the original claim that the inspected toolbar lacked Blender's hold-Z interaction is stale.
+- **Resolved since the initial comparison:** classiCAD labels its user-selected color “Single” in the shading popover, matching Blender's label; its internal enum still calls the mode `Custom`.
+- **Still different:** the render-result path skips dimension geometry, so dimensions and other editor-only overlays are not included. Blender controls viewport overlays separately from scene rendering; classiCAD does not currently offer a matching overlay inclusion control for this result.
+
 ### Workbench shading
 
 - Studio lighting uses Blender's Workbench studio-light behavior and presets. MatCap uses the selected MatCap and its orientation. Flat uses an unlit flat result. Workbench does not shade objects with scene lights.

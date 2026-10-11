@@ -74,6 +74,7 @@ struct SceneObject {
     bool hideViewport = false;
     bool hideRender = false;
     bool hiddenInViewport = false;
+    bool hideSelect = false;
     // Blender ID identity used by Workbench Random color. Imported linked
     // objects retain the source library path when the importer provides it.
     QString displayName;

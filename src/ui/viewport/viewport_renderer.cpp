@@ -1011,6 +1011,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
         }
         QHash<QString, QImage> textureImages;
+        QHash<int, QImage> faceTextureImages;
         int firstCorner = 0;
         const MeshColorAttribute *activeAttribute = nullptr;
         if (shadingSettings_.colorMode == ViewportColorMode::Attribute) {
@@ -1042,15 +1043,59 @@ void ViewportRenderer::drawShape(QPainter &painter,
             if (activeUvMap == nullptr) return nullptr;
             const int slot = mesh.faceMaterialIndices.value(faceIndex, 0);
             if (slot < 0 || slot >= meshMaterials.size()) return nullptr;
-            const QString path = meshMaterials[slot].textureImagePath;
-            if (path.isEmpty() || !QFileInfo(path).isFile()) return nullptr;
-            auto found = textureImages.find(path);
-            if (found == textureImages.end()) {
-                QImage loaded(path);
-                if (loaded.isNull()) return nullptr;
-                found = textureImages.insert(path, std::move(loaded));
+            const auto faceFound = faceTextureImages.constFind(slot);
+            if (faceFound != faceTextureImages.cend()) return &faceFound.value();
+            const WorkbenchMaterialData &material = meshMaterials[slot];
+            const QString path = material.textureImagePath;
+            const QString packed = material.textureImagePackedDataBase64;
+            if ((path.isEmpty() || !QFileInfo(path).isFile()) && packed.isEmpty()) {
+                return nullptr;
             }
-            return &found.value();
+            const QString alphaMode = material.textureImageAlphaMode;
+            const bool ignoreAlpha =
+                alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
+                alphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
+                alphaMode.compare(QStringLiteral("CHANNEL_PACKED"), Qt::CaseInsensitive) == 0;
+            const QString sourceKey = !packed.isEmpty()
+                ? QStringLiteral("packed:") + packed
+                : QStringLiteral("file:") + path;
+            const QString cacheKey = sourceKey + QLatin1Char('|') + alphaMode.toUpper();
+            auto found = textureImages.find(cacheKey);
+            if (found == textureImages.end()) {
+                QImage loaded;
+                if (!packed.isEmpty()) {
+                    loaded.loadFromData(QByteArray::fromBase64(packed.toLatin1()));
+                } else {
+                    loaded.load(path);
+                }
+                if (loaded.isNull()) return nullptr;
+                loaded = loaded.convertToFormat(QImage::Format_RGBA8888);
+                const bool premultiplied =
+                    alphaMode.compare(QStringLiteral("PREMUL"), Qt::CaseInsensitive) == 0;
+                for (int y = 0; y < loaded.height(); ++y) {
+                    auto *row = loaded.scanLine(y);
+                    for (int x = 0; x < loaded.width(); ++x) {
+                        uchar *pixel = row + x * 4;
+                        const int alpha = pixel[3];
+                        if (ignoreAlpha) {
+                            pixel[3] = 255;
+                        } else if (alpha < 26) { // GPU cutoff is alpha < 0.1.
+                            pixel[3] = 0;
+                        } else {
+                            if (premultiplied && alpha != 255) {
+                                pixel[0] = static_cast<uchar>(std::min(255, pixel[0] * 255 / alpha));
+                                pixel[1] = static_cast<uchar>(std::min(255, pixel[1] * 255 / alpha));
+                                pixel[2] = static_cast<uchar>(std::min(255, pixel[2] * 255 / alpha));
+                            }
+                            // Workbench uses alpha as a cutout mask, not as
+                            // translucent material blending.
+                            pixel[3] = 255;
+                        }
+                    }
+                }
+                found = textureImages.insert(cacheKey, std::move(loaded));
+            }
+            return &faceTextureImages.insert(slot, found.value()).value();
         };
         const auto attributeColor = [&](int faceIndex,
                                         const QVector<int> &face,
@@ -1101,9 +1146,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 switch (shadingSettings_.colorMode) {
                 case ViewportColorMode::Material:
                 case ViewportColorMode::Attribute:
+                    break;
                 case ViewportColorMode::Texture:
-                    // Texture mode uses Blender's material fallback until
-                    // imported image references can be decoded in the viewport.
+                    // The active image texture overrides this material color
+                    // when the mesh has usable UVs and image data.
                     break;
                 case ViewportColorMode::Object:
                     if (displayColorSceneLinear) {

@@ -18103,7 +18103,7 @@ private:
             const SceneObject *object = document_.object(objectId);
             const Shape &shape = document_[shapeIndex];
             if (object == nullptr || shape.geometryType != GeometryType::PolygonMesh ||
-                !document_.isObjectVisible(objectId) ||
+                !document_.isObjectEditable(objectId) ||
                 !validatePolygonMesh(shape.polygonMesh)) {
                 continue;
             }

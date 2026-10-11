@@ -1085,7 +1085,7 @@ bool Document::isObjectEditable(ObjectId objectId) const
     const SceneObject *sceneObject = object(objectId);
     const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
     return objectLayer != nullptr && isObjectVisible(objectId) &&
-           !objectLayer->locked;
+           !objectLayer->locked && !sceneObject->hideSelect;
 }
 
 Document::Snapshot Document::snapshot() const

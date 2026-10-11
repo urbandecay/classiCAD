@@ -928,11 +928,7 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     result.hideViewport = visibility.value(QStringLiteral("hide_viewport")).toBool();
     result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();
     result.hiddenInViewport = visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
-    if (warnings != nullptr &&
-        visibility.value(QStringLiteral("hide_select")).toBool()) {
-        warnings->append(QStringLiteral("%1: Blender view-layer-specific object visibility or selection state is not retained")
-                             .arg(blenderItemLabel(item)));
-    }
+    result.hideSelect = visibility.value(QStringLiteral("hide_select")).toBool();
     *sceneObject = std::move(result);
     return true;
 }

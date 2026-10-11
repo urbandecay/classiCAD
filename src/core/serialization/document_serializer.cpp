@@ -134,7 +134,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 10);
+    serialized.insert(QStringLiteral("version"), 11);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -236,6 +236,7 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("hideViewport"), sceneObject.hideViewport);
         serializedObject.insert(QStringLiteral("hideRender"), sceneObject.hideRender);
         serializedObject.insert(QStringLiteral("hiddenInViewport"), sceneObject.hiddenInViewport);
+        serializedObject.insert(QStringLiteral("hideSelect"), sceneObject.hideSelect);
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
         serializedObject.insert(QStringLiteral("libraryPath"), sceneObject.libraryPath);
         serializedObject.insert(QStringLiteral("blenderSourceVersion"),
@@ -287,7 +288,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 10) {
+    if (version < 1 || version > 11) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -651,6 +652,7 @@ bool documentFromJson(const QJsonValue &value,
         bool hideViewport = false;
         bool hideRender = false;
         bool hiddenInViewport = false;
+        bool hideSelect = false;
         if (version >= 10) {
             const QJsonValue collectionIdsValue =
                 serializedObject.value(QStringLiteral("collectionIds"));
@@ -676,6 +678,13 @@ bool documentFromJson(const QJsonValue &value,
             hideViewport = serializedObject.value(QStringLiteral("hideViewport")).toBool();
             hideRender = serializedObject.value(QStringLiteral("hideRender")).toBool();
             hiddenInViewport = serializedObject.value(QStringLiteral("hiddenInViewport")).toBool();
+        }
+        if (version >= 11) {
+            if (!serializedObject.value(QStringLiteral("hideSelect")).isBool()) {
+                setError(errorMessage, QStringLiteral("invalid scene object selection visibility"));
+                return false;
+            }
+            hideSelect = serializedObject.value(QStringLiteral("hideSelect")).toBool();
         }
 
         if (shape.geometryType == GeometryType::PolygonMesh) {
@@ -777,6 +786,7 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.hideViewport = hideViewport;
         sceneObject.hideRender = hideRender;
         sceneObject.hiddenInViewport = hiddenInViewport;
+        sceneObject.hideSelect = hideSelect;
         if (version >= 7) {
             const QJsonValue displayName = serializedObject.value(QStringLiteral("displayName"));
             const QJsonValue libraryPath = serializedObject.value(QStringLiteral("libraryPath"));

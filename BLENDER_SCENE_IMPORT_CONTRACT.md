@@ -140,18 +140,19 @@ An import operation is one undoable document transaction. Each imported mesh
 receives the active CAD layer assignment required by the document model, while
 its Blender collection links remain independent. Direct membership in multiple
 collections, the collection parent hierarchy (including multiple parents),
-global collection viewport/render hide flags, and object viewport hide flags
-are retained. The Collections panel controls viewport visibility separately
-from the Layers panel. Per-view-layer exclusions/visibility and `hide_select`
-are reported as unsupported. The importer reports imported, skipped, baked,
+global collection viewport/render hide flags, object viewport hide flags, and
+the object's `hide_select` selection lock are retained. The Collections panel
+controls viewport visibility separately from the Layers panel. Per-view-layer
+exclusions/visibility remain unsupported. The importer reports imported, skipped, baked,
 and unsupported item counts with per-item reasons.
 
 ## Implementation phases
 
 1. **Schema and validation — implemented:** `PolygonMesh3D`, validation,
-   document version 10, shared material records and slot references, affine
+   document version 11, shared material records and slot references, affine
    object transforms, active UV/color selectors, Blender version/import mode
-   metadata, and collections are serialized. Versions 1–9 remain readable.
+   metadata, collections, and selection locks are serialized. Versions 1–10
+   remain readable.
 2. **Blender extraction — implemented:** File > Import > Blender Scene invokes
    a Blender 5.2.2 version-checked bridge. Original/evaluated mesh extraction,
    per-object validation, unsupported-feature reporting, and one undoable
@@ -172,14 +173,16 @@ and unsupported item counts with per-item reasons.
    and GPU Texture mode samples the active UV map per fragment for supported
    external images and packed image bytes up to 32 MiB per image. GPU sampling
    applies Blender's alpha-mode handling and cutoff. QPainter Texture mode
-   samples external images with affine per-triangle mapping and repeat
-   wrapping; packed images, texture alpha, perspective correction, and filtering
-   differ from the GPU path. Shader-node evaluation remains unsupported. UV
-   maps and active selectors are retained as mesh data. Object viewport hide
-   flags and global collection viewport hide flags affect viewport visibility.
+   samples external and packed images with affine per-triangle mapping and
+   repeat wrapping, and applies PREMUL handling and the alpha cutoff; cutout
+   interpolation, perspective correction, and filtering differ from the GPU
+   path. Shader-node evaluation remains unsupported. UV maps and active
+   selectors are retained as mesh data. Object viewport hide flags and global
+   collection viewport hide flags affect viewport visibility; `hide_select`
+   prevents imported objects from being selected or edited.
    Collection membership and hierarchy are shown in a Collections panel,
-   separate from CAD layers. Blender per-view-layer exclusions/visibility and
-   `hide_select` remain unsupported.
+   separate from CAD layers. Blender per-view-layer exclusions/visibility
+   remain unsupported.
 5. **Round-trip and parity — pending review:** native JSON preserves the mesh
    data, but save/reopen and Blender 5.2.2 visual parity have not been checked
    as a comparison matrix. Blender mesh export from native classiCAD documents

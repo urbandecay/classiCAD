@@ -158,10 +158,11 @@ skipped, baked, and unsupported item counts with per-item reasons.
    selection, bounds, affine transforms, duplication, and vertex/edge-midpoint/
    center/near snapping. Mesh component editing is outside this contract.
 4. **Workbench inputs — partially implemented:** per-face material slots,
-   Material/Object/Random/Custom color sources, and material alpha reach the
-   GPU path. QPainter Attribute mode supports point, face, and corner data;
-   GPU Attribute mode and Texture image sampling remain gaps. UV maps and
-   active selectors are retained but are not yet displayed.
+   Material/Object/Random/Custom/Attribute color sources, and material alpha
+   reach the GPU and QPainter paths. Point, face, and corner color attributes
+   use their stored domains. Image-texture references persist with materials,
+   but Texture mode does not resolve image pixels or sample UVs. UV maps and
+   active selectors are retained for future Texture sampling.
 5. **Round-trip and parity — pending review:** native JSON preserves the mesh
    data, but save/reopen and Blender 5.2.2 visual parity have not been checked
    as a comparison matrix. Blender mesh export from native classiCAD documents

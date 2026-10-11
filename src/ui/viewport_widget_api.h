@@ -125,10 +125,12 @@ public:
     {
         setViewportAntiAliasingSamples(mode);
     }
-    // Optional input from a timeline/playback owner. No application caller is
-    // wired yet. A caller must keep this true during playback, clear it when
-    // playback stops, and schedule the viewport frames; this only requests a
-    // redraw when the state changes. The default preserves older adapters.
+    // Optional input for a future scene timeline/playback owner. The app
+    // currently has no scene timeline, playback clock, or playback frame
+    // scheduler; NavigationController's camera preset animation is unrelated.
+    // An external owner must keep this true during playback, clear it on stop,
+    // and schedule viewport frames. This setter only requests a redraw when
+    // the state changes. The default preserves older adapters.
     virtual void setViewportPlaybackActive(bool active)
     {
         (void)active;

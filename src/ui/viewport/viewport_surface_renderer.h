@@ -45,6 +45,9 @@ private:
         float nx;
         float ny;
         float nz;
+        float attributeR = 1.0f;
+        float attributeG = 1.0f;
+        float attributeB = 1.0f;
     };
 
     struct DrawRange {
@@ -54,6 +57,7 @@ private:
         bool selected = false;
         QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
         WorkbenchMaterialData workbenchMaterial;
+        bool useAttributeColor = false;
         quint64 objectSeed = 0;
         quint32 effectObjectId = 0;
         QString displayName;

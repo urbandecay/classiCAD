@@ -259,10 +259,12 @@ bool ViewportSurfaceRenderer::initialize()
         #version 330 core
         layout(location = 0) in vec3 aPosition;
         layout(location = 1) in vec3 aNormal;
+        layout(location = 2) in vec3 aAttributeColor;
         uniform mat4 uViewProjection;
         uniform vec3 uWorldOffset;
         uniform mat4 uShadowViewProjection;
         out vec3 vNormalView;
+        out vec3 vAttributeColor;
         out vec3 vWorldPosition;
         out vec4 vShadowPosition;
         uniform vec3 uViewRight;
@@ -274,6 +276,7 @@ bool ViewportSurfaceRenderer::initialize()
             vNormalView = vec3(dot(aNormal, uViewRight),
                                dot(aNormal, uViewUp),
                                dot(aNormal, uViewFacing));
+            vAttributeColor = aAttributeColor;
             vWorldPosition = position;
             vShadowPosition = uShadowViewProjection * vec4(position, 1.0);
             gl_Position = uViewProjection * vec4(position, 1.0);
@@ -284,9 +287,11 @@ bool ViewportSurfaceRenderer::initialize()
     static constexpr const char *fragmentShader = R"glsl(
         #version 330 core
         in vec3 vNormalView;
+        in vec3 vAttributeColor;
         in vec3 vWorldPosition;
         in vec4 vShadowPosition;
         uniform vec4 uBaseColor;
+        uniform bool uUseAttributeColor;
         uniform bool uEditModeSelected;
         uniform vec3 uEditSelectionColor;
         uniform float uEditSelectionMix;
@@ -619,9 +624,12 @@ bool ViewportSurfaceRenderer::initialize()
                                           dot(incidentWorld, uViewUp),
                                           dot(incidentWorld, uViewFacing)));
             }
-            vec3 color = uBaseColor.rgb;
+            vec3 baseColor = uUseAttributeColor
+                                 ? vAttributeColor
+                                 : uBaseColor.rgb;
+            vec3 color = baseColor;
             if (uLightingMode == 0) {
-                color = workbenchStudioLighting(uBaseColor.rgb,
+                color = workbenchStudioLighting(baseColor,
                                                 uRoughness,
                                                 uMetallic,
                                                 normal,
@@ -636,7 +644,7 @@ bool ViewportSurfaceRenderer::initialize()
                                     ? texture(uMatcapTexture,
                                               vec3(uv, 1.0)).rgb
                                     : vec3(0.0);
-                color = diffuse * uBaseColor.rgb + specular;
+                color = diffuse * baseColor + specular;
             }
             if (uUseCavity) {
                 ivec2 pixel = ivec2(gl_FragCoord.xy);
@@ -850,6 +858,9 @@ bool ViewportSurfaceRenderer::initialize()
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex),
                           reinterpret_cast<const void *>(offsetof(SurfaceVertex, nx)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(SurfaceVertex),
+                          reinterpret_cast<const void *>(offsetof(SurfaceVertex, attributeR)));
     vertexBuffer_.release();
     vertexArray_.release();
 
@@ -893,6 +904,15 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 keyStream << qint32(face.size());
                 for (int index : face) keyStream << qint32(index);
             }
+            keyStream << mesh.activeColorAttributeName;
+            for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
+                if (attribute.name != mesh.activeColorAttributeName) continue;
+                keyStream << attribute.name << qint32(attribute.domain)
+                          << attribute.dataType << attribute.colorSpace
+                          << qint32(attribute.componentCount)
+                          << qint32(attribute.values.size());
+                for (float value : attribute.values) keyStream << value;
+            }
             for (double value : object.meshObjectTransform) keyStream << value;
         }
     }
@@ -929,6 +949,14 @@ void ViewportSurfaceRenderer::prepareGeometry(
         };
         if (hasPolygonMeshGeometry(object)) {
             const PolygonMesh3D &mesh = object.shape.polygonMesh;
+            const MeshColorAttribute *activeAttribute = nullptr;
+            for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
+                if (attribute.name == mesh.activeColorAttributeName) {
+                    activeAttribute = &attribute;
+                    break;
+                }
+            }
+            int firstCorner = 0;
             const auto &matrix = object.meshObjectTransform;
             const qreal linearDeterminant =
                 matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9]) -
@@ -956,6 +984,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                        matrix[10] * p.z + matrix[11]) / divisor});
                 }
                 const auto triangles = triangulatePolygonLoop(localLoop);
+                const int faceFirstCorner = firstCorner;
+                firstCorner += face.size();
                 const int first = changed
                     ? vertices_.size()
                     : (ranges_.isEmpty() ? 0
@@ -977,17 +1007,60 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                            (b.y - a.y) * (c.x - a.x)));
                     if (normal.lengthSquared() <= 1.0e-16f) continue;
                     normal.normalize();
+                    QVector3D triangleColors[3] = {
+                        QVector3D(1.0f, 1.0f, 1.0f),
+                        QVector3D(1.0f, 1.0f, 1.0f),
+                        QVector3D(1.0f, 1.0f, 1.0f)};
+                    bool triangleHasAttribute = activeAttribute != nullptr &&
+                        activeAttribute->componentCount >= 1 &&
+                        activeAttribute->componentCount <= 4;
+                    if (triangleHasAttribute) {
+                        for (int corner = 0; corner < 3; ++corner) {
+                            const int loopIndex = triangle[corner];
+                            int elementIndex = faceIndex;
+                            if (activeAttribute->domain == MeshAttributeDomain::Point) {
+                                elementIndex = face[loopIndex];
+                            } else if (activeAttribute->domain == MeshAttributeDomain::Corner) {
+                                elementIndex = faceFirstCorner + loopIndex;
+                            }
+                            const int base = elementIndex * activeAttribute->componentCount;
+                            if (base < 0 || base + activeAttribute->componentCount >
+                                                activeAttribute->values.size()) {
+                                triangleHasAttribute = false;
+                                break;
+                            }
+                            float r = activeAttribute->values[base];
+                            float g = activeAttribute->componentCount >= 3
+                                          ? activeAttribute->values[base + 1] : r;
+                            float b = activeAttribute->componentCount >= 3
+                                          ? activeAttribute->values[base + 2] : r;
+                            if (activeAttribute->colorSpace.contains(
+                                    QStringLiteral("srgb"), Qt::CaseInsensitive)) {
+                                const QVector3D linear = workbenchSrgbToSceneLinear(
+                                    QVector3D(r, g, b));
+                                r = linear.x(); g = linear.y(); b = linear.z();
+                            }
+                            triangleColors[corner] = QVector3D(r, g, b);
+                        }
+                    }
                     if (changed) {
-                        for (const Point3D *point : {&a, &b, &c}) {
+                        const Point3D *trianglePoints[3] = {&a, &b, &c};
+                        for (int corner = 0; corner < 3; ++corner) {
+                            const Point3D *point = trianglePoints[corner];
+                            const QVector3D &color = triangleColors[corner];
                             vertices_.append({static_cast<float>(point->x),
                                               static_cast<float>(point->y),
                                               static_cast<float>(point->z),
-                                              normal.x(), normal.y(), normal.z()});
+                                              normal.x(), normal.y(), normal.z(),
+                                              color.x(), color.y(), color.z()});
                         }
                     }
                     count += 3;
                 }
                 DrawRange range = makeRange(first, count);
+                range.useAttributeColor = activeAttribute != nullptr &&
+                    activeAttribute->componentCount >= 1 &&
+                    activeAttribute->componentCount <= 4;
                 const int slotIndex = mesh.faceMaterialIndices.value(faceIndex, -1);
                 if (slotIndex >= 0 && slotIndex < object.meshMaterials.size()) {
                     range.workbenchMaterial = object.meshMaterials[slotIndex];
@@ -2618,6 +2691,10 @@ bool ViewportSurfaceRenderer::draw(
                                    int vertexCount) {
             program_.setUniformValue("uShadowVolumeShadowed",
                                      volumeShadowed);
+            program_.setUniformValue(
+                "uUseAttributeColor",
+                settings.colorMode == ViewportColorMode::Attribute &&
+                    range.useAttributeColor);
             const QVector3D offset(static_cast<float>(range.offset.x),
                                    static_cast<float>(range.offset.y),
                                    static_cast<float>(range.offset.z));

@@ -1129,6 +1129,31 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 const Point3D vertices[] = {world[loopTriangle[0]],
                                             world[loopTriangle[1]],
                                             world[loopTriangle[2]]};
+                if (shadingSettings_.backfaceCulling) {
+                    const Point3D &a = vertices[0];
+                    const Point3D &b = vertices[1];
+                    const Point3D &c = vertices[2];
+                    const Point3D ab{b.x - a.x, b.y - a.y, b.z - a.z};
+                    const Point3D ac{c.x - a.x, c.y - a.y, c.z - a.z};
+                    const Point3D normal{ab.y * ac.z - ab.z * ac.y,
+                                         ab.z * ac.x - ab.x * ac.z,
+                                         ab.x * ac.y - ab.y * ac.x};
+                    Point3D towardCamera = transform_.isPerspectiveEnabled()
+                        ? transform_.cameraPosition(viewportSize)
+                        : Point3D{};
+                    if (transform_.isPerspectiveEnabled()) {
+                        towardCamera.x -= a.x;
+                        towardCamera.y -= a.y;
+                        towardCamera.z -= a.z;
+                    } else {
+                        const Point3D view = transform_.viewDirection();
+                        towardCamera = {-view.x, -view.y, -view.z};
+                    }
+                    if (normal.x * towardCamera.x + normal.y * towardCamera.y +
+                            normal.z * towardCamera.z <= 0.0) {
+                        continue;
+                    }
+                }
                 bool projected = true;
                 for (const Point3D &point : vertices) {
                     QPointF screen;

@@ -31,6 +31,16 @@ struct WorkbenchMaterialData {
 };
 
 // Shared imported material datablock. Mesh slots refer to this record by id.
+struct DocumentImageTextureReference {
+    QString nodeName;
+    QString imageName;
+    QString imageLibraryPath;
+    QString filepath;
+    QString colorSpace;
+    bool packed = false;
+    bool sourceFileExists = false;
+};
+
 struct DocumentMaterial {
     QString id;
     QString name;
@@ -39,6 +49,9 @@ struct DocumentMaterial {
     float roughness = 0.4f;
     float metallic = 0.0f;
     float alpha = 1.0f;
+    // Source image references are retained for future Texture color-mode
+    // rendering. They do not imply node-graph evaluation or image sampling.
+    QVector<DocumentImageTextureReference> imageTextures;
 };
 
 bool isValidDocumentMaterial(const DocumentMaterial &material);

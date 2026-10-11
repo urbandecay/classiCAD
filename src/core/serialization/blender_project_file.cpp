@@ -574,6 +574,20 @@ bool parseBlenderMaterials(
             material.roughness = static_cast<float>(roughness);
             material.metallic = static_cast<float>(metallic);
             material.alpha = static_cast<float>(alpha);
+            const QJsonArray imageTextures = source.value(QStringLiteral("image_textures")).toArray();
+            for (const QJsonValue &imageValue : imageTextures) {
+                if (!imageValue.isObject()) continue;
+                const QJsonObject image = imageValue.toObject();
+                classiCAD::DocumentImageTextureReference reference;
+                reference.nodeName = image.value(QStringLiteral("node_name")).toString();
+                reference.imageName = image.value(QStringLiteral("image_name")).toString();
+                reference.imageLibraryPath = image.value(QStringLiteral("image_library_path")).toString();
+                reference.filepath = image.value(QStringLiteral("filepath")).toString();
+                reference.colorSpace = image.value(QStringLiteral("color_space")).toString();
+                reference.packed = image.value(QStringLiteral("packed")).toBool();
+                reference.sourceFileExists = image.value(QStringLiteral("source_file_exists")).toBool();
+                if (!reference.imageName.isEmpty()) material.imageTextures.append(std::move(reference));
+            }
             if (!classiCAD::isValidDocumentMaterial(material)) {
                 materialError = QStringLiteral("material values are outside the supported range");
             }
@@ -594,7 +608,6 @@ bool parseBlenderMaterials(
 }
 
 bool parseBlenderMeshItem(const QJsonObject &item,
-                          const QJsonObject &sourceMaterials,
                           const QHash<QString, classiCAD::DocumentMaterial> &materials,
                           const QString &blenderVersion,
                           const QString &importMode,
@@ -742,12 +755,6 @@ bool parseBlenderMeshItem(const QJsonObject &item,
                 result.workbenchMaterial.metallic = material.metallic;
                 result.workbenchMaterial.alpha = material.alpha;
                 fallbackMaterialSet = true;
-            }
-            const QJsonObject sourceMaterial = sourceMaterials.value(materialId).toObject();
-            if (!sourceMaterial.value(QStringLiteral("image_textures")).toArray().isEmpty() &&
-                warnings != nullptr) {
-                warnings->append(QStringLiteral("%1: image texture references are not stored by the current material schema")
-                                     .arg(blenderItemLabel(item)));
             }
         }
     }
@@ -1301,7 +1308,7 @@ bool importBlenderScene(const QString &path,
         const int warningCountBeforeItem = warnings.size();
         SceneObject sceneObject;
         QString itemError;
-        if (!parseBlenderMeshItem(item, sourceMaterials, materialsById,
+        if (!parseBlenderMeshItem(item, materialsById,
                                   source.value(QStringLiteral("blender_version")).toString(),
                                   mode,
                                   &sceneObject,

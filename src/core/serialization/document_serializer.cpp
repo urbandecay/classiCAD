@@ -177,6 +177,19 @@ QJsonObject documentToJson(const Document &document)
         record.insert(QStringLiteral("roughness"), material.roughness);
         record.insert(QStringLiteral("metallic"), material.metallic);
         record.insert(QStringLiteral("alpha"), material.alpha);
+        QJsonArray imageTextures;
+        for (const DocumentImageTextureReference &reference : material.imageTextures) {
+            QJsonObject image;
+            image.insert(QStringLiteral("nodeName"), reference.nodeName);
+            image.insert(QStringLiteral("imageName"), reference.imageName);
+            image.insert(QStringLiteral("imageLibraryPath"), reference.imageLibraryPath);
+            image.insert(QStringLiteral("filepath"), reference.filepath);
+            image.insert(QStringLiteral("colorSpace"), reference.colorSpace);
+            image.insert(QStringLiteral("packed"), reference.packed);
+            image.insert(QStringLiteral("sourceFileExists"), reference.sourceFileExists);
+            imageTextures.append(image);
+        }
+        record.insert(QStringLiteral("imageTextures"), imageTextures);
         materials.append(record);
     }
     serialized.insert(QStringLiteral("materials"), materials);
@@ -292,6 +305,39 @@ bool documentFromJson(const QJsonValue &value,
             material.roughness = static_cast<float>(roughness.toDouble());
             material.metallic = static_cast<float>(metallic.toDouble());
             material.alpha = static_cast<float>(alpha.toDouble());
+            const QJsonValue imageTexturesValue = record.value(QStringLiteral("imageTextures"));
+            if (!imageTexturesValue.isUndefined()) {
+                if (!imageTexturesValue.isArray()) {
+                    setError(errorMessage, QStringLiteral("invalid document image texture references"));
+                    return false;
+                }
+                for (const QJsonValue &imageValue : imageTexturesValue.toArray()) {
+                    if (!imageValue.isObject()) {
+                        setError(errorMessage, QStringLiteral("invalid document image texture reference"));
+                        return false;
+                    }
+                    const QJsonObject image = imageValue.toObject();
+                    const QStringList stringKeys{QStringLiteral("nodeName"), QStringLiteral("imageName"),
+                        QStringLiteral("imageLibraryPath"), QStringLiteral("filepath"), QStringLiteral("colorSpace")};
+                    bool validImage = true;
+                    for (const QString &key : stringKeys) validImage &= image.value(key).isString();
+                    if (!validImage || !image.value(QStringLiteral("packed")).isBool() ||
+                        !image.value(QStringLiteral("sourceFileExists")).isBool() ||
+                        image.value(QStringLiteral("imageName")).toString().isEmpty()) {
+                        setError(errorMessage, QStringLiteral("invalid document image texture reference"));
+                        return false;
+                    }
+                    DocumentImageTextureReference reference;
+                    reference.nodeName = image.value(QStringLiteral("nodeName")).toString();
+                    reference.imageName = image.value(QStringLiteral("imageName")).toString();
+                    reference.imageLibraryPath = image.value(QStringLiteral("imageLibraryPath")).toString();
+                    reference.filepath = image.value(QStringLiteral("filepath")).toString();
+                    reference.colorSpace = image.value(QStringLiteral("colorSpace")).toString();
+                    reference.packed = image.value(QStringLiteral("packed")).toBool();
+                    reference.sourceFileExists = image.value(QStringLiteral("sourceFileExists")).toBool();
+                    material.imageTextures.append(std::move(reference));
+                }
+            }
             if (!isValidDocumentMaterial(material)) {
                 setError(errorMessage, QStringLiteral("invalid document material values"));
                 return false;

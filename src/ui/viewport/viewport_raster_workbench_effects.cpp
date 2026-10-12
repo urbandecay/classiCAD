@@ -219,11 +219,10 @@ bool compositeRasterWorkbenchSurfaces(
     const float noDepth = -std::numeric_limits<float>::infinity();
     QVector<float> opaqueDepth(pixelCount, noDepth);
     QVector<QRgb> opaqueColor(pixelCount, qRgba(0, 0, 0, 0));
-    QVector<float> accumRed(pixelCount, 0.0f);
-    QVector<float> accumGreen(pixelCount, 0.0f);
-    QVector<float> accumBlue(pixelCount, 0.0f);
-    QVector<float> accumWeight(pixelCount, 0.0f);
-    QVector<float> revealage(pixelCount, 1.0f);
+    QVector<float> transparentRed(pixelCount, 0.0f);
+    QVector<float> transparentGreen(pixelCount, 0.0f);
+    QVector<float> transparentBlue(pixelCount, 0.0f);
+    QVector<float> transparentAlpha(pixelCount, 0.0f);
     const qreal dpr = devicePixelRatio;
     const Point3D cameraPosition = transform.cameraPosition(viewportSize);
     const Point3D viewDirection = transform.viewDirection();
@@ -354,9 +353,10 @@ bool compositeRasterWorkbenchSurfaces(
         });
     }
 
-    // A second color pass supplies partial-alpha layers. Constant unit weights
-    // keep the resolve deterministic; Blender's depth-weighted OIT kernel is
-    // intentionally not claimed here.
+    // The caller supplies objects in average-depth back-to-front order. Use
+    // source-over for the surviving transparent object layers. Per-pixel
+    // depth sorting is unavailable here, so intersecting objects can still
+    // disagree with their global average order.
     for (const ViewportRenderObject &object : objects) {
         renderObject(object, [&](const QImage &layer) {
             for (int y = 0; y < height; ++y) {
@@ -371,12 +371,18 @@ bool compositeRasterWorkbenchSurfaces(
                         continue;
                     }
                     const float alpha = alphaByte / 255.0f;
-                    const float invAlpha = 1.0f / alpha;
-                    accumRed[index] += qRed(pixel) * invAlpha * alpha;
-                    accumGreen[index] += qGreen(pixel) * invAlpha * alpha;
-                    accumBlue[index] += qBlue(pixel) * invAlpha * alpha;
-                    accumWeight[index] += alpha;
-                    revealage[index] *= 1.0f - alpha;
+                    const float remain = 1.0f - alpha;
+                    const float sourceRed = qRed(pixel) / alphaByte;
+                    const float sourceGreen = qGreen(pixel) / alphaByte;
+                    const float sourceBlue = qBlue(pixel) / alphaByte;
+                    transparentRed[index] = sourceRed * alpha +
+                        transparentRed[index] * remain;
+                    transparentGreen[index] = sourceGreen * alpha +
+                        transparentGreen[index] * remain;
+                    transparentBlue[index] = sourceBlue * alpha +
+                        transparentBlue[index] * remain;
+                    transparentAlpha[index] = alpha +
+                        transparentAlpha[index] * remain;
                 }
             }
         });
@@ -386,18 +392,23 @@ bool compositeRasterWorkbenchSurfaces(
         auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));
         for (int x = 0; x < width; ++x) {
             const int index = y * width + x;
-            const float transAlpha = 1.0f - revealage[index];
+            const float transAlpha = transparentAlpha[index];
             QRgb surface = opaqueColor[index];
-            if (transAlpha > 0.0f && accumWeight[index] > 0.0f) {
-                const float invWeight = 1.0f / accumWeight[index];
-                const int transR = qRound(accumRed[index] * invWeight);
-                const int transG = qRound(accumGreen[index] * invWeight);
-                const int transB = qRound(accumBlue[index] * invWeight);
+            if (transAlpha > 0.0f) {
                 const float opaqueAlpha = qAlpha(surface) / 255.0f;
                 const float outAlpha = transAlpha + opaqueAlpha * (1.0f - transAlpha);
-                const int outR = qRound(transR * transAlpha + qRed(surface) * (1.0f - transAlpha));
-                const int outG = qRound(transG * transAlpha + qGreen(surface) * (1.0f - transAlpha));
-                const int outB = qRound(transB * transAlpha + qBlue(surface) * (1.0f - transAlpha));
+                const float inverseAlpha = outAlpha > 0.0f
+                                               ? 1.0f / outAlpha
+                                               : 0.0f;
+                const int outR = qRound(
+                    (transparentRed[index] * 255.0f +
+                     qRed(surface) * (1.0f - transAlpha)) * inverseAlpha);
+                const int outG = qRound(
+                    (transparentGreen[index] * 255.0f +
+                     qGreen(surface) * (1.0f - transAlpha)) * inverseAlpha);
+                const int outB = qRound(
+                    (transparentBlue[index] * 255.0f +
+                     qBlue(surface) * (1.0f - transAlpha)) * inverseAlpha);
                 surface = qPremultiply(qRgba(
                     std::clamp(outR, 0, 255),
                     std::clamp(outG, 0, 255),

@@ -10762,6 +10762,27 @@ protected:
             if (!surfacesDrawn) {
                 QVector<ViewportRenderObject> fallbackDrawObjects = visibleShapes;
                 QVector<ViewportRenderObject> fallbackSurfaceObjects;
+                const auto averageViewDepth = [this](
+                    const ViewportRenderObject &object) {
+                    const QVector<QVector3D> *vertices =
+                        object.preparedDepthGeometry
+                            ? &object.preparedDepthGeometry->surfaceVertices
+                            : nullptr;
+                    if (vertices == nullptr || vertices->isEmpty()) {
+                        return viewportTransform_.worldDirectionToView(
+                            object.placementTranslation).towardCamera;
+                    }
+                    qreal depth = 0.0;
+                    for (const QVector3D &vertex : *vertices) {
+                        const Point3D world(
+                            vertex.x() + object.preparedGeometryOffset.x,
+                            vertex.y() + object.preparedGeometryOffset.y,
+                            vertex.z() + object.preparedGeometryOffset.z);
+                        depth += viewportTransform_.worldDirectionToView(world)
+                                     .towardCamera;
+                    }
+                    return depth / vertices->size();
+                };
                 const auto isSurfaceObject = [](const ViewportRenderObject &object) {
                     const GeometryType type = object.shape.geometryType;
                     return type == GeometryType::NurbsSurface ||
@@ -10780,6 +10801,12 @@ protected:
                     }
                     fallbackSurfaceObjects.append(std::move(object));
                 }
+                std::stable_sort(
+                    fallbackSurfaceObjects.begin(), fallbackSurfaceObjects.end(),
+                    [&averageViewDepth](const ViewportRenderObject &a,
+                                        const ViewportRenderObject &b) {
+                        return averageViewDepth(a) < averageViewDepth(b);
+                    });
 
                 // Keep the native-renderer failure fallback on the same
                 // per-pixel opaque/transparent surface compositor as the
@@ -10822,27 +10849,6 @@ protected:
                 }
 
                 QHash<quint64, qreal> fallbackViewDepths;
-                const auto averageViewDepth = [this](
-                    const ViewportRenderObject &object) {
-                    const QVector<QVector3D> *vertices =
-                        object.preparedDepthGeometry
-                            ? &object.preparedDepthGeometry->surfaceVertices
-                            : nullptr;
-                    if (vertices == nullptr || vertices->isEmpty()) {
-                        return viewportTransform_.worldDirectionToView(
-                            object.placementTranslation).towardCamera;
-                    }
-                    qreal depth = 0.0;
-                    for (const QVector3D &vertex : *vertices) {
-                        const Point3D world(
-                            vertex.x() + object.preparedGeometryOffset.x,
-                            vertex.y() + object.preparedGeometryOffset.y,
-                            vertex.z() + object.preparedGeometryOffset.z);
-                        depth += viewportTransform_.worldDirectionToView(world)
-                                     .towardCamera;
-                    }
-                    return depth / vertices->size();
-                };
                 for (const ViewportRenderObject &object : fallbackDrawObjects) {
                     fallbackViewDepths.insert(object.objectId.value(),
                                               averageViewDepth(object));

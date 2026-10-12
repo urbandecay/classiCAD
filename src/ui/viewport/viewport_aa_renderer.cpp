@@ -800,10 +800,16 @@ bool ViewportAaRenderer::initialize()
                 outCoc = vec4(0.0);
                 return;
             }
+            // Blender's resolve samples the half-resolution buffers at
+            // gl_FragCoord * (0.5 / halfResolution), independently of the
+            // full-resolution viewport size. This matters for odd dimensions
+            // where the floor-sized half target does not span the last pixel.
+            vec2 halfUv = gl_FragCoord.xy *
+                          (0.5 / vec2(textureSize(uBlur, 0)));
             float depth = texelFetch(uDepth, p, 0).r;
             float coc = abs(cocAtDepth(depth));
             float blend = smoothstep(1.0, 3.0, coc);
-            outColor = mix(texture(uSource, vUv), texture(uBlur, vUv), blend);
+            outColor = mix(texture(uSource, vUv), texture(uBlur, halfUv), blend);
             outCoc = vec4(0.0);
         }
     )glsl";
@@ -1103,8 +1109,8 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     const bool depthOfFieldComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
-    const QSize halfSize(std::max((pixelSize.width() + 1) / 2, 1),
-                         std::max((pixelSize.height() + 1) / 2, 1));
+    const QSize halfSize(std::max(pixelSize.width() / 2, 1),
+                         std::max(pixelSize.height() / 2, 1));
     glGenTextures(1, &depthOfFieldSourceTexture_);
     glBindTexture(GL_TEXTURE_2D, depthOfFieldSourceTexture_);
     for (int level = 0; level < 3; ++level) {
@@ -1432,8 +1438,8 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_SCISSOR_TEST);
 
-    const QSize halfSize(std::max((targetSize_.width() + 1) / 2, 1),
-                         std::max((targetSize_.height() + 1) / 2, 1));
+    const QSize halfSize(std::max(targetSize_.width() / 2, 1),
+                         std::max(targetSize_.height() / 2, 1));
     const auto bindPass = [&](int stage, GLuint framebuffer, int width, int height,
                               GLuint color, GLuint coc, GLuint blur, int lod) {
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);

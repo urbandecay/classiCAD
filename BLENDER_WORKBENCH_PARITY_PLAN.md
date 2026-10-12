@@ -87,6 +87,18 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   disagreed with Blender 5.2.2 `DofPass::setup_samples`; see the pinned source
   link below. Other aperture geometry and image parity remain unverified.
 
+### GPU Workbench DOF half-resolution sizing (2026-10-12)
+
+- The GPU DOF targets now use `max(resolution / 2, 1)` per dimension and the
+  resolve samples those floor-sized targets with Blender's half-resolution UV
+  scale. This matches Blender 5.2.2 for odd-sized render targets. Pinned
+  references: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L98-L100)
+  and [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L24-L32).
+- The rest of the GPU gather remains approximate: Blender uses a CoC-aware
+  three-level downsample, jittered ring gather, and 3x3 median before resolve;
+  classiCAD currently uses a fixed 12-tap disk gather and full-resolution
+  median cleanup. Image comparison remains open.
+
 ### Background regression correction
 
 Compared with GitHub `origin/feature/3d-workplanes` commit `6722914`, the theme

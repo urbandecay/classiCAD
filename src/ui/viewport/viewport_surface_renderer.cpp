@@ -1855,15 +1855,15 @@ void ViewportSurfaceRenderer::prepareGeometry(
             const bool hasSurfaceUv =
                 object.shape.geometryType == GeometryType::NurbsSurface &&
                 geometry != nullptr &&
-                geometry->surfaceTextureCoordinates.size() == count &&
-                object.shape.nurbsSurface.trimLoops.isEmpty();
+                geometry->surfaceTextureCoordinates.size() == count;
             const bool hasSurfaceTexture =
                 !object.workbenchMaterial.textureImagePath.isEmpty() ||
                 !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty() ||
                 !object.workbenchMaterial.textureImageTiles.isEmpty();
             range.useTextureColor = hasSurfaceUv && hasSurfaceTexture;
-            // The depth-map fallback can use the same exact-domain NURBS UVs
-            // and image input as the GPU color pass for untrimmed surfaces.
+            // Tessellation carries active-domain UVs for each rendered vertex,
+            // including vertices on trimmed regions, so the GPU color, object-ID,
+            // and depth-map alpha masks use the same texture placement.
             range.shadowTextureAlphaMask = range.useTextureColor;
             range.textureImagePath = range.useTextureColor
                 ? object.workbenchMaterial.textureImagePath : QString{};

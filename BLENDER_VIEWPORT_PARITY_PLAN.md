@@ -425,6 +425,14 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   previously documented NURBS Texture mapping mismatch for untrimmed surfaces.
   Source: [mesh conversion](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/mesh_convert.cc#L210-L281), [surface sampling](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/curve.cc#L1299-L1375), [surface DispList dimensions](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/displist.cc#L1195-L1207).
 
+- GPU Workbench texture-alpha masking now includes trimmed NURBS surfaces in
+  the object-ID/outline pass and shadow-map pass. Surface tessellation already
+  emits active-domain UV coordinates for every visible triangle vertex, so
+  the existing image/UDIM sampling and Blender's 0.1 cutoff apply across the
+  tessellated trimmed region as they do on untrimmed surfaces. Trim boundaries
+  remain tessellation approximations; missing or unsupported images still use
+  the material fallback.
+
 - A `QOpenGLWidget` now presents the viewport on desktop OpenGL systems. The
   procedural grid remains in a GPU framebuffer and is resolved/composited into
   the widget framebuffer without a `toImage()` readback during normal camera
@@ -498,6 +506,15 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   scene target. Blender accumulates its lit color before display conversion,
   so the exact transform placement still differs. Build and GPU image
   validation are pending.
+
+## Raster Workbench trimmed-surface effect coverage (2026-10-12)
+
+- The QPainter cavity/outline effect raster now applies texture-alpha cutout
+  sampling to trimmed NURBS surfaces. Their shared tessellation already
+  supplies normalized UV parameters per triangle; trim boundaries remain
+  represented by the tessellation itself. This closes the CPU effect-mask
+  gap without changing the native GPU object-ID path.
+- Validation is pending; this focused change was not built or tested.
 
 ## Upstream behavioral references
 

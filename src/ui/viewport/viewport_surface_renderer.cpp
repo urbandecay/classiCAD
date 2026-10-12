@@ -42,9 +42,7 @@ int workbenchTextureInterpolation(const QString &interpolation)
 {
     if (interpolation.compare(QStringLiteral("Closest"), Qt::CaseInsensitive) == 0)
         return 1;
-    if (interpolation.compare(QStringLiteral("Cubic"), Qt::CaseInsensitive) == 0 ||
-        interpolation.compare(QStringLiteral("Smart"), Qt::CaseInsensitive) == 0)
-        return 2;
+    // Workbench uses the GPU's filtered sampler for Linear, Cubic, and Smart.
     return 0;
 }
 

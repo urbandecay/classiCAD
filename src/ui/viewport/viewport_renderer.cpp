@@ -128,28 +128,10 @@ void sampleWorkbenchImage(const QImage &image,
     const qreal ty = uv.y() * image.height() - 0.5;
     const int x0 = qFloor(tx), y0 = qFloor(ty);
     const qreal fx = tx - x0, fy = ty - y0;
-    const bool cubic = interpolation.compare(QStringLiteral("Cubic"),
-                                              Qt::CaseInsensitive) == 0 ||
-                       interpolation.compare(QStringLiteral("Smart"),
-                                              Qt::CaseInsensitive) == 0;
     for (int c = 0; c < 4; ++c) {
-        qreal value = 0.0;
-        if (cubic) {
-            const auto weight = [](qreal t, int i) {
-                // Blender's cubic image sampling uses a cubic B-spline.
-                const qreal x = std::abs(t - i);
-                if (x < 1.0) return (4.0 - 6.0*x*x + 3.0*x*x*x) / 6.0;
-                if (x < 2.0) { const qreal a = 2.0 - x; return a*a*a / 6.0; }
-                return 0.0;
-            };
-            for (int j = -1; j <= 2; ++j)
-                for (int i = -1; i <= 2; ++i)
-                    value += texel(x0 + i, y0 + j, c) * weight(fx, i) * weight(fy, j);
-        } else {
-            const qreal a = texel(x0, y0, c) * (1.0 - fx) + texel(x0 + 1, y0, c) * fx;
-            const qreal b = texel(x0, y0 + 1, c) * (1.0 - fx) + texel(x0 + 1, y0 + 1, c) * fx;
-            value = a * (1.0 - fy) + b * fy;
-        }
+        const qreal a = texel(x0, y0, c) * (1.0 - fx) + texel(x0 + 1, y0, c) * fx;
+        const qreal b = texel(x0, y0 + 1, c) * (1.0 - fx) + texel(x0 + 1, y0 + 1, c) * fx;
+        const qreal value = a * (1.0 - fy) + b * fy;
         rgba[c] = static_cast<uchar>(std::clamp(qRound(value), 0, 255));
     }
 }

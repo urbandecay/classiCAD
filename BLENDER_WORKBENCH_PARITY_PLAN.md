@@ -20,6 +20,19 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 
 ## Current classiCAD status
 
+### Workbench Image Texture interpolation (2026-10-12)
+
+- GPU and QPainter Workbench sampling now use nearest only for `Closest` and
+  bilinear filtering for `Linear`, `Cubic`, and `Smart`. The prior mapping
+  incorrectly selected a custom 4x4 cubic B-spline for Cubic and Smart. Blender
+  5.2.2 Workbench sets `use_filter` for every mode except `SHD_INTERP_CLOSEST`,
+  leaving the GPU filtered sampler to perform linear filtering. The CPU path
+  now follows that same behavior.
+- The custom cubic shader taps remain unreachable from Workbench interpolation
+  selection. This is specific to Workbench; other Blender render paths may
+  implement Image Texture Cubic/Smart differently. Pinned source:
+  [workbench_materials.cc](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L469-L476).
+
 ### GPU Workbench curvature sample spacing (2026-10-12)
 
 - GPU curvature neighbor reads now use `uiScale / viewportSize` offsets in

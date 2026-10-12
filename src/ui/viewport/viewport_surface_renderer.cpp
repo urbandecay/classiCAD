@@ -1205,7 +1205,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 }
             }
             DrawRange range = makeRange(first, count);
-            if (object.shape.geometryType == GeometryType::NurbsSolid &&
+            if ((object.shape.geometryType == GeometryType::NurbsSolid ||
+                 object.shape.geometryType == GeometryType::NurbsSurface) &&
                 geometry != nullptr && geometry->shadowCasterMesh.valid) {
                 range.shadowVolumeSupported = true;
                 range.shadowVertices = geometry->shadowCasterMesh.vertices;
@@ -1855,6 +1856,21 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
         }
 
         for (const EdgeAdjacency &adjacent : edges) {
+            if (adjacent.count == 1 && adjacent.firstTriangle >= 0) {
+                if (facingLight[adjacent.firstTriangle]) {
+                    const QVector3D a =
+                        range.shadowVertices[adjacent.firstFrom] + offset;
+                    const QVector3D b =
+                        range.shadowVertices[adjacent.firstTo] + offset;
+                    const QVector3D farA = extrudeToFarPlane(a);
+                    const QVector3D farB = extrudeToFarPlane(b);
+                    // Boundary edges close the forced-fail volume of an open
+                    // sheet, matching Workbench's single border-edge quad.
+                    appendTriangle(&volumeVertices, a, farA, farB);
+                    appendTriangle(&volumeVertices, a, farB, b);
+                }
+                continue;
+            }
             if (adjacent.count != 2 || adjacent.firstTriangle < 0 ||
                 adjacent.secondTriangle < 0) {
                 return false;

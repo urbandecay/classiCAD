@@ -28,9 +28,9 @@ struct ViewportDepthGeometry {
     QVector<QVector3D> surfaceVertices;
     // One smooth normal per expanded GL_TRIANGLES vertex.
     QVector<QVector3D> surfaceNormals;
-    // A closed, indexed display mesh derived only for validated NurbsSolids.
-    // It reuses the cap tessellation's shared vertices and adds walls along
-    // the cap mesh boundary so shadow volumes have explicit manifold topology.
+    // An indexed display mesh for shadow volumes. NurbsSolids require a
+    // validated closed mesh; open NurbsSurfaces retain their boundary loops
+    // so the renderer can build forced-fail shadow-volume sides.
     struct ShadowCasterMesh {
         QVector<QVector3D> vertices;
         QVector<std::array<int, 3>> triangles;

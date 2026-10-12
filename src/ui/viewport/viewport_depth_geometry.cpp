@@ -561,6 +561,91 @@ bool orientAndValidateClosedShadowMesh(
     return true;
 }
 
+bool prepareOpenSurfaceShadowMesh(
+    const NurbsSurface3D &surface,
+    const SurfaceTessellationCache *surfaceCache,
+    ObjectId objectId,
+    quint64 geometryRevision,
+    ViewportDepthGeometry::ShadowCasterMesh *mesh)
+{
+    if (mesh == nullptr || !validateNurbsSurface(surface)) return false;
+    *mesh = {};
+    PreparedNurbsSurfaceTessellation localTessellation;
+    QSharedPointer<const PreparedNurbsSurfaceTessellation> cachedTessellation;
+    const PreparedNurbsSurfaceTessellation *tessellation = nullptr;
+    if (surfaceCache != nullptr) {
+        cachedTessellation = surfaceCache->acquire(
+            objectId, geometryRevision, surface, 0);
+        tessellation = cachedTessellation.data();
+    } else if (localTessellation.prepare(surface)) {
+        tessellation = &localTessellation;
+    }
+    if (tessellation == nullptr || !tessellation->isValid() ||
+        tessellation->triangles().isEmpty()) {
+        return false;
+    }
+
+    struct EdgeUse {
+        int count = 0;
+        int orientation = 0;
+    };
+    QHash<quint64, EdgeUse> edges;
+    QVector<int> boundaryDegree(tessellation->vertices().size(), 0);
+    for (const auto &triangle : tessellation->triangles()) {
+        for (const int index : triangle) {
+            if (index < 0 || index >= tessellation->vertices().size()) {
+                return false;
+            }
+        }
+        const Point3D &a = tessellation->vertices()[triangle[0]];
+        const Point3D &b = tessellation->vertices()[triangle[1]];
+        const Point3D &c = tessellation->vertices()[triangle[2]];
+        const Point3D ab{b.x - a.x, b.y - a.y, b.z - a.z};
+        const Point3D ac{c.x - a.x, c.y - a.y, c.z - a.z};
+        const Point3D normal{ab.y * ac.z - ab.z * ac.y,
+                             ab.z * ac.x - ab.x * ac.z,
+                             ab.x * ac.y - ab.y * ac.x};
+        if (!std::isfinite(normal.x) || !std::isfinite(normal.y) ||
+            !std::isfinite(normal.z) ||
+            normal.x * normal.x + normal.y * normal.y +
+                    normal.z * normal.z <= 1.0e-24) {
+            return false;
+        }
+        const int directedEdges[][2] = {
+            {triangle[0], triangle[1]},
+            {triangle[1], triangle[2]},
+            {triangle[2], triangle[0]}};
+        for (const auto &edge : directedEdges) {
+            EdgeUse &use = edges[shadowMeshEdgeKey(edge[0], edge[1])];
+            ++use.count;
+            use.orientation += edge[0] < edge[1] ? 1 : -1;
+            if (use.count > 2) return false;
+        }
+    }
+    for (auto it = edges.cbegin(); it != edges.cend(); ++it) {
+        if (it->count == 1) {
+            const int first = static_cast<int>(it.key() >> 32u);
+            const int second = static_cast<int>(it.key() & 0xffffffffu);
+            ++boundaryDegree[first];
+            ++boundaryDegree[second];
+        } else if (it->count != 2 || it->orientation != 0) {
+            return false;
+        }
+    }
+    if (std::any_of(boundaryDegree.cbegin(), boundaryDegree.cend(),
+                    [](int degree) { return degree != 0 && degree != 2; })) {
+        return false;
+    }
+
+    mesh->vertices.reserve(tessellation->vertices().size());
+    for (const Point3D &point : tessellation->vertices()) {
+        mesh->vertices.append(asVector(point));
+    }
+    mesh->triangles = tessellation->triangles();
+    mesh->valid = true;
+    return true;
+}
+
 bool prepareNurbsSolidShadowMesh(
     const NurbsExtrusionSolid3D &solid,
     const SurfaceTessellationCache *surfaceCache,
@@ -791,6 +876,10 @@ void appendShapeDepthGeometry(const Shape &shape,
             if (shape.geometryType == GeometryType::NurbsSolid) {
                 prepareNurbsSolidShadowMesh(
                     shape.nurbsSolid, surfaceCache, objectId,
+                    geometryRevision, &geometry.shadowCasterMesh);
+            } else if (shape.geometryType == GeometryType::NurbsSurface) {
+                prepareOpenSurfaceShadowMesh(
+                    shape.nurbsSurface, surfaceCache, objectId,
                     geometryRevision, &geometry.shadowCasterMesh);
             }
             return;

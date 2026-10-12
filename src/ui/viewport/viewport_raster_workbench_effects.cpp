@@ -25,6 +25,7 @@ namespace {
 
 struct RasterSample {
     float depth = -std::numeric_limits<float>::infinity();
+    QVector3D position;
     QVector3D normal;
     quint64 objectId = 0;
 };
@@ -42,6 +43,30 @@ qreal rasterDofKernelRotation(int x, int y)
     const int index = ((y & (size - 1)) * size + (x & (size - 1))) * channels;
     const qreal noise = static_cast<unsigned char>(blueNoiseRg.at(index)) / 256.0;
     return noise * twoPi;
+}
+
+float rasterCavityNoise(int x, int y, int channel)
+{
+    static const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
+        detail::kWorkbenchCavityBlueNoiseRgBase64,
+        static_cast<qsizetype>(
+            sizeof(detail::kWorkbenchCavityBlueNoiseRgBase64) - 1)));
+    constexpr int size = 64;
+    constexpr int channels = 2;
+    if (blueNoiseRg.size() != size * size * channels) return 0.5f;
+    const int index = ((y & (size - 1)) * size + (x & (size - 1))) * channels +
+                      std::clamp(channel, 0, channels - 1);
+    return static_cast<unsigned char>(blueNoiseRg.at(index)) / 256.0f;
+}
+
+float radicalInverseVdc(unsigned int bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return static_cast<float>(bits) * 2.3283064365386963e-10f;
 }
 
 struct TextureAlphaTriangle {
@@ -710,7 +735,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             QVector3D world[3];
             QVector3D normal[3];
             QPointF screen[3];
-            float depth[3];
             qreal reciprocalDepth[3] = {1.0, 1.0, 1.0};
             bool valid = true;
             for (int corner = 0; corner < 3; ++corner) {
@@ -725,9 +749,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                     world[corner].z());
                 valid = valid && transform.worldPointToScreenUnclipped(
                                      point, viewportSize, &screen[corner]);
-                depth[corner] = static_cast<float>(
-                    point.x * towardCamera.x + point.y * towardCamera.y +
-                    point.z * towardCamera.z);
                 if (perspective) {
                     const qreal cameraDepth =
                         (point.x - camera.x) * towardCamera.x +
@@ -782,17 +803,39 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             continue;
                         }
                     }
-                    const float z = static_cast<float>(w0 * depth[0] +
-                                                       w1 * depth[1] +
-                                                       w2 * depth[2]);
                     RasterSample &sample = samples[y * width + x];
+                    qreal positionWeight0 = w0;
+                    qreal positionWeight1 = w1;
+                    qreal positionWeight2 = w2;
+                    if (perspective) {
+                        positionWeight0 *= reciprocalDepth[0];
+                        positionWeight1 *= reciprocalDepth[1];
+                        positionWeight2 *= reciprocalDepth[2];
+                        const qreal positionWeightSum = positionWeight0 +
+                                                        positionWeight1 +
+                                                        positionWeight2;
+                        if (std::abs(positionWeightSum) > 1.0e-12) {
+                            positionWeight0 /= positionWeightSum;
+                            positionWeight1 /= positionWeightSum;
+                            positionWeight2 /= positionWeightSum;
+                        }
+                    }
+                    const QVector3D interpolatedPosition =
+                        world[0] * static_cast<float>(positionWeight0) +
+                        world[1] * static_cast<float>(positionWeight1) +
+                        world[2] * static_cast<float>(positionWeight2);
+                    const float z = static_cast<float>(
+                        interpolatedPosition.x() * towardCamera.x +
+                        interpolatedPosition.y() * towardCamera.y +
+                        interpolatedPosition.z() * towardCamera.z);
                     const QVector3D interpolatedNormal = normalized(
-                        normal[0] * static_cast<float>(w0) +
-                        normal[1] * static_cast<float>(w1) +
-                        normal[2] * static_cast<float>(w2));
+                        normal[0] * static_cast<float>(positionWeight0) +
+                        normal[1] * static_cast<float>(positionWeight1) +
+                        normal[2] * static_cast<float>(positionWeight2));
                     const auto writeNearest = [&](RasterSample &target) {
                         if (target.objectId != 0 && z <= target.depth) return;
                         target.depth = z;
+                        target.position = interpolatedPosition;
                         target.normal = interpolatedNormal;
                         target.objectId = id;
                     };
@@ -878,11 +921,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         1.0f, 64.0f);
     const float attenuation = std::max(0.01f,
         static_cast<float>(settings.cavityAttenuation));
-    const float worldRadius = std::max(
-        1.0e-4f, static_cast<float>(settings.cavityDistance));
-    const float step = std::max(1.0f, radius / 4.0f);
-    const std::array<QPoint, 8> directions = {{{1, 0}, {1, 1}, {0, 1}, {-1, 1},
-                                               {-1, 0}, {-1, -1}, {0, -1}, {1, -1}}};
+    const float step = std::max(1.0f, radius / 2.0f);
     QVector<float> factors(width * height, 1.0f);
     const float ridge = std::max(0.0f,
         static_cast<float>(settings.cavityRidgeFactor));
@@ -897,23 +936,61 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         for (int x = 0; x < width; ++x) {
             const RasterSample &center = opaqueSamples[y * width + x];
             if (center.objectId == 0) continue;
-            float occlusion = 0.0f;
+            float cavityAmount = 0.0f;
+            float edgeAmount = 0.0f;
             float ridgeResponse = 0.0f;
             float valleyResponse = 0.0f;
             int validNeighbors = 0;
+            const float noiseAngle = rasterCavityNoise(x, y, 0) *
+                                     6.28318530718f;
+            const float rotationX = std::cos(noiseAngle);
+            const float rotationY = std::sin(noiseAngle);
+            const float noiseRadius = std::clamp(
+                rasterCavityNoise(x, y, 1) - 0.5f, -0.499f, 0.499f) /
+                static_cast<float>(requested);
             for (int i = 0; i < requested; ++i) {
-                const QPoint direction = directions[static_cast<size_t>(i % 8)];
-                const int ring = 1 + i / 8;
-                const int sx = x + qRound(direction.x() * step * ring);
-                const int sy = y + qRound(direction.y() * step * ring);
+                // Match Workbench's deterministic Hammersley-like disk sample
+                // sequence and per-pixel blue-noise rotation/jitter.
+                const float sampleRadius = std::fmod(
+                    (static_cast<float>(i) + 0.5f) /
+                        static_cast<float>(requested), 1.0f);
+                const float angle = radicalInverseVdc(
+                    static_cast<unsigned int>(i)) * 6.28318530718f;
+                const float directionX = std::cos(angle);
+                const float directionY = std::sin(angle);
+                const float jitteredX = directionX * rotationX -
+                                        directionY * rotationY;
+                const float jitteredY = directionX * rotationY +
+                                        directionY * rotationX;
+                const float sampleDistance = std::max(
+                    0.0f, sampleRadius + noiseRadius);
+                const int sx = x + qRound(jitteredX * sampleDistance * step);
+                const int sy = y + qRound(jitteredY * sampleDistance * step);
                 if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
                 const RasterSample &neighbor = opaqueSamples[sy * width + sx];
                 if (neighbor.objectId == 0) continue;
                 ++validNeighbors;
                 const float delta = neighbor.depth - center.depth;
-                const float depthWeight = saturate(
-                    (delta - worldRadius * 0.01f) * attenuation / worldRadius);
-                if (ssao) occlusion += depthWeight;
+                if (ssao) {
+                    // The shader evaluates these values in view space. A
+                    // rigid view rotation preserves vector length and dot
+                    // products, so the retained world positions/normals give
+                    // the same geometric response without inverse projection.
+                    const QVector3D direction =
+                        neighbor.position - center.position;
+                    const float distance = direction.length();
+                    const float cavityDot = QVector3D::dotProduct(
+                        direction, center.normal);
+                    const float edgeDot = -cavityDot;
+                    const float bias = 0.05f * distance + 0.0001f;
+                    const float distanceAttenuation = 1.0f /
+                        std::max(distance * (1.0f + distance * distance *
+                                             attenuation), 1.0e-8f);
+                    if (cavityDot > -bias)
+                        cavityAmount += cavityDot * distanceAttenuation;
+                    if (edgeDot > bias)
+                        edgeAmount += edgeDot * distanceAttenuation;
+                }
                 if (curvature) {
                     const float normalDelta = 1.0f - std::clamp(
                         QVector3D::dotProduct(center.normal, neighbor.normal),
@@ -927,13 +1004,19 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             }
             if (validNeighbors == 0) continue;
             const float invCount = 1.0f / static_cast<float>(validNeighbors);
-            occlusion = saturate(occlusion * invCount * valley);
+            cavityAmount = ssao
+                ? saturate(cavityAmount / static_cast<float>(requested) * valley)
+                : 0.0f;
+            edgeAmount = ssao
+                ? edgeAmount / static_cast<float>(requested) * ridge
+                : 0.0f;
             ridgeResponse = saturate(ridgeResponse * invCount *
                                      curvatureRidge * ridge);
             valleyResponse = saturate(valleyResponse * invCount *
                                       curvatureValley * valley);
             factors[y * width + x] = std::clamp(
-                (1.0f - occlusion) * (1.0f + ridgeResponse + valleyResponse),
+                (1.0f - cavityAmount) * (1.0f + edgeAmount) *
+                    (1.0f + ridgeResponse + valleyResponse),
                 0.0f, 4.0f);
         }
     }

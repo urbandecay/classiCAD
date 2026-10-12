@@ -559,8 +559,6 @@ def workbench_shading_record(scene):
         unsupported.append("use_scene_lights_render")
     if record["use_scene_world_render"]:
         unsupported.append("use_scene_world_render")
-    if record["background_type"] == "WORLD":
-        unsupported.append("background_type:WORLD (scene World background is not represented)")
     if record["studiolight_background_alpha"] > 0.0:
         unsupported.append("studiolight_background_alpha")
     if record["studiolight_background_blur"] != 0.5:

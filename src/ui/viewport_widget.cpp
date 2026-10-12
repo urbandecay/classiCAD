@@ -162,17 +162,76 @@ struct ComponentPickCycleState {
 };
 
 QColor viewportShadingBackgroundColor(
-    const ViewportShadingSettings &settings)
+    const ViewportShadingSettings &settings,
+    const std::optional<QVector3D> &worldColorSceneLinear = std::nullopt)
 {
     if (settings.backgroundMode == ViewportBackgroundMode::Custom) {
         return settings.customBackgroundColor;
     }
     if (settings.backgroundMode == ViewportBackgroundMode::World) {
-        // classiCAD has no scene World datablock yet; this is the current
-        // viewport world's neutral background color.
+        if (worldColorSceneLinear.has_value()) {
+            const auto linearToSrgb = [](float value) {
+                return value <= 0.0031308f
+                           ? 12.92f * value
+                           : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+            };
+            return QColor::fromRgbF(
+                linearToSrgb(worldColorSceneLinear->x()),
+                linearToSrgb(worldColorSceneLinear->y()),
+                linearToSrgb(worldColorSceneLinear->z()));
+        }
+        // Preserve the existing neutral fallback when no imported World is
+        // available.
         return QColor(48, 48, 48);
     }
     return {};
+}
+
+std::optional<QVector3D> importedWorldColorSceneLinear(
+    const QJsonArray &scenes, const QString &activeLayerKey)
+{
+    for (const QJsonValue &sceneValue : scenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        bool matchesActiveLayer = activeLayerKey.isEmpty();
+        for (const QJsonValue &layerValue :
+             scene.value(QStringLiteral("view_layers")).toArray()) {
+            if (layerValue.toObject().value(QStringLiteral("key")).toString() ==
+                activeLayerKey) {
+                matchesActiveLayer = true;
+                break;
+            }
+        }
+        if (!matchesActiveLayer) continue;
+
+        const QJsonArray values = scene.value(QStringLiteral("render_output"))
+                                      .toObject()
+                                      .value(QStringLiteral("world_color_scene_linear"))
+                                      .toArray();
+        if (values.size() != 3 || !values[0].isDouble() ||
+            !values[1].isDouble() || !values[2].isDouble()) {
+            return std::nullopt;
+        }
+        return QVector3D(static_cast<float>(values[0].toDouble()),
+                         static_cast<float>(values[1].toDouble()),
+                         static_cast<float>(values[2].toDouble()));
+    }
+    return std::nullopt;
+}
+
+bool renderViewportBackground(
+    BlenderGridRenderer &renderer, const QSize &size, qreal devicePixelRatio,
+    const ViewportShadingSettings &settings,
+    const std::optional<QVector3D> &worldColorSceneLinear,
+    bool sceneLinearOutput = false)
+{
+    if (settings.backgroundMode == ViewportBackgroundMode::World &&
+        worldColorSceneLinear.has_value()) {
+        return renderer.renderBackgroundToCurrentFramebuffer(
+            size, devicePixelRatio, *worldColorSceneLinear);
+    }
+    return renderer.renderBackgroundToCurrentFramebuffer(
+        size, devicePixelRatio,
+        viewportShadingBackgroundColor(settings), sceneLinearOutput);
 }
 
 void fillViewportBackground(QPainter &painter,
@@ -8826,6 +8885,10 @@ protected:
             }
         }
         bool gpuControlPointsDrawn = false;
+        const std::optional<QVector3D> viewportWorldColorSceneLinear =
+            importedWorldColorSceneLinear(
+                document_.settings().importedBlenderScenes,
+                document_.settings().activeViewLayerKey);
         QImage gpuViewportBackground;
         QImage committedSceneLayer;
         QPainter rasterScenePainter;
@@ -8857,16 +8920,16 @@ protected:
                                              viewportAaMode_ != 0);
         } else if (aaRenderer == nullptr) {
             painter.beginNativePainting();
-            const bool backgroundDrawn =
-                nativeRenderer->renderBackgroundToCurrentFramebuffer(
-                    renderFrame.viewportSize, devicePixelRatioF(),
-                    viewportShadingBackgroundColor(
-                        viewportShadingSettings_));
+            const bool backgroundDrawn = renderViewportBackground(
+                *nativeRenderer, renderFrame.viewportSize, devicePixelRatioF(),
+                viewportShadingSettings_, viewportWorldColorSceneLinear);
             painter.endNativePainting();
             if (!backgroundDrawn) {
                 fillViewportBackground(
                     painter, rect(),
-                    viewportShadingBackgroundColor(viewportShadingSettings_));
+                    viewportShadingBackgroundColor(
+                        viewportShadingSettings_,
+                        viewportWorldColorSceneLinear));
             }
         }
         QPainter &scenePainter = nativeRenderer == nullptr
@@ -10913,18 +10976,18 @@ protected:
                         viewportPlaybackActive_);
                 if (aaSceneSampleActive) {
                     sceneCamera = aaRenderer->sampleCamera();
-                    nativeRenderer->renderBackgroundToCurrentFramebuffer(
-                        renderFrame.viewportSize, devicePixelRatioF(),
-                        viewportShadingBackgroundColor(
-                            viewportShadingSettings_), true);
+                    renderViewportBackground(
+                        *nativeRenderer, renderFrame.viewportSize,
+                        devicePixelRatioF(), viewportShadingSettings_,
+                        viewportWorldColorSceneLinear, true);
                 } else if (aaRenderer->hasCachedHistory()) {
                     aaRenderer->presentCachedHistory();
                     cachedScenePresented = true;
                 } else {
-                    nativeRenderer->renderBackgroundToCurrentFramebuffer(
-                        renderFrame.viewportSize, devicePixelRatioF(),
-                        viewportShadingBackgroundColor(
-                            viewportShadingSettings_));
+                    renderViewportBackground(
+                        *nativeRenderer, renderFrame.viewportSize,
+                        devicePixelRatioF(), viewportShadingSettings_,
+                        viewportWorldColorSceneLinear);
                 }
             }
 
@@ -11374,7 +11437,8 @@ protected:
                 renderShadingSettings);
             fillViewportBackground(
                 painter, rect(),
-                viewportShadingBackgroundColor(viewportShadingSettings_));
+                viewportShadingBackgroundColor(
+                    viewportShadingSettings_, viewportWorldColorSceneLinear));
             if (gpuViewportBackground.isNull()) {
                 drawGrid(painter);
                 drawOrigin(painter);

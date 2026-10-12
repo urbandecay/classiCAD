@@ -3,8 +3,10 @@
 #include "viewport_raster_workbench_effects.h"
 
 #include "viewport_depth_geometry.h"
+#include "viewport_cavity_blue_noise.h"
 #include "core/geometry/polygon_mesh.h"
 
+#include <QByteArray>
 #include <QBuffer>
 #include <QFileInfo>
 #include <QHash>
@@ -26,6 +28,21 @@ struct RasterSample {
     QVector3D normal;
     quint64 objectId = 0;
 };
+
+qreal rasterDofKernelRotation(int x, int y)
+{
+    static const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
+        detail::kWorkbenchCavityBlueNoiseRgBase64,
+        static_cast<qsizetype>(
+            sizeof(detail::kWorkbenchCavityBlueNoiseRgBase64) - 1)));
+    constexpr int size = 64;
+    constexpr int channels = 2;
+    constexpr qreal twoPi = 6.283185307179586;
+    if (blueNoiseRg.size() != size * size * channels) return 0.0;
+    const int index = ((y & (size - 1)) * size + (x & (size - 1))) * channels;
+    const qreal noise = static_cast<unsigned char>(blueNoiseRg.at(index)) / 256.0;
+    return noise * twoPi;
+}
 
 struct TextureAlphaTriangle {
     QImage image;
@@ -920,8 +937,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     if (radius < 0.75 * colorDpr) continue;
                     qreal red = 0.0, green = 0.0, blue = 0.0;
                     int count = 0;
+                    // QPainter has no temporal AA sample sequence to rotate
+                    // this kernel between accumulated frames. Use the shared
+                    // Workbench blue-noise LUT for a stable per-pixel rotation.
+                    const qreal kernelAngle = rasterDofKernelRotation(x, y);
+                    const qreal kernelCos = std::cos(kernelAngle);
+                    const qreal kernelSin = std::sin(kernelAngle);
                     for (const QPointF &diskTap : disk) {
-                        const QPointF tap = shapeApertureTap(diskTap);
+                        const QPointF rotatedTap(
+                            diskTap.x() * kernelCos - diskTap.y() * kernelSin,
+                            diskTap.x() * kernelSin + diskTap.y() * kernelCos);
+                        const QPointF tap = shapeApertureTap(rotatedTap);
                         const int sx = std::clamp(qRound(x + tap.x() * radius),
                                                   0, outputWidth - 1);
                         const int sy = std::clamp(qRound(y + tap.y() * radius),

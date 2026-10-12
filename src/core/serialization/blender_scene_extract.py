@@ -21,7 +21,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 4
+BRIDGE_FORMAT_VERSION = 5
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -490,6 +490,7 @@ def extract_scene(input_path, mode):
         })
     for scene in bpy.data.scenes:
         depsgraph = depsgraph_for_scene(scene) if mode == "evaluated" else None
+        render = scene.render
         scene_record = {
             "scene_id": stable_id(scene),
             "name": scene.name_full,
@@ -506,6 +507,16 @@ def extract_scene(input_path, mode):
             ),
             "object_ids": [],
             "active_camera": scene_camera_record(scene, depsgraph),
+            "render_output": {
+                "resolution_x": int(render.resolution_x),
+                "resolution_y": int(render.resolution_y),
+                "resolution_percentage": int(render.resolution_percentage),
+                "pixel_aspect_x": finite_number(render.pixel_aspect_x),
+                "pixel_aspect_y": finite_number(render.pixel_aspect_y),
+                "file_format": render.image_settings.file_format,
+                "color_mode": render.image_settings.color_mode,
+                "color_depth": render.image_settings.color_depth,
+            },
         }
         for obj in scene.objects:
             object_count += 1

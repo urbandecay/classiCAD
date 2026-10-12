@@ -1269,7 +1269,7 @@ bool importBlenderScene(const QString &path,
     if (root.value(QStringLiteral("format")).toString() !=
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
-        bridgeVersion != 4) {
+        bridgeVersion != 5) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -1328,6 +1328,32 @@ bool importBlenderScene(const QString &path,
             !scene.value(QStringLiteral("view_layers")).isArray()) {
             setError(errorMessage,
                      QStringLiteral("A Blender scene record is incomplete"));
+            return false;
+        }
+        const QJsonObject renderOutput =
+            scene.value(QStringLiteral("render_output")).toObject();
+        int resolutionX = 0;
+        int resolutionY = 0;
+        int resolutionPercentage = 0;
+        const QJsonValue pixelAspectXValue =
+            renderOutput.value(QStringLiteral("pixel_aspect_x"));
+        const QJsonValue pixelAspectYValue =
+            renderOutput.value(QStringLiteral("pixel_aspect_y"));
+        if (!jsonInteger(renderOutput.value(QStringLiteral("resolution_x")),
+                         &resolutionX) || resolutionX <= 0 ||
+            !jsonInteger(renderOutput.value(QStringLiteral("resolution_y")),
+                         &resolutionY) || resolutionY <= 0 ||
+            !jsonInteger(renderOutput.value(
+                             QStringLiteral("resolution_percentage")),
+                         &resolutionPercentage) ||
+            resolutionPercentage <= 0 || resolutionPercentage > 100 ||
+            !pixelAspectXValue.isDouble() || !pixelAspectYValue.isDouble() ||
+            !std::isfinite(pixelAspectXValue.toDouble()) ||
+            !std::isfinite(pixelAspectYValue.toDouble()) ||
+            pixelAspectXValue.toDouble() <= 0.0 ||
+            pixelAspectYValue.toDouble() <= 0.0) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender scene render-output record is invalid"));
             return false;
         }
         importedSceneRecords.append(scene);

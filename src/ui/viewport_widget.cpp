@@ -782,6 +782,8 @@ bool importedSceneCameraTransform(const Document &document,
     const QJsonArray scenes = document.settings().importedBlenderScenes;
     const QString activeLayer = document.settings().activeViewLayerKey;
     QJsonObject cameraRecord;
+    qreal pixelAspectX = 1.0;
+    qreal pixelAspectY = 1.0;
     bool selectedScene = false;
     for (const QJsonValue &sceneValue : scenes) {
         const QJsonObject scene = sceneValue.toObject();
@@ -798,6 +800,16 @@ bool importedSceneCameraTransform(const Document &document,
         }
         if (!matchesActiveLayer) continue;
         selectedScene = true;
+        const QJsonObject renderOutput =
+            scene.value(QStringLiteral("render_output")).toObject();
+        const qreal storedAspectX = renderOutput.value(
+            QStringLiteral("pixel_aspect_x")).toDouble(1.0);
+        const qreal storedAspectY = renderOutput.value(
+            QStringLiteral("pixel_aspect_y")).toDouble(1.0);
+        if (std::isfinite(storedAspectX) && storedAspectX > 0.0)
+            pixelAspectX = storedAspectX;
+        if (std::isfinite(storedAspectY) && storedAspectY > 0.0)
+            pixelAspectY = storedAspectY;
         const QJsonValue activeCamera =
             scene.value(QStringLiteral("active_camera"));
         if (activeCamera.isObject()) cameraRecord = activeCamera.toObject();
@@ -854,16 +866,21 @@ bool importedSceneCameraTransform(const Document &document,
     preferences.focalLengthMillimeters = lens;
     preferences.clipStart = clipStart;
     preferences.clipEnd = clipEnd;
-    const qreal fittedSensorExtent =
-        cameraRecord.value(QStringLiteral("sensor_fit")).toString() ==
-                QLatin1String("VERTICAL") ||
-            (cameraRecord.value(QStringLiteral("sensor_fit")).toString() ==
-                 QLatin1String("AUTO") && outputSize.height() > outputSize.width())
-            ? sensorHeight : sensorWidth;
+    const QString sensorFit =
+        cameraRecord.value(QStringLiteral("sensor_fit")).toString();
+    const qreal effectiveAspect = outputSize.width() * pixelAspectX /
+        std::max<qreal>(1.0, outputSize.height() * pixelAspectY);
+    const bool fitVertical = sensorFit == QLatin1String("VERTICAL") ||
+        (sensorFit == QLatin1String("AUTO") && effectiveAspect < 1.0);
+    const qreal fitPixelExtent = fitVertical ? outputSize.height()
+                                             : outputSize.width();
+    const qreal fittedSensorExtent = fitVertical ? sensorHeight : sensorWidth;
     // ViewportTransform's interactive frustum includes Blender's viewport
-    // projection zoom factor of two. A scene camera uses the full render
-    // sensor, so halve this internal extent to cancel that viewport-only term.
-    preferences.sensorWidthMillimeters = fittedSensorExtent * 0.5;
+    // projection zoom factor of two. Compensate here so the chosen sensor-fit
+    // axis produces the scene camera's render-pixel focal length.
+    preferences.sensorWidthMillimeters = fittedSensorExtent *
+        std::max(outputSize.width(), outputSize.height()) /
+        (2.0 * std::max<qreal>(1.0, fitPixelExtent));
     preferences.sceneCameraEnabled =
         cameraRecord.value(QStringLiteral("dof_enabled")).toBool();
     preferences.focusDistance = cameraNumber("dof_focus_distance", 10000.0);
@@ -888,13 +905,10 @@ bool importedSceneCameraTransform(const Document &document,
     } else {
         const qreal orthoScale = cameraNumber("orthographic_scale", 10.0);
         if (orthoScale <= 0.0) return false;
-        const qreal sensorFitExtent = std::max(outputSize.width(),
-                                               outputSize.height());
-        const qreal focalPixels = sensorFitExtent * lens /
+        const qreal focalPixels =
+            std::max(outputSize.width(), outputSize.height()) * lens /
             (preferences.sensorWidthMillimeters * 2.0);
-        const qreal desiredPixelsPerUnit =
-            (outputSize.width() >= outputSize.height()
-                 ? outputSize.width() : outputSize.height()) / orthoScale;
+        const qreal desiredPixelsPerUnit = fitPixelExtent / orthoScale;
         state.zoom = desiredPixelsPerUnit * 60.0 /
                      std::max<qreal>(focalPixels, 1.0e-12);
         state.orbitPivot = cameraPosition;

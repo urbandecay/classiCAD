@@ -288,26 +288,77 @@ private:
             return;
         }
         const QSize viewportSize = viewport_->viewportPixelSize();
-        QStringList labels{
-            QStringLiteral("Viewport (%1 × %2)").arg(viewportSize.width()).arg(viewportSize.height()),
-            QStringLiteral("1280 × 720 (HD)"),
-            QStringLiteral("1920 × 1080 (Full HD)"),
-            QStringLiteral("2560 × 1440 (QHD)"),
-            QStringLiteral("3840 × 2160 (4K)"),
-            QStringLiteral("Custom…")};
+        QSize sceneOutputSize;
+        const QString activeLayerKey =
+            session_.document().settings().activeViewLayerKey;
+        for (const QJsonValue &sceneValue :
+             session_.document().settings().importedBlenderScenes) {
+            const QJsonObject scene = sceneValue.toObject();
+            bool activeScene = activeLayerKey.isEmpty();
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key")).toString() ==
+                    activeLayerKey) {
+                    activeScene = true;
+                    break;
+                }
+            }
+            if (!activeScene) continue;
+            const QJsonObject renderOutput =
+                scene.value(QStringLiteral("render_output")).toObject();
+            const int resolutionX = renderOutput.value(
+                QStringLiteral("resolution_x")).toInt();
+            const int resolutionY = renderOutput.value(
+                QStringLiteral("resolution_y")).toInt();
+            const int percentage = renderOutput.value(
+                QStringLiteral("resolution_percentage")).toInt();
+            if (resolutionX > 0 && resolutionY > 0 &&
+                resolutionX <= 819200 && resolutionY <= 819200 &&
+                percentage > 0 && percentage <= 100) {
+                const int outputWidth =
+                    (resolutionX * percentage + 50) / 100;
+                const int outputHeight =
+                    (resolutionY * percentage + 50) / 100;
+                if (outputWidth <= 8192 && outputHeight <= 8192) {
+                    sceneOutputSize = QSize(outputWidth, outputHeight);
+                }
+            }
+            break;
+        }
+        const QString viewportLabel =
+            QStringLiteral("Viewport (%1 × %2)")
+                .arg(viewportSize.width()).arg(viewportSize.height());
+        const QString sceneLabel = sceneOutputSize.isValid()
+            ? QStringLiteral("Blender Scene Output (%1 × %2)")
+                  .arg(sceneOutputSize.width()).arg(sceneOutputSize.height())
+            : QString();
+        QStringList labels{viewportLabel};
+        if (!sceneLabel.isEmpty()) labels.append(sceneLabel);
+        labels.append({QStringLiteral("1280 × 720 (HD)"),
+                       QStringLiteral("1920 × 1080 (Full HD)"),
+                       QStringLiteral("2560 × 1440 (QHD)"),
+                       QStringLiteral("3840 × 2160 (4K)"),
+                       QStringLiteral("Custom…")});
         bool accepted = false;
         const QString choice = QInputDialog::getItem(
             this, QStringLiteral("Render Result Resolution"),
-            QStringLiteral("Output size"), labels, 0, false, &accepted);
+            QStringLiteral("Output size"), labels,
+            sceneLabel.isEmpty() ? 0 : 1, false, &accepted);
         if (!accepted) {
             return;
         }
         QSize outputSize = viewportSize;
-        if (choice == labels[1]) outputSize = QSize(1280, 720);
-        else if (choice == labels[2]) outputSize = QSize(1920, 1080);
-        else if (choice == labels[3]) outputSize = QSize(2560, 1440);
-        else if (choice == labels[4]) outputSize = QSize(3840, 2160);
-        else if (choice == labels[5]) {
+        if (choice == sceneLabel && sceneOutputSize.isValid()) {
+            outputSize = sceneOutputSize;
+        } else if (choice == QStringLiteral("1280 × 720 (HD)")) {
+            outputSize = QSize(1280, 720);
+        } else if (choice == QStringLiteral("1920 × 1080 (Full HD)")) {
+            outputSize = QSize(1920, 1080);
+        } else if (choice == QStringLiteral("2560 × 1440 (QHD)")) {
+            outputSize = QSize(2560, 1440);
+        } else if (choice == QStringLiteral("3840 × 2160 (4K)")) {
+            outputSize = QSize(3840, 2160);
+        } else if (choice == QStringLiteral("Custom…")) {
             QSettings settings;
             bool widthAccepted = false;
             const int width = QInputDialog::getInt(

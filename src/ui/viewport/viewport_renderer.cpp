@@ -2598,7 +2598,21 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         textureColor[channel] =
                             baseColorVector[channel] * linear;
                     }
-                    const QColor textured = shade(triangle.normal, center,
+                    Point3D shadingPosition = center;
+                    if (transform_.isPerspectiveEnabled()) {
+                        // Match the GPU fragment shader's view direction by
+                        // shading from this pixel's perspective-correct world
+                        // position instead of the triangle's center.
+                        shadingPosition = {
+                            (points[0].x * cw0 + points[1].x * cw1 +
+                             points[2].x * cw2) / denominator,
+                            (points[0].y * cw0 + points[1].y * cw1 +
+                             points[2].y * cw2) / denominator,
+                            (points[0].z * cw0 + points[1].z * cw1 +
+                             points[2].z * cw2) / denominator};
+                    }
+                    const QColor textured = shade(triangle.normal,
+                                                  shadingPosition,
                                                   textureColor);
                     const int red = textured.red();
                     const int green = textured.green();

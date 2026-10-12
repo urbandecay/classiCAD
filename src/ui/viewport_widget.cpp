@@ -6775,12 +6775,15 @@ public:
         const bool noSceneWorldBackground =
             !transparentFilm && result.renderUsesSceneWorldBackground &&
             !result.sceneWorldColorAvailable;
+        const bool combinedUsesPremultipliedAlpha =
+            transparentFilm || noSceneWorldBackground;
         const QVector3D sceneWorldColor = result.sceneWorldColorSceneLinear;
         if (captureSceneLinearCombined) result.sceneLinearSize = outputSize;
         gpuSurface_->renderOffscreen(
             outputSize,
             renderCamera,
             [&renderFrame, &settings, &renderCamera, transparentFilm,
+             combinedUsesPremultipliedAlpha,
              useSceneWorldBackground, noSceneWorldBackground,
              sceneWorldColor](
                 const QSize &pixelSize, ViewportAaRenderer &aa,
@@ -6790,7 +6793,8 @@ public:
                                        !settings.xrayEnabled(),
                                    renderCamera.cameraPreferences(),
                                    renderCamera.isPerspectiveEnabled());
-                aa.setDisplayTransform(settings, true, transparentFilm);
+                aa.setDisplayTransform(settings, true,
+                                       combinedUsesPremultipliedAlpha);
                 if (!transparentFilm && !noSceneWorldBackground) {
                     const bool backgroundDrawn = useSceneWorldBackground
                         ? grid.renderBackgroundToCurrentFramebuffer(

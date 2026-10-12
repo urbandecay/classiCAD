@@ -291,20 +291,26 @@ in ordinary free views or orthographic views is superseded by this correction.
 
 - Blender 5.2.2 exposes `RenderSettings.film_transparent` as the
   `R_ALPHAPREMUL` bit of `Scene.r.alphamode`; Workbench uses that same bit to
-  leave its render background transparent. The importer retains this setting
-  with render-output metadata. The offscreen Combined path clears to zero and
-  skips its viewport background only when transparent film is enabled;
-  interactive viewport rendering remains opaque. Pinned sources:
+  leave its render background transparent. In addition, `SceneState` starts
+  with a transparent background and leaves it that way when the render uses a
+  World background but no scene World exists. The importer retains the film
+  setting with render-output metadata; the offscreen Combined path also carries
+  the missing-World case as transparent. Interactive viewport rendering remains
+  opaque. Pinned sources:
   [`rna_scene.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_scene.cc#L7233),
   [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L175-L184),
   and [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L488-L494).
-- For transparent-film PNG/TIFF output, the presentation transform now
+- For transparent-film and missing-World PNG/TIFF output, the presentation
+  transform now
   unpremultiplies RGB before the nonlinear view transform and premultiplies the
   result afterward. Blender's color-managed output path predivides premultiplied
   render buffers before processing; see
   [`colormanagement.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/colormanagement.cc#L1574-L1582)
   and [lines 2124-2165](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/colormanagement.cc#L2124-L2165).
-  The scene-linear Combined EXR payload remains premultiplied and unchanged.
+  The same handling applies when `film_transparent` is false but the requested
+  World background has no scene World: Workbench still leaves target alpha
+  transparent. Scene-linear EXR/HDR Combined capture remains before the display
+  transform and is unchanged.
 
 ### Weighted transparency resolve (2026-10-12)
 

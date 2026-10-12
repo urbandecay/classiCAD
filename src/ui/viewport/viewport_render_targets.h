@@ -10,6 +10,31 @@
 
 namespace classiCAD {
 
+enum class ViewportRenderPass : quint32 {
+    OpaqueColor = 1u << 0,
+    TransparentColor = 1u << 1,
+    TransparentAccumulation = 1u << 2,
+    TransparentResolve = 1u << 3,
+    TransparentDepth = 1u << 4,
+};
+
+// Named completion and attachment report shared by the live viewport and
+// offscreen Workbench render-result path.
+struct ViewportRenderPassReport {
+    quint32 completedPasses = 0;
+    quint32 populatedAttachments = 0;
+
+    void markPassCompleted(ViewportRenderPass pass) noexcept
+    {
+        completedPasses |= static_cast<quint32>(pass);
+    }
+
+    bool passCompleted(ViewportRenderPass pass) const noexcept
+    {
+        return (completedPasses & static_cast<quint32>(pass)) != 0;
+    }
+};
+
 // Borrowed texture handles for the active Workbench sample and its resolved
 // history. Consumers must check validAttachments before sampling a texture;
 // a zero handle or a clear-only attachment is never advertised as valid.

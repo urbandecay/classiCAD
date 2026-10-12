@@ -36,7 +36,7 @@ public:
               bool clearDepth = true,
               bool selectionOverlay = false,
               const ViewportRenderTargets *sharedTargets = nullptr,
-              quint32 *populatedAttachments = nullptr,
+              ViewportRenderPassReport *passReport = nullptr,
               bool sceneLinearOutput = false);
 
 private:

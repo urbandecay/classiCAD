@@ -6667,10 +6667,13 @@ public:
                         viewportShadingBackgroundColor(settings), true)) {
                     return false;
                 }
+                ViewportWorkbenchSceneColorPassRequest passRequest;
+                passRequest.sharedTargets = &aa.targets();
+                passRequest.sceneLinearOutput = true;
                 const ViewportWorkbenchSceneColorPassResult sceneColorPass =
                     ViewportWorkbenchScenePassCoordinator::renderSceneColor(
                         surface, renderFrame.objects, aa.sampleCamera(),
-                        pixelSize, 1.0, settings, &aa.targets(), true);
+                        pixelSize, 1.0, settings, passRequest);
                 return sceneColorPass.rendered;
             },
             [this, &strokes, &renderCamera](
@@ -10896,19 +10899,21 @@ protected:
                 }
                 ViewportWorkbenchSceneColorPassResult sceneColorPass;
                 if (surfaceRenderer != nullptr) {
+                    ViewportWorkbenchSceneColorPassRequest passRequest;
+                    passRequest.sharedTargets =
+                        aaRenderer != nullptr ? &aaRenderer->targets()
+                                              : nullptr;
+                    passRequest.sceneLinearOutput = aaSceneSampleActive;
                     sceneColorPass =
                         ViewportWorkbenchScenePassCoordinator::renderSceneColor(
                             *surfaceRenderer, surfaceDrawObjects, sceneCamera,
                             renderFrame.viewportSize, devicePixelRatioF(),
-                            renderShadingSettings,
-                            aaRenderer != nullptr ? &aaRenderer->targets()
-                                                 : nullptr,
-                            aaSceneSampleActive);
+                            renderShadingSettings, passRequest);
                 }
                 surfacesDrawn = sceneColorPass.rendered;
                 if (aaRenderer != nullptr && surfacesDrawn) {
                     aaRenderer->markCurrentSampleAttachmentsValid(
-                        sceneColorPass.populatedAttachments);
+                        sceneColorPass.report.populatedAttachments);
                 }
             } else {
                 sceneDrawn = true;

@@ -8,13 +8,22 @@
 
 namespace classiCAD {
 
-// Shared entry point for the Workbench scene-color pass in the interactive
-// viewport and offscreen render result. Background/grid drawing, AA sample
-// lifecycle, attachment validity, and CAD overlays remain with their callers.
-// The surface renderer still owns the individual GPU subpasses.
+// A scene-color request shared by the interactive viewport and offscreen
+// render result. Background/grid drawing, AA sample lifecycle, and CAD
+// overlays remain with their callers; the surface renderer owns GL details.
+struct ViewportWorkbenchSceneColorPassRequest {
+    const ViewportRenderTargets *sharedTargets = nullptr;
+    bool sceneLinearOutput = false;
+};
+
 struct ViewportWorkbenchSceneColorPassResult {
     bool rendered = false;
-    quint32 populatedAttachments = 0;
+    ViewportRenderPassReport report;
+
+    bool completed(ViewportRenderPass pass) const noexcept
+    {
+        return report.passCompleted(pass);
+    }
 };
 
 class ViewportWorkbenchScenePassCoordinator final {
@@ -26,8 +35,7 @@ public:
         const QSize &viewportSize,
         qreal devicePixelRatio,
         const ViewportShadingSettings &settings,
-        const ViewportRenderTargets *sharedTargets,
-        bool sceneLinearOutput);
+        const ViewportWorkbenchSceneColorPassRequest &request);
 };
 
 } // namespace classiCAD

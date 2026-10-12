@@ -163,6 +163,8 @@ src/ui/viewport/viewport_erase_overlay_renderer.* erase cursor and candidate pre
 src/ui/viewport/viewport_tool_preview_renderer.* geometry, guide, and transform previews for drawing tools
 src/ui/viewport/blender_grid_renderer.* 3D grid shader setup, offscreen/on-screen contexts, camera uniforms, and procedural GPU drawing
 src/ui/viewport/viewport_gpu_surface.* native QOpenGLWidget presentation surface and renderer lifetime
+src/ui/viewport/viewport_render_targets.h named GPU attachment ownership and render-pass completion report shared by viewport and offscreen rendering
+src/ui/viewport/viewport_workbench_scene_pass_coordinator.* typed shared request/result for Workbench opaque color, transparency accumulation/resolve, and transparent-depth stages
 src/ui/viewport/viewport_scene_renderer.* GPU committed-curve strokes, linetype/style resolution, and dashed control guides
 src/ui/viewport/viewport_render_frame.* immutable camera, visible scene geometry, layer styling, selection, transform previews, revisions, and active ToolPreview snapshot
 src/ui/viewport/viewport_geometry_cache.* revision-keyed immutable double-precision world geometry, pinned prepared revisions, and draw-time placement offsets reused by GPU strokes, depth, and CPU fallback
@@ -809,6 +811,7 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 | Phase | Status | Notes |
 |---|---|---|
 | 24. Modularity, scalability, and build improvements | In progress (large-scene follow-up) | The earlier viewport/cache/build work is complete. Added batched document insert/remove paths for Duplicate/Delete and hash-backed changed-ID de-duplication. The 16,344-object synthetic NURBS benchmark and full 11-test CTest run passed. The requested real-scene run is still pending because `ForGPTest.vignola` was not visible at the reported Desktop path; no real-scene speed claim is made. |
+| 25. Blender Workbench render and resolve convergence | In progress | Viewport and offscreen rendering now use a typed shared scene-color request and report named opaque-color, transparent accumulation/resolve, and transparent-depth completion plus populated attachments. The offscreen result retains a separate scene-linear float Combined payload and optional OpenEXR FLOAT writer; this build has no OpenEXR development package, so local EXR output remains unavailable. Shared pass ownership, Blender's registered render-result lifecycle, and matched visual comparisons remain open. |
 
 R12 follow-up checkpoint: added isolated `app-dev` and `full-test` CMake
 configure/build presets and documented them in the README. `cmake --list-presets`
@@ -1147,3 +1150,24 @@ code is uncommitted and unpushed. Follow-up: run placement-aware persistence,
 transform, duplicate, snap, selection, and CPU-depth contracts, then measure
 large-scene group moves against the prior revision and inspect the full-scene
 frame-construction cost.
+
+#### Blender Workbench render/resolve contract checkpoint (2026-10-12)
+
+The interactive viewport and offscreen Workbench result now submit a named
+scene-color request to `ViewportWorkbenchScenePassCoordinator`. The surface
+renderer reports completion of opaque color, transparent color,
+weighted-transparency accumulation and resolve, and transparent depth, along
+with the shared depth/normal/object-ID attachments it populated. The
+offscreen-result API can separately capture the final scene-linear RGBA float
+texture after DOF and before display conversion and CAD annotations; an
+optional OpenEXR writer stores FLOAT channels when that dependency is present.
+This environment does not have the OpenEXR development package, so its
+configured build retains PNG fallback and cannot validate an EXR file. The
+hold-Z shading pie also now cancels on Escape/right-click and ignores
+non-primary releases.
+
+`cmake --build build` and the 303-source dependency audit passed; `git diff
+--check` passed. No tests, screenshots, or app startup were run. Blender's
+registered render-result lifecycle, a required/available float writer on this
+machine, and matched visual comparison remain open. This checkpoint is
+committed and pushed on `experimental/blender-workbench-viewport`.

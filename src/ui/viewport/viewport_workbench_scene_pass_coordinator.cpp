@@ -12,14 +12,13 @@ ViewportWorkbenchScenePassCoordinator::renderSceneColor(
     const QSize &viewportSize,
     qreal devicePixelRatio,
     const ViewportShadingSettings &settings,
-    const ViewportRenderTargets *sharedTargets,
-    bool sceneLinearOutput)
+    const ViewportWorkbenchSceneColorPassRequest &request)
 {
     ViewportWorkbenchSceneColorPassResult result;
     result.rendered = surfaceRenderer.draw(
         objects, camera, viewportSize, devicePixelRatio, settings,
-        false, true, false, sharedTargets, &result.populatedAttachments,
-        sceneLinearOutput);
+        false, true, false, request.sharedTargets, &result.report,
+        request.sceneLinearOutput);
     return result;
 }
 

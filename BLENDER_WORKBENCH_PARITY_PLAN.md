@@ -383,6 +383,16 @@ uses `eyeDistance - clipStart - dot(worldPosition - viewTarget, viewFacing)`;
 eye-space depth. This change is limited to the primary GPU OIT weight; sorted
 fallbacks and QPainter are unchanged. Pixel comparison remains open.
 
+**Pass contract update:** Interactive viewport and offscreen Workbench result
+now submit a `ViewportWorkbenchSceneColorPassRequest` to the same coordinator.
+The surface renderer returns named completion flags for opaque color,
+transparent color, weighted accumulation/resolve, and transparent depth, plus
+the shared depth/normal/object-ID attachments it populated. The same scene
+color call is shared, while grid/background, DOF/AA presentation, CAD strokes,
+and editor overlays retain their existing caller-owned order. The render result
+currently exposes Combined, Depth, and an optional scene-linear float Combined
+payload; Blender's registered multi-pass Render Result lifecycle remains open.
+
 ### Implementation plan
 
 1. **Establish a comparable baseline.** Use the same hard-edged cube, viewport pixel dimensions, projection and camera pose, clipping range, color transform, and selection/overlay state in Blender 5.2.2 and classiCAD. Capture classiCAD's native GPU path separately from QPainter. Compare AA Off, Single Pass, and 8 samples, both idle and while navigating. Save pre-AA, post-AA scene-linear, and final display-transformed outputs so edge softness can be attributed to a specific stage. Do not call the AA port complete until the edge profiles and remaining differences are recorded.

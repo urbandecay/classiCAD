@@ -3652,12 +3652,10 @@ bool ViewportSurfaceRenderer::draw(
     bool clearDepth,
     bool selectionOverlay,
     const ViewportRenderTargets *sharedTargets,
-    quint32 *populatedAttachments,
+    ViewportRenderPassReport *passReport,
     bool sceneLinearOutput)
 {
-    if (populatedAttachments != nullptr) {
-        *populatedAttachments = 0;
-    }
+    if (passReport != nullptr) *passReport = {};
     if (QOpenGLContext::currentContext() == nullptr || viewportSize.isEmpty() ||
         !initialize()) {
         return false;
@@ -3859,8 +3857,8 @@ bool ViewportSurfaceRenderer::draw(
             &snapshotDepthReady);
         cavityDepthReady = sharedPrepassReady && ssaoEnabled &&
                            snapshotDepthReady;
-        if (sharedPrepassReady && populatedAttachments != nullptr) {
-            *populatedAttachments =
+        if (sharedPrepassReady && passReport != nullptr) {
+            passReport->populatedAttachments =
                 ViewportRenderTargets::Depth |
                 ViewportRenderTargets::ViewSpaceNormal |
                 ViewportRenderTargets::ObjectId;
@@ -4494,6 +4492,10 @@ bool ViewportSurfaceRenderer::draw(
                     drawRange(draw, false, false, draw.first, draw.count);
                 }
                 glDepthFunc(GL_LESS);
+                if (passReport != nullptr) {
+                    passReport->markPassCompleted(
+                        ViewportRenderPass::TransparentColor);
+                }
                 return;
             }
 
@@ -4562,6 +4564,10 @@ bool ViewportSurfaceRenderer::draw(
                 drawRange(range, false, false, range.first, range.count, true);
             }
             program_.setUniformValue("uTransparencyAccumulation", false);
+            if (passReport != nullptr) {
+                passReport->markPassCompleted(
+                    ViewportRenderPass::TransparentAccumulation);
+            }
 
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
                               static_cast<GLuint>(previousDrawFramebuffer));
@@ -4625,6 +4631,12 @@ bool ViewportSurfaceRenderer::draw(
             vertexArray_.bind();
             glDrawArrays(GL_TRIANGLES, 0, 3);
             transparencyResolveProgram_.release();
+            if (passReport != nullptr) {
+                passReport->markPassCompleted(
+                    ViewportRenderPass::TransparentResolve);
+                passReport->markPassCompleted(
+                    ViewportRenderPass::TransparentColor);
+            }
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D,
@@ -4670,6 +4682,10 @@ bool ViewportSurfaceRenderer::draw(
                     drawRange(range, volumeShadowed, true, range.first,
                               range.count);
                 }
+                if (passReport != nullptr && !opaqueRangeIndices.isEmpty()) {
+                    passReport->markPassCompleted(
+                        ViewportRenderPass::OpaqueColor);
+                }
                 if (includeTransparent) drawTransparentTriangles();
                 return;
             }
@@ -4678,6 +4694,10 @@ bool ViewportSurfaceRenderer::draw(
                     drawRange(range, volumeShadowed, true, range.first,
                               range.count);
                 }
+            }
+            if (passReport != nullptr && !ranges_.isEmpty()) {
+                passReport->markPassCompleted(
+                    ViewportRenderPass::OpaqueColor);
             }
         };
         if (shadowVolumesAvailable) {
@@ -4798,9 +4818,18 @@ bool ViewportSurfaceRenderer::draw(
         // Do not run this on the sorted fallback path: it has no compatible
         // shared depth target to update.
         if (weightedOitAvailable && sharedTargets != nullptr) {
-            renderWorkbenchTransparentDepthPass(
+            const bool transparentDepthRendered =
+                renderWorkbenchTransparentDepthPass(
                 transform, viewportSize, devicePixelRatio, settings,
                 *sharedTargets, transparentRangeIndices);
+            if (transparentDepthRendered && passReport != nullptr) {
+                passReport->markPassCompleted(
+                    ViewportRenderPass::TransparentDepth);
+                passReport->populatedAttachments |=
+                    ViewportRenderTargets::Depth |
+                    ViewportRenderTargets::ViewSpaceNormal |
+                    ViewportRenderTargets::ObjectId;
+            }
         }
     }
 

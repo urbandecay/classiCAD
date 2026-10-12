@@ -367,6 +367,25 @@ def object_metadata(obj, scene):
     }
 
 
+def loose_edge_curve_item(obj, scene, source_item, edges_world):
+    """Build a curve companion without reusing the Blender mesh identity."""
+    source_id = source_item["object_id"]
+    derived_id = hashlib.sha256(source_id.encode("utf-8")).hexdigest()
+    item = object_metadata(obj, scene)
+    item["object_id"] = "classiCAD::derived::loose-edges::" + derived_id
+    item["source_object_id"] = source_id
+    item["source_object_name"] = obj.name_full
+    item["name"] = obj.name_full + " (Loose Edges)"
+    item["object_type"] = "CURVE"
+    item["splines"] = [
+        {"type": "POLY", "control_points_world": edge}
+        for edge in edges_world
+    ]
+    item["view_layer_hidden"] = source_item["view_layer_hidden"]
+    item["default_view_layer_key"] = source_item["default_view_layer_key"]
+    return item
+
+
 def scene_camera_record(scene, depsgraph=None):
     camera = scene.camera
     if camera is None:
@@ -493,25 +512,38 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
             tuple(sorted((int(edge.vertices[0]), int(edge.vertices[1]))))
             for edge in mesh.edges
         ]
-        loose_edge_count = sum(edge not in polygon_edges for edge in mesh_edges)
+        loose_edges = [
+            (int(edge.vertices[0]), int(edge.vertices[1]))
+            for edge in mesh.edges
+            if tuple(sorted((int(edge.vertices[0]), int(edge.vertices[1]))))
+            not in polygon_edges
+        ]
         edge_vertices = {vertex_index for edge in mesh_edges for vertex_index in edge}
         isolated_vertex_count = sum(
             1 for vertex in mesh.vertices
             if int(vertex.index) not in polygon_vertices and
             int(vertex.index) not in edge_vertices
         )
-        if loose_edge_count or isolated_vertex_count:
-            details = []
-            if loose_edge_count:
-                details.append("%d loose edge(s)" % loose_edge_count)
-            if isolated_vertex_count:
-                details.append("%d isolated vertex/vertices" % isolated_vertex_count)
+        if isolated_vertex_count:
             add_unsupported(
-                unsupported, item_id, "loose_geometry",
-                "Blender mesh contains %s; classiCAD PolygonMesh3D stores "
-                "polygon faces only, so these elements are omitted" %
-                " and ".join(details),
+                unsupported, item_id, "isolated_vertices",
+                "Blender mesh contains %d isolated vertex/vertices; "
+                "classiCAD scene import has no point-item path for them" %
+                isolated_vertex_count,
             )
+        # PolygonMesh3D stores faces only. Preserve true loose edges as a
+        # companion CURVE transport item, using world points so evaluated
+        # object transforms are baked exactly once by the existing curve
+        # parser. The scene loop removes this private field before emitting
+        # the mesh record.
+        if loose_edges and obj.type == "MESH":
+            item["_loose_edges_world"] = [
+                [
+                    vector_values(transform @ mesh.vertices[first].co),
+                    vector_values(transform @ mesh.vertices[second].co),
+                ]
+                for first, second in loose_edges
+            ]
         item["polygon_material_indices"] = [
             int(polygon.material_index) for polygon in mesh.polygons
         ]
@@ -1113,8 +1145,15 @@ def extract_scene(input_path, mode):
                     view_layer_key(scene, scene.view_layers[0])
                     if len(scene.view_layers) else ""
                 )
+                loose_edges_world = item.pop("_loose_edges_world", [])
+                loose_edges_item = (
+                    loose_edge_curve_item(obj, scene, item, loose_edges_world)
+                    if loose_edges_world else None
+                )
                 output["items"].append(item)
                 mesh_count += 1
+                if loose_edges_item is not None:
+                    output["items"].append(loose_edges_item)
             except Exception as error:
                 output["unsupported_items"].append({
                     **object_metadata(obj, scene),

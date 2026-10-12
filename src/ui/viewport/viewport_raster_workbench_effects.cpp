@@ -713,8 +713,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const quint64 objectId = samples[depthY * width + depthX].objectId;
                 int differentNeighbors = 0;
                 bool selectedEdge = (objectId & selectedIdMask) != 0;
-                constexpr std::array<QPoint, 4> neighbors = {
-                    QPoint(1, 0), QPoint(-1, 0), QPoint(0, 1), QPoint(0, -1)};
+                constexpr std::array<QPoint, 8> neighbors = {
+                    QPoint(1, 0), QPoint(-1, 0), QPoint(0, 1), QPoint(0, -1),
+                    QPoint(1, 1), QPoint(1, -1), QPoint(-1, 1), QPoint(-1, -1)};
                 for (const QPoint &offset : neighbors) {
                     const int sx = std::clamp(depthX + offset.x(), 0, width - 1);
                     const int sy = std::clamp(depthY + offset.y(), 0, height - 1);
@@ -724,7 +725,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     selectedEdge = selectedEdge ||
                                    (neighborId & selectedIdMask) != 0;
                 }
-                const float edgeOpacity = differentNeighbors * 0.25f;
+                const float edgeOpacity = differentNeighbors / 8.0f;
                 const QColor &edgeColor = selectedEdge
                                               ? selectionOutline : outline;
                 const float sourceAlpha =

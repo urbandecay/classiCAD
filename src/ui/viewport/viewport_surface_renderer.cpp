@@ -906,20 +906,27 @@ bool ViewportSurfaceRenderer::initialize()
             ivec2 dx = ivec2(uPixelOffset, 0);
             ivec2 dy = ivec2(0, uPixelOffset);
             uint centerId = texelFetch(uObjectIdBuffer, pixel, 0).r;
-            uvec4 adjacentIds = uvec4(
+            uvec4 cardinalIds = uvec4(
                 texelFetch(uObjectIdBuffer, clamp(pixel + dx, ivec2(0), size - 1), 0).r,
                 texelFetch(uObjectIdBuffer, clamp(pixel - dx, ivec2(0), size - 1), 0).r,
                 texelFetch(uObjectIdBuffer, clamp(pixel + dy, ivec2(0), size - 1), 0).r,
                 texelFetch(uObjectIdBuffer, clamp(pixel - dy, ivec2(0), size - 1), 0).r);
-            float opacity = 1.0 - dot(vec4(equal(uvec4(centerId), adjacentIds)),
-                                     vec4(0.25));
+            uvec4 diagonalIds = uvec4(
+                texelFetch(uObjectIdBuffer, clamp(pixel + dx + dy, ivec2(0), size - 1), 0).r,
+                texelFetch(uObjectIdBuffer, clamp(pixel + dx - dy, ivec2(0), size - 1), 0).r,
+                texelFetch(uObjectIdBuffer, clamp(pixel - dx + dy, ivec2(0), size - 1), 0).r,
+                texelFetch(uObjectIdBuffer, clamp(pixel - dx - dy, ivec2(0), size - 1), 0).r);
+            float opacity = 1.0 -
+                (dot(vec4(equal(uvec4(centerId), cardinalIds)), vec4(0.125)) +
+                 dot(vec4(equal(uvec4(centerId), diagonalIds)), vec4(0.125)));
             if (opacity <= 0.0) {
                 discard;
             }
             const uint selectedBit = 0x80000000u;
             bool selected = (centerId & selectedBit) != 0u;
             for (int index = 0; index < 4; ++index) {
-                selected = selected || ((adjacentIds[index] & selectedBit) != 0u);
+                selected = selected || ((cardinalIds[index] & selectedBit) != 0u) ||
+                           ((diagonalIds[index] & selectedBit) != 0u);
             }
             vec4 color = selected ? uSelectionColor : uOutlineColor;
             fragmentColor = vec4(color.rgb, color.a * opacity);

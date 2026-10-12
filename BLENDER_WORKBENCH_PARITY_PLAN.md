@@ -20,6 +20,17 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 
 ## Current classiCAD status
 
+### GPU opaque depth comparison (2026-10-12)
+
+- The Solid GPU pass now uses `GL_LEQUAL` for opaque surface fragments, so
+  equal-depth coplanar fragments can update the color/depth buffer in draw
+  order. Blender 5.2.2 configures its Workbench opaque G-buffer with
+  `DRW_STATE_DEPTH_LESS_EQUAL` in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L108-L124).
+  classiCAD previously used `GL_LESS` in the opaque Solid branch of
+  `ViewportSurfaceRenderer::draw`, rejecting equal-depth fragments. This is a
+  state-level parity fix; no build or visual comparison was run for this audit.
+
 ### Workbench Image Texture interpolation (2026-10-12)
 
 - GPU and QPainter Workbench sampling now use nearest only for `Closest` and
@@ -294,6 +305,10 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   an assigned material; per-face mesh material ranges continue to use their
   assigned material values. Native documents write version 20; older
   documents retain their previous material appearance when loaded.
+- QPainter's software cavity/outline alpha prepass uses the same presence rule:
+  with no material, it reads object display alpha instead of the default
+  material alpha. Blender's Workbench material setup packs `ob.color[3]` as
+  the fallback alpha in the same pinned `workbench_materials.cc` source.
 
 ### GPU opaque backface normal orientation (2026-10-12)
 

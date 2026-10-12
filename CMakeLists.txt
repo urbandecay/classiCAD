@@ -205,6 +205,7 @@ set(CLASSICAD_VIEWPORT_ADAPTER_SUPPORT_SOURCES
     src/ui/viewport/viewport_control_point_renderer.cpp
     src/ui/viewport/viewport_scene_renderer.cpp
     src/ui/viewport/viewport_surface_renderer.cpp
+    src/ui/viewport/viewport_workbench_scene_pass_coordinator.cpp
 )
 
 set(CLASSICAD_VIEWPORT_SUPPORT_SOURCES

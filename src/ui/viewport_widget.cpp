@@ -68,6 +68,7 @@
 #include "viewport/viewport_control_point_renderer.h"
 #include "viewport/viewport_marker_style.h"
 #include "viewport/viewport_gpu_surface.h"
+#include "viewport/viewport_workbench_scene_pass_coordinator.h"
 #include "viewport/viewport_hud_renderer.h"
 #include "viewport/viewport_line_weight.h"
 #include "viewport/viewport_scene_renderer.h"
@@ -6637,10 +6638,11 @@ public:
                         viewportShadingBackgroundColor(settings), true)) {
                     return false;
                 }
-                const bool surfacesDrawn = surface.draw(
-                    renderFrame.objects, aa.sampleCamera(), pixelSize, 1.0,
-                    settings, false, true, false, &aa.targets(), nullptr, true);
-                return surfacesDrawn;
+                const ViewportWorkbenchSceneColorPassResult sceneColorPass =
+                    ViewportWorkbenchScenePassCoordinator::renderSceneColor(
+                        surface, renderFrame.objects, aa.sampleCamera(),
+                        pixelSize, 1.0, settings, &aa.targets(), true);
+                return sceneColorPass.rendered;
             },
             [this, &strokes, &renderCamera](
                 const QSize &pixelSize, ViewportSceneRenderer &scene) {
@@ -10686,18 +10688,21 @@ protected:
                         object.selected = false;
                     }
                 }
-                quint32 populatedAttachments = 0;
-                surfacesDrawn = surfaceRenderer != nullptr &&
-                    surfaceRenderer->draw(
-                        surfaceDrawObjects, sceneCamera,
-                        renderFrame.viewportSize, devicePixelRatioF(),
-                        renderShadingSettings, false, true, false,
-                        aaRenderer != nullptr ? &aaRenderer->targets() : nullptr,
-                        &populatedAttachments,
-                        aaSceneSampleActive);
+                ViewportWorkbenchSceneColorPassResult sceneColorPass;
+                if (surfaceRenderer != nullptr) {
+                    sceneColorPass =
+                        ViewportWorkbenchScenePassCoordinator::renderSceneColor(
+                            *surfaceRenderer, surfaceDrawObjects, sceneCamera,
+                            renderFrame.viewportSize, devicePixelRatioF(),
+                            renderShadingSettings,
+                            aaRenderer != nullptr ? &aaRenderer->targets()
+                                                 : nullptr,
+                            aaSceneSampleActive);
+                }
+                surfacesDrawn = sceneColorPass.rendered;
                 if (aaRenderer != nullptr && surfacesDrawn) {
                     aaRenderer->markCurrentSampleAttachmentsValid(
-                        populatedAttachments);
+                        sceneColorPass.populatedAttachments);
                 }
             } else {
                 sceneDrawn = true;

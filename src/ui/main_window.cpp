@@ -418,7 +418,7 @@ private:
                 .arg(result.colorMode)
                 .arg(result.writtenColorDepth())
                 .arg(result.depthPassAvailable
-                         ? QStringLiteral("linear camera distance PFM")
+                         ? QStringLiteral("Z depth PFM")
                          : QStringLiteral("disabled in Blender view layer")),
             &window);
         layout->addWidget(info);

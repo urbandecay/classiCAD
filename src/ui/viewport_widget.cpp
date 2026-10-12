@@ -6744,13 +6744,22 @@ public:
                                     float(eyePoint.z));
                 const QVector3D view(float(direction.x), float(direction.y),
                                      float(direction.z));
+                const ViewportCameraPreferences depthPreferences =
+                    renderCamera.cameraPreferences();
+                const float nearClip =
+                    static_cast<float>(depthPreferences.clipStart);
+                const float farClip =
+                    static_cast<float>(depthPreferences.clipEnd);
                 for (int y = 0; y < outputSize.height(); ++y) {
                     for (int x = 0; x < outputSize.width(); ++x) {
                         const qsizetype index =
                             qsizetype(y) * outputSize.width() + x;
                         const float depth = result.depth[index];
-                        if (depth >= 0.999999f) {
-                            result.depth[index] = 0.0f;
+                        if (!std::isfinite(depth) || depth >= 1.0f ||
+                            !std::isfinite(nearClip) ||
+                            !std::isfinite(farClip) || nearClip <= 0.0f ||
+                            farClip <= nearClip) {
+                            result.depth[index] = 1.0e10f;
                             continue;
                         }
                         const QVector3D ndc(

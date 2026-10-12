@@ -265,7 +265,7 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("renderPrecision"),
                       QStringLiteral("display-referred normalized RGBA; no HDR range"));
     cameraJson.insert(QStringLiteral("depthPass"),
-                      QStringLiteral("linear camera-space distance; zero is background"));
+                      QStringLiteral("Blender Workbench view-Z; background is 1e10"));
     cameraJson.insert(QStringLiteral("depthPassAvailable"),
                       depthPassAvailable);
     QJsonObject poseJson;

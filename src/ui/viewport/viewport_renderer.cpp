@@ -1082,6 +1082,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
             qreal metallic = 0.0;
             qreal depth = 0.0;
             QImage texture;
+            QHash<int, QImage> textureTiles;
+            bool tiledTexture = false;
             bool texturePremultiplied = false;
             bool textureSrgb = true;
             QString textureInterpolation = QStringLiteral("Linear");
@@ -1098,8 +1100,12 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 break;
             }
         }
-        QHash<QString, QImage> textureImages;
-        QHash<int, QImage> faceTextureImages;
+        struct MeshTextureSet {
+            QImage image;
+            QHash<int, QImage> tiles;
+        };
+        QHash<QString, MeshTextureSet> textureImages;
+        QHash<int, MeshTextureSet> faceTextureImages;
         int firstCorner = 0;
         const MeshColorAttribute *activeAttribute = nullptr;
         if (shadingSettings_.colorMode == ViewportColorMode::Attribute) {
@@ -1127,7 +1133,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
             return color;
         };
-        const auto textureForFace = [&](int faceIndex) -> const QImage * {
+        const auto textureForFace = [&](int faceIndex) -> const MeshTextureSet * {
             if (activeUvMap == nullptr) return nullptr;
             const int slot = mesh.faceMaterialIndices.value(faceIndex, 0);
             if (slot < 0 || slot >= meshMaterials.size()) return nullptr;
@@ -1136,37 +1142,58 @@ void ViewportRenderer::drawShape(QPainter &painter,
             const WorkbenchMaterialData &material = meshMaterials[slot];
             const QString path = material.textureImagePath;
             const QString packed = material.textureImagePackedDataBase64;
-            if ((path.isEmpty() || !QFileInfo(path).isFile()) && packed.isEmpty()) {
+            if ((path.isEmpty() || !QFileInfo(path).isFile()) && packed.isEmpty() &&
+                material.textureImageTiles.isEmpty()) {
                 return nullptr;
             }
             const QString alphaMode = material.textureImageAlphaMode;
-            const bool ignoreAlpha =
-                alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
-                alphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
-                alphaMode.compare(QStringLiteral("CHANNEL_PACKED"), Qt::CaseInsensitive) == 0;
-            const QString sourceKey = !packed.isEmpty()
+            QString sourceKey = !packed.isEmpty()
                 ? QStringLiteral("packed:") + packed
                 : QStringLiteral("file:") + path;
+            for (const DocumentImageTextureTile &tile : material.textureImageTiles) {
+                sourceKey += QStringLiteral("|%1:%2:%3")
+                    .arg(tile.number).arg(tile.filepath)
+                    .arg(tile.sourceFileExists ? 1 : 0);
+            }
             const QString cacheKey = sourceKey + QLatin1Char('|') + alphaMode.toUpper();
             auto found = textureImages.find(cacheKey);
             if (found == textureImages.end()) {
-                QImage loaded;
-                if (!packed.isEmpty()) {
-                    loaded.loadFromData(QByteArray::fromBase64(packed.toLatin1()));
-                } else {
-                    loaded.load(path);
-                }
-                if (loaded.isNull()) return nullptr;
-                loaded = loaded.convertToFormat(QImage::Format_RGBA8888);
-                for (int y = 0; y < loaded.height(); ++y) {
-                    auto *row = loaded.scanLine(y);
-                    for (int x = 0; x < loaded.width(); ++x) {
-                        uchar *pixel = row + x * 4;
-                        if (ignoreAlpha) {
-                            pixel[3] = 255;
+                const bool ignoreAlpha =
+                    alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
+                    alphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
+                    alphaMode.compare(QStringLiteral("CHANNEL_PACKED"), Qt::CaseInsensitive) == 0;
+                const auto loadImage = [ignoreAlpha](const QString &imagePath,
+                                                     const QString &packedData) {
+                    QImage loaded;
+                    if (!packedData.isEmpty()) {
+                        loaded.loadFromData(QByteArray::fromBase64(
+                            packedData.toLatin1()));
+                    } else {
+                        loaded.load(imagePath);
+                    }
+                    if (loaded.isNull()) return QImage{};
+                    loaded = loaded.convertToFormat(QImage::Format_RGBA8888);
+                    for (int y = 0; y < loaded.height(); ++y) {
+                        auto *row = loaded.scanLine(y);
+                        for (int x = 0; x < loaded.width(); ++x) {
+                            if (ignoreAlpha) row[x * 4 + 3] = 255;
                         }
                     }
+                    return loaded;
+                };
+                MeshTextureSet loaded;
+                if (!packed.isEmpty() || (!path.isEmpty() && QFileInfo(path).isFile())) {
+                    loaded.image = loadImage(path, packed);
                 }
+                for (const DocumentImageTextureTile &tile : material.textureImageTiles) {
+                    if (!tile.sourceFileExists || tile.number < 1001 ||
+                        tile.number > 1999 || tile.filepath.isEmpty()) continue;
+                    QImage tileImage = loadImage(tile.filepath, {});
+                    if (!tileImage.isNull()) loaded.tiles.insert(tile.number,
+                                                                 std::move(tileImage));
+                }
+                if (loaded.image.isNull() && loaded.tiles.isEmpty() &&
+                    material.textureImageTiles.isEmpty()) return nullptr;
                 found = textureImages.insert(cacheKey, std::move(loaded));
             }
             return &faceTextureImages.insert(slot, found.value()).value();
@@ -1347,11 +1374,16 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     if (useWorkbenchColor && shadingSettings_.colorMode ==
                             ViewportColorMode::Texture && hasUvs &&
                         textureForFace(faceIndex) != nullptr) {
-                        triangle.texture = *textureForFace(faceIndex);
-                        triangle.sceneLinearColor = QVector3D(
-                            sourceColor.x(), sourceColor.y(), sourceColor.z());
+                        const MeshTextureSet *textureSet = textureForFace(faceIndex);
+                        triangle.texture = textureSet->image;
+                        triangle.textureTiles = textureSet->tiles;
                         const int materialIndex =
                             mesh.faceMaterialIndices.value(faceIndex, 0);
+                        triangle.tiledTexture = materialIndex >= 0 &&
+                            materialIndex < meshMaterials.size() &&
+                            !meshMaterials[materialIndex].textureImageTiles.isEmpty();
+                        triangle.sceneLinearColor = QVector3D(
+                            sourceColor.x(), sourceColor.y(), sourceColor.z());
                         if (materialIndex >= 0 &&
                             materialIndex < meshMaterials.size()) {
                             triangle.roughness = meshMaterials[materialIndex].roughness;
@@ -1459,7 +1491,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                    (triangle.points[2].y() - triangle.points[0].y()) -
                                (triangle.points[1].y() - triangle.points[0].y()) *
                                    (triangle.points[2].x() - triangle.points[0].x());
-            if (std::abs(area) < 1.0e-12 || texture.isNull()) return;
+            if (std::abs(area) < 1.0e-12 ||
+                (texture.isNull() && triangle.textureTiles.isEmpty())) return;
             const qreal minX = std::clamp(
                 std::min({triangle.points[0].x(), triangle.points[1].x(), triangle.points[2].x()}),
                 0.0, qreal(viewportSize.width()));
@@ -1490,10 +1523,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
             QImage raster(width, height, QImage::Format_RGBA8888);
             raster.fill(Qt::transparent);
-            const auto sample = [&](const QPointF &uv, uchar *rgba) {
-                sampleWorkbenchImage(texture, uv, triangle.textureInterpolation,
-                                     triangle.textureExtension, rgba);
-            };
             const qreal alpha = triangle.color.alphaF();
             for (int y = 0; y < height; ++y) {
                 uchar *row = raster.scanLine(y);
@@ -1517,8 +1546,36 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     if (denominator <= 1.0e-12) continue;
                     const QPointF uv = (triangle.uvs[0] * p0 + triangle.uvs[1] * p1 +
                                         triangle.uvs[2] * p2) / denominator;
+                    const QImage *sampleImage = &texture;
+                    QPointF sampleUv = uv;
+                    if (triangle.tiledTexture) {
+                        const qreal tileU = std::floor(uv.x());
+                        const qreal tileV = std::floor(uv.y());
+                        const qreal tileNumber = 1001.0 + tileU + 10.0 * tileV;
+                        const bool validTile = tileU >= 0.0 && tileU < 10.0 &&
+                            tileV >= 0.0 && tileV <= 99.0 &&
+                            tileNumber >= 1001.0 && tileNumber <= 1999.0;
+                        const auto tile = validTile
+                            ? triangle.textureTiles.constFind(static_cast<int>(tileNumber))
+                            : triangle.textureTiles.cend();
+                        if (tile == triangle.textureTiles.cend()) {
+                            // Blender Workbench displays absent UDIM tiles as
+                            // magenta so the incomplete image stays visible.
+                            uchar *pixel = row + x * 4;
+                            pixel[0] = 255;
+                            pixel[1] = 0;
+                            pixel[2] = 255;
+                            pixel[3] = 255;
+                            continue;
+                        }
+                        sampleImage = &tile.value();
+                        sampleUv = QPointF(uv.x() - tileU, uv.y() - tileV);
+                    }
+                    if (sampleImage->isNull()) continue;
                     uchar rgba[4];
-                    sample(uv, rgba);
+                    sampleWorkbenchImage(*sampleImage, sampleUv,
+                                         triangle.textureInterpolation,
+                                         triangle.textureExtension, rgba);
                     if (rgba[3] < 26) continue; // Blender's filtered alpha < 0.1 cutoff.
                     uchar *pixel = row + x * 4;
                     QVector3D textureColor;
@@ -1572,7 +1629,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
             painter.restore();
         };
         for (const MeshTriangle &triangle : triangles) {
-            if (!triangle.texture.isNull() && triangle.points.size() == 3) {
+            if ((!triangle.texture.isNull() || triangle.tiledTexture) &&
+                triangle.points.size() == 3) {
                 drawTextureTriangle(triangle);
             } else {
                 painter.setBrush(triangle.color);

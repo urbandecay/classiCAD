@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 
 namespace classiCAD {
@@ -71,6 +72,31 @@ void configureWorkbenchImageTexture(GLuint texture,
         functions->glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR,
                                     transparent);
     }
+}
+
+void configureWorkbenchUdimTexture(GLuint texture,
+                                   const WorkbenchMaterialData &material)
+{
+    if (texture == 0) return;
+    const bool closest = workbenchTextureInterpolation(
+        material.textureImageInterpolation) == 1;
+    QOpenGLFunctions *functions = QOpenGLContext::currentContext()->functions();
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousBinding = 0;
+    functions->glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    functions->glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousBinding);
+    functions->glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
+    functions->glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER,
+                                closest ? GL_NEAREST : GL_LINEAR);
+    functions->glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER,
+                                closest ? GL_NEAREST : GL_LINEAR);
+    functions->glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S,
+                                GL_CLAMP_TO_EDGE);
+    functions->glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T,
+                                GL_CLAMP_TO_EDGE);
+    functions->glBindTexture(GL_TEXTURE_2D_ARRAY,
+                              static_cast<GLuint>(previousBinding));
+    functions->glActiveTexture(static_cast<GLenum>(previousActiveTexture));
 }
 
 QVector3D workbenchShadowDirectionWorld(
@@ -264,6 +290,11 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         if (texture != 0) glDeleteTextures(1, &texture);
     }
     imageTextures_.clear();
+    for (const UdimTextureSet &textures : udimImageTextures_) {
+        if (textures.imageArray != 0) glDeleteTextures(1, &textures.imageArray);
+        if (textures.tileLookup != 0) glDeleteTextures(1, &textures.tileLookup);
+    }
+    udimImageTextures_.clear();
     if (agxDisplayTexture_ != 0 && agxDisplayTextureTransform_ != 4) {
         glDeleteTextures(1, &agxDisplayTexture_);
     }
@@ -380,11 +411,53 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uUseAttributeColor;
         uniform bool uUseTextureColor;
         uniform sampler2D uWorkbenchImage;
+        uniform bool uUseUdimImage;
+        uniform sampler2DArray uWorkbenchUdimImage;
+        uniform sampler2D uWorkbenchUdimLookup;
         uniform int uTextureInterpolation;
         uniform bool uTexturePremultiplied;
         uniform bool uTextureAlphaCutoff;
+        vec4 sampleWorkbenchUdimLinear(vec2 uv)
+        {
+            vec2 tile = floor(uv);
+            if (tile.x < 0.0 || tile.x >= 10.0 ||
+                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
+            int layer = int(tileInfo.x + 0.5) - 1;
+            if (layer < 0) return vec4(1.0, 0.0, 1.0, 1.0);
+            return texture(uWorkbenchUdimImage,
+                           vec3(fract(uv) * tileInfo.yz, float(layer)));
+        }
+        vec4 sampleWorkbenchUdim(vec2 uv)
+        {
+            if (uTextureInterpolation != 2) return sampleWorkbenchUdimLinear(uv);
+            vec2 tile = floor(uv);
+            if (tile.x < 0.0 || tile.x >= 10.0 ||
+                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
+            if (tileInfo.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec2 size = vec2(textureSize(uWorkbenchUdimImage, 0).xy) * tileInfo.yz;
+            vec2 p = fract(uv) * size - 0.5;
+            vec2 base = floor(p);
+            vec2 f = fract(p);
+            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+            vec2 w3 = f * f * f / 6.0;
+            vec4 result = vec4(0.0);
+            for (int y = 0; y < 4; ++y) {
+                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
+                for (int x = 0; x < 4; ++x) {
+                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
+                    vec2 tap = tile + (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size;
+                    result += sampleWorkbenchUdimLinear(tap) * wx * wy;
+                }
+            }
+            return result;
+        }
         vec4 sampleWorkbenchImage(vec2 uv)
         {
+            if (uUseUdimImage) return sampleWorkbenchUdim(uv);
             if (uTextureInterpolation == 1) {
                 return texture(uWorkbenchImage, uv);
             }
@@ -988,12 +1061,54 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uUseTextureAlphaMask;
         uniform bool uTextureAlphaCutoff;
         uniform sampler2D uWorkbenchImage;
+        uniform bool uUseUdimImage;
+        uniform sampler2DArray uWorkbenchUdimImage;
+        uniform sampler2D uWorkbenchUdimLookup;
         uniform int uTextureInterpolation;
         layout(location = 0) out vec4 fragmentViewNormal;
         layout(location = 1) out uint fragmentObjectId;
         layout(location = 2) out uint fragmentOutlineObjectId;
+        vec4 sampleWorkbenchUdimAlphaLinear(vec2 uv)
+        {
+            vec2 tile = floor(uv);
+            if (tile.x < 0.0 || tile.x >= 10.0 ||
+                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
+            int layer = int(tileInfo.x + 0.5) - 1;
+            if (layer < 0) return vec4(1.0, 0.0, 1.0, 1.0);
+            return texture(uWorkbenchUdimImage,
+                           vec3(fract(uv) * tileInfo.yz, float(layer)));
+        }
+        vec4 sampleWorkbenchUdimAlpha(vec2 uv)
+        {
+            if (uTextureInterpolation != 2) return sampleWorkbenchUdimAlphaLinear(uv);
+            vec2 tile = floor(uv);
+            if (tile.x < 0.0 || tile.x >= 10.0 ||
+                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
+            if (tileInfo.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec2 size = vec2(textureSize(uWorkbenchUdimImage, 0).xy) * tileInfo.yz;
+            vec2 p = fract(uv) * size - 0.5;
+            vec2 base = floor(p);
+            vec2 f = fract(p);
+            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+            vec2 w3 = f * f * f / 6.0;
+            vec4 result = vec4(0.0);
+            for (int y = 0; y < 4; ++y) {
+                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
+                for (int x = 0; x < 4; ++x) {
+                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
+                    vec2 tap = tile + (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size;
+                    result += sampleWorkbenchUdimAlphaLinear(tap) * wx * wy;
+                }
+            }
+            return result;
+        }
         vec4 sampleWorkbenchAlphaImage(vec2 uv)
         {
+            if (uUseUdimImage) return sampleWorkbenchUdimAlpha(uv);
             if (uTextureInterpolation != 2) return texture(uWorkbenchImage, uv);
             vec2 size = vec2(textureSize(uWorkbenchImage, 0));
             vec2 p = uv * size - 0.5;
@@ -1095,10 +1210,52 @@ bool ViewportSurfaceRenderer::initialize()
         #version 330 core
         in vec2 vUv;
         uniform sampler2D uShadowAlphaTexture;
+        uniform bool uUseShadowUdimImage;
+        uniform sampler2DArray uShadowUdimImage;
+        uniform sampler2D uShadowUdimLookup;
         uniform bool uUseShadowAlphaMask;
         uniform int uTextureInterpolation;
+        vec4 sampleShadowUdimAlphaLinear(vec2 uv)
+        {
+            vec2 tile = floor(uv);
+            if (tile.x < 0.0 || tile.x >= 10.0 ||
+                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 tileInfo = texelFetch(uShadowUdimLookup, ivec2(tile), 0);
+            int layer = int(tileInfo.x + 0.5) - 1;
+            if (layer < 0) return vec4(1.0, 0.0, 1.0, 1.0);
+            return texture(uShadowUdimImage,
+                           vec3(fract(uv) * tileInfo.yz, float(layer)));
+        }
+        vec4 sampleShadowUdimAlpha(vec2 uv)
+        {
+            if (uTextureInterpolation != 2) return sampleShadowUdimAlphaLinear(uv);
+            vec2 tile = floor(uv);
+            if (tile.x < 0.0 || tile.x >= 10.0 ||
+                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 tileInfo = texelFetch(uShadowUdimLookup, ivec2(tile), 0);
+            if (tileInfo.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec2 size = vec2(textureSize(uShadowUdimImage, 0).xy) * tileInfo.yz;
+            vec2 p = fract(uv) * size - 0.5;
+            vec2 base = floor(p);
+            vec2 f = fract(p);
+            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+            vec2 w3 = f * f * f / 6.0;
+            vec4 result = vec4(0.0);
+            for (int y = 0; y < 4; ++y) {
+                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
+                for (int x = 0; x < 4; ++x) {
+                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
+                    vec2 tap = tile + (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size;
+                    result += sampleShadowUdimAlphaLinear(tap) * wx * wy;
+                }
+            }
+            return result;
+        }
         vec4 sampleShadowAlphaImage(vec2 uv)
         {
+            if (uUseShadowUdimImage) return sampleShadowUdimAlpha(uv);
             if (uTextureInterpolation != 2) return texture(uShadowAlphaTexture, uv);
             vec2 size = vec2(textureSize(uShadowAlphaTexture, 0));
             vec2 p = uv * size - 0.5;
@@ -1360,7 +1517,11 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 const bool packedImageAvailable = faceSlot >= 0 &&
                         faceSlot < object.meshMaterials.size() &&
                     !object.meshMaterials[faceSlot].textureImagePackedDataBase64.isEmpty();
-                const bool textureAvailable = (!imagePath.isEmpty() || packedImageAvailable) &&
+                const bool tiledImageAvailable = faceSlot >= 0 &&
+                        faceSlot < object.meshMaterials.size() &&
+                    !object.meshMaterials[faceSlot].textureImageTiles.isEmpty();
+                const bool textureAvailable = (!imagePath.isEmpty() || packedImageAvailable ||
+                                               tiledImageAvailable) &&
                     activeUvMap != nullptr &&
                     faceFirstCorner + face.size() <= activeUvMap->cornerValues.size();
                 const int first = changed
@@ -1472,6 +1633,9 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     range.workbenchMaterial.alpha = slot.alpha;
                 }
                 range.textureImageSrgb = range.workbenchMaterial.textureImageSrgb;
+                range.textureImageTiles = textureAvailable
+                    ? range.workbenchMaterial.textureImageTiles
+                    : QVector<DocumentImageTextureTile>{};
                 ranges_.append(std::move(range));
             }
         } else {
@@ -1502,13 +1666,17 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 object.shape.nurbsSurface.trimLoops.isEmpty();
             const bool hasSurfaceTexture =
                 !object.workbenchMaterial.textureImagePath.isEmpty() ||
-                !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty();
+                !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty() ||
+                !object.workbenchMaterial.textureImageTiles.isEmpty();
             range.useTextureColor = hasSurfaceUv && hasSurfaceTexture;
             // The depth-map fallback can use the same exact-domain NURBS UVs
             // and image input as the GPU color pass for untrimmed surfaces.
             range.shadowTextureAlphaMask = range.useTextureColor;
             range.textureImagePath = range.useTextureColor
                 ? object.workbenchMaterial.textureImagePath : QString{};
+            range.textureImageTiles = range.useTextureColor
+                ? object.workbenchMaterial.textureImageTiles
+                : QVector<DocumentImageTextureTile>{};
             range.textureImageSrgb = object.workbenchMaterial.textureImageSrgb;
             if ((object.shape.geometryType == GeometryType::NurbsSolid ||
                  object.shape.geometryType == GeometryType::NurbsSurface) &&
@@ -1860,6 +2028,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     GLint previousProgram = 0;
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousTexture0 = 0;
+    GLint previousUdimArrayTexture = 0;
+    GLint previousUdimLookupTexture = 0;
     GLboolean previousDepthMask = GL_TRUE;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
@@ -1878,6 +2048,11 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     glBindFramebuffer(GL_FRAMEBUFFER, workbenchEffectFramebuffer_);
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
+    glActiveTexture(GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousUdimArrayTexture);
+    glActiveTexture(GL_TEXTURE2);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousUdimLookupTexture);
+    glActiveTexture(GL_TEXTURE0);
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
     glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1916,6 +2091,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     const GLint outlineObjectIdUniformLocation =
         workbenchEffectProgram_.uniformLocation("uOutlineObjectId");
     workbenchEffectProgram_.setUniformValue("uWorkbenchImage", 0);
+    workbenchEffectProgram_.setUniformValue("uWorkbenchUdimImage", 1);
+    workbenchEffectProgram_.setUniformValue("uWorkbenchUdimLookup", 2);
     const GLint useTextureAlphaMaskUniformLocation =
         workbenchEffectProgram_.uniformLocation("uUseTextureAlphaMask");
     const GLint textureAlphaCutoffUniformLocation =
@@ -1956,13 +2133,27 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
                                  range.workbenchMaterial.textureImagePackedDataBase64,
                                  range.textureImageSrgb)
             : 0;
-        glUniform1i(useTextureAlphaMaskUniformLocation, imageTexture != 0);
+        const UdimTextureSet udimTexture = settings.colorMode == ViewportColorMode::Texture &&
+                range.useTextureColor
+            ? ensureUdimTexture(range.textureImageTiles, range.textureImageSrgb)
+            : UdimTextureSet{};
+        glUniform1i(useTextureAlphaMaskUniformLocation,
+                    imageTexture != 0 || udimTexture.imageArray != 0);
+        workbenchEffectProgram_.setUniformValue(
+            "uUseUdimImage", udimTexture.imageArray != 0);
         glUniform1i(textureAlphaCutoffUniformLocation, !ignoreTextureAlpha);
         workbenchEffectProgram_.setUniformValue(
             "uTextureInterpolation", workbenchTextureInterpolation(
                 range.workbenchMaterial.textureImageInterpolation));
         configureWorkbenchImageTexture(imageTexture, range.workbenchMaterial);
         glBindTexture(GL_TEXTURE_2D, imageTexture);
+        configureWorkbenchUdimTexture(udimTexture.imageArray,
+                                      range.workbenchMaterial);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, udimTexture.imageArray);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, udimTexture.tileLookup);
+        glActiveTexture(GL_TEXTURE0);
         workbenchEffectProgram_.setUniformValue(
             "uWorldOffset",
             QVector3D(static_cast<float>(range.offset.x),
@@ -2001,6 +2192,13 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
                       static_cast<GLuint>(previousDrawFramebuffer));
     glBindFramebuffer(GL_READ_FRAMEBUFFER,
                       static_cast<GLuint>(previousReadFramebuffer));
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY,
+                  static_cast<GLuint>(previousUdimArrayTexture));
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D,
+                  static_cast<GLuint>(previousUdimLookupTexture));
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glViewport(previousViewport[0], previousViewport[1],
@@ -2040,6 +2238,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
     GLint previousDepthFunction = GL_LESS;
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousTexture0 = 0;
+    GLint previousUdimArrayTexture = 0;
+    GLint previousUdimLookupTexture = 0;
     GLint previousVertexArray = 0;
     GLint previousArrayBuffer = 0;
     GLint previousDrawBuffers[3] = {GL_COLOR_ATTACHMENT0,
@@ -2081,6 +2281,11 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
 
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
+    glActiveTexture(GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousUdimArrayTexture);
+    glActiveTexture(GL_TEXTURE2);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousUdimLookupTexture);
+    glActiveTexture(GL_TEXTURE0);
     glBindFramebuffer(GL_FRAMEBUFFER, workbenchEffectFramebuffer_);
     glGetIntegerv(GL_DRAW_BUFFER0, &previousDrawBuffers[0]);
     glGetIntegerv(GL_DRAW_BUFFER1, &previousDrawBuffers[1]);
@@ -2116,6 +2321,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
     workbenchEffectProgram_.setUniformValue("uViewUp", asVector(viewUp));
     workbenchEffectProgram_.setUniformValue("uViewFacing", asVector(viewDirection));
     workbenchEffectProgram_.setUniformValue("uWorkbenchImage", 0);
+    workbenchEffectProgram_.setUniformValue("uWorkbenchUdimImage", 1);
+    workbenchEffectProgram_.setUniformValue("uWorkbenchUdimLookup", 2);
     const GLint objectIdUniformLocation =
         workbenchEffectProgram_.uniformLocation("uObjectId");
     const GLint outlineObjectIdUniformLocation =
@@ -2161,13 +2368,27 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
                       range.workbenchMaterial.textureImagePackedDataBase64,
                       range.textureImageSrgb)
                 : 0;
-        glUniform1i(useTextureAlphaMaskUniformLocation, imageTexture != 0);
+        const UdimTextureSet udimTexture = settings.colorMode == ViewportColorMode::Texture &&
+                range.useTextureColor
+            ? ensureUdimTexture(range.textureImageTiles, range.textureImageSrgb)
+            : UdimTextureSet{};
+        glUniform1i(useTextureAlphaMaskUniformLocation,
+                    imageTexture != 0 || udimTexture.imageArray != 0);
+        workbenchEffectProgram_.setUniformValue(
+            "uUseUdimImage", udimTexture.imageArray != 0);
         glUniform1i(textureAlphaCutoffUniformLocation, !ignoreTextureAlpha);
         workbenchEffectProgram_.setUniformValue(
             "uTextureInterpolation", workbenchTextureInterpolation(
                 range.workbenchMaterial.textureImageInterpolation));
         configureWorkbenchImageTexture(imageTexture, range.workbenchMaterial);
         glBindTexture(GL_TEXTURE_2D, imageTexture);
+        configureWorkbenchUdimTexture(udimTexture.imageArray,
+                                      range.workbenchMaterial);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, udimTexture.imageArray);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, udimTexture.tileLookup);
+        glActiveTexture(GL_TEXTURE0);
         workbenchEffectProgram_.setUniformValue(
             "uWorldOffset",
             QVector3D(static_cast<float>(range.offset.x),
@@ -2215,6 +2436,13 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
                         static_cast<GLenum>(previousBlendDestinationAlpha));
     glBindVertexArray(static_cast<GLuint>(previousVertexArray));
     glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(previousArrayBuffer));
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY,
+                  static_cast<GLuint>(previousUdimArrayTexture));
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D,
+                  static_cast<GLuint>(previousUdimLookupTexture));
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glUseProgram(static_cast<GLuint>(previousProgram));
@@ -2279,6 +2507,8 @@ bool ViewportSurfaceRenderer::renderShadowMap(
     GLint previousProgram = 0;
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousTexture0 = 0;
+    GLint previousShadowUdimArrayTexture = 0;
+    GLint previousShadowUdimLookupTexture = 0;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
     GLboolean previousDepthMask = GL_TRUE;
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
@@ -2291,6 +2521,13 @@ bool ViewportSurfaceRenderer::renderShadowMap(
     glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
+    glActiveTexture(GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,
+                  &previousShadowUdimArrayTexture);
+    glActiveTexture(GL_TEXTURE2);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                  &previousShadowUdimLookupTexture);
+    glActiveTexture(GL_TEXTURE0);
     glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
 
@@ -2317,6 +2554,8 @@ bool ViewportSurfaceRenderer::renderShadowMap(
     shadowProgram_.setUniformValue("uShadowViewProjection",
                                    shadowViewProjection_);
     shadowProgram_.setUniformValue("uShadowAlphaTexture", 0);
+    shadowProgram_.setUniformValue("uShadowUdimImage", 1);
+    shadowProgram_.setUniformValue("uShadowUdimLookup", 2);
     for (const DrawRange &range : ranges_) {
         if (range.count <= 0 ||
             (fallbackOnly && range.shadowVolumeSupported)) {
@@ -2340,12 +2579,27 @@ bool ViewportSurfaceRenderer::renderShadowMap(
                                  range.workbenchMaterial.textureImagePackedDataBase64,
                                  range.textureImageSrgb)
             : 0;
+        const UdimTextureSet udimTexture = range.shadowTextureAlphaMask &&
+                settings.colorMode == ViewportColorMode::Texture &&
+                !ignoreTextureAlpha
+            ? ensureUdimTexture(range.textureImageTiles, range.textureImageSrgb)
+            : UdimTextureSet{};
         shadowProgram_.setUniformValue(
             "uTextureInterpolation", workbenchTextureInterpolation(
                 range.workbenchMaterial.textureImageInterpolation));
         configureWorkbenchImageTexture(alphaTexture, range.workbenchMaterial);
-        shadowProgram_.setUniformValue("uUseShadowAlphaMask", alphaTexture != 0);
+        configureWorkbenchUdimTexture(udimTexture.imageArray,
+                                      range.workbenchMaterial);
+        shadowProgram_.setUniformValue("uUseShadowAlphaMask",
+                                      alphaTexture != 0 || udimTexture.imageArray != 0);
+        shadowProgram_.setUniformValue("uUseShadowUdimImage",
+                                      udimTexture.imageArray != 0);
         glBindTexture(GL_TEXTURE_2D, alphaTexture);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, udimTexture.imageArray);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, udimTexture.tileLookup);
+        glActiveTexture(GL_TEXTURE0);
         glDrawArrays(GL_TRIANGLES, range.first, range.count);
     }
     shadowProgram_.release();
@@ -2354,6 +2608,13 @@ bool ViewportSurfaceRenderer::renderShadowMap(
 
     glBindFramebuffer(GL_FRAMEBUFFER,
                       static_cast<GLuint>(previousFramebuffer));
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY,
+                  static_cast<GLuint>(previousShadowUdimArrayTexture));
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D,
+                  static_cast<GLuint>(previousShadowUdimLookupTexture));
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glViewport(previousViewport[0], previousViewport[1],
@@ -2840,6 +3101,143 @@ GLuint ViewportSurfaceRenderer::ensureImageTexture(
                  0, GL_RGBA, GL_UNSIGNED_BYTE, image.constBits());
     imageTextures_.insert(cacheKey, texture);
     return texture;
+}
+
+ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTexture(
+    const QVector<DocumentImageTextureTile> &tiles, bool srgb)
+{
+    if (tiles.isEmpty()) return {};
+    QByteArray cacheMaterial;
+    QDataStream cacheStream(&cacheMaterial, QIODevice::WriteOnly);
+    cacheStream.setVersion(QDataStream::Qt_5_15);
+    cacheStream << srgb;
+    for (const DocumentImageTextureTile &tile : tiles) {
+        const QFileInfo info(tile.filepath);
+        cacheStream << qint32(tile.number) << tile.filepath << tile.sourceFileExists
+                    << info.size() << info.lastModified().toMSecsSinceEpoch();
+    }
+    const QString cacheKey = QStringLiteral("UDIM\n") + QString::fromLatin1(
+        QCryptographicHash::hash(cacheMaterial, QCryptographicHash::Sha256).toHex());
+    const auto cached = udimImageTextures_.constFind(cacheKey);
+    if (cached != udimImageTextures_.cend()) return cached.value();
+
+    struct LoadedTile {
+        int number = 0;
+        QImage image;
+    };
+    QVector<LoadedTile> loaded;
+    QSet<int> seenNumbers;
+    int maximumWidth = 0;
+    int maximumHeight = 0;
+    quint64 decodedPixelCount = 0;
+    for (const DocumentImageTextureTile &tile : tiles) {
+        if (tile.number < 1001 || tile.number > 1999 ||
+            seenNumbers.contains(tile.number)) continue;
+        seenNumbers.insert(tile.number);
+        const QFileInfo info(tile.filepath);
+        const QByteArray suffix = info.suffix().toLower().toLatin1();
+        static const QSet<QByteArray> allowedFormats{
+            "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
+        if (!tile.sourceFileExists || !info.isFile() ||
+            !allowedFormats.contains(suffix) || info.size() <= 0 ||
+            info.size() > 256LL * 1024LL * 1024LL) continue;
+        QImageReader reader(tile.filepath);
+        const QSize size = reader.size();
+        if (!size.isValid() || size.width() > 16384 || size.height() > 16384 ||
+            static_cast<quint64>(size.width()) * size.height() > 67108864ULL) continue;
+        const quint64 tilePixels = static_cast<quint64>(size.width()) * size.height();
+        if (decodedPixelCount + tilePixels > 67108864ULL) continue;
+        QImage image = reader.read();
+        if (image.isNull()) continue;
+        decodedPixelCount += tilePixels;
+        image = image.convertToFormat(QImage::Format_RGBA8888)
+                     .mirrored(false, true);
+        maximumWidth = std::max(maximumWidth, image.width());
+        maximumHeight = std::max(maximumHeight, image.height());
+        loaded.append({tile.number, std::move(image)});
+    }
+    if (loaded.isEmpty()) {
+        QImage missingTile(1, 1, QImage::Format_RGBA8888);
+        missingTile.fill(QColor(255, 0, 255, 255));
+        loaded.append({0, std::move(missingTile)});
+        maximumWidth = 1;
+        maximumHeight = 1;
+    }
+    GLint maximumLayers = 0;
+    glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &maximumLayers);
+    const quint64 layerPixels = static_cast<quint64>(maximumWidth) * maximumHeight;
+    if (maximumLayers <= 0 || loaded.size() > maximumLayers ||
+        layerPixels > 67108864ULL ||
+        layerPixels * static_cast<quint64>(loaded.size()) > 67108864ULL) {
+        udimImageTextures_.insert(cacheKey, {});
+        return {};
+    }
+
+    QVector<float> tileLookup(10 * 100 * 4, 0.0f);
+    QVector<QImage> paddedImages;
+    paddedImages.reserve(loaded.size());
+    for (int layer = 0; layer < loaded.size(); ++layer) {
+        QImage image(maximumWidth, maximumHeight, QImage::Format_RGBA8888);
+        const QImage &source = loaded[layer].image;
+        for (int y = 0; y < maximumHeight; ++y) {
+            uchar *destination = image.scanLine(y);
+            const int sourceY = std::min(y, source.height() - 1);
+            const uchar *sourceLine = source.constScanLine(sourceY);
+            for (int x = 0; x < maximumWidth; ++x) {
+                const int sourceX = std::min(x, source.width() - 1);
+                std::memcpy(destination + x * 4, sourceLine + sourceX * 4, 4);
+            }
+        }
+        if (loaded[layer].number < 1001 || loaded[layer].number > 1999) {
+            paddedImages.append(std::move(image));
+            continue;
+        }
+        const int tileOffset = loaded[layer].number - 1001;
+        const int mapOffset = tileOffset * 4;
+        tileLookup[mapOffset] = static_cast<float>(layer + 1);
+        tileLookup[mapOffset + 1] = static_cast<float>(source.width()) /
+                                    static_cast<float>(maximumWidth);
+        tileLookup[mapOffset + 2] = static_cast<float>(source.height()) /
+                                    static_cast<float>(maximumHeight);
+        paddedImages.append(std::move(image));
+    }
+
+    GLint previousArrayBinding = 0;
+    GLint previous2dBinding = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousArrayBinding);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous2dBinding);
+    GLuint imageArray = 0;
+    GLuint lookupTexture = 0;
+    glGenTextures(1, &imageArray);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, imageArray);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8,
+                 maximumWidth, maximumHeight, paddedImages.size(), 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, nullptr);
+    for (int layer = 0; layer < paddedImages.size(); ++layer) {
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer,
+                        maximumWidth, maximumHeight, 1, GL_RGBA,
+                        GL_UNSIGNED_BYTE, paddedImages[layer].constBits());
+    }
+    glGenTextures(1, &lookupTexture);
+    glBindTexture(GL_TEXTURE_2D, lookupTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 10, 100, 0, GL_RGBA,
+                 GL_FLOAT, tileLookup.constData());
+    glBindTexture(GL_TEXTURE_2D_ARRAY, static_cast<GLuint>(previousArrayBinding));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previous2dBinding));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    const UdimTextureSet result{imageArray, lookupTexture};
+    udimImageTextures_.insert(cacheKey, result);
+    return result;
 }
 
 bool ViewportSurfaceRenderer::ensureAgxDisplayTexture(
@@ -3515,6 +3913,8 @@ bool ViewportSurfaceRenderer::draw(
         GLint previousCavityDepthTextureBinding = 0;
         GLint previousCavityJitterTextureBinding = 0;
         GLint previousImageTextureBinding = 0;
+        GLint previousUdimArrayTextureBinding = 0;
+        GLint previousUdimLookupTextureBinding = 0;
         glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
         glActiveTexture(GL_TEXTURE0);
         if (matcapAvailable) {
@@ -3562,6 +3962,8 @@ bool ViewportSurfaceRenderer::draw(
         glActiveTexture(GL_TEXTURE6);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousImageTextureBinding);
         program_.setUniformValue("uWorkbenchImage", 6);
+        program_.setUniformValue("uWorkbenchUdimImage", 8);
+        program_.setUniformValue("uWorkbenchUdimLookup", 9);
         glActiveTexture(GL_TEXTURE7);
         glGetIntegerv(GL_TEXTURE_BINDING_2D,
                       &previousCavityJitterTextureBinding);
@@ -3570,6 +3972,12 @@ bool ViewportSurfaceRenderer::draw(
                           ? cavityJitterTexture_
                           : 0);
         program_.setUniformValue("uCavityJitterTexture", 7);
+        glActiveTexture(GL_TEXTURE8);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,
+                      &previousUdimArrayTextureBinding);
+        glActiveTexture(GL_TEXTURE9);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                      &previousUdimLookupTextureBinding);
         // Blender 5.2's 3D View face_select color is #FFA300 with alpha 0x33.
         const QColor editSelectionColor(QStringLiteral("#ffa300"));
         // Theme colors are sRGB; Blender's overlay framebuffer blends in
@@ -3663,7 +4071,16 @@ bool ViewportSurfaceRenderer::draw(
                 ? ensureImageTexture(range.textureImagePath,
                                      range.workbenchMaterial.textureImagePackedDataBase64,
                                      range.textureImageSrgb) : 0;
-            program_.setUniformValue("uUseTextureColor", imageTexture != 0);
+            const UdimTextureSet udimTexture =
+                settings.colorMode == ViewportColorMode::Texture &&
+                        range.useTextureColor
+                    ? ensureUdimTexture(range.textureImageTiles,
+                                        range.textureImageSrgb)
+                    : UdimTextureSet{};
+            program_.setUniformValue("uUseTextureColor",
+                                     imageTexture != 0 || udimTexture.imageArray != 0);
+            program_.setUniformValue("uUseUdimImage",
+                                     udimTexture.imageArray != 0);
             program_.setUniformValue(
                 "uTextureInterpolation", workbenchTextureInterpolation(
                     range.workbenchMaterial.textureImageInterpolation));
@@ -3678,6 +4095,13 @@ bool ViewportSurfaceRenderer::draw(
             program_.setUniformValue("uTextureAlphaCutoff", !ignoreTextureAlpha);
             glActiveTexture(GL_TEXTURE6);
             glBindTexture(GL_TEXTURE_2D, imageTexture);
+            configureWorkbenchUdimTexture(udimTexture.imageArray,
+                                          range.workbenchMaterial);
+            glActiveTexture(GL_TEXTURE8);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, udimTexture.imageArray);
+            glActiveTexture(GL_TEXTURE9);
+            glBindTexture(GL_TEXTURE_2D, udimTexture.tileLookup);
+            glActiveTexture(GL_TEXTURE6);
             const QVector3D offset(static_cast<float>(range.offset.x),
                                    static_cast<float>(range.offset.y),
                                    static_cast<float>(range.offset.z));
@@ -4047,6 +4471,12 @@ bool ViewportSurfaceRenderer::draw(
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D,
                       static_cast<GLuint>(previousCavityJitterTextureBinding));
+        glActiveTexture(GL_TEXTURE8);
+        glBindTexture(GL_TEXTURE_2D_ARRAY,
+                      static_cast<GLuint>(previousUdimArrayTextureBinding));
+        glActiveTexture(GL_TEXTURE9);
+        glBindTexture(GL_TEXTURE_2D,
+                      static_cast<GLuint>(previousUdimLookupTextureBinding));
         glActiveTexture(static_cast<GLenum>(previousActiveTexture));
 
         // Blender's TransparentDepthPass runs after transparent color has

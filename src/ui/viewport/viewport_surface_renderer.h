@@ -64,6 +64,7 @@ private:
         bool useAttributeColor = false;
         bool useTextureColor = false;
         QString textureImagePath;
+        QVector<DocumentImageTextureTile> textureImageTiles;
         bool textureImageSrgb = true;
         quint64 objectSeed = 0;
         quint32 effectObjectId = 0;
@@ -121,6 +122,12 @@ private:
     GLuint ensureImageTexture(const QString &path,
                               const QString &packedDataBase64,
                               bool srgb);
+    struct UdimTextureSet {
+        GLuint imageArray = 0;
+        GLuint tileLookup = 0;
+    };
+    UdimTextureSet ensureUdimTexture(const QVector<DocumentImageTextureTile> &tiles,
+                                     bool srgb);
 
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram outlineProgram_;
@@ -159,6 +166,7 @@ private:
     unsigned int shadowTexture_ = 0;
     unsigned int shadowFramebuffer_ = 0;
     QHash<QString, GLuint> imageTextures_;
+    QHash<QString, UdimTextureSet> udimImageTextures_;
     QMatrix4x4 shadowViewProjection_;
     QString matcapTextureName_;
     QByteArray geometryKey_;

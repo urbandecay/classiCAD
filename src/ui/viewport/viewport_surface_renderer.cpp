@@ -2579,7 +2579,10 @@ bool ViewportSurfaceRenderer::draw(
 
     bool shadowMapAvailable = false;
     if (shadowMapRequested) {
-        const bool fallbackOnly = shadowVolumesAvailable && !hasPartialAlpha;
+        // The volume pass already covers every supported caster, including
+        // transparent ones. In mixed-alpha scenes the map is only for ranges
+        // whose topology could not enter that pass.
+        const bool fallbackOnly = shadowVolumesAvailable;
         const bool hasFallbackCasters = std::any_of(
             ranges_.cbegin(), ranges_.cend(),
             [fallbackOnly](const DrawRange &range) {

@@ -1612,7 +1612,7 @@ bool ViewportSurfaceRenderer::initialize()
                 vec3 coordinate = texStart + texRay * t;
                 if (any(lessThan(coordinate, vec3(0.0))) ||
                     any(greaterThan(coordinate, vec3(1.0)))) discard;
-                float density = max(sampleDensity(coordinate), 0.0) * uDensityScale;
+                float density = sampleDensity(coordinate) * uDensityScale;
                 float extinction = max(density, 1.0e-4);
                 float opacity = 1.0 - exp(-extinction * uSliceStepWorld);
                 float scatteringScale = density / extinction;
@@ -1642,7 +1642,7 @@ bool ViewportSurfaceRenderer::initialize()
                 if (i >= uMaxSlice || (float(i) + noise) * rayStepWorld >= worldChordLength ||
                     transmittance <= 0.01) break;
                 float t = nearT + (float(i) + noise) * dt;
-                float density = max(sampleDensity(texStart + texRay * t), 0.0) * uDensityScale;
+                float density = sampleDensity(texStart + texRay * t) * uDensityScale;
                 float extinction = max(density, 1.0e-4);
                 float stepTransmittance = exp(-extinction * rayStepWorld);
                 float stepOpacity = 1.0 - stepTransmittance;

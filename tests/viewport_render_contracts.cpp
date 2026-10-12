@@ -428,6 +428,7 @@ int main(int argc, char *argv[])
             bool gpuVolumePassReported = false;
             int gpuVolumeChangedPixels = 0;
             bool gpuLowDensityVolumePreserved = false;
+            bool gpuSignedVolumeScatteringPreserved = false;
             const QSize glSize(640, 480);
             ViewportTransform gpuTransform;
             gpuTransform.zoom() = 17.28;
@@ -758,6 +759,41 @@ int main(int argc, char *argv[])
                         gpuLowDensityVolumePreserved =
                             lowDensityDrawSucceeded &&
                             maximumLowDensityAlpha > 0.0f;
+                        ScalarVolume3D negativeDensityVolume = scalarVolume;
+                        negativeDensityVolume.activeRecords[0].value =
+                            -1.0e-6f;
+                        ViewportRenderObject negativeDensityVolumeObject =
+                            volumeObject;
+                        negativeDensityVolumeObject.shape.scalarVolume =
+                            negativeDensityVolume;
+                        functions.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        const bool negativeDensityDrawSucceeded =
+                            gpuSurfaceRenderer.draw(
+                                {negativeDensityVolumeObject}, gpuTransform,
+                                glSize, 1.0, volumeShading, false, true,
+                                false, &volumeTargets, nullptr, true);
+                        functions.glReadPixels(
+                            0, 0, glSize.width(), glSize.height(), GL_RGBA,
+                            GL_FLOAT, lowDensityPixels.data());
+                        GLfloat minimumNegativeDensityRed = 0.0f;
+                        maximumLowDensityAlpha = 0.0f;
+                        for (qsizetype pixel = 0;
+                             pixel < qsizetype(glSize.width()) *
+                                         glSize.height();
+                             ++pixel) {
+                            minimumNegativeDensityRed = std::min(
+                                minimumNegativeDensityRed,
+                                lowDensityPixels[pixel * 4]);
+                            maximumLowDensityAlpha = std::max(
+                                maximumLowDensityAlpha,
+                                lowDensityPixels[pixel * 4 + 3]);
+                        }
+                        gpuSignedVolumeScatteringPreserved =
+                            negativeDensityDrawSucceeded &&
+                            minimumNegativeDensityRed < 0.0f &&
+                            maximumLowDensityAlpha > 0.0f;
                         floatFramebuffer.release();
                     }
                     functions.glDeleteTextures(1, &sceneDepthTexture);
@@ -1053,6 +1089,8 @@ int main(int argc, char *argv[])
                             "a bounded scalar volume must change offscreen framebuffer pixels");
             passed &= check(gpuLowDensityVolumePreserved,
                             "low-density volume extinction must remain nonzero in the float target");
+            passed &= check(gpuSignedVolumeScatteringPreserved,
+                            "negative scalar density must retain Blender's signed scattering");
         }
     }
 

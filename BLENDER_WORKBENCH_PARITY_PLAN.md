@@ -155,7 +155,7 @@ Status: completed against Blender 5.2.2 and classiCAD source. Updated after impl
 
 ### Stage 1: Make anti-aliasing control the viewport
 
-Status: partially implemented. The GPU path uses Blender's unjittered one-sample TAA filter plus SMAA for preference value 1 and during navigation, and jittered TAA accumulation plus SMAA for the 5+ modes. The viewport exposes `setViewportPlaybackActive(bool)`, but no application playback owner calls it; an external timeline owner must set it during playback and drive viewport frames for the one-sample reset to take effect. Scene strokes and selected-face overlays redraw after scene resolve using the unjittered camera and regenerated scene depth; the unjittered grid follows. Pixel-for-pixel equivalence has not been verified, and QPainter remains an approximation.
+Status: implemented for the application's current interaction model. The GPU path uses Blender's unjittered one-sample TAA filter plus SMAA for preference value 1 and during navigation, and jittered TAA accumulation plus SMAA for the 5+ modes. The viewport exposes `setViewportPlaybackActive(bool)`, but classiCAD has no scene timeline or playback owner; wiring that hook is deferred until playback exists. Scene strokes and selected-face overlays redraw after scene resolve using the unjittered camera and regenerated scene depth; the unjittered grid follows. Pixel-for-pixel equivalence has not been verified, and QPainter remains an approximation; those checks stay in Stage 5.
 
 - Define one classiCAD AA setting model that matches Blender's UI choices and exact sample mapping.
 - Route the setting through the complete Workbench scene render and resolve path, not only the grid framebuffer.

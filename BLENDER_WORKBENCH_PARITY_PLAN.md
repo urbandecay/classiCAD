@@ -244,6 +244,19 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   produce equivalent alpha composition with its straight-alpha shader; matched
   GPU output comparison remains pending.
 
+### GPU Workbench outline UI-scale sampling (2026-10-12)
+
+- The outline pass now samples its four cardinal object-ID neighbors at the
+  imported device/UI scale as a floating-point offset in normalized viewport
+  coordinates. It no longer rounds fractional display scale to an integer
+  texel step. This follows Blender 5.2.2's
+  [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl#L256-L271)
+  and the `U.pixelsize` setup in
+  [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L100-L109).
+  The integer ID texture uses nearest filtering and clamp-to-edge, so visible
+  changes are limited to fractional-scale boundary cases; matched rendering
+  remains open.
+
 ### GPU Studio lighting with specular disabled (2026-10-12)
 
 - Studio lighting now always multiplies its ambient/specular accumulator by

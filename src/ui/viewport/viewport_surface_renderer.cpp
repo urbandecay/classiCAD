@@ -1665,20 +1665,22 @@ bool ViewportSurfaceRenderer::initialize()
         uniform usampler2D uObjectIdBuffer;
         uniform vec4 uOutlineColor;
         uniform vec4 uSelectionColor;
-        uniform int uPixelOffset;
+        uniform float uUiScale;
         layout(location = 0) out vec4 fragmentColor;
         void main()
         {
             ivec2 size = textureSize(uObjectIdBuffer, 0);
             ivec2 pixel = ivec2(gl_FragCoord.xy);
-            ivec2 dx = ivec2(uPixelOffset, 0);
-            ivec2 dy = ivec2(0, uPixelOffset);
             uint centerId = texelFetch(uObjectIdBuffer, pixel, 0).r;
+            vec2 inverseSize = 1.0 / vec2(size);
+            vec2 uv = (vec2(pixel) + vec2(0.5)) * inverseSize;
+            vec2 dx = vec2(inverseSize.x * uUiScale, 0.0);
+            vec2 dy = vec2(0.0, inverseSize.y * uUiScale);
             uvec4 cardinalIds = uvec4(
-                texelFetch(uObjectIdBuffer, clamp(pixel + dx, ivec2(0), size - 1), 0).r,
-                texelFetch(uObjectIdBuffer, clamp(pixel - dx, ivec2(0), size - 1), 0).r,
-                texelFetch(uObjectIdBuffer, clamp(pixel + dy, ivec2(0), size - 1), 0).r,
-                texelFetch(uObjectIdBuffer, clamp(pixel - dy, ivec2(0), size - 1), 0).r);
+                texture(uObjectIdBuffer, uv + dx).r,
+                texture(uObjectIdBuffer, uv - dx).r,
+                texture(uObjectIdBuffer, uv + dy).r,
+                texture(uObjectIdBuffer, uv - dy).r);
             // Blender Workbench derives silhouette coverage from the center
             // ID and its four cardinal neighbors. Apply selection color over
             // that same neighborhood so diagonal-only contact does not color
@@ -5967,7 +5969,7 @@ bool ViewportSurfaceRenderer::draw(
                 QVector4D(selectionColor.redF(), selectionColor.greenF(),
                           selectionColor.blueF(), 1.0f));
             outlineProgram_.setUniformValue(
-                "uPixelOffset", std::max(1, qRound(dpr)));
+                "uUiScale", static_cast<float>(dpr));
             outlineVertexArray_.bind();
             glDrawArrays(GL_TRIANGLES, 0, 3);
             outlineVertexArray_.release();

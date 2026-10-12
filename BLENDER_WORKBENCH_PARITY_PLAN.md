@@ -127,6 +127,11 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   composition. Front transparent color is reported as a completed pass and
   current-sample color output; no separate persistent attachment is claimed
   because its OIT result is composited directly into the current sample.
+- Mixed-alpha Solid scenes now request the shared outline prepass. The shared
+  object/outline IDs are used only when regular transparent depth and any
+  required front transparent depth merge both completed; sorted or failed
+  target fallbacks retain the private outline-ID path. Regular transparent
+  depth preserves front-owned coverage, including front opaque pixels.
 
 ### GPU Workbench two-blade aperture (2026-10-12)
 

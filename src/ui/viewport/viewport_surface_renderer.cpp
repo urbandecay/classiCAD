@@ -3932,6 +3932,8 @@ bool ViewportSurfaceRenderer::draw(
     QVector<int> frontOpaqueRangeIndices;
     QVector<int> shadowVolumeRangeIndices;
     bool hasPartialAlpha = false;
+    bool hasFrontTransparentRanges = false;
+    bool transparentDepthCoverageReady = false;
     if (settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
         !selectionOverlay && !settings.xrayEnabled()) {
         for (int index = 0; index < ranges_.size(); ++index) {
@@ -3954,9 +3956,6 @@ bool ViewportSurfaceRenderer::draw(
                     opaqueRangeIndices.append(index);
                 }
             } else {
-                // Partial-alpha showInFront ranges intentionally remain in
-                // the existing regular OIT/sorted transparency domain until
-                // the separate front OIT resolve is implemented.
                 hasPartialAlpha = true;
             }
         }
@@ -3965,8 +3964,6 @@ bool ViewportSurfaceRenderer::draw(
         settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
         !selectionOverlay && clearDepth && !settings.xrayEnabled() &&
         !vertices_.isEmpty();
-    const bool primaryOpaqueSceneDraw =
-        primarySceneEffectsDraw && !hasPartialAlpha;
     if (settings.mode == ViewportShadingMode::Solid &&
         settings.backfaceCulling && !settings.xrayEnabled()) {
         glEnable(GL_CULL_FACE);
@@ -4074,7 +4071,7 @@ bool ViewportSurfaceRenderer::draw(
     }
 
     const bool cavityRequested = primarySceneEffectsDraw && settings.cavity;
-    const bool outlineRequested = primaryOpaqueSceneDraw && settings.outline;
+    const bool outlineRequested = primarySceneEffectsDraw && settings.outline;
     const bool worldSsaoRequested = cavityRequested &&
         (settings.cavityType == ViewportCavityType::World ||
          settings.cavityType == ViewportCavityType::Both);
@@ -4596,9 +4593,14 @@ bool ViewportSurfaceRenderer::draw(
                 frontOpaqueRangeIndices.contains(index)) {
                 continue;
             }
-            if (range.showInFront && sharedTargets != nullptr &&
-                sharedTargets->frontDepthTexture != 0) {
-                frontTransparentRangeIndices.append(index);
+            if (range.showInFront) {
+                hasFrontTransparentRanges = true;
+                if (sharedTargets != nullptr &&
+                    sharedTargets->frontDepthTexture != 0) {
+                    frontTransparentRangeIndices.append(index);
+                } else {
+                    transparentRangeIndices.append(index);
+                }
             } else {
                 transparentRangeIndices.append(index);
             }
@@ -5309,6 +5311,7 @@ bool ViewportSurfaceRenderer::draw(
         // shared depth target to update.
         if (weightedOitAvailable && sharedTargets != nullptr) {
             bool frontDepthMerged = false;
+            bool regularDepthRendered = transparentRangeIndices.isEmpty();
             if (frontWeightedOitAvailable &&
                 !frontTransparentRangeIndices.isEmpty()) {
                 ViewportRenderTargets frontTargets = *sharedTargets;
@@ -5341,12 +5344,15 @@ bool ViewportSurfaceRenderer::draw(
                 }
             }
             if (!transparentRangeIndices.isEmpty()) {
-                const bool transparentDepthRendered =
+                const bool excludeFrontCoverage = frontDomainReady &&
+                    (!frontOpaqueRangeIndices.isEmpty() ||
+                     (hasFrontTransparentRanges && frontDepthMerged));
+                regularDepthRendered =
                     renderWorkbenchTransparentDepthPass(
                         transform, viewportSize, devicePixelRatio, settings,
                         *sharedTargets, transparentRangeIndices,
-                        frontDepthMerged);
-                if (transparentDepthRendered && passReport != nullptr) {
+                        excludeFrontCoverage);
+                if (regularDepthRendered && passReport != nullptr) {
                     passReport->markPassCompleted(
                         ViewportRenderPass::TransparentDepth);
                     passReport->populatedAttachments |=
@@ -5355,7 +5361,14 @@ bool ViewportSurfaceRenderer::draw(
                         ViewportRenderTargets::ObjectId;
                 }
             }
+            transparentDepthCoverageReady = regularDepthRendered &&
+                (!hasFrontTransparentRanges ||
+                 (frontWeightedOitAvailable && frontDepthMerged));
         }
+    }
+
+    if (!hasPartialAlpha) {
+        transparentDepthCoverageReady = true;
     }
 
     if (settings.mode == ViewportShadingMode::Solid &&
@@ -5364,7 +5377,9 @@ bool ViewportSurfaceRenderer::draw(
         const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
         const QSize pixelSize(qRound(viewportSize.width() * dpr),
                               qRound(viewportSize.height() * dpr));
-        const bool useSharedOutlineIds = sharedPrepassReady &&
+        const bool sharedOutlineIdsReady = sharedPrepassReady &&
+                                           transparentDepthCoverageReady;
+        const bool useSharedOutlineIds = sharedOutlineIdsReady &&
                                          outlineRequested;
         const bool outlineFramebufferReady = useSharedOutlineIds ||
             ensureObjectIdFramebuffer(pixelSize);

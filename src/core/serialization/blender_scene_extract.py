@@ -621,6 +621,8 @@ def unsupported_object_record(obj, scene):
         record["reason"] = "surface has no supported NURBS patch"
     elif obj.type == "FONT":
         record["reason"] = "FONT objects require evaluated mode for mesh conversion; source text is not represented"
+    elif obj.type == "META":
+        record["reason"] = "METABALL objects require evaluated mode for mesh conversion; original metaball data is not represented"
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record
@@ -1062,6 +1064,38 @@ def extract_scene(input_path, mode):
                         **object_metadata(obj, scene),
                         "object_type": obj.type,
                         "reason": "font mesh extraction failed; whole object skipped: " + str(error),
+                    })
+                continue
+            if obj.type == "META":
+                if mode != "evaluated":
+                    output["unsupported_items"].append(
+                        unsupported_object_record(obj, scene))
+                    continue
+                try:
+                    item = extract_mesh_object(
+                        obj, scene, "evaluated", depsgraph, output["materials"],
+                        output["unsupported_features"])
+                    item["object_type"] = "MESH"
+                    item["source_object_type"] = "META"
+                    add_unsupported(
+                        output["unsupported_features"], item["object_id"],
+                        "metaball_to_mesh",
+                        "evaluated metaball geometry was imported as a baked mesh; editable metaball data and threshold settings were not retained")
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    output["items"].append(item)
+                    mesh_count += 1
+                except Exception as error:
+                    output["unsupported_items"].append({
+                        **object_metadata(obj, scene),
+                        "object_type": obj.type,
+                        "reason": "metaball mesh extraction failed; whole object skipped: " + str(error),
                     })
                 continue
             if obj.type != "MESH":

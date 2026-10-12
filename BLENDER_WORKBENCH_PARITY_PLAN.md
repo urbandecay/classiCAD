@@ -237,6 +237,8 @@ Acceptance: each checkbox affects its matching wire category only, while other v
 
 The previously supplied cube screenshots are not a controlled edge-quality comparison: the recorded views differ (`Ortho` versus `User Perspective`), the visible geometry differs, and the output dimensions differ. The source audit found no clear defect in the GPU TAA/SMAA equations that explains the soft edge. The cause remains unverified until a same-geometry, same-camera, same-size comparison separates rasterization, AA, and display conversion.
 
+Phase Two Category 8 source audit: the GPU TAA/SMAA weights, log-space accumulation, SMAA edge/area/search stages, temporal mix, and resolve follow Blender 5.2.2 closely, so no duplicate shader rewrite was made. QPainter still uses supersampling rather than Workbench temporal accumulation, and imported custom display LUTs still clamp inputs to `[0, 2]`; changing either requires work across fallback orchestration or LUT generation/metadata and CPU/GPU sampling. Keep those differences explicit until a scoped implementation and matched comparison are available.
+
 ### Implementation plan
 
 1. **Establish a comparable baseline.** Use the same hard-edged cube, viewport pixel dimensions, projection and camera pose, clipping range, color transform, and selection/overlay state in Blender 5.2.2 and classiCAD. Capture classiCAD's native GPU path separately from QPainter. Compare AA Off, Single Pass, and 8 samples, both idle and while navigating. Save pre-AA, post-AA scene-linear, and final display-transformed outputs so edge softness can be attributed to a specific stage. Do not call the AA port complete until the edge profiles and remaining differences are recorded.

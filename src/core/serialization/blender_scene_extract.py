@@ -148,6 +148,7 @@ def image_references(material):
                 "node_name": node.name,
                 "image_name": image.name_full,
                 "image_library_path": source_library_path(image),
+                "image_library_path_exists": source_library_exists(image),
                 # Resolve Blender's // path against the source .blend while
                 # still in Blender; classiCAD never interprets Blender paths.
                 "filepath": (bpy.path.abspath(image.filepath)
@@ -376,6 +377,14 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
                         + record["library_path"],
                     )
                 for image in record["image_textures"]:
+                    if (image["image_library_path_exists"] is False and
+                            not image["packed_data_base64"]):
+                        add_unsupported(
+                            unsupported, item_id,
+                            "image_library:" + image["image_name"],
+                            "linked Blender image library file is missing: "
+                            + image["image_library_path"],
+                        )
                     if image["packed_data_error"]:
                         add_unsupported(
                             unsupported, item_id,
@@ -592,6 +601,14 @@ def extract_surface_patches(obj, scene, materials, unsupported):
                     "linked Blender material library file is missing: " +
                     record["library_path"])
             for image in record["image_textures"]:
+                if (image["image_library_path_exists"] is False and
+                        not image["packed_data_base64"]):
+                    add_unsupported(
+                        unsupported, source_id,
+                        "image_library:" + image["image_name"],
+                        "linked Blender image library file is missing: " +
+                        image["image_library_path"],
+                    )
                 if image["packed_data_error"]:
                     add_unsupported(
                         unsupported, source_id,

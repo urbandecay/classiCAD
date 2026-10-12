@@ -1366,14 +1366,10 @@ bool ViewportSurfaceRenderer::initialize()
                 texelFetch(uObjectIdBuffer, clamp(pixel - dx, ivec2(0), size - 1), 0).r,
                 texelFetch(uObjectIdBuffer, clamp(pixel + dy, ivec2(0), size - 1), 0).r,
                 texelFetch(uObjectIdBuffer, clamp(pixel - dy, ivec2(0), size - 1), 0).r);
-            uvec4 diagonalIds = uvec4(
-                texelFetch(uObjectIdBuffer, clamp(pixel + dx + dy, ivec2(0), size - 1), 0).r,
-                texelFetch(uObjectIdBuffer, clamp(pixel + dx - dy, ivec2(0), size - 1), 0).r,
-                texelFetch(uObjectIdBuffer, clamp(pixel - dx + dy, ivec2(0), size - 1), 0).r,
-                texelFetch(uObjectIdBuffer, clamp(pixel - dx - dy, ivec2(0), size - 1), 0).r);
             // Blender Workbench derives silhouette coverage from the center
-            // ID and its four cardinal neighbors. Diagonal IDs remain below
-            // only for classiCAD's existing selected-color behavior.
+            // ID and its four cardinal neighbors. Apply selection color over
+            // that same neighborhood so diagonal-only contact does not color
+            // this pixel as selected.
             float opacity = 1.0 -
                 dot(vec4(equal(uvec4(centerId), cardinalIds)), vec4(0.25));
             if (opacity <= 0.0) {
@@ -1382,8 +1378,7 @@ bool ViewportSurfaceRenderer::initialize()
             const uint selectedBit = 0x80000000u;
             bool selected = (centerId & selectedBit) != 0u;
             for (int index = 0; index < 4; ++index) {
-                selected = selected || ((cardinalIds[index] & selectedBit) != 0u) ||
-                           ((diagonalIds[index] & selectedBit) != 0u);
+                selected = selected || ((cardinalIds[index] & selectedBit) != 0u);
             }
             vec4 color = selected ? uSelectionColor : uOutlineColor;
             fragmentColor = vec4(color.rgb, color.a * opacity);

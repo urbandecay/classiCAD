@@ -1059,9 +1059,11 @@ bool ViewportSurfaceRenderer::initialize()
                 texelFetch(uObjectIdBuffer, clamp(pixel + dx - dy, ivec2(0), size - 1), 0).r,
                 texelFetch(uObjectIdBuffer, clamp(pixel - dx + dy, ivec2(0), size - 1), 0).r,
                 texelFetch(uObjectIdBuffer, clamp(pixel - dx - dy, ivec2(0), size - 1), 0).r);
+            // Blender Workbench derives silhouette coverage from the center
+            // ID and its four cardinal neighbors. Diagonal IDs remain below
+            // only for classiCAD's existing selected-color behavior.
             float opacity = 1.0 -
-                (dot(vec4(equal(uvec4(centerId), cardinalIds)), vec4(0.125)) +
-                 dot(vec4(equal(uvec4(centerId), diagonalIds)), vec4(0.125)));
+                dot(vec4(equal(uvec4(centerId), cardinalIds)), vec4(0.25));
             if (opacity <= 0.0) {
                 discard;
             }

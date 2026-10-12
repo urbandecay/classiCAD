@@ -398,6 +398,9 @@ multi-pass Render Result lifecycle remains open. The Z export converts
 depth-buffer values to view-space Z and writes
 `1e10` for the background, matching Blender Workbench's pinned
 [`write_render_z_output`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2925-L3011).
+When OpenEXR support is available, the Combined EXR now also includes the
+enabled view-space Z pass as a FLOAT `Z` channel; the separate PFM export
+remains available.
 Committed CAD dimensions remain post-render, screen-space annotations in
 Combined; their fixed-pixel labels/arrows have no corresponding Z samples.
 Offscreen rendering accumulates the imported Blender `scene.display.render_aa`

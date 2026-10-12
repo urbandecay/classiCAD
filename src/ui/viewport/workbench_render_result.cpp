@@ -126,6 +126,11 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
         header.channels().insert("G", Channel(FLOAT));
         header.channels().insert("B", Channel(FLOAT));
         header.channels().insert("A", Channel(FLOAT));
+        const bool includeDepth = hasDepthPass() &&
+                                  depth.size() == qsizetype(width) * height;
+        if (includeDepth) {
+            header.channels().insert("Z", Channel(FLOAT));
+        }
         FrameBuffer frameBuffer;
         char *base = reinterpret_cast<char *>(
             const_cast<float *>(sceneLinearRgba.constData()));
@@ -138,6 +143,15 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
                                       yStride, 1, 1, 0.0));
         frameBuffer.insert("A", Slice(FLOAT, base + 3 * sizeof(float), xStride,
                                       yStride, 1, 1, 0.0));
+        if (includeDepth) {
+            char *depthBase = reinterpret_cast<char *>(
+                const_cast<float *>(depth.constData()));
+            const size_t depthXStride = sizeof(float);
+            const size_t depthYStride = size_t(width) * depthXStride;
+            frameBuffer.insert(
+                "Z", Slice(FLOAT, depthBase, depthXStride, depthYStride,
+                           1, 1, 0.0));
+        }
         const QByteArray encodedPath = QFile::encodeName(path);
         OutputFile output(encodedPath.constData(), header);
         output.setFrameBuffer(frameBuffer);

@@ -116,6 +116,23 @@ in ordinary free views or orthographic views is superseded by this correction.
   `workbench_materials.cc` image-filter setup above; visual comparison remains
   pending.
 
+### QPainter Image Texture alpha coverage (2026-10-12)
+
+- QPainter mesh and NURBS color paths now use sampled image alpha only for
+  Blender's cutout decision. Samples below the filtered 0.1 threshold are
+  discarded when alpha is enabled; surviving fragments retain the material
+  or object alpha and are not made translucent by multiplying by image alpha.
+  `NONE`/`IGNORE` and `CHANNEL_PACKED` continue to bypass the cutout (mesh
+  images normalize alpha to opaque when loaded; NURBS checks the mode directly).
+- This follows Blender 5.2.2: `workbench_image.bsl.hh` discards on sampled
+  image alpha and returns image RGB, while `workbench_prepass.bsl.hh` writes
+  fragment alpha from the material and X-Ray alpha. The cutoff/mode setup is
+  in `workbench_materials.cc`. Pinned sources:
+  [workbench_image.bsl.hh](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image.bsl.hh#L46-L72),
+  [workbench_prepass.bsl.hh](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L346-L369),
+  [workbench_materials.cc](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L86-L96).
+- QPainter color parity is source-corrected; visual comparison remains pending.
+
 ### GPU Workbench curvature sample spacing (2026-10-12)
 
 - GPU curvature neighbor reads now use `uiScale / viewportSize` offsets in

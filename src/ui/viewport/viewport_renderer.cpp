@@ -1830,7 +1830,6 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                                  triangle.textureSrgb);
                         }
                         if (rgba[3] < 26) continue; // Blender's filtered alpha < 0.1 cutoff.
-                        pixelAlpha *= rgba[3] / 255.0;
                         for (int component = 0; component < 3; ++component) {
                             const float linear = triangle.texturePremultiplied &&
                                     rgba[3] != 0 && rgba[3] != 255
@@ -3148,7 +3147,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                              linearRgb, nurbsTextureSrgb);
                     }
                     if (!textureAlphaIgnored && rgba[3] < 26) continue;
-                    const qreal alpha = shaded.alphaF() * (textureAlphaIgnored ? 1.0 : rgba[3]/255.0);
+                    const qreal alpha = shaded.alphaF();
                     const bool premultiplied = material.textureImageAlphaMode.compare(
                         QStringLiteral("PREMUL"), Qt::CaseInsensitive) == 0;
                     QVector3D textureColor;

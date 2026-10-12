@@ -1207,8 +1207,8 @@ Offscreen result export now honors the active imported view layer's
 scene render, but its Combined save is disabled and direct save calls fail
 when Blender has no Combined pass; Z availability remains governed by
 `use_pass_z`. When OpenEXR support is available, Combined EXR also writes the
-enabled Blender view-space Z data as a FLOAT `Z` channel. The Combined-pass
-availability and EXR Z-channel changes passed `cmake --build build` and its
+enabled Blender view-space Z data as a FLOAT `Z` channel when both buffers
+have matching dimensions. The change passed `cmake --build build` and its
 303-source dependency audit. This configured build lacks OpenEXR headers, so
 the conditional EXR implementation itself was not compiled. No tests,
 screenshots, or app startup were run.

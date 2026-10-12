@@ -6813,7 +6813,7 @@ public:
             : (result.depthPassAvailable
                    ? QStringLiteral("Depth PFM")
                    : QStringLiteral("No enabled render passes"));
-        if (result.combinedPassAvailable && result.hasDepthPass() &&
+        if (result.combinedPassAvailable && result.hasSceneLinearDepthPass() &&
             result.combinedFileExtension() == QLatin1String("exr")) {
             result.outputFormat += QStringLiteral(" + Z channel");
         }

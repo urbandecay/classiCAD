@@ -126,8 +126,7 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
         header.channels().insert("G", Channel(FLOAT));
         header.channels().insert("B", Channel(FLOAT));
         header.channels().insert("A", Channel(FLOAT));
-        const bool includeDepth = hasDepthPass() &&
-                                  depth.size() == qsizetype(width) * height;
+        const bool includeDepth = hasSceneLinearDepthPass();
         if (includeDepth) {
             header.channels().insert("Z", Channel(FLOAT));
         }

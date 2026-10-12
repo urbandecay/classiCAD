@@ -62,6 +62,12 @@ struct WorkbenchRenderResult {
                depth.size() == qsizetype(combined.width()) * combined.height();
     }
 
+    bool hasSceneLinearDepthPass() const noexcept
+    {
+        return hasDepthPass() && hasValidSceneLinearCombined() &&
+               sceneLinearSize == combined.size();
+    }
+
     bool savePng(const QString &path, QString *errorMessage = nullptr) const;
     QString combinedFileExtension() const;
     int writtenColorDepth() const;

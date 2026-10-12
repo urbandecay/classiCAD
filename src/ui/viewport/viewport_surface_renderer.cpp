@@ -1726,7 +1726,8 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
     const QVector3D &lightDirection,
     const QMatrix4x4 &viewProjection,
     const QSize &viewportSize,
-    qreal devicePixelRatio)
+    qreal devicePixelRatio,
+    const QVector<int> &opaqueRangeIndices)
 {
     struct EdgeAdjacency {
         int count = 0;
@@ -1788,7 +1789,9 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
     };
 
     QVector<QVector3D> volumeVertices;
-    for (const DrawRange &range : ranges_) {
+    for (const int rangeIndex : opaqueRangeIndices) {
+        if (rangeIndex < 0 || rangeIndex >= ranges_.size()) return false;
+        const DrawRange &range = ranges_[rangeIndex];
         if (!range.shadowVolumeSupported || range.shadowTriangles.isEmpty()) {
             continue;
         }
@@ -2291,24 +2294,26 @@ bool ViewportSurfaceRenderer::draw(
     }
 
     prepareGeometry(objects);
-    const bool hasPartialAlpha = settings.mode == ViewportShadingMode::Solid &&
-        !previewOverlay && !selectionOverlay && !settings.xrayEnabled() &&
-        std::any_of(ranges_.cbegin(), ranges_.cend(),
-                    [&settings](const DrawRange &range) {
-                        if (range.count <= 0) {
-                            return false;
-                        }
-                        const qreal alpha = workbenchSourceAlpha(
-                            settings.colorMode,
-                            range.displayColorSceneLinear.w(),
-                            range.workbenchMaterial, settings.customColor);
-                        const float packedAlpha =
-                            workbenchPackUnitFloatToUnorm8(
-                                static_cast<float>(alpha));
-                        return workbenchEffectiveAlpha(packedAlpha, settings,
-                                                       false) <
-                               1.0 - 1.0e-6;
-                    });
+    QVector<int> opaqueRangeIndices;
+    bool hasPartialAlpha = false;
+    if (settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
+        !selectionOverlay && !settings.xrayEnabled()) {
+        for (int index = 0; index < ranges_.size(); ++index) {
+            const DrawRange &range = ranges_[index];
+            if (range.count <= 0) continue;
+            const qreal alpha = workbenchSourceAlpha(
+                settings.colorMode, range.displayColorSceneLinear.w(),
+                range.workbenchMaterial, settings.customColor);
+            const float packedAlpha = workbenchPackUnitFloatToUnorm8(
+                static_cast<float>(alpha));
+            if (workbenchEffectiveAlpha(packedAlpha, settings, false) >=
+                1.0 - 1.0e-6) {
+                opaqueRangeIndices.append(index);
+            } else {
+                hasPartialAlpha = true;
+            }
+        }
+    }
     const bool primaryOpaqueSceneDraw =
         settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
         !selectionOverlay && clearDepth && !settings.xrayEnabled() &&
@@ -2465,12 +2470,12 @@ bool ViewportSurfaceRenderer::draw(
         clearDepth;
     bool shadowVolumesAvailable = false;
     bool sceneDepthPrepassReady = sharedPrepassReady;
-    if (shadowMapRequested && primaryOpaqueSceneDraw &&
-        std::any_of(ranges_.cbegin(), ranges_.cend(),
-                    [](const DrawRange &range) {
-                        return range.count > 0 &&
-                               range.shadowVolumeSupported;
-                    })) {
+    const bool hasOpaqueShadowVolumeCaster = std::any_of(
+        opaqueRangeIndices.cbegin(), opaqueRangeIndices.cend(),
+        [this](int index) {
+            return ranges_[index].shadowVolumeSupported;
+        });
+    if (shadowMapRequested && hasOpaqueShadowVolumeCaster) {
         GLint stencilBits = 0;
         glGetIntegerv(GL_STENCIL_BITS, &stencilBits);
         if (stencilBits >= 8) {
@@ -2516,8 +2521,8 @@ bool ViewportSurfaceRenderer::draw(
                 shadowProgram_.setUniformValue(
                     "uShadowViewProjection",
                     viewportViewProjection(transform, viewportSize));
-                for (const DrawRange &range : ranges_) {
-                    if (range.count <= 0) continue;
+                for (const int rangeIndex : opaqueRangeIndices) {
+                    const DrawRange &range = ranges_[rangeIndex];
                     shadowProgram_.setUniformValue(
                         "uWorldOffset",
                         QVector3D(static_cast<float>(range.offset.x),
@@ -2548,7 +2553,8 @@ bool ViewportSurfaceRenderer::draw(
                     viewportViewProjection(transform, viewportSize);
                 shadowVolumesAvailable = renderShadowVolumes(
                     workbenchShadowDirectionWorld(settings),
-                    shadowViewProjection, viewportSize, devicePixelRatio);
+                    shadowViewProjection, viewportSize, devicePixelRatio,
+                    opaqueRangeIndices);
                 if (shadowVolumesAvailable) {
                     glDepthFunc(GL_LEQUAL);
                 }
@@ -2826,30 +2832,18 @@ bool ViewportSurfaceRenderer::draw(
                                        static_cast<int>(sizeof(SurfaceVertex)));
             geometryDirty_ = false;
         }
-        const auto rangeAlpha = [&](const DrawRange &range) {
-            const qreal sourceAlpha = workbenchSourceAlpha(
-                settings.colorMode, range.displayColorSceneLinear.w(),
-                range.workbenchMaterial, settings.customColor);
-            const WorkbenchPackedMaterialData packed = workbenchPackMaterialData(
-                0.0f, 0.4f, static_cast<float>(sourceAlpha));
-            return workbenchEffectiveAlpha(packed.alpha, settings, false);
-        };
         struct TransparentTriangle {
             int rangeIndex = -1;
             int firstVertex = 0;
             qreal projectedDepth = 0.0;
         };
-        QVector<int> opaqueRangeIndices;
         QVector<TransparentTriangle> transparentTriangles;
         for (int index = 0; index < ranges_.size(); ++index) {
             const DrawRange &range = ranges_[index];
             if (range.count <= 0) {
                 continue;
             }
-            if (rangeAlpha(range) >= 1.0 - 1.0e-6) {
-                opaqueRangeIndices.append(index);
-                continue;
-            }
+            if (opaqueRangeIndices.contains(index)) continue;
             // A range can cover a large or concave tessellated NURBS surface.
             // Sorting one average for the whole object lets distant parts
             // incorrectly occlude nearer parts, so order its display triangles
@@ -2892,10 +2886,15 @@ bool ViewportSurfaceRenderer::draw(
 
         const auto drawRange = [&](const DrawRange &range,
                                    bool volumeShadowed,
+                                   bool enableShadows,
                                    int firstVertex,
                                    int vertexCount) {
             program_.setUniformValue("uShadowVolumeShadowed",
                                      volumeShadowed);
+            program_.setUniformValue("uUseShadows",
+                                     useShadows && enableShadows);
+            program_.setUniformValue("uUseShadowMap",
+                                     shadowMapAvailable && enableShadows);
             program_.setUniformValue(
                 "uUseAttributeColor",
                 settings.colorMode == ViewportColorMode::Attribute &&
@@ -2989,7 +2988,23 @@ bool ViewportSurfaceRenderer::draw(
                           baseColorLinear.z(), alpha));
             glDrawArrays(GL_TRIANGLES, firstVertex, vertexCount);
         };
-        const auto drawSurfaceRanges = [&](bool volumeShadowed) {
+        const auto drawTransparentTriangles = [&]() {
+            if (!hasPartialAlpha) return;
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glDepthMask(GL_FALSE);
+            glEnable(GL_BLEND);
+            glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                                GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            for (const TransparentTriangle &triangle : transparentTriangles) {
+                drawRange(ranges_[triangle.rangeIndex], false, false,
+                          triangle.firstVertex, 3);
+            }
+            glDepthFunc(GL_LESS);
+        };
+        const auto drawSurfaceRanges = [&](bool volumeShadowed,
+                                           bool includeTransparent) {
             if (hasPartialAlpha) {
                 // Render opaque surfaces first to establish depth, then blend
                 // translucent surfaces back-to-front without updating depth.
@@ -2999,27 +3014,15 @@ bool ViewportSurfaceRenderer::draw(
                 glDisable(GL_BLEND);
                 for (int index : opaqueRangeIndices) {
                     const DrawRange &range = ranges_[index];
-                    drawRange(range, volumeShadowed, range.first,
+                    drawRange(range, volumeShadowed, true, range.first,
                               range.count);
                 }
-                glEnable(GL_DEPTH_TEST);
-                glDepthFunc(GL_LEQUAL);
-                glDepthMask(GL_FALSE);
-                glEnable(GL_BLEND);
-                glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
-                                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-                for (const TransparentTriangle &triangle :
-                     transparentTriangles) {
-                    drawRange(ranges_[triangle.rangeIndex], volumeShadowed,
-                              triangle.firstVertex, 3);
-                }
-                glDepthFunc(GL_LESS);
+                if (includeTransparent) drawTransparentTriangles();
                 return;
             }
             for (const DrawRange &range : ranges_) {
                 if (range.count > 0) {
-                    drawRange(range, volumeShadowed, range.first,
+                    drawRange(range, volumeShadowed, true, range.first,
                               range.count);
                 }
             }
@@ -3064,9 +3067,13 @@ bool ViewportSurfaceRenderer::draw(
             glStencilMask(0u);
             glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
             glStencilFunc(GL_EQUAL, 0, 0xFFu);
-            drawSurfaceRanges(false);
+            drawSurfaceRanges(false, false);
             glStencilFunc(GL_NOTEQUAL, 0, 0xFFu);
-            drawSurfaceRanges(true);
+            drawSurfaceRanges(true, false);
+            if (hasPartialAlpha) {
+                glDisable(GL_STENCIL_TEST);
+                drawTransparentTriangles();
+            }
 
             glStencilFuncSeparate(GL_FRONT,
                                   static_cast<GLenum>(previousStencilFunc),
@@ -3091,7 +3098,7 @@ bool ViewportSurfaceRenderer::draw(
             if (previousStencilTest) glEnable(GL_STENCIL_TEST);
             else glDisable(GL_STENCIL_TEST);
         } else {
-            drawSurfaceRanges(false);
+            drawSurfaceRanges(false, true);
         }
         vertexBuffer_.release();
         vertexArray_.release();

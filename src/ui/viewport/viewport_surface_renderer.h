@@ -83,7 +83,8 @@ private:
     bool renderShadowVolumes(const QVector3D &lightDirection,
                              const QMatrix4x4 &viewProjection,
                              const QSize &viewportSize,
-                             qreal devicePixelRatio);
+                             qreal devicePixelRatio,
+                             const QVector<int> &opaqueRangeIndices);
     bool ensureShadowMap();
     bool ensureObjectIdFramebuffer(const QSize &pixelSize);
     bool ensureWorkbenchEffectFramebuffers(

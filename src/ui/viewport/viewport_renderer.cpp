@@ -1151,12 +1151,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QPolygonF points;
             QColor color;
             QVector3D sceneLinearColor{0.8f, 0.8f, 0.8f};
+            qreal sceneLinearAlpha = 1.0;
             QVector3D normalView{0.0f, 0.0f, 1.0f};
             std::array<QVector3D, 3> cornerNormalsView{};
             QVector3D incidentView{0.0f, 0.0f, 1.0f};
             std::array<Point3D, 3> worldPoints{};
             qreal roughness = 0.4;
             qreal metallic = 0.0;
+            bool useWorkbenchColor = false;
             qreal depth = 0.0;
             QImage texture;
             QHash<int, QImage> textureTiles;
@@ -1196,6 +1198,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
         const auto materialColorForFace = [&](int faceIndex) {
             QVector4D color(0.8f, 0.8f, 0.8f, 1.0f);
             const int slotIndex = mesh.faceMaterialIndices.value(faceIndex, 0);
+            if (slotIndex >= 0 && slotIndex < meshMaterials.size()) {
+                const WorkbenchMaterialData &material = meshMaterials[slotIndex];
+                color = QVector4D(material.baseColorSceneLinear.x(),
+                                  material.baseColorSceneLinear.y(),
+                                  material.baseColorSceneLinear.z(),
+                                  material.alpha);
+                return color;
+            }
             if (slotIndex >= 0 && slotIndex < mesh.materialSlots.size()) {
                 const PolygonMeshMaterialSlot &slot =
                     mesh.materialSlots[slotIndex];
@@ -1516,6 +1526,46 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 meshMaterials[materialIndex].textureImageExtension;
                         }
                         triangle.uvs = triangleUvs;
+                    }
+                    if (useWorkbenchColor) {
+                        triangle.useWorkbenchColor = true;
+                        QVector3D sceneLinearColor(sourceColor.x(), sourceColor.y(),
+                                                   sourceColor.z());
+                        switch (shadingSettings_.colorMode) {
+                        case ViewportColorMode::Random: {
+                            const QColor random = workbenchRandomColor(
+                                shapeObjectId, displayName, libraryPath);
+                            sceneLinearColor = workbenchRec709ToSceneLinear(
+                                QVector3D(random.redF(), random.greenF(),
+                                          random.blueF()));
+                            break;
+                        }
+                        case ViewportColorMode::Custom:
+                            sceneLinearColor = workbenchSrgbToSceneLinear(
+                                QVector3D(shadingSettings_.customColor.redF(),
+                                          shadingSettings_.customColor.greenF(),
+                                          shadingSettings_.customColor.blueF()));
+                            break;
+                        default:
+                            break;
+                        }
+                        triangle.sceneLinearColor = sceneLinearColor;
+                        triangle.sceneLinearAlpha = sourceColor.w();
+
+                        const int materialIndex =
+                            mesh.faceMaterialIndices.value(faceIndex, 0);
+                        if (materialIndex >= 0 &&
+                            materialIndex < meshMaterials.size()) {
+                            triangle.roughness = meshMaterials[materialIndex].roughness;
+                            triangle.metallic = meshMaterials[materialIndex].metallic;
+                        } else if (materialIndex >= 0 &&
+                                   materialIndex < mesh.materialSlots.size()) {
+                            triangle.roughness =
+                                mesh.materialSlots[materialIndex].roughness;
+                            triangle.metallic =
+                                mesh.materialSlots[materialIndex].metallic;
+                        }
+
                         const Point3D ab{vertices[1].x - vertices[0].x,
                                          vertices[1].y - vertices[0].y,
                                          vertices[1].z - vertices[0].z};
@@ -1537,10 +1587,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                                 static_cast<float>(viewUp.z));
                         const QVector3D worldRight = workbenchNormalize(
                             QVector3D::crossProduct(worldUp, worldFacing));
-                        triangle.normalView = QVector3D(
+                        triangle.normalView = {
                             QVector3D::dotProduct(normalWorld, worldRight),
                             QVector3D::dotProduct(normalWorld, worldUp),
-                            QVector3D::dotProduct(normalWorld, worldFacing));
+                            QVector3D::dotProduct(normalWorld, worldFacing)};
                         for (int corner = 0; corner < 3; ++corner) {
                             QVector3D cornerNormalWorld = normalWorld;
                             const int loopIndex = firstCorner +
@@ -1563,23 +1613,24 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 QVector3D::dotProduct(cornerNormalWorld,
                                                      worldFacing)};
                         }
-                        const Point3D center{(vertices[0].x + vertices[1].x + vertices[2].x) / 3.0,
-                                             (vertices[0].y + vertices[1].y + vertices[2].y) / 3.0,
-                                             (vertices[0].z + vertices[1].z + vertices[2].z) / 3.0};
-                        QVector3D incidentView(0.0f, 0.0f, 1.0f);
+                        const Point3D center{
+                            (vertices[0].x + vertices[1].x + vertices[2].x) / 3.0,
+                            (vertices[0].y + vertices[1].y + vertices[2].y) / 3.0,
+                            (vertices[0].z + vertices[1].z + vertices[2].z) / 3.0};
+                        triangle.incidentView = {0.0f, 0.0f, 1.0f};
                         if (transform_.isPerspectiveEnabled()) {
-                            const Point3D camera = transform_.cameraPosition(viewportSize);
+                            const Point3D camera =
+                                transform_.cameraPosition(viewportSize);
                             const QVector3D incidentWorld = workbenchNormalize(
                                 QVector3D(static_cast<float>(camera.x - center.x),
                                           static_cast<float>(camera.y - center.y),
                                           static_cast<float>(camera.z - center.z)),
                                 worldFacing);
-                            incidentView = QVector3D(
+                            triangle.incidentView = {
                                 QVector3D::dotProduct(incidentWorld, worldRight),
                                 QVector3D::dotProduct(incidentWorld, worldUp),
-                                QVector3D::dotProduct(incidentWorld, worldFacing));
+                                QVector3D::dotProduct(incidentWorld, worldFacing)};
                         }
-                        triangle.incidentView = incidentView;
                     }
                     if (useWorkbenchColor &&
                         shadingSettings_.colorMode == ViewportColorMode::Attribute) {
@@ -1591,6 +1642,19 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 std::clamp(qreal(color->y()), 0.0, 1.0),
                                 std::clamp(qreal(color->z()), 0.0, 1.0),
                                 std::clamp(qreal(color->w()), 0.0, 1.0));
+                            QVector3D attributeSceneLinear(color->x(),
+                                                           color->y(),
+                                                           color->z());
+                            if (activeAttribute != nullptr &&
+                                activeAttribute->colorSpace.contains(
+                                    QStringLiteral("srgb"),
+                                    Qt::CaseInsensitive)) {
+                                attributeSceneLinear =
+                                    workbenchSrgbToSceneLinear(
+                                        attributeSceneLinear);
+                            }
+                            triangle.sceneLinearColor = attributeSceneLinear;
+                            triangle.sceneLinearAlpha = color->w();
                         }
                     }
                     triangles.append(std::move(triangle));
@@ -1625,14 +1689,16 @@ void ViewportRenderer::drawShape(QPainter &painter,
             meshViewLighting, shadingSettings_.studioLightRotationDegrees,
             shadingSettings_.worldSpaceLighting, meshViewRight,
             meshViewUpVector, meshViewFacing);
-        const auto drawTextureTriangle = [&](const MeshTriangle &triangle) {
+        const auto drawWorkbenchTriangle = [&](const MeshTriangle &triangle) {
             const QImage &texture = triangle.texture;
+            const bool hasTexture = !texture.isNull() ||
+                                    !triangle.textureTiles.isEmpty();
             const qreal area = (triangle.points[1].x() - triangle.points[0].x()) *
                                    (triangle.points[2].y() - triangle.points[0].y()) -
                                (triangle.points[1].y() - triangle.points[0].y()) *
                                    (triangle.points[2].x() - triangle.points[0].x());
             if (std::abs(area) < 1.0e-12 ||
-                (texture.isNull() && triangle.textureTiles.isEmpty())) return;
+                (!hasTexture && !triangle.useWorkbenchColor)) return;
             const qreal minX = std::clamp(
                 std::min({triangle.points[0].x(), triangle.points[1].x(), triangle.points[2].x()}),
                 0.0, qreal(viewportSize.width()));
@@ -1659,11 +1725,16 @@ void ViewportRenderer::drawShape(QPainter &painter,
             const int height = std::max(1, qCeil((maxY - top) * scaleY));
             if (width > 16384 || height > 16384 ||
                 qint64(width) * height > 64 * 1024 * 1024) {
+                if (!hasTexture && triangle.useWorkbenchColor) {
+                    painter.setBrush(triangle.color);
+                    painter.drawPolygon(triangle.points);
+                }
                 return;
             }
             QImage raster(width, height, QImage::Format_RGBA8888);
             raster.fill(Qt::transparent);
-            const qreal alpha = triangle.color.alphaF();
+            const qreal alpha = hasTexture ? triangle.color.alphaF()
+                                           : triangle.sceneLinearAlpha;
             for (int y = 0; y < height; ++y) {
                 uchar *row = raster.scanLine(y);
                 const qreal py = top + (y + 0.5) / scaleY;
@@ -1684,44 +1755,46 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     const qreal p2 = b2 * triangle.reciprocalDepths[2];
                     const qreal denominator = p0 + p1 + p2;
                     if (denominator <= 1.0e-12) continue;
-                    const QPointF uv = (triangle.uvs[0] * p0 + triangle.uvs[1] * p1 +
-                                        triangle.uvs[2] * p2) / denominator;
-                    uchar rgba[4];
-                    if (triangle.tiledTexture) {
-                        if (!sampleWorkbenchUdimImage(
-                                triangle.textureTiles, uv,
-                                triangle.textureInterpolation,
-                                triangle.textureExtension, rgba)) {
-                            // Blender Workbench displays absent UDIM tiles as
-                            // magenta so the incomplete image stays visible.
-                            uchar *pixel = row + x * 4;
-                            pixel[0] = 255;
-                            pixel[1] = 0;
-                            pixel[2] = 255;
-                            pixel[3] = 255;
-                            continue;
-                        }
-                    } else {
-                        if (texture.isNull()) continue;
-                        sampleWorkbenchImage(texture, uv,
-                                             triangle.textureInterpolation,
-                                             triangle.textureExtension, rgba);
-                    }
-                    if (rgba[3] < 26) continue; // Blender's filtered alpha < 0.1 cutoff.
                     uchar *pixel = row + x * 4;
-                    QVector3D textureColor;
-                    for (int component = 0; component < 3; ++component) {
-                        const qreal channelValue = triangle.texturePremultiplied &&
-                                rgba[3] != 0 && rgba[3] != 255
-                            ? qreal(rgba[component]) * 255.0 / rgba[3]
-                            : rgba[component];
-                        const float normalized =
-                            static_cast<float>(channelValue / 255.0);
-                        const float linear = triangle.textureSrgb
-                            ? workbenchSrgbToSceneLinear(normalized)
-                            : normalized;
-                        textureColor[component] = linear *
-                            triangle.sceneLinearColor[component];
+                    QVector3D textureColor = triangle.sceneLinearColor;
+                    qreal pixelAlpha = alpha;
+                    if (hasTexture) {
+                        const QPointF uv =
+                            (triangle.uvs[0] * p0 + triangle.uvs[1] * p1 +
+                             triangle.uvs[2] * p2) / denominator;
+                        uchar rgba[4];
+                        if (triangle.tiledTexture) {
+                            if (!sampleWorkbenchUdimImage(
+                                    triangle.textureTiles, uv,
+                                    triangle.textureInterpolation,
+                                    triangle.textureExtension, rgba)) {
+                                // Blender Workbench displays absent UDIM tiles as
+                                // magenta so the incomplete image stays visible.
+                                pixel[0] = 255;
+                                pixel[1] = 0;
+                                pixel[2] = 255;
+                                pixel[3] = 255;
+                                continue;
+                            }
+                        } else {
+                            sampleWorkbenchImage(texture, uv,
+                                                 triangle.textureInterpolation,
+                                                 triangle.textureExtension, rgba);
+                        }
+                        if (rgba[3] < 26) continue; // Blender's filtered alpha < 0.1 cutoff.
+                        pixelAlpha *= rgba[3] / 255.0;
+                        for (int component = 0; component < 3; ++component) {
+                            const qreal channelValue = triangle.texturePremultiplied &&
+                                    rgba[3] != 0 && rgba[3] != 255
+                                ? qreal(rgba[component]) * 255.0 / rgba[3]
+                                : qreal(rgba[component]);
+                            const float normalized =
+                                static_cast<float>(channelValue / 255.0);
+                            const float linear = triangle.textureSrgb
+                                ? workbenchSrgbToSceneLinear(normalized)
+                                : normalized;
+                            textureColor[component] *= linear;
+                        }
                     }
                     QVector3D shadedLinear = textureColor;
                     QVector3D normalView =
@@ -1788,7 +1861,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         qRound(displayColor.y() * 255.0f), 0, 255));
                     pixel[2] = static_cast<uchar>(std::clamp(
                         qRound(displayColor.z() * 255.0f), 0, 255));
-                    pixel[3] = static_cast<uchar>(qRound(alpha * 255.0));
+                    pixel[3] = static_cast<uchar>(qRound(pixelAlpha * 255.0));
                 }
             }
             painter.save();
@@ -1797,9 +1870,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
             painter.restore();
         };
         for (const MeshTriangle &triangle : triangles) {
-            if ((!triangle.texture.isNull() || triangle.tiledTexture) &&
-                triangle.points.size() == 3) {
-                drawTextureTriangle(triangle);
+            if (triangle.points.size() == 3 &&
+                ((!triangle.texture.isNull() || triangle.tiledTexture) ||
+                 triangle.useWorkbenchColor)) {
+                drawWorkbenchTriangle(triangle);
             } else {
                 painter.setBrush(triangle.color);
                 painter.drawPolygon(triangle.points);

@@ -22,6 +22,7 @@ struct WorkbenchRenderResult {
     QVector<float> sceneLinearRgba;
     QSize sceneLinearSize;
     QVector<float> depth;
+    bool depthPassAvailable = true;
     ProjectViewportCameraSettings camera;
     QString outputFormat = QStringLiteral("PNG + PFM depth");
     QString blenderImageFormat = QStringLiteral("PNG");
@@ -52,6 +53,12 @@ struct WorkbenchRenderResult {
                                      sceneLinearSize.height();
         return pixelCount > 0 && pixelCount <= std::numeric_limits<qsizetype>::max() / 4 &&
                sceneLinearRgba.size() == pixelCount * 4;
+    }
+
+    bool hasDepthPass() const noexcept
+    {
+        return depthPassAvailable && isValid() &&
+               depth.size() == qsizetype(combined.width()) * combined.height();
     }
 
     bool savePng(const QString &path, QString *errorMessage = nullptr) const;

@@ -412,11 +412,15 @@ private:
         window.resize(1000, 760);
         auto *layout = new QVBoxLayout(&window);
         auto *info = new QLabel(
-            QStringLiteral("Last completed result (not live)   •   Combined: %1 × %2 .%3 (%4, %5-bit output)   •   Depth: linear camera distance PFM")
+            QStringLiteral("Last completed result (not live)   •   Combined: %1 × %2 .%3 (%4, %5-bit output)   •   Depth: %6")
                 .arg(outputSize.width()).arg(outputSize.height())
                 .arg(result.combinedFileExtension())
                 .arg(result.colorMode)
-                .arg(result.writtenColorDepth()), &window);
+                .arg(result.writtenColorDepth())
+                .arg(result.depthPassAvailable
+                         ? QStringLiteral("linear camera distance PFM")
+                         : QStringLiteral("disabled in Blender view layer")),
+            &window);
         layout->addWidget(info);
         auto *preview = new QLabel(&window);
         preview->setAlignment(Qt::AlignCenter);
@@ -429,6 +433,7 @@ private:
             QStringLiteral("Save Combined %1…")
                 .arg(result.combinedFileExtension().toUpper()), &window);
         auto *saveDepth = new QPushButton(QStringLiteral("Save Depth PFM…"), &window);
+        saveDepth->setEnabled(result.depthPassAvailable);
         auto *close = new QPushButton(QStringLiteral("Close"), &window);
         buttons->addWidget(saveCombined);
         buttons->addWidget(saveDepth);

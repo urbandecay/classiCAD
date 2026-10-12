@@ -811,7 +811,7 @@ Update this table at the end of every refactoring iteration. Mark a phase comple
 | Phase | Status | Notes |
 |---|---|---|
 | 24. Modularity, scalability, and build improvements | In progress (large-scene follow-up) | The earlier viewport/cache/build work is complete. Added batched document insert/remove paths for Duplicate/Delete and hash-backed changed-ID de-duplication. The 16,344-object synthetic NURBS benchmark and full 11-test CTest run passed. The requested real-scene run is still pending because `ForGPTest.vignola` was not visible at the reported Desktop path; no real-scene speed claim is made. |
-| 25. Blender Workbench render and resolve convergence | In progress | Viewport and offscreen rendering use a typed shared scene-color request and report named opaque-color, transparent accumulation/resolve, and transparent-depth completion plus populated attachments. Offscreen Workbench rendering now maps imported Blender `scene.display.render_aa` values and advances those samples through the same temporal resolve before capturing Combined and depth; older import records fall back to the viewport AA preference. The result retains a separate scene-linear float Combined payload and optional OpenEXR FLOAT writer; this build has no OpenEXR development package, so local EXR output remains unavailable. Shared pass ownership, Blender's registered render-result lifecycle, and matched visual comparisons remain open. |
+| 25. Blender Workbench render and resolve convergence | In progress | Viewport and offscreen rendering use a typed shared scene-color request and report named opaque-color, transparent accumulation/resolve, and transparent-depth completion plus populated attachments. Offscreen Workbench rendering maps imported Blender `scene.display.render_aa` values and advances those samples through the same temporal resolve before capturing Combined and depth; older import records fall back to the viewport AA preference. Imported active view-layer `use_pass_z` controls whether the depth export is available. The result retains a separate scene-linear float Combined payload and optional OpenEXR FLOAT writer; this build has no OpenEXR development package, so local EXR output remains unavailable. Blender's registered result lifecycle and matched visual comparisons remain open. |
 
 R12 follow-up checkpoint: added isolated `app-dev` and `full-test` CMake
 configure/build presets and documented them in the README. `cmake --list-presets`
@@ -1182,3 +1182,12 @@ Imported Blender `scene.display.render_aa` values now select Off, Single Pass,
 or 5/8/11/16/32 offscreen samples; older scene records use the viewport AA
 preference. `cmake --build build` and its 303-source dependency audit passed;
 no tests, screenshots, or app startup were run.
+
+#### Blender Workbench depth pass availability checkpoint (2026-10-12)
+
+The extractor now records each Blender view layer's Combined and Z pass flags.
+The offscreen result uses the selected layer's `use_pass_z` value to label and
+enable the Depth PFM export; imported legacy records with no flag use Blender's
+default-disabled Z pass. Native classiCAD renders keep their existing depth
+output. `cmake --build build` and its 303-source dependency audit passed; no
+tests, screenshots, or app startup were run.

@@ -6549,6 +6549,8 @@ public:
         const QString activeLayerKey =
             document_.settings().activeViewLayerKey;
         int renderAntiAliasingMode = -1;
+        bool importedDepthPassAvailable = true;
+        bool selectedImportedScene = false;
         for (const QJsonValue &sceneValue :
              document_.settings().importedBlenderScenes) {
             const QJsonObject scene = sceneValue.toObject();
@@ -6562,6 +6564,19 @@ public:
                 }
             }
             if (!activeScene) continue;
+            selectedImportedScene = true;
+            importedDepthPassAvailable = false;
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                const QJsonObject layer = layerValue.toObject();
+                if (activeLayerKey.isEmpty() ||
+                    layer.value(QStringLiteral("key")).toString() ==
+                        activeLayerKey) {
+                    importedDepthPassAvailable = layer.value(
+                        QStringLiteral("use_pass_z")).toBool(false);
+                    break;
+                }
+            }
             const QJsonObject renderOutput =
                 scene.value(QStringLiteral("render_output")).toObject();
             const QString renderAa = renderOutput.value(
@@ -6619,6 +6634,8 @@ public:
                 QStringLiteral("tiff_codec")).toString(QStringLiteral("DEFLATE"));
             break;
         }
+        if (selectedImportedScene)
+            result.depthPassAvailable = importedDepthPassAvailable;
         result.camera = projectCameraSettings();
         ViewportTransform renderCamera = viewportTransform_;
         qreal sceneCameraSensorWidth = 0.0;
@@ -6771,10 +6788,13 @@ public:
             result.camera.view.targetZ = target.z;
             result.camera.view.storedInProject = true;
         }
-        result.outputFormat = QStringLiteral("%1 %2-bit %3 + PFM depth")
+        result.outputFormat = QStringLiteral("%1 %2-bit %3%4")
                                   .arg(result.combinedFileExtension().toUpper())
                                   .arg(result.writtenColorDepth())
-                                  .arg(result.colorMode);
+                                  .arg(result.colorMode)
+                                  .arg(result.depthPassAvailable
+                                           ? QStringLiteral(" + PFM depth")
+                                           : QString());
         return result;
     }
 

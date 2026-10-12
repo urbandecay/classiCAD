@@ -1151,6 +1151,8 @@ def extract_scene(input_path, mode):
             "view_layers": [{
                 "name": view_layer.name,
                 "key": view_layer_key(scene, view_layer),
+                "use_pass_combined": bool(view_layer.use_pass_combined),
+                "use_pass_z": bool(view_layer.use_pass_z),
                 "collection_instances": layer_collection_records(scene, view_layer),
             } for view_layer in scene.view_layers],
             "collection_ids": sorted(

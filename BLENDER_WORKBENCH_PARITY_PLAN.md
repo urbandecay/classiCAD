@@ -391,7 +391,10 @@ the shared depth/normal/object-ID attachments it populated. The same scene
 color call is shared, while grid/background, DOF/AA presentation, CAD strokes,
 and editor overlays retain their existing caller-owned order. The render result
 currently exposes Combined, Depth, and an optional scene-linear float Combined
-payload; Blender's registered multi-pass Render Result lifecycle remains open.
+payload. Blender's Combined and optional Z pass names/types are mirrored, and
+the imported active view layer's `use_pass_z` controls whether classiCAD offers
+Depth export. Blender's registered multi-pass Render Result lifecycle remains
+open.
 Offscreen rendering accumulates the imported Blender `scene.display.render_aa`
 mode before capturing Combined and depth. Older imports without that field use
 classiCAD's viewport AA preference. Blender's render AA enum is `OFF`, `FXAA`,

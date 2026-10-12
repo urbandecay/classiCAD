@@ -266,6 +266,8 @@ bool WorkbenchRenderResult::saveCombinedImage(
                       QStringLiteral("display-referred normalized RGBA; no HDR range"));
     cameraJson.insert(QStringLiteral("depthPass"),
                       QStringLiteral("linear camera-space distance; zero is background"));
+    cameraJson.insert(QStringLiteral("depthPassAvailable"),
+                      depthPassAvailable);
     QJsonObject poseJson;
     poseJson.insert(QStringLiteral("perspective"), camera.view.perspective);
     poseJson.insert(QStringLiteral("preset"), int(camera.view.preset));
@@ -338,9 +340,11 @@ bool WorkbenchRenderResult::savePng(const QString &path,
 bool WorkbenchRenderResult::saveDepthPfm(const QString &path,
                                          QString *errorMessage) const
 {
-    if (!isValid() || depth.size() != combined.width() * combined.height()) {
+    if (!hasDepthPass()) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("The depth render pass is empty");
+            *errorMessage = depthPassAvailable
+                ? QStringLiteral("The depth render pass is empty")
+                : QStringLiteral("The Blender view layer has its depth pass disabled");
         }
         return false;
     }

@@ -96,6 +96,7 @@ private:
     std::unique_ptr<ViewportSceneRenderer> previewRenderer_;
     std::unique_ptr<ViewportControlPointRenderer> controlPointRenderer_;
     std::unique_ptr<ViewportSurfaceRenderer> surfaceRenderer_;
+    quint64 offscreenRenderSerial_ = 0;
 };
 
 } // namespace classiCAD

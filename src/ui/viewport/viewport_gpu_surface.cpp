@@ -186,17 +186,22 @@ bool ViewportGpuSurface::renderOffscreen(
     functions.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
                       GL_STENCIL_BUFFER_BIT);
-    const int previousAaMode = aaRenderer_->mode();
-    aaRenderer_->setMode(static_cast<int>(ViewportAntiAliasingMode::Off));
-    const bool sampleStarted = aaRenderer_->beginSceneSample(
-        pixelSize, 1.0, camera, QByteArrayLiteral("workbench-render-result"),
-        true);
+    const QByteArray historyKey = QByteArrayLiteral("workbench-render-result-") +
+                                  QByteArray::number(++offscreenRenderSerial_);
+    bool sampleStarted = aaRenderer_->beginSceneSample(
+        pixelSize, 1.0, camera, historyKey, false);
     bool drawn = false;
     if (sceneLinearRgba != nullptr) sceneLinearRgba->clear();
     if (sampleStarted) {
-        drawn = draw(pixelSize, *aaRenderer_, *gridRenderer_, *sceneRenderer_,
-                     *surfaceRenderer_);
-        aaRenderer_->finishSceneSample();
+        do {
+            drawn = draw(pixelSize, *aaRenderer_, *gridRenderer_,
+                         *sceneRenderer_, *surfaceRenderer_);
+            const bool needsAnotherSample = aaRenderer_->finishSceneSample();
+            if (!drawn || !needsAnotherSample) break;
+            sampleStarted = aaRenderer_->beginSceneSample(
+                pixelSize, 1.0, camera, historyKey, false);
+            if (!sampleStarted) drawn = false;
+        } while (sampleStarted);
         if (drawn && sceneLinearRgba != nullptr) {
             const ViewportRenderTargets &targets = aaRenderer_->targets();
             const GLuint sceneLinearTexture =
@@ -237,7 +242,6 @@ bool ViewportGpuSurface::renderOffscreen(
             drawn = drawOverlay(pixelSize, *sceneRenderer_);
         }
     }
-    aaRenderer_->setMode(previousAaMode);
     if (drawn) {
         depth->resize(pixelSize.width() * pixelSize.height());
         QVector<float> bottomUp(depth->size());

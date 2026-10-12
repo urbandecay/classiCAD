@@ -368,10 +368,16 @@ bool compositeRasterWorkbenchSurfaces(
     const float noDepth = -std::numeric_limits<float>::infinity();
     QVector<float> opaqueDepth(pixelCount, noDepth);
     QVector<QRgb> opaqueColor(pixelCount, qRgba(0, 0, 0, 0));
-    QVector<float> transparentRed(pixelCount, 0.0f);
-    QVector<float> transparentGreen(pixelCount, 0.0f);
-    QVector<float> transparentBlue(pixelCount, 0.0f);
-    QVector<float> transparentAlpha(pixelCount, 0.0f);
+    struct TransparentFragment {
+        int pixelIndex = 0;
+        float depth = 0.0f;
+        int objectOrder = 0;
+        QRgb color = 0;
+    };
+    // Bound storage independently from viewport size. If the visible layer
+    // count exceeds this budget, let the caller use its existing sorted path.
+    constexpr qsizetype kMaximumTransparentFragments = 4'000'000;
+    QVector<TransparentFragment> transparentFragments;
     const qreal dpr = devicePixelRatio;
     const Point3D cameraPosition = transform.cameraPosition(viewportSize);
     const Point3D viewDirection = transform.viewDirection();
@@ -502,11 +508,13 @@ bool compositeRasterWorkbenchSurfaces(
         });
     }
 
-    // The caller supplies objects in average-depth back-to-front order. Use
-    // source-over for the surviving transparent object layers. Per-pixel
-    // depth sorting is unavailable here, so intersecting objects can still
-    // disagree with their global average order.
-    for (const ViewportRenderObject &object : objects) {
+    // Keep QPainter's per-object layer shading, then retain that layer's
+    // nearest surface depth at each covered pixel. This lets intersecting
+    // transparent objects composite in a local far-to-near order rather than
+    // inheriting one global average-depth order.
+    bool transparentFragmentBudgetExceeded = false;
+    for (int objectOrder = 0; objectOrder < objects.size(); ++objectOrder) {
+        const ViewportRenderObject &object = objects[objectOrder];
         renderObject(object, [&](const QImage &layer) {
             for (int y = 0; y < height; ++y) {
                 const auto *row = reinterpret_cast<const QRgb *>(layer.constScanLine(y));
@@ -519,22 +527,52 @@ bool compositeRasterWorkbenchSurfaces(
                         objectDepth[index] <= opaqueDepth[index]) {
                         continue;
                     }
-                    const float alpha = alphaByte / 255.0f;
-                    const float remain = 1.0f - alpha;
-                    const float sourceRed = qRed(pixel) / alphaByte;
-                    const float sourceGreen = qGreen(pixel) / alphaByte;
-                    const float sourceBlue = qBlue(pixel) / alphaByte;
-                    transparentRed[index] = sourceRed * alpha +
-                        transparentRed[index] * remain;
-                    transparentGreen[index] = sourceGreen * alpha +
-                        transparentGreen[index] * remain;
-                    transparentBlue[index] = sourceBlue * alpha +
-                        transparentBlue[index] * remain;
-                    transparentAlpha[index] = alpha +
-                        transparentAlpha[index] * remain;
+                    if (transparentFragments.size() >=
+                        kMaximumTransparentFragments) {
+                        transparentFragmentBudgetExceeded = true;
+                        return;
+                    }
+                    transparentFragments.append(
+                        {index, objectDepth[index], objectOrder, pixel});
                 }
+                if (transparentFragmentBudgetExceeded) return;
             }
         });
+        if (transparentFragmentBudgetExceeded) return false;
+    }
+
+    std::sort(transparentFragments.begin(), transparentFragments.end(),
+              [](const TransparentFragment &left,
+                 const TransparentFragment &right) {
+                  if (left.pixelIndex != right.pixelIndex) {
+                      return left.pixelIndex < right.pixelIndex;
+                  }
+                  if (left.depth != right.depth) {
+                      return left.depth < right.depth;
+                  }
+                  return left.objectOrder < right.objectOrder;
+              });
+    QVector<float> transparentRed(pixelCount, 0.0f);
+    QVector<float> transparentGreen(pixelCount, 0.0f);
+    QVector<float> transparentBlue(pixelCount, 0.0f);
+    QVector<float> transparentAlpha(pixelCount, 0.0f);
+    for (const TransparentFragment &fragment : transparentFragments) {
+        const int index = fragment.pixelIndex;
+        const QRgb pixel = fragment.color;
+        const int alphaByte = qAlpha(pixel);
+        const float alpha = alphaByte / 255.0f;
+        const float remain = 1.0f - alpha;
+        const float sourceRed = static_cast<float>(qRed(pixel)) / alphaByte;
+        const float sourceGreen = static_cast<float>(qGreen(pixel)) / alphaByte;
+        const float sourceBlue = static_cast<float>(qBlue(pixel)) / alphaByte;
+        transparentRed[index] = sourceRed * alpha +
+            transparentRed[index] * remain;
+        transparentGreen[index] = sourceGreen * alpha +
+            transparentGreen[index] * remain;
+        transparentBlue[index] = sourceBlue * alpha +
+            transparentBlue[index] * remain;
+        transparentAlpha[index] = alpha +
+            transparentAlpha[index] * remain;
     }
 
     for (int y = 0; y < height; ++y) {

@@ -126,8 +126,19 @@ bool sampleWorkbenchUdimImage(const QHash<int, QImage> &tiles,
                              const QString &extension,
                              uchar *rgba)
 {
+    if (!std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
+        rgba[0] = 255;
+        rgba[1] = 0;
+        rgba[2] = 255;
+        rgba[3] = 255;
+        return false;
+    }
     const qreal tileU = std::floor(uv.x());
-    const qreal tileV = std::floor(uv.y());
+    // QPainter color UVs are globally V-flipped for top-down QImage rows.
+    // UDIM selection must use Blender's original UV tile before flipping the
+    // local coordinate inside that tile.
+    const qreal sourceV = 1.0 - uv.y();
+    const qreal tileV = std::floor(sourceV);
     const qreal tileNumber = 1001.0 + tileU + 10.0 * tileV;
     const bool validTile = tileU >= 0.0 && tileU < 10.0 &&
         tileV >= 0.0 && tileV <= 99.0 &&
@@ -143,7 +154,8 @@ bool sampleWorkbenchUdimImage(const QHash<int, QImage> &tiles,
         return false;
     }
     sampleWorkbenchImage(tile.value(),
-                         QPointF(uv.x() - tileU, uv.y() - tileV),
+                         QPointF(uv.x() - tileU,
+                                 1.0 - (sourceV - tileV)),
                          interpolation, extension, rgba);
     return true;
 }

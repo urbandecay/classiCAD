@@ -71,6 +71,8 @@ float radicalInverseVdc(unsigned int bits)
 
 struct TextureAlphaTriangle {
     QImage image;
+    QHash<int, QImage> udimImages;
+    bool udim = false;
     std::array<QPointF, 3> uvs{};
     QString interpolation = QStringLiteral("Linear");
     QString extension = QStringLiteral("REPEAT");
@@ -180,10 +182,63 @@ QImage loadTextureAlphaImage(const WorkbenchMaterialData &material)
     return image.convertToFormat(QImage::Format_RGBA8888);
 }
 
+QImage loadTextureAlphaTile(const DocumentImageTextureTile &tile,
+                            quint64 *decodedPixels,
+                            quint64 *packedBytes)
+{
+    WorkbenchMaterialData material;
+    material.textureImagePath = tile.filepath;
+    material.textureImagePackedDataBase64 = tile.packedDataBase64;
+    const QByteArray encoded = tile.packedDataBase64.toLatin1();
+    const quint64 payloadSize = static_cast<quint64>(encoded.size());
+    if (payloadSize > 44ULL * 1024 * 1024 ||
+        *packedBytes + payloadSize > 44ULL * 1024 * 1024) return {};
+    QImage image = loadTextureAlphaImage(material);
+    if (image.isNull()) return {};
+    const quint64 pixels = static_cast<quint64>(image.width()) * image.height();
+    if (*decodedPixels + pixels > 67108864ULL) return {};
+    *decodedPixels += pixels;
+    *packedBytes += payloadSize;
+    return image;
+}
+
+QHash<int, QImage> loadTextureAlphaTiles(
+    const WorkbenchMaterialData &material)
+{
+    QHash<int, QImage> images;
+    quint64 decodedPixels = 0;
+    quint64 packedBytes = 0;
+    for (const DocumentImageTextureTile &tile : material.textureImageTiles) {
+        if (tile.number < 1001 || tile.number > 1999 ||
+            images.contains(tile.number)) continue;
+        const QImage image = loadTextureAlphaTile(tile, &decodedPixels,
+                                                   &packedBytes);
+        if (!image.isNull()) images.insert(tile.number, image);
+    }
+    return images;
+}
+
 float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
                          const QPointF &uv)
 {
-    const QImage &image = triangle.image;
+    QPointF sampleUv = uv;
+    const QImage *imagePointer = &triangle.image;
+    if (triangle.udim) {
+        if (!std::isfinite(uv.x()) || !std::isfinite(uv.y()) ||
+            uv.x() < 0.0 || uv.y() < 0.0 || uv.x() >= 100000.0 ||
+            uv.y() >= 100000.0) return 1.0f;
+        const int tileU = static_cast<int>(std::floor(uv.x()));
+        const int tileV = static_cast<int>(std::floor(uv.y()));
+        if (tileU < 0 || tileU > 9 || tileV < 0 || tileV > 99)
+            return 1.0f;
+        const qint64 number = 1001LL + tileU + 10LL * tileV;
+        if (number < 1001 || number > 1999) return 1.0f;
+        const auto found = triangle.udimImages.constFind(static_cast<int>(number));
+        if (found == triangle.udimImages.cend()) return 1.0f;
+        imagePointer = &found.value();
+        sampleUv = QPointF(uv.x() - tileU, 1.0 - (uv.y() - tileV));
+    }
+    const QImage &image = *imagePointer;
     if (image.isNull() || !std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
         return 1.0f;
     }
@@ -193,8 +248,8 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
         QStringLiteral("MIRROR"), Qt::CaseInsensitive) == 0;
     const bool clip = triangle.extension.compare(
         QStringLiteral("CLIP"), Qt::CaseInsensitive) == 0;
-    qreal u = uv.x();
-    qreal v = uv.y();
+    qreal u = sampleUv.x();
+    qreal v = sampleUv.y();
     if (repeat) {
         u -= std::floor(u);
         v -= std::floor(v);
@@ -604,6 +659,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 }
             }
             QHash<int, QImage> alphaImagesBySlot;
+            QHash<int, QHash<int, QImage>> alphaUdimImagesBySlot;
             const auto worldPoint = [&](const Point3D &local) {
                 const qreal w = m[12] * local.x + m[13] * local.y +
                                 m[14] * local.z + m[15];
@@ -647,8 +703,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         activeUvMap->cornerValues.size()) {
                     const WorkbenchMaterialData &material =
                         object.meshMaterials[faceSlot];
-                    if (!material.textureImagePath.isEmpty() ||
-                        !material.textureImagePackedDataBase64.isEmpty()) {
+                    if (!material.textureImageTiles.isEmpty()) {
+                        if (!alphaUdimImagesBySlot.contains(faceSlot)) {
+                            alphaUdimImagesBySlot.insert(
+                                faceSlot, loadTextureAlphaTiles(material));
+                        }
+                        textureAlphaCutout =
+                            !alphaUdimImagesBySlot.value(faceSlot).isEmpty() &&
+                            !ignoresTextureAlpha(
+                                material.textureImageAlphaMode);
+                    } else if (!material.textureImagePath.isEmpty() ||
+                               !material.textureImagePackedDataBase64.isEmpty()) {
                         if (!alphaImagesBySlot.contains(faceSlot)) {
                             alphaImagesBySlot.insert(
                                 faceSlot, loadTextureAlphaImage(material));
@@ -683,7 +748,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     }
                     TextureAlphaTriangle textureAlphaTriangle;
                     if (textureAlphaCutout) {
-                        textureAlphaTriangle.image = alphaImage;
+                        if (!alphaUdimImagesBySlot.value(faceSlot).isEmpty()) {
+                            textureAlphaTriangle.udim = true;
+                            textureAlphaTriangle.udimImages =
+                                alphaUdimImagesBySlot.value(faceSlot);
+                        } else {
+                            textureAlphaTriangle.image = alphaImage;
+                        }
                         textureAlphaTriangle.interpolation =
                             object.meshMaterials[faceSlot].textureImageInterpolation;
                         textureAlphaTriangle.extension =
@@ -693,7 +764,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             const QPointF uv = activeUvMap->cornerValues[
                                 faceFirstCorner + triangle[corner]];
                             textureAlphaTriangle.uvs[corner] =
-                                QPointF(uv.x(), 1.0 - uv.y());
+                                textureAlphaTriangle.udim
+                                    ? QPointF(uv.x(), uv.y())
+                                    : QPointF(uv.x(), 1.0 - uv.y());
                         }
                     }
                     textureAlphaTriangles.append(
@@ -714,19 +787,30 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             object.shape.geometryType == GeometryType::NurbsSurface &&
             object.shape.nurbsSurface.trimLoops.isEmpty() &&
             geometry->surfaceTextureCoordinates.size() == vertices.size() &&
-            (!object.workbenchMaterial.textureImagePath.isEmpty() ||
+            (!object.workbenchMaterial.textureImageTiles.isEmpty() ||
+             !object.workbenchMaterial.textureImagePath.isEmpty() ||
              !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty()) &&
             !ignoresTextureAlpha(
                 object.workbenchMaterial.textureImageAlphaMode)) {
-            const QImage alphaImage = loadTextureAlphaImage(
-                object.workbenchMaterial);
-            if (!alphaImage.isNull()) {
+            const bool hasUdim =
+                !object.workbenchMaterial.textureImageTiles.isEmpty();
+            const QHash<int, QImage> udimImages = hasUdim
+                ? loadTextureAlphaTiles(object.workbenchMaterial)
+                : QHash<int, QImage>{};
+            const QImage alphaImage = hasUdim ? QImage{}
+                : loadTextureAlphaImage(object.workbenchMaterial);
+            if ((hasUdim && !udimImages.isEmpty()) || !alphaImage.isNull()) {
                 textureAlphaTriangles.resize(vertices.size() / 3);
                 for (int triangle = 0; triangle + 2 < vertices.size();
                      triangle += 3) {
                     TextureAlphaTriangle &alphaTriangle =
                         textureAlphaTriangles[triangle / 3];
-                    alphaTriangle.image = alphaImage;
+                    if (hasUdim) {
+                        alphaTriangle.udim = true;
+                        alphaTriangle.udimImages = udimImages;
+                    } else {
+                        alphaTriangle.image = alphaImage;
+                    }
                     alphaTriangle.interpolation =
                         object.workbenchMaterial.textureImageInterpolation;
                     alphaTriangle.extension =
@@ -735,8 +819,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     for (int corner = 0; corner < 3; ++corner) {
                         const QPointF uv =
                             geometry->surfaceTextureCoordinates[triangle + corner];
-                        alphaTriangle.uvs[corner] =
-                            QPointF(uv.x(), 1.0 - uv.y());
+                        alphaTriangle.uvs[corner] = hasUdim
+                            ? QPointF(uv.x(), uv.y())
+                            : QPointF(uv.x(), 1.0 - uv.y());
                     }
                 }
             }

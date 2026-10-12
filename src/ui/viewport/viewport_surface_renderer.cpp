@@ -48,6 +48,17 @@ int workbenchTextureInterpolation(const QString &interpolation)
     return 0;
 }
 
+int workbenchTextureExtension(const QString &extension)
+{
+    if (extension.compare(QStringLiteral("EXTEND"), Qt::CaseInsensitive) == 0)
+        return 1;
+    if (extension.compare(QStringLiteral("CLIP"), Qt::CaseInsensitive) == 0)
+        return 2;
+    if (extension.compare(QStringLiteral("MIRROR"), Qt::CaseInsensitive) == 0)
+        return 3;
+    return 0;
+}
+
 void configureWorkbenchImageTexture(GLuint texture,
                                     const WorkbenchMaterialData &material)
 {
@@ -80,6 +91,12 @@ void configureWorkbenchUdimTexture(GLuint texture,
     if (texture == 0) return;
     const bool closest = workbenchTextureInterpolation(
         material.textureImageInterpolation) == 1;
+    const QString extension = material.textureImageExtension.toUpper();
+    const GLint wrap = extension == QStringLiteral("CLIP")
+        ? GL_CLAMP_TO_BORDER
+        : extension == QStringLiteral("EXTEND") ? GL_CLAMP_TO_EDGE
+        : extension == QStringLiteral("MIRROR") ? GL_MIRRORED_REPEAT
+                                                  : GL_REPEAT;
     QOpenGLFunctions *functions = QOpenGLContext::currentContext()->functions();
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousBinding = 0;
@@ -91,9 +108,14 @@ void configureWorkbenchUdimTexture(GLuint texture,
     functions->glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER,
                                 closest ? GL_NEAREST : GL_LINEAR);
     functions->glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S,
-                                GL_CLAMP_TO_EDGE);
+                                wrap);
     functions->glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T,
-                                GL_CLAMP_TO_EDGE);
+                                wrap);
+    if (wrap == GL_CLAMP_TO_BORDER) {
+        const GLfloat transparent[4] = {0.f, 0.f, 0.f, 0.f};
+        functions->glTexParameterfv(GL_TEXTURE_2D_ARRAY,
+                                    GL_TEXTURE_BORDER_COLOR, transparent);
+    }
     functions->glBindTexture(GL_TEXTURE_2D_ARRAY,
                               static_cast<GLuint>(previousBinding));
     functions->glActiveTexture(static_cast<GLenum>(previousActiveTexture));
@@ -415,31 +437,58 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2DArray uWorkbenchUdimImage;
         uniform sampler2D uWorkbenchUdimLookup;
         uniform int uTextureInterpolation;
+        uniform int uTextureExtension;
         uniform bool uTexturePremultiplied;
         uniform bool uTextureAlphaCutoff;
-        vec4 sampleWorkbenchUdimLinear(vec2 uv)
+        ivec2 mapUdimCoord(ivec2 p, ivec2 size, out bool valid)
         {
-            vec2 tile = floor(uv);
-            if (tile.x < 0.0 || tile.x >= 10.0 ||
-                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
-            int layer = int(tileInfo.x + 0.5) - 1;
-            if (layer < 0) return vec4(1.0, 0.0, 1.0, 1.0);
-            return texture(uWorkbenchUdimImage,
-                           vec3(fract(uv) * tileInfo.yz, float(layer)));
+            valid = true;
+            for (int axis = 0; axis < 2; ++axis) {
+                int n = size[axis];
+                int c = p[axis];
+                if (uTextureExtension == 0) c = (c % n + n) % n;
+                else if (uTextureExtension == 1) c = clamp(c, 0, n - 1);
+                else if (uTextureExtension == 2) {
+                    if (c < 0 || c >= n) valid = false;
+                }
+                else {
+                    c = (c % (2 * n) + 2 * n) % (2 * n);
+                    if (c >= n) c = 2 * n - 1 - c;
+                }
+                p[axis] = c;
+            }
+            return p;
         }
-        vec4 sampleWorkbenchUdim(vec2 uv)
+        vec4 fetchWorkbenchUdim(sampler2DArray image, vec4 info, ivec2 p)
         {
-            if (uTextureInterpolation != 2) return sampleWorkbenchUdimLinear(uv);
+            ivec2 size = ivec2(round(vec2(textureSize(image, 0).xy) * info.yz));
+            bool valid;
+            ivec2 mapped = mapUdimCoord(p, size, valid);
+            if (!valid) return vec4(0.0);
+            return texelFetch(image, ivec3(mapped, int(info.x + 0.5) - 1), 0);
+        }
+        vec4 sampleWorkbenchUdimTexture(sampler2DArray image,
+                                        sampler2D lookup, vec2 uv)
+        {
             vec2 tile = floor(uv);
             if (tile.x < 0.0 || tile.x >= 10.0 ||
                 tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
-            if (tileInfo.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec2 size = vec2(textureSize(uWorkbenchUdimImage, 0).xy) * tileInfo.yz;
-            vec2 p = fract(uv) * size - 0.5;
-            vec2 base = floor(p);
+            vec4 info = texelFetch(lookup, ivec2(tile), 0);
+            if (info.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
+            ivec2 size = ivec2(round(vec2(textureSize(image, 0).xy) * info.yz));
+            vec2 p = fract(uv) * vec2(size) - 0.5;
+            ivec2 base = ivec2(floor(p));
             vec2 f = fract(p);
+            if (uTextureInterpolation == 1)
+                return fetchWorkbenchUdim(image, info,
+                    ivec2(floor(fract(uv) * vec2(size))));
+            if (uTextureInterpolation != 2) {
+                vec4 a = mix(fetchWorkbenchUdim(image, info, base),
+                             fetchWorkbenchUdim(image, info, base + ivec2(1, 0)), f.x);
+                vec4 b = mix(fetchWorkbenchUdim(image, info, base + ivec2(0, 1)),
+                             fetchWorkbenchUdim(image, info, base + ivec2(1, 1)), f.x);
+                return mix(a, b, f.y);
+            }
             vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
             vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
             vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
@@ -449,11 +498,21 @@ bool ViewportSurfaceRenderer::initialize()
                 float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
                 for (int x = 0; x < 4; ++x) {
                     float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
-                    vec2 tap = tile + (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size;
-                    result += sampleWorkbenchUdimLinear(tap) * wx * wy;
+                    result += fetchWorkbenchUdim(image, info,
+                        base + ivec2(x - 1, y - 1)) * wx * wy;
                 }
             }
             return result;
+        }
+        vec4 sampleWorkbenchUdimLinear(vec2 uv)
+        {
+            return sampleWorkbenchUdimTexture(uWorkbenchUdimImage,
+                                               uWorkbenchUdimLookup, uv);
+        }
+        vec4 sampleWorkbenchUdim(vec2 uv)
+        {
+            return sampleWorkbenchUdimTexture(uWorkbenchUdimImage,
+                                               uWorkbenchUdimLookup, uv);
         }
         vec4 sampleWorkbenchImage(vec2 uv)
         {
@@ -1100,44 +1159,64 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2DArray uWorkbenchUdimImage;
         uniform sampler2D uWorkbenchUdimLookup;
         uniform int uTextureInterpolation;
+        uniform int uTextureExtension;
         layout(location = 0) out uint fragmentObjectId;
-        vec4 sampleWorkbenchUdimAlphaLinear(vec2 uv)
+        ivec2 mapUdimAlphaCoord(ivec2 p, ivec2 size, out bool valid)
+        {
+            valid = true;
+            for (int axis = 0; axis < 2; ++axis) {
+                int n = size[axis]; int c = p[axis];
+                if (uTextureExtension == 0) c = (c % n + n) % n;
+                else if (uTextureExtension == 1) c = clamp(c, 0, n - 1);
+                else if (uTextureExtension == 2) { if (c < 0 || c >= n) valid = false; }
+                else { c = (c % (2 * n) + 2 * n) % (2 * n); if (c >= n) c = 2 * n - 1 - c; }
+                p[axis] = c;
+            }
+            return p;
+        }
+        vec4 fetchWorkbenchUdimAlpha(sampler2DArray image, vec4 info, ivec2 p)
+        {
+            ivec2 size = ivec2(round(vec2(textureSize(image, 0).xy) * info.yz)); bool valid;
+            ivec2 mapped = mapUdimAlphaCoord(p, size, valid);
+            return valid ? texelFetch(image, ivec3(mapped, int(info.x + 0.5) - 1), 0)
+                         : vec4(0.0);
+        }
+        vec4 sampleWorkbenchUdimAlphaTexture(sampler2DArray image,
+                                             sampler2D lookup, vec2 uv)
         {
             vec2 tile = floor(uv);
-            if (tile.x < 0.0 || tile.x >= 10.0 ||
-                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
-            int layer = int(tileInfo.x + 0.5) - 1;
-            if (layer < 0) return vec4(1.0, 0.0, 1.0, 1.0);
-            return texture(uWorkbenchUdimImage,
-                           vec3(fract(uv) * tileInfo.yz, float(layer)));
+            if (tile.x < 0.0 || tile.x >= 10.0 || tile.y < 0.0 || tile.y >= 100.0)
+                return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 info = texelFetch(lookup, ivec2(tile), 0);
+            if (info.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
+            ivec2 size = ivec2(round(vec2(textureSize(image, 0).xy) * info.yz));
+            vec2 p = fract(uv) * vec2(size) - 0.5;
+            ivec2 base = ivec2(floor(p)); vec2 f = fract(p);
+            if (uTextureInterpolation == 1)
+                return fetchWorkbenchUdimAlpha(image, info, ivec2(floor(fract(uv) * vec2(size))));
+            if (uTextureInterpolation != 2) {
+                vec4 a = mix(fetchWorkbenchUdimAlpha(image, info, base), fetchWorkbenchUdimAlpha(image, info, base + ivec2(1,0)), f.x);
+                vec4 b = mix(fetchWorkbenchUdimAlpha(image, info, base + ivec2(0,1)), fetchWorkbenchUdimAlpha(image, info, base + ivec2(1,1)), f.x);
+                return mix(a, b, f.y);
+            }
+            vec2 w0=(1.0-f)*(1.0-f)*(1.0-f)/6.0;
+            vec2 w1=(3.0*f*f*f-6.0*f*f+4.0)/6.0;
+            vec2 w2=(-3.0*f*f*f+3.0*f*f+3.0*f+1.0)/6.0;
+            vec2 w3=f*f*f/6.0; vec4 result=vec4(0.0);
+            for (int y=0;y<4;++y) { float wy=y==0?w0.y:y==1?w1.y:y==2?w2.y:w3.y;
+                for (int x=0;x<4;++x) { float wx=x==0?w0.x:x==1?w1.x:x==2?w2.x:w3.x;
+                    result += fetchWorkbenchUdimAlpha(image,info,base+ivec2(x-1,y-1))*wx*wy; } }
+            return result;
+        }
+        vec4 sampleWorkbenchUdimAlphaLinear(vec2 uv)
+        {
+            return sampleWorkbenchUdimAlphaTexture(uWorkbenchUdimImage,
+                                                    uWorkbenchUdimLookup, uv);
         }
         vec4 sampleWorkbenchUdimAlpha(vec2 uv)
         {
-            if (uTextureInterpolation != 2) return sampleWorkbenchUdimAlphaLinear(uv);
-            vec2 tile = floor(uv);
-            if (tile.x < 0.0 || tile.x >= 10.0 ||
-                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
-            if (tileInfo.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec2 size = vec2(textureSize(uWorkbenchUdimImage, 0).xy) * tileInfo.yz;
-            vec2 p = fract(uv) * size - 0.5;
-            vec2 base = floor(p);
-            vec2 f = fract(p);
-            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
-            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
-            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
-            vec2 w3 = f * f * f / 6.0;
-            vec4 result = vec4(0.0);
-            for (int y = 0; y < 4; ++y) {
-                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
-                for (int x = 0; x < 4; ++x) {
-                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
-                    vec2 tap = tile + (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size;
-                    result += sampleWorkbenchUdimAlphaLinear(tap) * wx * wy;
-                }
-            }
-            return result;
+            return sampleWorkbenchUdimAlphaTexture(uWorkbenchUdimImage,
+                                                    uWorkbenchUdimLookup, uv);
         }
         vec4 sampleWorkbenchAlphaImage(vec2 uv)
         {
@@ -1182,46 +1261,47 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2DArray uWorkbenchUdimImage;
         uniform sampler2D uWorkbenchUdimLookup;
         uniform int uTextureInterpolation;
+        uniform int uTextureExtension;
         layout(location = 0) out vec4 fragmentViewNormal;
         layout(location = 1) out uint fragmentObjectId;
         layout(location = 2) out uint fragmentOutlineObjectId;
+        ivec2 mapUdimAlphaCoord(ivec2 p, ivec2 size, out bool valid)
+        {
+            valid=true;
+            for(int axis=0;axis<2;++axis){int n=size[axis];int c=p[axis];
+                if(uTextureExtension==0)c=(c%n+n)%n;
+                else if(uTextureExtension==1)c=clamp(c,0,n-1);
+                else if(uTextureExtension==2){if(c<0||c>=n)valid=false;}
+                else{c=(c%(2*n)+2*n)%(2*n);if(c>=n)c=2*n-1-c;}p[axis]=c;}
+            return p;
+        }
+        vec4 fetchWorkbenchUdimAlpha(sampler2DArray image,vec4 info,ivec2 p)
+        {ivec2 size=ivec2(round(vec2(textureSize(image,0).xy)*info.yz));bool valid;ivec2 mapped=mapUdimAlphaCoord(p,size,valid);
+         return valid?texelFetch(image,ivec3(mapped,int(info.x+0.5)-1),0):vec4(0.0);}
+        vec4 sampleWorkbenchUdimAlphaTexture(sampler2DArray image,sampler2D lookup,vec2 uv)
+        {
+            vec2 tile=floor(uv);
+            if(tile.x<0.0||tile.x>=10.0||tile.y<0.0||tile.y>=100.0)return vec4(1.0,0.0,1.0,1.0);
+            vec4 info=texelFetch(lookup,ivec2(tile),0);if(info.x<0.5)return vec4(1.0,0.0,1.0,1.0);
+            ivec2 size=ivec2(round(vec2(textureSize(image,0).xy)*info.yz));vec2 p=fract(uv)*vec2(size)-0.5;ivec2 base=ivec2(floor(p));vec2 f=fract(p);
+            if(uTextureInterpolation==1)return fetchWorkbenchUdimAlpha(image,info,ivec2(floor(fract(uv)*vec2(size))));
+            if(uTextureInterpolation!=2){vec4 a=mix(fetchWorkbenchUdimAlpha(image,info,base),fetchWorkbenchUdimAlpha(image,info,base+ivec2(1,0)),f.x);
+                vec4 b=mix(fetchWorkbenchUdimAlpha(image,info,base+ivec2(0,1)),fetchWorkbenchUdimAlpha(image,info,base+ivec2(1,1)),f.x);return mix(a,b,f.y);}
+            vec2 w0=(1.0-f)*(1.0-f)*(1.0-f)/6.0;vec2 w1=(3.0*f*f*f-6.0*f*f+4.0)/6.0;
+            vec2 w2=(-3.0*f*f*f+3.0*f*f+3.0*f+1.0)/6.0;vec2 w3=f*f*f/6.0;vec4 result=vec4(0.0);
+            for(int y=0;y<4;++y){float wy=y==0?w0.y:y==1?w1.y:y==2?w2.y:w3.y;for(int x=0;x<4;++x){float wx=x==0?w0.x:x==1?w1.x:x==2?w2.x:w3.x;
+                result+=fetchWorkbenchUdimAlpha(image,info,base+ivec2(x-1,y-1))*wx*wy;}}
+            return result;
+        }
         vec4 sampleWorkbenchUdimAlphaLinear(vec2 uv)
         {
-            vec2 tile = floor(uv);
-            if (tile.x < 0.0 || tile.x >= 10.0 ||
-                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
-            int layer = int(tileInfo.x + 0.5) - 1;
-            if (layer < 0) return vec4(1.0, 0.0, 1.0, 1.0);
-            return texture(uWorkbenchUdimImage,
-                           vec3(fract(uv) * tileInfo.yz, float(layer)));
+            return sampleWorkbenchUdimAlphaTexture(uWorkbenchUdimImage,
+                                                    uWorkbenchUdimLookup, uv);
         }
         vec4 sampleWorkbenchUdimAlpha(vec2 uv)
         {
-            if (uTextureInterpolation != 2) return sampleWorkbenchUdimAlphaLinear(uv);
-            vec2 tile = floor(uv);
-            if (tile.x < 0.0 || tile.x >= 10.0 ||
-                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
-            if (tileInfo.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec2 size = vec2(textureSize(uWorkbenchUdimImage, 0).xy) * tileInfo.yz;
-            vec2 p = fract(uv) * size - 0.5;
-            vec2 base = floor(p);
-            vec2 f = fract(p);
-            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
-            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
-            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
-            vec2 w3 = f * f * f / 6.0;
-            vec4 result = vec4(0.0);
-            for (int y = 0; y < 4; ++y) {
-                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
-                for (int x = 0; x < 4; ++x) {
-                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
-                    vec2 tap = tile + (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size;
-                    result += sampleWorkbenchUdimAlphaLinear(tap) * wx * wy;
-                }
-            }
-            return result;
+            return sampleWorkbenchUdimAlphaTexture(uWorkbenchUdimImage,
+                                                    uWorkbenchUdimLookup, uv);
         }
         vec4 sampleWorkbenchAlphaImage(vec2 uv)
         {
@@ -1332,43 +1412,44 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2D uShadowUdimLookup;
         uniform bool uUseShadowAlphaMask;
         uniform int uTextureInterpolation;
+        uniform int uTextureExtension;
+        ivec2 mapShadowUdimCoord(ivec2 p, ivec2 size, out bool valid)
+        {
+            valid=true;
+            for(int axis=0;axis<2;++axis){int n=size[axis];int c=p[axis];
+                if(uTextureExtension==0)c=(c%n+n)%n;
+                else if(uTextureExtension==1)c=clamp(c,0,n-1);
+                else if(uTextureExtension==2){if(c<0||c>=n)valid=false;}
+                else{c=(c%(2*n)+2*n)%(2*n);if(c>=n)c=2*n-1-c;}p[axis]=c;}
+            return p;
+        }
+        vec4 fetchShadowUdimAlpha(sampler2DArray image,vec4 info,ivec2 p)
+        {ivec2 size=ivec2(round(vec2(textureSize(image,0).xy)*info.yz));bool valid;ivec2 mapped=mapShadowUdimCoord(p,size,valid);
+         return valid?texelFetch(image,ivec3(mapped,int(info.x+0.5)-1),0):vec4(0.0);}
+        vec4 sampleShadowUdimTexture(sampler2DArray image,sampler2D lookup,vec2 uv)
+        {
+            vec2 tile=floor(uv);
+            if(tile.x<0.0||tile.x>=10.0||tile.y<0.0||tile.y>=100.0)return vec4(1.0,0.0,1.0,1.0);
+            vec4 info=texelFetch(lookup,ivec2(tile),0);if(info.x<0.5)return vec4(1.0,0.0,1.0,1.0);
+            ivec2 size=ivec2(round(vec2(textureSize(image,0).xy)*info.yz));vec2 p=fract(uv)*vec2(size)-0.5;ivec2 base=ivec2(floor(p));vec2 f=fract(p);
+            if(uTextureInterpolation==1)return fetchShadowUdimAlpha(image,info,ivec2(floor(fract(uv)*vec2(size))));
+            if(uTextureInterpolation!=2){vec4 a=mix(fetchShadowUdimAlpha(image,info,base),fetchShadowUdimAlpha(image,info,base+ivec2(1,0)),f.x);
+                vec4 b=mix(fetchShadowUdimAlpha(image,info,base+ivec2(0,1)),fetchShadowUdimAlpha(image,info,base+ivec2(1,1)),f.x);return mix(a,b,f.y);}
+            vec2 w0=(1.0-f)*(1.0-f)*(1.0-f)/6.0;vec2 w1=(3.0*f*f*f-6.0*f*f+4.0)/6.0;
+            vec2 w2=(-3.0*f*f*f+3.0*f*f+3.0*f+1.0)/6.0;vec2 w3=f*f*f/6.0;vec4 result=vec4(0.0);
+            for(int y=0;y<4;++y){float wy=y==0?w0.y:y==1?w1.y:y==2?w2.y:w3.y;for(int x=0;x<4;++x){float wx=x==0?w0.x:x==1?w1.x:x==2?w2.x:w3.x;
+                result+=fetchShadowUdimAlpha(image,info,base+ivec2(x-1,y-1))*wx*wy;}}
+            return result;
+        }
         vec4 sampleShadowUdimAlphaLinear(vec2 uv)
         {
-            vec2 tile = floor(uv);
-            if (tile.x < 0.0 || tile.x >= 10.0 ||
-                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec4 tileInfo = texelFetch(uShadowUdimLookup, ivec2(tile), 0);
-            int layer = int(tileInfo.x + 0.5) - 1;
-            if (layer < 0) return vec4(1.0, 0.0, 1.0, 1.0);
-            return texture(uShadowUdimImage,
-                           vec3(fract(uv) * tileInfo.yz, float(layer)));
+            return sampleShadowUdimTexture(uShadowUdimImage,
+                                            uShadowUdimLookup, uv);
         }
         vec4 sampleShadowUdimAlpha(vec2 uv)
         {
-            if (uTextureInterpolation != 2) return sampleShadowUdimAlphaLinear(uv);
-            vec2 tile = floor(uv);
-            if (tile.x < 0.0 || tile.x >= 10.0 ||
-                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec4 tileInfo = texelFetch(uShadowUdimLookup, ivec2(tile), 0);
-            if (tileInfo.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
-            vec2 size = vec2(textureSize(uShadowUdimImage, 0).xy) * tileInfo.yz;
-            vec2 p = fract(uv) * size - 0.5;
-            vec2 base = floor(p);
-            vec2 f = fract(p);
-            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
-            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
-            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
-            vec2 w3 = f * f * f / 6.0;
-            vec4 result = vec4(0.0);
-            for (int y = 0; y < 4; ++y) {
-                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
-                for (int x = 0; x < 4; ++x) {
-                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
-                    vec2 tap = tile + (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size;
-                    result += sampleShadowUdimAlphaLinear(tap) * wx * wy;
-                }
-            }
-            return result;
+            return sampleShadowUdimTexture(uShadowUdimImage,
+                                            uShadowUdimLookup, uv);
         }
         vec4 sampleShadowAlphaImage(vec2 uv)
         {
@@ -2262,6 +2343,9 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
         workbenchEffectProgram_.setUniformValue(
             "uTextureInterpolation", workbenchTextureInterpolation(
                 range.workbenchMaterial.textureImageInterpolation));
+        workbenchEffectProgram_.setUniformValue(
+            "uTextureExtension", workbenchTextureExtension(
+                range.workbenchMaterial.textureImageExtension));
         configureWorkbenchImageTexture(imageTexture, range.workbenchMaterial);
         glBindTexture(GL_TEXTURE_2D, imageTexture);
         configureWorkbenchUdimTexture(udimTexture.imageArray,
@@ -2497,6 +2581,9 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
         workbenchEffectProgram_.setUniformValue(
             "uTextureInterpolation", workbenchTextureInterpolation(
                 range.workbenchMaterial.textureImageInterpolation));
+        workbenchEffectProgram_.setUniformValue(
+            "uTextureExtension", workbenchTextureExtension(
+                range.workbenchMaterial.textureImageExtension));
         configureWorkbenchImageTexture(imageTexture, range.workbenchMaterial);
         glBindTexture(GL_TEXTURE_2D, imageTexture);
         configureWorkbenchUdimTexture(udimTexture.imageArray,
@@ -2704,6 +2791,9 @@ bool ViewportSurfaceRenderer::renderShadowMap(
         shadowProgram_.setUniformValue(
             "uTextureInterpolation", workbenchTextureInterpolation(
                 range.workbenchMaterial.textureImageInterpolation));
+        shadowProgram_.setUniformValue(
+            "uTextureExtension", workbenchTextureExtension(
+                range.workbenchMaterial.textureImageExtension));
         configureWorkbenchImageTexture(alphaTexture, range.workbenchMaterial);
         configureWorkbenchUdimTexture(udimTexture.imageArray,
                                       range.workbenchMaterial);
@@ -4267,6 +4357,9 @@ bool ViewportSurfaceRenderer::draw(
             program_.setUniformValue(
                 "uTextureInterpolation", workbenchTextureInterpolation(
                     range.workbenchMaterial.textureImageInterpolation));
+            program_.setUniformValue(
+                "uTextureExtension", workbenchTextureExtension(
+                    range.workbenchMaterial.textureImageExtension));
             configureWorkbenchImageTexture(imageTexture, range.workbenchMaterial);
             const QString alphaMode = range.workbenchMaterial.textureImageAlphaMode;
             const bool ignoreTextureAlpha =
@@ -4810,6 +4903,9 @@ bool ViewportSurfaceRenderer::draw(
                         workbenchTextureInterpolation(
                             range.workbenchMaterial
                                 .textureImageInterpolation));
+                    objectIdProgram_.setUniformValue(
+                        "uTextureExtension", workbenchTextureExtension(
+                            range.workbenchMaterial.textureImageExtension));
                     configureWorkbenchImageTexture(
                         imageTexture, range.workbenchMaterial);
                     glActiveTexture(GL_TEXTURE0);

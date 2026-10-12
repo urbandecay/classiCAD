@@ -184,48 +184,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         return;
     }
 
-    // Workbench resolves object outlines from visible IDs independently of
-    // cavity. Cavity remains limited to opaque draws in this software path.
-    bool cavityEnabled = settings.cavity;
-    for (const ViewportRenderObject &object : objects) {
-        if (!cavityEnabled) break;
-        if (object.shape.geometryType != GeometryType::NurbsSurface &&
-            object.shape.geometryType != GeometryType::NurbsSolid &&
-            !(object.shape.geometryType == GeometryType::PolygonMesh &&
-              validatePolygonMesh(object.shape.polygonMesh))) {
-            continue;
-        }
-        const float alpha = settings.colorMode == ViewportColorMode::Custom
-                                ? 1.0f
-                            : settings.colorMode == ViewportColorMode::Material ||
-                                    settings.colorMode == ViewportColorMode::Attribute ||
-                                    settings.colorMode == ViewportColorMode::Texture
-                                ? object.workbenchMaterial.alpha
-                                : object.displayColorSceneLinear.w();
-        if (alpha < 0.999f) {
-            cavityEnabled = false;
-            break;
-        }
-        if (object.shape.geometryType == GeometryType::PolygonMesh &&
-            (settings.colorMode == ViewportColorMode::Material ||
-             settings.colorMode == ViewportColorMode::Attribute ||
-             settings.colorMode == ViewportColorMode::Texture)) {
-            for (const WorkbenchMaterialData &material : object.meshMaterials) {
-                if (material.alpha < 0.999f) {
-                    cavityEnabled = false;
-                    break;
-                }
-            }
-            if (!cavityEnabled) break;
-            for (const PolygonMeshMaterialSlot &slot :
-                 object.shape.polygonMesh.materialSlots) {
-                if (slot.alpha < 0.999f) {
-                    cavityEnabled = false;
-                    break;
-                }
-            }
-        }
-    }
+    // Outlines use all visible geometry. Cavity uses a separate opaque-only
+    // depth/normal buffer so transparent surfaces neither occlude its samples
+    // nor receive its shading.
+    const bool cavityEnabled = settings.cavity;
 
     const int outputWidth = colorImage->width();
     const int outputHeight = colorImage->height();
@@ -236,6 +198,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     if (width <= 0 || height <= 0 || outputWidth <= 0 || outputHeight <= 0)
         return;
     QVector<RasterSample> samples(width * height);
+    QVector<RasterSample> opaqueSamples;
+    if (cavityEnabled) opaqueSamples.resize(width * height);
     const Point3D towardCamera = transform.viewDirection();
     const bool perspective = transform.isPerspectiveEnabled();
     const Point3D camera = perspective
@@ -258,8 +222,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             objectSourceAlpha(object, settings.colorMode) <= 0.0f) {
             continue;
         }
+        const float objectAlpha = perFaceMaterialAlpha
+                                      ? 1.0f
+                                      : saturate(objectSourceAlpha(
+                                            object, settings.colorMode));
         ViewportDepthGeometry fallback;
         QVector<TextureAlphaTriangle> textureAlphaTriangles;
+        QVector<float> triangleAlphas;
         const ViewportDepthGeometry *geometry =
             object.preparedDepthGeometry.data();
         if (object.shape.geometryType == GeometryType::PolygonMesh) {
@@ -295,6 +264,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const QVector<int> &face = mesh.faces[faceIndex];
                 const int faceFirstCorner = firstCorner;
                 const int faceSlot = mesh.faceMaterialIndices.value(faceIndex, 0);
+                float triangleSourceAlpha = objectAlpha;
                 if (settings.colorMode == ViewportColorMode::Material ||
                     settings.colorMode == ViewportColorMode::Attribute ||
                     settings.colorMode == ViewportColorMode::Texture) {
@@ -308,6 +278,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         firstCorner += face.size();
                         continue;
                     }
+                    faceAlpha = saturate(faceAlpha);
+                    triangleSourceAlpha = faceAlpha;
                 }
                 QImage alphaImage;
                 bool textureAlphaCutout = false;
@@ -365,6 +337,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     }
                     textureAlphaTriangles.append(
                         std::move(textureAlphaTriangle));
+                    triangleAlphas.append(triangleSourceAlpha);
                 }
                 firstCorner += face.size();
             }
@@ -376,6 +349,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
         const QVector<QVector3D> &vertices = geometry->surfaceVertices;
         const QVector<QVector3D> &normals = geometry->surfaceNormals;
+        if (object.shape.geometryType != GeometryType::PolygonMesh) {
+            triangleAlphas.fill(objectAlpha, vertices.size() / 3);
+        }
         for (int triangle = 0; triangle + 2 < vertices.size(); triangle += 3) {
             const int triangleIndex = triangle / 3;
             const TextureAlphaTriangle *textureAlphaTriangle =
@@ -463,13 +439,22 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                                        w1 * depth[1] +
                                                        w2 * depth[2]);
                     RasterSample &sample = samples[y * width + x];
-                    if (sample.objectId != 0 && z <= sample.depth) continue;
-                    sample.depth = z;
-                    sample.normal = normalized(
+                    const QVector3D interpolatedNormal = normalized(
                         normal[0] * static_cast<float>(w0) +
                         normal[1] * static_cast<float>(w1) +
                         normal[2] * static_cast<float>(w2));
-                    sample.objectId = id;
+                    const auto writeNearest = [&](RasterSample &target) {
+                        if (target.objectId != 0 && z <= target.depth) return;
+                        target.depth = z;
+                        target.normal = interpolatedNormal;
+                        target.objectId = id;
+                    };
+                    writeNearest(sample);
+                    const float sourceAlpha = triangleIndex < triangleAlphas.size()
+                                                  ? triangleAlphas[triangleIndex]
+                                                  : objectAlpha;
+                    if (cavityEnabled && sourceAlpha >= 0.999f)
+                        writeNearest(opaqueSamples[y * width + x]);
                 }
             }
         }
@@ -562,7 +547,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
 
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
-            const RasterSample &center = samples[y * width + x];
+            const RasterSample &center = opaqueSamples[y * width + x];
             if (center.objectId == 0) continue;
             float occlusion = 0.0f;
             float ridgeResponse = 0.0f;
@@ -574,7 +559,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const int sx = x + qRound(direction.x() * step * ring);
                 const int sy = y + qRound(direction.y() * step * ring);
                 if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
-                const RasterSample &neighbor = samples[sy * width + sx];
+                const RasterSample &neighbor = opaqueSamples[sy * width + sx];
                 if (neighbor.objectId == 0) continue;
                 ++validNeighbors;
                 const float delta = neighbor.depth - center.depth;
@@ -616,7 +601,22 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             const int depthX = std::clamp(
                 static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
                 0, width - 1);
-            const float factor = factors[depthY * width + depthX];
+            const int sampleIndex = depthY * width + depthX;
+            const RasterSample &opaqueReceiver = opaqueSamples[sampleIndex];
+            const RasterSample &visibleTop = samples[sampleIndex];
+            if (opaqueReceiver.objectId == 0 || visibleTop.objectId == 0)
+                continue;
+            const float depthTolerance = std::max(
+                1.0e-5f, std::abs(opaqueReceiver.depth) * 1.0e-6f);
+            // The source image has already composited transparency. Applying
+            // an opaque cavity factor beneath a translucent visible surface
+            // would also darken that transparent contribution, so only shade
+            // when this opaque receiver is itself the visible top sample.
+            if (std::abs(visibleTop.depth - opaqueReceiver.depth) >
+                depthTolerance) {
+                continue;
+            }
+            const float factor = factors[sampleIndex];
             if (factor == 1.0f) continue;
             const QRgb pixel = source.pixel(x, y);
             out[x] = qRgba(

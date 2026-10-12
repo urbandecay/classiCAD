@@ -167,8 +167,10 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   no longer has an epsilon floor, preserving Blender's two-blade edge equation.
   Aperture and overall output still need visual comparison.
   Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap
-  full-resolution gather and has no median pass. Image comparison remains
-  open. Pinned gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L783-L899); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
+  full-resolution gather and has no median pass. Its aperture shaping now uses
+  Blender's `blades > 1` condition and polygon/rotation/reciprocal-X-ratio
+  mapping, including the two-blade slit. Image comparison remains open. Pinned
+  gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L783-L899); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
 
 ### Background regression correction
 

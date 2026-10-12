@@ -1202,20 +1202,22 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const qreal fStop = cameraOptics.fStop;
         const qreal sensorWidth = cameraOptics.sensorWidthMillimeters * 0.001;
         const auto shapeApertureTap = [&cameraOptics](QPointF tap) {
-            if (cameraOptics.apertureBlades >= 3) {
+            if (cameraOptics.apertureBlades > 1) {
                 const qreal bladeAngle =
                     6.283185307179586 / cameraOptics.apertureBlades;
                 const qreal angle = std::atan2(tap.y(), tap.x()) -
                                     cameraOptics.apertureRotationRadians;
                 const qreal sector = std::remainder(angle, bladeAngle);
                 const qreal polygonRadius = std::cos(0.5 * bladeAngle) /
-                    std::max<qreal>(std::cos(sector), 1.0e-5);
+                    std::cos(sector);
                 tap *= polygonRadius;
             }
             const qreal ratio = std::max<qreal>(cameraOptics.apertureRatio, 0.01);
-            if (ratio > 1.0) tap.setX(tap.x() * ratio);
-            else tap.setY(tap.y() / ratio);
-            return tap;
+            const qreal angle = std::atan2(tap.y(), tap.x()) +
+                                cameraOptics.apertureRotationRadians;
+            const qreal radius = std::hypot(tap.x(), tap.y());
+            return QPointF(std::cos(angle) * radius / ratio,
+                           std::sin(angle) * radius);
         };
         if (std::isfinite(focal) && focal > 0.0 && std::isfinite(focus) &&
             focus > 0.0 && std::isfinite(fStop) && fStop > 0.0 &&

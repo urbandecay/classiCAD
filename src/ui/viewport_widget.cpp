@@ -2018,6 +2018,7 @@ public:
 
     void setArchitecturalDimensionFont(bool enabled) override
     {
+        architecturalDimensionFont_ = enabled;
         viewportRenderer_.setArchitecturalDimensionFont(enabled);
         curveHitTester_.setArchitecturalDimensionFont(enabled);
         DebugLog::instance().write(
@@ -6319,6 +6320,25 @@ public:
             },
             &result.combined, &result.depth, nullptr);
         if (result.isValid()) {
+            // CAD dimensions are committed scene annotations, not transient
+            // editor overlays. Include them in the saved result at the chosen
+            // output resolution while leaving the grid and tool overlays out.
+            ViewportRenderer annotationRenderer(renderCamera, curveHitTester_);
+            annotationRenderer.setArchitecturalDimensionFont(
+                architecturalDimensionFont_);
+            QPainter annotationPainter(&result.combined);
+            annotationPainter.setRenderHint(QPainter::Antialiasing, true);
+            annotationPainter.setRenderHint(QPainter::TextAntialiasing, true);
+            for (const ViewportRenderObject &object : renderFrame.objects) {
+                if (!isDimensionGeometryType(object.shape.geometryType)) continue;
+                annotationRenderer.drawShape(
+                    annotationPainter, object.shape, outputSize, false, false,
+                    false, object.layerColor, object.layerLineType,
+                    object.layerLineWeightMm, object.objectId,
+                    object.geometryRevision);
+            }
+            annotationPainter.end();
+
             bool invertible = false;
             const QMatrix4x4 inverse = viewportViewProjection(
                 renderCamera, outputSize).inverted(&invertible);
@@ -22472,6 +22492,7 @@ private:
     SurfaceTessellationCache surfaceTessellationCache_;
     ViewportGeometryCache viewportGeometryCache_;
     CurveHitTester curveHitTester_;
+    bool architecturalDimensionFont_ = false;
     SnapEngine snapEngine_;
     ViewportRenderer viewportRenderer_;
     ViewportShadingSettings viewportShadingSettings_;

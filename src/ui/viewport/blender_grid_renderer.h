@@ -90,6 +90,15 @@ public:
         QVector<int> *candidateIndices);
     void setSurfaceTessellationCache(
         const SurfaceTessellationCache *surfaceTessellationCache);
+    // Draw only showInFront geometry into the currently bound overlay depth
+    // target. The caller owns and clears that target; this method preserves
+    // ordinary scene depth and uses normal depth testing between front items.
+    void drawFrontSceneDepth(
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const QVector<ViewportRenderObject> &visibleSceneShapes,
+        bool surfacesOnly = false);
     void setAntiAliasingSamples(int samples);
     int antiAliasingSamples() const;
 
@@ -97,6 +106,14 @@ private:
     bool initialize();
     bool initializeResources();
     bool ensureFramebuffer(const QSize &pixelSize);
+    bool ensureFrontDepthFramebuffer(const QSize &pixelSize);
+    void mergeFrontDepthToCurrentFramebuffer(const QSize &pixelSize);
+    void drawAndMergeFrontSceneDepth(
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const QVector<ViewportRenderObject> &visibleSceneShapes,
+        bool surfacesOnly = false);
     bool renderGridLayer(const ViewportTransform &transform,
                          const QSize &viewportSize,
                          qreal devicePixelRatio,
@@ -107,7 +124,8 @@ private:
                         const ViewportTransform &transform,
                         const QSize &viewportSize,
                         qreal devicePixelRatio,
-                        bool surfacesOnly = false);
+                        bool surfacesOnly = false,
+                        bool overlayOnly = false);
     void uploadSceneDepthGeometry(const ViewportDepthGeometry &geometry);
     void updateSceneDepthGeometry(
         const QVector<ViewportRenderObject> &visibleSceneShapes);
@@ -122,11 +140,15 @@ private:
     std::unique_ptr<QOpenGLFramebufferObject> framebuffer_;
     std::unique_ptr<QOpenGLFramebufferObject> resolvedFramebuffer_;
     std::unique_ptr<QOpenGLFramebufferObject> pickFramebuffer_;
+    GLuint frontDepthFramebuffer_ = 0;
+    GLuint frontDepthTexture_ = 0;
+    QSize frontDepthPixelSize_;
     QOpenGLTextureBlitter textureBlitter_;
     QOpenGLShaderProgram program_;
     QOpenGLShaderProgram backgroundProgram_;
     QOpenGLShaderProgram sceneDepthProgram_;
     QOpenGLShaderProgram componentPickProgram_;
+    QOpenGLShaderProgram frontDepthMergeProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject sceneDepthVertexArray_;
     QOpenGLVertexArrayObject componentPickVertexArray_;
@@ -141,6 +163,7 @@ private:
         int pointFirst = 0;
         int pointCount = 0;
         Point3D offset;
+        bool showInFront = false;
     };
     QVector<DepthObjectRange> depthObjectRanges_;
     const SurfaceTessellationCache *surfaceTessellationCache_ = nullptr;

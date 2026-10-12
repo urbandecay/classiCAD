@@ -59,6 +59,7 @@ private:
         int count = 0;
         Point3D offset;
         bool selected = false;
+        bool showInFront = false;
         QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
         WorkbenchMaterialData workbenchMaterial;
         bool useAttributeColor = false;
@@ -95,6 +96,8 @@ private:
     bool ensureWorkbenchEffectFramebuffers(
         const QSize &pixelSize,
         const ViewportRenderTargets &targets);
+    bool mergeWorkbenchFrontAttachments(const ViewportRenderTargets &targets,
+                                        bool mergeColor);
     bool ensureTransparencyFramebuffer(const QSize &pixelSize,
                                       GLuint depthStencilTexture);
     bool renderWorkbenchEffectPrepass(
@@ -136,6 +139,7 @@ private:
     QOpenGLShaderProgram workbenchEffectProgram_;
     QOpenGLShaderProgram shadowProgram_;
     QOpenGLShaderProgram transparencyResolveProgram_;
+    QOpenGLShaderProgram frontMergeProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject outlineVertexArray_;
     QOpenGLVertexArrayObject shadowVolumeVertexArray_;
@@ -147,6 +151,7 @@ private:
     QSize objectIdFramebufferSize_;
     bool objectIdFramebufferAttempted_ = false;
     GLuint workbenchEffectFramebuffer_ = 0;
+    GLuint frontMergeFramebuffer_ = 0;
     GLuint workbenchOutlineIdTexture_ = 0;
     GLuint cavityDepthFramebuffer_ = 0;
     GLuint cavityDepthTexture_ = 0;

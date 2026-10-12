@@ -32,6 +32,12 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   selection. This is specific to Workbench; other Blender render paths may
   implement Image Texture Cubic/Smart differently. Pinned source:
   [workbench_materials.cc](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L469-L476).
+- The QPainter cavity/outline effect-alpha sampler had retained a separate
+  cubic B-spline for Cubic and Smart even after color sampling was corrected.
+  It now uses the same bilinear filtered sample for those modes, keeping alpha
+  cutouts aligned with the Workbench color pass. This follows the same pinned
+  `workbench_materials.cc` image-filter setup above; visual comparison remains
+  pending.
 
 ### GPU Workbench curvature sample spacing (2026-10-12)
 
@@ -93,15 +99,20 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 - The import and render-frame metadata path now carries Blender
   `Object.show_in_front` through `SceneObject` to `ViewportRenderObject`.
   Collection membership and CAD layer visibility remain independent.
-- GPU parity remains unimplemented. The current renderer has a single scene
-  color target and one weighted-OIT accumulation/resolve layer. It needs
-  separate regular and in-front OIT accumulation, exact opaque staging and
-  depth copy, stencil-filtered regular accumulation, and the source-ordered
-  transparent-depth merge into scene depth and object IDs. Workbench's
+- GPU opaque-surface support now uses per-sample in-front color, depth, normal,
+  object-ID, and outline-ID attachments. The surface prepass renders opaque
+  show-in-front ranges in their own depth domain, merges their metadata into the
+  shared scene attachments, and merges color/depth before DOF, TAA, and SMAA
+  resolve. The unjittered viewport depth path also has a dedicated in-front
+  depth target for scene occlusion and picking. C++ build passes; GPU image
+  comparison remains pending.
+- Transparent show-in-front ranges still use classiCAD's existing regular OIT
+  or sorted fallback behavior. Blender uses separate regular and in-front OIT
+  accumulation, then source-ordered transparent-depth merging. The QPainter
+  fallback also has no separate in-front surface domain. Keep those differences
+  explicit; opaque support does not complete this pass family. Workbench's
   transparent-depth pass does not write normals; in-front opaque geometry owns
-  its normal/material attachments during the earlier opaque stage. Do not enable
-  partial in-front behavior until those passes and the shared target lifecycle
-  are implemented together.
+  its normal/material attachments during the earlier opaque stage.
 
 ### GPU Workbench two-blade aperture (2026-10-12)
 

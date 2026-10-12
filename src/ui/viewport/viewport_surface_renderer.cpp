@@ -350,6 +350,10 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         glDeleteFramebuffers(1, &workbenchEffectFramebuffer_);
         workbenchEffectFramebuffer_ = 0;
     }
+    if (frontMergeFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &frontMergeFramebuffer_);
+        frontMergeFramebuffer_ = 0;
+    }
     if (workbenchOutlineIdTexture_ != 0) {
         glDeleteTextures(1, &workbenchOutlineIdTexture_);
         workbenchOutlineIdTexture_ = 0;
@@ -380,6 +384,7 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
     workbenchEffectProgram_.removeAllShaders();
     shadowProgram_.removeAllShaders();
     transparencyResolveProgram_.removeAllShaders();
+    frontMergeProgram_.removeAllShaders();
 }
 
 bool ViewportSurfaceRenderer::initialize()
@@ -1157,6 +1162,40 @@ bool ViewportSurfaceRenderer::initialize()
                           vec4(aPosition + uWorldOffset, 1.0);
         }
     )glsl";
+    static constexpr const char *frontMergeVertexShader = R"glsl(
+        #version 330 core
+        out vec2 vUv;
+        void main()
+        {
+            vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+            vUv = p * 0.5;
+            gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+        }
+    )glsl";
+    static constexpr const char *frontMergeFragmentShader = R"glsl(
+        #version 330 core
+        in vec2 vUv;
+        uniform sampler2D uFrontColor;
+        uniform sampler2D uFrontDepth;
+        uniform sampler2D uFrontNormal;
+        uniform usampler2D uFrontObjectId;
+        uniform usampler2D uFrontOutlineId;
+        uniform bool uMergeColor;
+        layout(location = 0) out vec4 mergedColor;
+        layout(location = 1) out vec4 mergedNormal;
+        layout(location = 2) out uint mergedObjectId;
+        layout(location = 3) out uint mergedOutlineId;
+        void main()
+        {
+            float depth = texture(uFrontDepth, vUv).r;
+            if (depth >= 1.0) discard;
+            gl_FragDepth = depth;
+            if (uMergeColor) mergedColor = texture(uFrontColor, vUv);
+            mergedNormal = texture(uFrontNormal, vUv);
+            mergedObjectId = texture(uFrontObjectId, vUv).r;
+            mergedOutlineId = texture(uFrontOutlineId, vUv).r;
+        }
+    )glsl";
     static constexpr const char *objectIdFragmentShader = R"glsl(
         #version 330 core
         in vec2 vUv;
@@ -1518,7 +1557,12 @@ bool ViewportSurfaceRenderer::initialize()
             QOpenGLShader::Vertex, transparencyResolveVertexShader) ||
         !transparencyResolveProgram_.addShaderFromSourceCode(
             QOpenGLShader::Fragment, transparencyResolveFragmentShader) ||
-        !transparencyResolveProgram_.link()) {
+        !transparencyResolveProgram_.link() ||
+        !frontMergeProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Vertex, frontMergeVertexShader) ||
+        !frontMergeProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Fragment, frontMergeFragmentShader) ||
+        !frontMergeProgram_.link()) {
         qWarning().noquote()
             << "Viewport shader setup failed. Surface:" << program_.log()
             << "Object ID:" << objectIdProgram_.log()
@@ -1571,6 +1615,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
             hasSurface ? object.preparedDepthGeometry.data() : nullptr;
         keyStream << quint64(object.objectId.value())
                   << quint64(object.geometryRevision)
+                  << quint8(object.showInFront ? 1 : 0)
                   << quint8(hasSurface ? 1 : (hasMesh ? 2 : 0))
                   << quint64(reinterpret_cast<quintptr>(geometry))
                   << qint32(geometry != nullptr
@@ -1655,6 +1700,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
             range.count = count;
             range.offset = object.preparedGeometryOffset;
             range.selected = object.selected;
+            range.showInFront = object.showInFront;
             range.displayColorSceneLinear = object.displayColorSceneLinear;
             range.workbenchMaterial = object.workbenchMaterial;
             range.objectSeed = object.objectId.value();
@@ -2088,8 +2134,15 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
                            GL_TEXTURE_2D, targets.viewSpaceNormalTexture, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
                            GL_TEXTURE_2D, targets.objectIdTexture, 0);
+    const bool frontDepthDomain = targets.frontDepthTexture != 0 &&
+                                  targets.depthTexture ==
+                                      targets.frontDepthTexture;
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
-                           GL_TEXTURE_2D, workbenchOutlineIdTexture_, 0);
+                           GL_TEXTURE_2D,
+                           frontDepthDomain &&
+                                   targets.frontOutlineIdTexture != 0
+                               ? targets.frontOutlineIdTexture
+                               : workbenchOutlineIdTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                            GL_TEXTURE_2D, targets.depthTexture, 0);
     const GLenum drawAttachments[] = {
@@ -2123,6 +2176,116 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
         return false;
     }
     return true;
+}
+
+bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
+    const ViewportRenderTargets &targets, bool mergeColor)
+{
+    if (targets.frontDepthTexture == 0 ||
+        targets.frontViewSpaceNormalTexture == 0 ||
+        targets.frontObjectIdTexture == 0 ||
+        targets.frontOutlineIdTexture == 0 || targets.depthTexture == 0 ||
+        targets.viewSpaceNormalTexture == 0 || targets.objectIdTexture == 0 ||
+        (mergeColor && targets.currentSampleColorTexture == 0)) {
+        return false;
+    }
+    GLint previousFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousDepthFunction = GL_LESS;
+    GLint previousTextureBindings[5] = {};
+    GLboolean previousDepthMask = GL_TRUE;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousStencil = glIsEnabled(GL_STENCIL_TEST);
+    const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
+    const GLboolean previousCull = glIsEnabled(GL_CULL_FACE);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+    for (int unit = 0; unit < 5; ++unit) {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBindings[unit]);
+    }
+    if (frontMergeFramebuffer_ == 0) {
+        glGenFramebuffers(1, &frontMergeFramebuffer_);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, frontMergeFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D,
+                           mergeColor ? targets.currentSampleColorTexture : 0, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_2D, targets.viewSpaceNormalTexture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
+                           GL_TEXTURE_2D, targets.objectIdTexture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3,
+                           GL_TEXTURE_2D, workbenchOutlineIdTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                           GL_TEXTURE_2D, targets.depthTexture, 0);
+    const GLenum drawBuffers[] = {mergeColor
+                                      ? static_cast<GLenum>(GL_COLOR_ATTACHMENT0)
+                                      : static_cast<GLenum>(GL_NONE),
+                                  GL_COLOR_ATTACHMENT1,
+                                  GL_COLOR_ATTACHMENT2,
+                                  GL_COLOR_ATTACHMENT3};
+    glDrawBuffers(4, drawBuffers);
+    const bool complete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (complete) {
+        glViewport(0, 0, targets.pixelSize.width(), targets.pixelSize.height());
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_CULL_FACE);
+        glDepthMask(GL_TRUE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, targets.frontColorTexture);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, targets.frontDepthTexture);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, targets.frontViewSpaceNormalTexture);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, targets.frontObjectIdTexture);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, targets.frontOutlineIdTexture);
+        frontMergeProgram_.bind();
+        frontMergeProgram_.setUniformValue("uFrontColor", 0);
+        frontMergeProgram_.setUniformValue("uFrontDepth", 1);
+        frontMergeProgram_.setUniformValue("uFrontNormal", 2);
+        frontMergeProgram_.setUniformValue("uFrontObjectId", 3);
+        frontMergeProgram_.setUniformValue("uFrontOutlineId", 4);
+        frontMergeProgram_.setUniformValue("uMergeColor", mergeColor);
+        outlineVertexArray_.bind();
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        outlineVertexArray_.release();
+        frontMergeProgram_.release();
+    }
+    for (int unit = 0; unit < 5; ++unit) {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D,
+                      static_cast<GLuint>(previousTextureBindings[unit]));
+    }
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previousFramebuffer));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glDepthMask(previousDepthMask);
+    glColorMask(previousColorMask[0], previousColorMask[1],
+                previousColorMask[2], previousColorMask[3]);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    if (previousBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (previousStencil) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+    if (previousScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    if (previousCull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    return complete;
 }
 
 bool ViewportSurfaceRenderer::ensureTransparencyFramebuffer(
@@ -3693,6 +3856,7 @@ bool ViewportSurfaceRenderer::draw(
 
     prepareGeometry(objects);
     QVector<int> opaqueRangeIndices;
+    QVector<int> frontOpaqueRangeIndices;
     QVector<int> shadowVolumeRangeIndices;
     bool hasPartialAlpha = false;
     if (settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
@@ -3710,8 +3874,16 @@ bool ViewportSurfaceRenderer::draw(
                 static_cast<float>(alpha));
             if (workbenchEffectiveAlpha(packedAlpha, settings, false) >=
                 1.0 - 1.0e-6) {
-                opaqueRangeIndices.append(index);
+                if (range.showInFront && sharedTargets != nullptr &&
+                    sharedTargets->frontFramebuffer != 0) {
+                    frontOpaqueRangeIndices.append(index);
+                } else {
+                    opaqueRangeIndices.append(index);
+                }
             } else {
+                // Partial-alpha showInFront ranges intentionally remain in
+                // the existing regular OIT/sorted transparency domain until
+                // the separate front OIT resolve is implemented.
                 hasPartialAlpha = true;
             }
         }
@@ -3846,22 +4018,72 @@ bool ViewportSurfaceRenderer::draw(
         ensureCavityJitterTexture(cavityTotalSampleCount);
     const bool ssaoEnabled = worldSsaoRequested && ssaoJitterReady;
     const bool sharedPrepassRequested = sharedTargets != nullptr &&
-                                       (cavityRequested || outlineRequested);
+        (cavityRequested || outlineRequested ||
+         !frontOpaqueRangeIndices.isEmpty());
     bool sharedPrepassReady = false;
     bool cavityDepthReady = false;
+    bool frontDomainReady = frontOpaqueRangeIndices.isEmpty();
     if (sharedPrepassRequested) {
         bool snapshotDepthReady = !ssaoEnabled;
         sharedPrepassReady = renderWorkbenchEffectPrepass(
             transform, viewportSize, devicePixelRatio, settings,
             *sharedTargets, opaqueRangeIndices, ssaoEnabled,
             &snapshotDepthReady);
+        bool frontPrepassReady = false;
+        if (sharedPrepassReady && !frontOpaqueRangeIndices.isEmpty()) {
+            ViewportRenderTargets frontTargets = *sharedTargets;
+            frontTargets.depthTexture = sharedTargets->frontDepthTexture;
+            frontTargets.viewSpaceNormalTexture =
+                sharedTargets->frontViewSpaceNormalTexture;
+            frontTargets.objectIdTexture = sharedTargets->frontObjectIdTexture;
+            frontTargets.frontOutlineIdTexture =
+                sharedTargets->frontOutlineIdTexture;
+            frontPrepassReady = renderWorkbenchEffectPrepass(
+                transform, viewportSize, devicePixelRatio, settings,
+                frontTargets, frontOpaqueRangeIndices, false, nullptr);
+            if (frontPrepassReady) {
+                frontPrepassReady = mergeWorkbenchFrontAttachments(
+                    *sharedTargets, false);
+                if (ssaoEnabled) {
+                    const QSize frontPixelSize = sharedTargets->pixelSize;
+                    GLint previousRead = 0;
+                    GLint previousDraw = 0;
+                    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+                    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                      frontMergeFramebuffer_);
+                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                      cavityDepthFramebuffer_);
+                    glBlitFramebuffer(0, 0, frontPixelSize.width(),
+                                      frontPixelSize.height(), 0, 0,
+                                      frontPixelSize.width(),
+                                      frontPixelSize.height(),
+                                      GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                      static_cast<GLuint>(previousRead));
+                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                      static_cast<GLuint>(previousDraw));
+                    snapshotDepthReady = true;
+                }
+            }
+            frontDomainReady = frontPrepassReady;
+        }
+        sharedPrepassReady = sharedPrepassReady &&
+            (frontOpaqueRangeIndices.isEmpty() || frontPrepassReady);
         cavityDepthReady = sharedPrepassReady && ssaoEnabled &&
                            snapshotDepthReady;
         if (sharedPrepassReady && passReport != nullptr) {
-            passReport->populatedAttachments =
+            passReport->populatedAttachments |=
                 ViewportRenderTargets::Depth |
                 ViewportRenderTargets::ViewSpaceNormal |
                 ViewportRenderTargets::ObjectId;
+        }
+        if (frontDomainReady && passReport != nullptr) {
+            passReport->populatedAttachments |=
+                ViewportRenderTargets::FrontDepth |
+                ViewportRenderTargets::FrontViewSpaceNormal |
+                ViewportRenderTargets::FrontObjectId |
+                ViewportRenderTargets::FrontOutlineId;
         }
     }
     if (sharedPrepassReady) {
@@ -4689,13 +4911,12 @@ bool ViewportSurfaceRenderer::draw(
                 if (includeTransparent) drawTransparentTriangles();
                 return;
             }
-            for (const DrawRange &range : ranges_) {
-                if (range.count > 0) {
-                    drawRange(range, volumeShadowed, true, range.first,
-                              range.count);
-                }
+            for (int index : opaqueRangeIndices) {
+                const DrawRange &range = ranges_[index];
+                drawRange(range, volumeShadowed, true, range.first,
+                          range.count);
             }
-            if (passReport != nullptr && !ranges_.isEmpty()) {
+            if (passReport != nullptr && !opaqueRangeIndices.isEmpty()) {
                 passReport->markPassCompleted(
                     ViewportRenderPass::OpaqueColor);
             }
@@ -4772,6 +4993,55 @@ bool ViewportSurfaceRenderer::draw(
             else glDisable(GL_STENCIL_TEST);
         } else {
             drawSurfaceRanges(false, true);
+        }
+        if (!frontOpaqueRangeIndices.isEmpty() && sharedTargets != nullptr &&
+            frontDomainReady) {
+            GLint previousFramebuffer = 0;
+            GLint previousViewport[4] = {};
+            GLint previousDepthFunction = GL_LESS;
+            GLboolean previousDepthMask = GL_TRUE;
+            GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE,
+                                               GL_TRUE, GL_TRUE};
+            const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+            const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+            glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+            glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+            glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousFramebuffer);
+            glGetIntegerv(GL_VIEWPORT, previousViewport);
+            glBindFramebuffer(GL_FRAMEBUFFER, sharedTargets->frontFramebuffer);
+            glDrawBuffer(GL_COLOR_ATTACHMENT0);
+            glViewport(0, 0, sharedTargets->pixelSize.width(),
+                       sharedTargets->pixelSize.height());
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            for (int index : frontOpaqueRangeIndices) {
+                const DrawRange &range = ranges_[index];
+                drawRange(range, false, true, range.first, range.count);
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER,
+                              static_cast<GLuint>(previousFramebuffer));
+            glViewport(previousViewport[0], previousViewport[1],
+                       previousViewport[2], previousViewport[3]);
+            glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+            glDepthMask(previousDepthMask);
+            glColorMask(previousColorMask[0], previousColorMask[1],
+                        previousColorMask[2], previousColorMask[3]);
+            if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+            else glDisable(GL_DEPTH_TEST);
+            if (previousBlend) glEnable(GL_BLEND);
+            else glDisable(GL_BLEND);
+            const bool frontColorMerged =
+                mergeWorkbenchFrontAttachments(*sharedTargets, true);
+            if (!frontColorMerged) {
+                qWarning() << "Workbench front color merge failed";
+            } else if (passReport != nullptr) {
+                passReport->populatedAttachments |=
+                    ViewportRenderTargets::FrontColor;
+            }
         }
         vertexBuffer_.release();
         vertexArray_.release();

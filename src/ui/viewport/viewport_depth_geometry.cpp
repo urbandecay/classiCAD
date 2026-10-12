@@ -1110,6 +1110,9 @@ QByteArray viewportDepthGeometryCacheKey(
         stream << quint64(entry.objectId.value())
                << (entry.preparedGeometryRevision != 0
                        ? entry.preparedGeometryRevision : entry.geometryRevision);
+        // Presentation metadata partitions overlay depth without rebuilding
+        // geometry, but it must still invalidate cached object ranges.
+        stream << quint8(entry.showInFront ? 1 : 0);
         if (includeOffsets) {
             stream << entry.preparedGeometryOffset.x << entry.preparedGeometryOffset.y
                    << entry.preparedGeometryOffset.z;
@@ -1124,7 +1127,13 @@ QByteArray viewportDepthGeometryCacheKey(
     for (const ViewportRenderObject &entry : visibleSceneShapes) {
         shapes.append(entry.shape);
     }
-    return viewportDepthGeometryCacheKey(shapes);
+    QByteArray fallbackPayload = viewportDepthGeometryCacheKey(shapes);
+    QDataStream fallbackStream(&fallbackPayload, QIODevice::Append);
+    fallbackStream << qint32(visibleSceneShapes.size());
+    for (const ViewportRenderObject &entry : visibleSceneShapes) {
+        fallbackStream << quint8(entry.showInFront ? 1 : 0);
+    }
+    return QCryptographicHash::hash(fallbackPayload, QCryptographicHash::Sha256);
 }
 
 } // namespace classiCAD

@@ -49,6 +49,11 @@ struct ViewportRenderTargets {
         ShadowMask = 1u << 6,
         HistoryColor = 1u << 7,
         ResolvedSceneLinearColor = 1u << 8,
+        FrontColor = 1u << 9,
+        FrontDepth = 1u << 10,
+        FrontViewSpaceNormal = 1u << 11,
+        FrontObjectId = 1u << 12,
+        FrontOutlineId = 1u << 13,
     };
 
     GLuint currentSampleColorTexture = 0;
@@ -64,6 +69,14 @@ struct ViewportRenderTargets {
     // Workbench effects. A zero ID denotes the background.
     GLuint viewSpaceNormalTexture = 0;
     GLuint objectIdTexture = 0; // R32UI; 0 is reserved for background.
+    // Isolated opaque showInFront sample, merged by the surface renderer
+    // into the ordinary per-sample attachments before effects and AA resolve.
+    GLuint frontColorTexture = 0;
+    GLuint frontDepthTexture = 0;
+    GLuint frontViewSpaceNormalTexture = 0;
+    GLuint frontObjectIdTexture = 0;
+    GLuint frontOutlineIdTexture = 0;
+    GLuint frontFramebuffer = 0;
     GLuint materialDataTexture = 0;
     GLuint shadowMaskTexture = 0;
     QSize pixelSize;

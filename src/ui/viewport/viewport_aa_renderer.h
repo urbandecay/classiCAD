@@ -83,6 +83,12 @@ private:
     GLuint depthTexture_ = 0;
     GLuint viewSpaceNormalTexture_ = 0;
     GLuint objectIdTexture_ = 0;
+    GLuint frontColorTexture_ = 0;
+    GLuint frontDepthTexture_ = 0;
+    GLuint frontViewSpaceNormalTexture_ = 0;
+    GLuint frontObjectIdTexture_ = 0;
+    GLuint frontOutlineIdTexture_ = 0;
+    GLuint frontFramebuffer_ = 0;
     GLuint historyFramebuffer_ = 0;
     GLuint historyColorTexture_ = 0;
     GLuint resolveFramebuffer_ = 0;

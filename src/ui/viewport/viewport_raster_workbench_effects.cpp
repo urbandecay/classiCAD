@@ -302,31 +302,9 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
             static_cast<int>(std::floor(u * image.width())),
             static_cast<int>(std::floor(v * image.height()))));
     }
-    const bool cubic = triangle.interpolation.compare(
-        QStringLiteral("Cubic"), Qt::CaseInsensitive) == 0 ||
-        triangle.interpolation.compare(
-            QStringLiteral("Smart"), Qt::CaseInsensitive) == 0;
-    if (cubic) {
-        const auto weight = [](qreal t, int offset) {
-            const qreal distance = std::abs(t - offset);
-            if (distance < 1.0)
-                return (4.0 - 6.0 * distance * distance +
-                        3.0 * distance * distance * distance) / 6.0;
-            if (distance < 2.0) {
-                const qreal remainder = 2.0 - distance;
-                return remainder * remainder * remainder / 6.0;
-            }
-            return 0.0;
-        };
-        qreal result = 0.0;
-        for (int j = -1; j <= 2; ++j) {
-            for (int i = -1; i <= 2; ++i) {
-                result += alphaAt(x0 + i, y0 + j) *
-                          weight(tx, i) * weight(ty, j);
-            }
-        }
-        return static_cast<float>(std::clamp(result, 0.0, 1.0));
-    }
+    // Workbench only distinguishes Closest from filtered sampling. Its image
+    // material setup enables the GPU's linear sampler for Linear, Cubic, and
+    // Smart, so effect-alpha must use the same bilinear result as color.
     const qreal top = alphaAt(x0, y0) * (1.0 - tx) +
                       alphaAt(x0 + 1, y0) * tx;
     const qreal bottom = alphaAt(x0, y0 + 1) * (1.0 - tx) +

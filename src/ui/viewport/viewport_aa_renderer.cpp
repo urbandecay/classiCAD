@@ -991,6 +991,17 @@ void ViewportAaRenderer::destroyTargets()
         glDeleteTextures(1, &objectIdTexture_);
         objectIdTexture_ = 0;
     }
+    if (frontFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &frontFramebuffer_);
+        frontFramebuffer_ = 0;
+    }
+    const GLuint frontTextures[] = {frontColorTexture_, frontDepthTexture_,
+                                    frontViewSpaceNormalTexture_, frontObjectIdTexture_,
+                                    frontOutlineIdTexture_};
+    glDeleteTextures(5, frontTextures);
+    frontColorTexture_ = frontDepthTexture_ = 0;
+    frontViewSpaceNormalTexture_ = frontObjectIdTexture_ = 0;
+    frontOutlineIdTexture_ = 0;
     if (historyColorTexture_ != 0) {
         glDeleteTextures(1, &historyColorTexture_);
         historyColorTexture_ = 0;
@@ -1049,6 +1060,59 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenTextures(1, &frontColorTexture_);
+    glBindTexture(GL_TEXTURE_2D, frontColorTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, pixelSize.width(),
+                 pixelSize.height(), 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenTextures(1, &frontOutlineIdTexture_);
+    glBindTexture(GL_TEXTURE_2D, frontOutlineIdTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, pixelSize.width(),
+                 pixelSize.height(), 0, GL_RED_INTEGER, GL_UNSIGNED_INT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenTextures(1, &frontDepthTexture_);
+    glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
+                 pixelSize.width(), pixelSize.height(), 0,
+                 GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenTextures(1, &frontViewSpaceNormalTexture_);
+    glBindTexture(GL_TEXTURE_2D, frontViewSpaceNormalTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, pixelSize.width(),
+                 pixelSize.height(), 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenTextures(1, &frontObjectIdTexture_);
+    glBindTexture(GL_TEXTURE_2D, frontObjectIdTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32UI, pixelSize.width(),
+                 pixelSize.height(), 0, GL_RED_INTEGER, GL_UNSIGNED_INT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &frontFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, frontFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, frontColorTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_2D, frontViewSpaceNormalTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
+                           GL_TEXTURE_2D, frontObjectIdTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3,
+                           GL_TEXTURE_2D, frontOutlineIdTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, frontDepthTexture_, 0);
+    const GLenum frontDrawBuffers[] = {GL_COLOR_ATTACHMENT0,
+                                       GL_COLOR_ATTACHMENT1,
+                                       GL_COLOR_ATTACHMENT2,
+                                       GL_COLOR_ATTACHMENT3};
+    glDrawBuffers(4, frontDrawBuffers);
+    const bool frontComplete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
     glGenTextures(1, &viewSpaceNormalTexture_);
     glBindTexture(GL_TEXTURE_2D, viewSpaceNormalTexture_);
@@ -1307,12 +1371,13 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
                        static_cast<GLuint>(previousRenderbuffer));
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-    if (!sceneComplete || !attachmentsComplete || !historyComplete ||
+    if (!sceneComplete || !frontComplete || !attachmentsComplete || !historyComplete ||
         !resolveComplete || !depthOfFieldComplete || !dofPrepareComplete ||
         !dofBlurComplete || !dofMipComplete || !edgeComplete || !weightComplete ||
         !textureDataValid) {
         qWarning() << "Viewport AA target allocation failed"
                    << "scene=" << sceneComplete
+                   << "front=" << frontComplete
                    << "attachments=" << attachmentsComplete
                    << "history=" << historyComplete
                    << "resolve=" << resolveComplete
@@ -1432,11 +1497,33 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     targets_.depthTexture = depthTexture_;
     targets_.viewSpaceNormalTexture = viewSpaceNormalTexture_;
     targets_.objectIdTexture = objectIdTexture_;
+    targets_.frontColorTexture = frontColorTexture_;
+    targets_.frontDepthTexture = frontDepthTexture_;
+    targets_.frontViewSpaceNormalTexture = frontViewSpaceNormalTexture_;
+    targets_.frontObjectIdTexture = frontObjectIdTexture_;
+    targets_.frontOutlineIdTexture = frontOutlineIdTexture_;
+    targets_.frontFramebuffer = frontFramebuffer_;
     targets_.materialDataTexture = 0;
     targets_.shadowMaskTexture = 0;
     targets_.historyColorIsSceneLinear = sourceIsSceneLinear_;
     targets_.resolvedSceneLinearColorTexture = 0;
     targets_.validAttachments = 0;
+    glBindFramebuffer(GL_FRAMEBUFFER, frontFramebuffer_);
+    const GLenum frontDrawBuffers[] = {GL_COLOR_ATTACHMENT0,
+                                       GL_COLOR_ATTACHMENT1,
+                                       GL_COLOR_ATTACHMENT2,
+                                       GL_COLOR_ATTACHMENT3};
+    glDrawBuffers(4, frontDrawBuffers);
+    const GLfloat frontClearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const GLfloat frontClearNormal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const GLuint frontClearId[4] = {0u, 0u, 0u, 0u};
+    const GLfloat frontClearDepth[1] = {1.0f};
+    glClearBufferfv(GL_COLOR, 0, frontClearColor);
+    glClearBufferfv(GL_COLOR, 1, frontClearNormal);
+    glClearBufferuiv(GL_COLOR, 2, frontClearId);
+    glClearBufferuiv(GL_COLOR, 3, frontClearId);
+    glClearBufferfv(GL_DEPTH, 0, frontClearDepth);
+    glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
     sceneSampleActive_ = true;
     return true;
 }
@@ -2110,7 +2197,12 @@ void ViewportAaRenderer::markCurrentSampleAttachmentsValid(
         ViewportRenderTargets::ViewSpaceNormal |
         ViewportRenderTargets::ObjectId |
         ViewportRenderTargets::MaterialData |
-        ViewportRenderTargets::ShadowMask;
+        ViewportRenderTargets::ShadowMask |
+        ViewportRenderTargets::FrontColor |
+        ViewportRenderTargets::FrontDepth |
+        ViewportRenderTargets::FrontViewSpaceNormal |
+        ViewportRenderTargets::FrontObjectId |
+        ViewportRenderTargets::FrontOutlineId;
     targets_.validAttachments |= attachmentFlags & sampleAttachments;
 }
 
@@ -2189,6 +2281,7 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
         stream << quint64(object.objectId.value())
                << quint64(object.geometryRevision)
                << object.selected << object.scalePreview << object.rotatePreview
+               << object.showInFront
                << object.placementTranslation.x
                << object.placementTranslation.y
                << object.placementTranslation.z

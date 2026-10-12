@@ -242,6 +242,14 @@ BlenderGridRenderer::~BlenderGridRenderer()
         framebuffer_.reset();
         resolvedFramebuffer_.reset();
         pickFramebuffer_.reset();
+        if (frontDepthFramebuffer_ != 0) {
+            glDeleteFramebuffers(1, &frontDepthFramebuffer_);
+            frontDepthFramebuffer_ = 0;
+        }
+        if (frontDepthTexture_ != 0) {
+            glDeleteTextures(1, &frontDepthTexture_);
+            frontDepthTexture_ = 0;
+        }
         if (textureBlitter_.isCreated()) {
             textureBlitter_.destroy();
         }
@@ -264,6 +272,7 @@ BlenderGridRenderer::~BlenderGridRenderer()
         backgroundProgram_.removeAllShaders();
         sceneDepthProgram_.removeAllShaders();
         componentPickProgram_.removeAllShaders();
+        frontDepthMergeProgram_.removeAllShaders();
         if (!usingWidgetContext_) {
             context_.doneCurrent();
         }
@@ -356,6 +365,36 @@ bool BlenderGridRenderer::initializeResources()
                              << componentPickProgram_.log();
         return false;
     }
+    static constexpr const char *frontDepthMergeVertexShader = R"glsl(
+        #version 330 core
+        out vec2 vUv;
+        void main()
+        {
+            vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+            vUv = p * 0.5;
+            gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+        }
+    )glsl";
+    static constexpr const char *frontDepthMergeFragmentShader = R"glsl(
+        #version 330 core
+        in vec2 vUv;
+        uniform sampler2D uFrontDepth;
+        void main()
+        {
+            float depth = texture(uFrontDepth, vUv).r;
+            if (depth >= 1.0) discard;
+            gl_FragDepth = depth;
+        }
+    )glsl";
+    if (!frontDepthMergeProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Vertex, frontDepthMergeVertexShader) ||
+        !frontDepthMergeProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Fragment, frontDepthMergeFragmentShader) ||
+        !frontDepthMergeProgram_.link()) {
+        qWarning().noquote() << "Front-depth merge shader setup failed:"
+                             << frontDepthMergeProgram_.log();
+        return false;
+    }
     if (!vertexArray_.create()) {
         qWarning() << "Blender grid renderer: could not create vertex array";
         return false;
@@ -397,6 +436,226 @@ bool BlenderGridRenderer::ensureFramebuffer(const QSize &pixelSize)
     return framebuffer_ != nullptr && framebuffer_->isValid();
 }
 
+bool BlenderGridRenderer::ensureFrontDepthFramebuffer(const QSize &pixelSize)
+{
+    if (pixelSize.isEmpty()) {
+        return false;
+    }
+    if (frontDepthPixelSize_ != pixelSize) {
+        if (frontDepthFramebuffer_ != 0) {
+            glDeleteFramebuffers(1, &frontDepthFramebuffer_);
+            frontDepthFramebuffer_ = 0;
+        }
+        if (frontDepthTexture_ != 0) {
+            glDeleteTextures(1, &frontDepthTexture_);
+            frontDepthTexture_ = 0;
+        }
+        frontDepthPixelSize_ = pixelSize;
+    }
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+    if (frontDepthTexture_ == 0) {
+        glGenTextures(1, &frontDepthTexture_);
+        glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
+                     pixelSize.width(), pixelSize.height(), 0,
+                     GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    if (frontDepthFramebuffer_ == 0) {
+        glGenFramebuffers(1, &frontDepthFramebuffer_);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, frontDepthFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, frontDepthTexture_, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    const bool complete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    return complete;
+}
+
+void BlenderGridRenderer::mergeFrontDepthToCurrentFramebuffer(
+    const QSize &pixelSize)
+{
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousDepthFunction = GL_LESS;
+    GLint previousProgram = 0;
+    GLint previousVertexArray = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture = 0;
+    GLboolean previousDepthMask = GL_TRUE;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
+    const GLboolean previousStencil = glIsEnabled(GL_STENCIL_TEST);
+    const GLboolean previousCull = glIsEnabled(GL_CULL_FACE);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_ALWAYS);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
+    if (frontDepthMergeProgram_.bind()) {
+        frontDepthMergeProgram_.setUniformValue("uFrontDepth", 0);
+        vertexArray_.bind();
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        vertexArray_.release();
+        frontDepthMergeProgram_.release();
+    }
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    glDepthMask(previousDepthMask);
+    glColorMask(previousColorMask[0], previousColorMask[1],
+                previousColorMask[2], previousColorMask[3]);
+    if (previousDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (previousBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (previousScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    if (previousStencil) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+    if (previousCull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glUseProgram(static_cast<GLuint>(previousProgram));
+    glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+}
+
+void BlenderGridRenderer::drawAndMergeFrontSceneDepth(
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
+    bool surfacesOnly)
+{
+    updateSceneDepthGeometry(visibleSceneShapes);
+    const bool hasFrontDepth = std::any_of(
+        depthObjectRanges_.cbegin(), depthObjectRanges_.cend(),
+        [surfacesOnly](const DepthObjectRange &range) {
+            return range.showInFront &&
+                   (surfacesOnly ? range.surfaceCount > 0
+                                 : (range.lineCount > 0 ||
+                                    range.surfaceCount > 0 ||
+                                    range.pointCount > 0));
+        });
+    if (!hasFrontDepth) {
+        return;
+    }
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    const QSize pixelSize(qRound(viewportSize.width() * dpr),
+                          qRound(viewportSize.height() * dpr));
+    if (!ensureFrontDepthFramebuffer(pixelSize)) {
+        return;
+    }
+
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousDepthFunction = GL_LESS;
+    GLint previousProgram = 0;
+    GLfloat previousLineWidth = 1.0f;
+    GLdouble previousClearDepth = 1.0;
+    GLboolean previousDepthMask = GL_TRUE;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
+    const GLboolean previousStencil = glIsEnabled(GL_STENCIL_TEST);
+    const GLboolean previousCull = glIsEnabled(GL_CULL_FACE);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetFloatv(GL_LINE_WIDTH, &previousLineWidth);
+    glGetDoublev(GL_DEPTH_CLEAR_VALUE, &previousClearDepth);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, frontDepthFramebuffer_);
+    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glClearDepth(1.0);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    drawFrontSceneDepth(transform, viewportSize, dpr, visibleSceneShapes,
+                        surfacesOnly);
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    mergeFrontDepthToCurrentFramebuffer(pixelSize);
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    glDepthMask(previousDepthMask);
+    glColorMask(previousColorMask[0], previousColorMask[1],
+                previousColorMask[2], previousColorMask[3]);
+    glClearDepth(previousClearDepth);
+    glLineWidth(previousLineWidth);
+    if (previousDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (previousBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (previousScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    if (previousStencil) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+    if (previousCull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glUseProgram(static_cast<GLuint>(previousProgram));
+}
+
 bool BlenderGridRenderer::renderGridLayer(
     const ViewportTransform &transform,
     const QSize &viewportSize,
@@ -423,6 +682,8 @@ bool BlenderGridRenderer::renderGridLayer(
 
     updateSceneDepthGeometry(visibleSceneShapes);
     drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
+    drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
+                                visibleSceneShapes);
     return drawGrid(transform, viewportSize, dpr, baseGridStep, appearance);
 }
 
@@ -635,12 +896,14 @@ bool BlenderGridRenderer::renderUnjitteredSceneDepthToCurrentFramebuffer(
     updateSceneDepthGeometry(visibleSceneShapes);
     GLint previousViewport[4] = {};
     GLint previousDepthFunction = GL_LESS;
+    GLint previousProgram = 0;
     GLdouble previousClearDepth = 1.0;
     GLboolean previousDepthMask = GL_TRUE;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean previousBlend = glIsEnabled(GL_BLEND);
     glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
     glGetDoublev(GL_DEPTH_CLEAR_VALUE, &previousClearDepth);
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
@@ -654,6 +917,8 @@ bool BlenderGridRenderer::renderUnjitteredSceneDepthToCurrentFramebuffer(
     glClearDepth(1.0);
     glClear(GL_DEPTH_BUFFER_BIT);
     drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
+    drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
+                                visibleSceneShapes);
 
     glColorMask(previousColorMask[0], previousColorMask[1],
                 previousColorMask[2], previousColorMask[3]);
@@ -662,6 +927,7 @@ bool BlenderGridRenderer::renderUnjitteredSceneDepthToCurrentFramebuffer(
     glClearDepth(previousClearDepth);
     if (previousDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
     if (previousBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    glUseProgram(static_cast<GLuint>(previousProgram));
     glViewport(previousViewport[0], previousViewport[1],
                previousViewport[2], previousViewport[3]);
     return true;
@@ -727,6 +993,8 @@ bool BlenderGridRenderer::pickScenePoint(
     glClearDepth(1.0);
     glClear(GL_DEPTH_BUFFER_BIT);
     drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr);
+    drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
+                                visibleSceneShapes);
 
     // Match the CPU hit tolerance while reading only a tiny block on demand,
     // once when orbit begins. This keeps navigation frames free of readback.
@@ -985,6 +1253,8 @@ bool BlenderGridRenderer::pickComponentElement(
     // Blender's solid-mode select engine first depth-tests the scene, then
     // writes component IDs only where the corresponding edit element is visible.
     drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr, true);
+    drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
+                                visibleSceneShapes, true);
     if (!componentPickProgram_.bind()) {
         restoreState();
         return false;
@@ -1246,6 +1516,8 @@ bool BlenderGridRenderer::pickComponentElementsInRect(
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     if (depthTest && sceneDepthSurfaceVertexCount_ > 0) {
         drawSceneDepth(cachedDepthGeometry_, transform, viewportSize, dpr, true);
+        drawAndMergeFrontSceneDepth(transform, viewportSize, dpr,
+                                    visibleSceneShapes, true);
     }
     if (!componentPickProgram_.bind()) {
         restoreState();
@@ -1347,7 +1619,8 @@ void BlenderGridRenderer::updateSceneDepthGeometry(
         }
         depthObjectRanges_.append({lineFirst, int(mesh->lineVertices.size()),
             surfaceFirst, int(mesh->surfaceVertices.size()),
-            pointFirst, int(mesh->pointVertices.size()), object.preparedGeometryOffset});
+            pointFirst, int(mesh->pointVertices.size()), object.preparedGeometryOffset,
+            object.showInFront});
         lineFirst += mesh->lineVertices.size();
         surfaceFirst += mesh->surfaceVertices.size();
         pointFirst += mesh->pointVertices.size();
@@ -1371,7 +1644,8 @@ void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,
                                          const ViewportTransform &transform,
                                          const QSize &viewportSize,
                                          qreal devicePixelRatio,
-                                         bool surfacesOnly)
+                                         bool surfacesOnly,
+                                         bool overlayOnly)
 {
     if (geometry.lineVertices.isEmpty() && geometry.pointVertices.isEmpty() &&
         geometry.surfaceVertices.isEmpty()) {
@@ -1434,12 +1708,16 @@ void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,
         };
         for (int i = 0; i < depthObjectRanges_.size(); ++i) {
             const auto &range = depthObjectRanges_[i];
+            if (range.showInFront != overlayOnly) {
+                continue;
+            }
             const QVector3D offset(range.offset.x, range.offset.y, range.offset.z);
             int count = countOf(range);
             const int first = firstOf(range);
             while (i + 1 < depthObjectRanges_.size()) {
                 const auto &next = depthObjectRanges_[i + 1];
-                if (firstOf(next) != first + count ||
+                if (next.showInFront != overlayOnly ||
+                    firstOf(next) != first + count ||
                     QVector3D(next.offset.x, next.offset.y, next.offset.z) != offset) break;
                 count += countOf(next);
                 ++i;
@@ -1454,6 +1732,24 @@ void BlenderGridRenderer::drawSceneDepth(const ViewportDepthGeometry &geometry,
     glDepthMask(GL_TRUE);
     sceneDepthVertexBuffer_.release();
     sceneDepthProgram_.release();
+}
+
+void BlenderGridRenderer::drawFrontSceneDepth(
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector<ViewportRenderObject> &visibleSceneShapes,
+    bool surfacesOnly)
+{
+    if (!initialized_ || QOpenGLContext::currentContext() == nullptr ||
+        viewportSize.isEmpty()) {
+        return;
+    }
+    updateSceneDepthGeometry(visibleSceneShapes);
+    // The caller binds and clears a dedicated front-depth attachment before
+    // this call. The unjittered projection matches the overlay resolve path.
+    drawSceneDepth(cachedDepthGeometry_, transform, viewportSize,
+                   devicePixelRatio, surfacesOnly, true);
 }
 
 void BlenderGridRenderer::uploadSceneDepthGeometry(

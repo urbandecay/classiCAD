@@ -972,10 +972,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const quint64 objectId = samples[depthY * width + depthX].objectId;
                 int differentNeighbors = 0;
                 bool selectedEdge = (objectId & selectedIdMask) != 0;
-                constexpr std::array<QPoint, 8> neighbors = {
+                constexpr std::array<QPoint, 4> cardinalNeighbors = {
                     QPoint(1, 0), QPoint(-1, 0), QPoint(0, 1), QPoint(0, -1),
-                    QPoint(1, 1), QPoint(1, -1), QPoint(-1, 1), QPoint(-1, -1)};
-                for (const QPoint &offset : neighbors) {
+                };
+                for (const QPoint &offset : cardinalNeighbors) {
                     const int sx = std::clamp(depthX + offset.x(), 0, width - 1);
                     const int sy = std::clamp(depthY + offset.y(), 0, height - 1);
                     const quint64 neighborId =
@@ -984,7 +984,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     selectedEdge = selectedEdge ||
                                    (neighborId & selectedIdMask) != 0;
                 }
-                const float edgeOpacity = differentNeighbors / 8.0f;
+                constexpr std::array<QPoint, 4> diagonalNeighbors = {
+                    QPoint(1, 1), QPoint(1, -1), QPoint(-1, 1), QPoint(-1, -1)};
+                for (const QPoint &offset : diagonalNeighbors) {
+                    const int sx = std::clamp(depthX + offset.x(), 0, width - 1);
+                    const int sy = std::clamp(depthY + offset.y(), 0, height - 1);
+                    const quint64 neighborId =
+                        samples[sy * width + sx].objectId;
+                    selectedEdge = selectedEdge ||
+                                   (neighborId & selectedIdMask) != 0;
+                }
+                const float edgeOpacity = differentNeighbors / 4.0f;
                 const QColor &edgeColor = selectedEdge
                                               ? selectionOutline : outline;
                 const float sourceAlpha =

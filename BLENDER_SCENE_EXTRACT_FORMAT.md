@@ -1,7 +1,7 @@
 # Blender Scene Extraction JSON
 
 `src/core/serialization/blender_scene_extract.py` runs inside Blender 5.2.2 and
-emits `classiCAD.blender-scene-extract`, format version `9`. This is a transport
+emits `classiCAD.blender-scene-extract`, format version `10`. This is a transport
 format for the native importer; it is not classiCAD's saved document schema.
 
 ## Mesh object records
@@ -70,3 +70,22 @@ source knot domain and rational data. The native importer stores each POLY
 spline as a degree-one NURBS and each Bezier span as a separate nonrational
 clamped degree-three NURBS component. Bevel, extrude, bevel-object, and 2D fill
 surfaces remain omitted.
+
+## Surface object records
+
+Each supported Blender `SURFACE` NURBS spline is emitted as a separate
+`object_type: SURFACE` item. `object_id` combines the source Blender object ID
+with the spline index so separate patches remain separate scene objects;
+`source_object_id` retains the owning Blender object identity. `surface`
+contains U/V degrees and orders, V-fastest control-net dimensions, flattened
+world-space Euclidean control points, their weights, the rational flag, and
+independent reduced Rhino/openNURBS `knots_u` and `knots_v`. The extractor
+reconstructs each full Blender knot vector from the pinned 5.2.2 flags, expands
+cyclic U/V control points by `order - 1`, and removes the two redundant outer
+knots in each direction. Blender stores surface points U-fastest; extraction
+reorders them to classiCAD's required V-fastest layout. Object transforms are
+baked into the control points exactly once. The native importer validates each
+patch and stores it as an exact `NurbsSurface3D`; display tessellation remains
+derived data. `material_id` identifies the material assigned to that spline;
+its Workbench display values are retained. Unsupported spline types are
+reported per patch. FONT objects remain unsupported.

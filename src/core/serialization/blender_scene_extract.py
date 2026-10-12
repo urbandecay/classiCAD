@@ -22,7 +22,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 9
+BRIDGE_FORMAT_VERSION = 10
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -443,8 +443,10 @@ def unsupported_object_record(obj, scene):
         record["instance_collection"] = obj.instance_collection.name_full
     elif obj.type == "CURVE":
         record["reason"] = "curve has no supported POLY, BEZIER, or NURBS spline"
-    elif obj.type in {"SURFACE", "FONT"}:
-        record["reason"] = "Blender SURFACE and FONT objects are not imported"
+    elif obj.type == "SURFACE":
+        record["reason"] = "surface has no supported NURBS patch"
+    elif obj.type == "FONT":
+        record["reason"] = "Blender FONT objects are not imported"
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record
@@ -560,6 +562,102 @@ def extract_poly_curve_object(obj, scene, unsupported):
     return item
 
 
+def extract_surface_patches(obj, scene, materials, unsupported):
+    """Extract each Blender SURFACE NURBS patch as a separate item."""
+    from mathutils import Vector
+
+    source_id = stable_id(obj)
+    if source_library_exists(obj) is False:
+        add_unsupported(unsupported, source_id, "linked_library",
+                        "linked Blender library file is missing: " + source_library_path(obj))
+    material_ids = []
+    for slot in obj.material_slots:
+        record = material_record(slot.material)
+        if record is not None:
+            materials[record["material_id"]] = record
+            material_ids.append(record["material_id"])
+            if record["library_path_exists"] is False:
+                add_unsupported(
+                    unsupported, source_id, "material_library:" + record["name"],
+                    "linked Blender material library file is missing: " +
+                    record["library_path"])
+        else:
+            material_ids.append("")
+    patches = []
+    for spline_index, spline in enumerate(obj.data.splines):
+        if spline.type != "NURBS":
+            add_unsupported(unsupported, source_id,
+                            "surface_spline:%d:%s" % (spline_index, spline.type),
+                            "only NURBS surface patches have an exact surface representation")
+            continue
+        count_u = int(spline.point_count_u)
+        count_v = int(spline.point_count_v)
+        order_u = int(spline.order_u)
+        order_v = int(spline.order_v)
+        if (order_u < 2 or order_v < 2 or count_u < order_u or
+                count_v < order_v or len(spline.points) != count_u * count_v):
+            add_unsupported(unsupported, source_id,
+                            "surface_spline:%d:NURBS" % spline_index,
+                            "surface control net is smaller than its U/V orders")
+            continue
+
+        cyclic_u = bool(spline.use_cyclic_u)
+        cyclic_v = bool(spline.use_cyclic_v)
+        expanded_u = count_u + (order_u - 1 if cyclic_u else 0)
+        expanded_v = count_v + (order_v - 1 if cyclic_v else 0)
+        world_points = []
+        weights = []
+        # Blender's BPoint array is U-fast; classiCAD's surface net is V-fast.
+        for u_index in range(expanded_u):
+            source_u = u_index % count_u
+            for v_index in range(expanded_v):
+                source_v = v_index % count_v
+                point = spline.points[source_u + source_v * count_u]
+                world = obj.matrix_world @ Vector(
+                    (point.co[0], point.co[1], point.co[2]))
+                world_points.append(vector_values(world))
+                weights.append(finite_number(point.co[3]))
+
+        full_knots_u = blender_nurbs_knots(
+            count_u, order_u, cyclic_u,
+            bool(spline.use_endpoint_u), bool(spline.use_bezier_u))
+        full_knots_v = blender_nurbs_knots(
+            count_v, order_v, cyclic_v,
+            bool(spline.use_endpoint_v), bool(spline.use_bezier_v))
+        if (len(full_knots_u) != expanded_u + order_u or
+                len(full_knots_v) != expanded_v + order_v):
+            raise ValueError("Blender generated inconsistent surface knot vectors")
+
+        item = object_metadata(obj, scene)
+        item["object_id"] = "%s::surface:%d" % (source_id, spline_index)
+        item["source_object_id"] = source_id
+        item["object_type"] = "SURFACE"
+        item["surface"] = {
+            "degree_u": order_u - 1,
+            "degree_v": order_v - 1,
+            "order_u": order_u,
+            "order_v": order_v,
+            "control_vertex_count_u": expanded_u,
+            "control_vertex_count_v": expanded_v,
+            "control_points_world": world_points,
+            "weights": weights,
+            "rational": any(weight != 1.0 for weight in weights),
+            "knots_u": full_knots_u[1:-1],
+            "knots_v": full_knots_v[1:-1],
+            "material_id": (
+                material_ids[spline.material_index]
+                if 0 <= spline.material_index < len(material_ids) else ""
+            ),
+        }
+        if obj.modifiers:
+            for modifier in obj.modifiers:
+                add_unsupported(
+                    unsupported, item["object_id"], "modifier:" + modifier.name,
+                    "exact surface import preserves source patches; modifier was not applied")
+        patches.append(item)
+    return patches
+
+
 def depsgraph_for_scene(scene):
     if not scene.view_layers:
         raise RuntimeError("scene has no view layer for evaluated mesh extraction")
@@ -598,6 +696,7 @@ def extract_scene(input_path, mode):
     }
     object_count = 0
     mesh_count = 0
+    surface_patch_count = 0
     collections_by_id = {stable_id(collection): collection
                          for collection in bpy.data.collections}
     scene_names_by_collection = {}
@@ -701,6 +800,32 @@ def extract_scene(input_path, mode):
                 else:
                     output["unsupported_items"].append(unsupported_object_record(obj, scene))
                 continue
+            if obj.type == "SURFACE":
+                try:
+                    patches = extract_surface_patches(
+                        obj, scene, output["materials"],
+                        output["unsupported_features"])
+                    for item in patches:
+                        item["view_layer_hidden"] = {
+                            view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                            for view_layer in scene.view_layers
+                        }
+                        item["default_view_layer_key"] = (
+                            view_layer_key(scene, scene.view_layers[0])
+                            if len(scene.view_layers) else ""
+                        )
+                        output["items"].append(item)
+                    surface_patch_count += len(patches)
+                    if not patches:
+                        output["unsupported_items"].append(
+                            unsupported_object_record(obj, scene))
+                except Exception as error:
+                    output["unsupported_items"].append({
+                        **object_metadata(obj, scene),
+                        "object_type": obj.type,
+                        "reason": "surface extraction failed; whole object skipped: " + str(error),
+                    })
+                continue
             if obj.type != "MESH":
                 output["unsupported_items"].append(unsupported_object_record(obj, scene))
                 continue
@@ -729,6 +854,7 @@ def extract_scene(input_path, mode):
         "scene_count": len(output["scenes"]),
         "source_object_occurrences": object_count,
         "mesh_items_extracted": mesh_count,
+        "surface_patches_extracted": surface_patch_count,
         "unsupported_item_occurrences": len(output["unsupported_items"]),
         "unsupported_feature_count": len(output["unsupported_features"]),
         "material_count": len(output["materials"]),

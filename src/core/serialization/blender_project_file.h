@@ -56,9 +56,10 @@ struct BlenderSceneImportReport {
     QJsonArray scenes;
 };
 
-// Extracts Blender mesh objects through the pinned Blender Python runtime.
-// The returned meshes are authoritative local-space polygon geometry with
-// transforms kept on SceneObject. No project document is replaced here.
+// Extracts supported Blender scene geometry through the pinned Python runtime.
+// Returned meshes, curves, and surfaces retain their authoritative geometry;
+// transforms follow each geometry type's native representation. No project
+// document is replaced here.
 bool importBlenderScene(const QString &path,
                         const QString &mode,
                         QVector<SceneObject> *objects,

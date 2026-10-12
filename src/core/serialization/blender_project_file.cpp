@@ -1155,6 +1155,107 @@ bool parseBlenderPolyCurveItem(
     return true;
 }
 
+bool parseBlenderSurfaceItem(
+    const QJsonObject &item,
+    const QHash<QString, classiCAD::CollectionId> &collectionIds,
+    const QHash<QString, classiCAD::DocumentMaterial> &materials,
+    classiCAD::SceneObject *sceneObject,
+    QString *errorMessage)
+{
+    if (sceneObject == nullptr ||
+        item.value(QStringLiteral("object_type")).toString() != QLatin1String("SURFACE")) {
+        setError(errorMessage, QStringLiteral("object is not a Blender surface"));
+        return false;
+    }
+    const QJsonObject sourceSurface = item.value(QStringLiteral("surface")).toObject();
+    classiCAD::NurbsSurface3D surface;
+    if (!jsonInteger(sourceSurface.value(QStringLiteral("degree_u")), &surface.degreeU) ||
+        !jsonInteger(sourceSurface.value(QStringLiteral("degree_v")), &surface.degreeV) ||
+        !jsonInteger(sourceSurface.value(QStringLiteral("order_u")), &surface.orderU) ||
+        !jsonInteger(sourceSurface.value(QStringLiteral("order_v")), &surface.orderV) ||
+        !jsonInteger(sourceSurface.value(QStringLiteral("control_vertex_count_u")),
+                     &surface.controlVertexCountU) ||
+        !jsonInteger(sourceSurface.value(QStringLiteral("control_vertex_count_v")),
+                     &surface.controlVertexCountV) ||
+        surface.controlVertexCountU <= 0 || surface.controlVertexCountV <= 0) {
+        setError(errorMessage, QStringLiteral("surface degree, order, or net dimensions are invalid"));
+        return false;
+    }
+    const qint64 pointCount = qint64(surface.controlVertexCountU) *
+                              surface.controlVertexCountV;
+    const QJsonArray sourcePoints =
+        sourceSurface.value(QStringLiteral("control_points_world")).toArray();
+    if (pointCount > std::numeric_limits<int>::max() ||
+        sourcePoints.size() != pointCount ||
+        !jsonNumberArray(sourceSurface.value(QStringLiteral("weights")),
+                         static_cast<int>(pointCount), &surface.weights) ||
+        !jsonNumberArray(sourceSurface.value(QStringLiteral("knots_u")), -1,
+                         &surface.knotsU) ||
+        !jsonNumberArray(sourceSurface.value(QStringLiteral("knots_v")), -1,
+                         &surface.knotsV)) {
+        setError(errorMessage, QStringLiteral("surface control net, weights, or knots are invalid"));
+        return false;
+    }
+    surface.rational = sourceSurface.value(QStringLiteral("rational")).toBool();
+    surface.controlPoints.reserve(static_cast<int>(pointCount));
+    for (const QJsonValue &pointValue : sourcePoints) {
+        QVector<double> xyz;
+        if (!jsonNumberArray(pointValue, 3, &xyz)) {
+            setError(errorMessage, QStringLiteral("surface control point is invalid"));
+            return false;
+        }
+        surface.controlPoints.append({xyz[0], xyz[1], xyz[2]});
+    }
+    QString validationError;
+    if (!classiCAD::validateNurbsSurface(surface, &validationError)) {
+        setError(errorMessage, validationError);
+        return false;
+    }
+
+    classiCAD::SceneObject result;
+    result.displayName = item.value(QStringLiteral("name")).toString();
+    result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    for (const QJsonValue &collectionValue :
+         item.value(QStringLiteral("collection_ids")).toArray()) {
+        const QString sourceId = collectionValue.toString();
+        if (sourceId.isEmpty() || !collectionIds.contains(sourceId)) {
+            setError(errorMessage,
+                     QStringLiteral("object references an unknown Blender collection"));
+            return false;
+        }
+        result.collectionIds.append(collectionIds.value(sourceId));
+    }
+    QVector<double> objectColor;
+    if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")), 4,
+                         &objectColor)) {
+        setError(errorMessage, QStringLiteral("object display color is invalid"));
+        return false;
+    }
+    result.displayColorSceneLinear = QVector4D(
+        static_cast<float>(objectColor[0]), static_cast<float>(objectColor[1]),
+        static_cast<float>(objectColor[2]), static_cast<float>(objectColor[3]));
+    const QString materialId = sourceSurface.value(QStringLiteral("material_id")).toString();
+    const classiCAD::DocumentMaterial material = materials.value(materialId);
+    if (!material.id.isEmpty()) {
+        result.workbenchMaterial.baseColorSceneLinear = QVector3D(
+            material.baseColorSceneLinear[0], material.baseColorSceneLinear[1],
+            material.baseColorSceneLinear[2]);
+        result.workbenchMaterial.roughness = material.roughness;
+        result.workbenchMaterial.metallic = material.metallic;
+        result.workbenchMaterial.alpha = material.alpha;
+    }
+    result.geometry.geometryType = classiCAD::GeometryType::NurbsSurface;
+    result.geometry.nurbsSurface = std::move(surface);
+    const QJsonObject visibility = item.value(QStringLiteral("visibility")).toObject();
+    result.hideViewport = visibility.value(QStringLiteral("hide_viewport")).toBool();
+    result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();
+    result.hiddenInViewport = visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
+    result.hideSelect = visibility.value(QStringLiteral("hide_select")).toBool();
+    result.viewLayerHidden = item.value(QStringLiteral("view_layer_hidden")).toObject();
+    *sceneObject = std::move(result);
+    return true;
+}
+
 QString conciseImportWarnings(const QStringList &warnings,
                               int skippedObjects,
                               int unsupportedFeatures)
@@ -1467,7 +1568,7 @@ bool importBlenderScene(const QString &path,
     if (root.value(QStringLiteral("format")).toString() !=
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
-        bridgeVersion != 9) {
+        bridgeVersion != 10) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -1648,7 +1749,8 @@ bool importBlenderScene(const QString &path,
         const QString objectType = item.value(QStringLiteral("object_type")).toString();
         if (objectId.isEmpty() ||
             (objectType != QLatin1String("MESH") &&
-             objectType != QLatin1String("CURVE"))) {
+             objectType != QLatin1String("CURVE") &&
+             objectType != QLatin1String("SURFACE"))) {
             ++skippedCount;
             warnings.append(QStringLiteral("A Blender scene record has missing identity or an unexpected object type and was skipped"));
             continue;
@@ -1691,8 +1793,12 @@ bool importBlenderScene(const QString &path,
                   item, collectionIdsBySource, materialsById,
                   source.value(QStringLiteral("blender_version")).toString(),
                   mode, &sceneObject, &warnings, &itemError)
-            : parseBlenderPolyCurveItem(item, collectionIdsBySource,
-                                        &sceneObject, &itemError);
+            : objectType == QLatin1String("SURFACE")
+                ? parseBlenderSurfaceItem(item, collectionIdsBySource,
+                                          materialsById,
+                                          &sceneObject, &itemError)
+                : parseBlenderPolyCurveItem(item, collectionIdsBySource,
+                                            &sceneObject, &itemError);
         if (!parsed) {
             ++skippedCount;
             warnings.append(QStringLiteral("%1: object skipped: %2")

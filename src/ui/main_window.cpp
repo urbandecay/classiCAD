@@ -707,7 +707,7 @@ private:
                 QMessageBox::critical(
                     this,
                     QStringLiteral("Could Not Import Blender Scene"),
-                    QStringLiteral("The imported meshes could not be added to the document."));
+                    QStringLiteral("The imported Blender objects could not be added to the document."));
                 return;
             }
             if (viewport_ != nullptr) {
@@ -718,7 +718,7 @@ private:
         QSettings settings;
         settings.setValue(QStringLiteral("files/lastProjectDirectory"),
                           QFileInfo(path).absolutePath());
-        const QString status = QStringLiteral("Imported %1 mesh object(s) from %2 using Blender %3 (%4 mode)")
+        const QString status = QStringLiteral("Imported %1 object(s) from %2 using Blender %3 (%4 mode)")
                                    .arg(report.importedObjectCount)
                                    .arg(QFileInfo(path).fileName(),
                                         report.blenderVersion,
@@ -728,11 +728,11 @@ private:
             QMessageBox::warning(
                 this,
                 QStringLiteral("Blender Scene Import Report"),
-                QStringLiteral("Imported %1 mesh object(s); skipped %2 object(s).\n\n%3")
+                QStringLiteral("Imported %1 object(s); skipped %2 object(s).\n\n%3")
                     .arg(report.importedObjectCount)
                     .arg(report.skippedObjectCount)
                     .arg(report.warningMessage.isEmpty()
-                             ? QStringLiteral("No supported mesh objects were found.")
+                             ? QStringLiteral("No supported objects were found.")
                              : report.warningMessage));
         }
     }

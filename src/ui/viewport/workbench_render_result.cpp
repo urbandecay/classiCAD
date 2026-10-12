@@ -34,6 +34,32 @@ QString fileExtension(const QString &writerFormat)
     return writerFormat;
 }
 
+void applyImageWriterSettings(QImageWriter *writer,
+                              const QString &writerFormat,
+                              const QString &blenderFormat,
+                              int quality,
+                              int compression,
+                              const QString &tiffCodec)
+{
+    if (writer == nullptr) return;
+    const QString key = blenderFormat.toUpper();
+    if (writerFormat == QLatin1String("jpeg")) {
+        writer->setQuality(std::clamp(quality, 0, 100));
+    } else if (writerFormat == QLatin1String("png")) {
+        writer->setCompression(std::clamp(compression, 0, 100));
+    } else if (writerFormat == QLatin1String("tga") &&
+               (key == QLatin1String("TARGA") ||
+                key == QLatin1String("TARGA_RAW"))) {
+        writer->setCompression(key == QLatin1String("TARGA") ? 1 : 0);
+    } else if (writerFormat == QLatin1String("tiff")) {
+        const QString codec = tiffCodec.toUpper();
+        if (codec == QLatin1String("NONE")) writer->setCompression(0);
+        else if (codec == QLatin1String("LZW")) writer->setCompression(1);
+        else if (codec == QLatin1String("PACKBITS"))
+            writer->setCompression(2);
+    }
+}
+
 } // namespace
 
 QString WorkbenchRenderResult::combinedFileExtension() const
@@ -109,6 +135,9 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("outputHeightPixels"), combined.height());
     cameraJson.insert(QStringLiteral("pixelAspectX"), pixelAspectX);
     cameraJson.insert(QStringLiteral("pixelAspectY"), pixelAspectY);
+    cameraJson.insert(QStringLiteral("imageQuality"), imageQuality);
+    cameraJson.insert(QStringLiteral("imageCompression"), imageCompression);
+    cameraJson.insert(QStringLiteral("tiffCodec"), tiffCodec);
     cameraJson.insert(QStringLiteral("outputFormat"), outputFormat);
     cameraJson.insert(QStringLiteral("blenderImageFormat"), blenderImageFormat);
     cameraJson.insert(QStringLiteral("writtenImageFormat"), writerFormat);
@@ -147,6 +176,8 @@ bool WorkbenchRenderResult::saveCombinedImage(
                        QJsonDocument::Compact)));
 
     QImageWriter writer(path, writerFormat.toLatin1());
+    applyImageWriterSettings(&writer, writerFormat, blenderImageFormat, imageQuality,
+                             imageCompression, tiffCodec);
     bool written = writer.write(output);
     QString writeError = writer.errorString();
     if (!written && outputDepth == 16) {
@@ -161,6 +192,9 @@ bool WorkbenchRenderResult::saveCombinedImage(
                        QString::fromUtf8(QJsonDocument(cameraJson).toJson(
                            QJsonDocument::Compact)));
         QImageWriter fallbackWriter(path, writerFormat.toLatin1());
+        applyImageWriterSettings(&fallbackWriter, writerFormat,
+                                 blenderImageFormat,
+                                 imageQuality, imageCompression, tiffCodec);
         written = fallbackWriter.write(output);
         if (!written) writeError = fallbackWriter.errorString();
     }

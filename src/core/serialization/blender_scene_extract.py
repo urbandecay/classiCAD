@@ -516,6 +516,9 @@ def extract_scene(input_path, mode):
                 "file_format": render.image_settings.file_format,
                 "color_mode": render.image_settings.color_mode,
                 "color_depth": render.image_settings.color_depth,
+                "quality": render.image_settings.quality,
+                "compression": render.image_settings.compression,
+                "tiff_codec": render.image_settings.tiff_codec,
             },
         }
         for obj in scene.objects:

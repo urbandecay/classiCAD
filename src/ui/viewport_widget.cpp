@@ -6470,6 +6470,12 @@ public:
                 &colorDepthValid);
             result.colorDepth = colorDepthValid
                                     ? parsedColorDepth : colorDepth.toInt(8);
+            result.imageQuality = renderOutput.value(
+                QStringLiteral("quality")).toInt(90);
+            result.imageCompression = renderOutput.value(
+                QStringLiteral("compression")).toInt(15);
+            result.tiffCodec = renderOutput.value(
+                QStringLiteral("tiff_codec")).toString(QStringLiteral("DEFLATE"));
             break;
         }
         result.camera = projectCameraSettings();

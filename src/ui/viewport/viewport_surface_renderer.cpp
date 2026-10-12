@@ -38,6 +38,238 @@ namespace {
 
 constexpr int kWorkbenchShadowMapSize = 1024;
 
+struct PolygonShadowEdgeUse {
+    int count = 0;
+    int from = -1;
+    int to = -1;
+};
+
+bool buildClosedPolygonShadowMesh(
+    const PolygonMesh3D &mesh,
+    const std::array<double, 16> &matrix,
+    QVector<QVector3D> *shadowVertices,
+    QVector<std::array<int, 3>> *shadowTriangles)
+{
+    if (shadowVertices == nullptr || shadowTriangles == nullptr ||
+        mesh.vertices.size() < 4 || mesh.faces.isEmpty()) {
+        return false;
+    }
+
+    QVector<QVector3D> vertices;
+    vertices.reserve(mesh.vertices.size());
+    for (const Point3D &point : mesh.vertices) {
+        const double w = matrix[12] * point.x + matrix[13] * point.y +
+                         matrix[14] * point.z + matrix[15];
+        if (!std::isfinite(w) || std::abs(w) <= 1.0e-12) return false;
+        const double x = (matrix[0] * point.x + matrix[1] * point.y +
+                          matrix[2] * point.z + matrix[3]) / w;
+        const double y = (matrix[4] * point.x + matrix[5] * point.y +
+                          matrix[6] * point.z + matrix[7]) / w;
+        const double z = (matrix[8] * point.x + matrix[9] * point.y +
+                          matrix[10] * point.z + matrix[11]) / w;
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z) ||
+            std::abs(x) > std::numeric_limits<float>::max() ||
+            std::abs(y) > std::numeric_limits<float>::max() ||
+            std::abs(z) > std::numeric_limits<float>::max()) {
+            return false;
+        }
+        vertices.append(QVector3D(static_cast<float>(x),
+                                  static_cast<float>(y),
+                                  static_cast<float>(z)));
+    }
+
+    const double determinant =
+        matrix[0] * (matrix[5] * matrix[10] - matrix[6] * matrix[9]) -
+        matrix[1] * (matrix[4] * matrix[10] - matrix[6] * matrix[8]) +
+        matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8]);
+    if (!std::isfinite(determinant) || std::abs(determinant) <= 1.0e-18) {
+        return false;
+    }
+    const bool reflected = determinant < 0.0;
+    QVector<std::array<int, 3>> triangles;
+    QSet<int> usedVertices;
+    for (const QVector<int> &face : mesh.faces) {
+        if (face.size() < 3) return false;
+        QVector<Point3D> localLoop;
+        localLoop.reserve(face.size());
+        QSet<int> faceIndices;
+        for (const int vertexIndex : face) {
+            if (vertexIndex < 0 || vertexIndex >= mesh.vertices.size() ||
+                faceIndices.contains(vertexIndex)) {
+                return false;
+            }
+            faceIndices.insert(vertexIndex);
+            usedVertices.insert(vertexIndex);
+            localLoop.append(mesh.vertices[vertexIndex]);
+        }
+        const QVector<std::array<int, 3>> faceTriangles =
+            triangulatePolygonLoop(localLoop);
+        if (faceTriangles.isEmpty()) return false;
+        for (const auto &faceTriangle : faceTriangles) {
+            std::array<int, 3> triangle{
+                face[faceTriangle[0]], face[faceTriangle[1]],
+                face[faceTriangle[2]]};
+            if (reflected) std::swap(triangle[1], triangle[2]);
+            const QVector3D a = vertices[triangle[0]];
+            const QVector3D b = vertices[triangle[1]];
+            const QVector3D c = vertices[triangle[2]];
+            const QVector3D cross = QVector3D::crossProduct(b - a, c - a);
+            if (!std::isfinite(cross.lengthSquared()) ||
+                cross.lengthSquared() <= 1.0e-16f) {
+                return false;
+            }
+            triangles.append(triangle);
+        }
+    }
+    // Loose vertices and incomplete triangulations are ambiguous volume
+    // topology, so keep those meshes on the established fallback path.
+    if (usedVertices.size() != vertices.size() || triangles.isEmpty()) {
+        return false;
+    }
+
+    // Edge counts alone admit closed shells pinched together at one vertex.
+    // A triangulated closed 2-manifold has one connected cycle in the link
+    // around every vertex.
+    QVector<QVector<std::array<int, 2>>> vertexLinks(vertices.size());
+    for (const auto &triangle : triangles) {
+        vertexLinks[triangle[0]].append({triangle[1], triangle[2]});
+        vertexLinks[triangle[1]].append({triangle[2], triangle[0]});
+        vertexLinks[triangle[2]].append({triangle[0], triangle[1]});
+    }
+    for (const QVector<std::array<int, 2>> &links : vertexLinks) {
+        if (links.isEmpty()) return false;
+        QHash<int, QSet<int>> adjacency;
+        for (const auto &linkEdge : links) {
+            const int first = linkEdge[0];
+            const int second = linkEdge[1];
+            if (first == second || adjacency[first].contains(second) ||
+                adjacency[second].contains(first)) {
+                return false;
+            }
+            adjacency[first].insert(second);
+            adjacency[second].insert(first);
+        }
+        for (auto it = adjacency.cbegin(); it != adjacency.cend(); ++it) {
+            if (it.value().size() != 2) return false;
+        }
+        QSet<int> visited;
+        QVector<int> pending{adjacency.constBegin().key()};
+        while (!pending.isEmpty()) {
+            const int node = pending.takeLast();
+            if (visited.contains(node)) continue;
+            visited.insert(node);
+            for (const int neighbor : adjacency.value(node)) {
+                if (!visited.contains(neighbor)) pending.append(neighbor);
+            }
+        }
+        if (visited.size() != adjacency.size()) return false;
+    }
+
+    const auto edgeKey = [](int first, int second) {
+        const quint32 low = static_cast<quint32>(std::min(first, second));
+        const quint32 high = static_cast<quint32>(std::max(first, second));
+        return (quint64(low) << 32u) | high;
+    };
+    QHash<quint64, PolygonShadowEdgeUse> edgeUses;
+    QVector<int> parent(vertices.size());
+    for (int index = 0; index < parent.size(); ++index) parent[index] = index;
+    const auto findRoot = [&parent](int value) {
+        int root = value;
+        while (parent[root] != root) root = parent[root];
+        while (parent[value] != value) {
+            const int next = parent[value];
+            parent[value] = root;
+            value = next;
+        }
+        return root;
+    };
+    const auto join = [&parent, &findRoot](int left, int right) {
+        const int leftRoot = findRoot(left);
+        const int rightRoot = findRoot(right);
+        if (leftRoot != rightRoot) parent[rightRoot] = leftRoot;
+    };
+    for (const auto &triangle : triangles) {
+        for (int edgeIndex = 0; edgeIndex < 3; ++edgeIndex) {
+            const int from = triangle[edgeIndex];
+            const int to = triangle[(edgeIndex + 1) % 3];
+            if (from == to) return false;
+            join(from, to);
+            PolygonShadowEdgeUse &use = edgeUses[edgeKey(from, to)];
+            if (use.count == 0) {
+                use.from = from;
+                use.to = to;
+            } else if (use.count == 1 && (use.from != to || use.to != from)) {
+                return false;
+            }
+            if (++use.count > 2) return false;
+        }
+    }
+    for (const PolygonShadowEdgeUse &use : edgeUses) {
+        if (use.count != 2) return false;
+    }
+
+    QHash<int, QVector3D> componentOrigins;
+    QHash<int, QVector3D> componentMinimums;
+    QHash<int, QVector3D> componentMaximums;
+    for (int index = 0; index < vertices.size(); ++index) {
+        const int root = findRoot(index);
+        const QVector3D &point = vertices[index];
+        if (!componentOrigins.contains(root)) {
+            componentOrigins.insert(root, point);
+            componentMinimums.insert(root, point);
+            componentMaximums.insert(root, point);
+        } else {
+            const QVector3D minimum = componentMinimums[root];
+            const QVector3D maximum = componentMaximums[root];
+            componentMinimums[root] = QVector3D(
+                std::min(minimum.x(), point.x()),
+                std::min(minimum.y(), point.y()),
+                std::min(minimum.z(), point.z()));
+            componentMaximums[root] = QVector3D(
+                std::max(maximum.x(), point.x()),
+                std::max(maximum.y(), point.y()),
+                std::max(maximum.z(), point.z()));
+        }
+    }
+    QHash<int, double> componentVolumes;
+    for (const auto &triangle : triangles) {
+        const int root = findRoot(triangle[0]);
+        const QVector3D origin = componentOrigins.value(root);
+        const QVector3D a = vertices[triangle[0]] - origin;
+        const QVector3D b = vertices[triangle[1]] - origin;
+        const QVector3D c = vertices[triangle[2]] - origin;
+        const double volume =
+            (static_cast<double>(a.x()) *
+                 (static_cast<double>(b.y()) * c.z() -
+                  static_cast<double>(b.z()) * c.y()) +
+             static_cast<double>(a.y()) *
+                 (static_cast<double>(b.z()) * c.x() -
+                  static_cast<double>(b.x()) * c.z()) +
+             static_cast<double>(a.z()) *
+                 (static_cast<double>(b.x()) * c.y() -
+                  static_cast<double>(b.y()) * c.x())) / 6.0;
+        componentVolumes[root] += volume;
+    }
+    for (auto it = componentVolumes.cbegin(); it != componentVolumes.cend(); ++it) {
+        const QVector3D extent = componentMaximums.value(it.key()) -
+                                 componentMinimums.value(it.key());
+        const double scale = std::max({static_cast<double>(extent.x()),
+                                       static_cast<double>(extent.y()),
+                                       static_cast<double>(extent.z())});
+        const double volumeTolerance =
+            std::max(1.0e-30, scale * scale * scale * 1.0e-12);
+        if (!std::isfinite(it.value()) || it.value() <= volumeTolerance) {
+            // Inward-oriented, flat, or numerically indeterminate components
+            // are left to the conservative depth-map fallback.
+            return false;
+        }
+    }
+
+    *shadowVertices = std::move(vertices);
+    *shadowTriangles = std::move(triangles);
+    return true;
+}
+
 int workbenchTextureInterpolation(const QString &interpolation)
 {
     if (interpolation.compare(QStringLiteral("Closest"), Qt::CaseInsensitive) == 0)
@@ -1738,6 +1970,13 @@ void ViewportSurfaceRenderer::prepareGeometry(
         };
         if (hasPolygonMeshGeometry(object)) {
             const PolygonMesh3D &mesh = object.shape.polygonMesh;
+            const int meshFirstRange = ranges_.size();
+            QVector<QVector3D> meshShadowVertices;
+            QVector<std::array<int, 3>> meshShadowTriangles;
+            const bool meshHasClosedShadowTopology =
+                buildClosedPolygonShadowMesh(mesh, object.meshObjectTransform,
+                                             &meshShadowVertices,
+                                             &meshShadowTriangles);
             const MeshColorAttribute *activeAttribute = nullptr;
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
                 if (attribute.name == mesh.activeColorAttributeName) {
@@ -1909,6 +2148,24 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     ? range.workbenchMaterial.textureImageTiles
                     : QVector<DocumentImageTextureTile>{};
                 ranges_.append(std::move(range));
+            }
+            if (meshHasClosedShadowTopology &&
+                meshFirstRange < ranges_.size()) {
+                // Mesh faces have separate material/color draw ranges. Mark
+                // every face as belonging to this validated volume so the
+                // fallback map does not draw the other faces a second time;
+                // keep the shared indexed topology on the first range only.
+                for (int rangeIndex = meshFirstRange;
+                     rangeIndex < ranges_.size(); ++rangeIndex) {
+                    DrawRange &range = ranges_[rangeIndex];
+                    range.shadowVolumeSupported = true;
+                    range.shadowVolumeClosed = true;
+                    range.shadowVolumePolygonMesh = true;
+                }
+                ranges_[meshFirstRange].shadowVertices =
+                    std::move(meshShadowVertices);
+                ranges_[meshFirstRange].shadowTriangles =
+                    std::move(meshShadowTriangles);
             }
         } else {
             const int first = changed ? vertices_.size() :
@@ -3939,7 +4196,8 @@ bool ViewportSurfaceRenderer::draw(
         for (int index = 0; index < ranges_.size(); ++index) {
             const DrawRange &range = ranges_[index];
             if (range.count <= 0) continue;
-            if (range.shadowVolumeSupported) {
+            if (range.shadowVolumeSupported &&
+                !range.shadowVolumePolygonMesh) {
                 shadowVolumeRangeIndices.append(index);
             }
             const qreal alpha = workbenchSourceAlpha(
@@ -3957,6 +4215,41 @@ bool ViewportSurfaceRenderer::draw(
                 }
             } else {
                 hasPartialAlpha = true;
+            }
+        }
+        // Imported meshes are split into one color range per face. Admit the
+        // shared indexed volume only when every range for that object is
+        // opaque in the current Workbench color/alpha mode. Otherwise restore
+        // every face to the normal fallback-caster set.
+        for (int index = 0; index < ranges_.size(); ++index) {
+            const DrawRange &candidate = ranges_[index];
+            if (!candidate.shadowVolumeSupported ||
+                !candidate.shadowVolumePolygonMesh ||
+                candidate.shadowTriangles.isEmpty()) {
+                continue;
+            }
+            bool allObjectRangesOpaque = true;
+            for (int rangeIndex = 0; rangeIndex < ranges_.size(); ++rangeIndex) {
+                const DrawRange &objectRange = ranges_[rangeIndex];
+                if (objectRange.shadowVolumePolygonMesh &&
+                    objectRange.objectSeed == candidate.objectSeed &&
+                    (objectRange.count <= 0 ||
+                     (!opaqueRangeIndices.contains(rangeIndex) &&
+                      !frontOpaqueRangeIndices.contains(rangeIndex)))) {
+                    allObjectRangesOpaque = false;
+                    break;
+                }
+            }
+            if (allObjectRangesOpaque) {
+                shadowVolumeRangeIndices.append(index);
+            } else {
+                const quint64 objectSeed = candidate.objectSeed;
+                for (DrawRange &objectRange : ranges_) {
+                    if (objectRange.shadowVolumePolygonMesh &&
+                        objectRange.objectSeed == objectSeed) {
+                        objectRange.shadowVolumeSupported = false;
+                    }
+                }
             }
         }
     }

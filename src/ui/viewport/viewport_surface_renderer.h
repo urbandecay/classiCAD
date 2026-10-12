@@ -70,6 +70,7 @@ private:
         QString libraryPath;
         bool outlineHandledBySceneStroke = false;
         bool shadowVolumeSupported = false;
+        bool shadowTextureAlphaMask = false;
         QVector<QVector3D> shadowVertices;
         QVector<std::array<int, 3>> shadowTriangles;
     };

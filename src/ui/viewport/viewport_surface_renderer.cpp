@@ -928,17 +928,29 @@ bool ViewportSurfaceRenderer::initialize()
     static constexpr const char *shadowVertexShader = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPosition;
+        layout(location = 3) in vec2 aUv;
         uniform mat4 uShadowViewProjection;
         uniform vec3 uWorldOffset;
+        out vec2 vUv;
         void main()
         {
+            vUv = aUv;
             gl_Position = uShadowViewProjection *
                           vec4(aPosition + uWorldOffset, 1.0);
         }
     )glsl";
     static constexpr const char *shadowFragmentShader = R"glsl(
         #version 330 core
-        void main() { }
+        in vec2 vUv;
+        uniform sampler2D uShadowAlphaTexture;
+        uniform bool uUseShadowAlphaMask;
+        void main()
+        {
+            if (uUseShadowAlphaMask &&
+                texture(uShadowAlphaTexture, vUv).a < 0.1) {
+                discard;
+            }
+        }
     )glsl";
 
     if (QOpenGLContext::currentContext() == nullptr ||
@@ -1254,6 +1266,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     activeAttribute->componentCount >= 1 &&
                     activeAttribute->componentCount <= 4;
                 range.useTextureColor = textureAvailable;
+                range.shadowTextureAlphaMask = textureAvailable;
                 range.textureImagePath = textureAvailable ? imagePath : QString{};
                 const int slotIndex = mesh.faceMaterialIndices.value(faceIndex, -1);
                 if (slotIndex >= 0 && slotIndex < object.meshMaterials.size()) {
@@ -1862,6 +1875,8 @@ bool ViewportSurfaceRenderer::renderShadowMap(
     GLint previousViewport[4] = {};
     GLint previousDepthFunction = GL_LESS;
     GLint previousProgram = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture0 = 0;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
     GLboolean previousDepthMask = GL_TRUE;
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
@@ -1871,6 +1886,9 @@ bool ViewportSurfaceRenderer::renderShadowMap(
     glGetIntegerv(GL_VIEWPORT, previousViewport);
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
     glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
 
@@ -1896,6 +1914,7 @@ bool ViewportSurfaceRenderer::renderShadowMap(
     shadowProgram_.bind();
     shadowProgram_.setUniformValue("uShadowViewProjection",
                                    shadowViewProjection_);
+    shadowProgram_.setUniformValue("uShadowAlphaTexture", 0);
     for (const DrawRange &range : ranges_) {
         if (range.count <= 0 ||
             (fallbackOnly && range.shadowVolumeSupported)) {
@@ -1906,6 +1925,21 @@ bool ViewportSurfaceRenderer::renderShadowMap(
             QVector3D(static_cast<float>(range.offset.x),
                       static_cast<float>(range.offset.y),
                       static_cast<float>(range.offset.z)));
+        const QString alphaMode = range.workbenchMaterial.textureImageAlphaMode;
+        const bool ignoreTextureAlpha =
+            alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
+            alphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
+            alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
+                              Qt::CaseInsensitive) == 0;
+        const GLuint alphaTexture = range.shadowTextureAlphaMask &&
+                settings.colorMode == ViewportColorMode::Texture &&
+                !ignoreTextureAlpha
+            ? ensureImageTexture(range.textureImagePath,
+                                 range.workbenchMaterial.textureImagePackedDataBase64,
+                                 range.textureImageSrgb)
+            : 0;
+        shadowProgram_.setUniformValue("uUseShadowAlphaMask", alphaTexture != 0);
+        glBindTexture(GL_TEXTURE_2D, alphaTexture);
         glDrawArrays(GL_TRIANGLES, range.first, range.count);
     }
     shadowProgram_.release();
@@ -1914,6 +1948,8 @@ bool ViewportSurfaceRenderer::renderShadowMap(
 
     glBindFramebuffer(GL_FRAMEBUFFER,
                       static_cast<GLuint>(previousFramebuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glViewport(previousViewport[0], previousViewport[1],
                previousViewport[2], previousViewport[3]);
     glColorMask(previousColorMask[0], previousColorMask[1],
@@ -2188,6 +2224,7 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
     shadowProgram_.bind();
     shadowProgram_.setUniformValue("uShadowViewProjection", viewProjection);
     shadowProgram_.setUniformValue("uWorldOffset", QVector3D());
+    shadowProgram_.setUniformValue("uUseShadowAlphaMask", false);
     glDrawArrays(GL_TRIANGLES, 0, volumeVertices.size());
     shadowProgram_.release();
     shadowVolumeVertexBuffer_.release();
@@ -2630,6 +2667,7 @@ bool ViewportSurfaceRenderer::draw(
         shadowProgram_.setUniformValue(
             "uShadowViewProjection",
             viewportViewProjection(transform, viewportSize));
+        shadowProgram_.setUniformValue("uUseShadowAlphaMask", false);
         for (const DrawRange &range : ranges_) {
             if (range.count <= 0) {
                 continue;
@@ -2745,6 +2783,7 @@ bool ViewportSurfaceRenderer::draw(
                 shadowProgram_.setUniformValue(
                     "uShadowViewProjection",
                     viewportViewProjection(transform, viewportSize));
+                shadowProgram_.setUniformValue("uUseShadowAlphaMask", false);
                 for (const int rangeIndex : opaqueRangeIndices) {
                     const DrawRange &range = ranges_[rangeIndex];
                     shadowProgram_.setUniformValue(

@@ -859,8 +859,10 @@ bool ViewportSurfaceRenderer::initialize()
         {
             vec4 accumulation = texture(uAccumulation, vUv);
             float weight = texture(uWeight, vUv).r;
-            vec3 color = max(accumulation.rgb / max(weight, 1.0e-4),
-                             vec3(0.0));
+            // Blender 5.2.2 clamps its resolved weight to this range in
+            // workbench_transparent_resolve_frag.glsl.
+            float resolvedWeight = clamp(weight, 1.0e-4, 5.0e4);
+            vec3 color = max(accumulation.rgb / resolvedWeight, vec3(0.0));
             if (uSceneLinearOutput) {
                 fragmentColor = vec4(color, 1.0 - accumulation.a);
                 return;

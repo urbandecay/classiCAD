@@ -132,11 +132,11 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   value ([`qtiffhandler.cpp`](https://github.com/qt/qtimageformats/blob/v6.4.2/src/plugins/imageformats/tiff/qtiffhandler.cpp#L160-L168),
   [lines 906-910](https://github.com/qt/qtimageformats/blob/v6.4.2/src/plugins/imageformats/tiff/qtiffhandler.cpp#L906-L910)).
   Therefore the current default DEFLATE writes uncompressed TIFF, and
-  PACKBITS writes LZW. classiCAD also records the requested `tiffCodec` in
-  metadata, not the actual encoding. CMake has no TIFF/OIIO writer dependency
-  and this environment has no TIFF development headers, so exact codec parity
-  requires adding a suitable encoder; until then, DEFLATE/PACKBITS are known
-  output approximations.
+  PACKBITS writes LZW. classiCAD metadata now keeps the requested `tiffCodec`
+  and adds `writtenTiffCodec` for Qt's effective NONE/LZW output. CMake has no
+  TIFF/OIIO writer dependency and this environment has no TIFF development
+  headers, so exact codec parity requires adding a suitable encoder; until
+  then, DEFLATE/PACKBITS are known output approximations.
 
 - PNG compression now maps Blender's 0–100 setting to the PNG writer's
   0–9 compression level using `int(compression / 11.1111)`, clamped at both

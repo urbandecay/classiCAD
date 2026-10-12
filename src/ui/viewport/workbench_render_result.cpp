@@ -717,6 +717,16 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("imageQuality"), imageQuality);
     cameraJson.insert(QStringLiteral("imageCompression"), imageCompression);
     cameraJson.insert(QStringLiteral("tiffCodec"), tiffCodec);
+    if (writerFormat == QLatin1String("tiff")) {
+        const QString requestedTiffCodec = tiffCodec.toUpper();
+        const QString writtenTiffCodec =
+            requestedTiffCodec == QLatin1String("LZW") ||
+                    requestedTiffCodec == QLatin1String("PACKBITS")
+                ? QStringLiteral("LZW")
+                : QStringLiteral("NONE");
+        cameraJson.insert(QStringLiteral("writtenTiffCodec"),
+                          writtenTiffCodec);
+    }
     cameraJson.insert(QStringLiteral("exrCodec"), exrCodec);
     cameraJson.insert(QStringLiteral("displayDevice"), colorDisplayDevice);
     cameraJson.insert(QStringLiteral("viewTransform"), viewTransform);

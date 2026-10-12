@@ -104,6 +104,18 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   produce equivalent alpha composition with its straight-alpha shader; matched
   GPU output comparison remains pending.
 
+### GPU Studio lighting with specular disabled (2026-10-12)
+
+- Studio lighting now always multiplies its ambient/specular accumulator by
+  `specularColor`. When specular is disabled, `specularColor` is zero, so the
+  accumulator contributes nothing; the enabled-specular path keeps the same
+  Fresnel-adjusted calculation.
+- This follows Blender 5.2.2's pinned
+  [`workbench_world_light.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light.bsl.hh#L57-L121):
+  it sets `specular_color` to zero when disabled and multiplies
+  `specular_light` by that value after the conditional. Matched GPU output
+  comparison remains pending.
+
 ### GPU scene-stroke alpha composition (2026-10-12)
 
 - The classiCAD GPU scene-stroke shader emits straight RGB and coverage-scaled

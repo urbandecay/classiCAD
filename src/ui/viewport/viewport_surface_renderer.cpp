@@ -913,8 +913,10 @@ bool ViewportSurfaceRenderer::initialize()
                 float normalView = clamp(dot(normal, incident), 0.0, 1.0);
                 float fresnel = exp2(-8.35 * normalView) * (1.0 - roughness);
                 specularColor = mix(specularColor, vec3(1.0), fresnel);
-                specularLight *= specularColor;
             }
+            // Blender multiplies this ambient/specular term even when the
+            // specular toggle is off; specularColor is then zero.
+            specularLight *= specularColor;
 
             for (int index = 0; index < 4; ++index) {
                 float normalLight = dot(uLightDirection[index], normal);

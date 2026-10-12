@@ -103,6 +103,13 @@ private:
         const QVector<int> &rangeIndices,
         bool snapshotDepth,
         bool *snapshotDepthReady);
+    bool renderWorkbenchTransparentDepthPass(
+        const ViewportTransform &transform,
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const ViewportShadingSettings &settings,
+        const ViewportRenderTargets &targets,
+        const QVector<int> &rangeIndices);
     bool ensureMatcapTexture(const QString &presetName);
     bool ensureAgxDisplayTexture(int colorTransform,
                                  const QString &customLutId = {},

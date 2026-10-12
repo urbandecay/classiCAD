@@ -2003,6 +2003,210 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     return true;
 }
 
+bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const ViewportShadingSettings &settings,
+    const ViewportRenderTargets &targets,
+    const QVector<int> &rangeIndices)
+{
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    const QSize pixelSize(qRound(viewportSize.width() * dpr),
+                          qRound(viewportSize.height() * dpr));
+    if (rangeIndices.isEmpty() || vertices_.isEmpty() ||
+        !ensureWorkbenchEffectFramebuffers(pixelSize, targets)) {
+        return false;
+    }
+
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousProgram = 0;
+    GLint previousDepthFunction = GL_LESS;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture0 = 0;
+    GLint previousVertexArray = 0;
+    GLint previousArrayBuffer = 0;
+    GLint previousDrawBuffers[3] = {GL_COLOR_ATTACHMENT0,
+                                    GL_COLOR_ATTACHMENT1,
+                                    GL_COLOR_ATTACHMENT2};
+    GLboolean previousDepthMask = GL_TRUE;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    GLint previousCullFaceMode = GL_BACK;
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousCullFace = glIsEnabled(GL_CULL_FACE);
+    const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
+    const GLboolean previousStencilTest = glIsEnabled(GL_STENCIL_TEST);
+    const GLboolean previousFramebufferSrgb =
+        glIsEnabled(GL_FRAMEBUFFER_SRGB);
+    GLint previousBlendSourceRgb = GL_ONE;
+    GLint previousBlendDestinationRgb = GL_ZERO;
+    GLint previousBlendSourceAlpha = GL_ONE;
+    GLint previousBlendDestinationAlpha = GL_ZERO;
+    GLint previousBlendEquationRgb = GL_FUNC_ADD;
+    GLint previousBlendEquationAlpha = GL_FUNC_ADD;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+    glGetIntegerv(GL_CULL_FACE_MODE, &previousCullFaceMode);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSourceRgb);
+    glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDestinationRgb);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &previousBlendSourceAlpha);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &previousBlendDestinationAlpha);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &previousBlendEquationRgb);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &previousBlendEquationAlpha);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
+
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
+    glBindFramebuffer(GL_FRAMEBUFFER, workbenchEffectFramebuffer_);
+    glGetIntegerv(GL_DRAW_BUFFER0, &previousDrawBuffers[0]);
+    glGetIntegerv(GL_DRAW_BUFFER1, &previousDrawBuffers[1]);
+    glGetIntegerv(GL_DRAW_BUFFER2, &previousDrawBuffers[2]);
+    const GLenum depthPassDrawBuffers[] = {
+        GL_NONE, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
+    glDrawBuffers(3, depthPassDrawBuffers);
+    glViewport(0, 0, pixelSize.width(), pixelSize.height());
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glDepthMask(GL_TRUE);
+    if (settings.backfaceCulling) {
+        glEnable(GL_CULL_FACE);
+        glCullFace(GL_BACK);
+    } else {
+        glDisable(GL_CULL_FACE);
+    }
+
+    const Point3D viewDirection =
+        normalized(transform.viewDirection(), {0.0, 0.0, 1.0});
+    const Point3D viewUp = normalized(transform.viewUp(), {0.0, 1.0, 0.0});
+    const Point3D viewRight = normalized(cross(viewUp, viewDirection),
+                                         {1.0, 0.0, 0.0});
+    workbenchEffectProgram_.bind();
+    workbenchEffectProgram_.setUniformValue(
+        "uViewProjection", viewportViewProjection(transform, viewportSize));
+    workbenchEffectProgram_.setUniformValue("uViewRight", asVector(viewRight));
+    workbenchEffectProgram_.setUniformValue("uViewUp", asVector(viewUp));
+    workbenchEffectProgram_.setUniformValue("uViewFacing", asVector(viewDirection));
+    workbenchEffectProgram_.setUniformValue("uWorkbenchImage", 0);
+    const GLint objectIdUniformLocation =
+        workbenchEffectProgram_.uniformLocation("uObjectId");
+    const GLint outlineObjectIdUniformLocation =
+        workbenchEffectProgram_.uniformLocation("uOutlineObjectId");
+    const GLint useTextureAlphaMaskUniformLocation =
+        workbenchEffectProgram_.uniformLocation("uUseTextureAlphaMask");
+    const GLint textureAlphaCutoffUniformLocation =
+        workbenchEffectProgram_.uniformLocation("uTextureAlphaCutoff");
+
+    vertexArray_.bind();
+    vertexBuffer_.bind();
+    if (geometryDirty_) {
+        vertexBuffer_.allocate(vertices_.constData(),
+                               vertices_.size() *
+                                   static_cast<int>(sizeof(SurfaceVertex)));
+        geometryDirty_ = false;
+    }
+    for (int rangeIndex : rangeIndices) {
+        if (rangeIndex < 0 || rangeIndex >= ranges_.size()) continue;
+        const DrawRange &range = ranges_[rangeIndex];
+        if (range.count <= 0) continue;
+
+        GLuint outlineObjectId = range.outlineHandledBySceneStroke
+                                     ? 0u
+                                     : range.effectObjectId;
+        if (range.selected && !range.outlineHandledBySceneStroke) {
+            outlineObjectId |= 0x80000000u;
+        }
+        glUniform1ui(objectIdUniformLocation, range.effectObjectId);
+        glUniform1ui(outlineObjectIdUniformLocation, outlineObjectId);
+
+        const QString alphaMode = range.workbenchMaterial.textureImageAlphaMode;
+        const bool ignoreTextureAlpha =
+            alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
+            alphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
+            alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
+                              Qt::CaseInsensitive) == 0;
+        const GLuint imageTexture =
+            settings.colorMode == ViewportColorMode::Texture &&
+                    range.useTextureColor
+                ? ensureImageTexture(
+                      range.textureImagePath,
+                      range.workbenchMaterial.textureImagePackedDataBase64,
+                      range.textureImageSrgb)
+                : 0;
+        glUniform1i(useTextureAlphaMaskUniformLocation, imageTexture != 0);
+        glUniform1i(textureAlphaCutoffUniformLocation, !ignoreTextureAlpha);
+        workbenchEffectProgram_.setUniformValue(
+            "uTextureInterpolation", workbenchTextureInterpolation(
+                range.workbenchMaterial.textureImageInterpolation));
+        configureWorkbenchImageTexture(imageTexture, range.workbenchMaterial);
+        glBindTexture(GL_TEXTURE_2D, imageTexture);
+        workbenchEffectProgram_.setUniformValue(
+            "uWorldOffset",
+            QVector3D(static_cast<float>(range.offset.x),
+                      static_cast<float>(range.offset.y),
+                      static_cast<float>(range.offset.z)));
+        glDrawArrays(GL_TRIANGLES, range.first, range.count);
+    }
+    vertexBuffer_.release();
+    vertexArray_.release();
+    workbenchEffectProgram_.release();
+
+    const GLenum restoredDrawBuffers[] = {
+        static_cast<GLenum>(previousDrawBuffers[0]),
+        static_cast<GLenum>(previousDrawBuffers[1]),
+        static_cast<GLenum>(previousDrawBuffers[2])};
+    glDrawBuffers(3, restoredDrawBuffers);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glColorMask(previousColorMask[0], previousColorMask[1],
+                previousColorMask[2], previousColorMask[3]);
+    glDepthMask(previousDepthMask);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    if (previousBlend) glEnable(GL_BLEND);
+    else glDisable(GL_BLEND);
+    if (previousCullFace) glEnable(GL_CULL_FACE);
+    else glDisable(GL_CULL_FACE);
+    glCullFace(static_cast<GLenum>(previousCullFaceMode));
+    if (previousScissor) glEnable(GL_SCISSOR_TEST);
+    else glDisable(GL_SCISSOR_TEST);
+    if (previousStencilTest) glEnable(GL_STENCIL_TEST);
+    else glDisable(GL_STENCIL_TEST);
+    if (previousFramebufferSrgb) glEnable(GL_FRAMEBUFFER_SRGB);
+    else glDisable(GL_FRAMEBUFFER_SRGB);
+    glBlendEquationSeparate(static_cast<GLenum>(previousBlendEquationRgb),
+                            static_cast<GLenum>(previousBlendEquationAlpha));
+    glBlendFuncSeparate(static_cast<GLenum>(previousBlendSourceRgb),
+                        static_cast<GLenum>(previousBlendDestinationRgb),
+                        static_cast<GLenum>(previousBlendSourceAlpha),
+                        static_cast<GLenum>(previousBlendDestinationAlpha));
+    glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(previousArrayBuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    glUseProgram(static_cast<GLuint>(previousProgram));
+    return true;
+}
+
 bool ViewportSurfaceRenderer::renderShadowMap(
     const ViewportTransform &transform,
     const QSize &viewportSize,
@@ -3786,6 +3990,17 @@ bool ViewportSurfaceRenderer::draw(
         glBindTexture(GL_TEXTURE_2D,
                       static_cast<GLuint>(previousCavityJitterTextureBinding));
         glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+
+        // Blender's TransparentDepthPass runs after transparent color has
+        // been resolved. Reuse the shared scene depth and ID attachments so
+        // DOF and Workbench outlines see the nearest transparent surface.
+        // Do not run this on the sorted fallback path: it has no compatible
+        // shared depth target to update.
+        if (weightedOitAvailable && sharedTargets != nullptr) {
+            renderWorkbenchTransparentDepthPass(
+                transform, viewportSize, devicePixelRatio, settings,
+                *sharedTargets, transparentRangeIndices);
+        }
     }
 
     if (settings.mode == ViewportShadingMode::Solid &&

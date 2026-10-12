@@ -1594,8 +1594,12 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
                                          ? samplePositions(5)[0]
                                          : JitterPoint{};
     sampleCamera_ = camera;
+    // Blender adds offset / resolution directly to its projection matrix.
+    // viewportViewProjection converts screen pixels to clip space with a
+    // factor of two, so pass half a physical pixel offset here to match that
+    // Workbench projection shift.
     sampleCamera_.setRenderJitterPixels(
-        QPointF(offset.x / dpr, offset.y / dpr));
+        QPointF(offset.x / (2.0 * dpr), offset.y / (2.0 * dpr)));
 
     GLint destinationFramebuffer = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &destinationFramebuffer);

@@ -783,7 +783,7 @@ Status: completed against Blender 5.2.2 and classiCAD source. Updated after impl
 
 ### Stage 1: Make anti-aliasing control the viewport
 
-Status: implemented for the application's current interaction model. The GPU path uses Blender's unjittered one-sample TAA filter plus SMAA for preference value 1 and during navigation, and jittered TAA accumulation plus SMAA for the 5+ modes. The viewport exposes `setViewportPlaybackActive(bool)`, but classiCAD has no scene timeline or playback owner; wiring that hook is deferred until playback exists. Scene strokes and selected-face overlays redraw after scene resolve using the unjittered camera and regenerated scene depth; the unjittered grid follows. Pixel-for-pixel equivalence has not been verified, and QPainter remains an approximation; those checks stay in Stage 5.
+Status: implemented for the application's current interaction model. The GPU path uses Blender's first jittered 5-sample location for its one-sample TAA plus SMAA at preference value 1 and during navigation, and jittered TAA accumulation plus SMAA for the 5+ modes. The viewport exposes `setViewportPlaybackActive(bool)`, but classiCAD has no scene timeline or playback owner; wiring that hook is deferred until playback exists. Scene strokes and selected-face overlays redraw after scene resolve using the unjittered camera and regenerated scene depth; the unjittered grid follows. Pixel-for-pixel equivalence has not been verified, and QPainter remains an approximation; those checks stay in Stage 5.
 
 - Define one classiCAD AA setting model that matches Blender's UI choices and exact sample mapping.
 - Route the setting through the complete Workbench scene render and resolve path, not only the grid framebuffer.
@@ -1000,17 +1000,20 @@ depth domain. Visual depth comparison remains open.
   light, AgX, and no selection, object outlines, cavity, or shadows. Run it
   with `blender --background --python tests/workbench_cube_reference.py --
   /tmp/workbench.png --aa OFF`, replacing `OFF` with `FXAA` or `8`.
-- A direct offscreen classiCAD capture was compared with the three Blender
-  outputs using identical dimensions, camera, cube, and material. The
-  background differs by one 8-bit code value (34 vs. 35) and was normalized
-  independently for coverage. At an RGB distance threshold of 2, mask IoU is
-  0.99798 for AA Off, 0.99799 for Single Pass, and 0.99417 for 8 samples.
-  On shared object pixels, RGB channel MAE is 0.396, 0.410, and 0.669 of
-  255 respectively. Off and Single Pass differ mainly at the cube's right
-  boundary (224 Blender-only pixels); 8 samples adds a one-row vertical edge
-  spread, with 658 classiCAD-only pixels under this mask. This is a useful
-  repeatable baseline, not a parity sign-off: graphics backend/raster edge
-  coverage and the 8-sample edge profile still need isolation.
+- A direct offscreen classiCAD GPU capture was compared with Blender outputs
+  using identical dimensions, camera, cube, and material. The background
+  differs by one 8-bit code value (34 vs. 35) and was normalized independently
+  for coverage. At an RGB distance threshold of 2, mask IoU is 0.99798 for AA
+  Off, 0.99799 for Single Pass, and 0.99599 for 8 samples. On shared object
+  pixels, RGB channel MAE is 0.396, 0.410, and 0.597 of 255 respectively.
+  Off and Single Pass differ mainly at the cube's right boundary (224
+  Blender-only pixels). After the jitter-scale correction below, 8-sample
+  bounds match exactly; 450 classiCAD pixels and one Blender pixel remain
+  unique under this threshold. A second threshold-20 baseline comparison
+  measured mask IoU 0.99997 and exactly matching face probes (top
+  `(142,144,145)`, front `(138,139,139)`). This is strong base-render
+  evidence, not a parity sign-off; the remaining edge differences and effects
+  still need isolation.
 - The source comparison found that Blender 5.2.2's Single Pass uses the first
   jitter point from the 5-sample sequence even though it renders one sample.
   classiCAD was using zero jitter for that mode. Its camera sample and filter
@@ -1020,10 +1023,20 @@ depth domain. Visual depth comparison remains open.
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L192-L219),
   with jitter generation in
   [`jitter_2d.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/intern/jitter_2d.cc#L119-L162).
+- The matched 8-sample edge profile also exposed a projection-scale mismatch.
+  Blender passes `sampleOffset / resolution` to
+  `window_translate_m4`, which adds that value directly to the orthographic
+  projection translation. classiCAD's projection helper converts pixel
+  translation to clip space with a factor of two, so it now receives half the
+  physical-pixel sample offset. This restored the same 8-sample foreground
+  bounds and improved mask IoU from 0.99417 to 0.99599. See Blender's pinned
+  [`math_geom.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/intern/math_geom.cc#L4417-L4441)
+  and classiCAD's `viewportViewProjection` in
+  `src/ui/viewport/blender_grid_renderer.cpp`.
 - The comparison uses the native classiCAD GPU pass and does not launch its
   GUI. QPainter, navigation-history reset, intermediate scene-linear captures,
-  volume/effects/transparency scenes, and edge-profile comparison remain
-  outstanding validation work.
+  volume/effects/transparency scenes, and a detailed edge-profile comparison
+  remain outstanding validation work.
 
 ### Bounded scalar volume pass (2026-10-12)
 
@@ -1069,7 +1082,7 @@ Status: in progress; the implementation and source reviews found the blockers li
 
 - The user clarified that classiCAD's current viewport should be treated as Edit Mode; its separate Object Mode is planned for later. Do not use the missing Object Mode as an explanation for base surface, background, or grid differences. The supplied screenshots still are not a controlled render comparison: classiCAD reports `Ortho`, Blender reports `User Perspective`, and the visible scene geometry differs. Blender's mesh edit edges and curve edit wires are separate Overlay-engine geometry; classiCAD's Solid-mode CAD curve strokes and `NurbsSolid` face boundaries use the configurable edit-wire theme setting, while control geometry and selection behavior remain a distinct implementation. Compare base rendering separately from mode-specific overlays, with matching camera and geometry.
 - This is an adaptation of selected Blender shading equations and passes into classiCAD's renderer, not a verbatim port of Blender's complete Workbench and Overlay engines. The table above and stage notes remain the parity record.
-- Review execution confirmed the installed Blender runtime is 5.2.2 LTS and the classiCAD C++ build passes. Background extraction smoke checks now pass for original and evaluated mesh modes, POLY/BEZIER/NURBS curves, NURBS surface patches, nested collection parents and visibility records, and reporting omitted loose mesh geometry. An offscreen classiCAD startup reached viewport construction, but Qt could not create an OpenGL context; this does not validate the GPU renderer. No controlled, matched Blender/classiCAD scene render was produced in this review, so the visual comparison matrix below remains open and full parity is not signed off.
+- Review execution confirmed the installed Blender runtime is 5.2.2 LTS and the classiCAD C++ build passes. Background extraction smoke checks now pass for original and evaluated mesh modes, POLY/BEZIER/NURBS curves, NURBS surface patches, nested collection parents and visibility records, and reporting omitted loose mesh geometry. An offscreen classiCAD startup reached viewport construction, but Qt could not create an OpenGL context; this does not validate the GPU renderer. A direct native-GPU offscreen cube render is now compared against Blender's background Workbench render at 640×480 for AA Off, Single Pass, and 8 samples. The baseline and Single Pass jitter fix are recorded above; the remaining comparison matrix, other scenes/effects, intermediate scene-linear captures, QPainter, and navigation cases remain open. Full parity is not signed off.
 
 - Run the comparison matrix below against Blender 5.2.2.
 - Record remaining visual differences with a source or implementation explanation; capture images only when both applications show the same nonblank scene and matched view.

@@ -411,12 +411,15 @@ private:
                                   .arg(outputSize.width()).arg(outputSize.height()));
         window.resize(1000, 760);
         auto *layout = new QVBoxLayout(&window);
+        const QString combinedDescription = result.combinedPassAvailable
+            ? QStringLiteral("%1 × %2 .%3 (%4, %5-bit output)")
+                  .arg(outputSize.width()).arg(outputSize.height())
+                  .arg(result.combinedFileExtension()).arg(result.colorMode)
+                  .arg(result.writtenColorDepth())
+            : QStringLiteral("disabled in Blender view layer");
         auto *info = new QLabel(
-            QStringLiteral("Last completed result (not live)   •   Combined: %1 × %2 .%3 (%4, %5-bit output)   •   Depth: %6")
-                .arg(outputSize.width()).arg(outputSize.height())
-                .arg(result.combinedFileExtension())
-                .arg(result.colorMode)
-                .arg(result.writtenColorDepth())
+            QStringLiteral("Last completed result (not live)   •   Combined: %1   •   Depth: %2")
+                .arg(combinedDescription)
                 .arg(result.depthPassAvailable
                          ? QStringLiteral("Z depth PFM")
                          : QStringLiteral("disabled in Blender view layer")),
@@ -432,6 +435,7 @@ private:
         auto *saveCombined = new QPushButton(
             QStringLiteral("Save Combined %1…")
                 .arg(result.combinedFileExtension().toUpper()), &window);
+        saveCombined->setEnabled(result.combinedPassAvailable);
         auto *saveDepth = new QPushButton(QStringLiteral("Save Depth PFM…"), &window);
         saveDepth->setEnabled(result.depthPassAvailable);
         auto *close = new QPushButton(QStringLiteral("Close"), &window);

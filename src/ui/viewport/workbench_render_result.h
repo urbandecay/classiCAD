@@ -22,6 +22,7 @@ struct WorkbenchRenderResult {
     QVector<float> sceneLinearRgba;
     QSize sceneLinearSize;
     QVector<float> depth;
+    bool combinedPassAvailable = true;
     bool depthPassAvailable = true;
     ProjectViewportCameraSettings camera;
     QString outputFormat = QStringLiteral("PNG + PFM depth");

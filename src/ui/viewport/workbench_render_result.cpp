@@ -106,6 +106,11 @@ bool WorkbenchRenderResult::openExrWriterAvailable() noexcept
 bool WorkbenchRenderResult::saveCombinedOpenExr(
     const QString &path, QString *errorMessage) const
 {
+    if (!combinedPassAvailable) {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("The Blender view layer has its Combined pass disabled");
+        return false;
+    }
     if (!hasValidSceneLinearCombined()) {
         if (errorMessage != nullptr)
             *errorMessage = QStringLiteral("The scene-linear Combined pass is empty or has invalid dimensions");
@@ -187,6 +192,11 @@ int WorkbenchRenderResult::writtenColorDepth() const
 bool WorkbenchRenderResult::saveCombinedImage(
     const QString &path, QString *errorMessage) const
 {
+    if (!combinedPassAvailable) {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("The Blender view layer has its Combined pass disabled");
+        return false;
+    }
     if (!isValid()) {
         if (errorMessage != nullptr)
             *errorMessage = QStringLiteral("The viewport render result is empty");
@@ -268,6 +278,8 @@ bool WorkbenchRenderResult::saveCombinedImage(
                       QStringLiteral("Blender Workbench view-Z; background is 1e10"));
     cameraJson.insert(QStringLiteral("depthPassAvailable"),
                       depthPassAvailable);
+    cameraJson.insert(QStringLiteral("combinedPassAvailable"),
+                      combinedPassAvailable);
     QJsonObject poseJson;
     poseJson.insert(QStringLiteral("perspective"), camera.view.perspective);
     poseJson.insert(QStringLiteral("preset"), int(camera.view.preset));

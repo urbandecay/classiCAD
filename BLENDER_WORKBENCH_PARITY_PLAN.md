@@ -392,11 +392,14 @@ color call is shared, while grid/background, DOF/AA presentation, CAD strokes,
 and editor overlays retain their existing caller-owned order. The render result
 currently exposes Combined, Depth, and an optional scene-linear float Combined
 payload. Blender's Combined and optional Z pass names/types are mirrored, and
-the imported active view layer's `use_pass_z` controls whether classiCAD offers
-Depth export. Blender's registered multi-pass Render Result lifecycle remains
-open. The Z export converts depth-buffer values to view-space Z and writes
+the imported active view layer's `use_pass_combined` and `use_pass_z` values
+control whether classiCAD offers those exports. Blender's registered
+multi-pass Render Result lifecycle remains open. The Z export converts
+depth-buffer values to view-space Z and writes
 `1e10` for the background, matching Blender Workbench's pinned
 [`write_render_z_output`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2925-L3011).
+Committed CAD dimensions remain post-render, screen-space annotations in
+Combined; their fixed-pixel labels/arrows have no corresponding Z samples.
 Offscreen rendering accumulates the imported Blender `scene.display.render_aa`
 mode before capturing Combined and depth. Older imports without that field use
 classiCAD's viewport AA preference. Blender's render AA enum is `OFF`, `FXAA`,

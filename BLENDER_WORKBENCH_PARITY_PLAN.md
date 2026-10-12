@@ -939,6 +939,36 @@ failure paths remain in place. The separate 1024-pixel shadow-map fallback
 still uses D24 because it is classiCAD-only and not the shared Workbench scene
 depth domain. Visual depth comparison remains open.
 
+### Phase Two source audit update (2026-10-12)
+
+- Focused audits of hard-edge rasterization/AA, GPU cavity and curvature,
+  image/UDIM sampling, Combined/Z output, color resolve, and the shared GPU
+  pass sequence found no further source-backed mismatch to port in those
+  paths. This is a code review result, not a visual parity sign-off; the
+  controlled image comparison below remains open.
+- The shared GPU pass sequence follows Blender's opaque, transparent
+  accumulation/resolve, transparent depth, outline, depth-of-field, and AA
+  order. The `TransparentResolve` completion flag now becomes true immediately
+  after the regular scene-domain resolve; the in-front resolve remains reported
+  separately. This report-timing correction is in commit `eef0b6e`.
+- A raster/AA review traced the cube surface through the single-sample scene
+  target and internal TAA/SMAA resolve. The grid's separate MSAA target does
+  not draw cube surfaces, so the available source does not identify the
+  screenshot's soft cube edge. Distinguishing a filled silhouette from a
+  post-resolve CAD stroke and making a matched GPU comparison are still
+  required to localize it.
+- The Blender `VOLUME` object path remains a data-model prerequisite, not an
+  omitted shader call: the extractor currently records the object as
+  unsupported, and classiCAD has no persistent voxel-grid model or serializer.
+  Blender's Python `VolumeGrid` API exposes metadata and transforms but not a
+  voxel-array accessor. A first bounded port needs a supported route for a
+  scalar density payload (for example, Blender-side dense extraction or a
+  linked OpenVDB reader), then a separate volume texture/raymarch pass.
+  General multi-grid, animated, and vector-field support remains out of scope
+  until that contract exists. References: [VolumeGrid API](https://docs.blender.org/api/5.2/bpy.types.VolumeGrid.html),
+  [Workbench volume pass](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc),
+  and [Blender volume developer docs](https://developer.blender.org/docs/features/objects/volume/).
+
 ### Workbench volume pass remains unsupported (2026-10-12)
 
 - Blender 5.2.2 draws its volume pass after transparent depth and before

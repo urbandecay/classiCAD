@@ -2295,12 +2295,16 @@ bool ViewportSurfaceRenderer::draw(
 
     prepareGeometry(objects);
     QVector<int> opaqueRangeIndices;
+    QVector<int> shadowVolumeRangeIndices;
     bool hasPartialAlpha = false;
     if (settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
         !selectionOverlay && !settings.xrayEnabled()) {
         for (int index = 0; index < ranges_.size(); ++index) {
             const DrawRange &range = ranges_[index];
             if (range.count <= 0) continue;
+            if (range.shadowVolumeSupported) {
+                shadowVolumeRangeIndices.append(index);
+            }
             const qreal alpha = workbenchSourceAlpha(
                 settings.colorMode, range.displayColorSceneLinear.w(),
                 range.workbenchMaterial, settings.customColor);
@@ -2470,12 +2474,7 @@ bool ViewportSurfaceRenderer::draw(
         clearDepth;
     bool shadowVolumesAvailable = false;
     bool sceneDepthPrepassReady = sharedPrepassReady;
-    const bool hasOpaqueShadowVolumeCaster = std::any_of(
-        opaqueRangeIndices.cbegin(), opaqueRangeIndices.cend(),
-        [this](int index) {
-            return ranges_[index].shadowVolumeSupported;
-        });
-    if (shadowMapRequested && hasOpaqueShadowVolumeCaster) {
+    if (shadowMapRequested && !shadowVolumeRangeIndices.isEmpty()) {
         GLint stencilBits = 0;
         glGetIntegerv(GL_STENCIL_BITS, &stencilBits);
         if (stencilBits >= 8) {
@@ -2554,7 +2553,7 @@ bool ViewportSurfaceRenderer::draw(
                 shadowVolumesAvailable = renderShadowVolumes(
                     workbenchShadowDirectionWorld(settings),
                     shadowViewProjection, viewportSize, devicePixelRatio,
-                    opaqueRangeIndices);
+                    shadowVolumeRangeIndices);
                 if (shadowVolumesAvailable) {
                     glDepthFunc(GL_LEQUAL);
                 }

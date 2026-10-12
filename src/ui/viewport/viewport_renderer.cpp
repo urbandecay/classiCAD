@@ -119,6 +119,34 @@ void sampleWorkbenchImage(const QImage &image,
     }
 }
 
+bool sampleWorkbenchUdimImage(const QHash<int, QImage> &tiles,
+                             const QPointF &uv,
+                             const QString &interpolation,
+                             const QString &extension,
+                             uchar *rgba)
+{
+    const qreal tileU = std::floor(uv.x());
+    const qreal tileV = std::floor(uv.y());
+    const qreal tileNumber = 1001.0 + tileU + 10.0 * tileV;
+    const bool validTile = tileU >= 0.0 && tileU < 10.0 &&
+        tileV >= 0.0 && tileV <= 99.0 &&
+        tileNumber >= 1001.0 && tileNumber <= 1999.0;
+    const auto tile = validTile
+        ? tiles.constFind(static_cast<int>(tileNumber))
+        : tiles.cend();
+    if (tile == tiles.cend()) {
+        rgba[0] = 255;
+        rgba[1] = 0;
+        rgba[2] = 255;
+        rgba[3] = 255;
+        return false;
+    }
+    sampleWorkbenchImage(tile.value(),
+                         QPointF(uv.x() - tileU, uv.y() - tileV),
+                         interpolation, extension, rgba);
+    return true;
+}
+
 quint32 blenderStringHash(const QByteArray &bytes, quint32 seed = 0)
 {
     constexpr quint32 multiplier = 0x5bd1e995U;
@@ -1546,19 +1574,12 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     if (denominator <= 1.0e-12) continue;
                     const QPointF uv = (triangle.uvs[0] * p0 + triangle.uvs[1] * p1 +
                                         triangle.uvs[2] * p2) / denominator;
-                    const QImage *sampleImage = &texture;
-                    QPointF sampleUv = uv;
+                    uchar rgba[4];
                     if (triangle.tiledTexture) {
-                        const qreal tileU = std::floor(uv.x());
-                        const qreal tileV = std::floor(uv.y());
-                        const qreal tileNumber = 1001.0 + tileU + 10.0 * tileV;
-                        const bool validTile = tileU >= 0.0 && tileU < 10.0 &&
-                            tileV >= 0.0 && tileV <= 99.0 &&
-                            tileNumber >= 1001.0 && tileNumber <= 1999.0;
-                        const auto tile = validTile
-                            ? triangle.textureTiles.constFind(static_cast<int>(tileNumber))
-                            : triangle.textureTiles.cend();
-                        if (tile == triangle.textureTiles.cend()) {
+                        if (!sampleWorkbenchUdimImage(
+                                triangle.textureTiles, uv,
+                                triangle.textureInterpolation,
+                                triangle.textureExtension, rgba)) {
                             // Blender Workbench displays absent UDIM tiles as
                             // magenta so the incomplete image stays visible.
                             uchar *pixel = row + x * 4;
@@ -1568,14 +1589,12 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             pixel[3] = 255;
                             continue;
                         }
-                        sampleImage = &tile.value();
-                        sampleUv = QPointF(uv.x() - tileU, uv.y() - tileV);
+                    } else {
+                        if (texture.isNull()) continue;
+                        sampleWorkbenchImage(texture, uv,
+                                             triangle.textureInterpolation,
+                                             triangle.textureExtension, rgba);
                     }
-                    if (sampleImage->isNull()) continue;
-                    uchar rgba[4];
-                    sampleWorkbenchImage(*sampleImage, sampleUv,
-                                         triangle.textureInterpolation,
-                                         triangle.textureExtension, rgba);
                     if (rgba[3] < 26) continue; // Blender's filtered alpha < 0.1 cutoff.
                     uchar *pixel = row + x * 4;
                     QVector3D textureColor;
@@ -2365,6 +2384,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                                     ? *workbenchMaterial
                                                     : fallbackMaterial;
         QImage nurbsTexture;
+        QHash<int, QImage> nurbsTextureTiles;
+        const bool nurbsTiledTexture = !material.textureImageTiles.isEmpty();
         const bool textureAlphaIgnored =
             material.textureImageAlphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
             material.textureImageAlphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
@@ -2373,8 +2394,56 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             shadingSettings_.colorMode == ViewportColorMode::Texture &&
             surface.trimLoops.isEmpty() && workbenchMaterial.has_value() &&
             (!material.textureImagePath.isEmpty() ||
-             !material.textureImagePackedDataBase64.isEmpty());
+             !material.textureImagePackedDataBase64.isEmpty() ||
+             nurbsTiledTexture);
         if (canSampleNurbsTexture) {
+            if (nurbsTiledTexture) {
+                static const QSet<QByteArray> allowedFormats{
+                    "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
+                QSet<int> loadedTileNumbers;
+                quint64 decodedTilePixels = 0;
+                for (const DocumentImageTextureTile &tile :
+                     material.textureImageTiles) {
+                    if (!tile.sourceFileExists || tile.number < 1001 ||
+                        tile.number > 1999 || tile.filepath.isEmpty() ||
+                        loadedTileNumbers.contains(tile.number)) {
+                        continue;
+                    }
+                    const QFileInfo info(tile.filepath);
+                    const QByteArray suffix = info.suffix().toLower().toLatin1();
+                    if (!info.isFile() || !allowedFormats.contains(suffix) ||
+                        info.size() <= 0 ||
+                        info.size() > 256LL * 1024LL * 1024LL) {
+                        continue;
+                    }
+                    QImageReader tileReader(info.filePath());
+                    const QSize size = tileReader.size();
+                    if (!size.isValid() || size.width() > 16384 ||
+                        size.height() > 16384 ||
+                        static_cast<quint64>(size.width()) * size.height() >
+                            67108864ULL) {
+                        continue;
+                    }
+                    const quint64 tilePixels =
+                        static_cast<quint64>(size.width()) * size.height();
+                    if (decodedTilePixels + tilePixels > 67108864ULL) {
+                        continue;
+                    }
+                    QImage tileImage = tileReader.read();
+                    if (tileImage.isNull()) continue;
+                    decodedTilePixels += tilePixels;
+                    loadedTileNumbers.insert(tile.number);
+                    tileImage = tileImage.convertToFormat(QImage::Format_RGBA8888);
+                    if (textureAlphaIgnored) {
+                        for (int y = 0; y < tileImage.height(); ++y) {
+                            uchar *row = tileImage.scanLine(y);
+                            for (int x = 0; x < tileImage.width(); ++x)
+                                row[x * 4 + 3] = 255;
+                        }
+                    }
+                    nurbsTextureTiles.insert(tile.number, std::move(tileImage));
+                }
+            } else {
             QByteArray packedBytes;
             QBuffer packedBuffer;
             QImageReader *reader = nullptr;
@@ -2414,6 +2483,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             }
             if (!nurbsTexture.isNull())
                 nurbsTexture = nurbsTexture.convertToFormat(QImage::Format_RGBA8888);
+            }
         }
         const bool nurbsTextureSrgb = material.textureImageSrgb;
         QVector3D sourceColorLinear = workbenchDefaultSolidMaterialDiffuseColor();
@@ -2643,7 +2713,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                  (triangle.a.z + triangle.b.z + triangle.c.z) / 3.0};
             const QColor shaded = shade(triangle.normal, center,
                                         baseColorVector);
-            if (nurbsTexture.isNull() || !triangle.hasUvs) {
+            if ((!nurbsTiledTexture && nurbsTexture.isNull()) ||
+                !triangle.hasUvs) {
                 painter.setBrush(shaded);
                 painter.drawPolygon(QPolygonF{screenA, screenB, screenC});
                 return;
@@ -2688,9 +2759,19 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     if (denominator <= 1.0e-12) continue;
                     const QPointF uv = (triangle.uvs[0]*cw0 + triangle.uvs[1]*cw1 + triangle.uvs[2]*cw2) / denominator;
                     uchar rgba[4];
-                    sampleWorkbenchImage(nurbsTexture, uv,
-                                         material.textureImageInterpolation,
-                                         material.textureImageExtension, rgba);
+                    if (nurbsTiledTexture) {
+                        if (!sampleWorkbenchUdimImage(
+                                nurbsTextureTiles, uv,
+                                material.textureImageInterpolation,
+                                material.textureImageExtension, rgba)) {
+                            row[x] = qPremultiply(qRgba(255, 0, 255, 255));
+                            continue;
+                        }
+                    } else {
+                        sampleWorkbenchImage(nurbsTexture, uv,
+                                             material.textureImageInterpolation,
+                                             material.textureImageExtension, rgba);
+                    }
                     if (!textureAlphaIgnored && rgba[3] < 26) continue;
                     const qreal alpha = shaded.alphaF() * (textureAlphaIgnored ? 1.0 : rgba[3]/255.0);
                     const bool premultiplied = material.textureImageAlphaMode.compare(

@@ -1425,6 +1425,16 @@ void ViewportRenderer::drawShape(QPainter &painter,
         if (!isValidNurbsCurve(curve)) {
             return;
         }
+        // The committed curve stroke is an Overlay wire in both the direct
+        // evaluator and prepared-geometry paths. Keep its QPainter fallback
+        // controlled by the Overlay preference just like primitive and
+        // surface wire strokes; otherwise these NURBS paths inherit whatever
+        // antialiasing state a previous draw left on the painter.
+        painter.save();
+        if (!preview) {
+            painter.setRenderHint(QPainter::Antialiasing,
+                                  smoothWiresOverlay_);
+        }
         if (!canUsePreparedCurve ||
             !drawPreparedCurveSegments(painter,
                                        *preparedGeometry,
@@ -1435,6 +1445,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             placedFrame.origin.z += preparedOffset.z;
             drawNurbsCurve(painter, curve, placedFrame, viewportSize);
         }
+        painter.restore();
     };
 
     if (isDimensionGeometryType(shape.geometryType)) {

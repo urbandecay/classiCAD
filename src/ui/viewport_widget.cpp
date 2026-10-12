@@ -6548,6 +6548,7 @@ public:
         }
         const QString activeLayerKey =
             document_.settings().activeViewLayerKey;
+        int renderAntiAliasingMode = -1;
         for (const QJsonValue &sceneValue :
              document_.settings().importedBlenderScenes) {
             const QJsonObject scene = sceneValue.toObject();
@@ -6563,6 +6564,17 @@ public:
             if (!activeScene) continue;
             const QJsonObject renderOutput =
                 scene.value(QStringLiteral("render_output")).toObject();
+            const QString renderAa = renderOutput.value(
+                QStringLiteral("render_aa")).toString();
+            if (renderAa == QLatin1String("OFF")) renderAntiAliasingMode = 0;
+            else if (renderAa == QLatin1String("FXAA")) renderAntiAliasingMode = 1;
+            else if (renderAa == QLatin1String("5") ||
+                     renderAa == QLatin1String("8") ||
+                     renderAa == QLatin1String("11") ||
+                     renderAa == QLatin1String("16") ||
+                     renderAa == QLatin1String("32")) {
+                renderAntiAliasingMode = renderAa.toInt();
+            }
             const QJsonObject colorManagement = scene.value(
                 QStringLiteral("color_management")).toObject();
             result.colorDisplayDevice = colorManagement.value(
@@ -6683,7 +6695,8 @@ public:
                     smoothWiresOverlay_, smoothWiresEditMode_);
             },
             &result.combined, &result.depth, nullptr,
-            captureSceneLinearCombined ? &result.sceneLinearRgba : nullptr);
+            captureSceneLinearCombined ? &result.sceneLinearRgba : nullptr,
+            renderAntiAliasingMode);
         if (result.isValid()) {
             // CAD dimensions are committed scene annotations, not transient
             // editor overlays. Include them in the saved result at the chosen

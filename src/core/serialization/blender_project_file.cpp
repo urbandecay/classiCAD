@@ -1889,6 +1889,20 @@ bool importBlenderScene(const QString &path,
         }
         const QJsonObject renderOutput =
             scene.value(QStringLiteral("render_output")).toObject();
+        const QJsonValue renderAaValue =
+            renderOutput.value(QStringLiteral("render_aa"));
+        if (!renderAaValue.isUndefined() &&
+            (!renderAaValue.isString() ||
+             (renderAaValue.toString() != QLatin1String("OFF") &&
+              renderAaValue.toString() != QLatin1String("FXAA") &&
+              renderAaValue.toString() != QLatin1String("5") &&
+              renderAaValue.toString() != QLatin1String("8") &&
+              renderAaValue.toString() != QLatin1String("11") &&
+              renderAaValue.toString() != QLatin1String("16") &&
+              renderAaValue.toString() != QLatin1String("32")))) {
+            warnings.append(QStringLiteral("Scene %1 has an unsupported render anti-aliasing value; the viewport preference will be used")
+                                .arg(scene.value(QStringLiteral("name")).toString()));
+        }
         int resolutionX = 0;
         int resolutionY = 0;
         int resolutionPercentage = 0;

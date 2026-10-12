@@ -58,7 +58,8 @@ public:
                          QImage *combined,
                          QVector<float> *depth,
                          QString *errorMessage = nullptr,
-                         QVector<float> *sceneLinearRgba = nullptr);
+                         QVector<float> *sceneLinearRgba = nullptr,
+                         int antiAliasingMode = -1);
     bool pickScenePoint(const QPointF &screenPosition,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,

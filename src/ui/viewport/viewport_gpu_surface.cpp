@@ -148,7 +148,8 @@ bool ViewportGpuSurface::renderOffscreen(
     QImage *combined,
     QVector<float> *depth,
     QString *errorMessage,
-    QVector<float> *sceneLinearRgba)
+    QVector<float> *sceneLinearRgba,
+    int antiAliasingMode)
 {
     if (!isValid() || pixelSize.isEmpty() || !draw || combined == nullptr ||
         depth == nullptr || aaRenderer_ == nullptr) {
@@ -186,6 +187,11 @@ bool ViewportGpuSurface::renderOffscreen(
     functions.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
                       GL_STENCIL_BUFFER_BIT);
+    const int previousAaMode = aaRenderer_->mode();
+    if (antiAliasingMode >= 0 &&
+        isViewportAntiAliasingMode(antiAliasingMode)) {
+        aaRenderer_->setMode(antiAliasingMode);
+    }
     const QByteArray historyKey = QByteArrayLiteral("workbench-render-result-") +
                                   QByteArray::number(++offscreenRenderSerial_);
     bool sampleStarted = aaRenderer_->beginSceneSample(
@@ -242,6 +248,7 @@ bool ViewportGpuSurface::renderOffscreen(
             drawn = drawOverlay(pixelSize, *sceneRenderer_);
         }
     }
+    aaRenderer_->setMode(previousAaMode);
     if (drawn) {
         depth->resize(pixelSize.width() * pixelSize.height());
         QVector<float> bottomUp(depth->size());

@@ -412,6 +412,20 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   external images using an affine mapping per triangle and repeat wrapping; perspective
   correction and image filtering differ from the GPU Workbench pass.
 
+- Blender 5.2.2's legacy SURFACE-to-MESH conversion creates an active/default
+  corner UV layer named `UVMap`. In `mesh_nurbs_displist_to_mesh()` it derives
+  UVs from the tessellated DispList grid indices, not from the NURBS knot
+  values: `U = (vertexIndex / dl.nr) / (dl.parts - 1)` and
+  `V = (vertexIndex % dl.nr) / (dl.nr - 1)`, with cyclic directions
+  adjusting the denominators and seam corners remapped to 1. For surface
+  DispLists, `parts` is the outer U sample count and `nr` is the inner V
+  sample count, so the first UV component follows outer U and the second
+  follows inner V. A Blender 5.2.2 background conversion of the built-in SurfPatch
+  confirmed `UVMap` values sampled on a normalized 0..1 grid. These are
+  generated display/conversion UVs, not stored NURBS parameter coordinates;
+  reproducing them for classiCAD surfaces requires matching Blender's grid
+  tessellation and index ordering. Source: [mesh conversion](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/mesh_convert.cc#L121-L128), [UV index mapping](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/mesh_convert.cc#L255-L281), [surface DispList dimensions](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/displist.cc#L1195-L1207).
+
 - A `QOpenGLWidget` now presents the viewport on desktop OpenGL systems. The
   procedural grid remains in a GPU framebuffer and is resolved/composited into
   the widget framebuffer without a `toImage()` readback during normal camera

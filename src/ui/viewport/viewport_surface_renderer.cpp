@@ -850,6 +850,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform int uCavitySamplesPerIteration;
         uniform float uCavitySampleCountInv;
         uniform bool uTransparencyAccumulation;
+        uniform bool uFaceAwareNormals;
         uniform bool uExcludeFrontCoverage;
         uniform sampler2D uFrontDepthMask;
         out vec4 fragmentColor;
@@ -1158,6 +1159,9 @@ bool ViewportSurfaceRenderer::initialize()
                 discard;
             }
             vec3 normal = normalize(vNormalView);
+            if (uFaceAwareNormals && !gl_FrontFacing) {
+                normal = -normal;
+            }
             vec3 incident = vec3(0.0, 0.0, 1.0);
             if (uPerspective) {
                 vec3 incidentWorld = normalize(uCameraPosition - vWorldPosition);
@@ -5104,6 +5108,9 @@ bool ViewportSurfaceRenderer::draw(
             const float alpha = static_cast<float>(workbenchEffectiveAlpha(
                 sourceAlpha, settings, previewOverlay));
             const bool rangeOpaque = alpha >= 1.0f - 1.0e-6f;
+            program_.setUniformValue("uFaceAwareNormals",
+                                     rangeOpaque &&
+                                         !transparencyAccumulation);
             const bool rangeCavity = cavityAvailable && rangeOpaque;
             program_.setUniformValue("uUseCavity", rangeCavity);
             program_.setUniformValue("uUseSsao",

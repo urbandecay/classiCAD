@@ -116,6 +116,21 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   `specular_light` by that value after the conditional. Matched GPU output
   comparison remains pending.
 
+### GPU opaque backface normal orientation (2026-10-12)
+
+- Opaque fragments now flip their interpolated view normal when the fragment
+  faces away from the camera, matching Blender's Workbench opaque prepass.
+  The shader enables this only for fully opaque ranges; weighted and sorted
+  transparent ranges retain their existing normal orientation.
+- Blender 5.2.2 passes `[[front_facing]]` to `normal_encode` in
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L306-L314),
+  and [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L35-L43)
+  flips the normal for backfaces. Its separate transparent shader uses the
+  interpolated normal directly at
+  [`workbench_prepass.bsl.hh:332-345`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh#L332-L345),
+  so classiCAD gates the orientation fix to opaque draws. Matched GPU output
+  comparison remains pending.
+
 ### GPU scene-stroke alpha composition (2026-10-12)
 
 - The classiCAD GPU scene-stroke shader emits straight RGB and coverage-scaled

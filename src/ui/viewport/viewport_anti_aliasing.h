@@ -6,8 +6,9 @@ namespace classiCAD {
 
 // Stored values intentionally match Blender 5.2.2's preference values. Its
 // visible label is "Single Pass Anti-Aliasing" and its RNA description says
-// FXAA, but Workbench handles value 1 as one unjittered TAA sample followed by
-// SMAA. Multisample modes store their requested sample count.
+// FXAA, but Workbench handles value 1 as one jittered sample from its
+// 5-sample sequence followed by SMAA. Multisample modes store their requested
+// sample count.
 enum class ViewportAntiAliasingMode : int {
     Off = 0,
     SinglePass = 1,

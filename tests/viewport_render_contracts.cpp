@@ -6,6 +6,8 @@
 #include "ui/viewport/viewport_shading.h"
 #include "ui/viewport/viewport_scene_renderer.h"
 #include "ui/viewport/viewport_surface_renderer.h"
+#include "ui/viewport/viewport_aa_renderer.h"
+#include "ui/viewport/viewport_workbench_scene_pass_coordinator.h"
 #include "ui/viewport/workbench_lighting.h"
 
 #include "core/geometry/nurbs_surface.h"
@@ -416,6 +418,7 @@ int main(int argc, char *argv[])
             QImage gpuShadowImage;
             QImage gpuMatcapImage;
             bool gpuDrawSucceeded = false;
+            bool gpuUnselectedCaptureNonblank = true;
             bool gpuMatcapDrawSucceeded = false;
             bool gpuBottomDrawSucceeded = false;
             bool gpuShadowDrawSucceeded = false;
@@ -488,6 +491,126 @@ int main(int argc, char *argv[])
                                             glSize, 1.0, gpuSolidShading);
                     functions.glFinish();
                     gpuUnselectedOutlineImage = framebuffer.toImage();
+                    ViewportShadingSettings rawFaceShading = gpuSolidShading;
+                    rawFaceShading.outline = false;
+                    const QString unselectedCapturePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_UNSELECTED_CAPTURE");
+                    if (!unselectedCapturePath.isEmpty()) {
+                        functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                        const bool rawFaceDrawSucceeded = gpuSurfaceRenderer.draw(
+                            {surfaceObject}, gpuTransform, glSize, 1.0,
+                            rawFaceShading);
+                        functions.glFinish();
+                        const QImage rawFaceImage = framebuffer.toImage();
+                        int rawFaceChangedPixels = 0;
+                        for (int y = 0; y < rawFaceImage.height(); ++y) {
+                            for (int x = 0; x < rawFaceImage.width(); ++x) {
+                                const QColor pixel = rawFaceImage.pixelColor(x, y);
+                                rawFaceChangedPixels += pixel.red() != 34 ||
+                                    pixel.green() != 34 || pixel.blue() != 34;
+                            }
+                        }
+                        gpuUnselectedCaptureNonblank =
+                            rawFaceDrawSucceeded && rawFaceChangedPixels > 4000;
+                        passed &= check(
+                            gpuUnselectedCaptureNonblank &&
+                                rawFaceImage.save(unselectedCapturePath),
+                            "unselected outline-free NURBS cube baseline must be nonblank and save");
+                    }
+                    const auto captureAaMode = [&](const char *environmentVariable,
+                                                   int aaMode,
+                                                   int expectedSamples,
+                                                   const char *label) {
+                        const QString capturePath =
+                            qEnvironmentVariable(environmentVariable);
+                        if (capturePath.isEmpty()) return true;
+
+                        ViewportAaRenderer aaRenderer;
+                        aaRenderer.setMode(aaMode);
+                        aaRenderer.setDisplayTransform(gpuSolidShading, true);
+                        int completedSamples = 0;
+                        bool captureSucceeded = true;
+                        for (int sample = 0; sample < expectedSamples; ++sample) {
+                            const QByteArray historyKey =
+                                QByteArray("viewport-aa-capture-") + label;
+                            if (!aaRenderer.beginSceneSample(
+                                    glSize, 1.0, gpuTransform, historyKey,
+                                    false, true)) {
+                                captureSucceeded = false;
+                                break;
+                            }
+                            const QPointF renderJitter =
+                                aaRenderer.sampleCamera().renderJitterPixels();
+                            const bool jitterMatchesMode =
+                                aaMode == static_cast<int>(
+                                              ViewportAntiAliasingMode::Off)
+                                    ? renderJitter.isNull()
+                                    : !renderJitter.isNull();
+                            if (!jitterMatchesMode) {
+                                captureSucceeded = false;
+                                aaRenderer.finishSceneSample();
+                                break;
+                            }
+                            const float targetDisplayGray = 34.0f / 255.0f;
+                            float low = 0.0f;
+                            float high = 16.0f;
+                            for (int iteration = 0; iteration < 32; ++iteration) {
+                                const float middle = (low + high) * 0.5f;
+                                const float displayGray =
+                                    workbenchSceneLinearToAgxSrgb(
+                                        QVector3D(middle, middle, middle)).x();
+                                if (displayGray < targetDisplayGray) low = middle;
+                                else high = middle;
+                            }
+                            const GLfloat linearBackground[4] = {
+                                (low + high) * 0.5f,
+                                (low + high) * 0.5f,
+                                (low + high) * 0.5f,
+                                1.0f};
+                            functions.glClearBufferfv(GL_COLOR, 0,
+                                                      linearBackground);
+                            ViewportWorkbenchSceneColorPassRequest request;
+                            request.sharedTargets = &aaRenderer.targets();
+                            request.sceneLinearOutput = true;
+                            const ViewportWorkbenchSceneColorPassResult result =
+                                ViewportWorkbenchScenePassCoordinator::renderSceneColor(
+                                    gpuSurfaceRenderer, {surfaceObject},
+                                    aaRenderer.sampleCamera(), glSize, 1.0,
+                                    rawFaceShading, request);
+                            if (!result.rendered) {
+                                captureSucceeded = false;
+                                aaRenderer.finishSceneSample();
+                                break;
+                            }
+                            aaRenderer.markCurrentSampleAttachmentsValid(
+                                result.report.populatedAttachments);
+                            aaRenderer.finishSceneSample();
+                            ++completedSamples;
+                        }
+                        const QImage image = framebuffer.toImage();
+                        int changedPixels = 0;
+                        for (int y = 0; y < image.height(); ++y) {
+                            for (int x = 0; x < image.width(); ++x) {
+                                const QColor pixel = image.pixelColor(x, y);
+                                changedPixels += pixel.red() != 34 ||
+                                    pixel.green() != 34 || pixel.blue() != 34;
+                            }
+                        }
+                        return check(
+                            captureSucceeded &&
+                                completedSamples == expectedSamples &&
+                                changedPixels > 4000 && image.save(capturePath),
+                            label);
+                    };
+                    passed &= captureAaMode(
+                        "CLASSICAD_VIEWPORT_AA_OFF_CAPTURE", 0, 1,
+                        "AA Off baseline must draw one nonblank outline-free cube sample");
+                    passed &= captureAaMode(
+                        "CLASSICAD_VIEWPORT_AA_SINGLE_PASS_CAPTURE", 1, 1,
+                        "Single Pass baseline must resolve one nonblank outline-free cube sample");
+                    passed &= captureAaMode(
+                        "CLASSICAD_VIEWPORT_AA_SAMPLES8_CAPTURE", 8, 8,
+                        "8-sample baseline must resolve eight nonblank outline-free cube samples");
                     surfaceObject.selected = true;
 
                     ViewportTransform bottomTransform;
@@ -871,6 +994,7 @@ int main(int argc, char *argv[])
                             gpuCubeFaceVisible &&
                                 gpuLightingMatchesWorkbench &&
                                 gpuUnselectedFaceColorPreserved &&
+                                gpuUnselectedCaptureNonblank &&
                                 gpuMatcapDrawSucceeded &&
                                 !gpuMatcapImage.isNull() &&
                                 gpuMatcapMatchesWorkbench &&

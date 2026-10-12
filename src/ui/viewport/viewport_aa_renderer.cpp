@@ -1585,10 +1585,14 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     }
 
     const int sampleIndex = temporalSample_ ? accumulatedSampleCount_ : 0;
+    const bool singlePassSample =
+        mode_ == static_cast<int>(ViewportAntiAliasingMode::SinglePass);
     const JitterPoint offset = temporalSample_
                                    ? samplePositions(requestedSampleCount_)
                                          [static_cast<std::size_t>(sampleIndex)]
-                                   : JitterPoint{};
+                                   : singlePassSample
+                                         ? samplePositions(5)[0]
+                                         : JitterPoint{};
     sampleCamera_ = camera;
     sampleCamera_.setRenderJitterPixels(
         QPointF(offset.x / dpr, offset.y / dpr));
@@ -2173,11 +2177,15 @@ bool ViewportAaRenderer::finishSceneSample()
     }
     GLuint presentTexture = sampleColorTexture;
     if (accumulate) {
+        const bool singlePassSample =
+            mode_ == static_cast<int>(ViewportAntiAliasingMode::SinglePass);
         const JitterPoint offset = temporalSample_
                                        ? samplePositions(requestedSampleCount_)
                                              [static_cast<std::size_t>(
                                                  accumulatedSampleCount_)]
-                                       : JitterPoint{};
+                                       : singlePassSample
+                                             ? samplePositions(5)[0]
+                                             : JitterPoint{};
         float sampleWeightSum = 0.0f;
         const std::array<float, 9> weights =
             workbenchSampleWeights(offset, &sampleWeightSum);

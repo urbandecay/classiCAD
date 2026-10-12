@@ -991,6 +991,40 @@ depth domain. Visual depth comparison remains open.
   color spaces](https://opencolorio.readthedocs.io/en/latest/guides/authoring/displays_views.html)
   and [Blender's pinned display color-management path](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_color_management.cc).
 
+### Controlled Workbench cube baseline (2026-10-12)
+
+- Added a repeatable background-render fixture at
+  [`tests/workbench_cube_reference.py`](tests/workbench_cube_reference.py).
+  It uses Blender 5.2.2 Workbench, a 640×480 orthographic 2-unit cube, a
+  5-unit horizontal view, camera direction `(4, -6, 4)`, the Default studio
+  light, AgX, and no selection, object outlines, cavity, or shadows. Run it
+  with `blender --background --python tests/workbench_cube_reference.py --
+  /tmp/workbench.png --aa OFF`, replacing `OFF` with `FXAA` or `8`.
+- A direct offscreen classiCAD capture was compared with the three Blender
+  outputs using identical dimensions, camera, cube, and material. The
+  background differs by one 8-bit code value (34 vs. 35) and was normalized
+  independently for coverage. At an RGB distance threshold of 2, mask IoU is
+  0.99798 for AA Off, 0.99799 for Single Pass, and 0.99417 for 8 samples.
+  On shared object pixels, RGB channel MAE is 0.396, 0.410, and 0.669 of
+  255 respectively. Off and Single Pass differ mainly at the cube's right
+  boundary (224 Blender-only pixels); 8 samples adds a one-row vertical edge
+  spread, with 658 classiCAD-only pixels under this mask. This is a useful
+  repeatable baseline, not a parity sign-off: graphics backend/raster edge
+  coverage and the 8-sample edge profile still need isolation.
+- The source comparison found that Blender 5.2.2's Single Pass uses the first
+  jitter point from the 5-sample sequence even though it renders one sample.
+  classiCAD was using zero jitter for that mode. Its camera sample and filter
+  weights now both use `samplePositions(5)[0]`; Off remains unjittered, and
+  5+ modes retain their requested sequences. The assertion in the offscreen
+  render contract checks this distinction. The pinned reference is
+  [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L192-L219),
+  with jitter generation in
+  [`jitter_2d.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/intern/jitter_2d.cc#L119-L162).
+- The comparison uses the native classiCAD GPU pass and does not launch its
+  GUI. QPainter, navigation-history reset, intermediate scene-linear captures,
+  volume/effects/transparency scenes, and edge-profile comparison remain
+  outstanding validation work.
+
 ### Bounded scalar volume pass (2026-10-12)
 
 - Blender 5.2.2 draws volumes after transparent depth and before outline, depth

@@ -887,8 +887,12 @@ color depth; the separate PFM export
 remains available. Result assembly now preserves the returned view-Z values;
 it no longer interprets them as normalized depth and converts them a second
 time.
-Committed CAD dimensions remain post-render, screen-space annotations in
-Combined; their fixed-pixel labels/arrows have no corresponding Z samples.
+Committed CAD dimensions are classiCAD-only post-render, screen-space
+annotations; Blender Workbench has no CAD dimension counterpart. They are
+composited into display-referred PNG/TIFF Combined output, but the scene-linear
+HDR/EXR Combined payload is captured before those annotations and omits them.
+Their fixed-pixel labels/arrows have no corresponding Z samples. This is a
+format behavior distinction, not a Blender parity requirement.
 Offscreen rendering accumulates the imported Blender `scene.display.render_aa`
 mode before capturing Combined and depth. For multi-sample scene renders,
 classiCAD keeps sample-zero depth while accumulating all samples for color,

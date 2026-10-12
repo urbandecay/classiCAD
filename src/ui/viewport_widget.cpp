@@ -6744,44 +6744,6 @@ public:
             }
             annotationPainter.end();
 
-            bool invertible = false;
-            const QMatrix4x4 inverse = viewportViewProjection(
-                renderCamera, outputSize).inverted(&invertible);
-            if (invertible) {
-                const Point3D eyePoint = renderCamera.cameraPosition(outputSize);
-                const Point3D direction = renderCamera.viewDirection();
-                const QVector3D eye(float(eyePoint.x), float(eyePoint.y),
-                                    float(eyePoint.z));
-                const QVector3D view(float(direction.x), float(direction.y),
-                                     float(direction.z));
-                const ViewportCameraPreferences depthPreferences =
-                    renderCamera.cameraPreferences();
-                const float nearClip =
-                    static_cast<float>(depthPreferences.clipStart);
-                const float farClip =
-                    static_cast<float>(depthPreferences.clipEnd);
-                for (int y = 0; y < outputSize.height(); ++y) {
-                    for (int x = 0; x < outputSize.width(); ++x) {
-                        const qsizetype index =
-                            qsizetype(y) * outputSize.width() + x;
-                        const float depth = result.depth[index];
-                        if (!std::isfinite(depth) || depth >= 1.0f ||
-                            !std::isfinite(nearClip) ||
-                            !std::isfinite(farClip) || nearClip <= 0.0f ||
-                            farClip <= nearClip) {
-                            result.depth[index] = 1.0e10f;
-                            continue;
-                        }
-                        const QVector3D ndc(
-                            2.0f * (float(x) + 0.5f) / outputSize.width() - 1.0f,
-                            1.0f - 2.0f * (float(y) + 0.5f) / outputSize.height(),
-                            2.0f * depth - 1.0f);
-                        const QVector3D world = inverse.map(ndc);
-                        result.depth[index] = QVector3D::dotProduct(world - eye,
-                                                                   view);
-                    }
-                }
-            }
         }
         result.camera.view.perspective = renderCamera.isPerspectiveEnabled();
         if (usingSceneCamera) {

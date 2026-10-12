@@ -84,6 +84,10 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 - classiCAD retains local camera-depth reconstruction and a resolve path that
   accounts for its scene-linear and display-transform stages; these remain
   renderer adaptations requiring matched visual comparison.
+- Selected transparent ranges now decode their sRGB edit-selection tint before
+  mixing it into the primary scene-linear OIT accumulation, matching the
+  opaque selected-range path. Legacy display-space accumulation keeps its
+  existing tint behavior.
 
 ### Transparent depth and Blender Object In Front (2026-10-12)
 
@@ -428,13 +432,16 @@ payload. Blender's Combined and optional Z pass names/types are mirrored, and
 the imported active view layer's `use_pass_combined` and `use_pass_z` values
 control whether classiCAD offers those exports. The GPU outputs are represented
 in classiCAD's standalone result object rather than Blender's host-registered
-`RenderResult` datablock; this host lifecycle is not duplicated. The Z export converts
-depth-buffer values to view-space Z and writes
+`RenderResult` datablock; this host lifecycle is not duplicated. The GPU
+offscreen renderer converts depth-buffer values to view-space Z exactly once,
+and the Z export writes
 `1e10` for the background, matching Blender Workbench's pinned
 [`write_render_z_output`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2925-L3011).
 When OpenEXR support is available, the Combined EXR now also includes the
 enabled view-space Z pass as a FLOAT `Z` channel; the separate PFM export
-remains available.
+remains available. Result assembly now preserves the returned view-Z values;
+it no longer interprets them as normalized depth and converts them a second
+time.
 Committed CAD dimensions remain post-render, screen-space annotations in
 Combined; their fixed-pixel labels/arrows have no corresponding Z samples.
 Offscreen rendering accumulates the imported Blender `scene.display.render_aa`

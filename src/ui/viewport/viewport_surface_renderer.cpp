@@ -1091,9 +1091,83 @@ bool ViewportSurfaceRenderer::initialize()
     )glsl";
     static constexpr const char *objectIdFragmentShader = R"glsl(
         #version 330 core
+        in vec2 vUv;
         uniform uint uObjectId;
+        uniform bool uUseTextureAlphaMask;
+        uniform bool uTextureAlphaCutoff;
+        uniform sampler2D uWorkbenchImage;
+        uniform bool uUseUdimImage;
+        uniform sampler2DArray uWorkbenchUdimImage;
+        uniform sampler2D uWorkbenchUdimLookup;
+        uniform int uTextureInterpolation;
         layout(location = 0) out uint fragmentObjectId;
-        void main() { fragmentObjectId = uObjectId; }
+        vec4 sampleWorkbenchUdimAlphaLinear(vec2 uv)
+        {
+            vec2 tile = floor(uv);
+            if (tile.x < 0.0 || tile.x >= 10.0 ||
+                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
+            int layer = int(tileInfo.x + 0.5) - 1;
+            if (layer < 0) return vec4(1.0, 0.0, 1.0, 1.0);
+            return texture(uWorkbenchUdimImage,
+                           vec3(fract(uv) * tileInfo.yz, float(layer)));
+        }
+        vec4 sampleWorkbenchUdimAlpha(vec2 uv)
+        {
+            if (uTextureInterpolation != 2) return sampleWorkbenchUdimAlphaLinear(uv);
+            vec2 tile = floor(uv);
+            if (tile.x < 0.0 || tile.x >= 10.0 ||
+                tile.y < 0.0 || tile.y >= 100.0) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec4 tileInfo = texelFetch(uWorkbenchUdimLookup, ivec2(tile), 0);
+            if (tileInfo.x < 0.5) return vec4(1.0, 0.0, 1.0, 1.0);
+            vec2 size = vec2(textureSize(uWorkbenchUdimImage, 0).xy) * tileInfo.yz;
+            vec2 p = fract(uv) * size - 0.5;
+            vec2 base = floor(p);
+            vec2 f = fract(p);
+            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+            vec2 w3 = f * f * f / 6.0;
+            vec4 result = vec4(0.0);
+            for (int y = 0; y < 4; ++y) {
+                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
+                for (int x = 0; x < 4; ++x) {
+                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
+                    vec2 tap = tile + (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size;
+                    result += sampleWorkbenchUdimAlphaLinear(tap) * wx * wy;
+                }
+            }
+            return result;
+        }
+        vec4 sampleWorkbenchAlphaImage(vec2 uv)
+        {
+            if (uUseUdimImage) return sampleWorkbenchUdimAlpha(uv);
+            if (uTextureInterpolation != 2) return texture(uWorkbenchImage, uv);
+            vec2 size = vec2(textureSize(uWorkbenchImage, 0));
+            vec2 p = uv * size - 0.5;
+            vec2 base = floor(p);
+            vec2 f = fract(p);
+            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+            vec2 w3 = f * f * f / 6.0;
+            vec4 result = vec4(0.0);
+            for (int y = 0; y < 4; ++y) {
+                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
+                for (int x = 0; x < 4; ++x) {
+                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
+                    result += texture(uWorkbenchImage,
+                        (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size) * wx * wy;
+                }
+            }
+            return result;
+        }
+        void main()
+        {
+            if (uUseTextureAlphaMask && uTextureAlphaCutoff &&
+                sampleWorkbenchAlphaImage(vUv).a < 0.1) discard;
+            fragmentObjectId = uObjectId;
+        }
     )glsl";
     static constexpr const char *workbenchEffectFragmentShader = R"glsl(
         #version 330 core
@@ -4629,9 +4703,25 @@ bool ViewportSurfaceRenderer::draw(
                 objectIdProgram_.bind();
                 const GLint objectIdUniformLocation =
                     objectIdProgram_.uniformLocation("uObjectId");
+                objectIdProgram_.setUniformValue("uWorkbenchImage", 0);
+                objectIdProgram_.setUniformValue("uWorkbenchUdimImage", 1);
+                objectIdProgram_.setUniformValue("uWorkbenchUdimLookup", 2);
                 objectIdProgram_.setUniformValue(
                     "uViewProjection",
                     viewportViewProjection(transform, viewportSize));
+                GLint previousObjectIdTexture0 = 0;
+                GLint previousObjectIdTexture1 = 0;
+                GLint previousObjectIdTexture2 = 0;
+                glActiveTexture(GL_TEXTURE0);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                              &previousObjectIdTexture0);
+                glActiveTexture(GL_TEXTURE1);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY,
+                              &previousObjectIdTexture1);
+                glActiveTexture(GL_TEXTURE2);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                              &previousObjectIdTexture2);
+                glActiveTexture(GL_TEXTURE0);
                 vertexArray_.bind();
                 vertexBuffer_.bind();
                 for (int rangeIndex = 0; rangeIndex < ranges_.size();
@@ -4650,6 +4740,56 @@ bool ViewportSurfaceRenderer::draw(
                         objectId |= 0x80000000u;
                     }
                     glUniform1ui(objectIdUniformLocation, objectId);
+                    const QString alphaMode =
+                        range.workbenchMaterial.textureImageAlphaMode;
+                    const bool ignoreTextureAlpha =
+                        alphaMode.compare(QStringLiteral("NONE"),
+                                          Qt::CaseInsensitive) == 0 ||
+                        alphaMode.compare(QStringLiteral("IGNORE"),
+                                          Qt::CaseInsensitive) == 0 ||
+                        alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
+                                          Qt::CaseInsensitive) == 0;
+                    const bool textureColorEnabled =
+                        settings.colorMode == ViewportColorMode::Texture &&
+                        range.useTextureColor;
+                    const GLuint imageTexture = textureColorEnabled
+                        ? ensureImageTexture(
+                              range.textureImagePath,
+                              range.workbenchMaterial
+                                  .textureImagePackedDataBase64,
+                              range.textureImageSrgb)
+                        : 0;
+                    const UdimTextureSet udimTexture = textureColorEnabled
+                        ? ensureUdimTexture(range.textureImageTiles,
+                                            range.textureImageSrgb)
+                        : UdimTextureSet{};
+                    glUniform1i(
+                        objectIdProgram_.uniformLocation(
+                            "uUseTextureAlphaMask"),
+                        imageTexture != 0 || udimTexture.imageArray != 0);
+                    glUniform1i(
+                        objectIdProgram_.uniformLocation(
+                            "uTextureAlphaCutoff"),
+                        !ignoreTextureAlpha);
+                    objectIdProgram_.setUniformValue(
+                        "uUseUdimImage", udimTexture.imageArray != 0);
+                    objectIdProgram_.setUniformValue(
+                        "uTextureInterpolation",
+                        workbenchTextureInterpolation(
+                            range.workbenchMaterial
+                                .textureImageInterpolation));
+                    configureWorkbenchImageTexture(
+                        imageTexture, range.workbenchMaterial);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, imageTexture);
+                    configureWorkbenchUdimTexture(
+                        udimTexture.imageArray, range.workbenchMaterial);
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D_ARRAY,
+                                  udimTexture.imageArray);
+                    glActiveTexture(GL_TEXTURE2);
+                    glBindTexture(GL_TEXTURE_2D, udimTexture.tileLookup);
+                    glActiveTexture(GL_TEXTURE0);
                     objectIdProgram_.setUniformValue(
                         "uWorldOffset",
                         QVector3D(static_cast<float>(range.offset.x),
@@ -4660,6 +4800,16 @@ bool ViewportSurfaceRenderer::draw(
                 vertexBuffer_.release();
                 vertexArray_.release();
                 objectIdProgram_.release();
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D,
+                              static_cast<GLuint>(previousObjectIdTexture0));
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D_ARRAY,
+                              static_cast<GLuint>(previousObjectIdTexture1));
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D,
+                              static_cast<GLuint>(previousObjectIdTexture2));
+                glActiveTexture(static_cast<GLenum>(previousActiveTexture));
 
                 glBindFramebuffer(GL_FRAMEBUFFER,
                                   static_cast<GLuint>(previousFramebuffer));

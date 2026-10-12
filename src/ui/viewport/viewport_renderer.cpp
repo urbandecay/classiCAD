@@ -26,12 +26,16 @@
 #include <QPolygonF>
 #include <QTransform>
 #include <QImage>
+#include <QImageReader>
+#include <QBuffer>
 #include <QFileInfo>
 #include <QHash>
+#include <QSet>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -2122,6 +2126,57 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const WorkbenchMaterialData &material = workbenchMaterial
                                                     ? *workbenchMaterial
                                                     : fallbackMaterial;
+        QImage nurbsTexture;
+        const bool textureAlphaIgnored =
+            material.textureImageAlphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
+            material.textureImageAlphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
+            material.textureImageAlphaMode.compare(QStringLiteral("CHANNEL_PACKED"), Qt::CaseInsensitive) == 0;
+        const bool canSampleNurbsTexture =
+            shadingSettings_.colorMode == ViewportColorMode::Texture &&
+            surface.trimLoops.isEmpty() && workbenchMaterial.has_value() &&
+            (!material.textureImagePath.isEmpty() ||
+             !material.textureImagePackedDataBase64.isEmpty());
+        if (canSampleNurbsTexture) {
+            QByteArray packedBytes;
+            QBuffer packedBuffer;
+            QImageReader *reader = nullptr;
+            std::unique_ptr<QImageReader> fileReader;
+            const bool packed = !material.textureImagePackedDataBase64.isEmpty();
+            if (packed) {
+                const QByteArray encoded = material.textureImagePackedDataBase64.toLatin1();
+                if (encoded.size() <= 44 * 1024 * 1024) {
+                    packedBytes = QByteArray::fromBase64(encoded);
+                    if (packedBytes.size() <= 32 * 1024 * 1024) {
+                        packedBuffer.setData(packedBytes);
+                        if (packedBuffer.open(QIODevice::ReadOnly)) {
+                            fileReader = std::make_unique<QImageReader>(&packedBuffer);
+                            reader = fileReader.get();
+                        }
+                    }
+                }
+            } else {
+                const QFileInfo info(material.textureImagePath);
+                static const QSet<QByteArray> allowedFormats{
+                    "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
+                const QByteArray suffix = info.suffix().toLower().toLatin1();
+                if (info.isFile() && allowedFormats.contains(suffix) &&
+                    info.size() > 0 && info.size() <= 256LL * 1024LL * 1024LL) {
+                    fileReader = std::make_unique<QImageReader>(info.filePath());
+                    reader = fileReader.get();
+                }
+            }
+            if (reader != nullptr) {
+                const QSize size = reader->size();
+                if (size.isValid() && size.width() <= 16384 &&
+                    size.height() <= 16384 &&
+                    static_cast<quint64>(size.width()) * size.height() <=
+                        67108864ULL) {
+                    nurbsTexture = reader->read();
+                }
+            }
+            if (!nurbsTexture.isNull())
+                nurbsTexture = nurbsTexture.convertToFormat(QImage::Format_RGBA8888);
+        }
         QVector3D sourceColorLinear = workbenchDefaultSolidMaterialDiffuseColor();
         qreal sourceAlpha = 1.0;
         qreal roughness = 0.4;
@@ -2311,12 +2366,16 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             Point3D c;
             QVector3D normal;
             qreal depth = 0.0;
+            std::array<QPointF, 3> uvs{};
+            bool hasUvs = false;
         };
         QVector<SurfaceFillTriangle> fillTriangles;
         const auto appendTriangle = [&](const Point3D &a,
                                         const Point3D &b,
                                         const Point3D &c,
-                                        const QVector3D &normal) {
+                                        const QVector3D &normal,
+                                        const std::array<QPointF, 3> &uvs = std::array<QPointF, 3>{},
+                                        bool hasUvs = false) {
             const Point3D center{(a.x + b.x + c.x) / 3.0,
                                  (a.y + b.y + c.y) / 3.0,
                                  (a.z + b.z + c.z) / 3.0};
@@ -2324,7 +2383,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                       center.y + preparedOffset.y,
                                       center.z + preparedOffset.z};
             fillTriangles.append({a, b, c, normal,
-                transform_.worldDirectionToView(worldCenter).towardCamera});
+                transform_.worldDirectionToView(worldCenter).towardCamera,
+                uvs, hasUvs});
         };
         const auto drawTriangle = [&](const SurfaceFillTriangle &triangle) {
             QPointF screenA;
@@ -2339,8 +2399,80 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             const Point3D center{(triangle.a.x + triangle.b.x + triangle.c.x) / 3.0,
                                  (triangle.a.y + triangle.b.y + triangle.c.y) / 3.0,
                                  (triangle.a.z + triangle.b.z + triangle.c.z) / 3.0};
-            painter.setBrush(shade(triangle.normal, center));
-            painter.drawPolygon(QPolygonF{screenA, screenB, screenC});
+            const QColor shaded = shade(triangle.normal, center);
+            if (nurbsTexture.isNull() || !triangle.hasUvs) {
+                painter.setBrush(shaded);
+                painter.drawPolygon(QPolygonF{screenA, screenB, screenC});
+                return;
+            }
+            // QPainter has no perspective-correct textured-triangle primitive.
+            // Rasterize the projected triangle and correct UV interpolation by
+            // reciprocal camera depth, as the polygon-mesh fallback does.
+            const qreal area = (screenB.x() - screenA.x()) * (screenC.y() - screenA.y()) -
+                               (screenB.y() - screenA.y()) * (screenC.x() - screenA.x());
+            if (std::abs(area) < 1.0e-12) return;
+            const int left = qFloor(std::max<qreal>(0, std::min({screenA.x(), screenB.x(), screenC.x()})));
+            const int top = qFloor(std::max<qreal>(0, std::min({screenA.y(), screenB.y(), screenC.y()})));
+            const int right = qCeil(std::min<qreal>(viewportSize.width(), std::max({screenA.x(), screenB.x(), screenC.x()})));
+            const int bottom = qCeil(std::min<qreal>(viewportSize.height(), std::max({screenA.y(), screenB.y(), screenC.y()})));
+            if (right <= left || bottom <= top || qint64(right-left) * (bottom-top) > 4000000) return;
+            const Point3D cameraWorld = transform_.cameraPosition(viewportSize);
+            const Point3D viewDirection = transform_.viewDirection();
+            const Point3D points[3] = {triangle.a, triangle.b, triangle.c};
+            qreal reciprocal[3] = {1.0, 1.0, 1.0};
+            if (transform_.isPerspectiveEnabled()) {
+                for (int i=0; i<3; ++i) {
+                    const qreal dx=points[i].x+preparedOffset.x-cameraWorld.x;
+                    const qreal dy=points[i].y+preparedOffset.y-cameraWorld.y;
+                    const qreal dz=points[i].z+preparedOffset.z-cameraWorld.z;
+                    reciprocal[i] = 1.0 / std::max<qreal>(
+                        dx*viewDirection.x+dy*viewDirection.y+dz*viewDirection.z,
+                        1.0e-9);
+                }
+            }
+            QImage raster(right-left, bottom-top, QImage::Format_ARGB32_Premultiplied);
+            raster.fill(Qt::transparent);
+            const auto wrap = [](int n, int size) { const int r = n % size; return r < 0 ? r + size : r; };
+            const auto texel = [&](int x, int y, int channel) {
+                return qreal(nurbsTexture.constScanLine(wrap(y, nurbsTexture.height()))[
+                    wrap(x, nurbsTexture.width()) * 4 + channel]);
+            };
+            for (int y = 0; y < raster.height(); ++y) {
+                auto *row = reinterpret_cast<QRgb *>(raster.scanLine(y));
+                for (int x = 0; x < raster.width(); ++x) {
+                    const qreal px = left + x + 0.5, py = top + y + 0.5;
+                    const qreal w1 = ((px-screenA.x())*(screenC.y()-screenA.y()) - (py-screenA.y())*(screenC.x()-screenA.x())) / area;
+                    const qreal w2 = ((screenB.x()-screenA.x())*(py-screenA.y()) - (screenB.y()-screenA.y())*(px-screenA.x())) / area;
+                    const qreal w0 = 1.0-w1-w2;
+                    if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+                    const qreal cw0=w0*reciprocal[0], cw1=w1*reciprocal[1], cw2=w2*reciprocal[2];
+                    const qreal denominator=cw0+cw1+cw2;
+                    if (denominator <= 1.0e-12) continue;
+                    const QPointF uv = (triangle.uvs[0]*cw0 + triangle.uvs[1]*cw1 + triangle.uvs[2]*cw2) / denominator;
+                    const qreal tx = uv.x()*nurbsTexture.width()-0.5, ty = uv.y()*nurbsTexture.height()-0.5;
+                    const int x0=qFloor(tx), y0=qFloor(ty); const qreal fx=tx-x0, fy=ty-y0;
+                    uchar rgba[4];
+                    for(int c=0;c<4;++c) {
+                        const qreal a=texel(x0,y0,c)*(1-fx)+texel(x0+1,y0,c)*fx;
+                        const qreal b=texel(x0,y0+1,c)*(1-fx)+texel(x0+1,y0+1,c)*fx;
+                        rgba[c]=static_cast<uchar>(std::clamp(qRound(a*(1-fy)+b*fy),0,255));
+                    }
+                    if (!textureAlphaIgnored && rgba[3] < 26) continue;
+                    const qreal alpha = shaded.alphaF() * (textureAlphaIgnored ? 1.0 : rgba[3]/255.0);
+                    const bool premultiplied = material.textureImageAlphaMode.compare(
+                        QStringLiteral("PREMUL"), Qt::CaseInsensitive) == 0;
+                    const auto textureChannel = [&](int c) {
+                        return premultiplied && rgba[3] > 0 && rgba[3] < 255
+                            ? qreal(rgba[c]) * 255.0 / rgba[3]
+                            : qreal(rgba[c]);
+                    };
+                    const int red=qRound(shaded.red()*textureChannel(0)/255.0);
+                    const int green=qRound(shaded.green()*textureChannel(1)/255.0);
+                    const int blue=qRound(shaded.blue()*textureChannel(2)/255.0);
+                    row[x]=qPremultiply(qRgba(red,green,blue,qRound(alpha*255)));
+                }
+            }
+            painter.drawImage(QPoint(left,top), raster);
         };
 
         painter.save();
@@ -2359,8 +2491,14 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 const auto point = [&preparedOffset](const QVector3D &value) {
                     return Point3D{value.x(), value.y(), value.z()};
                 };
+                std::array<QPointF, 3> uvs{};
+                const bool hasUvs = preparedGeometry->surfaceTextureCoordinates.size() == vertices.size();
+                if (hasUvs) for (int corner=0; corner<3; ++corner) {
+                    const QPointF uv = preparedGeometry->surfaceTextureCoordinates[index+corner];
+                    uvs[corner] = QPointF(uv.x(), 1.0 - uv.y());
+                }
                 appendTriangle(point(vertices[index]), point(vertices[index + 1]),
-                               point(vertices[index + 2]), normal);
+                               point(vertices[index + 2]), normal, uvs, hasUvs);
             }
         } else {
             PreparedNurbsSurfaceTessellation localTessellation;
@@ -2374,6 +2512,20 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 tessellation = &localTessellation;
             }
             if (tessellation != nullptr) {
+                const QVector<QPointF> &textureParameters =
+                    tessellation->vertexTextureParameters();
+                const QVector<double> fullKnotsU =
+                    expandedNurbsSurfaceKnotVector(surface.knotsU);
+                const QVector<double> fullKnotsV =
+                    expandedNurbsSurfaceKnotVector(surface.knotsV);
+                const bool textureParametersValid =
+                    textureParameters.size() == tessellation->vertices().size() &&
+                    fullKnotsU.size() > surface.degreeU &&
+                    fullKnotsU.size() > surface.controlVertexCountU &&
+                    fullKnotsV.size() > surface.degreeV &&
+                    fullKnotsV.size() > surface.controlVertexCountV &&
+                    fullKnotsU[surface.controlVertexCountU] > fullKnotsU[surface.degreeU] &&
+                    fullKnotsV[surface.controlVertexCountV] > fullKnotsV[surface.degreeV];
                 for (const PreparedNurbsSurfaceTessellation::Triangle &triangle :
                      tessellation->triangles()) {
                     const Point3D &a = tessellation->vertices()[triangle[0]];
@@ -2385,7 +2537,22 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     const QVector3D ac(static_cast<float>(c.x - a.x),
                                        static_cast<float>(c.y - a.y),
                                        static_cast<float>(c.z - a.z));
-                    appendTriangle(a, b, c, QVector3D::crossProduct(ab, ac));
+                    std::array<QPointF, 3> uvs{};
+                    if (textureParametersValid) {
+                        const int indices[3] = {triangle[0], triangle[1], triangle[2]};
+                        for (int corner = 0; corner < 3; ++corner) {
+                            const QPointF parameter = textureParameters[indices[corner]];
+                            const qreal u = (parameter.x() - fullKnotsU[surface.degreeU]) /
+                                (fullKnotsU[surface.controlVertexCountU] -
+                                 fullKnotsU[surface.degreeU]);
+                            const qreal v = (parameter.y() - fullKnotsV[surface.degreeV]) /
+                                (fullKnotsV[surface.controlVertexCountV] -
+                                 fullKnotsV[surface.degreeV]);
+                            uvs[corner] = QPointF(u, 1.0 - v);
+                        }
+                    }
+                    appendTriangle(a, b, c, QVector3D::crossProduct(ab, ac),
+                                   uvs, textureParametersValid);
                 }
             }
         }

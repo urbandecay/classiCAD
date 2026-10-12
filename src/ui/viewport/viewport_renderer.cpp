@@ -2614,7 +2614,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             material.textureImageAlphaMode.compare(QStringLiteral("CHANNEL_PACKED"), Qt::CaseInsensitive) == 0;
         const bool canSampleNurbsTexture =
             shadingSettings_.colorMode == ViewportColorMode::Texture &&
-            surface.trimLoops.isEmpty() && workbenchMaterial.has_value() &&
+            workbenchMaterial.has_value() &&
             (!material.textureImagePath.isEmpty() ||
              !material.textureImagePackedDataBase64.isEmpty() ||
              nurbsTiledTexture);

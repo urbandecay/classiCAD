@@ -269,6 +269,16 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   `specular_light` by that value after the conditional. Matched GPU output
   comparison remains pending.
 
+### QPainter Studio lighting with specular disabled (2026-10-12)
+
+- The QPainter Studio helper now multiplies its ambient/specular accumulator
+  by `specularColor` after the specular conditional. With specular disabled,
+  that color is zero and no additive ambient specular term remains. This makes
+  the fallback match the GPU helper and Blender's shader behavior.
+- Blender 5.2.2 performs the multiplication unconditionally in
+  [`workbench_world_light_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light_lib.glsl#L580-L713).
+  Matched QPainter output comparison remains pending.
+
 ### GPU opaque backface normal orientation (2026-10-12)
 
 - Opaque fragments now flip their interpolated view normal when the fragment
@@ -312,8 +322,8 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 
 ### QPainter cavity under translucent surfaces (2026-10-12)
 
-- This update supersedes the earlier parity-matrix wording that said cavity
-  was skipped beneath visible translucent surfaces.
+- This update supersedes earlier parity-matrix and implementation-plan wording
+  that said cavity was skipped beneath visible translucent surfaces.
 - The QPainter surface compositor retains its opaque surface color and its
   resolved transparent contribution for the later cavity pass. When a
   translucent surface covers an opaque cavity receiver, cavity now changes

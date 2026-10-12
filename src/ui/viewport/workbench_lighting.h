@@ -711,8 +711,11 @@ inline QVector3D workbenchStudioShade(
                                          environment * blend;
             specularLight += light.specularColor * specularAmount;
         }
-        specularLight *= specularColor;
     }
+    // Blender applies this multiplication even when specular lighting is
+    // disabled; in that case specularColor is zero and ambient light must not
+    // leak through as an additive term.
+    specularLight *= specularColor;
 
     for (const WorkbenchStudioLight &light : lighting.lights) {
         if (!light.enabled) {

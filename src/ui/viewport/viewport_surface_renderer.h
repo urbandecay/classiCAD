@@ -62,6 +62,7 @@ private:
         bool showInFront = false;
         QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
         WorkbenchMaterialData workbenchMaterial;
+        bool hasWorkbenchMaterial = false;
         bool useAttributeColor = false;
         bool useTextureColor = false;
         QString textureImagePath;

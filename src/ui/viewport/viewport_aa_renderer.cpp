@@ -2307,6 +2307,7 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
                << object.preparedGeometryOffset.z
                << object.displayColorSceneLinear
                << object.workbenchMaterial.baseColorSceneLinear
+               << object.hasWorkbenchMaterial
                << object.workbenchMaterial.roughness
                << object.workbenchMaterial.metallic
                << object.workbenchMaterial.alpha

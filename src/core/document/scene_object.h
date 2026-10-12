@@ -112,6 +112,9 @@ struct SceneObject {
     // Blender Object.color default: opaque white in scene-linear RGBA.
     QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
     WorkbenchMaterialData workbenchMaterial;
+    // True when imported or explicitly assigned Workbench material values
+    // override the object's display color in Material color mode.
+    bool hasWorkbenchMaterial = false;
     MeshObjectTransform meshObjectTransform = identityMeshObjectTransform;
     QString blenderSourceVersion;
     QString blenderMeshImportMode;

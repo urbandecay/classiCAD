@@ -197,7 +197,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 19);
+    serialized.insert(QStringLiteral("version"), 20);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -351,6 +351,8 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(
             QStringLiteral("displayColorSceneLinear"),
             vector4ToJson(sceneObject.displayColorSceneLinear));
+        serializedObject.insert(QStringLiteral("hasWorkbenchMaterial"),
+                                sceneObject.hasWorkbenchMaterial);
         QJsonObject workbenchMaterial;
         workbenchMaterial.insert(
             QStringLiteral("baseColorSceneLinear"),
@@ -402,7 +404,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 19) {
+    if (version < 1 || version > 20) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1055,6 +1057,7 @@ bool documentFromJson(const QJsonValue &value,
 
         QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
         WorkbenchMaterialData workbenchMaterial;
+        bool hasWorkbenchMaterial = version < 20;
         if (version >= 6) {
             float displayColor[4] = {};
             if (!unitIntervalArrayFromJson(
@@ -1071,6 +1074,16 @@ bool documentFromJson(const QJsonValue &value,
             displayColorSceneLinear = QVector4D(
                 displayColor[0], displayColor[1], displayColor[2],
                 displayColor[3]);
+            if (version >= 20) {
+                const QJsonValue hasMaterialValue =
+                    serializedObject.value(QStringLiteral("hasWorkbenchMaterial"));
+                if (!hasMaterialValue.isBool()) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid scene object material presence"));
+                    return false;
+                }
+                hasWorkbenchMaterial = hasMaterialValue.toBool();
+            }
         }
 
         SceneObject sceneObject;
@@ -1143,6 +1156,7 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.placementTranslation = placementTranslation;
         sceneObject.displayColorSceneLinear = displayColorSceneLinear;
         sceneObject.workbenchMaterial = workbenchMaterial;
+        sceneObject.hasWorkbenchMaterial = hasWorkbenchMaterial;
         snapshot.objects.append(std::move(sceneObject));
         objectIds.insert(objectValueId);
         if (objectValueId < std::numeric_limits<quint64>::max()) {

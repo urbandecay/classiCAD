@@ -130,6 +130,7 @@ bool DocumentTransaction::setObjectAppearance(
     const bool sameDisplayColor =
         object->displayColorSceneLinear == displayColorSceneLinear;
     const bool sameMaterial =
+        object->hasWorkbenchMaterial &&
         currentMaterial.baseColorSceneLinear ==
             workbenchMaterial.baseColorSceneLinear &&
         currentMaterial.roughness == workbenchMaterial.roughness &&
@@ -141,6 +142,7 @@ bool DocumentTransaction::setObjectAppearance(
 
     object->displayColorSceneLinear = displayColorSceneLinear;
     object->workbenchMaterial = workbenchMaterial;
+    object->hasWorkbenchMaterial = true;
     changes_.addObject(objectId);
     changes_.objectAppearanceChanged = true;
     return true;

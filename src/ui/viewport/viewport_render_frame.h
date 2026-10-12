@@ -74,6 +74,7 @@ struct ViewportRenderObject {
     QColor layerColor;
     QVector4D displayColorSceneLinear{1.0f, 1.0f, 1.0f, 1.0f};
     WorkbenchMaterialData workbenchMaterial;
+    bool hasWorkbenchMaterial = false;
     QString layerLineType;
     qreal layerLineWeightMm = 0.0;
     // Solid surface perimeter is rendered through ViewportSceneRenderer so

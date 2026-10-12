@@ -127,6 +127,7 @@ ViewportRenderFrame buildViewportRenderFrame(
         }
         entry.displayColorSceneLinear = sceneObject.displayColorSceneLinear;
         entry.workbenchMaterial = sceneObject.workbenchMaterial;
+        entry.hasWorkbenchMaterial = sceneObject.hasWorkbenchMaterial;
         if (sceneObject.geometry.geometryType == GeometryType::PolygonMesh) {
             const PolygonMesh3D &mesh = sceneObject.geometry.polygonMesh;
             if (!mesh.materialSlotIds.isEmpty()) {

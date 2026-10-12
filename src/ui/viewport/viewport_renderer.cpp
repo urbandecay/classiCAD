@@ -2767,10 +2767,21 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             // Texture mode starts from the Blender material color. The
             // raster path below multiplies a supported image sample into it;
             // missing images or UVs retain this Material fallback.
-            sourceColorLinear = workbenchMaterial
-                                    ? material.baseColorSceneLinear
-                                    : workbenchDefaultSolidMaterialDiffuseColor();
-            sourceAlpha = workbenchMaterial ? material.alpha : 1.0;
+            if (workbenchMaterial) {
+                sourceColorLinear = material.baseColorSceneLinear;
+                sourceAlpha = material.alpha;
+            } else if (displayColorSceneLinear) {
+                // Blender's Workbench material source starts from ob.color
+                // when an object has no assigned material. Preserve that
+                // object color (and alpha) for the QPainter fallback too.
+                sourceColorLinear = QVector3D(displayColorSceneLinear->x(),
+                                              displayColorSceneLinear->y(),
+                                              displayColorSceneLinear->z());
+                sourceAlpha = displayColorSceneLinear->w();
+            } else {
+                sourceColorLinear = workbenchDefaultSolidMaterialDiffuseColor();
+                sourceAlpha = 1.0;
+            }
             roughness = workbenchMaterial ? material.roughness : 0.4;
             metallic = workbenchMaterial ? material.metallic : 0.0;
             break;

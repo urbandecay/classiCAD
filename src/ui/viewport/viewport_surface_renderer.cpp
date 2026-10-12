@@ -517,13 +517,14 @@ QColor workbenchRandomColor(quint64 objectId,
 qreal workbenchSourceAlpha(ViewportColorMode colorMode,
                            qreal objectAlpha,
                            const WorkbenchMaterialData &material,
+                           bool hasWorkbenchMaterial,
                            const QColor &customColor)
 {
     switch (colorMode) {
     case ViewportColorMode::Material:
     case ViewportColorMode::Attribute:
     case ViewportColorMode::Texture:
-        return material.alpha;
+        return hasWorkbenchMaterial ? material.alpha : objectAlpha;
     case ViewportColorMode::Object:
     case ViewportColorMode::Random:
         return objectAlpha;
@@ -2004,6 +2005,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
             range.showInFront = object.showInFront;
             range.displayColorSceneLinear = object.displayColorSceneLinear;
             range.workbenchMaterial = object.workbenchMaterial;
+            range.hasWorkbenchMaterial = object.hasWorkbenchMaterial;
             range.objectSeed = object.objectId.value();
             range.effectObjectId = static_cast<quint32>(objectIndex + 1) &
                                    0x7fffffffu;
@@ -2177,6 +2179,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 const int slotIndex = mesh.faceMaterialIndices.value(faceIndex, -1);
                 if (slotIndex >= 0 && slotIndex < object.meshMaterials.size()) {
                     range.workbenchMaterial = object.meshMaterials[slotIndex];
+                    range.hasWorkbenchMaterial = true;
                 } else if (slotIndex >= 0 && slotIndex < mesh.materialSlots.size()) {
                     const PolygonMeshMaterialSlot &slot = mesh.materialSlots[slotIndex];
                     if (slot.baseColorSceneLinear.size() >= 3) {
@@ -2187,6 +2190,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     range.workbenchMaterial.roughness = slot.roughness;
                     range.workbenchMaterial.metallic = slot.metallic;
                     range.workbenchMaterial.alpha = slot.alpha;
+                    range.hasWorkbenchMaterial = true;
                 }
                 range.textureImageSrgb = range.workbenchMaterial.textureImageSrgb;
                 range.textureImageTiles = textureAvailable
@@ -4245,7 +4249,8 @@ bool ViewportSurfaceRenderer::draw(
             }
             const qreal alpha = workbenchSourceAlpha(
                 settings.colorMode, range.displayColorSceneLinear.w(),
-                range.workbenchMaterial, settings.customColor);
+                range.workbenchMaterial, range.hasWorkbenchMaterial,
+                settings.customColor);
             const float packedAlpha = workbenchPackUnitFloatToUnorm8(
                 static_cast<float>(alpha));
             if (workbenchEffectiveAlpha(packedAlpha, settings, false) >=
@@ -5102,9 +5107,16 @@ bool ViewportSurfaceRenderer::draw(
                     // Attribute and Texture have no color-attribute, UV,
                     // or image inputs in the scene model yet; Blender
                     // falls back to the Material source for these modes.
-                    baseColorLinear = material.baseColorSceneLinear;
-                    roughness = static_cast<float>(material.roughness);
-                    metallic = static_cast<float>(material.metallic);
+                    if (range.hasWorkbenchMaterial) {
+                        baseColorLinear = material.baseColorSceneLinear;
+                        roughness = static_cast<float>(material.roughness);
+                        metallic = static_cast<float>(material.metallic);
+                    } else {
+                        baseColorLinear = QVector3D(
+                            range.displayColorSceneLinear.x(),
+                            range.displayColorSceneLinear.y(),
+                            range.displayColorSceneLinear.z());
+                    }
                     break;
                 case ViewportColorMode::Object:
                     baseColorLinear = QVector3D(
@@ -5132,7 +5144,7 @@ bool ViewportSurfaceRenderer::draw(
             }
             qreal sourceAlpha = workbenchSourceAlpha(
                 settings.colorMode, range.displayColorSceneLinear.w(),
-                material, settings.customColor);
+                material, range.hasWorkbenchMaterial, settings.customColor);
             const WorkbenchPackedMaterialData packed =
                 workbenchPackMaterialData(metallic, roughness,
                                           static_cast<float>(sourceAlpha));

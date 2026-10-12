@@ -892,6 +892,7 @@ bool parseBlenderMeshItem(const QJsonObject &item,
         }
         mesh.materialSlotIds.append(material.id.isEmpty() ? QString{} : materialId);
         if (!material.id.isEmpty()) {
+            result.hasWorkbenchMaterial = true;
             if (!fallbackMaterialSet) {
                 result.workbenchMaterial.baseColorSceneLinear = QVector3D(
                     material.baseColorSceneLinear[0],
@@ -1341,6 +1342,7 @@ bool parseBlenderSurfaceItem(
     const QString materialId = sourceSurface.value(QStringLiteral("material_id")).toString();
     const classiCAD::DocumentMaterial material = materials.value(materialId);
     if (!material.id.isEmpty()) {
+        result.hasWorkbenchMaterial = true;
         result.workbenchMaterial.baseColorSceneLinear = QVector3D(
             material.baseColorSceneLinear[0], material.baseColorSceneLinear[1],
             material.baseColorSceneLinear[2]);

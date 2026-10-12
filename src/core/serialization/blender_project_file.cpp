@@ -971,7 +971,7 @@ bool parseBlenderPolyCurveItem(
     }
     const QJsonArray sourceSplines = item.value(QStringLiteral("splines")).toArray();
     if (sourceSplines.isEmpty()) {
-        setError(errorMessage, QStringLiteral("curve has no supported POLY splines"));
+        setError(errorMessage, QStringLiteral("curve has no supported POLY or BEZIER splines"));
         return false;
     }
 
@@ -999,47 +999,103 @@ bool parseBlenderPolyCurveItem(
         static_cast<float>(objectColor[2]), static_cast<float>(objectColor[3]));
 
     QVector<classiCAD::NurbsCurve3D> curves;
-    curves.reserve(sourceSplines.size());
     for (const QJsonValue &splineValue : sourceSplines) {
         if (!splineValue.isObject()) {
-            setError(errorMessage, QStringLiteral("POLY spline record is invalid"));
+            setError(errorMessage, QStringLiteral("curve spline record is invalid"));
             return false;
         }
-        const QJsonArray sourcePoints =
-            splineValue.toObject().value(QStringLiteral("control_points_world")).toArray();
-        if (sourcePoints.size() < 2) {
-            setError(errorMessage,
-                     QStringLiteral("POLY spline needs at least two control points"));
-            return false;
-        }
-        classiCAD::NurbsCurve3D curve;
-        curve.dimension = 3;
-        curve.degree = 1;
-        curve.order = 2;
-        curve.rational = false;
-        curve.controlPoints.reserve(sourcePoints.size());
-        curve.normalCoordinates.reserve(sourcePoints.size());
-        curve.weights.fill(1.0, sourcePoints.size());
-        curve.knots.reserve(sourcePoints.size());
-        for (int pointIndex = 0; pointIndex < sourcePoints.size(); ++pointIndex) {
-            QVector<double> xyz;
-            if (!jsonNumberArray(sourcePoints[pointIndex], 3, &xyz)) {
+        const QJsonObject spline = splineValue.toObject();
+        const QString splineType = spline.value(QStringLiteral("type")).toString(
+            QStringLiteral("POLY"));
+        if (splineType == QLatin1String("POLY")) {
+            const QJsonArray sourcePoints =
+                spline.value(QStringLiteral("control_points_world")).toArray();
+            if (sourcePoints.size() < 2) {
                 setError(errorMessage,
-                         QStringLiteral("POLY spline control point is invalid"));
+                         QStringLiteral("POLY spline needs at least two control points"));
                 return false;
             }
-            curve.controlPoints.append(QPointF(xyz[0], xyz[1]));
-            curve.normalCoordinates.append(xyz[2]);
-            // A degree-one clamped uniform vector reduces to integer knots
-            // after Rhino's two redundant outer entries are removed.
-            curve.knots.append(static_cast<double>(pointIndex));
+            classiCAD::NurbsCurve3D curve;
+            curve.dimension = 3;
+            curve.degree = 1;
+            curve.order = 2;
+            curve.rational = false;
+            curve.controlPoints.reserve(sourcePoints.size());
+            curve.normalCoordinates.reserve(sourcePoints.size());
+            curve.weights.fill(1.0, sourcePoints.size());
+            curve.knots.reserve(sourcePoints.size());
+            for (int pointIndex = 0; pointIndex < sourcePoints.size(); ++pointIndex) {
+                QVector<double> xyz;
+                if (!jsonNumberArray(sourcePoints[pointIndex], 3, &xyz)) {
+                    setError(errorMessage,
+                             QStringLiteral("POLY spline control point is invalid"));
+                    return false;
+                }
+                curve.controlPoints.append(QPointF(xyz[0], xyz[1]));
+                curve.normalCoordinates.append(xyz[2]);
+                // A degree-one clamped uniform vector reduces to integer knots
+                // after Rhino's two redundant outer entries are removed.
+                curve.knots.append(static_cast<double>(pointIndex));
+            }
+            curves.append(std::move(curve));
+        } else if (splineType == QLatin1String("BEZIER")) {
+            const QJsonArray spans = spline.value(QStringLiteral("spans_world")).toArray();
+            if (spans.isEmpty()) {
+                setError(errorMessage, QStringLiteral("BEZIER spline has no spans"));
+                return false;
+            }
+            QVector<double> previousEnd;
+            for (const QJsonValue &spanValue : spans) {
+                const QJsonArray points = spanValue.toArray();
+                if (points.size() != 4) {
+                    setError(errorMessage,
+                             QStringLiteral("BEZIER span must contain four control points"));
+                    return false;
+                }
+                classiCAD::NurbsCurve3D curve;
+                curve.dimension = 3;
+                curve.degree = 3;
+                curve.order = 4;
+                curve.rational = false;
+                curve.weights.fill(1.0, 4);
+                curve.knots = {0.0, 0.0, 0.0, 1.0, 1.0, 1.0};
+                QVector<QVector<double>> spanCoordinates;
+                spanCoordinates.reserve(4);
+                for (const QJsonValue &pointValue : points) {
+                    QVector<double> xyz;
+                    if (!jsonNumberArray(pointValue, 3, &xyz)) {
+                        setError(errorMessage,
+                                 QStringLiteral("BEZIER span control point is invalid"));
+                        return false;
+                    }
+                    spanCoordinates.append(xyz);
+                }
+                if (!previousEnd.isEmpty() &&
+                    (previousEnd[0] != spanCoordinates[0][0] ||
+                     previousEnd[1] != spanCoordinates[0][1] ||
+                     previousEnd[2] != spanCoordinates[0][2])) {
+                    setError(errorMessage,
+                             QStringLiteral("BEZIER spline span endpoints are disconnected"));
+                    return false;
+                }
+                previousEnd = spanCoordinates[3];
+                for (const QVector<double> &xyz : spanCoordinates) {
+                    curve.controlPoints.append(QPointF(xyz[0], xyz[1]));
+                    curve.normalCoordinates.append(xyz[2]);
+                }
+                curves.append(std::move(curve));
+            }
+        } else {
+            setError(errorMessage, QStringLiteral("unsupported Blender curve spline type"));
+            return false;
         }
+    }
+    for (const classiCAD::NurbsCurve3D &curve : curves) {
         QString validationError;
         if (!classiCAD::validateNurbsCurve(curve, &validationError)) {
             setError(errorMessage, validationError);
             return false;
         }
-        curves.append(std::move(curve));
     }
 
     result.geometry.workPlane = classiCAD::WorkPlane::XY;
@@ -1377,7 +1433,7 @@ bool importBlenderScene(const QString &path,
     if (root.value(QStringLiteral("format")).toString() !=
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
-        bridgeVersion != 7) {
+        bridgeVersion != 8) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

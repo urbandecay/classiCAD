@@ -22,7 +22,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 7
+BRIDGE_FORMAT_VERSION = 8
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -417,7 +417,7 @@ def unsupported_object_record(obj, scene):
         record["reason"] = "collection instance is metadata only; no geometry was fabricated"
         record["instance_collection"] = obj.instance_collection.name_full
     elif obj.type == "CURVE":
-        record["reason"] = "curve has no supported POLY spline; NURBS and BEZIER splines are not imported"
+        record["reason"] = "curve has no supported POLY or BEZIER spline; NURBS splines are not imported"
     elif obj.type in {"SURFACE", "FONT"}:
         record["reason"] = "Blender SURFACE and FONT objects are not imported"
     else:
@@ -426,7 +426,7 @@ def unsupported_object_record(obj, scene):
 
 
 def extract_poly_curve_object(obj, scene, unsupported):
-    """Extract only exact POLY spline control points, baked to world XYZ."""
+    """Extract exact POLY points and cubic BEZIER spans in world XYZ."""
     from mathutils import Vector
 
     item_id = stable_id(obj)
@@ -454,25 +454,47 @@ def extract_poly_curve_object(obj, scene, unsupported):
             "2D curve fill surfaces are omitted; only source spline centerlines are imported",
         )
     for spline_index, spline in enumerate(obj.data.splines):
-        if spline.type != "POLY":
+        if spline.type not in {"POLY", "BEZIER"}:
             add_unsupported(
                 unsupported, item_id,
                 "spline:%d:%s" % (spline_index, spline.type),
-                "only POLY splines are imported; NURBS and BEZIER splines are unsupported",
+                "Blender NURBS splines are unsupported",
             )
             continue
-        points = []
-        for point in spline.points:
-            world = obj.matrix_world @ Vector((point.co[0], point.co[1], point.co[2]))
-            points.append(vector_values(world))
-        if spline.use_cyclic_u and points and points[-1] != points[0]:
-            points.append(list(points[0]))
-        if len(points) < 2:
-            add_unsupported(unsupported, item_id,
-                            "spline:%d:POLY" % spline_index,
-                            "POLY spline has fewer than two control points")
+        if spline.type == "POLY":
+            points = []
+            for point in spline.points:
+                world = obj.matrix_world @ Vector((point.co[0], point.co[1], point.co[2]))
+                points.append(vector_values(world))
+            if spline.use_cyclic_u and points and points[-1] != points[0]:
+                points.append(list(points[0]))
+            if len(points) < 2:
+                add_unsupported(unsupported, item_id,
+                                "spline:%d:POLY" % spline_index,
+                                "POLY spline has fewer than two control points")
+                continue
+            item["splines"].append({"type": "POLY", "control_points_world": points})
             continue
-        item["splines"].append({"control_points_world": points})
+
+        bezier_points = list(spline.bezier_points)
+        count = len(bezier_points)
+        segment_count = count if spline.use_cyclic_u else max(0, count - 1)
+        spans = []
+        for segment_index in range(segment_count):
+            start = bezier_points[segment_index]
+            end = bezier_points[(segment_index + 1) % count]
+            local_points = (start.co, start.handle_right, end.handle_left, end.co)
+            span = []
+            for point in local_points:
+                world = obj.matrix_world @ Vector((point[0], point[1], point[2]))
+                span.append(vector_values(world))
+            spans.append(span)
+        if not spans:
+            add_unsupported(unsupported, item_id,
+                            "spline:%d:BEZIER" % spline_index,
+                            "open BEZIER spline has fewer than two control points")
+            continue
+        item["splines"].append({"type": "BEZIER", "spans_world": spans})
     for modifier in obj.modifiers:
         add_unsupported(unsupported, item_id, "modifier:" + modifier.name,
                         "exact spline import preserves source control points; modifier was not applied")

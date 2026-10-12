@@ -1,7 +1,7 @@
 # Blender Scene Extraction JSON
 
 `src/core/serialization/blender_scene_extract.py` runs inside Blender 5.2.2 and
-emits `classiCAD.blender-scene-extract`, format version `1`. This is a transport
+emits `classiCAD.blender-scene-extract`, format version `8`. This is a transport
 format for the native importer; it is not classiCAD's saved document schema.
 
 ## Mesh object records
@@ -49,3 +49,16 @@ Blender shader-node graphs are not evaluated. Collection membership and hidden
 state are reported but are not currently retained.
 `summary` contains extraction counts only; it does not claim successful native
 import.
+
+## Curve object records
+
+Supported Blender `CURVE` objects retain one item per source object. Each entry
+in `splines` has an explicit `type`. `POLY` records contain
+`control_points_world`; cyclic polylines repeat their first point at the end.
+`BEZIER` records contain `spans_world`, with each cubic span ordered as start
+point, outgoing handle, incoming handle, end point. Cyclic Bezier splines include
+the final-to-first span. Every point is transformed by the source object's
+`matrix_world` during extraction. The native importer stores each POLY spline
+as a degree-one NURBS and each Bezier span as a separate nonrational clamped
+degree-three NURBS component. Blender NURBS splines remain explicitly
+unsupported. Bevel, extrude, bevel-object, and 2D fill surfaces remain omitted.

@@ -4348,7 +4348,9 @@ bool ViewportSurfaceRenderer::draw(
                                 GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         } else {
             glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_LESS);
+            // Blender Workbench's opaque G-buffer uses DEPTH_LESS_EQUAL,
+            // allowing later coplanar fragments to replace earlier ones.
+            glDepthFunc(GL_LEQUAL);
             glDepthMask(GL_TRUE);
             glDisable(GL_BLEND);
         }

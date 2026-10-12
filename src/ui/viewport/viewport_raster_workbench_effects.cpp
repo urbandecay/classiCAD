@@ -881,6 +881,22 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const qreal fStop = cameraOptics.fStop;
         const qreal sensorWidth = std::max<qreal>(cameraOptics.sensorWidthMillimeters,
                                                    1.0e-6);
+        const auto shapeApertureTap = [&cameraOptics](QPointF tap) {
+            if (cameraOptics.apertureBlades >= 3) {
+                const qreal bladeAngle =
+                    6.283185307179586 / cameraOptics.apertureBlades;
+                const qreal angle = std::atan2(tap.y(), tap.x()) -
+                                    cameraOptics.apertureRotationRadians;
+                const qreal sector = std::remainder(angle, bladeAngle);
+                const qreal polygonRadius = std::cos(0.5 * bladeAngle) /
+                    std::max<qreal>(std::cos(sector), 1.0e-5);
+                tap *= polygonRadius;
+            }
+            const qreal ratio = std::max<qreal>(cameraOptics.apertureRatio, 0.01);
+            if (ratio > 1.0) tap.setX(tap.x() * ratio);
+            else tap.setY(tap.y() / ratio);
+            return tap;
+        };
         if (std::isfinite(focal) && focal > 0.0 && std::isfinite(focus) &&
             focus > focal && std::isfinite(fStop) && fStop > 0.0) {
             for (int y = 0; y < outputHeight; ++y) {
@@ -903,7 +919,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     if (radius < 0.75 * colorDpr) continue;
                     qreal red = 0.0, green = 0.0, blue = 0.0;
                     int count = 0;
-                    for (const QPointF &tap : disk) {
+                    for (const QPointF &diskTap : disk) {
+                        const QPointF tap = shapeApertureTap(diskTap);
                         const int sx = std::clamp(qRound(x + tap.x() * radius),
                                                   0, outputWidth - 1);
                         const int sy = std::clamp(qRound(y + tap.y() * radius),

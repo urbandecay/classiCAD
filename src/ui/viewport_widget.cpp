@@ -1146,14 +1146,29 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent *event) override
     {
-        updateHovered(event->position());
-        activateHovered();
+        if (event->button() == Qt::LeftButton) {
+            updateHovered(event->position());
+            activateHovered();
+            event->accept();
+            return;
+        }
+        // Match Blender's cancel gesture and avoid treating a context-menu
+        // click (or another non-primary release) as a shading choice.
+        if (event->button() == Qt::RightButton) {
+            canceled_ = true;
+            close();
+            event->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(event);
     }
 
     void keyReleaseEvent(QKeyEvent *event) override
     {
-        if (event->key() == Qt::Key_Z && !event->isAutoRepeat()) {
+        if (event->key() == Qt::Key_Z && !event->isAutoRepeat() &&
+            !canceled_) {
             activateHovered();
+            event->accept();
             return;
         }
         QWidget::keyReleaseEvent(event);
@@ -1162,7 +1177,9 @@ protected:
     void keyPressEvent(QKeyEvent *event) override
     {
         if (event->key() == Qt::Key_Escape) {
+            canceled_ = true;
             close();
+            event->accept();
             return;
         }
         QWidget::keyPressEvent(event);
@@ -1187,12 +1204,14 @@ private:
 
     void activateHovered()
     {
-        if (hovered_ >= 0 && activate_) activate_(hovered_);
+        if (!canceled_ && hovered_ >= 0 && activate_) activate_(hovered_);
+        canceled_ = true;
         close();
     }
 
     std::function<void(int)> activate_;
     int hovered_ = -1;
+    bool canceled_ = false;
 };
 
 class ViewportWidget final : public ViewportWidgetApi {

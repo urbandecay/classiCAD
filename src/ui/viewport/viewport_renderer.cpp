@@ -1216,6 +1216,16 @@ void ViewportRenderer::drawShape(QPainter &painter,
         };
         QVector<MeshTriangle> triangles;
         const PolygonMesh3D &mesh = shape.polygonMesh;
+        const qreal meshTransformDeterminant =
+            meshTransform[0] * (meshTransform[5] * meshTransform[10] -
+                                meshTransform[6] * meshTransform[9]) -
+            meshTransform[1] * (meshTransform[4] * meshTransform[10] -
+                                meshTransform[6] * meshTransform[8]) +
+            meshTransform[2] * (meshTransform[4] * meshTransform[9] -
+                                meshTransform[5] * meshTransform[8]);
+        const bool reflectedMeshTransform =
+            std::isfinite(meshTransformDeterminant) &&
+            meshTransformDeterminant < -1.0e-12;
         const MeshUvMap *activeUvMap = nullptr;
         for (const MeshUvMap &uvMap : mesh.uvMaps) {
             if (uvMap.name == mesh.activeUvMapName) {
@@ -1493,8 +1503,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         const Point3D view = transform_.viewDirection();
                         towardCamera = {-view.x, -view.y, -view.z};
                     }
-                    if (normal.x * towardCamera.x + normal.y * towardCamera.y +
-                            normal.z * towardCamera.z <= 0.0) {
+                    const qreal facing =
+                        normal.x * towardCamera.x +
+                        normal.y * towardCamera.y +
+                        normal.z * towardCamera.z;
+                    if ((reflectedMeshTransform ? -facing : facing) <= 0.0) {
                         continue;
                     }
                 }

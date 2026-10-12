@@ -10461,6 +10461,128 @@ protected:
         bool gpuOpaqueExtrudePreviewRendered = false;
         bool gpuArcOverlayRendered = false;
         QVector<const Shape *> failedScenePicturePreviews;
+        const auto drawNativeSurfaceFailureFallback = [&]() {
+            QVector<ViewportRenderObject> fallbackDrawObjects = visibleShapes;
+            QVector<ViewportRenderObject> fallbackSurfaceObjects;
+            const auto averageViewDepth = [this](
+                const ViewportRenderObject &object) {
+                const QVector<QVector3D> *vertices =
+                    object.preparedDepthGeometry
+                        ? &object.preparedDepthGeometry->surfaceVertices
+                        : nullptr;
+                if (vertices == nullptr || vertices->isEmpty()) {
+                    return viewportTransform_.worldDirectionToView(
+                        object.placementTranslation).towardCamera;
+                }
+                qreal depth = 0.0;
+                for (const QVector3D &vertex : *vertices) {
+                    const Point3D world(
+                        vertex.x() + object.preparedGeometryOffset.x,
+                        vertex.y() + object.preparedGeometryOffset.y,
+                        vertex.z() + object.preparedGeometryOffset.z);
+                    depth += viewportTransform_.worldDirectionToView(world)
+                                 .towardCamera;
+                }
+                return depth / vertices->size();
+            };
+            const auto isSurfaceObject = [](const ViewportRenderObject &object) {
+                const GeometryType type = object.shape.geometryType;
+                return type == GeometryType::NurbsSurface ||
+                       type == GeometryType::NurbsSolid ||
+                       type == GeometryType::PolygonMesh;
+            };
+            for (ViewportRenderObject object : fallbackDrawObjects) {
+                if (!isSurfaceObject(object)) {
+                    continue;
+                }
+                object.outlineHandledBySceneStroke =
+                    surfaceOutlineStrokeObjectIds.contains(
+                        object.objectId.value());
+                if (!componentSelectionForObject(object.objectId).isEmpty()) {
+                    object.selected = false;
+                }
+                fallbackSurfaceObjects.append(std::move(object));
+            }
+            std::stable_sort(
+                fallbackSurfaceObjects.begin(), fallbackSurfaceObjects.end(),
+                [&averageViewDepth](const ViewportRenderObject &a,
+                                    const ViewportRenderObject &b) {
+                    return averageViewDepth(a) < averageViewDepth(b);
+                });
+
+            // Keep the native-renderer failure fallback on the same bounded
+            // per-pixel opaque/transparent compositor as the ordinary
+            // QPainter renderer. Missing prepared data or an oversized target
+            // retains the legacy average-depth painter path.
+            bool fallbackSurfaceBatchRendered = false;
+            if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                !fallbackSurfaceObjects.isEmpty()) {
+                const qreal fallbackDpr =
+                    std::max<qreal>(devicePixelRatioF(), 1.0);
+                QImage fallbackSurfaceLayer(
+                    QSize(qRound(renderFrame.viewportSize.width() * fallbackDpr),
+                          qRound(renderFrame.viewportSize.height() * fallbackDpr)),
+                    QImage::Format_ARGB32_Premultiplied);
+                fallbackSurfaceLayer.setDevicePixelRatio(fallbackDpr);
+                fallbackSurfaceLayer.fill(Qt::transparent);
+                fallbackSurfaceBatchRendered = compositeRasterWorkbenchSurfaces(
+                    &fallbackSurfaceLayer, fallbackSurfaceObjects,
+                    viewportTransform_, renderFrame.viewportSize,
+                    fallbackDpr, viewportAaMode_ != 0,
+                    [this](QPainter &surfacePainter,
+                           const ViewportRenderObject &object) {
+                        drawShape(surfacePainter, object.shape, false,
+                                  object.selected, true, object.layerColor,
+                                  object.layerLineType,
+                                  object.layerLineWeightMm, object.objectId,
+                                  object.geometryRevision,
+                                  object.preparedDepthGeometry.data(),
+                                  object.preparedGeometryOffset,
+                                  object.displayColorSceneLinear,
+                                  object.workbenchMaterial,
+                                  object.displayName, object.libraryPath,
+                                  object.meshObjectTransform,
+                                  object.meshMaterials);
+                    });
+                if (fallbackSurfaceBatchRendered) {
+                    painter.drawImage(QPoint(0, 0), fallbackSurfaceLayer);
+                }
+            }
+
+            QHash<quint64, qreal> fallbackViewDepths;
+            for (const ViewportRenderObject &object : fallbackDrawObjects) {
+                fallbackViewDepths.insert(object.objectId.value(),
+                                          averageViewDepth(object));
+            }
+            std::stable_sort(
+                fallbackDrawObjects.begin(), fallbackDrawObjects.end(),
+                [&fallbackViewDepths](const ViewportRenderObject &a,
+                                      const ViewportRenderObject &b) {
+                    return fallbackViewDepths.value(a.objectId.value()) <
+                           fallbackViewDepths.value(b.objectId.value());
+                });
+            if (!fallbackSurfaceBatchRendered) {
+                for (const ViewportRenderObject &renderObject : fallbackDrawObjects) {
+                    if (isSurfaceObject(renderObject)) {
+                        drawShape(painter, renderObject.shape, false,
+                                  renderObject.selected, true,
+                                  renderObject.layerColor,
+                                  renderObject.layerLineType,
+                                  renderObject.layerLineWeightMm,
+                                  renderObject.objectId,
+                                  renderObject.geometryRevision,
+                                  renderObject.preparedDepthGeometry.data(),
+                                  renderObject.preparedGeometryOffset,
+                                  renderObject.displayColorSceneLinear,
+                                  renderObject.workbenchMaterial,
+                                  renderObject.displayName,
+                                  renderObject.libraryPath,
+                                  renderObject.meshObjectTransform,
+                                  renderObject.meshMaterials);
+                    }
+                }
+            }
+        };
         if (nativeRenderer != nullptr) {
             painter.beginNativePainting();
             ViewportTransform overlayCamera = renderFrame.camera;
@@ -10567,6 +10689,7 @@ protected:
                 sceneDrawn = true;
                 surfacesDrawn = true;
             }
+            const bool nativeSurfacePassFailed = !surfacesDrawn;
 
             if (aaSceneSampleActive) {
                 aaNeedsAnotherSample = aaRenderer->finishSceneSample();
@@ -10574,7 +10697,18 @@ protected:
                     update();
                 }
             }
-            if (aaRenderer != nullptr) {
+            if (nativeSurfacePassFailed) {
+                // Finish the native pass before painting the software surface
+                // fallback. Resume native painting afterward so every normal
+                // overlay pass is drawn once, in its established order, on top
+                // of the fallback surfaces.
+                painter.endNativePainting();
+                drawNativeSurfaceFailureFallback();
+                painter.beginNativePainting();
+                surfacesDrawn = true;
+                sceneDrawn = false;
+            }
+            if (aaRenderer != nullptr || nativeSurfacePassFailed) {
                 nativeRenderer->renderUnjitteredSceneDepthToCurrentFramebuffer(
                     overlayCamera, renderFrame.viewportSize,
                     devicePixelRatioF(), visibleShapes);
@@ -10620,7 +10754,8 @@ protected:
             }
             const bool gridDrawn = nativeRenderer->renderToCurrentFramebuffer(
                 overlayCamera, renderFrame.viewportSize,
-                devicePixelRatioF(), visibleShapes, baseGridStep, gridAppearance_);
+                devicePixelRatioF(), visibleShapes, baseGridStep,
+                gridAppearance_);
             if (previewRenderer != nullptr) {
                 for (const TransientPreviewPicture &preview : gpuPreviewPictures) {
                     if (preview.sceneShapeIndex >= 0) {
@@ -10783,129 +10918,6 @@ protected:
                                   true, stroke.color, QString(), 0.0,
                                   ObjectId::invalid(), 0, nullptr,
                                   stroke.worldOffset);
-                    }
-                }
-            }
-            if (!surfacesDrawn) {
-                QVector<ViewportRenderObject> fallbackDrawObjects = visibleShapes;
-                QVector<ViewportRenderObject> fallbackSurfaceObjects;
-                const auto averageViewDepth = [this](
-                    const ViewportRenderObject &object) {
-                    const QVector<QVector3D> *vertices =
-                        object.preparedDepthGeometry
-                            ? &object.preparedDepthGeometry->surfaceVertices
-                            : nullptr;
-                    if (vertices == nullptr || vertices->isEmpty()) {
-                        return viewportTransform_.worldDirectionToView(
-                            object.placementTranslation).towardCamera;
-                    }
-                    qreal depth = 0.0;
-                    for (const QVector3D &vertex : *vertices) {
-                        const Point3D world(
-                            vertex.x() + object.preparedGeometryOffset.x,
-                            vertex.y() + object.preparedGeometryOffset.y,
-                            vertex.z() + object.preparedGeometryOffset.z);
-                        depth += viewportTransform_.worldDirectionToView(world)
-                                     .towardCamera;
-                    }
-                    return depth / vertices->size();
-                };
-                const auto isSurfaceObject = [](const ViewportRenderObject &object) {
-                    const GeometryType type = object.shape.geometryType;
-                    return type == GeometryType::NurbsSurface ||
-                           type == GeometryType::NurbsSolid ||
-                           type == GeometryType::PolygonMesh;
-                };
-                for (ViewportRenderObject object : fallbackDrawObjects) {
-                    if (!isSurfaceObject(object)) {
-                        continue;
-                    }
-                    object.outlineHandledBySceneStroke =
-                        surfaceOutlineStrokeObjectIds.contains(
-                            object.objectId.value());
-                    if (!componentSelectionForObject(object.objectId).isEmpty()) {
-                        object.selected = false;
-                    }
-                    fallbackSurfaceObjects.append(std::move(object));
-                }
-                std::stable_sort(
-                    fallbackSurfaceObjects.begin(), fallbackSurfaceObjects.end(),
-                    [&averageViewDepth](const ViewportRenderObject &a,
-                                        const ViewportRenderObject &b) {
-                        return averageViewDepth(a) < averageViewDepth(b);
-                    });
-
-                // Keep the native-renderer failure fallback on the same
-                // per-pixel opaque/transparent surface compositor as the
-                // ordinary QPainter renderer. If prepared depth data or the
-                // bounded software target is unavailable, retain the legacy
-                // sorted painter fallback below.
-                bool fallbackSurfaceBatchRendered = false;
-                if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
-                    !fallbackSurfaceObjects.isEmpty()) {
-                    const qreal fallbackDpr =
-                        std::max<qreal>(devicePixelRatioF(), 1.0);
-                    QImage fallbackSurfaceLayer(
-                        QSize(qRound(renderFrame.viewportSize.width() * fallbackDpr),
-                              qRound(renderFrame.viewportSize.height() * fallbackDpr)),
-                        QImage::Format_ARGB32_Premultiplied);
-                    fallbackSurfaceLayer.setDevicePixelRatio(fallbackDpr);
-                    fallbackSurfaceLayer.fill(Qt::transparent);
-                    fallbackSurfaceBatchRendered = compositeRasterWorkbenchSurfaces(
-                        &fallbackSurfaceLayer, fallbackSurfaceObjects,
-                        viewportTransform_, renderFrame.viewportSize,
-                        fallbackDpr, viewportAaMode_ != 0,
-                        [this](QPainter &surfacePainter,
-                               const ViewportRenderObject &object) {
-                            drawShape(surfacePainter, object.shape, false,
-                                      object.selected, true, object.layerColor,
-                                      object.layerLineType,
-                                      object.layerLineWeightMm, object.objectId,
-                                      object.geometryRevision,
-                                      object.preparedDepthGeometry.data(),
-                                      object.preparedGeometryOffset,
-                                      object.displayColorSceneLinear,
-                                      object.workbenchMaterial,
-                                      object.displayName, object.libraryPath,
-                                      object.meshObjectTransform,
-                                      object.meshMaterials);
-                        });
-                    if (fallbackSurfaceBatchRendered) {
-                        painter.drawImage(QPoint(0, 0), fallbackSurfaceLayer);
-                    }
-                }
-
-                QHash<quint64, qreal> fallbackViewDepths;
-                for (const ViewportRenderObject &object : fallbackDrawObjects) {
-                    fallbackViewDepths.insert(object.objectId.value(),
-                                              averageViewDepth(object));
-                }
-                std::stable_sort(
-                    fallbackDrawObjects.begin(), fallbackDrawObjects.end(),
-                    [&fallbackViewDepths](const ViewportRenderObject &a,
-                                          const ViewportRenderObject &b) {
-                        return fallbackViewDepths.value(a.objectId.value()) <
-                               fallbackViewDepths.value(b.objectId.value());
-                    });
-                if (!fallbackSurfaceBatchRendered) {
-                    for (const ViewportRenderObject &renderObject : fallbackDrawObjects) {
-                        if (isSurfaceObject(renderObject)) {
-                            drawShape(painter, renderObject.shape, false,
-                                      renderObject.selected, true,
-                                      renderObject.layerColor,
-                                      renderObject.layerLineType,
-                                      renderObject.layerLineWeightMm,
-                                      renderObject.objectId,
-                                      renderObject.geometryRevision,
-                                      renderObject.preparedDepthGeometry.data(),
-                                      renderObject.preparedGeometryOffset,
-                                      renderObject.displayColorSceneLinear,
-                                      renderObject.workbenchMaterial,
-                                      renderObject.displayName,
-                                      renderObject.libraryPath,
-                                      renderObject.meshObjectTransform,
-                                      renderObject.meshMaterials);
-                        }
                     }
                 }
             }

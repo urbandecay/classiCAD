@@ -1742,7 +1742,7 @@ bool importBlenderScene(const QString &path,
             !jsonInteger(renderOutput.value(
                              QStringLiteral("resolution_percentage")),
                          &resolutionPercentage) ||
-            resolutionPercentage <= 0 || resolutionPercentage > 100 ||
+            resolutionPercentage <= 0 || resolutionPercentage > 32767 ||
             !pixelAspectXValue.isDouble() || !pixelAspectYValue.isDouble() ||
             !std::isfinite(pixelAspectXValue.toDouble()) ||
             !std::isfinite(pixelAspectYValue.toDouble()) ||

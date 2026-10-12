@@ -313,14 +313,14 @@ private:
             const int percentage = renderOutput.value(
                 QStringLiteral("resolution_percentage")).toInt();
             if (resolutionX > 0 && resolutionY > 0 &&
-                resolutionX <= 819200 && resolutionY <= 819200 &&
-                percentage > 0 && percentage <= 100) {
-                const int outputWidth =
-                    (resolutionX * percentage + 50) / 100;
-                const int outputHeight =
-                    (resolutionY * percentage + 50) / 100;
-                if (outputWidth <= 8192 && outputHeight <= 8192) {
-                    sceneOutputSize = QSize(outputWidth, outputHeight);
+                percentage > 0 && percentage <= 32767) {
+                const qint64 outputWidth =
+                    qint64(resolutionX) * percentage / 100;
+                const qint64 outputHeight =
+                    qint64(resolutionY) * percentage / 100;
+                if (outputWidth > 0 && outputHeight > 0 &&
+                    outputWidth <= 8192 && outputHeight <= 8192) {
+                    sceneOutputSize = QSize(int(outputWidth), int(outputHeight));
                 }
             }
             break;

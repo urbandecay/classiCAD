@@ -3,6 +3,7 @@
 #pragma once
 
 #include <QString>
+#include <QJsonArray>
 
 namespace classiCAD {
 
@@ -22,6 +23,9 @@ struct DocumentSettings {
     // Active imported Blender view layer. Empty keeps legacy documents on
     // each object's first imported view layer.
     QString activeViewLayerKey;
+    // Imported Blender scene metadata, including each scene's active camera.
+    // Kept scene-qualified because Blender files may contain multiple scenes.
+    QJsonArray importedBlenderScenes;
 
     bool operator==(const DocumentSettings &) const = default;
 };

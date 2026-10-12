@@ -134,13 +134,15 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 13);
+    serialized.insert(QStringLiteral("version"), 14);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
     settings.insert(QStringLiteral("gridSpacing"), document.settings().gridSpacing);
     settings.insert(QStringLiteral("activeViewLayerKey"),
                     document.settings().activeViewLayerKey);
+    settings.insert(QStringLiteral("importedBlenderScenes"),
+                    document.settings().importedBlenderScenes);
     serialized.insert(QStringLiteral("settings"), settings);
     serialized.insert(QStringLiteral("activeLayerId"),
                       idToJson(document.activeLayerId().value()));
@@ -293,7 +295,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 13) {
+    if (version < 1 || version > 14) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -542,6 +544,16 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             settings.activeViewLayerKey = activeViewLayerKey.toString();
+        }
+        if (version >= 14) {
+            const QJsonValue importedScenes =
+                settingsObject.value(QStringLiteral("importedBlenderScenes"));
+            if (!importedScenes.isArray()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid imported Blender scene metadata"));
+                return false;
+            }
+            settings.importedBlenderScenes = importedScenes.toArray();
         }
         if (!isValidDocumentSettings(settings)) {
             setError(errorMessage, QStringLiteral("invalid document grid settings"));

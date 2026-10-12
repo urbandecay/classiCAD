@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QJsonArray>
 #include <QVector>
 
 #include "core/document/scene_object.h"
@@ -52,6 +53,7 @@ struct BlenderSceneImportReport {
     QString blenderVersion;
     QString importMode;
     QString warningMessage;
+    QJsonArray scenes;
 };
 
 // Extracts Blender mesh objects through the pinned Blender Python runtime.

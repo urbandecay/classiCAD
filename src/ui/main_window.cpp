@@ -545,7 +545,7 @@ private:
         }
 
         if (!importedObjects.isEmpty() || !importedCollections.isEmpty() ||
-            !importedMaterials.isEmpty()) {
+            !importedMaterials.isEmpty() || !report.scenes.isEmpty()) {
             const LayerId targetLayer = session_.document().activeLayerId();
             DocumentTransaction transaction = session_.beginTransaction();
             QHash<quint64, CollectionId> collectionRemap;
@@ -618,6 +618,22 @@ private:
                 }
             }
             DocumentSettings settings = session_.document().settings();
+            for (const QJsonValue &sceneValue : report.scenes) {
+                const QJsonObject importedScene = sceneValue.toObject();
+                const QString sceneId = importedScene.value(
+                    QStringLiteral("scene_id")).toString();
+                bool replaced = false;
+                for (int index = 0;
+                     index < settings.importedBlenderScenes.size(); ++index) {
+                    if (settings.importedBlenderScenes[index].toObject().value(
+                            QStringLiteral("scene_id")).toString() == sceneId) {
+                        settings.importedBlenderScenes.replace(index, importedScene);
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced) settings.importedBlenderScenes.append(importedScene);
+            }
             if (settings.activeViewLayerKey.isEmpty()) {
                 for (const SceneObject &object : importedObjects) {
                     if (!object.defaultViewLayerKey.isEmpty()) {
@@ -625,10 +641,8 @@ private:
                         break;
                     }
                 }
-                if (!settings.activeViewLayerKey.isEmpty()) {
-                    transaction.setSettings(settings);
-                }
             }
+            transaction.setSettings(settings);
             transaction.insertObjects(session_.document().size(), importedObjects);
             if (!session_.commitTransaction(transaction)) {
                 QMessageBox::critical(

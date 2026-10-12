@@ -1269,7 +1269,7 @@ bool importBlenderScene(const QString &path,
     if (root.value(QStringLiteral("format")).toString() !=
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
-        bridgeVersion != 2) {
+        bridgeVersion != 4) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -1315,8 +1315,22 @@ bool importBlenderScene(const QString &path,
     QHash<QString, CollectionId> collectionIdsBySource;
     QHash<QString, QString> sceneLibraryPaths;
     const QJsonArray sourceScenes = root.value(QStringLiteral("scenes")).toArray();
+    QJsonArray importedSceneRecords;
     for (const QJsonValue &sceneValue : sourceScenes) {
+        if (!sceneValue.isObject()) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender scene record is invalid"));
+            return false;
+        }
         const QJsonObject scene = sceneValue.toObject();
+        if (scene.value(QStringLiteral("scene_id")).toString().isEmpty() ||
+            !scene.value(QStringLiteral("name")).isString() ||
+            !scene.value(QStringLiteral("view_layers")).isArray()) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender scene record is incomplete"));
+            return false;
+        }
+        importedSceneRecords.append(scene);
         sceneLibraryPaths.insert(scene.value(QStringLiteral("name")).toString(),
                                  scene.value(QStringLiteral("library_path")).toString());
     }
@@ -1461,6 +1475,7 @@ bool importBlenderScene(const QString &path,
         report->importMode = mode;
         report->warningMessage = conciseImportWarnings(
             warnings, skippedCount, unsupportedFeatureCount);
+        report->scenes = importedSceneRecords;
     }
     QSet<QString> usedMaterialIds;
     for (const SceneObject &object : imported) {

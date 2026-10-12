@@ -21,7 +21,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 3
+BRIDGE_FORMAT_VERSION = 4
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -222,6 +222,33 @@ def object_metadata(obj, scene):
         "classiCAD_geometry_type": obj.get("classiCAD_geometry_type", ""),
         "classiCAD_proxy_geometry": obj.get("classiCAD_proxy_geometry", ""),
         "classiCAD_data_block": obj.get("classiCAD_data_block", ""),
+    }
+
+
+def scene_camera_record(scene, depsgraph=None):
+    camera = scene.camera
+    if camera is None:
+        return None
+    evaluated = camera.evaluated_get(depsgraph) if depsgraph is not None else camera
+    data = evaluated.data
+    return {
+        "object_id": stable_id(camera),
+        "name": camera.name_full,
+        "object_type": "CAMERA",
+        "matrix_world": matrix_values(evaluated.matrix_world),
+        "camera_type": data.type,
+        "lens_millimeters": finite_number(data.lens),
+        "sensor_fit": data.sensor_fit,
+        "sensor_width_millimeters": finite_number(data.sensor_width),
+        "sensor_height_millimeters": finite_number(data.sensor_height),
+        "clip_start": finite_number(data.clip_start),
+        "clip_end": finite_number(data.clip_end),
+        "shift_x": finite_number(data.shift_x),
+        "shift_y": finite_number(data.shift_y),
+        "orthographic_scale": finite_number(data.ortho_scale),
+        "dof_enabled": bool(data.dof.use_dof),
+        "dof_focus_distance": finite_number(data.dof.focus_distance),
+        "dof_f_stop": finite_number(data.dof.aperture_fstop),
     }
 
 
@@ -464,6 +491,7 @@ def extract_scene(input_path, mode):
     for scene in bpy.data.scenes:
         depsgraph = depsgraph_for_scene(scene) if mode == "evaluated" else None
         scene_record = {
+            "scene_id": stable_id(scene),
             "name": scene.name_full,
             "library_path": source_library_path(scene),
             "view_layer_names": [view_layer.name for view_layer in scene.view_layers],
@@ -477,6 +505,7 @@ def extract_scene(input_path, mode):
                 if scene.name_full in scene_names
             ),
             "object_ids": [],
+            "active_camera": scene_camera_record(scene, depsgraph),
         }
         for obj in scene.objects:
             object_count += 1

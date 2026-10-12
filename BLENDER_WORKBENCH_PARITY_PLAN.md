@@ -912,12 +912,11 @@ HDR/EXR Combined payload is captured before those annotations and omits them.
 Their fixed-pixel labels/arrows have no corresponding Z samples. This is a
 format behavior distinction, not a Blender parity requirement.
 Offscreen rendering accumulates the imported Blender `scene.display.render_aa`
-mode before capturing Combined and depth. For multi-sample scene renders,
-classiCAD keeps sample-zero depth while accumulating all samples for color,
-matching Blender's Workbench `AntiAliasingPass`: it saves sample-zero depth and
-restores it on the last render sample. The first jitter position is centered;
-interactive viewport accumulation continues to expose each current sample's
-depth. Older imports without the AA field use classiCAD's viewport AA
+mode before capturing Combined and depth. For multi-sample TAA, classiCAD now
+saves sample-zero main and in-front depth. It restores both depth domains on
+each later interactive viewport sample and on the last scene-render sample,
+matching Blender's Workbench `AntiAliasingPass`. The first jitter position is
+centered. Older imports without the AA field use classiCAD's viewport AA
 preference. Blender's render AA enum is `OFF`, `FXAA`, or 5/8/11/16/32 samples,
 as declared in the pinned [SceneDisplay API](https://docs.blender.org/api/5.0/bpy.types.SceneDisplay.html).
 Source: [Workbench AA depth preservation](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L259-L280).

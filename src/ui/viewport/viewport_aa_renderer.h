@@ -82,11 +82,13 @@ private:
     GLuint sceneFramebuffer_ = 0;
     GLuint attachmentClearFramebuffer_ = 0;
     GLuint sampleZeroDepthFramebuffer_ = 0;
+    GLuint sampleZeroFrontDepthFramebuffer_ = 0;
     QSize sampleZeroDepthSize_;
     GLuint sceneColorTexture_ = 0;
     GLuint displayTransformTexture_ = 0;
     GLuint depthTexture_ = 0;
     GLuint sampleZeroDepthTexture_ = 0;
+    GLuint sampleZeroFrontDepthTexture_ = 0;
     GLuint viewSpaceNormalTexture_ = 0;
     GLuint objectIdTexture_ = 0;
     GLuint frontColorTexture_ = 0;

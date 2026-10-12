@@ -5061,7 +5061,6 @@ bool ViewportSurfaceRenderer::draw(
                     passReport->markPassCompleted(
                         ViewportRenderPass::FrontTransparentResolve);
                     passReport->populatedAttachments |=
-                        ViewportRenderTargets::FrontTransparentColor |
                         ViewportRenderTargets::CurrentSampleColor;
                 }
             }
@@ -5182,6 +5181,8 @@ bool ViewportSurfaceRenderer::draw(
             if (!mergeWorkbenchFrontAttachments(*sharedTargets, true)) {
                 qWarning() << "Workbench front color merge failed";
             } else if (passReport != nullptr) {
+                passReport->markPassCompleted(
+                    ViewportRenderPass::FrontOpaqueColor);
                 passReport->populatedAttachments |=
                     ViewportRenderTargets::FrontColor;
             }

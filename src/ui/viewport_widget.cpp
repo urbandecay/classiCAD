@@ -6709,6 +6709,10 @@ public:
                     ViewportWorkbenchScenePassCoordinator::renderSceneColor(
                         surface, renderFrame.objects, aa.sampleCamera(),
                         pixelSize, 1.0, settings, passRequest);
+                if (sceneColorPass.rendered) {
+                    aa.markCurrentSampleAttachmentsValid(
+                        sceneColorPass.report.populatedAttachments);
+                }
                 return sceneColorPass.rendered;
             },
             [this, &strokes, &renderCamera](

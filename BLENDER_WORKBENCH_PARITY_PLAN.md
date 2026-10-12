@@ -121,6 +121,12 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   retain the existing sorted/regular OIT behavior. The QPainter fallback has
   no separate in-front surface domain. GPU pixel comparison remains pending;
   these paths are not claimed as Blender parity.
+- Named pass reporting now includes front opaque color completion, and the
+  offscreen Workbench result forwards populated scene attachments to the AA
+  validity record, matching the interactive viewport without changing image
+  composition. Front transparent color is reported as a completed pass and
+  current-sample color output; no separate persistent attachment is claimed
+  because its OIT result is composited directly into the current sample.
 
 ### GPU Workbench two-blade aperture (2026-10-12)
 

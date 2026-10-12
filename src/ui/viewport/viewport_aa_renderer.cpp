@@ -2203,7 +2203,6 @@ void ViewportAaRenderer::markCurrentSampleAttachmentsValid(
         ViewportRenderTargets::FrontViewSpaceNormal |
         ViewportRenderTargets::FrontObjectId |
         ViewportRenderTargets::FrontOutlineId |
-        ViewportRenderTargets::FrontTransparentColor |
         ViewportRenderTargets::FrontTransparentDepthAttachment;
     targets_.validAttachments |= attachmentFlags & sampleAttachments;
 }

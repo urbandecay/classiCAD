@@ -6579,21 +6579,29 @@ public:
             applyImportedSceneColorManagement(document_, &settings);
         gpuSurface_->renderOffscreen(
             outputSize,
-            [this, &renderFrame, &strokes, &settings, &renderCamera](
-                const QSize &pixelSize, BlenderGridRenderer &grid,
-                ViewportSceneRenderer &scene, ViewportSurfaceRenderer &surface) {
+            renderCamera,
+            [&renderFrame, &settings, &renderCamera](
+                const QSize &pixelSize, ViewportAaRenderer &aa,
+                BlenderGridRenderer &grid,
+                ViewportSceneRenderer &, ViewportSurfaceRenderer &surface) {
+                aa.setDepthOfField(settings.depthOfField,
+                                   renderCamera.cameraPreferences(),
+                                   renderCamera.isPerspectiveEnabled());
                 if (!grid.renderBackgroundToCurrentFramebuffer(
                         pixelSize, 1.0,
                         viewportShadingBackgroundColor(settings))) {
                     return false;
                 }
                 const bool surfacesDrawn = surface.draw(
-                    renderFrame.objects, renderCamera, pixelSize, 1.0,
-                    settings, false, true, false);
-                const bool strokesDrawn = strokes.isEmpty() || scene.draw(
+                    renderFrame.objects, aa.sampleCamera(), pixelSize, 1.0,
+                    settings, false, true, false, &aa.targets());
+                return surfacesDrawn;
+            },
+            [this, &strokes, &renderCamera](
+                const QSize &pixelSize, ViewportSceneRenderer &scene) {
+                return strokes.isEmpty() || scene.draw(
                     strokes, renderCamera, pixelSize, 1.0, true, 1.0,
                     smoothWiresOverlay_, smoothWiresEditMode_);
-                return surfacesDrawn && strokesDrawn;
             },
             &result.combined, &result.depth, nullptr);
         if (result.isValid()) {

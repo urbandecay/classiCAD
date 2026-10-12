@@ -47,10 +47,14 @@ public:
     void setSurfaceTessellationCache(
         const SurfaceTessellationCache *surfaceTessellationCache);
     using OffscreenDrawCallback = std::function<bool(
-        const QSize &, BlenderGridRenderer &, ViewportSceneRenderer &,
-        ViewportSurfaceRenderer &)>;
+        const QSize &, ViewportAaRenderer &, BlenderGridRenderer &,
+        ViewportSceneRenderer &, ViewportSurfaceRenderer &)>;
+    using OffscreenOverlayCallback = std::function<bool(
+        const QSize &, ViewportSceneRenderer &)>;
     bool renderOffscreen(const QSize &pixelSize,
+                         const ViewportTransform &camera,
                          const OffscreenDrawCallback &draw,
+                         const OffscreenOverlayCallback &drawOverlay,
                          QImage *combined,
                          QVector<float> *depth,
                          QString *errorMessage = nullptr);

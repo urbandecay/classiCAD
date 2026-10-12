@@ -139,13 +139,15 @@ void ViewportGpuSurface::setSurfaceTessellationCache(
 
 bool ViewportGpuSurface::renderOffscreen(
     const QSize &pixelSize,
+    const ViewportTransform &camera,
     const OffscreenDrawCallback &draw,
+    const OffscreenOverlayCallback &drawOverlay,
     QImage *combined,
     QVector<float> *depth,
     QString *errorMessage)
 {
     if (!isValid() || pixelSize.isEmpty() || !draw || combined == nullptr ||
-        depth == nullptr) {
+        depth == nullptr || aaRenderer_ == nullptr) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Offscreen render request is invalid");
         }
@@ -178,8 +180,21 @@ bool ViewportGpuSurface::renderOffscreen(
     functions.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
                       GL_STENCIL_BUFFER_BIT);
-    const bool drawn = draw(pixelSize, *gridRenderer_, *sceneRenderer_,
-                            *surfaceRenderer_);
+    const int previousAaMode = aaRenderer_->mode();
+    aaRenderer_->setMode(static_cast<int>(ViewportAntiAliasingMode::Off));
+    const bool sampleStarted = aaRenderer_->beginSceneSample(
+        pixelSize, 1.0, camera, QByteArrayLiteral("workbench-render-result"),
+        true);
+    bool drawn = false;
+    if (sampleStarted) {
+        drawn = draw(pixelSize, *aaRenderer_, *gridRenderer_, *sceneRenderer_,
+                     *surfaceRenderer_);
+        aaRenderer_->finishSceneSample();
+        if (drawn && drawOverlay) {
+            drawn = drawOverlay(pixelSize, *sceneRenderer_);
+        }
+    }
+    aaRenderer_->setMode(previousAaMode);
     if (drawn) {
         depth->resize(pixelSize.width() * pixelSize.height());
         QVector<float> bottomUp(depth->size());

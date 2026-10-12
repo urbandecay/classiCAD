@@ -430,6 +430,7 @@ def object_metadata(obj, scene):
         "parent_id": stable_id(parent) if parent is not None else "",
         "collection_ids": sorted(stable_id(collection) for collection in obj.users_collection),
         "visibility": visibility_metadata(obj),
+        "showInFront": bool(obj.show_in_front),
         "display_color_linear": vector_values(obj.color),
         "classiCAD_geometry_type": obj.get("classiCAD_geometry_type", ""),
         "classiCAD_proxy_geometry": obj.get("classiCAD_proxy_geometry", ""),

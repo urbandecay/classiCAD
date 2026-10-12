@@ -81,34 +81,27 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 
 ### Transparent depth and Blender Object In Front (2026-10-12)
 
-- Blender 5.2.2's transparent-depth pass has a second depth domain for
-  `OBJECT_IN_FRONT`: it draws in-front objects, merges that depth into scene
-  depth, and uses stencil classification. See the pinned
+- Blender 5.2.2 stages opaque `OBJECT_IN_FRONT` geometry against scene depth,
+  marks its pixels with `OBJECT_IN_FRONT` stencil, copies depth into
+  `depth_in_front_tx`, and excludes marked pixels from regular opaque and
+  transparent passes. Transparent accumulation then uses regular and in-front
+  depth domains separately. `TransparentDepthPass` writes in-front depth,
+  object ID and stencil, merges depth into scene depth only for marked pixels,
+  and finally draws regular transparent depth while excluding those pixels.
+  Pinned source:
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L306-L369).
-- classiCAD currently writes transparent depth, normal, and object-ID data into
-  one shared attachment set with a single depth test. The import transport does
-  not extract `Object.show_in_front`, `SceneObject` has no corresponding state,
-  and `ViewportRenderObject` cannot carry it to the surface renderer. The
-  ordinary transparent depth test is source-matched.
-- A safe port requires a coordinated contract: add `show_in_front` (or a
-  deliberately named `inFront`) to each supported Blender object record in
-  `blender_project_adapter.py`, document it in
-  `BLENDER_SCENE_EXTRACT_FORMAT.md`, parse it in every supported object parser
-  in `blender_project_file.cpp`, persist it in `document_serializer.cpp`, and
-  carry it through `SceneObject` and `ViewportRenderObject` into the transparent
-  depth pass. Collection membership and CAD layer visibility remain separate
-  and must not be changed by this flag.
-- The rendering half is not a field-only fix: `renderWorkbenchTransparentDepthPass`
-  currently draws all transparent ranges into the one shared Workbench effect
-  framebuffer/depth domain. Blender's pass needs in-front classification and
-  depth merging (including stencil semantics) so transparent in-front objects
-  and ordinary transparent objects update the correct depth/normal/object-ID
-  samples. `ViewportRenderTargets` and effect framebuffer setup therefore need
-  an explicit second depth-domain contract, plus coordinated shader/pass changes
-  in `viewport_surface_renderer.cpp` and the shared-target producer. Do not
-  enable partial in-front behavior until that contract is implemented; simply
-  sorting or disabling depth tests would produce incorrect occlusion and
-  effect inputs.
+- The import and render-frame metadata path now carries Blender
+  `Object.show_in_front` through `SceneObject` to `ViewportRenderObject`.
+  Collection membership and CAD layer visibility remain independent.
+- GPU parity remains unimplemented. The current renderer has a single scene
+  color target and one weighted-OIT accumulation/resolve layer. It needs
+  separate regular and in-front OIT accumulation, exact opaque staging and
+  depth copy, stencil-filtered regular accumulation, and the source-ordered
+  transparent-depth merge into scene depth and object IDs. Workbench's
+  transparent-depth pass does not write normals; in-front opaque geometry owns
+  its normal/material attachments during the earlier opaque stage. Do not enable
+  partial in-front behavior until those passes and the shared target lifecycle
+  are implemented together.
 
 ### GPU Workbench two-blade aperture (2026-10-12)
 
@@ -126,10 +119,14 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   references: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L98-L100)
   and [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L24-L32).
 - The GPU path has Blender's CoC-aware three-level downsample, half-resolution
-  ring gather, 3x3 median, and resolve. Its gather ring samples now use
-  Workbench's square-to-circle mapping and rotate per pixel with an AA-sample
-  offset. Rotation now reads the second channel of the shared 64x64 EEVEE
-  blue-noise LUT, matching Blender 5.2.2 `get_random_vector`: `bn = texelFetch(noise_tx, ivec2(gl_FragCoord.xy) % 64, 0).a`, then `angle = 2π * fract(bn + noise_offset)`. The existing cavity header stores that channel as RG's second byte and the DOF path uploads it as a separate single-channel noise texture. The ring gather uses the angle for rotation; Blender's source additionally uses `sqrt(ign)` radial scaling and an IGN-based sample offset, which do not map to this ring kernel. Exact gather weights/texture sampling still need source-by-source comparison. Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap
+  ring gather, 3x3 median, and resolve. Its per-pixel gather jitter now follows
+  pinned `get_random_vector`: it combines the second channel of the shared
+  64x64 EEVEE blue-noise LUT with interleaved gradient noise, applies
+  `sqrt(ign)`, scales the offset by the maximum CoC, and uses Blender's
+  full-resolution pixel scale for the half-resolution gather. The sample
+  pattern is no longer rotated by per-pixel noise. The ring sample layout,
+  gather weights, and LOD selection still need source-by-source comparison.
+  Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap
   full-resolution gather and has no median pass. Image comparison remains
   open. Pinned gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L783-L899); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
 

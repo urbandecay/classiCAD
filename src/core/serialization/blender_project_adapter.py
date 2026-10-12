@@ -544,6 +544,7 @@ def add_scene_object(layer_collections, record, surface_display_mesh=None):
         obj["classiCAD_layer_id"] = layer_id
         obj["classiCAD_geometry_type"] = geometry_type
         obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
+        obj.show_in_front = bool(record.get("showInFront", False))
         return
     curve_data = bpy.data.curves.new(object_name, "CURVE")
     curve_data.dimensions = "3D"
@@ -594,6 +595,7 @@ def add_scene_object(layer_collections, record, surface_display_mesh=None):
     obj["classiCAD_layer_id"] = layer_id
     obj["classiCAD_geometry_type"] = geometry_type
     obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
+    obj.show_in_front = bool(record.get("showInFront", False))
     layer_collection.objects.link(obj)
 
 

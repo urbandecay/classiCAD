@@ -96,6 +96,8 @@ struct SceneObject {
     bool hideRender = false;
     bool hiddenInViewport = false;
     bool hideSelect = false;
+    // Blender Object.show_in_front: draw this object through other geometry.
+    bool showInFront = false;
     QJsonObject viewLayerHidden;
     QString defaultViewLayerKey;
     // Blender ID identity used by Workbench Random color. Imported linked

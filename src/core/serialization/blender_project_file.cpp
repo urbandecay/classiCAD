@@ -739,6 +739,7 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     result.libraryPath = item.value(QStringLiteral("library_path")).toString();
     result.blenderSourceVersion = blenderVersion;
     result.blenderMeshImportMode = importMode;
+    result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
     const QJsonArray sourceCollectionIds = item.value(QStringLiteral("collection_ids")).toArray();
     for (const QJsonValue &collectionValue : sourceCollectionIds) {
         const QString sourceId = collectionValue.toString();
@@ -1079,6 +1080,7 @@ bool parseBlenderPolyCurveItem(
     classiCAD::SceneObject result;
     result.displayName = item.value(QStringLiteral("name")).toString();
     result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
         const QString sourceId = collectionValue.toString();
@@ -1316,6 +1318,7 @@ bool parseBlenderSurfaceItem(
     classiCAD::SceneObject result;
     result.displayName = item.value(QStringLiteral("name")).toString();
     result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
     for (const QJsonValue &collectionValue :
          item.value(QStringLiteral("collection_ids")).toArray()) {
         const QString sourceId = collectionValue.toString();

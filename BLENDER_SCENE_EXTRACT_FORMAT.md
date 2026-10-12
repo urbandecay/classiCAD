@@ -1,7 +1,7 @@
 # Blender Scene Extraction JSON
 
 `src/core/serialization/blender_scene_extract.py` runs inside Blender 5.2.2 and
-emits `classiCAD.blender-scene-extract`, format version `10`. This is a transport
+emits `classiCAD.blender-scene-extract`, bridge format version `13`. This is a transport
 format for the native importer; it is not classiCAD's saved document schema.
 
 ## Mesh object records
@@ -13,6 +13,10 @@ is a row-major 4 by 4 world matrix. `vertices_local` contains local-space XYZ
 positions, so the native importer must retain the transform separately.
 `classiCAD_proxy_geometry` carries the classiCAD custom property used to mark
 NURBS display proxies; these are reported and skipped as source mesh geometry.
+Every supported and unsupported object item includes the boolean `showInFront`,
+copied from Blender `Object.show_in_front`. The native importer stores this as
+independent object presentation state; it does not change collection membership,
+layer visibility, or object visibility flags.
 In evaluated mode, Blender `FONT` objects use the same mesh record after
 `Object.to_mesh()` evaluation; `source_object_type` is `FONT`, and
 `evaluated_geometry_baked` records that the output is baked geometry. Original

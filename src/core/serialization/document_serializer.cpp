@@ -197,7 +197,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 18);
+    serialized.insert(QStringLiteral("version"), 19);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -333,6 +333,7 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("hideRender"), sceneObject.hideRender);
         serializedObject.insert(QStringLiteral("hiddenInViewport"), sceneObject.hiddenInViewport);
         serializedObject.insert(QStringLiteral("hideSelect"), sceneObject.hideSelect);
+        serializedObject.insert(QStringLiteral("showInFront"), sceneObject.showInFront);
         serializedObject.insert(QStringLiteral("viewLayerHidden"), sceneObject.viewLayerHidden);
         serializedObject.insert(QStringLiteral("defaultViewLayerKey"), sceneObject.defaultViewLayerKey);
         serializedObject.insert(QStringLiteral("displayName"), sceneObject.displayName);
@@ -401,7 +402,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 18) {
+    if (version < 1 || version > 19) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1080,6 +1081,13 @@ bool documentFromJson(const QJsonValue &value,
         sceneObject.hideRender = hideRender;
         sceneObject.hiddenInViewport = hiddenInViewport;
         sceneObject.hideSelect = hideSelect;
+        if (version >= 19) {
+            if (!serializedObject.value(QStringLiteral("showInFront")).isBool()) {
+                setError(errorMessage, QStringLiteral("invalid object in-front state"));
+                return false;
+            }
+            sceneObject.showInFront = serializedObject.value(QStringLiteral("showInFront")).toBool();
+        }
         sceneObject.viewLayerHidden = viewLayerHidden;
         sceneObject.defaultViewLayerKey = defaultViewLayerKey;
         if (version >= 7) {

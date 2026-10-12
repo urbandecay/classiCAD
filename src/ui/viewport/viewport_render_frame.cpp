@@ -121,6 +121,7 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.objectIndex = objectIndex++;
         entry.geometryRevision = document.objectGeometryRevision(entry.objectId);
         entry.selected = selectedIds.contains(entry.objectId.value());
+        entry.showInFront = sceneObject.showInFront;
         if (layer != nullptr) {
             entry.layerColor = layer->color;
         }

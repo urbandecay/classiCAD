@@ -968,6 +968,15 @@ depth domain. Visual depth comparison remains open.
   until that contract exists. References: [VolumeGrid API](https://docs.blender.org/api/5.2/bpy.types.VolumeGrid.html),
   [Workbench volume pass](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc),
   and [Blender volume developer docs](https://developer.blender.org/docs/features/objects/volume/).
+- The sRGB-only custom-LUT gate is required by the current output contract.
+  OCIO's `DisplayViewTransform` emits values in the selected display's encoding
+  and gamut; classiCAD consumes its LUT as ordinary sRGB RGB for the Qt view
+  and image writers. Supporting Display P3, Rec.2020, or HDR display devices
+  therefore needs explicit output-color-space metadata and conversion/profile
+  handling across GPU, QPainter, and saved image paths. Removing the gate alone
+  would silently misinterpret pixel values. References: [OCIO display and view
+  color spaces](https://opencolorio.readthedocs.io/en/latest/guides/authoring/displays_views.html)
+  and [Blender's pinned display color-management path](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_color_management.cc).
 
 ### Workbench volume pass remains unsupported (2026-10-12)
 

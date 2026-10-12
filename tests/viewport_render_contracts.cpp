@@ -412,16 +412,23 @@ int main(int argc, char *argv[])
                             "NURBS solid display test must initialize OpenGL 3.3");
             QImage gpuImage;
             QImage gpuWithoutOutlineImage;
+            QImage gpuUnselectedNoOutlineImage;
+            QImage gpuCavityImage;
+            QImage gpuCavityBaselineImage;
             QImage gpuSceneStrokeManagedOutlineImage;
             QImage gpuUnselectedOutlineImage;
             QImage gpuBottomImage;
             QImage gpuShadowImage;
+            int gpuCavityChangedPixels = 0;
+            int gpuShadowDarkenedPixels = 0;
             QImage gpuMatcapImage;
             bool gpuDrawSucceeded = false;
             bool gpuUnselectedCaptureNonblank = true;
             bool gpuMatcapDrawSucceeded = false;
             bool gpuBottomDrawSucceeded = false;
             bool gpuShadowDrawSucceeded = false;
+            bool gpuCavityDrawSucceeded = false;
+            bool gpuUnselectedBaselineDrawSucceeded = false;
             bool gpuSceneStrokeSuppressesPostOutline = false;
             bool gpuWireLinearBlendMatches = false;
             bool gpuVolumeDrawSucceeded = false;
@@ -495,6 +502,80 @@ int main(int argc, char *argv[])
                     gpuUnselectedOutlineImage = framebuffer.toImage();
                     ViewportShadingSettings rawFaceShading = gpuSolidShading;
                     rawFaceShading.outline = false;
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    gpuUnselectedBaselineDrawSucceeded =
+                        gpuSurfaceRenderer.draw(
+                            {surfaceObject}, gpuTransform, glSize, 1.0,
+                            rawFaceShading);
+                    functions.glFinish();
+                    gpuUnselectedNoOutlineImage = framebuffer.toImage();
+
+                    ViewportShadingSettings shadowShading = rawFaceShading;
+                    shadowShading.shadows = true;
+                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    gpuShadowDrawSucceeded = gpuSurfaceRenderer.draw(
+                        {surfaceObject}, gpuTransform, glSize, 1.0,
+                        shadowShading);
+                    functions.glFinish();
+                    gpuShadowImage = framebuffer.toImage();
+
+                    const auto renderCoordinatedCavity = [&](
+                        const ViewportShadingSettings &shading,
+                        const QByteArray &historyKey, QImage *image) {
+                        ViewportAaRenderer cavityAaRenderer;
+                        cavityAaRenderer.setMode(static_cast<int>(
+                            ViewportAntiAliasingMode::Off));
+                        cavityAaRenderer.setDisplayTransform(shading, true);
+                        if (!cavityAaRenderer.beginSceneSample(
+                                glSize, 1.0, gpuTransform, historyKey,
+                                false, true)) {
+                            return false;
+                        }
+                        const float targetDisplayGray = 34.0f / 255.0f;
+                        float low = 0.0f;
+                        float high = 16.0f;
+                        for (int iteration = 0; iteration < 32; ++iteration) {
+                            const float middle = (low + high) * 0.5f;
+                            const float displayGray =
+                                workbenchSceneLinearToAgxSrgb(
+                                    QVector3D(middle, middle, middle)).x();
+                            if (displayGray < targetDisplayGray) low = middle;
+                            else high = middle;
+                        }
+                        const GLfloat linearBackground[4] = {
+                            (low + high) * 0.5f,
+                            (low + high) * 0.5f,
+                            (low + high) * 0.5f,
+                            1.0f};
+                        functions.glClearBufferfv(GL_COLOR, 0,
+                                                  linearBackground);
+                        ViewportWorkbenchSceneColorPassRequest request;
+                        request.sharedTargets = &cavityAaRenderer.targets();
+                        request.sceneLinearOutput = true;
+                        const auto result =
+                            ViewportWorkbenchScenePassCoordinator::renderSceneColor(
+                                gpuSurfaceRenderer, {surfaceObject},
+                                cavityAaRenderer.sampleCamera(), glSize, 1.0,
+                                shading, request);
+                        if (result.rendered) {
+                            cavityAaRenderer.markCurrentSampleAttachmentsValid(
+                                result.report.populatedAttachments);
+                        }
+                        cavityAaRenderer.finishSceneSample();
+                        if (!result.rendered) return false;
+                        functions.glFinish();
+                        *image = framebuffer.toImage();
+                        return !image->isNull();
+                    };
+                    gpuCavityDrawSucceeded = renderCoordinatedCavity(
+                        rawFaceShading, QByteArrayLiteral("cavity-baseline"),
+                        &gpuCavityBaselineImage);
+                    ViewportShadingSettings cavityShading = rawFaceShading;
+                    cavityShading.cavity = true;
+                    cavityShading.cavityType = ViewportCavityType::World;
+                    gpuCavityDrawSucceeded = renderCoordinatedCavity(
+                        cavityShading, QByteArrayLiteral("cavity-enabled"),
+                        &gpuCavityImage) && gpuCavityDrawSucceeded;
                     const QString unselectedCapturePath = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_UNSELECTED_CAPTURE");
                     if (!unselectedCapturePath.isEmpty()) {
@@ -626,15 +707,6 @@ int main(int argc, char *argv[])
                         bottomShading);
                     functions.glFinish();
                     gpuBottomImage = framebuffer.toImage();
-
-                    ViewportShadingSettings shadowShading = gpuSolidShading;
-                    shadowShading.shadows = true;
-                    functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-                    gpuShadowDrawSucceeded = gpuSurfaceRenderer.draw(
-                        {surfaceObject}, gpuTransform, glSize, 1.0,
-                        shadowShading);
-                    functions.glFinish();
-                    gpuShadowImage = framebuffer.toImage();
 
                     ViewportShadingSettings gpuMatcapShading = gpuSolidShading;
                     gpuMatcapShading.lightingMode = ViewportLightingMode::MatCap;
@@ -1039,6 +1111,36 @@ int main(int argc, char *argv[])
                 gpuSceneStrokeSuppressesPostOutline =
                     countChangedPixels(gpuSceneStrokeManagedOutlineImage,
                                        gpuWithoutOutlineImage) == 0;
+                if (!gpuShadowImage.isNull() &&
+                    gpuShadowImage.size() == gpuUnselectedNoOutlineImage.size()) {
+                    for (int y = 0; y < gpuShadowImage.height(); ++y) {
+                        for (int x = 0; x < gpuShadowImage.width(); ++x) {
+                            const QColor shadow = gpuShadowImage.pixelColor(x, y);
+                            const QColor baseline =
+                                gpuUnselectedNoOutlineImage.pixelColor(x, y);
+                            if (std::max({baseline.red() - shadow.red(),
+                                          baseline.green() - shadow.green(),
+                                          baseline.blue() - shadow.blue()}) >= 2) {
+                                ++gpuShadowDarkenedPixels;
+                            }
+                        }
+                    }
+                }
+                if (!gpuCavityImage.isNull() &&
+                    gpuCavityImage.size() == gpuCavityBaselineImage.size()) {
+                    for (int y = 0; y < gpuCavityImage.height(); ++y) {
+                        for (int x = 0; x < gpuCavityImage.width(); ++x) {
+                            const QColor cavity = gpuCavityImage.pixelColor(x, y);
+                            const QColor baseline =
+                                gpuCavityBaselineImage.pixelColor(x, y);
+                            const int maxDelta = std::max({
+                                std::abs(cavity.red() - baseline.red()),
+                                std::abs(cavity.green() - baseline.green()),
+                                std::abs(cavity.blue() - baseline.blue())});
+                            gpuCavityChangedPixels += maxDelta >= 2;
+                        }
+                    }
+                }
                 int bottomFacePixels = 0;
                 for (int y = 0; y < gpuBottomImage.height(); ++y) {
                     for (int x = 0; x < gpuBottomImage.width(); ++x) {
@@ -1081,8 +1183,15 @@ int main(int argc, char *argv[])
                                 gpuBottomDrawSucceeded &&
                                 gpuBackfaceCullingKeepsOutwardFaces &&
                                 gpuShadowDrawSucceeded &&
-                                !gpuShadowImage.isNull(),
+                                !gpuShadowImage.isNull() &&
+                                gpuUnselectedBaselineDrawSucceeded &&
+                                gpuShadowDarkenedPixels > 0,
                             "OpenGL NURBS cubes must match Blender face colors, show outlines, retain outward bottom faces under culling, and render the Shadow option");
+            passed &= check(gpuCavityDrawSucceeded &&
+                                gpuCavityImage.size() == glSize &&
+                                gpuCavityBaselineImage.size() == glSize &&
+                                gpuCavityChangedPixels > 0,
+                            "GPU Workbench world cavity must change pixels from the matching outline-free cube baseline");
             passed &= check(gpuVolumeDrawSucceeded && gpuVolumePassReported,
                             "a bounded scalar volume must complete the GPU volume pass");
             passed &= check(gpuVolumeChangedPixels > 100,

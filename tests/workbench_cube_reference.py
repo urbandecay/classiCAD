@@ -1,7 +1,8 @@
 """Render the controlled Workbench cube reference in Blender 5.2.2.
 
-Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA
+Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE
 AA accepts OFF, FXAA, or 8 (default: FXAA).
+Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
 
 import argparse
@@ -17,6 +18,11 @@ def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", help="PNG output path")
     parser.add_argument("--aa", choices=("OFF", "FXAA", "8"), default="FXAA")
+    parser.add_argument(
+        "--effect",
+        choices=("BASELINE", "SHADOWS", "CAVITY", "OUTLINE"),
+        default="BASELINE",
+    )
     return parser.parse_args(argv)
 
 
@@ -54,9 +60,12 @@ def main():
     shading.light = "STUDIO"
     shading.studio_light = "Default"
     shading.color_type = "MATERIAL"
-    shading.show_shadows = False
-    shading.show_cavity = False
-    shading.show_object_outline = False
+    shading.show_shadows = args.effect == "SHADOWS"
+    shading.shadow_intensity = 0.5
+    shading.show_cavity = args.effect == "CAVITY"
+    shading.cavity_ridge_factor = 1.0
+    shading.cavity_valley_factor = 1.0
+    shading.show_object_outline = args.effect == "OUTLINE"
     shading.background_type = "WORLD"
     scene.world.color = (0.0232, 0.0232, 0.0232)
 

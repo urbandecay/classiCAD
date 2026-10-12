@@ -246,6 +246,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
     }
     vertices_.clear();
     vertexParameters_.clear();
+    vertexTextureParameters_.clear();
     triangles_.clear();
     wireframe_.clear();
     basisGrid_ = PreparedNurbsSurfaceBasisGrid{};
@@ -372,6 +373,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
                 if (!surfaceEvaluator.evaluate(std::clamp(parameter.x(), uStart, uEnd),
                                                std::clamp(parameter.y(), vStart, vEnd), &point)) return false;
                 vertices_.append(point);
+                vertexTextureParameters_.append(parameter);
             }
             for (int i = 1; i < polygon.size(); ++i) {
                 triangles_.append({0, i, i + 1 < polygon.size() ? i + 1 : 1});
@@ -442,6 +444,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
                 Point3D point;
                 if (!surfaceEvaluator.evaluate(parameter, v, &point)) return false;
                 vertices_.append(point);
+                vertexTextureParameters_.append(QPointF(parameter, v));
             }
             if (previousRow >= 0) {
                 triangles_.append({previousRow, row, row + 1});
@@ -477,6 +480,7 @@ bool PreparedNurbsSurfaceTessellation::prepare(
         const int vertexIndex = vertices_.size();
         vertices_.append(point);
         vertexParameters_.append(parameter);
+        vertexTextureParameters_.append(parameter);
         vertexIndices.insert(key, vertexIndex);
         return vertexIndex;
     };
@@ -699,6 +703,12 @@ const QVector<QPointF> &
 PreparedNurbsSurfaceTessellation::vertexParameters() const
 {
     return vertexParameters_;
+}
+
+const QVector<QPointF> &
+PreparedNurbsSurfaceTessellation::vertexTextureParameters() const
+{
+    return vertexTextureParameters_;
 }
 
 const QVector<PreparedNurbsSurfaceTessellation::Triangle> &

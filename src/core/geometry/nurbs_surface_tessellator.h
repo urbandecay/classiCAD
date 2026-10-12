@@ -53,6 +53,7 @@ public:
     PreparedNurbsSurfaceTessellation translated(const Point3D &offset) const;
     const QVector<Point3D> &vertices() const;
     const QVector<QPointF> &vertexParameters() const;
+    const QVector<QPointF> &vertexTextureParameters() const;
     const QVector<Triangle> &triangles() const;
     const QVector<Polyline> &wireframe() const;
 
@@ -61,6 +62,7 @@ private:
 
     QVector<Point3D> vertices_;
     QVector<QPointF> vertexParameters_;
+    QVector<QPointF> vertexTextureParameters_;
     QVector<Triangle> triangles_;
     QVector<Polyline> wireframe_;
     PreparedNurbsSurfaceBasisGrid basisGrid_;

@@ -315,6 +315,18 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
         }
         return;
     }
+    const QVector<QPointF> &textureParameters =
+        tessellation->vertexTextureParameters();
+    const QVector<double> fullKnotsU = expandedNurbsSurfaceKnotVector(surface.knotsU);
+    const QVector<double> fullKnotsV = expandedNurbsSurfaceKnotVector(surface.knotsV);
+    const bool textureParametersValid =
+        textureParameters.size() == tessellation->vertices().size() &&
+        fullKnotsU.size() > surface.degreeU &&
+        fullKnotsU.size() > surface.controlVertexCountU &&
+        fullKnotsV.size() > surface.degreeV &&
+        fullKnotsV.size() > surface.controlVertexCountV &&
+        fullKnotsU[surface.controlVertexCountU] > fullKnotsU[surface.degreeU] &&
+        fullKnotsV[surface.controlVertexCountV] > fullKnotsV[surface.degreeV];
     timing.tessellationValid = tessellation->isValid();
     timing.tessellationStrategy = tessellation->strategy();
     timing.sampledVertexCount = tessellation->vertices().size();
@@ -410,6 +422,9 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
     }
     geometry->surfaceVertices.reserve(
         geometry->surfaceVertices.size() + tessellation->triangles().size() * 3);
+    geometry->surfaceTextureCoordinates.reserve(
+        geometry->surfaceTextureCoordinates.size() +
+        tessellation->triangles().size() * 3);
     geometry->surfaceNormals.reserve(
         geometry->surfaceNormals.size() + tessellation->triangles().size() * 3);
     for (int triangleIndex = 0;
@@ -425,6 +440,16 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
         for (const int vertexIndex : orderedVertices) {
             geometry->surfaceVertices.append(
                 asVector(tessellation->vertices()[vertexIndex]));
+            if (textureParametersValid) {
+                const QPointF parameter = textureParameters[vertexIndex];
+                geometry->surfaceTextureCoordinates.append(QPointF(
+                    (parameter.x() - fullKnotsU[surface.degreeU]) /
+                        (fullKnotsU[surface.controlVertexCountU] -
+                         fullKnotsU[surface.degreeU]),
+                    (parameter.y() - fullKnotsV[surface.degreeV]) /
+                        (fullKnotsV[surface.controlVertexCountV] -
+                         fullKnotsV[surface.degreeV])));
+            }
             QVector3D normal;
             for (const int adjacentTriangle : trianglesAtVertex[vertexIndex]) {
                 const QVector3D &adjacentNormal =
@@ -967,6 +992,8 @@ ViewportDepthGeometry buildViewportDepthGeometry(
             geometry.pointVertices += prepared.pointVertices;
             geometry.surfaceVertices += prepared.surfaceVertices;
             geometry.surfaceNormals += prepared.surfaceNormals;
+            geometry.surfaceTextureCoordinates +=
+                prepared.surfaceTextureCoordinates;
             continue;
         }
 
@@ -977,6 +1004,8 @@ ViewportDepthGeometry buildViewportDepthGeometry(
         geometry.pointVertices += prepared.pointVertices;
         geometry.surfaceVertices += prepared.surfaceVertices;
         geometry.surfaceNormals += prepared.surfaceNormals;
+        geometry.surfaceTextureCoordinates +=
+            prepared.surfaceTextureCoordinates;
     }
     return geometry;
 }

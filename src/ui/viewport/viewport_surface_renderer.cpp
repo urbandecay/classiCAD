@@ -966,6 +966,14 @@ void ViewportSurfaceRenderer::prepareGeometry(
                   << qint32(geometry != nullptr
                                 ? geometry->surfaceVertices.size()
                                 : 0);
+        if (object.shape.geometryType == GeometryType::NurbsSurface) {
+            keyStream << object.workbenchMaterial.textureImagePath
+                      << QCryptographicHash::hash(
+                             object.workbenchMaterial.textureImagePackedDataBase64.toLatin1(),
+                             QCryptographicHash::Sha256)
+                      << object.workbenchMaterial.textureImageSrgb
+                      << object.workbenchMaterial.textureImageAlphaMode;
+        }
         if (hasMesh) {
             const PolygonMesh3D &mesh = object.shape.polygonMesh;
             keyStream << qint32(mesh.vertices.size()) << qint32(mesh.faces.size());
@@ -1211,11 +1219,28 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 for (int index = 0; index < count; ++index) {
                     const QVector3D &position = geometry->surfaceVertices[index];
                     const QVector3D &normal = geometry->surfaceNormals[index];
+                    const QPointF uv = geometry->surfaceTextureCoordinates.size() == count
+                        ? geometry->surfaceTextureCoordinates[index] : QPointF();
                     vertices_.append({position.x(), position.y(), position.z(),
-                                      normal.x(), normal.y(), normal.z()});
+                                      normal.x(), normal.y(), normal.z(),
+                                      1.0f, 1.0f, 1.0f,
+                                      static_cast<float>(uv.x()),
+                                      static_cast<float>(uv.y())});
                 }
             }
             DrawRange range = makeRange(first, count);
+            const bool hasSurfaceUv =
+                object.shape.geometryType == GeometryType::NurbsSurface &&
+                geometry != nullptr &&
+                geometry->surfaceTextureCoordinates.size() == count &&
+                object.shape.nurbsSurface.trimLoops.isEmpty();
+            const bool hasSurfaceTexture =
+                !object.workbenchMaterial.textureImagePath.isEmpty() ||
+                !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty();
+            range.useTextureColor = hasSurfaceUv && hasSurfaceTexture;
+            range.textureImagePath = range.useTextureColor
+                ? object.workbenchMaterial.textureImagePath : QString{};
+            range.textureImageSrgb = object.workbenchMaterial.textureImageSrgb;
             if ((object.shape.geometryType == GeometryType::NurbsSolid ||
                  object.shape.geometryType == GeometryType::NurbsSurface) &&
                 geometry != nullptr && geometry->shadowCasterMesh.valid) {

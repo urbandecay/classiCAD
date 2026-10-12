@@ -2131,9 +2131,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         case ViewportColorMode::Material:
         case ViewportColorMode::Attribute:
         case ViewportColorMode::Texture:
-            // Blender falls back to Material mode when an object lacks the
-            // corresponding color-attribute or UV input. classiCAD has no
-            // attribute, UV, or image-texture data, so mirror that fallback.
+            // The QPainter fallback has no NURBS UV/image sampling path. Use
+            // Blender's Material fallback here; the GPU surface renderer
+            // handles the supported untrimmed NURBS Texture subset.
             sourceColorLinear = workbenchMaterial
                                     ? material.baseColorSceneLinear
                                     : workbenchDefaultSolidMaterialDiffuseColor();

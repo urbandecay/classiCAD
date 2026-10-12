@@ -10,6 +10,7 @@
 #include "viewport_render_frame.h"
 
 #include <QVector>
+#include <QPointF>
 #include <QVector3D>
 #include <QByteArray>
 
@@ -26,6 +27,9 @@ struct ViewportDepthGeometry {
     // coordinates are not precise enough to distinguish small CAD features.
     QVector<Point3D> precisePointVertices;
     QVector<QVector3D> surfaceVertices;
+    // UVs normalized from exact NURBS U/V parameter domains, one per
+    // expanded surface triangle vertex. Empty means no supported UV mapping.
+    QVector<QPointF> surfaceTextureCoordinates;
     // One smooth normal per expanded GL_TRIANGLES vertex.
     QVector<QVector3D> surfaceNormals;
     // An indexed display mesh for shadow volumes. NurbsSolids require a

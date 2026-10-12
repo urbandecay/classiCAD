@@ -89,6 +89,21 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   opaque selected-range path. Legacy display-space accumulation keeps its
   existing tint behavior.
 
+### GPU Workbench outline alpha blending (2026-10-12)
+
+- The outline shader emits straight RGB with fractional coverage in alpha.
+  Its blend state now uses `SRC_ALPHA / ONE_MINUS_SRC_ALPHA` for RGB and
+  `ONE / ONE_MINUS_SRC_ALPHA` for alpha. This keeps the existing RGB result
+  while avoiding the previous second multiplication of outline coverage in
+  the output alpha.
+- Blender 5.2.2's pinned
+  [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc)
+  uses premultiplied-alpha blending, and
+  [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl)
+  multiplies its outline color by coverage. The classiCAD blend factors now
+  produce equivalent alpha composition with its straight-alpha shader; matched
+  GPU output comparison remains pending.
+
 ### Transparent depth and Blender Object In Front (2026-10-12)
 
 - Blender 5.2.2 stages opaque `OBJECT_IN_FRONT` geometry against scene depth,

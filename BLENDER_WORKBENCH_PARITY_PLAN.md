@@ -79,6 +79,18 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   `pixelAspectRatio`; Blender derives it from `ppm_y / ppm_x` in
   [`openexr_api.cpp`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/openexr/openexr_api.cpp#L3071-L3082),
   and classiCAD writes the equivalent `pixelAspectX / pixelAspectY` value.
+  Imported `exr_codec` now selects the matching OpenEXR header compression
+  (NONE, PXR24, ZIP, PIZ, RLE, ZIPS, B44, B44A, DWAA, or DWAB); absent codec
+  metadata defaults to ZIP. DWAA/DWAB quality uses Blender's integer mapping
+  from quality 100→level 0 and 90→level 45, and HALF input clamps to Blender's
+  DWA-dependent finite range before conversion. HTJ2K maps to 256-line mode
+  only with OpenEXR 3.4+, matching Blender's version-gated path; older
+  libraries retain ZIP fallback. Blender stores codec/quality in
+  [`image_format.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_format.cc#L3571-L3583),
+  maps DWA quality and HALF range in
+  [`openexr_api.cpp`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/openexr/openexr_api.cpp#L2802-L2850),
+  and configures the codec enum in
+  [`openexr_api.cpp`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/openexr/openexr_api.cpp#L2854-L2943).
   The normal PNG/TIFF path remains normalized and display-referred. Blender's
   registered pass lifecycle, multi-pass result API, and matched visual output
   remain open.
@@ -131,6 +143,26 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   ends. This matches Blender 5.2.2's [`format_png.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/format_png.cc#L67-L69);
   for example, Blender's default value of 15 selects level 1. The mapping only
   applies to PNG and leaves the separate TIFF codec handling unchanged.
+
+- JPEG quality now maps Blender's nonpositive setting to quality 75 and caps
+  positive values at 100 before passing them to Qt. Blender 5.2.2 applies the
+  same `quality <= 0 ? 75 : min(quality, 100)` behavior in
+  [`format_jpeg.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/format_jpeg.cc#L742-L780).
+  Qt 6.4.2's [`qjpeghandler.cpp`](https://github.com/qt/qtbase/blob/v6.4.2/src/plugins/imageformats/jpeg/qjpeghandler.cpp#L566-L567)
+  treats explicit quality 0 as 0 rather than its default, so the import value
+  now receives Blender's fallback before writing. Both use libjpeg defaults
+  for subsampling without overriding sampling factors.
+
+- Targa output now uses a small local 8-bit encoder instead of depending on the
+  installed Qt TGA plugin. It writes grayscale for BW, BGR for RGB, and BGRA
+  for RGBA, selects raw packets for `TARGA_RAW` and TGA RLE packets for
+  `TARGA`, and marks the image origin as top-left. Blender 5.2.2's
+  [`format_targa.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/format_targa.cc#L367-L382)
+  uses the selected color-mode channel count, UINT8 samples, and the same raw
+  versus RLE setting. classiCAD emits valid grayscale (types 3/11) and true
+  color (types 2/10) TGA streams. TGA's 16-bit output option is not represented;
+  Targa remains an 8-bit format in this writer. File decoding and visual
+  comparison remain pending.
 
 ### Opaque-film scene World background (2026-10-12)
 

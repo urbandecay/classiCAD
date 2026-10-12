@@ -12,16 +12,19 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <limits>
 #include <vector>
 
 #ifdef CLASSICAD_HAS_OPENEXR
 #include <OpenEXR/ImfChannelList.h>
+#include <OpenEXR/ImfCompression.h>
 #include <OpenEXR/ImfFrameBuffer.h>
 #include <OpenEXR/ImfHeader.h>
 #include <OpenEXR/ImfOutputFile.h>
 #include <OpenEXR/ImfRgba.h>
+#include <OpenEXR/OpenEXRConfig.h>
 #endif
 
 namespace classiCAD {
@@ -59,7 +62,7 @@ void applyImageWriterSettings(QImageWriter *writer,
     if (writer == nullptr) return;
     const QString key = blenderFormat.toUpper();
     if (writerFormat == QLatin1String("jpeg")) {
-        writer->setQuality(std::clamp(quality, 0, 100));
+        writer->setQuality(quality <= 0 ? 75 : std::min(quality, 100));
     } else if (writerFormat == QLatin1String("png")) {
         const int compressionLevel = std::clamp(
             int(float(std::clamp(compression, 0, 100)) / 11.1111f), 0, 9);
@@ -242,6 +245,138 @@ void applyPixelAspectMetadata(QImage *image, qreal aspectX, qreal aspectY)
     image->setDotsPerMeterY(dotsPerMeterY);
 }
 
+bool saveTarga(const QString &path, const QImage &source, const QString &colorMode,
+               bool useRle, QString *errorMessage)
+{
+    if (source.isNull() || source.width() > 65535 || source.height() > 65535) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral(
+                "Targa output requires a nonempty image no larger than 65535 pixels per side");
+        }
+        return false;
+    }
+
+    const QString mode = colorMode.toUpper();
+    const bool grayscale = mode == QLatin1String("BW");
+    const bool alpha = mode != QLatin1String("RGB") && !grayscale;
+    const int bytesPerPixel = grayscale ? 1 : (alpha ? 4 : 3);
+    const QImage image = source.convertToFormat(
+        grayscale ? QImage::Format_Grayscale8
+                  : (alpha ? QImage::Format_RGBA8888 : QImage::Format_RGB888));
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        if (errorMessage != nullptr) *errorMessage = file.errorString();
+        return false;
+    }
+
+    // TGA stores a little-endian 18-byte header. Bit 5 marks top-left origin;
+    // the low descriptor bits report the eight alpha bits in RGBA mode.
+    const std::uint8_t imageType = grayscale
+        ? (useRle ? 11 : 3) : (useRle ? 10 : 2);
+    const std::uint8_t descriptor = std::uint8_t(0x20 | (alpha ? 8 : 0));
+    const std::uint8_t header[18] = {
+        0, 0, imageType, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        std::uint8_t(image.width() & 0xff),
+        std::uint8_t((image.width() >> 8) & 0xff),
+        std::uint8_t(image.height() & 0xff),
+        std::uint8_t((image.height() >> 8) & 0xff),
+        std::uint8_t(bytesPerPixel * 8), descriptor};
+    if (file.write(reinterpret_cast<const char *>(header), sizeof(header)) !=
+        qint64(sizeof(header))) {
+        if (errorMessage != nullptr) *errorMessage = file.errorString();
+        return false;
+    }
+
+    const auto writePixels = [&file, bytesPerPixel](const std::uint8_t *pixels,
+                                                    int pixelCount,
+                                                    bool rle) {
+        const auto pixel = [bytesPerPixel](const std::uint8_t *data, int index) {
+            return data + qsizetype(index) * bytesPerPixel;
+        };
+        if (!rle) {
+            return file.write(reinterpret_cast<const char *>(pixels),
+                              qint64(pixelCount) * bytesPerPixel) ==
+                   qint64(pixelCount) * bytesPerPixel;
+        }
+        int position = 0;
+        while (position < pixelCount) {
+            int runLength = 1;
+            while (position + runLength < pixelCount && runLength < 128 &&
+                   std::memcmp(pixel(pixels, position),
+                               pixel(pixels, position + runLength),
+                               size_t(bytesPerPixel)) == 0) {
+                ++runLength;
+            }
+            if (runLength >= 2) {
+                const std::uint8_t packetHeader =
+                    std::uint8_t(0x80 | (runLength - 1));
+                if (file.write(reinterpret_cast<const char *>(&packetHeader), 1) != 1 ||
+                    file.write(reinterpret_cast<const char *>(pixel(pixels, position)),
+                               bytesPerPixel) != bytesPerPixel) {
+                    return false;
+                }
+                position += runLength;
+                continue;
+            }
+
+            const int rawStart = position++;
+            while (position < pixelCount && position - rawStart < 128) {
+                runLength = 1;
+                while (position + runLength < pixelCount && runLength < 128 &&
+                       std::memcmp(pixel(pixels, position),
+                                   pixel(pixels, position + runLength),
+                                   size_t(bytesPerPixel)) == 0) {
+                    ++runLength;
+                }
+                if (runLength >= 2) break;
+                ++position;
+            }
+            const std::uint8_t packetHeader =
+                std::uint8_t(position - rawStart - 1);
+            const qint64 byteCount =
+                qint64(position - rawStart) * bytesPerPixel;
+            if (file.write(reinterpret_cast<const char *>(&packetHeader), 1) != 1 ||
+                file.write(reinterpret_cast<const char *>(pixel(pixels, rawStart)),
+                           byteCount) != byteCount) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    std::vector<std::uint8_t> row(size_t(image.width()) * bytesPerPixel);
+    for (int y = 0; y < image.height(); ++y) {
+        const auto *input = image.constScanLine(y);
+        if (grayscale) {
+            std::copy_n(input, row.size(), row.data());
+        } else if (alpha) {
+            for (int x = 0; x < image.width(); ++x) {
+                const auto *rgba = input + x * 4;
+                auto *bgra = row.data() + size_t(x) * 4;
+                bgra[0] = rgba[2];
+                bgra[1] = rgba[1];
+                bgra[2] = rgba[0];
+                bgra[3] = rgba[3];
+            }
+        } else {
+            for (int x = 0; x < image.width(); ++x) {
+                const auto *rgb = input + x * 3;
+                auto *bgr = row.data() + size_t(x) * 3;
+                bgr[0] = rgb[2];
+                bgr[1] = rgb[1];
+                bgr[2] = rgb[0];
+            }
+        }
+        if (!writePixels(row.data(), image.width(), useRle)) {
+            if (errorMessage != nullptr) *errorMessage = file.errorString();
+            return false;
+        }
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
+
 } // namespace
 
 bool WorkbenchRenderResult::openExrWriterAvailable() noexcept
@@ -272,6 +407,41 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
         const int height = sceneLinearSize.height();
         const bool halfPrecision = colorDepth == 16;
         OPENEXR_IMF_NAMESPACE::Header header(width, height);
+        using namespace OPENEXR_IMF_NAMESPACE;
+        const QString codec = exrCodec.toUpper();
+        Compression compression = ZIP_COMPRESSION;
+        if (codec == QLatin1String("NONE")) compression = NO_COMPRESSION;
+        else if (codec == QLatin1String("PXR24")) compression = PXR24_COMPRESSION;
+        else if (codec == QLatin1String("ZIP")) compression = ZIP_COMPRESSION;
+        else if (codec == QLatin1String("PIZ")) compression = PIZ_COMPRESSION;
+        else if (codec == QLatin1String("RLE")) compression = RLE_COMPRESSION;
+        else if (codec == QLatin1String("ZIPS")) compression = ZIPS_COMPRESSION;
+        else if (codec == QLatin1String("B44")) compression = B44_COMPRESSION;
+        else if (codec == QLatin1String("B44A")) compression = B44A_COMPRESSION;
+#if OPENEXR_VERSION_MAJOR > 2 || \
+    (OPENEXR_VERSION_MAJOR == 2 && OPENEXR_VERSION_MINOR >= 2)
+        else if (codec == QLatin1String("DWAA")) compression = DWAA_COMPRESSION;
+        else if (codec == QLatin1String("DWAB")) compression = DWAB_COMPRESSION;
+#endif
+#if OPENEXR_VERSION_MAJOR > 3 || \
+    (OPENEXR_VERSION_MAJOR == 3 && OPENEXR_VERSION_MINOR >= 4)
+        else if (codec == QLatin1String("HTJ2K"))
+            compression = HTJ2K256_COMPRESSION;
+#endif
+        header.compression() = compression;
+        bool dwaCompression = false;
+#if OPENEXR_VERSION_MAJOR > 2 || \
+    (OPENEXR_VERSION_MAJOR == 2 && OPENEXR_VERSION_MINOR >= 2)
+        dwaCompression = compression == DWAA_COMPRESSION ||
+                         compression == DWAB_COMPRESSION;
+#endif
+        int dwaQuality = 0;
+        if (dwaCompression) {
+            const int quality = std::clamp(imageQuality, 0, 100);
+            // Blender maps quality 100 to level 0 and quality 90 to 45.
+            dwaQuality = ((100 - quality) * 45) / 10;
+            header.dwaCompressionLevel() = static_cast<float>(dwaQuality);
+        }
         if (std::isfinite(pixelAspectX) && std::isfinite(pixelAspectY) &&
             pixelAspectX > 0.0 && pixelAspectY > 0.0) {
             // Blender's OpenEXR writer stores ppm_y / ppm_x. The PNG/TIFF
@@ -280,7 +450,6 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
             header.pixelAspectRatio() =
                 static_cast<float>(pixelAspectX / pixelAspectY);
         }
-        using namespace OPENEXR_IMF_NAMESPACE;
         const PixelType pixelType = halfPrecision ? HALF : FLOAT;
         const bool rgbOnly = colorMode.compare(QLatin1String("RGB"),
                                                Qt::CaseInsensitive) == 0;
@@ -310,7 +479,13 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
         if (halfPrecision) {
             // Blender clamps float render channels to the finite HALF range
             // before converting them to OpenEXR half precision.
-            constexpr float halfMaximum = 65504.0f;
+            float halfMaximum = 65504.0f;
+            if (dwaCompression) {
+                const int margin = dwaQuality <= 50
+                    ? 2048 + 32 * dwaQuality
+                    : 3624 + 128 * (dwaQuality - 50);
+                halfMaximum -= static_cast<float>(margin);
+            }
             const auto toHalfRange = [halfMaximum](float value) {
                 return std::clamp(value, -halfMaximum, halfMaximum);
             };
@@ -423,6 +598,12 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
 
 QString WorkbenchRenderResult::combinedFileExtension() const
 {
+    if (blenderImageFormat.compare(QLatin1String("TARGA"),
+                                   Qt::CaseInsensitive) == 0 ||
+        blenderImageFormat.compare(QLatin1String("TARGA_RAW"),
+                                   Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("tga");
+    }
     if (blenderImageFormat.compare(QLatin1String("OPEN_EXR"),
                                    Qt::CaseInsensitive) == 0) {
         return openExrWriterAvailable() ? QStringLiteral("exr")
@@ -506,6 +687,14 @@ bool WorkbenchRenderResult::saveCombinedImage(
     QImage output = makeOutputImage();
     applyPixelAspectMetadata(&output, pixelAspectX, pixelAspectY);
 
+    const bool targa = blenderImageFormat.compare(QLatin1String("TARGA"),
+                                                   Qt::CaseInsensitive) == 0;
+    const bool targaRaw = blenderImageFormat.compare(
+        QLatin1String("TARGA_RAW"), Qt::CaseInsensitive) == 0;
+    if (targa || targaRaw) {
+        return saveTarga(path, output, mode, targa, errorMessage);
+    }
+
     QJsonObject cameraJson;
     cameraJson.insert(QStringLiteral("focalLengthMillimeters"),
                       camera.focalLengthMillimeters);
@@ -528,6 +717,7 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("imageQuality"), imageQuality);
     cameraJson.insert(QStringLiteral("imageCompression"), imageCompression);
     cameraJson.insert(QStringLiteral("tiffCodec"), tiffCodec);
+    cameraJson.insert(QStringLiteral("exrCodec"), exrCodec);
     cameraJson.insert(QStringLiteral("displayDevice"), colorDisplayDevice);
     cameraJson.insert(QStringLiteral("viewTransform"), viewTransform);
     cameraJson.insert(QStringLiteral("look"), colorLook);

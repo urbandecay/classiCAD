@@ -6700,6 +6700,8 @@ public:
                 result.pixelAspectY = pixelAspectY;
             result.blenderImageFormat = renderOutput.value(
                 QStringLiteral("file_format")).toString(QStringLiteral("PNG"));
+            result.exrCodec = renderOutput.value(
+                QStringLiteral("exr_codec")).toString(QStringLiteral("ZIP"));
             result.colorMode = renderOutput.value(
                 QStringLiteral("color_mode")).toString(QStringLiteral("RGBA"));
             const QJsonValue colorDepth = renderOutput.value(

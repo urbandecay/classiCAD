@@ -1933,6 +1933,24 @@ bool importBlenderScene(const QString &path,
         }
         const QString imageColorMode = renderOutput.value(
             QStringLiteral("color_mode")).toString();
+        const QJsonValue exrCodecValue = renderOutput.value(
+            QStringLiteral("exr_codec"));
+        const QString exrCodec = exrCodecValue.isUndefined()
+                                     ? QStringLiteral("ZIP")
+                                     : exrCodecValue.toString();
+        const bool exrCodecValid = exrCodecValue.isUndefined() ||
+            (exrCodecValue.isString() &&
+             (exrCodec == QLatin1String("NONE") ||
+              exrCodec == QLatin1String("PXR24") ||
+              exrCodec == QLatin1String("ZIP") ||
+              exrCodec == QLatin1String("PIZ") ||
+              exrCodec == QLatin1String("RLE") ||
+              exrCodec == QLatin1String("ZIPS") ||
+              exrCodec == QLatin1String("B44") ||
+              exrCodec == QLatin1String("B44A") ||
+              exrCodec == QLatin1String("DWAA") ||
+              exrCodec == QLatin1String("DWAB") ||
+              exrCodec == QLatin1String("HTJ2K")));
         const QJsonValue filmTransparentValue = renderOutput.value(
             QStringLiteral("film_transparent"));
         const QJsonValue worldColorValue = renderOutput.value(
@@ -1947,6 +1965,7 @@ bool importBlenderScene(const QString &path,
                                               &worldColorSceneLinear);
         }
         if (!renderOutput.value(QStringLiteral("file_format")).isString() ||
+            !exrCodecValid ||
             (!filmTransparentValue.isUndefined() &&
              !filmTransparentValue.isBool()) ||
             !worldColorValid ||

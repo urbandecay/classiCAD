@@ -34,6 +34,7 @@ struct WorkbenchRenderResult {
     ProjectViewportCameraSettings camera;
     QString outputFormat = QStringLiteral("PNG + PFM depth");
     QString blenderImageFormat = QStringLiteral("PNG");
+    QString exrCodec = QStringLiteral("ZIP");
     QString colorMode = QStringLiteral("RGBA");
     int colorDepth = 8;
     qreal pixelAspectX = 1.0;

@@ -388,13 +388,31 @@ private:
                 QStringLiteral("The offscreen scene render failed."));
             return;
         }
+        lastWorkbenchRenderResult_ = result;
+        showWorkbenchRenderResult(lastWorkbenchRenderResult_);
+    }
+
+    void showLastWorkbenchRenderResult()
+    {
+        if (!lastWorkbenchRenderResult_.isValid()) {
+            QMessageBox::information(
+                this, QStringLiteral("No Render Result"),
+                QStringLiteral("Render a Workbench result first."));
+            return;
+        }
+        showWorkbenchRenderResult(lastWorkbenchRenderResult_);
+    }
+
+    void showWorkbenchRenderResult(const WorkbenchRenderResult &result)
+    {
+        const QSize outputSize = result.combined.size();
         QDialog window(this);
-        window.setWindowTitle(QStringLiteral("Workbench Render Result — %1 × %2")
+        window.setWindowTitle(QStringLiteral("Last Workbench Render Result — %1 × %2")
                                   .arg(outputSize.width()).arg(outputSize.height()));
         window.resize(1000, 760);
         auto *layout = new QVBoxLayout(&window);
         auto *info = new QLabel(
-            QStringLiteral("Combined: %1 × %2 .%3 (%4, %5-bit file from 8-bit render)   •   Depth: linear camera distance PFM")
+            QStringLiteral("Last completed result (not live)   •   Combined: %1 × %2 .%3 (%4, %5-bit file from 8-bit render)   •   Depth: linear camera distance PFM")
                 .arg(outputSize.width()).arg(outputSize.height())
                 .arg(result.combinedFileExtension())
                 .arg(result.colorMode)
@@ -1196,6 +1214,10 @@ private:
         renderResultAction->setShortcut(QKeySequence(Qt::Key_F12));
         connect(renderResultAction, &QAction::triggered,
                 this, [this]() { saveWorkbenchRenderResult(); });
+        QAction *showLastRenderResultAction = fileMenu->addAction(
+            QStringLiteral("Show Last Workbench Render Result"));
+        connect(showLastRenderResultAction, &QAction::triggered,
+                this, [this]() { showLastWorkbenchRenderResult(); });
         fileMenu->addSeparator();
         fileMenu->addAction(QStringLiteral("Quit"), this, &QWidget::close);
 
@@ -3139,6 +3161,7 @@ private:
     ProjectController projectController_{session_};
     UpdateController updateController_;
     ViewportWidgetApi *viewport_ = nullptr;
+    WorkbenchRenderResult lastWorkbenchRenderResult_;
     ToolShelf *toolShelf_ = nullptr;
     QLabel *coordinateLabel_ = nullptr;
     QLabel *joinFeedbackLabel_ = nullptr;

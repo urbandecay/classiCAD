@@ -519,7 +519,8 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   that cutoff for the other texture alpha modes. The normalized surface UVs
   map each active knot domain to `[0, 1]`, and screen-space samples use
   perspective-correct interpolation before alpha lookup.
-- Validation is pending; this focused change was not built or tested.
+- The project build passed after this change; matched visual comparison is
+  still pending and no GUI was launched.
 
 ## Phase Two: Solid shading defaults audit (2026-10-12)
 
@@ -535,7 +536,8 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   confirmed by querying its Python API in the 5.2.2 factory-startup runtime;
   the [versioned `View3DShading` API](https://docs.blender.org/api/5.2/bpy.types.View3DShading.html#bpy.types.View3DShading.show_object_outline)
   documents the setting.
-- Build and visual validation were intentionally not run in this audit.
+- The audit itself did not build or launch the GUI; the later project build
+  passed, while matched visual validation remains open.
 
 ## Upstream behavioral references
 

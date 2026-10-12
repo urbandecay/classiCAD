@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QImageWriter>
+#include <QSysInfo>
 
 #include <algorithm>
 #include <cmath>
@@ -262,9 +263,15 @@ bool WorkbenchRenderResult::saveDepthPfm(const QString &path,
         }
         return false;
     }
-    const QByteArray header = QStringLiteral("Pf\n%1 %2\n-1.0\n")
+    // PFM uses the sign of its scale value to declare the byte order of the
+    // following float samples. Write native floats and declare that order so
+    // the depth pass remains valid on both little- and big-endian hosts.
+    const char *scale = QSysInfo::ByteOrder == QSysInfo::LittleEndian
+                            ? "-1.0" : "1.0";
+    const QByteArray header = QStringLiteral("Pf\n%1 %2\n%3\n")
                                   .arg(combined.width())
-                                  .arg(combined.height()).toLatin1();
+                                  .arg(combined.height())
+                                  .arg(QString::fromLatin1(scale)).toLatin1();
     if (file.write(header) != header.size()) {
         if (errorMessage != nullptr) {
             *errorMessage = file.errorString();

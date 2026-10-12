@@ -362,6 +362,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform int uColorTransform;
         uniform float uColorExposure;
         uniform float uColorGamma;
+        uniform bool uSceneLinearOutput;
         uniform vec3 uLightDirection[4];
         uniform vec3 uLightDiffuse[4];
         uniform vec3 uLightSpecular[4];
@@ -802,14 +803,22 @@ bool ViewportSurfaceRenderer::initialize()
                 fragmentColor = vec4(color * (alpha * weight), alpha);
                 transparencyWeight = vec4(alpha * weight, 0.0, 0.0, 1.0);
             } else {
-                color = sceneLinearToAgxSrgb(color);
-                // Blender composites Edit Mode overlays after the view
-                // transform, in linear display space.
-                if (uEditModeSelected) {
-                    vec3 displayLinear = srgbToDisplayLinear(color);
-                    color = sceneLinearToSrgb(
-                        mix(displayLinear, uEditSelectionColor,
-                            uEditSelectionMix));
+                if (uSceneLinearOutput) {
+                    if (uEditModeSelected) {
+                        color = mix(color,
+                                    srgbToDisplayLinear(uEditSelectionColor),
+                                    uEditSelectionMix);
+                    }
+                } else {
+                    color = sceneLinearToAgxSrgb(color);
+                    // Blender composites Edit Mode overlays after the view
+                    // transform, in linear display space.
+                    if (uEditModeSelected) {
+                        vec3 displayLinear = srgbToDisplayLinear(color);
+                        color = sceneLinearToSrgb(
+                            mix(displayLinear, uEditSelectionColor,
+                                uEditSelectionMix));
+                    }
                 }
                 fragmentColor = vec4(color, uBaseColor.a);
                 transparencyWeight = vec4(0.0);
@@ -837,6 +846,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform int uColorTransform;
         uniform float uColorExposure;
         uniform float uColorGamma;
+        uniform bool uSceneLinearOutput;
         out vec4 fragmentColor;
         vec3 sceneLinearToSrgb(vec3 color)
         {
@@ -850,7 +860,12 @@ bool ViewportSurfaceRenderer::initialize()
             vec4 accumulation = texture(uAccumulation, vUv);
             float weight = texture(uWeight, vUv).r;
             vec3 color = max(accumulation.rgb / max(weight, 1.0e-4),
-                             vec3(0.0)) * exp2(uColorExposure);
+                             vec3(0.0));
+            if (uSceneLinearOutput) {
+                fragmentColor = vec4(color, 1.0 - accumulation.a);
+                return;
+            }
+            color *= exp2(uColorExposure);
             vec3 displayColor;
             if (uColorTransform == 1) {
                 displayColor = sceneLinearToSrgb(color);
@@ -2596,7 +2611,8 @@ bool ViewportSurfaceRenderer::draw(
     bool clearDepth,
     bool selectionOverlay,
     const ViewportRenderTargets *sharedTargets,
-    quint32 *populatedAttachments)
+    quint32 *populatedAttachments,
+    bool sceneLinearOutput)
 {
     if (populatedAttachments != nullptr) {
         *populatedAttachments = 0;
@@ -3019,6 +3035,7 @@ bool ViewportSurfaceRenderer::draw(
                                  static_cast<float>(settings.colorExposure));
         program_.setUniformValue("uColorGamma",
                                  static_cast<float>(settings.colorGamma));
+        program_.setUniformValue("uSceneLinearOutput", sceneLinearOutput);
         program_.setUniformValue("uUseShadows", useShadows);
         program_.setUniformValue("uUseShadowMap", shadowMapAvailable);
         program_.setUniformValue("uShadowVolumeShadowed", false);
@@ -3447,9 +3464,9 @@ bool ViewportSurfaceRenderer::draw(
             glDisable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
             glDisable(GL_STENCIL_TEST);
-            // The AA scene target is SRGB8_ALPHA8 and stores display-valued
-            // opaque output. Transform the OIT scene-linear resolve before
-            // source-over compositing into that target.
+            // Composite in the target's active color space. The primary AA
+            // scene target is scene-linear; display overlays keep their
+            // legacy display-space path.
             glDisable(GL_FRAMEBUFFER_SRGB);
             glEnable(GL_BLEND);
             glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
@@ -3474,6 +3491,8 @@ bool ViewportSurfaceRenderer::draw(
                 "uColorExposure", static_cast<float>(settings.colorExposure));
             transparencyResolveProgram_.setUniformValue(
                 "uColorGamma", static_cast<float>(settings.colorGamma));
+            transparencyResolveProgram_.setUniformValue(
+                "uSceneLinearOutput", sceneLinearOutput);
             glActiveTexture(GL_TEXTURE0);
             vertexArray_.bind();
             glDrawArrays(GL_TRIANGLES, 0, 3);

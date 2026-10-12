@@ -1845,7 +1845,8 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
                                         const ViewportTransform &transform,
                                         const QSize &viewportSize,
                                         qreal devicePixelRatio,
-                                        float opacity)
+                                        float opacity,
+                                        bool sceneLinearOutput)
 {
     if (picture.pictureImage.isNull() ||
         picture.geometryType != GeometryType::Picture ||
@@ -1938,6 +1939,8 @@ bool ViewportSceneRenderer::drawPicture(const Shape &picture,
         "uViewProjection", viewportViewProjection(transform, viewportSize));
     pictureProgram_.setUniformValue("uPicture", 0);
     pictureProgram_.setUniformValue("uOpacity", std::clamp(opacity, 0.0f, 1.0f));
+    pictureProgram_.setUniformValue("uSceneLinearOutput",
+                                    sceneLinearOutput ? 1 : 0);
     glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
     pictureProgram_.release();
     pictureVertexBuffer_.release();

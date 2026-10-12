@@ -28,8 +28,8 @@ struct ViewportRenderTargets {
     GLuint currentSampleColorTexture = 0;
     GLuint sceneLinearColorTexture = 0;
     GLuint historyColorTexture = 0;
-    // Workbench TAA history stores weighted log2 values of the display-linear
-    // scene color. It is an accumulation target, not scene-linear output.
+    // When true, history contains weighted log2 values of scene-linear color.
+    // The stored numbers are encoded for accumulation rather than raw RGB.
     bool historyColorIsSceneLinear = false;
     GLuint depthTexture = 0;
     // RGBA16F view-space normals and R32UI scene object IDs are shared with

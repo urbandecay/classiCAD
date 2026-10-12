@@ -6,18 +6,21 @@
 
 #include "blender_grid_renderer.h"
 #include "core/serialization/shape_json_codec.h"
+#include "workbench_lighting.h"
 
 #include <QDataStream>
 #include <QFile>
 #include <QIODevice>
 #include <QJsonDocument>
 #include <QOpenGLContext>
+#include <QtEndian>
 #include <QVector2D>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace classiCAD {
@@ -333,6 +336,94 @@ void ViewportAaRenderer::setDepthOfField(
     depthOfFieldPerspective_ = perspectiveView;
 }
 
+void ViewportAaRenderer::setDisplayTransform(
+    const ViewportShadingSettings &settings, bool sourceIsSceneLinear)
+{
+    displaySettings_ = settings;
+    sourceIsSceneLinear_ = sourceIsSceneLinear;
+    if (sceneSampleActive_) {
+        targets_.sceneLinearColorTexture = sourceIsSceneLinear
+            ? sceneColorTexture_ : 0;
+        targets_.historyColorIsSceneLinear = sourceIsSceneLinear;
+    }
+}
+
+bool ViewportAaRenderer::ensureDisplayTransformTexture()
+{
+    if (displaySettings_.colorTransform == 1) {
+        displayTransformTextureAvailable_ = false;
+        return false;
+    }
+    if (displayTransformTexture_ != 0 &&
+        displayTransformTextureMode_ == displaySettings_.colorTransform &&
+        displayTransformTextureLutId_ == displaySettings_.colorLutId) {
+        return displayTransformTextureAvailable_;
+    }
+    const int edge = workbenchAgxDisplayLutSize;
+    const qsizetype expectedBytes = qsizetype(edge) * edge * edge * 12;
+    const QVector<float> *builtin = nullptr;
+    if (displaySettings_.colorTransform == 2) {
+        builtin = &workbenchPbrNeutralDisplayLutData();
+    } else if (displaySettings_.colorTransform == 3) {
+        builtin = &workbenchFilmicDisplayLutData();
+    } else if (displaySettings_.colorTransform != 4) {
+        builtin = &workbenchAgxDisplayLutData();
+    }
+    if ((builtin != nullptr && builtin->size() != edge * edge * edge * 3) ||
+        (displaySettings_.colorTransform == 4 &&
+         displaySettings_.colorLutData.size() != expectedBytes)) {
+        displayTransformTextureAvailable_ = false;
+        return false;
+    }
+    QVector<float> customValues;
+    const float *values = nullptr;
+    if (builtin != nullptr) {
+        values = builtin->constData();
+    } else {
+        customValues.resize(edge * edge * edge * 3);
+        const auto *bytes = reinterpret_cast<const uchar *>(
+            displaySettings_.colorLutData.constData());
+        for (qsizetype index = 0; index < customValues.size(); ++index) {
+            const quint32 bits = qFromLittleEndian<quint32>(
+                bytes + index * qsizetype(sizeof(quint32)));
+            std::memcpy(&customValues[index], &bits, sizeof(bits));
+            if (!std::isfinite(customValues[index])) {
+                displayTransformTextureAvailable_ = false;
+                return false;
+            }
+        }
+        values = customValues.constData();
+    }
+    if (displayTransformTexture_ == 0) {
+        glGenTextures(1, &displayTransformTexture_);
+    }
+    if (displayTransformTexture_ == 0) {
+        displayTransformTextureAvailable_ = false;
+        return false;
+    }
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE3);
+    glGetIntegerv(GL_TEXTURE_BINDING_3D, &previousTexture);
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    glBindTexture(GL_TEXTURE_3D, displayTransformTexture_);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGB16F, edge, edge, edge, 0,
+                 GL_RGB, GL_FLOAT, values);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_3D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    displayTransformTextureAvailable_ = glGetError() == GL_NO_ERROR;
+    displayTransformTextureMode_ = displaySettings_.colorTransform;
+    displayTransformTextureLutId_ = displaySettings_.colorLutId;
+    return displayTransformTextureAvailable_;
+}
+
 bool ViewportAaRenderer::initialize()
 {
     if (initialized_) {
@@ -381,6 +472,12 @@ bool ViewportAaRenderer::initialize()
         uniform float uFStop;
         uniform vec2 uPixelSize;
         uniform bool uEncodeDisplay;
+        uniform bool uApplyViewTransform;
+        uniform sampler3D uDisplayLut;
+        uniform bool uDisplayLutAvailable;
+        uniform int uColorTransform;
+        uniform float uExposure;
+        uniform float uGamma;
         layout(location = 0) out vec4 fragmentColor;
         float cocRadius(vec2 uv)
         {
@@ -451,11 +548,30 @@ bool ViewportAaRenderer::initialize()
             vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
             return mix(high, low, lessThanEqual(color, vec3(0.0031308)));
         }
+        vec3 transformColor(vec3 color)
+        {
+            color *= exp2(uExposure);
+            if (uColorTransform == 1 ||
+                (!uDisplayLutAvailable && uColorTransform != 4)) {
+                color = linearToSrgb(color);
+            } else if (uDisplayLutAvailable) {
+                vec3 bounded = clamp(color, vec3(0.0), vec3(2.0));
+                vec3 coordinate = (bounded * 32.0 + 0.5) / 65.0;
+                color = texture(uDisplayLut, coordinate).rgb;
+            }
+            return pow(max(color, vec3(0.0)),
+                       vec3(1.0 / max(uGamma, 0.000001)));
+        }
         void main()
         {
             vec4 source = uUseDepthOfField ? dofGather(vUv) : texture(uSource, vUv);
-            fragmentColor = vec4(uEncodeDisplay ? linearToSrgb(source.rgb) : source.rgb,
-                                 source.a);
+            vec3 outputColor = source.rgb;
+            if (uApplyViewTransform) {
+                outputColor = transformColor(outputColor);
+            } else if (uEncodeDisplay) {
+                outputColor = linearToSrgb(outputColor);
+            }
+            fragmentColor = vec4(outputColor, source.a);
         }
     )glsl";
     // Workbench 5.2.2's DOF is a half-resolution, multi-pass gather. This
@@ -763,6 +879,12 @@ void ViewportAaRenderer::destroyTargets()
         glDeleteTextures(1, &sceneColorTexture_);
         sceneColorTexture_ = 0;
     }
+    if (displayTransformTexture_ != 0) {
+        glDeleteTextures(1, &displayTransformTexture_);
+        displayTransformTexture_ = 0;
+        displayTransformTextureMode_ = -1;
+        displayTransformTextureLutId_.clear();
+    }
     if (depthTexture_ != 0) {
         glDeleteTextures(1, &depthTexture_);
         depthTexture_ = 0;
@@ -827,8 +949,8 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
 
     glGenTextures(1, &sceneColorTexture_);
     glBindTexture(GL_TEXTURE_2D, sceneColorTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, pixelSize.width(),
-                 pixelSize.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, pixelSize.width(),
+                 pixelSize.height(), 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -1210,14 +1332,15 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     targets_.sampleIndex = sampleIndex;
     targets_.sampleCount = requestedSampleCount_;
     targets_.currentSampleColorTexture = sceneColorTexture_;
-    targets_.sceneLinearColorTexture = 0;
+    targets_.sceneLinearColorTexture = sourceIsSceneLinear_
+        ? sceneColorTexture_ : 0;
     targets_.historyColorTexture = historyColorTexture_;
     targets_.depthTexture = depthTexture_;
     targets_.viewSpaceNormalTexture = viewSpaceNormalTexture_;
     targets_.objectIdTexture = objectIdTexture_;
     targets_.materialDataTexture = 0;
     targets_.shadowMaskTexture = 0;
-    targets_.historyColorIsSceneLinear = false;
+    targets_.historyColorIsSceneLinear = sourceIsSceneLinear_;
     targets_.validAttachments = 0;
     sceneSampleActive_ = true;
     return true;
@@ -1530,6 +1653,7 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousTexture = 0;
     GLint previousDepthTexture = 0;
+    GLint previousDisplayLutTexture = 0;
     const GLboolean previousBlend = glIsEnabled(GL_BLEND);
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
     const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
@@ -1545,6 +1669,10 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
     glActiveTexture(GL_TEXTURE1);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousDepthTexture);
+    const bool transformAvailable = sourceIsSceneLinear_ &&
+        displaySettings_.colorTransform != 1 && ensureDisplayTransformTexture();
+    glActiveTexture(GL_TEXTURE3);
+    glGetIntegerv(GL_TEXTURE_BINDING_3D, &previousDisplayLutTexture);
 
     glBindFramebuffer(GL_FRAMEBUFFER, destinationFramebuffer);
     glViewport(destinationViewport[0], destinationViewport[1],
@@ -1563,6 +1691,18 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
         "uUseDepthOfField", applyDepthOfField && depthOfFieldEnabled_ &&
                                 depthOfFieldPerspective_ && depthTexture_ != 0);
     presentProgram_.setUniformValue("uEncodeDisplay", encodeDisplay);
+    presentProgram_.setUniformValue("uApplyViewTransform", sourceIsSceneLinear_);
+    presentProgram_.setUniformValue("uDisplayLutAvailable", transformAvailable);
+    presentProgram_.setUniformValue("uColorTransform",
+                                    displaySettings_.colorTransform);
+    presentProgram_.setUniformValue("uExposure",
+                                    static_cast<float>(displaySettings_.colorExposure));
+    presentProgram_.setUniformValue("uGamma",
+                                    static_cast<float>(displaySettings_.colorGamma));
+    presentProgram_.setUniformValue("uDisplayLut", 3);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_3D,
+                  transformAvailable ? displayTransformTexture_ : 0);
     presentProgram_.setUniformValue(
         "uNearFar", QVector2D(float(depthOfFieldOptics_.clipStart),
                               float(depthOfFieldOptics_.clipEnd)));
@@ -1587,6 +1727,9 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousDepthTexture));
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_3D,
+                  static_cast<GLuint>(previousDisplayLutTexture));
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
@@ -1749,12 +1892,15 @@ bool ViewportAaRenderer::finishSceneSample()
     targets_.sampleCount = requestedSampleCount_;
     targets_.validAttachments |= ViewportRenderTargets::CurrentSampleColor |
                                  ViewportRenderTargets::Depth;
+    if (sourceIsSceneLinear_) {
+        targets_.validAttachments |= ViewportRenderTargets::SceneLinearColor;
+    }
     if (accumulatedSampleCount_ > 0) {
         targets_.validAttachments |= ViewportRenderTargets::HistoryColor;
     }
 
     drawPresentation(presentTexture, destinationFramebuffer_, destinationViewport_,
-                     true, false);
+                     !sourceIsSceneLinear_, false);
     copyDepthToFramebuffer(destinationFramebuffer_, destinationViewport_);
     return temporalSample_ && accumulatedSampleCount_ < requestedSampleCount_;
 }
@@ -1769,7 +1915,8 @@ void ViewportAaRenderer::presentCachedHistory()
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &destinationFramebuffer);
     glGetIntegerv(GL_VIEWPORT, viewport);
     drawPresentation(resolvedColorTexture_,
-                     static_cast<GLuint>(destinationFramebuffer), viewport);
+                     static_cast<GLuint>(destinationFramebuffer), viewport,
+                     !sourceIsSceneLinear_, false);
     copyDepthToFramebuffer(static_cast<GLuint>(destinationFramebuffer), viewport);
     targets_.validAttachments |= ViewportRenderTargets::HistoryColor |
                                 ViewportRenderTargets::CurrentSampleColor |

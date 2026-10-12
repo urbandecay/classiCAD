@@ -13,6 +13,7 @@
 #include <QOpenGLShaderProgram>
 #include <QOpenGLVertexArrayObject>
 #include <QSize>
+#include <QString>
 
 #include <array>
 
@@ -27,6 +28,8 @@ public:
     void setDepthOfField(bool enabled,
                          const ViewportCameraPreferences &optics,
                          bool perspectiveView);
+    void setDisplayTransform(const ViewportShadingSettings &settings,
+                             bool sourceIsSceneLinear);
 
     // Returns true after binding a single-sample scene target. The supplied
     // history key must change whenever pixels in the Workbench scene change.
@@ -51,6 +54,7 @@ public:
 private:
     bool initialize();
     bool ensureTargets(const QSize &pixelSize);
+    bool ensureDisplayTransformTexture();
     bool runDepthOfField(GLuint sourceTexture);
     void destroyTargets();
     void drawSmaaResolve(float mixFactor);
@@ -75,6 +79,7 @@ private:
     GLuint sceneFramebuffer_ = 0;
     GLuint attachmentClearFramebuffer_ = 0;
     GLuint sceneColorTexture_ = 0;
+    GLuint displayTransformTexture_ = 0;
     GLuint depthTexture_ = 0;
     GLuint viewSpaceNormalTexture_ = 0;
     GLuint objectIdTexture_ = 0;
@@ -102,6 +107,11 @@ private:
     ViewportCameraPreferences depthOfFieldOptics_;
     bool depthOfFieldEnabled_ = false;
     bool depthOfFieldPerspective_ = false;
+    ViewportShadingSettings displaySettings_;
+    bool sourceIsSceneLinear_ = false;
+    bool displayTransformTextureAvailable_ = false;
+    int displayTransformTextureMode_ = -1;
+    QString displayTransformTextureLutId_;
     GLuint destinationFramebuffer_ = 0;
     GLint destinationViewport_[4] = {};
     int requestedSampleCount_ = 1;

@@ -36,7 +36,8 @@ public:
               bool clearDepth = true,
               bool selectionOverlay = false,
               const ViewportRenderTargets *sharedTargets = nullptr,
-              quint32 *populatedAttachments = nullptr);
+              quint32 *populatedAttachments = nullptr,
+              bool sceneLinearOutput = false);
 
 private:
     struct SurfaceVertex {

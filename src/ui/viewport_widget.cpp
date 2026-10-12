@@ -6631,14 +6631,15 @@ public:
                 aa.setDepthOfField(settings.depthOfField,
                                    renderCamera.cameraPreferences(),
                                    renderCamera.isPerspectiveEnabled());
+                aa.setDisplayTransform(settings, true);
                 if (!grid.renderBackgroundToCurrentFramebuffer(
                         pixelSize, 1.0,
-                        viewportShadingBackgroundColor(settings))) {
+                        viewportShadingBackgroundColor(settings), true)) {
                     return false;
                 }
                 const bool surfacesDrawn = surface.draw(
                     renderFrame.objects, aa.sampleCamera(), pixelSize, 1.0,
-                    settings, false, true, false, &aa.targets());
+                    settings, false, true, false, &aa.targets(), nullptr, true);
                 return surfacesDrawn;
             },
             [this, &strokes, &renderCamera](
@@ -10629,6 +10630,7 @@ protected:
                     viewportShadingSettings_.depthOfField,
                     viewportTransform_.cameraPreferences(),
                     viewportTransform_.isPerspectiveEnabled());
+                aaRenderer->setDisplayTransform(renderShadingSettings, true);
                 aaSceneSampleActive = aaRenderer->beginSceneSample(
                     renderFrame.viewportSize, devicePixelRatioF(),
                     renderFrame.camera, historyKey,
@@ -10639,7 +10641,7 @@ protected:
                     nativeRenderer->renderBackgroundToCurrentFramebuffer(
                         renderFrame.viewportSize, devicePixelRatioF(),
                         viewportShadingBackgroundColor(
-                            viewportShadingSettings_));
+                            viewportShadingSettings_), true);
                 } else if (aaRenderer->hasCachedHistory()) {
                     aaRenderer->presentCachedHistory();
                     cachedScenePresented = true;
@@ -10659,7 +10661,8 @@ protected:
                                                         sceneCamera,
                                                         renderFrame.viewportSize,
                                                         devicePixelRatioF(),
-                                                        preview.opacity)) {
+                                                        preview.opacity,
+                                                        aaSceneSampleActive)) {
                             failedScenePicturePreviews.append(&preview.image);
                         }
                     }
@@ -10682,7 +10685,8 @@ protected:
                         renderFrame.viewportSize, devicePixelRatioF(),
                         renderShadingSettings, false, true, false,
                         aaRenderer != nullptr ? &aaRenderer->targets() : nullptr,
-                        &populatedAttachments);
+                        &populatedAttachments,
+                        aaSceneSampleActive);
                 if (aaRenderer != nullptr && surfacesDrawn) {
                     aaRenderer->markCurrentSampleAttachmentsValid(
                         populatedAttachments);

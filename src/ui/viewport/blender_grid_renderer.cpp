@@ -528,7 +528,8 @@ bool BlenderGridRenderer::renderToCurrentFramebuffer(
 bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
     const QSize &viewportSize,
     qreal devicePixelRatio,
-    const QColor &solidColor)
+    const QColor &solidColor,
+    bool sceneLinearOutput)
 {
     if (viewportSize.isEmpty() || QOpenGLContext::currentContext() == nullptr) {
         return false;
@@ -583,6 +584,8 @@ bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
         backgroundProgram_.setUniformValue(
             "uGradient", QVector3D(low.redF(), low.greenF(),
                                    low.blueF()));
+        backgroundProgram_.setUniformValue("uSceneLinearOutput",
+                                           sceneLinearOutput ? 1 : 0);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     backgroundProgram_.release();

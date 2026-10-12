@@ -5,6 +5,7 @@
 uniform vec2 uViewportSize;
 uniform vec3 uHighGradient;
 uniform vec3 uGradient;
+uniform int uSceneLinearOutput;
 
 out vec4 fragmentColor;
 
@@ -28,7 +29,23 @@ void main()
                                  0.0,
                                  1.0);
 
-    // Blend the theme colors in gamma space, then return to linear space.
+    if (uSceneLinearOutput != 0) {
+        // QColor components are sRGB encoded. Decode before interpolation so
+        // this pass can feed a scene-linear render target.
+        vec3 highLinear = mix(uHighGradient / 12.92,
+                              pow((uHighGradient + 0.055) / 1.055,
+                                  vec3(2.4)),
+                              step(vec3(0.04045), uHighGradient));
+        vec3 lowLinear = mix(uGradient / 12.92,
+                             pow((uGradient + 0.055) / 1.055,
+                                 vec3(2.4)),
+                             step(vec3(0.04045), uGradient));
+        vec3 color = mix(highLinear, lowLinear, gradientFactor);
+        fragmentColor = vec4(color, 1.0);
+        return;
+    }
+
+    // Preserve the legacy output for callers rendering directly to a display target.
     vec3 highGamma = pow(uHighGradient, vec3(1.0 / 2.2));
     vec3 lowGamma = pow(uGradient, vec3(1.0 / 2.2));
     vec3 color = pow(mix(highGamma, lowGamma, gradientFactor), vec3(2.2));

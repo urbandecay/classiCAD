@@ -213,7 +213,8 @@ public:
                      const ViewportTransform &transform,
                      const QSize &viewportSize,
                      qreal devicePixelRatio,
-                     float opacity);
+                     float opacity,
+                     bool sceneLinearOutput = false);
 
 private:
     struct PictureTexture {

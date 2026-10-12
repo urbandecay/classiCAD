@@ -58,7 +58,8 @@ public:
                                     const BlenderGridAppearance &appearance);
     bool renderBackgroundToCurrentFramebuffer(const QSize &viewportSize,
                                               qreal devicePixelRatio,
-                                              const QColor &solidColor = QColor());
+                                              const QColor &solidColor = QColor(),
+                                              bool sceneLinearOutput = false);
     bool renderUnjitteredSceneDepthToCurrentFramebuffer(
         const ViewportTransform &transform,
         const QSize &viewportSize,

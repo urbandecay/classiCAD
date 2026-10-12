@@ -135,13 +135,11 @@ Port the behavior behind Blender's Viewport Anti-Aliasing preference, not merely
 
 ### Smooth Wires: Overlay and Edit Mode
 
-The screenshot's Overlay and Edit Mode checkboxes are Smooth Wires preferences. They control antialiasing for the corresponding wire categories. They are separate from Workbench surface shading and from the grid's own line rendering. Blender's Edit Mode Smooth Wires preference is marked as requiring a restart in its preference definition.
+The screenshot's Overlay and Edit Mode checkboxes are Smooth Wires preferences. They control antialiasing for the corresponding wire categories. They are separate from Workbench surface shading and from the grid's own line rendering. Blender 5.2.2's RNA source (`rna_userdef.cc`, `use_overlay_smooth_wire` and `use_edit_mode_smooth_wire`) confirms Overlay updates live while Edit Mode says “requires restart”; both properties request a GPU update. The Overlay wireframe pass (`overlay_wireframe.hh`) gates custom depth bias on the Overlay preference. classiCAD routes the two settings to separate stroke categories and gates depth bias with the selected category.
 
-- Route overlay-wire smoothing to Blender-equivalent overlay strokes.
-- Route edit-mode wire smoothing to edit-mode edges.
-- Keep these switches independent. Turning off overlay wire smoothing must not turn off grid antialiasing, surface antialiasing, or edit-mode smoothing.
-- Confirm which classiCAD strokes correspond to Blender overlays and edit-mode edges before wiring the preferences. Do not use a generic scene stroke flag if it groups unlike Blender draw passes.
-- Preserve the restart requirement for Edit Mode Smooth Wires. Verify the v5.2.2 UI and RNA definition for the Overlay setting before deciding whether it can update live.
+- Overlay smoothing routes to committed curve strokes and wireframe surface lines; Edit Mode smoothing routes to component controls/cages and Solid-mode `NurbsSolid` boundaries. The GPU categories stay independent of each other, the grid, and surface antialiasing.
+- Preserve the restart requirement for Edit Mode Smooth Wires; Overlay Smooth Wires updates live in Blender 5.2.2 and classiCAD.
+- Remaining fallback gap: QPainter's prepared-segment path applies the category's antialiasing preference but projects strokes without depth testing, per-vertex fades, or line patterns. Closing that requires depth-aware fallback composition and is broader than a safe Smooth Wires-only toggle change.
 
 ## Implementation stages
 

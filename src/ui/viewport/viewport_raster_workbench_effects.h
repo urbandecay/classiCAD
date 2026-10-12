@@ -13,6 +13,14 @@
 
 namespace classiCAD {
 
+// Retained surface layers let the QPainter cavity approximation shade the
+// opaque receiver before applying the already resolved transparent surface
+// contribution, as Blender does with its opaque and transparent passes.
+struct RasterWorkbenchSurfaceLayers {
+    QImage opaqueColor;
+    QImage transparentColor;
+};
+
 // Software Workbench screen-space effects for the QPainter fallback. The color
 // image is shaded first; this pass resolves a scene-wide depth/normal/object-ID
 // buffer from NURBS display triangles and imported polygon-mesh triangles.
@@ -21,7 +29,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const ViewportTransform &transform,
                                  const QSize &viewportSize,
                                  qreal devicePixelRatio,
-                                 const ViewportShadingSettings &settings);
+                                 const ViewportShadingSettings &settings,
+                                 const RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr);
 
 // Render surface objects into temporary color layers, use their display
 // tessellation to depth-test opaque coverage, then accumulate visible partial
@@ -34,6 +43,7 @@ bool compositeRasterWorkbenchSurfaces(
     const QSize &viewportSize,
     qreal devicePixelRatio,
     bool antialias,
-    const std::function<void(QPainter &, const ViewportRenderObject &)> &drawObject);
+    const std::function<void(QPainter &, const ViewportRenderObject &)> &drawObject,
+    RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr);
 
 } // namespace classiCAD

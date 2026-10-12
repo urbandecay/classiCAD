@@ -297,6 +297,22 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   neighborhood remain approximate; matched QPainter/Blender image comparison
   has not been performed.
 
+### QPainter cavity under translucent surfaces (2026-10-12)
+
+- The QPainter surface compositor retains its opaque surface color and its
+  resolved transparent contribution for the later cavity pass. When a
+  translucent surface covers an opaque cavity receiver, cavity now changes
+  the opaque contribution first and preserves the transparent contribution,
+  matching Blender's opaque cavity result followed by transparent color
+  compositing. Blender 5.2.2 draws the opaque pass before the transparent pass
+  in [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L496-L499);
+  its cavity effect is part of the opaque resolve and affects opaque surfaces
+  in [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L7-L13).
+- Because the QPainter cavity effect runs after scene strokes are drawn, it
+  applies the opaque-layer color delta to the final pixel to keep those strokes
+  intact. Surface/stroke overlap can therefore remain approximate; matched
+  QPainter/Blender image comparison has not been performed.
+
 ### Transparent depth and Blender Object In Front (2026-10-12)
 
 - Blender 5.2.2 stages opaque `OBJECT_IN_FRONT` geometry against scene depth,

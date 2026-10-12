@@ -322,7 +322,8 @@ bool compositeRasterWorkbenchSurfaces(
     const QSize &viewportSize,
     qreal devicePixelRatio,
     bool antialias,
-    const std::function<void(QPainter &, const ViewportRenderObject &)> &drawObject)
+    const std::function<void(QPainter &, const ViewportRenderObject &)> &drawObject,
+    RasterWorkbenchSurfaceLayers *surfaceLayers)
 {
     if (colorImage == nullptr || colorImage->isNull() || objects.isEmpty() ||
         !drawObject || !std::isfinite(devicePixelRatio) ||
@@ -343,6 +344,18 @@ bool compositeRasterWorkbenchSurfaces(
         }
     }
     const int pixelCount = static_cast<int>(pixelCount64);
+    if (surfaceLayers != nullptr) {
+        surfaceLayers->opaqueColor = QImage(
+            colorImage->size(), QImage::Format_ARGB32_Premultiplied);
+        surfaceLayers->opaqueColor.setDevicePixelRatio(
+            colorImage->devicePixelRatioF());
+        surfaceLayers->opaqueColor.fill(Qt::transparent);
+        surfaceLayers->transparentColor = QImage(
+            colorImage->size(), QImage::Format_ARGB32_Premultiplied);
+        surfaceLayers->transparentColor.setDevicePixelRatio(
+            colorImage->devicePixelRatioF());
+        surfaceLayers->transparentColor.fill(Qt::transparent);
+    }
     const float noDepth = -std::numeric_limits<float>::infinity();
     QVector<float> opaqueDepth(pixelCount, noDepth);
     QVector<QRgb> opaqueColor(pixelCount, qRgba(0, 0, 0, 0));
@@ -555,10 +568,24 @@ bool compositeRasterWorkbenchSurfaces(
 
     for (int y = 0; y < height; ++y) {
         auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));
+        auto *opaqueRow = surfaceLayers != nullptr
+            ? reinterpret_cast<QRgb *>(surfaceLayers->opaqueColor.scanLine(y))
+            : nullptr;
+        auto *transparentRow = surfaceLayers != nullptr
+            ? reinterpret_cast<QRgb *>(surfaceLayers->transparentColor.scanLine(y))
+            : nullptr;
         for (int x = 0; x < width; ++x) {
             const int index = y * width + x;
             const float transAlpha = transparentAlpha[index];
             QRgb surface = opaqueColor[index];
+            if (opaqueRow != nullptr) opaqueRow[x] = surface;
+            if (transparentRow != nullptr) {
+                transparentRow[x] = qRgba(
+                    std::clamp(qRound(transparentRed[index] * 255.0f), 0, 255),
+                    std::clamp(qRound(transparentGreen[index] * 255.0f), 0, 255),
+                    std::clamp(qRound(transparentBlue[index] * 255.0f), 0, 255),
+                    std::clamp(qRound(transAlpha * 255.0f), 0, 255));
+            }
             if (transAlpha > 0.0f) {
                 const float opaqueAlpha = qAlpha(surface) / 255.0f;
                 const float outAlpha = transAlpha + opaqueAlpha * (1.0f - transAlpha);
@@ -600,7 +627,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const ViewportTransform &transform,
                                  const QSize &viewportSize,
                                  qreal devicePixelRatio,
-                                 const ViewportShadingSettings &settings)
+                                 const ViewportShadingSettings &settings,
+                                 const RasterWorkbenchSurfaceLayers *surfaceLayers)
 {
     if (colorImage == nullptr || colorImage->isNull() ||
         (!settings.cavity && !settings.outline && !settings.depthOfField) ||
@@ -1219,17 +1247,42 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 continue;
             const float depthTolerance = std::max(
                 1.0e-5f, std::abs(opaqueReceiver.depth) * 1.0e-6f);
-            // The source image has already composited transparency. Applying
-            // an opaque cavity factor beneath a translucent visible surface
-            // would also darken that transparent contribution, so only shade
-            // when this opaque receiver is itself the visible top sample.
-            if (std::abs(visibleTop.depth - opaqueReceiver.depth) >
-                depthTolerance) {
+            // Blender shades its opaque pass before compositing transparent
+            // surfaces. Retain that pass's color so cavity changes only the
+            // opaque contribution when a translucent surface is in front.
+            const bool hasTransparentTop =
+                std::abs(visibleTop.depth - opaqueReceiver.depth) >
+                depthTolerance;
+            const bool hasRetainedLayers = surfaceLayers != nullptr &&
+                !surfaceLayers->opaqueColor.isNull() &&
+                !surfaceLayers->transparentColor.isNull() &&
+                surfaceLayers->opaqueColor.size() == colorImage->size() &&
+                surfaceLayers->transparentColor.size() == colorImage->size();
+            if (hasTransparentTop && !hasRetainedLayers) {
                 continue;
             }
             const float factor = factors[sampleIndex];
             if (factor == 1.0f) continue;
             const QRgb pixel = source.pixel(x, y);
+            if (hasTransparentTop && hasRetainedLayers) {
+                const int layerX = std::clamp(
+                    x, 0, surfaceLayers->opaqueColor.width() - 1);
+                const int layerY = std::clamp(
+                    y, 0, surfaceLayers->opaqueColor.height() - 1);
+                const QRgb opaque = surfaceLayers->opaqueColor.pixel(layerX, layerY);
+                const QRgb transparent = surfaceLayers->transparentColor.pixel(layerX, layerY);
+                const float remain = 1.0f - qAlpha(transparent) / 255.0f;
+                const auto applyUnderlyingCavity = [&](int channel, int opaqueChannel) {
+                    const int delta = qRound(opaqueChannel * (factor - 1.0f) * remain);
+                    return std::clamp(channel + delta, 0, 255);
+                };
+                out[x] = qRgba(
+                    applyUnderlyingCavity(qRed(pixel), qRed(opaque)),
+                    applyUnderlyingCavity(qGreen(pixel), qGreen(opaque)),
+                    applyUnderlyingCavity(qBlue(pixel), qBlue(opaque)),
+                    qAlpha(pixel));
+                continue;
+            }
             out[x] = qRgba(
                 std::clamp(qRound(qRed(pixel) * factor), 0, 255),
                 std::clamp(qRound(qGreen(pixel) * factor), 0, 255),

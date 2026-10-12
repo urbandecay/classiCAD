@@ -8895,6 +8895,7 @@ protected:
                 document_.settings().activeViewLayerKey);
         QImage gpuViewportBackground;
         QImage committedSceneLayer;
+        RasterWorkbenchSurfaceLayers rasterSurfaceLayers;
         QPainter rasterScenePainter;
         if (nativeRenderer == nullptr) {
             gpuViewportBackground = blenderGridRenderer_.render(
@@ -9034,7 +9035,7 @@ protected:
                                   object.displayName, object.libraryPath,
                                   object.meshObjectTransform,
                                   object.meshMaterials);
-                    });
+                    }, &rasterSurfaceLayers);
             }
         }
         for (const ViewportRenderObject &renderObject : sceneDrawObjects) {
@@ -11438,7 +11439,8 @@ protected:
             applyRasterWorkbenchEffects(
                 &committedSceneLayer, visibleShapes, viewportTransform_,
                 renderFrame.viewportSize, devicePixelRatioF(),
-                renderShadingSettings);
+                renderShadingSettings,
+                rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr);
             fillViewportBackground(
                 painter, rect(),
                 viewportShadingBackgroundColor(

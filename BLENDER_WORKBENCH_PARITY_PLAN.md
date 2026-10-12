@@ -736,6 +736,18 @@ classiCAD's viewport AA preference. Blender's render AA enum is `OFF`, `FXAA`,
 or 5/8/11/16/32 samples, as declared in the pinned
 [SceneDisplay API](https://docs.blender.org/api/5.0/bpy.types.SceneDisplay.html).
 
+### Workbench volume pass remains unsupported (2026-10-12)
+
+- Blender 5.2.2 draws its volume pass after transparent depth and before
+  outline, depth of field, and anti-aliasing in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L500-L506).
+- classiCAD's shared scene coordinator has no volume pass, and Blender scene
+  import does not currently create a volume object or transfer volume grids.
+  There is no payload for a Workbench volume shader to consume. Adding only
+  an empty pass hook would not render Blender volume objects; a real port first
+  needs a volume data/import contract, then a GPU volume draw stage in the same
+  position in the shared viewport/render-result pass sequence.
+
 ### Implementation plan
 
 1. **Establish a comparable baseline.** Use the same hard-edged cube, viewport pixel dimensions, projection and camera pose, clipping range, color transform, and selection/overlay state in Blender 5.2.2 and classiCAD. Capture classiCAD's native GPU path separately from QPainter. Compare AA Off, Single Pass, and 8 samples, both idle and while navigating. Save pre-AA, post-AA scene-linear, and final display-transformed outputs so edge softness can be attributed to a specific stage. Do not call the AA port complete until the edge profiles and remaining differences are recorded.

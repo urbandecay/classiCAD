@@ -28,7 +28,10 @@ bool validCameraPreferences(const ProjectViewportCameraSettings &settings)
            settings.apertureRatio <= 1.0e6 &&
            std::isfinite(settings.sensorWidthMillimeters) &&
            settings.sensorWidthMillimeters >= 1.0 &&
-           settings.sensorWidthMillimeters <= 100.0;
+           settings.sensorWidthMillimeters <= 100.0 &&
+           std::isfinite(settings.opticalSensorSizeMillimeters) &&
+           settings.opticalSensorSizeMillimeters >= 1.0 &&
+           settings.opticalSensorSizeMillimeters <= 100.0;
 }
 
 } // namespace

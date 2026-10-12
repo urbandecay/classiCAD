@@ -467,6 +467,8 @@ bool SessionSerializer::write(const QString &path,
                              view.cameraPreferences.apertureRatio);
     cameraPreferences.insert(QStringLiteral("sensorWidthMillimeters"),
                              view.cameraPreferences.sensorWidthMillimeters);
+    cameraPreferences.insert(QStringLiteral("opticalSensorSizeMillimeters"),
+                             view.cameraPreferences.opticalSensorSizeMillimeters);
     root.insert(QStringLiteral("cameraPreferences"), cameraPreferences);
 
     QJsonArray selectedObjectIds;
@@ -571,6 +573,8 @@ bool SessionSerializer::read(const QString &path,
         const QJsonValue apertureRatioValue = preferences.value(QStringLiteral("apertureRatio"));
         const QJsonValue sensorWidthValue =
             preferences.value(QStringLiteral("sensorWidthMillimeters"));
+        const QJsonValue opticalSensorSizeValue =
+            preferences.value(QStringLiteral("opticalSensorSizeMillimeters"));
         restored.view.cameraPreferences = {
             focalLengthValue.toDouble(std::numeric_limits<qreal>::quiet_NaN()),
             clipStartValue.toDouble(std::numeric_limits<qreal>::quiet_NaN()),
@@ -581,7 +585,8 @@ bool SessionSerializer::read(const QString &path,
             apertureBladesValue.toInt(0),
             apertureRotationValue.toDouble(0.0),
             apertureRatioValue.toDouble(1.0),
-            sensorWidthValue.toDouble(36.0)};
+            sensorWidthValue.toDouble(36.0),
+            opticalSensorSizeValue.toDouble(sensorWidthValue.toDouble(36.0))};
         if (!focalLengthValue.isDouble() || !clipStartValue.isDouble() ||
             !clipEndValue.isDouble() ||
             !std::isfinite(restored.view.cameraPreferences.focalLengthMillimeters) ||
@@ -608,6 +613,9 @@ bool SessionSerializer::read(const QString &path,
             !std::isfinite(restored.view.cameraPreferences.sensorWidthMillimeters) ||
             restored.view.cameraPreferences.sensorWidthMillimeters < 1.0 ||
             restored.view.cameraPreferences.sensorWidthMillimeters > 100.0 ||
+            !std::isfinite(restored.view.cameraPreferences.opticalSensorSizeMillimeters) ||
+            restored.view.cameraPreferences.opticalSensorSizeMillimeters < 1.0 ||
+            restored.view.cameraPreferences.opticalSensorSizeMillimeters > 100.0 ||
             (preferences.contains(QStringLiteral("sceneCameraEnabled")) &&
              !sceneCameraEnabledValue.isBool())) {
             return fail(errorMessage, QStringLiteral("Invalid camera preferences."));

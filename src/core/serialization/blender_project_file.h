@@ -48,6 +48,7 @@ struct ProjectViewportCameraSettings {
     double apertureRotationRadians = 0.0;
     double apertureRatio = 1.0;
     double sensorWidthMillimeters = 36.0;
+    double opticalSensorSizeMillimeters = 36.0;
     ProjectViewportViewState view;
     bool storedInProject = false;
 };

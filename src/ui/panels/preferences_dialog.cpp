@@ -157,6 +157,7 @@ public:
                 apertureBladesSpinBox_->value(),
                 apertureRotationSpinBox_->value() * 3.141592653589793 / 180.0,
                 apertureRatioSpinBox_->value(),
+                sensorWidthSpinBox_->value(),
                 sensorWidthSpinBox_->value()};
     }
 

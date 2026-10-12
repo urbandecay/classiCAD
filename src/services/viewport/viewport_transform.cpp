@@ -787,7 +787,10 @@ bool ViewportTransform::setCameraPreferences(
         preferences.apertureRatio < 0.01 || preferences.apertureRatio > 1.0e6 ||
         !std::isfinite(preferences.sensorWidthMillimeters) ||
         preferences.sensorWidthMillimeters < 1.0 ||
-        preferences.sensorWidthMillimeters > 100.0) {
+        preferences.sensorWidthMillimeters > 100.0 ||
+        !std::isfinite(preferences.opticalSensorSizeMillimeters) ||
+        preferences.opticalSensorSizeMillimeters < 1.0 ||
+        preferences.opticalSensorSizeMillimeters > 100.0) {
         return false;
     }
     cameraPreferences_ = preferences;

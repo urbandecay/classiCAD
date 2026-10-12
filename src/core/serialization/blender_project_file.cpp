@@ -155,7 +155,10 @@ bool isValidProjectViewportCameraSettings(
         settings.apertureRatio > 1.0e6 ||
         !std::isfinite(settings.sensorWidthMillimeters) ||
         settings.sensorWidthMillimeters < 1.0 ||
-        settings.sensorWidthMillimeters > 100.0) {
+        settings.sensorWidthMillimeters > 100.0 ||
+        !std::isfinite(settings.opticalSensorSizeMillimeters) ||
+        settings.opticalSensorSizeMillimeters < 1.0 ||
+        settings.opticalSensorSizeMillimeters > 100.0) {
         return false;
     }
     if (!settings.view.storedInProject) {
@@ -201,6 +204,8 @@ QJsonObject projectViewportCameraSettingsToJson(
     serialized.insert(QStringLiteral("apertureRatio"), settings.apertureRatio);
     serialized.insert(QStringLiteral("sensorWidthMillimeters"),
                       settings.sensorWidthMillimeters);
+    serialized.insert(QStringLiteral("opticalSensorSizeMillimeters"),
+                      settings.opticalSensorSizeMillimeters);
     if (settings.view.storedInProject) {
         const classiCAD::ProjectViewportViewState &view = settings.view;
         QJsonObject viewState;
@@ -273,6 +278,9 @@ bool projectViewportCameraSettingsFromJson(
         QStringLiteral("apertureRotationRadians")).toDouble(0.0);
     settings->apertureRatio = camera.value(QStringLiteral("apertureRatio")).toDouble(1.0);
     settings->sensorWidthMillimeters = camera.value(QStringLiteral("sensorWidthMillimeters")).toDouble(36.0);
+    settings->opticalSensorSizeMillimeters = camera.value(
+        QStringLiteral("opticalSensorSizeMillimeters"))
+        .toDouble(settings->sensorWidthMillimeters);
     settings->storedInProject = true;
 
     const QJsonValue viewValue = camera.value(QStringLiteral("viewState"));

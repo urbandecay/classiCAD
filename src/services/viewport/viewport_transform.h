@@ -45,7 +45,10 @@ struct ViewportCameraPreferences {
     int apertureBlades = 0;
     qreal apertureRotationRadians = 0.0;
     qreal apertureRatio = 1.0;
+    // Sensor size used by optical effects. The projection sensor value above
+    // may be adjusted to reproduce a camera frame in the viewport.
     qreal sensorWidthMillimeters = 36.0;
+    qreal opticalSensorSizeMillimeters = 36.0;
 };
 
 struct ViewportNavigationPreferences {

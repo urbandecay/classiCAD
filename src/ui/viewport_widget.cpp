@@ -944,6 +944,10 @@ bool importedSceneCameraTransform(const Document &document,
     preferences.sensorWidthMillimeters = fittedSensorExtent *
         std::max(outputSize.width(), outputSize.height()) /
         (2.0 * std::max<qreal>(1.0, fitPixelExtent));
+    // Blender's BKE_camera_sensor_size() selects sensor_y only for explicit
+    // VERTICAL fit; AUTO and HORIZONTAL use sensor_x for Workbench DOF.
+    preferences.opticalSensorSizeMillimeters =
+        sensorFit == QLatin1String("VERTICAL") ? sensorHeight : sensorWidth;
     preferences.sceneCameraEnabled =
         cameraRecord.value(QStringLiteral("dof_enabled")).toBool();
     preferences.focusDistance = cameraNumber("dof_focus_distance", 10000.0);
@@ -6567,6 +6571,8 @@ public:
         cameraSettings.apertureRotationRadians = preferences.apertureRotationRadians;
         cameraSettings.apertureRatio = preferences.apertureRatio;
         cameraSettings.sensorWidthMillimeters = preferences.sensorWidthMillimeters;
+        cameraSettings.opticalSensorSizeMillimeters =
+            preferences.opticalSensorSizeMillimeters;
         const ViewportCameraState viewState = viewportTransform_.cameraState();
         const Point3D target = viewportTransform_.viewTarget();
         ProjectViewportViewState &storedView = cameraSettings.view;
@@ -6744,6 +6750,8 @@ public:
             usingSceneCamera
                 ? sceneCameraSensorWidth
                 : renderPreferences.sensorWidthMillimeters;
+        result.camera.opticalSensorSizeMillimeters =
+            renderPreferences.opticalSensorSizeMillimeters;
         ViewportRenderFrameInput input;
         ViewportRenderFrame renderFrame = buildViewportRenderFrame(
             document_, renderCamera, outputSize, input);
@@ -6919,7 +6927,8 @@ public:
                 cameraSettings.apertureBlades,
                 cameraSettings.apertureRotationRadians,
                 cameraSettings.apertureRatio,
-                cameraSettings.sensorWidthMillimeters};
+                cameraSettings.sensorWidthMillimeters,
+                cameraSettings.opticalSensorSizeMillimeters};
             viewportTransform_.setCameraPreferences(preferences);
         }
         if (cameraSettings.view.storedInProject) {

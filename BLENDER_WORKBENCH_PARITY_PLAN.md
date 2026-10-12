@@ -555,11 +555,29 @@ in ordinary free views or orthographic views is superseded by this correction.
   and then added it again for sample coordinates. Its denominator no longer
   has an epsilon floor, preserving Blender's two-blade edge equation.
   Aperture and overall output still need visual comparison.
-  Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap
-  full-resolution gather and has no median pass. Its aperture shaping now uses
-  Blender's `blades > 1` condition and polygon/rotation/reciprocal-X-ratio
-  mapping, including the two-blade slit. Image comparison remains open. Pinned
-  gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L783-L899); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
+  Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap full-resolution gather and has no median pass. Its aperture shaping now uses Blender's `blades > 1` condition and polygon/rotation/reciprocal-X-ratio mapping, including the two-blade slit. Image comparison remains open. Pinned gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L30-L75); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
+
+### GPU and QPainter DOF optical sensor fit (2026-10-12)
+
+- Camera projection uses an effective sensor value adjusted for classiCAD's
+  viewport framing math. DOF now uses a separate `opticalSensorSizeMillimeters`
+  field, so projection zoom compensation cannot change CoC. Imported Blender
+  camera fit follows `BKE_camera_sensor_size`: explicit VERTICAL selects
+  `sensor_y`; HORIZONTAL and AUTO select `sensor_x`. This matches Blender's
+  `DofPass::init`, which computes CoC pixels from the fitted sensor and
+  multiplies by render width. Pinned sources:
+  [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L119-L147)
+  and [`camera.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/camera.cc#L324-L342).
+- Offscreen scene rendering has no `RegionView3D` camera border factor, so it
+  uses the fitted optical sensor directly. Blender applies
+  `rv3d->viewcamtexcofac[0]` only when an `rv3d` exists; classiCAD does not
+  currently import/use that factor for an interactive Blender camera-view
+  viewport. That camera-view behavior remains unsupported. Native camera
+  settings and session state preserve the optical sensor field; legacy files
+  without it fall back to the previous sensor-width value. Render-result
+  metadata keeps `sensorWidthMillimeters` as the source camera's actual X
+  sensor dimension and records the fitted optical size separately. Visual
+  comparison remains open.
 
 ### Background regression correction
 

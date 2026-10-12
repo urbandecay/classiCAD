@@ -710,6 +710,8 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("apertureRatio"), camera.apertureRatio);
     cameraJson.insert(QStringLiteral("sensorWidthMillimeters"),
                       camera.sensorWidthMillimeters);
+    cameraJson.insert(QStringLiteral("opticalSensorSizeMillimeters"),
+                      camera.opticalSensorSizeMillimeters);
     cameraJson.insert(QStringLiteral("outputWidthPixels"), combined.width());
     cameraJson.insert(QStringLiteral("outputHeightPixels"), combined.height());
     cameraJson.insert(QStringLiteral("pixelAspectX"), pixelAspectX);

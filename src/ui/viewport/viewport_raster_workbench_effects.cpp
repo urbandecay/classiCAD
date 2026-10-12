@@ -1313,7 +1313,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const qreal focal = cameraOptics.focalLengthMillimeters * 0.001;
         const qreal focus = cameraOptics.focusDistance;
         const qreal fStop = cameraOptics.fStop;
-        const qreal sensorWidth = cameraOptics.sensorWidthMillimeters * 0.001;
+        const qreal sensorWidth =
+            cameraOptics.opticalSensorSizeMillimeters * 0.001;
         const auto shapeApertureTap = [&cameraOptics](QPointF tap) {
             if (cameraOptics.apertureBlades > 1) {
                 const qreal bladeAngle =

@@ -124,6 +124,9 @@ StoredPreferences loadStoredPreferences()
     camera.sensorWidthMillimeters = settings.value(
         QStringLiteral("viewport/sensorWidthMillimeters"),
         camera.sensorWidthMillimeters).toDouble();
+    camera.opticalSensorSizeMillimeters = settings.value(
+        QStringLiteral("viewport/opticalSensorSizeMillimeters"),
+        camera.sensorWidthMillimeters).toDouble();
     dialog.cameraPreferences = camera;
 
     ViewportNavigationPreferences navigation;
@@ -287,6 +290,8 @@ void saveCameraPreferences(const ViewportCameraPreferences &preferences)
         settings.setValue(QStringLiteral("viewport/apertureRatio"),
                           preferences.apertureRatio);
         settings.setValue(QStringLiteral("viewport/sensorWidthMillimeters"),
+                          preferences.sensorWidthMillimeters);
+        settings.setValue(QStringLiteral("viewport/opticalSensorSizeMillimeters"),
                           preferences.sensorWidthMillimeters);
     });
 }

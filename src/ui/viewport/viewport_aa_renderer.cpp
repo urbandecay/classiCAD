@@ -493,7 +493,7 @@ bool ViewportAaRenderer::initialize()
         uniform vec2 uNearFar;
         uniform float uFocusDistance;
         uniform float uFocalLengthMillimeters;
-        uniform float uSensorWidthMillimeters;
+        uniform float uOpticalSensorSizeMillimeters;
         uniform float uFStop;
         uniform vec2 uPixelSize;
         uniform bool uEncodeDisplay;
@@ -520,11 +520,11 @@ bool ViewportAaRenderer::initialize()
             // units; view depth and focus distance remain in scene units.
             const float millimetersToSceneUnits = 0.001;
             float f = uFocalLengthMillimeters * millimetersToSceneUnits;
-            float sensorWidth = uSensorWidthMillimeters * millimetersToSceneUnits;
+            float sensorSize = uOpticalSensorSizeMillimeters * millimetersToSceneUnits;
             float focus = uFocusDistance;
             float coc = abs((f * f / max(uFStop * abs(focus - f), 1e-6)) *
                             ((z - focus) / max(z, 1e-6)));
-            return clamp(coc * (uPixelSize.x / max(sensorWidth, 1e-6)),
+            return clamp(coc * (uPixelSize.x / max(sensorSize, 1e-6)),
                          0.0, 12.0);
         }
         vec3 median3(vec3 a, vec3 b, vec3 c)
@@ -648,7 +648,7 @@ bool ViewportAaRenderer::initialize()
         uniform vec2 uNearFar;
         uniform float uFocusDistance;
         uniform float uFocalLengthMillimeters;
-        uniform float uSensorWidthMillimeters;
+        uniform float uOpticalSensorSizeMillimeters;
         uniform float uFStop;
         uniform int uApertureBlades;
         uniform float uApertureRotation;
@@ -666,11 +666,11 @@ bool ViewportAaRenderer::initialize()
             // depth and focus distance use unscaled Blender scene coordinates.
             const float millimetersToSceneUnits = 0.001;
             float f = uFocalLengthMillimeters * millimetersToSceneUnits;
-            float sensorWidth = uSensorWidthMillimeters * millimetersToSceneUnits;
+            float sensorSize = uOpticalSensorSizeMillimeters * millimetersToSceneUnits;
             float focus = uFocusDistance;
             return (0.5 * f * f / max(uFStop * abs(focus - f), 1e-6)) *
                    ((focus - z) / max(z, 1e-6)) *
-                   (float(textureSize(uDepth, 0).x) / max(sensorWidth, 1e-6));
+                   (float(textureSize(uDepth, 0).x) / max(sensorSize, 1e-6));
         }
         vec2 encodeCoc(float coc)
         {
@@ -1661,9 +1661,9 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
     if (!std::isfinite(focalLengthSceneUnits) || focalLengthSceneUnits <= 0.0f ||
         !std::isfinite(optics.focusDistance) || optics.focusDistance <= 0.0 ||
         !std::isfinite(optics.fStop) || optics.fStop <= 0.0 ||
-        !std::isfinite(optics.sensorWidthMillimeters) ||
-        optics.sensorWidthMillimeters <= 0.0 ||
-        !std::isfinite(optics.sensorWidthMillimeters * 0.001) ||
+        !std::isfinite(optics.opticalSensorSizeMillimeters) ||
+        optics.opticalSensorSizeMillimeters <= 0.0 ||
+        !std::isfinite(optics.opticalSensorSizeMillimeters * 0.001) ||
         std::abs(optics.focusDistance - focalLengthSceneUnits) <= 1.0e-6 ||
         !std::isfinite(optics.clipStart) || optics.clipStart <= 0.0 ||
         !std::isfinite(optics.clipEnd) || optics.clipEnd <= optics.clipStart) {
@@ -1732,8 +1732,8 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
             "uFocalLengthMillimeters",
             float(depthOfFieldOptics_.focalLengthMillimeters));
         depthOfFieldProgram_.setUniformValue(
-            "uSensorWidthMillimeters",
-            float(depthOfFieldOptics_.sensorWidthMillimeters));
+            "uOpticalSensorSizeMillimeters",
+            float(depthOfFieldOptics_.opticalSensorSizeMillimeters));
         depthOfFieldProgram_.setUniformValue("uFStop", float(depthOfFieldOptics_.fStop));
         depthOfFieldProgram_.setUniformValue("uApertureBlades",
                                              depthOfFieldOptics_.apertureBlades);
@@ -2062,8 +2062,8 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
         "uFocalLengthMillimeters",
         float(depthOfFieldOptics_.focalLengthMillimeters));
     presentProgram_.setUniformValue(
-        "uSensorWidthMillimeters",
-        float(depthOfFieldOptics_.sensorWidthMillimeters));
+        "uOpticalSensorSizeMillimeters",
+        float(depthOfFieldOptics_.opticalSensorSizeMillimeters));
     presentProgram_.setUniformValue("uFStop", float(depthOfFieldOptics_.fStop));
     presentProgram_.setUniformValue(
         "uPixelSize", QVector2D(1.0f / std::max(1, targetSize_.width()),
@@ -2367,6 +2367,7 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
     const ViewportCameraPreferences optics = frame.camera.cameraPreferences();
     stream << optics.sceneCameraEnabled << optics.focusDistance << optics.fStop
            << optics.sensorWidthMillimeters
+           << optics.opticalSensorSizeMillimeters
            << optics.focalLengthMillimeters << optics.clipStart << optics.clipEnd;
     stream << sceneContentStateKey;
     const QMatrix4x4 viewProjection =

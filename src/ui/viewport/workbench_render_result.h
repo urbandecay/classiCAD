@@ -25,6 +25,12 @@ struct WorkbenchRenderResult {
     int imageQuality = 90;
     int imageCompression = 15;
     QString tiffCodec = QStringLiteral("DEFLATE");
+    QString colorDisplayDevice;
+    QString viewTransform;
+    QString colorLook;
+    qreal colorExposure = 0.0;
+    qreal colorGamma = 1.0;
+    bool colorManagementApplied = false;
 
     bool isValid() const noexcept
     {

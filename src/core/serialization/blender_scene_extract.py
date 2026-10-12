@@ -507,6 +507,13 @@ def extract_scene(input_path, mode):
             ),
             "object_ids": [],
             "active_camera": scene_camera_record(scene, depsgraph),
+            "color_management": {
+                "display_device": scene.display_settings.display_device,
+                "view_transform": scene.view_settings.view_transform,
+                "look": scene.view_settings.look,
+                "exposure": finite_number(scene.view_settings.exposure),
+                "gamma": finite_number(scene.view_settings.gamma),
+            },
             "render_output": {
                 "resolution_x": int(render.resolution_x),
                 "resolution_y": int(render.resolution_y),

@@ -102,6 +102,11 @@ struct ViewportShadingSettings {
     qreal shadowIntensity = 0.5;
     qreal shadowOffset = 0.1;
     qreal shadowFocus = 0.0;
+    // Imported scene display transform controls used by offscreen scene renders.
+    // 0 selects the bundled AgX transform; 1 selects the Standard sRGB curve.
+    int colorTransform = 0;
+    qreal colorExposure = 0.0;
+    qreal colorGamma = 1.0;
 
     bool xrayEnabled() const noexcept
     {

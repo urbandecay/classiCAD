@@ -343,6 +343,9 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uMatcapFlipX;
         uniform sampler3D uAgxDisplayTexture;
         uniform bool uAgxDisplayAvailable;
+        uniform int uColorTransform;
+        uniform float uColorExposure;
+        uniform float uColorGamma;
         uniform vec3 uLightDirection[4];
         uniform vec3 uLightDiffuse[4];
         uniform vec3 uLightSpecular[4];
@@ -476,12 +479,17 @@ bool ViewportSurfaceRenderer::initialize()
 
         vec3 sceneLinearToAgxSrgb(vec3 color)
         {
-            if (!uAgxDisplayAvailable) {
-                return sceneLinearToSrgb(color);
+            color = max(color, vec3(0.0)) * exp2(uColorExposure);
+            vec3 displayColor;
+            if (uColorTransform == 1 || !uAgxDisplayAvailable) {
+                displayColor = sceneLinearToSrgb(color);
+            } else {
+                vec3 bounded = clamp(color, vec3(0.0), vec3(2.0));
+                vec3 coordinate = (bounded * 32.0 + 0.5) / 65.0;
+                displayColor = texture(uAgxDisplayTexture, coordinate).rgb;
             }
-            vec3 bounded = clamp(color, vec3(0.0), vec3(2.0));
-            vec3 coordinate = (bounded * 32.0 + 0.5) / 65.0;
-            return texture(uAgxDisplayTexture, coordinate).rgb;
+            return pow(max(displayColor, vec3(0.0)),
+                       vec3(1.0 / max(uColorGamma, 0.000001)));
         }
 
         vec3 cavityNoise(vec2 screenCoordinate, ivec2 pixelSize)
@@ -2646,6 +2654,12 @@ bool ViewportSurfaceRenderer::draw(
         program_.setUniformValue("uMatcapAvailable", matcapAvailable);
         const bool agxDisplayAvailable = ensureAgxDisplayTexture();
         program_.setUniformValue("uAgxDisplayAvailable", agxDisplayAvailable);
+        program_.setUniformValue("uColorTransform",
+                                 settings.colorTransform);
+        program_.setUniformValue("uColorExposure",
+                                 static_cast<float>(settings.colorExposure));
+        program_.setUniformValue("uColorGamma",
+                                 static_cast<float>(settings.colorGamma));
         program_.setUniformValue("uUseShadows", useShadows);
         program_.setUniformValue("uUseShadowMap", shadowMapAvailable);
         program_.setUniformValue("uShadowVolumeShadowed", false);

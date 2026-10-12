@@ -6451,6 +6451,21 @@ public:
             if (!activeScene) continue;
             const QJsonObject renderOutput =
                 scene.value(QStringLiteral("render_output")).toObject();
+            const QJsonObject colorManagement = scene.value(
+                QStringLiteral("color_management")).toObject();
+            result.colorDisplayDevice = colorManagement.value(
+                QStringLiteral("display_device")).toString();
+            result.viewTransform = colorManagement.value(
+                QStringLiteral("view_transform")).toString();
+            result.colorLook = colorManagement.value(
+                QStringLiteral("look")).toString();
+            const qreal exposure = colorManagement.value(
+                QStringLiteral("exposure")).toDouble();
+            const qreal gamma = colorManagement.value(
+                QStringLiteral("gamma")).toDouble(1.0);
+            if (std::isfinite(exposure)) result.colorExposure = exposure;
+            if (std::isfinite(gamma) && gamma > 0.0)
+                result.colorGamma = gamma;
             const qreal pixelAspectX = renderOutput.value(
                 QStringLiteral("pixel_aspect_x")).toDouble(1.0);
             const qreal pixelAspectY = renderOutput.value(
@@ -6511,7 +6526,20 @@ public:
                 strokes.append(std::move(stroke));
             }
         }
-        const ViewportShadingSettings settings = viewportShadingSettings_;
+        ViewportShadingSettings settings = viewportShadingSettings_;
+        result.colorManagementApplied =
+            result.colorDisplayDevice == QLatin1String("sRGB") &&
+            result.colorLook == QLatin1String("None") &&
+            (result.viewTransform == QLatin1String("AgX") ||
+             result.viewTransform == QLatin1String("Standard"));
+        if (result.colorManagementApplied) {
+            settings.colorTransform =
+                result.viewTransform == QLatin1String("Standard") ? 1 : 0;
+            settings.colorExposure = std::clamp(result.colorExposure,
+                                                -32.0, 32.0);
+            settings.colorGamma = std::clamp(result.colorGamma,
+                                             0.000001, 5.0);
+        }
         gpuSurface_->renderOffscreen(
             outputSize,
             [this, &renderFrame, &strokes, &settings, &renderCamera](

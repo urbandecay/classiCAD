@@ -138,6 +138,13 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("imageQuality"), imageQuality);
     cameraJson.insert(QStringLiteral("imageCompression"), imageCompression);
     cameraJson.insert(QStringLiteral("tiffCodec"), tiffCodec);
+    cameraJson.insert(QStringLiteral("displayDevice"), colorDisplayDevice);
+    cameraJson.insert(QStringLiteral("viewTransform"), viewTransform);
+    cameraJson.insert(QStringLiteral("look"), colorLook);
+    cameraJson.insert(QStringLiteral("exposure"), colorExposure);
+    cameraJson.insert(QStringLiteral("gamma"), colorGamma);
+    cameraJson.insert(QStringLiteral("colorManagementApplied"),
+                      colorManagementApplied);
     cameraJson.insert(QStringLiteral("outputFormat"), outputFormat);
     cameraJson.insert(QStringLiteral("blenderImageFormat"), blenderImageFormat);
     cameraJson.insert(QStringLiteral("writtenImageFormat"), writerFormat);

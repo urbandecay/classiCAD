@@ -1316,6 +1316,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             brushTransform.scale(1.0 / texture.width(), 1.0 / texture.height());
             textureBrush.setTransform(brushTransform);
             painter.save();
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
             painter.setTransform(map, true);
             painter.setBrush(textureBrush);
             painter.drawPolygon(source);

@@ -84,9 +84,9 @@ struct ViewportShadingSettings {
     QVector3D shadowDirection = QVector3D(0.57735026f, 0.57735026f,
                                           0.57735026f);
     bool backfaceCulling = false;
-    // Blender 5.2.2 initializes View3DShading with specular enabled, while
-    // object outline, shadows, and cavity are opt-in shading flags.
-    bool outline = false;
+    // Blender 5.2.2 enables specular highlights and object outlines by
+    // default, while shadows and cavity start disabled.
+    bool outline = true;
     bool specularLighting = true;
     bool shadows = false;
     bool depthOfField = false;

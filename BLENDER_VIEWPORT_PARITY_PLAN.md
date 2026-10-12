@@ -521,6 +521,22 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   perspective-correct interpolation before alpha lookup.
 - Validation is pending; this focused change was not built or tested.
 
+## Phase Two: Solid shading defaults audit (2026-10-12)
+
+- Compared a Blender 5.2.2 LTS factory-startup `VIEW_3D` shading state with
+  `ViewportShadingSettings` (using `blender --background --factory-startup`).
+  Solid mode, Studio lighting, the `Default` studio light, Material color,
+  Theme background, specular highlights on, shadows/cavity off, screen cavity
+  type, and X-Ray off all match. The classiCAD `outline` default was the
+  concrete mismatch: it was off while Blender's `show_object_outline` is on.
+- Set the classiCAD default to on. Its existing toggle and renderer path are
+  already present, so this aligns startup behavior without changing the
+  outline implementation or imported settings. The Blender factory state was
+  confirmed by querying its Python API in the 5.2.2 factory-startup runtime;
+  the [versioned `View3DShading` API](https://docs.blender.org/api/5.2/bpy.types.View3DShading.html#bpy.types.View3DShading.show_object_outline)
+  documents the setting.
+- Build and visual validation were intentionally not run in this audit.
+
 ## Upstream behavioral references
 
 - [Blender overlay grid setup](https://github.com/blender/blender/blob/main/source/blender/draw/engines/overlay/overlay_grid.hh)

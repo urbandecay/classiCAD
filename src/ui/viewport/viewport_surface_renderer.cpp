@@ -5372,6 +5372,13 @@ bool ViewportSurfaceRenderer::draw(
             vertexArray_.bind();
             glDrawArrays(GL_TRIANGLES, 0, 3);
             transparencyResolveProgram_.release();
+            if (passReport != nullptr) {
+                // This flag reports the regular scene-domain resolve. The
+                // in-front transparency resolve below has its own flag and
+                // may complete later in the same color stage.
+                passReport->markPassCompleted(
+                    ViewportRenderPass::TransparentResolve);
+            }
             if (frontWeightedOitAvailable) {
                 // Blender resolves regular transparency first, then performs
                 // a second accumulation against depth_in_front and composites
@@ -5473,8 +5480,6 @@ bool ViewportSurfaceRenderer::draw(
                 }
             }
             if (passReport != nullptr) {
-                passReport->markPassCompleted(
-                    ViewportRenderPass::TransparentResolve);
                 passReport->markPassCompleted(
                     ViewportRenderPass::TransparentColor);
             }

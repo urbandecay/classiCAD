@@ -513,7 +513,12 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   sampling to trimmed NURBS surfaces. Their shared tessellation already
   supplies normalized UV parameters per triangle; trim boundaries remain
   represented by the tessellation itself. This closes the CPU effect-mask
-  gap without changing the native GPU object-ID path.
+  gap without changing the native GPU object-ID path. The effect sampler
+  discards alpha below `0.1`, matching Blender 5.2.2's
+  `image_transparency_cutoff` for alpha-clipped textures; Blender disables
+  that cutoff for the other texture alpha modes. The normalized surface UVs
+  map each active knot domain to `[0, 1]`, and screen-space samples use
+  perspective-correct interpolation before alpha lookup.
 - Validation is pending; this focused change was not built or tested.
 
 ## Upstream behavioral references
@@ -532,4 +537,6 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 - [Blender 5.2.2 Workbench transparent pass and framebuffer attachments](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc)
 - [Blender 5.2.2 Workbench transparent accumulation shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl)
 - [Blender 5.2.2 Workbench transparent resolve shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_resolve_frag.glsl)
+- [Blender 5.2.2 Workbench texture sampling and alpha cutoff](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl)
+- [Blender 5.2.2 Workbench texture cutoff setup](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image.bsl.hh)
 - [Blender 5.2.2 OpenGL OIT blend factors](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/opengl/gl_state.cc)

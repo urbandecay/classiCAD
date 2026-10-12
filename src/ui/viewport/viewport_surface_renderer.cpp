@@ -1502,6 +1502,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                  object.shape.geometryType == GeometryType::NurbsSurface) &&
                 geometry != nullptr && geometry->shadowCasterMesh.valid) {
                 range.shadowVolumeSupported = true;
+                range.shadowVolumeClosed =
+                    object.shape.geometryType == GeometryType::NurbsSolid;
                 range.shadowVertices = geometry->shadowCasterMesh.vertices;
                 range.shadowTriangles = geometry->shadowCasterMesh.triangles;
             }
@@ -2362,6 +2364,7 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
     const QMatrix4x4 &viewProjection,
     const QSize &viewportSize,
     qreal devicePixelRatio,
+    const QVector<int> &volumeRangeIndices,
     const QVector<int> &opaqueRangeIndices)
 {
     struct EdgeAdjacency {
@@ -2424,15 +2427,42 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
     };
 
     QVector<QVector3D> volumeVertices;
-    for (const int rangeIndex : opaqueRangeIndices) {
+    QVector<QVector3D> depthPassSideVertices;
+    bool useDepthPass = true;
+    const auto isNearPlaneSafe = [&viewProjection](const QVector3D &position) {
+        const QVector4D clip =
+            viewProjection * QVector4D(position, 1.0f);
+        if (!std::isfinite(clip.x()) || !std::isfinite(clip.y()) ||
+            !std::isfinite(clip.z()) || !std::isfinite(clip.w()) ||
+            clip.w() <= 1.0e-6f) {
+            return false;
+        }
+        const float nearDistance = clip.z() + clip.w();
+        const float safetyMargin =
+            1.0e-5f * std::max(1.0f, std::abs(clip.w()));
+        return nearDistance > safetyMargin;
+    };
+    for (const int rangeIndex : volumeRangeIndices) {
         if (rangeIndex < 0 || rangeIndex >= ranges_.size()) return false;
         const DrawRange &range = ranges_[rangeIndex];
         if (!range.shadowVolumeSupported || range.shadowTriangles.isEmpty()) {
             continue;
         }
+        if (!range.shadowVolumeClosed ||
+            !opaqueRangeIndices.contains(rangeIndex)) {
+            useDepthPass = false;
+        }
         const QVector3D offset(static_cast<float>(range.offset.x),
                                static_cast<float>(range.offset.y),
                                static_cast<float>(range.offset.z));
+        for (const QVector3D &vertex : range.shadowVertices) {
+            const QVector3D position = vertex + offset;
+            if (!isNearPlaneSafe(position) ||
+                !isNearPlaneSafe(extrudeToFarPlane(position))) {
+                useDepthPass = false;
+                break;
+            }
+        }
         QVector<bool> facingLight;
         facingLight.reserve(range.shadowTriangles.size());
         QHash<quint64, EdgeAdjacency> edges;
@@ -2502,6 +2532,8 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
                     // sheet, matching Workbench's single border-edge quad.
                     appendTriangle(&volumeVertices, a, farA, farB);
                     appendTriangle(&volumeVertices, a, farB, b);
+                    appendTriangle(&depthPassSideVertices, a, farA, farB);
+                    appendTriangle(&depthPassSideVertices, a, farB, b);
                 }
                 continue;
             }
@@ -2527,9 +2559,12 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
             const QVector3D farB = extrudeToFarPlane(b);
             appendTriangle(&volumeVertices, a, farA, farB);
             appendTriangle(&volumeVertices, a, farB, b);
+            appendTriangle(&depthPassSideVertices, a, farA, farB);
+            appendTriangle(&depthPassSideVertices, a, farB, b);
         }
     }
     if (volumeVertices.isEmpty()) return false;
+    useDepthPass = useDepthPass && !depthPassSideVertices.isEmpty();
 
     GLint previousViewport[4] = {};
     GLint previousDepthFunction = GL_LESS;
@@ -2605,19 +2640,30 @@ bool ViewportSurfaceRenderer::renderShadowVolumes(
     glClearStencil(0);
     glClear(GL_STENCIL_BUFFER_BIT);
     glStencilFunc(GL_ALWAYS, 0, 0xFFFFFFFFu);
-    glStencilOpSeparate(GL_BACK, GL_KEEP, GL_INCR_WRAP, GL_KEEP);
-    glStencilOpSeparate(GL_FRONT, GL_KEEP, GL_DECR_WRAP, GL_KEEP);
+    if (useDepthPass) {
+        // Blender uses the depth-pass technique for opaque manifold casters.
+        // This route is enabled only when the full volume lies beyond the
+        // camera near plane; all other cases retain the capped depth-fail path.
+        glStencilOpSeparate(GL_BACK, GL_KEEP, GL_KEEP, GL_INCR_WRAP);
+        glStencilOpSeparate(GL_FRONT, GL_KEEP, GL_KEEP, GL_DECR_WRAP);
+    } else {
+        glStencilOpSeparate(GL_BACK, GL_KEEP, GL_INCR_WRAP, GL_KEEP);
+        glStencilOpSeparate(GL_FRONT, GL_KEEP, GL_DECR_WRAP, GL_KEEP);
+    }
 
     shadowVolumeVertexArray_.bind();
     shadowVolumeVertexBuffer_.bind();
     shadowVolumeVertexBuffer_.allocate(
-        volumeVertices.constData(),
-        volumeVertices.size() * static_cast<int>(sizeof(QVector3D)));
+        (useDepthPass ? depthPassSideVertices : volumeVertices).constData(),
+        (useDepthPass ? depthPassSideVertices.size() : volumeVertices.size()) *
+            static_cast<int>(sizeof(QVector3D)));
     shadowProgram_.bind();
     shadowProgram_.setUniformValue("uShadowViewProjection", viewProjection);
     shadowProgram_.setUniformValue("uWorldOffset", QVector3D());
     shadowProgram_.setUniformValue("uUseShadowAlphaMask", false);
-    glDrawArrays(GL_TRIANGLES, 0, volumeVertices.size());
+    glDrawArrays(GL_TRIANGLES, 0,
+                 useDepthPass ? depthPassSideVertices.size()
+                              : volumeVertices.size());
     shadowProgram_.release();
     shadowVolumeVertexBuffer_.release();
     shadowVolumeVertexArray_.release();
@@ -3246,7 +3292,7 @@ bool ViewportSurfaceRenderer::draw(
                 shadowVolumesAvailable = renderShadowVolumes(
                     workbenchShadowDirectionWorld(settings),
                     shadowViewProjection, viewportSize, devicePixelRatio,
-                    shadowVolumeRangeIndices);
+                    shadowVolumeRangeIndices, opaqueRangeIndices);
                 if (shadowVolumesAvailable) {
                     glDepthFunc(GL_LEQUAL);
                 }

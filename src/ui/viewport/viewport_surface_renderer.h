@@ -71,6 +71,7 @@ private:
         QString libraryPath;
         bool outlineHandledBySceneStroke = false;
         bool shadowVolumeSupported = false;
+        bool shadowVolumeClosed = false;
         bool shadowTextureAlphaMask = false;
         QVector<QVector3D> shadowVertices;
         QVector<std::array<int, 3>> shadowTriangles;
@@ -86,6 +87,7 @@ private:
                              const QMatrix4x4 &viewProjection,
                              const QSize &viewportSize,
                              qreal devicePixelRatio,
+                             const QVector<int> &volumeRangeIndices,
                              const QVector<int> &opaqueRangeIndices);
     bool ensureShadowMap();
     bool ensureObjectIdFramebuffer(const QSize &pixelSize);

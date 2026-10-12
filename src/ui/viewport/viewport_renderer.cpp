@@ -1225,7 +1225,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 meshTransform[5] * meshTransform[8]);
         const bool reflectedMeshTransform =
             std::isfinite(meshTransformDeterminant) &&
-            meshTransformDeterminant < -1.0e-12;
+            meshTransformDeterminant < 0.0;
         const MeshUvMap *activeUvMap = nullptr;
         for (const MeshUvMap &uvMap : mesh.uvMaps) {
             if (uvMap.name == mesh.activeUvMapName) {

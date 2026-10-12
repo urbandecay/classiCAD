@@ -5920,12 +5920,7 @@ bool ViewportSurfaceRenderer::draw(
                 glActiveTexture(GL_TEXTURE0);
                 vertexArray_.bind();
                 vertexBuffer_.bind();
-                for (int rangeIndex = 0; rangeIndex < ranges_.size();
-                     ++rangeIndex) {
-                    const DrawRange &range = ranges_[rangeIndex];
-                    if (range.count <= 0) {
-                        continue;
-                    }
+                const auto drawObjectIdRange = [&](const DrawRange &range) {
                     GLuint objectId = range.effectObjectId;
                     if (range.outlineHandledBySceneStroke) {
                         // Keep depth from suppressing outlines behind this
@@ -5995,6 +5990,21 @@ bool ViewportSurfaceRenderer::draw(
                                   static_cast<float>(range.offset.y),
                                   static_cast<float>(range.offset.z)));
                     glDrawArrays(GL_TRIANGLES, range.first, range.count);
+                };
+                // First establish regular-scene ownership. In-front surfaces
+                // are applied afterward in a separate depth domain so their
+                // IDs can cover regular geometry even when geometrically
+                // farther from the camera.
+                for (const DrawRange &range : ranges_) {
+                    if (range.count > 0 && !range.showInFront) {
+                        drawObjectIdRange(range);
+                    }
+                }
+                glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+                for (const DrawRange &range : ranges_) {
+                    if (range.count > 0 && range.showInFront) {
+                        drawObjectIdRange(range);
+                    }
                 }
                 vertexBuffer_.release();
                 vertexArray_.release();

@@ -57,7 +57,8 @@ public:
                          const OffscreenOverlayCallback &drawOverlay,
                          QImage *combined,
                          QVector<float> *depth,
-                         QString *errorMessage = nullptr);
+                         QString *errorMessage = nullptr,
+                         QVector<float> *sceneLinearRgba = nullptr);
     bool pickScenePoint(const QPointF &screenPosition,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,

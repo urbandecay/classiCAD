@@ -147,7 +147,8 @@ bool ViewportGpuSurface::renderOffscreen(
     const OffscreenOverlayCallback &drawOverlay,
     QImage *combined,
     QVector<float> *depth,
-    QString *errorMessage)
+    QString *errorMessage,
+    QVector<float> *sceneLinearRgba)
 {
     if (!isValid() || pixelSize.isEmpty() || !draw || combined == nullptr ||
         depth == nullptr || aaRenderer_ == nullptr) {
@@ -191,10 +192,47 @@ bool ViewportGpuSurface::renderOffscreen(
         pixelSize, 1.0, camera, QByteArrayLiteral("workbench-render-result"),
         true);
     bool drawn = false;
+    if (sceneLinearRgba != nullptr) sceneLinearRgba->clear();
     if (sampleStarted) {
         drawn = draw(pixelSize, *aaRenderer_, *gridRenderer_, *sceneRenderer_,
                      *surfaceRenderer_);
         aaRenderer_->finishSceneSample();
+        if (drawn && sceneLinearRgba != nullptr) {
+            const ViewportRenderTargets &targets = aaRenderer_->targets();
+            const GLuint sceneLinearTexture =
+                targets.isValid(ViewportRenderTargets::ResolvedSceneLinearColor)
+                    ? targets.resolvedSceneLinearColorTexture : 0;
+            if (sceneLinearTexture == 0) {
+                drawn = false;
+            } else {
+                const qsizetype pixelCount =
+                    qsizetype(pixelSize.width()) * pixelSize.height();
+                QVector<float> colorBottomUp(pixelCount * 4);
+                GLint previousActiveTexture = GL_TEXTURE0;
+                GLint previousTexture = 0;
+                functions.glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+                functions.glActiveTexture(GL_TEXTURE0);
+                functions.glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+                functions.glBindTexture(GL_TEXTURE_2D, sceneLinearTexture);
+                functions.glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT,
+                                        colorBottomUp.data());
+                functions.glBindTexture(GL_TEXTURE_2D,
+                                        static_cast<GLuint>(previousTexture));
+                functions.glActiveTexture(
+                    static_cast<GLenum>(previousActiveTexture));
+                sceneLinearRgba->resize(pixelCount * 4);
+                for (int row = 0; row < pixelSize.height(); ++row) {
+                    const qsizetype sourceOffset =
+                        qsizetype(pixelSize.height() - 1 - row) *
+                        pixelSize.width() * 4;
+                    const qsizetype destinationOffset =
+                        qsizetype(row) * pixelSize.width() * 4;
+                    std::copy_n(colorBottomUp.constData() + sourceOffset,
+                                qsizetype(pixelSize.width()) * 4,
+                                sceneLinearRgba->data() + destinationOffset);
+                }
+            }
+        }
         if (drawn && drawOverlay) {
             drawn = drawOverlay(pixelSize, *sceneRenderer_);
         }

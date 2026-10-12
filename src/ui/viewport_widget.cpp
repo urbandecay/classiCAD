@@ -6646,6 +6646,11 @@ public:
         ViewportShadingSettings settings = viewportShadingSettings_;
         result.colorManagementApplied =
             applyImportedSceneColorManagement(document_, &settings);
+        const bool captureSceneLinearCombined =
+            result.blenderImageFormat.compare(QLatin1String("OPEN_EXR"),
+                                               Qt::CaseInsensitive) == 0 &&
+            WorkbenchRenderResult::openExrWriterAvailable();
+        if (captureSceneLinearCombined) result.sceneLinearSize = outputSize;
         gpuSurface_->renderOffscreen(
             outputSize,
             renderCamera,
@@ -6674,7 +6679,8 @@ public:
                     strokes, renderCamera, pixelSize, 1.0, true, 1.0,
                     smoothWiresOverlay_, smoothWiresEditMode_);
             },
-            &result.combined, &result.depth, nullptr);
+            &result.combined, &result.depth, nullptr,
+            captureSceneLinearCombined ? &result.sceneLinearRgba : nullptr);
         if (result.isValid()) {
             // CAD dimensions are committed scene annotations, not transient
             // editor overlays. Include them in the saved result at the chosen
@@ -6750,8 +6756,8 @@ public:
             result.camera.view.storedInProject = true;
         }
         result.outputFormat = QStringLiteral("%1 %2-bit %3 + PFM depth")
-                                  .arg(result.blenderImageFormat)
-                                  .arg(result.colorDepth)
+                                  .arg(result.combinedFileExtension().toUpper())
+                                  .arg(result.writtenColorDepth())
                                   .arg(result.colorMode);
         return result;
     }

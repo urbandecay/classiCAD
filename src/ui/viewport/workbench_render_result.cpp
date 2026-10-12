@@ -10,6 +10,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <limits>
+
+#ifdef CLASSICAD_HAS_OPENEXR
+#include <OpenEXR/ImfChannelList.h>
+#include <OpenEXR/ImfFrameBuffer.h>
+#include <OpenEXR/ImfHeader.h>
+#include <OpenEXR/ImfOutputFile.h>
+#endif
 
 namespace classiCAD {
 
@@ -85,8 +94,72 @@ void applyPixelAspectMetadata(QImage *image, qreal aspectX, qreal aspectY)
 
 } // namespace
 
+bool WorkbenchRenderResult::openExrWriterAvailable() noexcept
+{
+#ifdef CLASSICAD_HAS_OPENEXR
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool WorkbenchRenderResult::saveCombinedOpenExr(
+    const QString &path, QString *errorMessage) const
+{
+    if (!hasValidSceneLinearCombined()) {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("The scene-linear Combined pass is empty or has invalid dimensions");
+        return false;
+    }
+#ifdef CLASSICAD_HAS_OPENEXR
+    try {
+        const int width = sceneLinearSize.width();
+        const int height = sceneLinearSize.height();
+        OPENEXR_IMF_NAMESPACE::Header header(width, height);
+        using namespace OPENEXR_IMF_NAMESPACE;
+        header.channels().insert("R", Channel(FLOAT));
+        header.channels().insert("G", Channel(FLOAT));
+        header.channels().insert("B", Channel(FLOAT));
+        header.channels().insert("A", Channel(FLOAT));
+        FrameBuffer frameBuffer;
+        char *base = reinterpret_cast<char *>(
+            const_cast<float *>(sceneLinearRgba.constData()));
+        const size_t xStride = 4 * sizeof(float);
+        const size_t yStride = size_t(width) * xStride;
+        frameBuffer.insert("R", Slice(FLOAT, base, xStride, yStride, 1, 1, 0.0));
+        frameBuffer.insert("G", Slice(FLOAT, base + sizeof(float), xStride,
+                                      yStride, 1, 1, 0.0));
+        frameBuffer.insert("B", Slice(FLOAT, base + 2 * sizeof(float), xStride,
+                                      yStride, 1, 1, 0.0));
+        frameBuffer.insert("A", Slice(FLOAT, base + 3 * sizeof(float), xStride,
+                                      yStride, 1, 1, 0.0));
+        const QByteArray encodedPath = QFile::encodeName(path);
+        OutputFile output(encodedPath.constData(), header);
+        output.setFrameBuffer(frameBuffer);
+        output.writePixels(height);
+    } catch (const std::exception &exception) {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Could not write OpenEXR Combined pass: %1")
+                                .arg(QString::fromLocal8Bit(exception.what()));
+        return false;
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+#else
+    Q_UNUSED(path);
+    if (errorMessage != nullptr)
+        *errorMessage = QStringLiteral("OpenEXR support was not found when classiCAD was configured");
+    return false;
+#endif
+}
+
 QString WorkbenchRenderResult::combinedFileExtension() const
 {
+    if (blenderImageFormat.compare(QLatin1String("OPEN_EXR"),
+                                   Qt::CaseInsensitive) == 0) {
+        return openExrWriterAvailable() ? QStringLiteral("exr")
+                                        : QStringLiteral("png");
+    }
     QString format = qtWriterFormat(blenderImageFormat);
     const QList<QByteArray> supported = QImageWriter::supportedImageFormats();
     const QByteArray requested = format.toLatin1();
@@ -103,6 +176,8 @@ QString WorkbenchRenderResult::combinedFileExtension() const
 int WorkbenchRenderResult::writtenColorDepth() const
 {
     const QString extension = combinedFileExtension();
+    if (extension == QLatin1String("exr") && openExrWriterAvailable())
+        return 32;
     return colorDepth == 16 &&
                    (extension == QLatin1String("png") ||
                     extension == QLatin1String("tif"))
@@ -116,6 +191,11 @@ bool WorkbenchRenderResult::saveCombinedImage(
         if (errorMessage != nullptr)
             *errorMessage = QStringLiteral("The viewport render result is empty");
         return false;
+    }
+    if (blenderImageFormat.compare(QLatin1String("OPEN_EXR"),
+                                   Qt::CaseInsensitive) == 0 &&
+        openExrWriterAvailable()) {
+        return saveCombinedOpenExr(path, errorMessage);
     }
     QString writerFormat = qtWriterFormat(blenderImageFormat);
     const QString extension = combinedFileExtension();

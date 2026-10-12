@@ -12,6 +12,9 @@ set(CMAKE_AUTORCC ON)
 find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
 find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS OpenGL)
+# OpenEXR is optional. When available, WorkbenchRenderResult can write its
+# unmodified scene-linear float Combined pass as a real multi-channel EXR.
+find_package(OpenEXR QUIET)
 
 set(CLASSICAD_QT_OPENGL_LIBRARIES Qt${QT_VERSION_MAJOR}::OpenGL)
 if (QT_VERSION_MAJOR EQUAL 6)
@@ -272,6 +275,13 @@ classicad_add_object_module(classicad_application_objects
 classicad_add_ui_object_module(classicad_viewport_shared_objects
     ${CLASSICAD_VIEWPORT_SHARED_SOURCES}
 )
+if (TARGET OpenEXR::OpenEXR)
+    target_link_libraries(classicad_viewport_shared_objects PRIVATE OpenEXR::OpenEXR)
+    target_compile_definitions(classicad_viewport_shared_objects PRIVATE CLASSICAD_HAS_OPENEXR=1)
+elseif (TARGET OpenEXR::IlmImf)
+    target_link_libraries(classicad_viewport_shared_objects PRIVATE OpenEXR::IlmImf)
+    target_compile_definitions(classicad_viewport_shared_objects PRIVATE CLASSICAD_HAS_OPENEXR=1)
+endif ()
 classicad_add_ui_object_module(classicad_viewport_support_objects
     ${CLASSICAD_VIEWPORT_ADAPTER_SUPPORT_SOURCES}
 )

@@ -23,10 +23,13 @@ struct ViewportRenderTargets {
         MaterialData = 1u << 5,
         ShadowMask = 1u << 6,
         HistoryColor = 1u << 7,
+        ResolvedSceneLinearColor = 1u << 8,
     };
 
     GLuint currentSampleColorTexture = 0;
     GLuint sceneLinearColorTexture = 0;
+    // Final post-DOF/AA scene-linear output, before the display transform.
+    GLuint resolvedSceneLinearColorTexture = 0;
     GLuint historyColorTexture = 0;
     // When true, history contains weighted log2 values of scene-linear color.
     // The stored numbers are encoded for accumulation rather than raw RGB.

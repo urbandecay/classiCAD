@@ -1435,6 +1435,7 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     targets_.materialDataTexture = 0;
     targets_.shadowMaskTexture = 0;
     targets_.historyColorIsSceneLinear = sourceIsSceneLinear_;
+    targets_.resolvedSceneLinearColorTexture = 0;
     targets_.validAttachments = 0;
     sceneSampleActive_ = true;
     return true;
@@ -2057,6 +2058,16 @@ bool ViewportAaRenderer::finishSceneSample()
     }
     if (accumulatedSampleCount_ > 0) {
         targets_.validAttachments |= ViewportRenderTargets::HistoryColor;
+    }
+
+    // Keep the final scene-linear texture available to offscreen render
+    // callers. It includes the active DOF and temporal resolve, but remains
+    // before display conversion and editor overlays.
+    targets_.resolvedSceneLinearColorTexture = sourceIsSceneLinear_
+        ? presentTexture : 0;
+    if (targets_.resolvedSceneLinearColorTexture != 0) {
+        targets_.validAttachments |=
+            ViewportRenderTargets::ResolvedSceneLinearColor;
     }
 
     drawPresentation(presentTexture, destinationFramebuffer_, destinationViewport_,

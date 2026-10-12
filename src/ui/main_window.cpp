@@ -412,7 +412,7 @@ private:
         window.resize(1000, 760);
         auto *layout = new QVBoxLayout(&window);
         auto *info = new QLabel(
-            QStringLiteral("Last completed result (not live)   •   Combined: %1 × %2 .%3 (%4, %5-bit file from 8-bit render)   •   Depth: linear camera distance PFM")
+            QStringLiteral("Last completed result (not live)   •   Combined: %1 × %2 .%3 (%4, %5-bit output)   •   Depth: linear camera distance PFM")
                 .arg(outputSize.width()).arg(outputSize.height())
                 .arg(result.combinedFileExtension())
                 .arg(result.colorMode)

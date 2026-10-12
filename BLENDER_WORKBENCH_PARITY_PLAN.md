@@ -56,15 +56,15 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   write fails; other supported output formats remain 8-bit. The sidecar image
   metadata records 16-bit render precision and explicitly identifies it as
   normalized display-referred data.
-- This is not Blender's float Combined pass. The normalized RGBA16 presentation
-  target clamps values to [0, 1] after display transform, so scene-linear values,
-  highlights above display white, and HDR range are not preserved. Blender
-  allocates an SFLOAT_16_16_16_16 target and reads Combined as four float
-  channels; see [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L602-L651)
-  and its float readback at [lines 654-671](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L654-L671).
-  Exact float Combined/HDR output still needs a float render-result API and a
-  float-capable writer path (for example OpenEXR), separate from this display
-  precision improvement.
+- The result now also has a separate top-down interleaved RGBA-float payload
+  captured from the final post-DOF scene-linear texture before display transform
+  or CAD annotations. When OpenEXR is found by CMake, OPEN_EXR writes those
+  channels as actual FLOAT RGBA channels; it never routes that output through
+  QImage. OpenEXR is optional because it is not a current project dependency.
+  This build did not find its development package, so this machine still saves
+  PNG fallback output and does not capture/write the float payload. The normal
+  PNG/TIFF path remains normalized and display-referred. Blender's registered
+  pass lifecycle, multi-pass result API, and matched visual output remain open.
 
 ### Weighted transparency resolve (2026-10-12)
 

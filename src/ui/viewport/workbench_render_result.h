@@ -5,8 +5,11 @@
 #include "core/serialization/blender_project_file.h"
 
 #include <QImage>
+#include <QSize>
 #include <QString>
 #include <QVector>
+
+#include <limits>
 
 namespace classiCAD {
 
@@ -14,6 +17,10 @@ namespace classiCAD {
 // and optics used to produce it.
 struct WorkbenchRenderResult {
     QImage combined;
+    // Scene-linear RGBA Combined pass, tightly packed as four floats per
+    // pixel. This is independent of the display-referred QImage above.
+    QVector<float> sceneLinearRgba;
+    QSize sceneLinearSize;
     QVector<float> depth;
     ProjectViewportCameraSettings camera;
     QString outputFormat = QStringLiteral("PNG + PFM depth");
@@ -38,11 +45,23 @@ struct WorkbenchRenderResult {
         return !combined.isNull();
     }
 
+    bool hasValidSceneLinearCombined() const noexcept
+    {
+        if (sceneLinearSize.isEmpty()) return false;
+        const qsizetype pixelCount = qsizetype(sceneLinearSize.width()) *
+                                     sceneLinearSize.height();
+        return pixelCount > 0 && pixelCount <= std::numeric_limits<qsizetype>::max() / 4 &&
+               sceneLinearRgba.size() == pixelCount * 4;
+    }
+
     bool savePng(const QString &path, QString *errorMessage = nullptr) const;
     QString combinedFileExtension() const;
     int writtenColorDepth() const;
     bool saveCombinedImage(const QString &path,
                            QString *errorMessage = nullptr) const;
+    static bool openExrWriterAvailable() noexcept;
+    bool saveCombinedOpenExr(const QString &path,
+                             QString *errorMessage = nullptr) const;
     bool saveDepthPfm(const QString &path,
                       QString *errorMessage = nullptr) const;
 };

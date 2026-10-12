@@ -312,6 +312,8 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 
 ### QPainter cavity under translucent surfaces (2026-10-12)
 
+- This update supersedes the earlier parity-matrix wording that said cavity
+  was skipped beneath visible translucent surfaces.
 - The QPainter surface compositor retains its opaque surface color and its
   resolved transparent contribution for the later cavity pass. When a
   translucent surface covers an opaque cavity receiver, cavity now changes

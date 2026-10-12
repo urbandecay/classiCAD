@@ -100,6 +100,12 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   requires adding a suitable encoder; until then, DEFLATE/PACKBITS are known
   output approximations.
 
+- PNG compression now maps Blender's 0–100 setting to the PNG writer's
+  0–9 compression level using `int(compression / 11.1111)`, clamped at both
+  ends. This matches Blender 5.2.2's [`format_png.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/format_png.cc#L67-L69);
+  for example, Blender's default value of 15 selects level 1. The mapping only
+  applies to PNG and leaves the separate TIFF codec handling unchanged.
+
 ### Opaque-film scene World background (2026-10-12)
 
 - Blender Workbench imports each scene's `World.color` as scene-linear RGB in

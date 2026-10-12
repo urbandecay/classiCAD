@@ -60,7 +60,9 @@ void applyImageWriterSettings(QImageWriter *writer,
     if (writerFormat == QLatin1String("jpeg")) {
         writer->setQuality(std::clamp(quality, 0, 100));
     } else if (writerFormat == QLatin1String("png")) {
-        writer->setCompression(std::clamp(compression, 0, 100));
+        const int compressionLevel = std::clamp(
+            int(float(std::clamp(compression, 0, 100)) / 11.1111f), 0, 9);
+        writer->setCompression(compressionLevel);
     } else if (writerFormat == QLatin1String("tga") &&
                (key == QLatin1String("TARGA") ||
                 key == QLatin1String("TARGA_RAW"))) {

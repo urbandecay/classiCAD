@@ -661,7 +661,9 @@ bool ViewportAaRenderer::initialize()
         }
         vec2 shapeAperture(vec2 disk)
         {
-            if (uApertureBlades >= 3) {
+            // Blender Workbench enables polygon shaping for every blade
+            // count above one, including the two-blade slit aperture.
+            if (uApertureBlades > 1) {
                 float bladeAngle = 6.28318530718 / float(uApertureBlades);
                 float angle = atan(disk.y, disk.x) - uApertureRotation;
                 float sector = mod(angle + 0.5 * bladeAngle, bladeAngle) -

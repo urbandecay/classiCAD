@@ -284,10 +284,19 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
         const PixelType pixelType = halfPrecision ? HALF : FLOAT;
         const bool rgbOnly = colorMode.compare(QLatin1String("RGB"),
                                                Qt::CaseInsensitive) == 0;
+        const bool bwOnly = colorMode.compare(QLatin1String("BW"),
+                                              Qt::CaseInsensitive) == 0;
+        const bool omitAlpha = rgbOnly || bwOnly;
+        const auto luminance = [](const float *rgb) {
+            // Blender's bundled default OCIO config uses these Rec.709 luma
+            // coefficients. The scene-linear Combined RGB is already
+            // premultiplied, matching Blender's alpha-under-black step.
+            return 0.2126f * rgb[0] + 0.7152f * rgb[1] + 0.0722f * rgb[2];
+        };
         header.channels().insert("R", Channel(pixelType));
         header.channels().insert("G", Channel(pixelType));
         header.channels().insert("B", Channel(pixelType));
-        if (!rgbOnly) {
+        if (!omitAlpha) {
             header.channels().insert("A", Channel(pixelType));
         }
         const bool includeDepth = hasSceneLinearDepthPass();
@@ -308,10 +317,15 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
             halfColor.resize(size_t(width) * size_t(height));
             for (size_t index = 0; index < halfColor.size(); ++index) {
                 const float *source = sceneLinearRgba.constData() + index * 4;
-                halfColor[index] = Rgba(toHalfRange(source[0]),
-                                        toHalfRange(source[1]),
-                                        toHalfRange(source[2]),
-                                        toHalfRange(source[3]));
+                if (bwOnly) {
+                    const float gray = toHalfRange(luminance(source));
+                    halfColor[index] = Rgba(gray, gray, gray, 1.0f);
+                } else {
+                    halfColor[index] = Rgba(toHalfRange(source[0]),
+                                            toHalfRange(source[1]),
+                                            toHalfRange(source[2]),
+                                            toHalfRange(source[3]));
+                }
             }
             constexpr size_t componentStride = sizeof(Rgba) / 4;
             char *halfBase = reinterpret_cast<char *>(&halfColor.front().r);
@@ -322,7 +336,7 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
                                           xStride, yStride));
             frameBuffer.insert("B", Slice(HALF, halfBase + 2 * componentStride,
                                           xStride, yStride));
-            if (!rgbOnly) {
+            if (!omitAlpha) {
                 frameBuffer.insert("A", Slice(HALF,
                                               halfBase + 3 * componentStride,
                                               xStride, yStride));
@@ -339,15 +353,22 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
                                size_t(width) * sizeof(Rgba)));
             }
         } else {
-            if (rgbOnly) {
+            if (omitAlpha) {
                 rgbChannels.resize(size_t(width) * size_t(height) * 3);
                 for (size_t index = 0; index < size_t(width) * size_t(height);
                      ++index) {
                     const float *source = sceneLinearRgba.constData() + index * 4;
                     float *destination = rgbChannels.data() + index * 3;
-                    destination[0] = source[0];
-                    destination[1] = source[1];
-                    destination[2] = source[2];
+                    if (bwOnly) {
+                        const float gray = luminance(source);
+                        destination[0] = gray;
+                        destination[1] = gray;
+                        destination[2] = gray;
+                    } else {
+                        destination[0] = source[0];
+                        destination[1] = source[1];
+                        destination[2] = source[2];
+                    }
                 }
                 char *base = reinterpret_cast<char *>(rgbChannels.data());
                 const size_t xStride = 3 * sizeof(float);

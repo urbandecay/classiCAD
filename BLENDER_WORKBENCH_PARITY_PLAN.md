@@ -94,14 +94,20 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   and the RGBE/RLE path has source review, but no decoder round-trip comparison
   has been run.
 
-- EXR output now honors RGB color mode by writing only R/G/B for both HALF and
-  FLOAT channel storage. The scene-linear payload is already premultiplied, so
-  its RGB values already represent compositing against black; the writer
-  preserves them unchanged and omits A. Blender's pinned
-  [`openexr_api.cpp`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/openexr/openexr_api.cpp#L652-L710)
-  includes A only when the source image has alpha; RGB mode therefore omits
-  that channel. BW mode remains a separate gap: classiCAD still writes the
-  existing RGBA channels instead of Blender's grayscale output.
+- EXR output honors RGB and BW color modes for both HALF and FLOAT channel
+  storage, writing only R/G/B and omitting A. RGB preserves the existing
+  scene-linear values, which are already premultiplied against black. BW
+  computes the dot product with the bundled default Rec.709 luma coefficients
+  `(0.2126, 0.7152, 0.0722)` and repeats that grayscale value into R/G/B. Blender
+  applies alpha-under-black before conversion for non-RGBA output, and its
+  `IMB_color_to_bw` uses `IMB_colormanagement_get_luminance`; see pinned
+  [`colormanagement.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/colormanagement.cc#L2351-L2380),
+  [`conversion.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/conversion.cc#L387-L405),
+  and [`colormanagement_inline.h`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/colormanagement_inline.h#L19-L27).
+  The OpenEXR writer emits R/G/B and conditionally A as documented in pinned
+  [`openexr_api.cpp`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/openexr/openexr_api.cpp#L652-L710).
+  Custom OCIO configurations with non-default luma coefficients are not
+  imported, so BW output currently uses the bundled default coefficients.
 
 - TIFF compression currently does not preserve all Blender codec settings.
   Blender 5.2.2's `ImageFormatData` defaults to DEFLATE and maps DEFLATE,

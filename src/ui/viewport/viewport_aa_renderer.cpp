@@ -670,9 +670,9 @@ bool ViewportAaRenderer::initialize()
                                       max(cos(sector), 1e-5);
                 disk *= polygonRadius;
             }
-            float ratio = max(uApertureRatio, 0.01);
-            if (ratio > 1.0) disk.x *= ratio;
-            else disk.y /= ratio;
+            // Blender stores the aperture ratio as an X scale reciprocal:
+            // sample.x = r * cos(T) * (1.0 / aperture_ratio).
+            disk.x /= max(uApertureRatio, 0.01);
             return disk;
         }
         vec4 weightedFour(vec4 a, vec4 b, vec4 c, vec4 d,

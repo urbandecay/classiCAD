@@ -564,8 +564,6 @@ def workbench_shading_record(scene, shading=None):
         unsupported.append("studiolight_background_alpha")
     if record["studiolight_background_blur"] != 0.5:
         unsupported.append("studiolight_background_blur")
-    if record["studiolight_intensity"] != 1.0:
-        unsupported.append("studiolight_intensity")
     if matcap_flip_x is None:
         unsupported.append("matcap_flip_x (not exposed by Blender 5.2.2 scene shading RNA)")
     record["unsupported"] = unsupported
@@ -1172,6 +1170,9 @@ def extract_scene(input_path, mode):
         })
     for scene in bpy.data.scenes:
         depsgraph = depsgraph_for_scene(scene) if mode == "evaluated" else None
+        camera_depsgraph = depsgraph
+        if camera_depsgraph is None and scene.camera is not None:
+            camera_depsgraph = depsgraph_for_scene(scene)
         render = scene.render
         scene_record = {
             "scene_id": stable_id(scene),
@@ -1190,7 +1191,10 @@ def extract_scene(input_path, mode):
                 if scene.name_full in scene_names
             ),
             "object_ids": [],
-            "active_camera": scene_camera_record(scene, depsgraph),
+            # Camera and focus-object transforms are evaluated scene state,
+            # even when mesh import is explicitly set to preserve original
+            # (unevaluated) geometry.
+            "active_camera": scene_camera_record(scene, camera_depsgraph),
             "workbench_shading": workbench_shading_record(scene),
             "workbench_viewport_shading": saved_viewport_shading_record(scene),
             "color_management": bake_color_lut(

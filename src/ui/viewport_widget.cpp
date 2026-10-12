@@ -7427,6 +7427,8 @@ protected:
         cavityLayout->setContentsMargins(0, 0, 0, 0);
         cavityCheck_ = new QCheckBox(QStringLiteral("Cavity"), cavityRow);
         cavityCheck_->setObjectName(QStringLiteral("WorkbenchCavity"));
+        cavityCheck_->setToolTip(QStringLiteral(
+            "The QPainter fallback approximates Blender's cavity pass and applies it after the display transform, so its tones can differ from the GPU renderer."));
         cavityLayout->addWidget(cavityCheck_);
         auto *cavityTypeButton = new QToolButton(cavityRow);
         cavityTypeButton->setObjectName(QStringLiteral("CavityType"));

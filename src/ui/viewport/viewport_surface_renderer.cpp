@@ -1322,6 +1322,9 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 !object.workbenchMaterial.textureImagePath.isEmpty() ||
                 !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty();
             range.useTextureColor = hasSurfaceUv && hasSurfaceTexture;
+            // The depth-map fallback can use the same exact-domain NURBS UVs
+            // and image input as the GPU color pass for untrimmed surfaces.
+            range.shadowTextureAlphaMask = range.useTextureColor;
             range.textureImagePath = range.useTextureColor
                 ? object.workbenchMaterial.textureImagePath : QString{};
             range.textureImageSrgb = object.workbenchMaterial.textureImageSrgb;

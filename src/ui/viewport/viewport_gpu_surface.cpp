@@ -12,6 +12,7 @@
 #include <QSurfaceFormat>
 
 #include <algorithm>
+#include <cmath>
 
 namespace classiCAD {
 
@@ -201,11 +202,31 @@ bool ViewportGpuSurface::renderOffscreen(
         functions.glReadPixels(0, 0, pixelSize.width(), pixelSize.height(),
                                GL_DEPTH_COMPONENT, GL_FLOAT,
                                bottomUp.data());
+        const ViewportCameraPreferences cameraPreferences =
+            camera.cameraPreferences();
+        const float nearClip = static_cast<float>(cameraPreferences.clipStart);
+        const float farClip = static_cast<float>(cameraPreferences.clipEnd);
+        const bool perspective = camera.isPerspectiveEnabled();
         const qsizetype rowLength = pixelSize.width();
         for (int row = 0; row < pixelSize.height(); ++row) {
-            std::copy_n(bottomUp.constData() +
-                            (pixelSize.height() - 1 - row) * rowLength,
-                        rowLength, depth->data() + row * rowLength);
+            const float *source = bottomUp.constData() +
+                (pixelSize.height() - 1 - row) * rowLength;
+            float *destination = depth->data() + row * rowLength;
+            for (qsizetype column = 0; column < rowLength; ++column) {
+                const float z = source[column];
+                if (!std::isfinite(z) || z >= 1.0f || nearClip <= 0.0f ||
+                    farClip <= nearClip) {
+                    destination[column] = 0.0f;
+                    continue;
+                }
+                const float normalizedDepth = std::clamp(z, 0.0f, 1.0f);
+                destination[column] = perspective
+                    ? (2.0f * nearClip * farClip) /
+                          (farClip + nearClip -
+                           (2.0f * normalizedDepth - 1.0f) *
+                               (farClip - nearClip))
+                    : nearClip + normalizedDepth * (farClip - nearClip);
+            }
         }
         *combined = target.toImage(true).convertToFormat(QImage::Format_RGBA8888);
     }

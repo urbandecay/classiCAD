@@ -484,14 +484,16 @@ bool ViewportAaRenderer::initialize()
             float depth = texture(uDepth, uv).r;
             float z = (uNearFar.x * uNearFar.y) /
                 max(uNearFar.y - depth * (uNearFar.y - uNearFar.x), 1e-6);
-            // View-space distances use the document's millimeter model units,
-            // matching the camera focal length and sensor dimensions here.
-            float f = uFocalLengthMillimeters;
+            // Blender 5.2.2 converts camera lens/sensor millimeters to scene
+            // units; view depth and focus distance remain in scene units.
+            const float millimetersToSceneUnits = 0.001;
+            float f = uFocalLengthMillimeters * millimetersToSceneUnits;
+            float sensorWidth = uSensorWidthMillimeters * millimetersToSceneUnits;
             float focus = uFocusDistance;
-            float coc = abs((f * f / max(uFStop * (focus - f), 1e-6)) *
+            float coc = abs((f * f / max(uFStop * abs(focus - f), 1e-6)) *
                             ((z - focus) / max(z, 1e-6)));
-            return clamp(coc * (uPixelSize.x /
-                max(uSensorWidthMillimeters, 1e-6)), 0.0, 12.0);
+            return clamp(coc * (uPixelSize.x / max(sensorWidth, 1e-6)),
+                         0.0, 12.0);
         }
         vec3 median3(vec3 a, vec3 b, vec3 c)
         {
@@ -600,12 +602,15 @@ bool ViewportAaRenderer::initialize()
         {
             float z = (uNearFar.x * uNearFar.y) /
                 max(uNearFar.y - depth * (uNearFar.y - uNearFar.x), 1e-6);
-            float f = uFocalLengthMillimeters;
+            // Camera lens and sensor values are stored in millimeters, while
+            // depth and focus distance use unscaled Blender scene coordinates.
+            const float millimetersToSceneUnits = 0.001;
+            float f = uFocalLengthMillimeters * millimetersToSceneUnits;
+            float sensorWidth = uSensorWidthMillimeters * millimetersToSceneUnits;
             float focus = uFocusDistance;
             return (0.5 * f * f / max(uFStop * abs(focus - f), 1e-6)) *
                    ((focus - z) / max(z, 1e-6)) *
-                   (float(textureSize(uDepth, 0).x) /
-                    max(uSensorWidthMillimeters, 1e-6));
+                   (float(textureSize(uDepth, 0).x) / max(sensorWidth, 1e-6));
         }
         vec2 encodeCoc(float coc)
         {
@@ -1348,6 +1353,20 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
 
 bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
 {
+    const auto &optics = depthOfFieldOptics_;
+    const float focalLengthSceneUnits =
+        float(optics.focalLengthMillimeters * 0.001);
+    if (!std::isfinite(focalLengthSceneUnits) || focalLengthSceneUnits <= 0.0f ||
+        !std::isfinite(optics.focusDistance) || optics.focusDistance <= 0.0 ||
+        !std::isfinite(optics.fStop) || optics.fStop <= 0.0 ||
+        !std::isfinite(optics.sensorWidthMillimeters) ||
+        optics.sensorWidthMillimeters <= 0.0 ||
+        !std::isfinite(optics.sensorWidthMillimeters * 0.001) ||
+        std::abs(optics.focusDistance - focalLengthSceneUnits) <= 1.0e-6 ||
+        !std::isfinite(optics.clipStart) || optics.clipStart <= 0.0 ||
+        !std::isfinite(optics.clipEnd) || optics.clipEnd <= optics.clipStart) {
+        return false;
+    }
     if (sourceTexture == 0 || depthOfFieldPrepareFramebuffer_ == 0 ||
         depthOfFieldBlurFramebuffer_ == 0 || depthOfFieldFramebuffer_ == 0 ||
         !depthOfFieldProgram_.isLinked()) {

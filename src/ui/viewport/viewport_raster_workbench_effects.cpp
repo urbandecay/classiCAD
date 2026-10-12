@@ -1081,11 +1081,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             {-0.670, -0.179}, {0.244, -0.647}, {0.765, 0.429},
             {-0.315, 0.847}, {-0.897, 0.310}, {0.493, 0.749},
             {0.901, -0.312}, {-0.527, -0.757}, {0.089, -0.956}}};
-        const qreal focal = cameraOptics.focalLengthMillimeters;
+        // Blender Workbench converts lens and sensor dimensions from mm to
+        // the scene's meter-based coordinates; depth and focus stay in scene
+        // coordinates (also the convention of the imported Blender geometry).
+        const qreal focal = cameraOptics.focalLengthMillimeters * 0.001;
         const qreal focus = cameraOptics.focusDistance;
         const qreal fStop = cameraOptics.fStop;
-        const qreal sensorWidth = std::max<qreal>(cameraOptics.sensorWidthMillimeters,
-                                                   1.0e-6);
+        const qreal sensorWidth = cameraOptics.sensorWidthMillimeters * 0.001;
         const auto shapeApertureTap = [&cameraOptics](QPointF tap) {
             if (cameraOptics.apertureBlades >= 3) {
                 const qreal bladeAngle =
@@ -1103,7 +1105,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             return tap;
         };
         if (std::isfinite(focal) && focal > 0.0 && std::isfinite(focus) &&
-            focus > focal && std::isfinite(fStop) && fStop > 0.0) {
+            focus > 0.0 && std::isfinite(fStop) && fStop > 0.0 &&
+            std::isfinite(sensorWidth) && sensorWidth > 0.0 &&
+            std::abs(focus - focal) > 1.0e-6) {
             for (int y = 0; y < outputHeight; ++y) {
                 QRgb *out = reinterpret_cast<QRgb *>(dofResult.scanLine(y));
                 const int depthY = std::clamp(
@@ -1117,7 +1121,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     if (center.objectId == 0 || center.depth <= 0.0f) continue;
                     const qreal z = center.depth;
                     const qreal cocMm = std::abs(
-                        (focal * focal / (fStop * (focus - focal))) *
+                        (focal * focal / (fStop * std::abs(focus - focal))) *
                         ((z - focus) / std::max<qreal>(z, 1.0e-6)));
                     const qreal radius = std::clamp(
                         cocMm * outputWidth / sensorWidth, 0.0, 12.0) * colorDpr;

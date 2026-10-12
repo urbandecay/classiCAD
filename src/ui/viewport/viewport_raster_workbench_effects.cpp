@@ -5,6 +5,11 @@
 #include "viewport_depth_geometry.h"
 #include "core/geometry/polygon_mesh.h"
 
+#include <QBuffer>
+#include <QFileInfo>
+#include <QHash>
+#include <QImageReader>
+#include <QSet>
 #include <QVector3D>
 
 #include <algorithm>
@@ -19,6 +24,12 @@ struct RasterSample {
     float depth = -std::numeric_limits<float>::infinity();
     QVector3D normal;
     quint64 objectId = 0;
+};
+
+struct TextureAlphaTriangle {
+    QImage image;
+    std::array<QPointF, 3> uvs{};
+    bool cutout = false;
 };
 
 QVector3D normalized(const QVector3D &value)
@@ -71,6 +82,90 @@ float objectSourceAlpha(const ViewportRenderObject &object,
         return object.workbenchMaterial.alpha;
     }
     return object.displayColorSceneLinear.w();
+}
+
+bool ignoresTextureAlpha(const QString &alphaMode)
+{
+    return alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
+           alphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
+           alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
+                             Qt::CaseInsensitive) == 0;
+}
+
+QImage loadTextureAlphaImage(const WorkbenchMaterialData &material)
+{
+    QImage image;
+    const QString &packed = material.textureImagePackedDataBase64;
+    if (!packed.isEmpty()) {
+        const QByteArray encoded = packed.toLatin1();
+        if (encoded.size() > 44 * 1024 * 1024) return {};
+        const QByteArray bytes = QByteArray::fromBase64(encoded);
+        if (bytes.size() > 32 * 1024 * 1024) return {};
+        QBuffer buffer;
+        buffer.setData(bytes);
+        if (!buffer.open(QIODevice::ReadOnly)) return {};
+        QImageReader reader(&buffer);
+        const QSize size = reader.size();
+        if (!size.isValid() || size.width() > 16384 || size.height() > 16384 ||
+            static_cast<quint64>(size.width()) * size.height() > 67108864ULL) {
+            return {};
+        }
+        image = reader.read();
+    } else {
+        const QFileInfo info(material.textureImagePath);
+        static const QSet<QByteArray> allowedFormats{
+            "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
+        const QByteArray suffix = info.suffix().toLower().toLatin1();
+        if (!info.isFile() || !allowedFormats.contains(suffix) ||
+            info.size() <= 0 || info.size() > 256LL * 1024LL * 1024LL) {
+            return {};
+        }
+        QImageReader reader(info.filePath());
+        const QSize size = reader.size();
+        if (!size.isValid() || size.width() > 16384 || size.height() > 16384 ||
+            static_cast<quint64>(size.width()) * size.height() > 67108864ULL) {
+            return {};
+        }
+        image = reader.read();
+    }
+    if (image.isNull() || image.width() > 16384 || image.height() > 16384 ||
+        static_cast<quint64>(image.width()) * image.height() > 67108864ULL) {
+        return {};
+    }
+    return image.convertToFormat(QImage::Format_RGBA8888);
+}
+
+int repeatedTextureIndex(int index, int size)
+{
+    const int wrapped = index % size;
+    return wrapped < 0 ? wrapped + size : wrapped;
+}
+
+float sampleTextureAlphaRepeat(const QImage &image, const QPointF &uv)
+{
+    if (image.isNull() || !std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
+        return 1.0f;
+    }
+    const qreal wrappedU = uv.x() - std::floor(uv.x());
+    const qreal wrappedV = uv.y() - std::floor(uv.y());
+    const qreal x = wrappedU * image.width() - 0.5;
+    const qreal y = wrappedV * image.height() - 0.5;
+    const int x0 = static_cast<int>(std::floor(x));
+    const int y0 = static_cast<int>(std::floor(y));
+    const qreal tx = x - x0;
+    const qreal ty = y - y0;
+    const int x1 = repeatedTextureIndex(x0 + 1, image.width());
+    const int y1 = repeatedTextureIndex(y0 + 1, image.height());
+    const int wrappedX0 = repeatedTextureIndex(x0, image.width());
+    const int wrappedY0 = repeatedTextureIndex(y0, image.height());
+    const auto alphaAt = [&image](int px, int py) {
+        return image.constScanLine(py)[px * 4 + 3] / 255.0;
+    };
+    const qreal top = alphaAt(wrappedX0, wrappedY0) * (1.0 - tx) +
+                      alphaAt(x1, wrappedY0) * tx;
+    const qreal bottom = alphaAt(wrappedX0, y1) * (1.0 - tx) +
+                         alphaAt(x1, y1) * tx;
+    return static_cast<float>(top * (1.0 - ty) + bottom * ty);
 }
 
 } // namespace
@@ -142,6 +237,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         return;
     QVector<RasterSample> samples(width * height);
     const Point3D towardCamera = transform.viewDirection();
+    const bool perspective = transform.isPerspectiveEnabled();
+    const Point3D camera = perspective
+                               ? transform.cameraPosition(viewportSize)
+                               : Point3D{};
 
     for (const ViewportRenderObject &object : objects) {
         if (object.shape.geometryType != GeometryType::NurbsSurface &&
@@ -150,8 +249,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
               validatePolygonMesh(object.shape.polygonMesh))) {
             continue;
         }
-        if (objectSourceAlpha(object, settings.colorMode) <= 0.0f) continue;
+        const bool perFaceMaterialAlpha =
+            object.shape.geometryType == GeometryType::PolygonMesh &&
+            (settings.colorMode == ViewportColorMode::Material ||
+             settings.colorMode == ViewportColorMode::Attribute ||
+             settings.colorMode == ViewportColorMode::Texture);
+        if (!perFaceMaterialAlpha &&
+            objectSourceAlpha(object, settings.colorMode) <= 0.0f) {
+            continue;
+        }
         ViewportDepthGeometry fallback;
+        QVector<TextureAlphaTriangle> textureAlphaTriangles;
         const ViewportDepthGeometry *geometry =
             object.preparedDepthGeometry.data();
         if (object.shape.geometryType == GeometryType::PolygonMesh) {
@@ -160,6 +268,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             // the NURBS fallback, applying the scene-object transform first.
             const PolygonMesh3D &mesh = object.shape.polygonMesh;
             const auto &m = object.meshObjectTransform;
+            const MeshUvMap *activeUvMap = nullptr;
+            if (settings.colorMode == ViewportColorMode::Texture) {
+                for (const MeshUvMap &uvMap : mesh.uvMaps) {
+                    if (uvMap.name == mesh.activeUvMapName) {
+                        activeUvMap = &uvMap;
+                        break;
+                    }
+                }
+            }
+            QHash<int, QImage> alphaImagesBySlot;
             const auto worldPoint = [&](const Point3D &local) {
                 const qreal w = m[12] * local.x + m[13] * local.y +
                                 m[14] * local.z + m[15];
@@ -175,24 +293,43 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             int firstCorner = 0;
             for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
                 const QVector<int> &face = mesh.faces[faceIndex];
+                const int faceFirstCorner = firstCorner;
+                const int faceSlot = mesh.faceMaterialIndices.value(faceIndex, 0);
                 if (settings.colorMode == ViewportColorMode::Material ||
                     settings.colorMode == ViewportColorMode::Attribute ||
                     settings.colorMode == ViewportColorMode::Texture) {
-                    const int slotIndex = mesh.faceMaterialIndices.value(
-                        faceIndex, -1);
                     float faceAlpha = object.workbenchMaterial.alpha;
-                    if (slotIndex >= 0 && slotIndex < object.meshMaterials.size()) {
-                        faceAlpha = object.meshMaterials[slotIndex].alpha;
-                    } else if (slotIndex >= 0 &&
-                               slotIndex < mesh.materialSlots.size()) {
-                        faceAlpha = mesh.materialSlots[slotIndex].alpha;
+                    if (faceSlot >= 0 && faceSlot < object.meshMaterials.size()) {
+                        faceAlpha = object.meshMaterials[faceSlot].alpha;
+                    } else if (faceSlot >= 0 && faceSlot < mesh.materialSlots.size()) {
+                        faceAlpha = mesh.materialSlots[faceSlot].alpha;
                     }
                     if (faceAlpha <= 0.0f) {
                         firstCorner += face.size();
                         continue;
                     }
                 }
-                const int faceFirstCorner = firstCorner;
+                QImage alphaImage;
+                bool textureAlphaCutout = false;
+                if (settings.colorMode == ViewportColorMode::Texture &&
+                    activeUvMap != nullptr && faceSlot >= 0 &&
+                    faceSlot < object.meshMaterials.size() &&
+                    faceFirstCorner + face.size() <=
+                        activeUvMap->cornerValues.size()) {
+                    const WorkbenchMaterialData &material =
+                        object.meshMaterials[faceSlot];
+                    if (!material.textureImagePath.isEmpty() ||
+                        !material.textureImagePackedDataBase64.isEmpty()) {
+                        if (!alphaImagesBySlot.contains(faceSlot)) {
+                            alphaImagesBySlot.insert(
+                                faceSlot, loadTextureAlphaImage(material));
+                        }
+                        alphaImage = alphaImagesBySlot.value(faceSlot);
+                        textureAlphaCutout = !alphaImage.isNull() &&
+                            !ignoresTextureAlpha(
+                                material.textureImageAlphaMode);
+                    }
+                }
                 QVector<Point3D> points;
                 points.reserve(face.size());
                 for (int vertex : face) points.append(mesh.vertices[vertex]);
@@ -215,6 +352,19 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             cornerNormal = normal;
                         fallback.surfaceNormals.append(cornerNormal);
                     }
+                    TextureAlphaTriangle textureAlphaTriangle;
+                    if (textureAlphaCutout) {
+                        textureAlphaTriangle.image = alphaImage;
+                        textureAlphaTriangle.cutout = true;
+                        for (int corner = 0; corner < 3; ++corner) {
+                            const QPointF uv = activeUvMap->cornerValues[
+                                faceFirstCorner + triangle[corner]];
+                            textureAlphaTriangle.uvs[corner] =
+                                QPointF(uv.x(), 1.0 - uv.y());
+                        }
+                    }
+                    textureAlphaTriangles.append(
+                        std::move(textureAlphaTriangle));
                 }
                 firstCorner += face.size();
             }
@@ -227,10 +377,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         const QVector<QVector3D> &vertices = geometry->surfaceVertices;
         const QVector<QVector3D> &normals = geometry->surfaceNormals;
         for (int triangle = 0; triangle + 2 < vertices.size(); triangle += 3) {
+            const int triangleIndex = triangle / 3;
+            const TextureAlphaTriangle *textureAlphaTriangle =
+                triangleIndex >= 0 &&
+                        triangleIndex < textureAlphaTriangles.size()
+                    ? &textureAlphaTriangles[triangleIndex]
+                    : nullptr;
             QVector3D world[3];
             QVector3D normal[3];
             QPointF screen[3];
             float depth[3];
+            qreal reciprocalDepth[3] = {1.0, 1.0, 1.0};
             bool valid = true;
             for (int corner = 0; corner < 3; ++corner) {
                 world[corner] = vertices[triangle + corner] + QVector3D(
@@ -247,6 +404,14 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 depth[corner] = static_cast<float>(
                     point.x * towardCamera.x + point.y * towardCamera.y +
                     point.z * towardCamera.z);
+                if (perspective) {
+                    const qreal cameraDepth =
+                        (point.x - camera.x) * towardCamera.x +
+                        (point.y - camera.y) * towardCamera.y +
+                        (point.z - camera.z) * towardCamera.z;
+                    reciprocalDepth[corner] =
+                        1.0 / std::max<qreal>(cameraDepth, 1.0e-9);
+                }
             }
             if (!valid) continue;
             const QPointF p0 = screen[0] * dpr;
@@ -276,6 +441,24 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const qreal w2 = 1.0 - w0 - w1;
                     if (w0 < -1.0e-6 || w1 < -1.0e-6 || w2 < -1.0e-6)
                         continue;
+                    if (textureAlphaTriangle != nullptr &&
+                        textureAlphaTriangle->cutout) {
+                        const qreal corrected0 = w0 * reciprocalDepth[0];
+                        const qreal corrected1 = w1 * reciprocalDepth[1];
+                        const qreal corrected2 = w2 * reciprocalDepth[2];
+                        const qreal denominator =
+                            corrected0 + corrected1 + corrected2;
+                        if (std::abs(denominator) <= 1.0e-12) continue;
+                        const QPointF uv =
+                            (textureAlphaTriangle->uvs[0] * corrected0 +
+                             textureAlphaTriangle->uvs[1] * corrected1 +
+                             textureAlphaTriangle->uvs[2] * corrected2) /
+                            denominator;
+                        if (sampleTextureAlphaRepeat(
+                                textureAlphaTriangle->image, uv) < 0.1f) {
+                            continue;
+                        }
+                    }
                     const float z = static_cast<float>(w0 * depth[0] +
                                                        w1 * depth[1] +
                                                        w2 * depth[2]);

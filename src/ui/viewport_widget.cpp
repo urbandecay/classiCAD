@@ -8574,7 +8574,62 @@ protected:
         bool gpuActiveToolPreview = false;
         bool gpuActivePicturePreviewRendered = false;
         int extrudePreviewCapStrokeIndex = 0;
-        for (const ViewportRenderObject &renderObject : visibleShapes) {
+        QVector<ViewportRenderObject> sceneDrawObjects = visibleShapes;
+        if (nativeRenderer == nullptr) {
+            const auto hasSurfaceGeometry = [](const ViewportRenderObject &object) {
+                const GeometryType type = object.shape.geometryType;
+                return type == GeometryType::NurbsSurface ||
+                       type == GeometryType::NurbsSolid ||
+                       type == GeometryType::PolygonMesh;
+            };
+            QVector<ViewportRenderObject> surfaceDrawObjects;
+            QVector<int> surfaceDrawSlots;
+            surfaceDrawObjects.reserve(sceneDrawObjects.size());
+            surfaceDrawSlots.reserve(sceneDrawObjects.size());
+            for (int objectIndex = 0; objectIndex < sceneDrawObjects.size();
+                 ++objectIndex) {
+                if (hasSurfaceGeometry(sceneDrawObjects.at(objectIndex))) {
+                    surfaceDrawObjects.append(sceneDrawObjects.at(objectIndex));
+                    surfaceDrawSlots.append(objectIndex);
+                }
+            }
+            const auto averageViewDepth = [this](
+                const ViewportRenderObject &object) {
+                const QVector<QVector3D> *vertices =
+                    object.preparedDepthGeometry
+                        ? &object.preparedDepthGeometry->surfaceVertices
+                        : nullptr;
+                if (vertices == nullptr || vertices->isEmpty()) {
+                    return viewportTransform_.worldDirectionToView(
+                        object.placementTranslation).towardCamera;
+                }
+                qreal depth = 0.0;
+                for (const QVector3D &vertex : *vertices) {
+                    const Point3D world(
+                        vertex.x() + object.preparedGeometryOffset.x,
+                        vertex.y() + object.preparedGeometryOffset.y,
+                        vertex.z() + object.preparedGeometryOffset.z);
+                    depth += viewportTransform_.worldDirectionToView(world)
+                                 .towardCamera;
+                }
+                return depth / vertices->size();
+            };
+            std::stable_sort(
+                surfaceDrawObjects.begin(), surfaceDrawObjects.end(),
+                [&averageViewDepth](const ViewportRenderObject &a,
+                                    const ViewportRenderObject &b) {
+                    return averageViewDepth(a) < averageViewDepth(b);
+                });
+            // Reorder only surface-bearing objects in their existing slots.
+            // Curves, annotations, and other stroke-rendered objects retain
+            // their prior position and relative order in the scene dispatch.
+            for (int surfaceIndex = 0;
+                 surfaceIndex < surfaceDrawSlots.size(); ++surfaceIndex) {
+                sceneDrawObjects[surfaceDrawSlots.at(surfaceIndex)] =
+                    surfaceDrawObjects.at(surfaceIndex);
+            }
+        }
+        for (const ViewportRenderObject &renderObject : sceneDrawObjects) {
             const int index = renderObject.objectIndex;
             const ObjectId objectId = renderObject.objectId;
             const Shape &visibleShape = renderObject.shape;

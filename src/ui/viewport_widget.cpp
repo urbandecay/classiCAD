@@ -929,25 +929,35 @@ bool importedSceneCameraTransform(const Document &document,
     preferences.focalLengthMillimeters = lens;
     preferences.clipStart = clipStart;
     preferences.clipEnd = clipEnd;
-    const QString sensorFit =
+    const QString sensorFitName =
         cameraRecord.value(QStringLiteral("sensor_fit")).toString();
     const qreal effectiveAspect = outputSize.width() * pixelAspectX /
         std::max<qreal>(1.0, outputSize.height() * pixelAspectY);
-    const bool fitVertical = sensorFit == QLatin1String("VERTICAL") ||
-        (sensorFit == QLatin1String("AUTO") && effectiveAspect < 1.0);
-    const qreal fitPixelExtent = fitVertical ? outputSize.height()
-                                             : outputSize.width();
-    const qreal fittedSensorExtent = fitVertical ? sensorHeight : sensorWidth;
+    const ViewportCameraSensorFit sensorFit =
+        sensorFitName == QLatin1String("VERTICAL")
+            ? ViewportCameraSensorFit::Vertical
+        : sensorFitName == QLatin1String("HORIZONTAL")
+            ? ViewportCameraSensorFit::Horizontal
+            : ViewportCameraSensorFit::Auto;
+    const bool fitVertical = sensorFit == ViewportCameraSensorFit::Vertical ||
+        (sensorFit == ViewportCameraSensorFit::Auto && effectiveAspect < 1.0);
+    const qreal viewFactor = fitVertical
+        ? outputSize.height() * pixelAspectY / pixelAspectX
+        : outputSize.width();
+    const qreal fittedSensorExtent =
+        sensorFit == ViewportCameraSensorFit::Vertical ? sensorHeight
+                                                       : sensorWidth;
     // ViewportTransform's interactive frustum includes Blender's viewport
     // projection zoom factor of two. Compensate here so the chosen sensor-fit
     // axis produces the scene camera's render-pixel focal length.
     preferences.sensorWidthMillimeters = fittedSensorExtent *
         std::max(outputSize.width(), outputSize.height()) /
-        (2.0 * std::max<qreal>(1.0, fitPixelExtent));
+        (2.0 * std::max<qreal>(1.0, viewFactor));
     // Blender's BKE_camera_sensor_size() selects sensor_y only for explicit
     // VERTICAL fit; AUTO and HORIZONTAL use sensor_x for Workbench DOF.
     preferences.opticalSensorSizeMillimeters =
-        sensorFit == QLatin1String("VERTICAL") ? sensorHeight : sensorWidth;
+        sensorFit == ViewportCameraSensorFit::Vertical ? sensorHeight
+                                                       : sensorWidth;
     preferences.sceneCameraEnabled =
         cameraRecord.value(QStringLiteral("dof_enabled")).toBool();
     preferences.focusDistance = cameraNumber("dof_focus_distance", 10000.0);
@@ -980,19 +990,27 @@ bool importedSceneCameraTransform(const Document &document,
         const qreal focalPixels =
             std::max(outputSize.width(), outputSize.height()) * lens /
             (preferences.sensorWidthMillimeters * 2.0);
-        const qreal desiredPixelsPerUnit = fitPixelExtent / orthoScale;
+        const qreal desiredPixelsPerUnit = viewFactor / orthoScale;
         state.zoom = desiredPixelsPerUnit * 60.0 /
                      std::max<qreal>(focalPixels, 1.0e-12);
         state.orbitPivot = cameraPosition;
     }
     cameraTransform->setCameraState(state);
-    const qreal blenderViewFactor = fitVertical
-        ? outputSize.height() * pixelAspectY / pixelAspectX
-        : outputSize.width();
     const qreal shiftX = cameraNumber("shift_x", 0.0);
     const qreal shiftY = cameraNumber("shift_y", 0.0);
     cameraTransform->setProjectionShiftPixels(
-        QPointF(shiftX * blenderViewFactor, shiftY * blenderViewFactor));
+        QPointF(shiftX * viewFactor, shiftY * viewFactor));
+    ViewportRenderCameraProjection renderProjection;
+    renderProjection.sensorWidthMillimeters = sensorWidth;
+    renderProjection.sensorHeightMillimeters = sensorHeight;
+    renderProjection.sensorFit = sensorFit;
+    renderProjection.pixelAspectX = pixelAspectX;
+    renderProjection.pixelAspectY = pixelAspectY;
+    renderProjection.shiftX = shiftX;
+    renderProjection.shiftY = shiftY;
+    renderProjection.orthographicScale = cameraNumber(
+        "orthographic_scale", 10.0);
+    cameraTransform->setRenderCameraProjection(renderProjection);
     return true;
 }
 

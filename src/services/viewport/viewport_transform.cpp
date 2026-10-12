@@ -811,6 +811,24 @@ void ViewportTransform::setProjectionShiftPixels(const QPointF &shift)
     projectionShiftPixels_ = shift;
 }
 
+void ViewportTransform::setRenderCameraProjection(
+    const ViewportRenderCameraProjection &projection)
+{
+    renderCameraProjection_ = projection;
+    hasRenderCameraProjection_ = true;
+}
+
+bool ViewportTransform::hasRenderCameraProjection() const noexcept
+{
+    return hasRenderCameraProjection_;
+}
+
+const ViewportRenderCameraProjection &
+ViewportTransform::renderCameraProjection() const noexcept
+{
+    return renderCameraProjection_;
+}
+
 void ViewportTransform::setGridSpacing(qreal gridSpacing)
 {
     if (!std::isfinite(gridSpacing) || gridSpacing <= 0.0) {

@@ -259,10 +259,10 @@ bool ViewportGpuSurface::renderOffscreen(
         functions.glReadPixels(0, 0, pixelSize.width(), pixelSize.height(),
                                GL_DEPTH_COMPONENT, GL_FLOAT,
                                bottomUp.data());
-        const ViewportCameraPreferences cameraPreferences =
-            camera.cameraPreferences();
-        const float nearClip = static_cast<float>(cameraPreferences.clipStart);
-        const float farClip = static_cast<float>(cameraPreferences.clipEnd);
+        const ViewportProjectionClipRange clipRange =
+            viewportProjectionClipRange(camera, pixelSize);
+        const float nearClip = static_cast<float>(clipRange.nearPlane);
+        const float farClip = static_cast<float>(clipRange.farPlane);
         const bool perspective = camera.isPerspectiveEnabled();
         const qsizetype rowLength = pixelSize.width();
         for (int row = 0; row < pixelSize.height(); ++row) {

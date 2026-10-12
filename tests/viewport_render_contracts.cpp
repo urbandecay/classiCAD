@@ -9,6 +9,7 @@
 #include "ui/viewport/viewport_aa_renderer.h"
 #include "ui/viewport/viewport_workbench_scene_pass_coordinator.h"
 #include "ui/viewport/workbench_lighting.h"
+#include "ui/viewport/blender_grid_renderer.h"
 
 #include "core/geometry/nurbs_surface.h"
 #include "core/geometry/nurbs_solid.h"
@@ -33,6 +34,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 using namespace classiCAD;
@@ -196,6 +198,78 @@ int main(int argc, char *argv[])
                         (defaultCubeFaceAgx - blenderDefaultCubeFaceSrgb)
                                 .length() < 0.01f,
                     "default solid cube face must use Blender's Workbench lighting and AgX display transform");
+
+    // Imported scene cameras use Blender's render viewplane, independently
+    // of the interactive viewport's navigation projection.
+    const QSize cameraRenderSize(640, 480);
+    ViewportTransform renderCameraTransform;
+    renderCameraTransform.setPerspectiveEnabled(true);
+    ViewportCameraPreferences renderCameraPreferences;
+    renderCameraPreferences.focalLengthMillimeters = 50.0;
+    renderCameraPreferences.clipStart = 0.2;
+    renderCameraPreferences.clipEnd = 200.0;
+    renderCameraTransform.setCameraPreferences(renderCameraPreferences);
+    ViewportRenderCameraProjection renderCameraProjection;
+    renderCameraProjection.sensorWidthMillimeters = 40.0;
+    renderCameraProjection.sensorHeightMillimeters = 20.0;
+    renderCameraProjection.sensorFit = ViewportCameraSensorFit::Horizontal;
+    renderCameraTransform.setRenderCameraProjection(renderCameraProjection);
+    const Point3D cameraTarget = renderCameraTransform.viewTarget();
+    const Point3D cameraOutward = renderCameraTransform.viewDirection();
+    const Point3D cameraUp = renderCameraTransform.viewUp();
+    const Point3D centerInFrontOfCamera{
+        cameraTarget.x - cameraOutward.x * 10.0,
+        cameraTarget.y - cameraOutward.y * 10.0,
+        cameraTarget.z - cameraOutward.z * 10.0};
+    const auto cameraNdc = [&](const ViewportTransform &transform,
+                               const Point3D &point) {
+        const QVector4D clip = viewportViewProjection(
+            transform, cameraRenderSize) *
+            QVector4D(float(point.x), float(point.y), float(point.z), 1.0f);
+        return std::abs(clip.w()) > 1.0e-7f
+            ? QPointF(clip.x() / clip.w(), clip.y() / clip.w())
+            : QPointF(std::numeric_limits<qreal>::quiet_NaN(),
+                      std::numeric_limits<qreal>::quiet_NaN());
+    };
+    const QPointF centeredCameraNdc = cameraNdc(
+        renderCameraTransform, centerInFrontOfCamera);
+    ViewportTransform shiftedCameraTransform = renderCameraTransform;
+    renderCameraProjection.shiftX = 0.1;
+    renderCameraProjection.shiftY = 0.05;
+    shiftedCameraTransform.setRenderCameraProjection(renderCameraProjection);
+    const QPointF shiftedCameraNdc = cameraNdc(
+        shiftedCameraTransform, centerInFrontOfCamera);
+    const ViewportProjectionClipRange cameraClipRange =
+        viewportProjectionClipRange(renderCameraTransform, cameraRenderSize);
+    ViewportTransform anisotropicCameraTransform = renderCameraTransform;
+    renderCameraProjection.shiftX = 0.0;
+    renderCameraProjection.shiftY = 0.0;
+    renderCameraProjection.pixelAspectY = 2.0;
+    anisotropicCameraTransform.setRenderCameraProjection(
+        renderCameraProjection);
+    const Point3D elevatedCameraPoint{
+        centerInFrontOfCamera.x + cameraUp.x,
+        centerInFrontOfCamera.y + cameraUp.y,
+        centerInFrontOfCamera.z + cameraUp.z};
+    const QPointF squarePixelElevatedNdc = cameraNdc(
+        renderCameraTransform, elevatedCameraPoint);
+    const QPointF anisotropicElevatedNdc = cameraNdc(
+        anisotropicCameraTransform, elevatedCameraPoint);
+    passed &= check(
+        std::abs(centeredCameraNdc.x()) < 1.0e-4 &&
+            std::abs(centeredCameraNdc.y()) < 1.0e-4 &&
+            std::abs((shiftedCameraNdc.x() - centeredCameraNdc.x()) + 0.2) <
+                1.0e-3 &&
+            std::abs((shiftedCameraNdc.y() - centeredCameraNdc.y()) +
+                     (2.0 * 0.05 * cameraRenderSize.width() /
+                      cameraRenderSize.height())) < 1.0e-3 &&
+            std::abs(cameraClipRange.nearPlane - 0.2) < 1.0e-9 &&
+            std::abs(cameraClipRange.farPlane - 200.0) < 1.0e-9 &&
+            std::abs(anisotropicElevatedNdc.x() -
+                     squarePixelElevatedNdc.x()) < 1.0e-4 &&
+            std::abs(anisotropicElevatedNdc.y() -
+                     squarePixelElevatedNdc.y() * 0.5) < 1.0e-3,
+        "render camera projection must match Blender shifts, pixel aspect, and depth clip range");
 
     const WorkbenchStudioLighting basicStudioLight =
         workbenchStudioLightingPreset(QStringLiteral("Basic"));

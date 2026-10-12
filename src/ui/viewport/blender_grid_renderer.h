@@ -39,6 +39,15 @@ struct ViewportComponentPickCandidate {
 QMatrix4x4 viewportViewProjection(const ViewportTransform &transform,
                                    const QSize &viewportSize);
 
+struct ViewportProjectionClipRange {
+    qreal nearPlane = 0.01;
+    qreal farPlane = 1000.0;
+};
+
+// The depth readback decoder must use the same clip range as the scene matrix.
+ViewportProjectionClipRange viewportProjectionClipRange(
+    const ViewportTransform &transform, const QSize &viewportSize);
+
 class BlenderGridRenderer final : protected QOpenGLFunctions_3_3_Core {
 public:
     ~BlenderGridRenderer();

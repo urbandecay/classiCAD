@@ -98,6 +98,9 @@ ProjectionClipRange projectionClipRange(const ViewportTransform &transform,
     ProjectionClipRange range;
     range.nearPlane = preferences.clipStart;
     range.farPlane = preferences.clipEnd;
+    if (transform.hasRenderCameraProjection()) {
+        return range;
+    }
     if (camera.perspective) {
         // Keep depth precision stable as the user zooms out. The stored clip
         // end still controls navigation range, but using it directly here can
@@ -139,7 +142,7 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
     const ProjectionClipRange clipRange =
         projectionClipRange(transform, viewportSize);
     Point3D eye = transform.cameraPosition(viewportSize);
-    if (!camera.perspective) {
+    if (!camera.perspective && !transform.hasRenderCameraProjection()) {
         eye = add(target, multiply(outward,
                                    clipRange.orthographicEyeDistance));
     }
@@ -154,7 +157,49 @@ QMatrix4x4 viewProjection(const ViewportTransform &transform,
     QMatrix4x4 view = cameraViewMatrix(transform, eye);
 
     QMatrix4x4 projection;
-    if (camera.perspective) {
+    if (transform.hasRenderCameraProjection()) {
+        const ViewportRenderCameraProjection &renderCamera =
+            transform.renderCameraProjection();
+        const qreal pixelAspectX = renderCamera.pixelAspectX;
+        const qreal pixelAspectY = renderCamera.pixelAspectY;
+        const qreal pixelAspectRatio = pixelAspectY / pixelAspectX;
+        const qreal aspectWidth = viewportSize.width() * pixelAspectX;
+        const qreal aspectHeight = viewportSize.height() * pixelAspectY;
+        const bool fitHorizontal =
+            renderCamera.sensorFit == ViewportCameraSensorFit::Horizontal ||
+            (renderCamera.sensorFit == ViewportCameraSensorFit::Auto &&
+             aspectWidth >= aspectHeight);
+        const qreal viewFactor = fitHorizontal
+            ? viewportSize.width() : aspectHeight / pixelAspectX;
+        const qreal sensorSize =
+            renderCamera.sensorFit == ViewportCameraSensorFit::Vertical
+                ? renderCamera.sensorHeightMillimeters
+                : renderCamera.sensorWidthMillimeters;
+        const qreal pixelSize = camera.perspective
+            ? sensorSize * clipRange.nearPlane /
+                  (cameraPreferences.focalLengthMillimeters * viewFactor)
+            : renderCamera.orthographicScale / viewFactor;
+        const qreal halfWidth = viewportSize.width() * pixelSize * 0.5;
+        const qreal halfHeight = viewportSize.height() * pixelAspectRatio *
+                                 pixelSize * 0.5;
+        const qreal shiftX = renderCamera.shiftX * viewFactor * pixelSize;
+        const qreal shiftY = renderCamera.shiftY * viewFactor * pixelSize;
+        if (camera.perspective) {
+            projection.frustum(float(shiftX - halfWidth),
+                               float(shiftX + halfWidth),
+                               float(shiftY - halfHeight),
+                               float(shiftY + halfHeight),
+                               float(clipRange.nearPlane),
+                               float(clipRange.farPlane));
+        } else {
+            projection.ortho(float(shiftX - halfWidth),
+                             float(shiftX + halfWidth),
+                             float(shiftY - halfHeight),
+                             float(shiftY + halfHeight),
+                             float(clipRange.nearPlane),
+                             float(clipRange.farPlane));
+        }
+    } else if (camera.perspective) {
         const qreal sensorExtent = std::max(viewportSize.width(),
                                             viewportSize.height());
         const qreal focalLengthPixels = sensorExtent *
@@ -215,6 +260,14 @@ QMatrix4x4 gridViewProjection(const ViewportTransform &transform,
 }
 
 } // namespace
+
+ViewportProjectionClipRange viewportProjectionClipRange(
+    const ViewportTransform &transform, const QSize &viewportSize)
+{
+    const ProjectionClipRange range =
+        projectionClipRange(transform, viewportSize);
+    return {range.nearPlane, range.farPlane};
+}
 
 QMatrix4x4 viewportViewProjection(const ViewportTransform &transform,
                                    const QSize &viewportSize)

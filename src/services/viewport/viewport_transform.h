@@ -51,6 +51,26 @@ struct ViewportCameraPreferences {
     qreal opticalSensorSizeMillimeters = 36.0;
 };
 
+enum class ViewportCameraSensorFit {
+    Auto,
+    Horizontal,
+    Vertical,
+};
+
+// Exact render-camera parameters are kept separate from interactive viewport
+// optics so an imported camera can affect an offscreen render without
+// changing ordinary viewport projection or picking.
+struct ViewportRenderCameraProjection {
+    qreal sensorWidthMillimeters = 36.0;
+    qreal sensorHeightMillimeters = 24.0;
+    ViewportCameraSensorFit sensorFit = ViewportCameraSensorFit::Auto;
+    qreal pixelAspectX = 1.0;
+    qreal pixelAspectY = 1.0;
+    qreal shiftX = 0.0;
+    qreal shiftY = 0.0;
+    qreal orthographicScale = 10.0;
+};
+
 struct ViewportNavigationPreferences {
     bool autoPerspective = true;
     bool zoomToMouse = true;
@@ -185,6 +205,10 @@ public:
     // Off-axis camera-frustum offset in render pixels. Positive values follow
     // Blender's camera shift convention (the image content moves left/down).
     void setProjectionShiftPixels(const QPointF &shift);
+    void setRenderCameraProjection(
+        const ViewportRenderCameraProjection &projection);
+    bool hasRenderCameraProjection() const noexcept;
+    const ViewportRenderCameraProjection &renderCameraProjection() const noexcept;
     void setGridSpacing(qreal gridSpacing);
     ViewportNavigationPreferences navigationPreferences() const;
     void setNavigationPreferences(const ViewportNavigationPreferences &preferences);
@@ -227,6 +251,8 @@ private:
     qreal gridSpacing_ = 1.0;
     ViewportCameraPreferences cameraPreferences_;
     QPointF projectionShiftPixels_;
+    bool hasRenderCameraProjection_ = false;
+    ViewportRenderCameraProjection renderCameraProjection_;
     ViewportNavigationPreferences navigationPreferences_;
     bool orbitPivotLocked_ = false;
     Point3D trackballStartVector_{};

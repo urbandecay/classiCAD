@@ -601,6 +601,33 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
         const QVector<QVector3D> &vertices = geometry->surfaceVertices;
         const QVector<QVector3D> &normals = geometry->surfaceNormals;
+        if (settings.colorMode == ViewportColorMode::Texture &&
+            object.shape.geometryType == GeometryType::NurbsSurface &&
+            object.shape.nurbsSurface.trimLoops.isEmpty() &&
+            geometry->surfaceTextureCoordinates.size() == vertices.size() &&
+            (!object.workbenchMaterial.textureImagePath.isEmpty() ||
+             !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty()) &&
+            !ignoresTextureAlpha(
+                object.workbenchMaterial.textureImageAlphaMode)) {
+            const QImage alphaImage = loadTextureAlphaImage(
+                object.workbenchMaterial);
+            if (!alphaImage.isNull()) {
+                textureAlphaTriangles.resize(vertices.size() / 3);
+                for (int triangle = 0; triangle + 2 < vertices.size();
+                     triangle += 3) {
+                    TextureAlphaTriangle &alphaTriangle =
+                        textureAlphaTriangles[triangle / 3];
+                    alphaTriangle.image = alphaImage;
+                    alphaTriangle.cutout = true;
+                    for (int corner = 0; corner < 3; ++corner) {
+                        const QPointF uv =
+                            geometry->surfaceTextureCoordinates[triangle + corner];
+                        alphaTriangle.uvs[corner] =
+                            QPointF(uv.x(), 1.0 - uv.y());
+                    }
+                }
+            }
+        }
         if (object.shape.geometryType != GeometryType::PolygonMesh) {
             triangleAlphas.fill(objectAlpha, vertices.size() / 3);
         }

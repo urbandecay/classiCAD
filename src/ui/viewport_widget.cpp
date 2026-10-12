@@ -6427,6 +6427,36 @@ public:
         if (gpuSurface_ == nullptr || outputSize.isEmpty()) {
             return result;
         }
+        const QString activeLayerKey =
+            document_.settings().activeViewLayerKey;
+        for (const QJsonValue &sceneValue :
+             document_.settings().importedBlenderScenes) {
+            const QJsonObject scene = sceneValue.toObject();
+            bool activeScene = activeLayerKey.isEmpty();
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key")).toString() ==
+                    activeLayerKey) {
+                    activeScene = true;
+                    break;
+                }
+            }
+            if (!activeScene) continue;
+            const QJsonObject renderOutput =
+                scene.value(QStringLiteral("render_output")).toObject();
+            result.blenderImageFormat = renderOutput.value(
+                QStringLiteral("file_format")).toString(QStringLiteral("PNG"));
+            result.colorMode = renderOutput.value(
+                QStringLiteral("color_mode")).toString(QStringLiteral("RGBA"));
+            const QJsonValue colorDepth = renderOutput.value(
+                QStringLiteral("color_depth"));
+            bool colorDepthValid = false;
+            const int parsedColorDepth = colorDepth.toString().toInt(
+                &colorDepthValid);
+            result.colorDepth = colorDepthValid
+                                    ? parsedColorDepth : colorDepth.toInt(8);
+            break;
+        }
         result.camera = projectCameraSettings();
         ViewportTransform renderCamera = viewportTransform_;
         qreal sceneCameraSensorWidth = 0.0;
@@ -6554,7 +6584,10 @@ public:
             result.camera.view.targetZ = target.z;
             result.camera.view.storedInProject = true;
         }
-        result.outputFormat = QStringLiteral("PNG + PFM depth");
+        result.outputFormat = QStringLiteral("%1 %2-bit %3 + PFM depth")
+                                  .arg(result.blenderImageFormat)
+                                  .arg(result.colorDepth)
+                                  .arg(result.colorMode);
         return result;
     }
 

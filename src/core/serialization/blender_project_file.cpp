@@ -1339,6 +1339,10 @@ bool importBlenderScene(const QString &path,
             renderOutput.value(QStringLiteral("pixel_aspect_x"));
         const QJsonValue pixelAspectYValue =
             renderOutput.value(QStringLiteral("pixel_aspect_y"));
+        const QJsonValue colorDepthValue =
+            renderOutput.value(QStringLiteral("color_depth"));
+        bool colorDepthValid = false;
+        const int colorDepth = colorDepthValue.toString().toInt(&colorDepthValid);
         if (!jsonInteger(renderOutput.value(QStringLiteral("resolution_x")),
                          &resolutionX) || resolutionX <= 0 ||
             !jsonInteger(renderOutput.value(QStringLiteral("resolution_y")),
@@ -1354,6 +1358,18 @@ bool importBlenderScene(const QString &path,
             pixelAspectYValue.toDouble() <= 0.0) {
             setError(errorMessage,
                      QStringLiteral("A Blender scene render-output record is invalid"));
+            return false;
+        }
+        const QString imageColorMode = renderOutput.value(
+            QStringLiteral("color_mode")).toString();
+        if (!renderOutput.value(QStringLiteral("file_format")).isString() ||
+            (imageColorMode != QLatin1String("BW") &&
+             imageColorMode != QLatin1String("RGB") &&
+             imageColorMode != QLatin1String("RGBA")) ||
+            !colorDepthValid ||
+            (colorDepth != 8 && colorDepth != 16 && colorDepth != 32)) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender scene image-output record is invalid"));
             return false;
         }
         importedSceneRecords.append(scene);

@@ -5,20 +5,76 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFile>
+#include <QImageWriter>
+
+#include <algorithm>
 
 namespace classiCAD {
 
-bool WorkbenchRenderResult::savePng(const QString &path,
-                                    QString *errorMessage) const
+namespace {
+
+QString qtWriterFormat(const QString &blenderFormat)
+{
+    const QString key = blenderFormat.toUpper();
+    if (key == QLatin1String("PNG")) return QStringLiteral("png");
+    if (key == QLatin1String("JPEG")) return QStringLiteral("jpeg");
+    if (key == QLatin1String("BMP")) return QStringLiteral("bmp");
+    if (key == QLatin1String("TIFF")) return QStringLiteral("tiff");
+    if (key == QLatin1String("TARGA") || key == QLatin1String("TARGA_RAW"))
+        return QStringLiteral("tga");
+    if (key == QLatin1String("OPEN_EXR")) return QStringLiteral("exr");
+    if (key == QLatin1String("HDR")) return QStringLiteral("hdr");
+    return QStringLiteral("png");
+}
+
+QString fileExtension(const QString &writerFormat)
+{
+    if (writerFormat == QLatin1String("jpeg")) return QStringLiteral("jpg");
+    if (writerFormat == QLatin1String("tiff")) return QStringLiteral("tif");
+    return writerFormat;
+}
+
+} // namespace
+
+QString WorkbenchRenderResult::combinedFileExtension() const
+{
+    QString format = qtWriterFormat(blenderImageFormat);
+    const QList<QByteArray> supported = QImageWriter::supportedImageFormats();
+    const QByteArray requested = format.toLatin1();
+    if (std::none_of(supported.cbegin(), supported.cend(),
+                     [&requested](const QByteArray &candidate) {
+                         return candidate.compare(requested,
+                                                  Qt::CaseInsensitive) == 0;
+                     })) {
+        format = QStringLiteral("png");
+    }
+    return fileExtension(format);
+}
+
+bool WorkbenchRenderResult::saveCombinedImage(
+    const QString &path, QString *errorMessage) const
 {
     if (!isValid()) {
-        if (errorMessage != nullptr) {
+        if (errorMessage != nullptr)
             *errorMessage = QStringLiteral("The viewport render result is empty");
-        }
         return false;
     }
-
+    QString writerFormat = qtWriterFormat(blenderImageFormat);
+    const QString extension = combinedFileExtension();
+    if (extension == QLatin1String("png") &&
+        writerFormat != QLatin1String("png")) {
+        writerFormat = QStringLiteral("png");
+    }
     QImage output = combined;
+    const QString mode = colorMode.toUpper();
+    if (mode == QLatin1String("RGB")) {
+        output = output.convertToFormat(QImage::Format_RGB888);
+    } else if (mode == QLatin1String("BW")) {
+        output = output.convertToFormat(QImage::Format_Grayscale8);
+    } else {
+        output = output.convertToFormat(QImage::Format_RGBA8888);
+    }
+
     QJsonObject cameraJson;
     cameraJson.insert(QStringLiteral("focalLengthMillimeters"),
                       camera.focalLengthMillimeters);
@@ -33,6 +89,11 @@ bool WorkbenchRenderResult::savePng(const QString &path,
     cameraJson.insert(QStringLiteral("outputWidthPixels"), combined.width());
     cameraJson.insert(QStringLiteral("outputHeightPixels"), combined.height());
     cameraJson.insert(QStringLiteral("outputFormat"), outputFormat);
+    cameraJson.insert(QStringLiteral("blenderImageFormat"), blenderImageFormat);
+    cameraJson.insert(QStringLiteral("writtenImageFormat"), writerFormat);
+    cameraJson.insert(QStringLiteral("colorMode"), mode);
+    cameraJson.insert(QStringLiteral("sourceColorDepth"), colorDepth);
+    cameraJson.insert(QStringLiteral("writtenColorDepth"), 8);
     cameraJson.insert(QStringLiteral("depthPass"),
                       QStringLiteral("linear camera-space distance; zero is background"));
     QJsonObject poseJson;
@@ -63,17 +124,21 @@ bool WorkbenchRenderResult::savePng(const QString &path,
                    QString::fromUtf8(QJsonDocument(cameraJson).toJson(
                        QJsonDocument::Compact)));
 
-    if (!output.save(path, "PNG")) {
-        if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("Could not write PNG render result: %1")
-                                .arg(path);
-        }
+    QImageWriter writer(path, writerFormat.toLatin1());
+    if (!writer.write(output)) {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Could not write combined render: %1")
+                                .arg(writer.errorString());
         return false;
     }
-    if (errorMessage != nullptr) {
-        errorMessage->clear();
-    }
+    if (errorMessage != nullptr) errorMessage->clear();
     return true;
+}
+
+bool WorkbenchRenderResult::savePng(const QString &path,
+                                    QString *errorMessage) const
+{
+    return saveCombinedImage(path, errorMessage);
 }
 
 bool WorkbenchRenderResult::saveDepthPfm(const QString &path,

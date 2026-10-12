@@ -17,6 +17,9 @@ struct WorkbenchRenderResult {
     QVector<float> depth;
     ProjectViewportCameraSettings camera;
     QString outputFormat = QStringLiteral("PNG + PFM depth");
+    QString blenderImageFormat = QStringLiteral("PNG");
+    QString colorMode = QStringLiteral("RGBA");
+    int colorDepth = 8;
 
     bool isValid() const noexcept
     {
@@ -24,6 +27,9 @@ struct WorkbenchRenderResult {
     }
 
     bool savePng(const QString &path, QString *errorMessage = nullptr) const;
+    QString combinedFileExtension() const;
+    bool saveCombinedImage(const QString &path,
+                           QString *errorMessage = nullptr) const;
     bool saveDepthPfm(const QString &path,
                       QString *errorMessage = nullptr) const;
 };

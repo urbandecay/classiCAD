@@ -394,8 +394,10 @@ private:
         window.resize(1000, 760);
         auto *layout = new QVBoxLayout(&window);
         auto *info = new QLabel(
-            QStringLiteral("Combined: %1 × %2 PNG   •   Depth: linear camera distance PFM")
-                .arg(outputSize.width()).arg(outputSize.height()), &window);
+            QStringLiteral("Combined: %1 × %2 .%3 (%4, written 8-bit)   •   Depth: linear camera distance PFM")
+                .arg(outputSize.width()).arg(outputSize.height())
+                .arg(result.combinedFileExtension())
+                .arg(result.colorMode), &window);
         layout->addWidget(info);
         auto *preview = new QLabel(&window);
         preview->setAlignment(Qt::AlignCenter);
@@ -404,7 +406,9 @@ private:
             960, 680, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         layout->addWidget(preview, 1);
         auto *buttons = new QHBoxLayout;
-        auto *saveCombined = new QPushButton(QStringLiteral("Save Combined PNG…"), &window);
+        auto *saveCombined = new QPushButton(
+            QStringLiteral("Save Combined %1…")
+                .arg(result.combinedFileExtension().toUpper()), &window);
         auto *saveDepth = new QPushButton(QStringLiteral("Save Depth PFM…"), &window);
         auto *close = new QPushButton(QStringLiteral("Close"), &window);
         buttons->addWidget(saveCombined);
@@ -413,14 +417,17 @@ private:
         buttons->addWidget(close);
         layout->addLayout(buttons);
         connect(saveCombined, &QPushButton::clicked, &window, [this, &result]() {
+            const QString extension = result.combinedFileExtension();
             QString path = QFileDialog::getSaveFileName(
                 this, QStringLiteral("Save Combined Render"),
-                QStringLiteral("WorkbenchRender.png"),
-                QStringLiteral("PNG Image (*.png)"));
+                QStringLiteral("WorkbenchRender.%1").arg(extension),
+                QStringLiteral("Image Files (*.%1)").arg(extension));
             if (path.isEmpty()) return;
-            if (QFileInfo(path).suffix().isEmpty()) path += QStringLiteral(".png");
+            if (QFileInfo(path).suffix().isEmpty())
+                path += QStringLiteral(".%1").arg(extension);
             QString error;
-            if (!result.savePng(path, &error)) QMessageBox::critical(this, QStringLiteral("Save Failed"), error);
+            if (!result.saveCombinedImage(path, &error))
+                QMessageBox::critical(this, QStringLiteral("Save Failed"), error);
         });
         connect(saveDepth, &QPushButton::clicked, &window, [this, &result]() {
             QString path = QFileDialog::getSaveFileName(

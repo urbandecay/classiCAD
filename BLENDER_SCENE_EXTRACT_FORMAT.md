@@ -48,6 +48,10 @@ mesh is skipped whole and receives a reason there. `unsupported_features` is
 per-item and covers data such as custom split normals, unsupported attributes,
 shape keys, missing linked libraries/images, unapplied modifiers, and
 shader-node graphs.
+Supported mesh, curve, and surface child objects also report
+`parent_hierarchy`: their world-space geometry/transform is retained, but the
+Blender parent relationship itself is not represented in the native scene
+model.
 The importer validates required topology and finite coordinates before
 committing any mesh object. Image paths are retained as material source
 references in the native scene model; available packed image bytes within the

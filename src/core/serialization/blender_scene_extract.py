@@ -324,6 +324,9 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
     item = object_metadata(obj, scene)
     item["object_type"] = obj.type
     item["import_mode"] = mode
+    if obj.parent is not None:
+        add_unsupported(unsupported, item_id, "parent_hierarchy",
+                        "the object's world transform is preserved, but its Blender parent relationship is not represented")
     if item["library_path_exists"] is False:
         add_unsupported(unsupported, item_id, "linked_library",
                         "linked Blender library file is missing: " + item["library_path"])
@@ -479,6 +482,9 @@ def extract_poly_curve_object(obj, scene, unsupported):
     item = object_metadata(obj, scene)
     item["object_type"] = "CURVE"
     item["splines"] = []
+    if obj.parent is not None:
+        add_unsupported(unsupported, item_id, "parent_hierarchy",
+                        "the object's world-space spline geometry is preserved, but its Blender parent relationship is not represented")
     if item["library_path_exists"] is False:
         add_unsupported(unsupported, item_id, "linked_library",
                         "linked Blender library file is missing: " + item["library_path"])
@@ -586,6 +592,9 @@ def extract_surface_patches(obj, scene, materials, unsupported):
     from mathutils import Vector
 
     source_id = stable_id(obj)
+    if obj.parent is not None:
+        add_unsupported(unsupported, source_id, "parent_hierarchy",
+                        "the surface world-space control net is preserved, but its Blender parent relationship is not represented")
     if source_library_exists(obj) is False:
         add_unsupported(unsupported, source_id, "linked_library",
                         "linked Blender library file is missing: " + source_library_path(obj))

@@ -1,4 +1,4 @@
-# Blender AgX viewport transform
+# Blender viewport display transforms
 
 `agx_srgb_default_65.bin` is a 65×65×65 RGB float lookup table baked from
 Blender 5.2.2's `config.ocio` with the OpenColorIO processor
@@ -6,10 +6,20 @@ Blender 5.2.2's `config.ocio` with the OpenColorIO processor
 and stores sRGB display values in little-endian RGB float order, with red
 varying fastest. The viewport samples it trilinearly on both CPU and GPU.
 
+`khronos_pbr_neutral_srgb_65.bin` is baked from Blender 5.2.2's
+`Khronos PBR Neutral` view on the sRGB display using the same LUT layout.
+`Standard` remains an analytic sRGB transfer curve in the renderer.
+
 Regenerate it with Blender's bundled PyOpenColorIO module:
 
 ```sh
 python generate_agx_lut.py /path/to/blender/datafiles/colormanagement/config.ocio agx_srgb_default_65.bin
+```
+
+The generator also accepts `--display` and `--view`; for example:
+
+```sh
+python generate_agx_lut.py /path/to/blender/datafiles/colormanagement/config.ocio khronos_pbr_neutral_srgb_65.bin --display sRGB --view "Khronos PBR Neutral"
 ```
 
 The transform follows Blender's OpenColorIO configuration, based on AgX by

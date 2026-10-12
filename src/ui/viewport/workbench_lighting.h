@@ -116,7 +116,31 @@ inline const QVector<float> &workbenchAgxDisplayLutData()
     return values;
 }
 
-inline QVector3D workbenchSceneLinearToAgxSrgb(
+inline const QVector<float> &workbenchPbrNeutralDisplayLutData()
+{
+    static const QVector<float> values = [] {
+        QFile file(QStringLiteral(
+            ":/workbench-lighting/color/khronos_pbr_neutral_srgb_65.bin"));
+        if (!file.open(QIODevice::ReadOnly)) return QVector<float>{};
+        const QByteArray bytes = file.readAll();
+        constexpr qsizetype valueCount =
+            workbenchAgxDisplayLutSize * workbenchAgxDisplayLutSize *
+            workbenchAgxDisplayLutSize * 3;
+        if (bytes.size() != valueCount * static_cast<qsizetype>(sizeof(quint32)))
+            return QVector<float>{};
+        QVector<float> result(valueCount);
+        const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
+        for (qsizetype index = 0; index < valueCount; ++index) {
+            const quint32 bits = qFromLittleEndian<quint32>(
+                source + index * sizeof(quint32));
+            std::memcpy(&result[index], &bits, sizeof(bits));
+        }
+        return result;
+    }();
+    return values;
+}
+
+inline QVector3D workbenchSceneLinearToDisplaySrgb(
     const QVector3D &inputColor,
     int colorTransform = 0,
     qreal exposure = 0.0,
@@ -130,7 +154,9 @@ inline QVector3D workbenchSceneLinearToAgxSrgb(
     if (colorTransform == 1) {
         displayColor = workbenchSceneLinearToSrgb(color);
     } else {
-        const QVector<float> &lut = workbenchAgxDisplayLutData();
+        const QVector<float> &lut = colorTransform == 2
+            ? workbenchPbrNeutralDisplayLutData()
+            : workbenchAgxDisplayLutData();
         if (lut.isEmpty()) {
             displayColor = workbenchSceneLinearToSrgb(color);
         } else {
@@ -178,6 +204,16 @@ inline QVector3D workbenchSceneLinearToAgxSrgb(
     return {std::pow(std::max(0.0f, displayColor.x()), exponent),
             std::pow(std::max(0.0f, displayColor.y()), exponent),
             std::pow(std::max(0.0f, displayColor.z()), exponent)};
+}
+
+inline QVector3D workbenchSceneLinearToAgxSrgb(
+    const QVector3D &inputColor,
+    int colorTransform = 0,
+    qreal exposure = 0.0,
+    qreal gamma = 1.0)
+{
+    return workbenchSceneLinearToDisplaySrgb(inputColor, colorTransform,
+                                              exposure, gamma);
 }
 
 inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()

@@ -103,7 +103,7 @@ private:
         bool snapshotDepth,
         bool *snapshotDepthReady);
     bool ensureMatcapTexture(const QString &presetName);
-    bool ensureAgxDisplayTexture();
+    bool ensureAgxDisplayTexture(int colorTransform);
     bool ensureCavityJitterTexture(int totalSamples);
     GLuint ensureImageTexture(const QString &path, bool srgb);
     GLuint ensureImageTexture(const QString &path,
@@ -139,6 +139,7 @@ private:
     QVector<DrawRange> ranges_;
     unsigned int matcapTexture_ = 0;
     unsigned int agxDisplayTexture_ = 0;
+    int agxDisplayTextureTransform_ = -1;
     GLuint cavityJitterTexture_ = 0;
     int cavityJitterSampleCount_ = 0;
     unsigned int shadowTexture_ = 0;

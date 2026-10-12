@@ -2353,7 +2353,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     normalView, incidentView,
                     shadingSettings_.specularLighting);
             }
-            const QVector3D shaded = workbenchSceneLinearToAgxSrgb(
+            const QVector3D shaded = workbenchSceneLinearToDisplaySrgb(
                 shadedLinear, shadingSettings_.colorTransform,
                 shadingSettings_.colorExposure, shadingSettings_.colorGamma);
             QColor color = baseColor;

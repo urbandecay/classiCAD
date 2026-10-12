@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake Blender's default AgX display transform for classiCAD's viewport."""
+"""Bake a Blender OCIO display/view transform for classiCAD's viewport."""
 
 import argparse
 import math
@@ -16,11 +16,13 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", help="Blender datafiles/colormanagement/config.ocio")
     parser.add_argument("output", help="Output little-endian RGB float LUT")
+    parser.add_argument("--display", default="sRGB")
+    parser.add_argument("--view", default="AgX")
     args = parser.parse_args()
 
     config = ocio.Config.CreateFromFile(args.config)
     processor = config.getProcessor(
-        "Linear Rec.709", "sRGB", "AgX", ocio.TRANSFORM_DIR_FORWARD
+        "Linear Rec.709", args.display, args.view, ocio.TRANSFORM_DIR_FORWARD
     ).getDefaultCPUProcessor()
 
     with open(args.output, "wb") as output:

@@ -2402,12 +2402,15 @@ GLuint ViewportSurfaceRenderer::ensureImageTexture(
     return texture;
 }
 
-bool ViewportSurfaceRenderer::ensureAgxDisplayTexture()
+bool ViewportSurfaceRenderer::ensureAgxDisplayTexture(int colorTransform)
 {
-    if (agxDisplayTexture_ != 0) {
+    if (agxDisplayTexture_ != 0 &&
+        agxDisplayTextureTransform_ == colorTransform) {
         return true;
     }
-    const QVector<float> &lut = workbenchAgxDisplayLutData();
+    const QVector<float> &lut = colorTransform == 2
+        ? workbenchPbrNeutralDisplayLutData()
+        : workbenchAgxDisplayLutData();
     if (lut.size() != workbenchAgxDisplayLutSize *
                           workbenchAgxDisplayLutSize *
                           workbenchAgxDisplayLutSize * 3) {
@@ -2430,6 +2433,7 @@ bool ViewportSurfaceRenderer::ensureAgxDisplayTexture()
                  workbenchAgxDisplayLutSize,
                  workbenchAgxDisplayLutSize, 0, GL_RGB, GL_FLOAT,
                  lut.constData());
+    agxDisplayTextureTransform_ = colorTransform;
     glBindTexture(GL_TEXTURE_3D, static_cast<GLuint>(previousBinding));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     return agxDisplayTexture_ != 0;
@@ -2934,7 +2938,8 @@ bool ViewportSurfaceRenderer::draw(
             settings.lightingMode == ViewportLightingMode::MatCap &&
             ensureMatcapTexture(settings.matcapPreset);
         program_.setUniformValue("uMatcapAvailable", matcapAvailable);
-        const bool agxDisplayAvailable = ensureAgxDisplayTexture();
+        const bool agxDisplayAvailable = settings.colorTransform != 1 &&
+            ensureAgxDisplayTexture(settings.colorTransform);
         program_.setUniformValue("uAgxDisplayAvailable", agxDisplayAvailable);
         program_.setUniformValue("uColorTransform",
                                  settings.colorTransform);

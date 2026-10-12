@@ -964,12 +964,14 @@ bool applyImportedSceneColorManagement(
         if (displayDevice != QLatin1String("sRGB") ||
             look != QLatin1String("None") ||
             (transform != QLatin1String("AgX") &&
-             transform != QLatin1String("Standard")) ||
+             transform != QLatin1String("Standard") &&
+             transform != QLatin1String("Khronos PBR Neutral")) ||
             !std::isfinite(exposure) || !std::isfinite(gamma) || gamma <= 0.0) {
             return false;
         }
-        settings->colorTransform = transform == QLatin1String("Standard")
-                                       ? 1 : 0;
+        settings->colorTransform =
+            transform == QLatin1String("Standard") ? 1 :
+            transform == QLatin1String("Khronos PBR Neutral") ? 2 : 0;
         settings->colorExposure = std::clamp(exposure, -32.0, 32.0);
         settings->colorGamma = std::clamp(gamma, 0.000001, 5.0);
         return true;
@@ -7641,7 +7643,7 @@ protected:
                 } else {
                     color = baseColor;
                 }
-                const QVector3D srgb = workbenchSceneLinearToAgxSrgb(color);
+                const QVector3D srgb = workbenchSceneLinearToDisplaySrgb(color);
                 row[x] = QColor::fromRgbF(std::clamp(srgb.x(), 0.0f, 1.0f),
                                           std::clamp(srgb.y(), 0.0f, 1.0f),
                                           std::clamp(srgb.z(), 0.0f, 1.0f),

@@ -96,6 +96,7 @@ bool loadVignolaDocument(const QString &path,
 bool loadVignolaDocument(const QString &path,
                          Document *document,
                          ProjectViewportCameraSettings *cameraSettings,
-                         QString *errorMessage = nullptr);
+                         QString *errorMessage = nullptr,
+                         BlenderSceneImportReport *ordinaryImportReport = nullptr);
 
 } // namespace classiCAD

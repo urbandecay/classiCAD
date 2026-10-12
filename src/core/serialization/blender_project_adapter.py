@@ -825,7 +825,11 @@ def load_project(source_path, output_json_path):
         None,
     )
     if scene is None:
-        raise RuntimeError("This Blender file does not contain a classiCAD project")
+        # Let the C++ project loader route ordinary .blend files through the
+        # supported scene extractor instead of interpreting display proxies.
+        with open(output_json_path, "w", encoding="utf-8") as output_file:
+            json.dump({"format": "classiCAD.ordinary-blend"}, output_file)
+        return
     if int(scene.get("classiCAD_format_version", -1)) != PROJECT_FORMAT_VERSION:
         raise RuntimeError("This classiCAD project format version is not supported")
 

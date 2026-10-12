@@ -18,7 +18,8 @@ public:
               QString *errorMessage = nullptr) const;
     bool open(const QString &path,
               ProjectViewportCameraSettings *cameraSettings = nullptr,
-              QString *errorMessage = nullptr);
+              QString *errorMessage = nullptr,
+              BlenderSceneImportReport *ordinaryImportReport = nullptr);
     bool importRhino3dm(const QString &path,
                         Rhino3dmImportReport *report = nullptr,
                         QString *errorMessage = nullptr);

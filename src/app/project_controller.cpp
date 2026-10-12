@@ -47,14 +47,16 @@ bool ProjectController::save(const QString &path,
 
 bool ProjectController::open(const QString &path,
                              ProjectViewportCameraSettings *cameraSettings,
-                             QString *errorMessage)
+                             QString *errorMessage,
+                             BlenderSceneImportReport *ordinaryImportReport)
 {
     Document candidate;
     ProjectViewportCameraSettings restoredCameraSettings;
     if (!loadVignolaDocument(path,
                              &candidate,
                              &restoredCameraSettings,
-                             errorMessage)) {
+                             errorMessage,
+                             ordinaryImportReport)) {
         return false;
     }
     if (restoredCameraSettings.storedInProject &&

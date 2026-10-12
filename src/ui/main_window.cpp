@@ -481,11 +481,13 @@ private:
 
         QString errorMessage;
         ProjectViewportCameraSettings cameraSettings;
+        BlenderSceneImportReport ordinaryImportReport;
         suppressDirtyTracking_ = true;
         const bool loaded = viewport_ != nullptr &&
                             projectController_.open(path,
                                                     &cameraSettings,
-                                                    &errorMessage);
+                                                    &errorMessage,
+                                                    &ordinaryImportReport);
         if (loaded) {
             viewport_->applyProjectCameraSettings(cameraSettings);
         }
@@ -499,13 +501,39 @@ private:
             return;
         }
 
-        currentProjectPath_ = QFileInfo(path).absoluteFilePath();
+        const bool importedOrdinaryBlend =
+            !ordinaryImportReport.blenderVersion.isEmpty();
+        // Opening a normal Blender file imports its supported scene data into
+        // a new classiCAD document. Never let Ctrl+S replace that source file.
+        currentProjectPath_ = importedOrdinaryBlend
+                                  ? QString{}
+                                  : QFileInfo(path).absoluteFilePath();
         documentModified_ = false;
         QSettings settings;
         settings.setValue(QStringLiteral("files/lastProjectDirectory"),
-                          QFileInfo(currentProjectPath_).absolutePath());
+                          QFileInfo(path).absolutePath());
         updateWindowTitle();
-        statusBar()->showMessage(QStringLiteral("Opened %1").arg(currentProjectPath_), 5000);
+        statusBar()->showMessage(
+            importedOrdinaryBlend
+                ? QStringLiteral("Imported Blender scene from %1; use Save As to create a classiCAD project")
+                      .arg(QFileInfo(path).fileName())
+                : QStringLiteral("Opened %1").arg(currentProjectPath_),
+            8000);
+        if (!ordinaryImportReport.blenderVersion.isEmpty() &&
+            (ordinaryImportReport.skippedObjectCount > 0 ||
+             !ordinaryImportReport.warningMessage.isEmpty() ||
+             ordinaryImportReport.importedObjectCount == 0)) {
+            QMessageBox::warning(
+                this,
+                QStringLiteral("Blender Scene Open Report"),
+                QStringLiteral("Loaded %1 supported object(s); skipped %2 object(s) from Blender %3.\n\n%4")
+                    .arg(ordinaryImportReport.importedObjectCount)
+                    .arg(ordinaryImportReport.skippedObjectCount)
+                    .arg(ordinaryImportReport.blenderVersion,
+                         ordinaryImportReport.warningMessage.isEmpty()
+                             ? QStringLiteral("No supported objects were found.")
+                             : ordinaryImportReport.warningMessage));
+        }
     }
 
     void importRhino3dm()

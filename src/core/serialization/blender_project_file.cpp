@@ -1566,11 +1566,15 @@ bool loadVignolaDocument(const QString &path,
 bool loadVignolaDocument(const QString &path,
                          Document *document,
                          ProjectViewportCameraSettings *cameraSettings,
-                         QString *errorMessage)
+                         QString *errorMessage,
+                         BlenderSceneImportReport *ordinaryImportReport)
 {
     if (document == nullptr || path.trimmed().isEmpty()) {
         setError(errorMessage, QStringLiteral("A destination document and project file path are required"));
         return false;
+    }
+    if (ordinaryImportReport != nullptr) {
+        *ordinaryImportReport = BlenderSceneImportReport{};
     }
     if (!hasBlenderFileHeader(path)) {
         setError(errorMessage,
@@ -1602,6 +1606,53 @@ bool loadVignolaDocument(const QString &path,
                  QStringLiteral("The classiCAD data inside the Blender file is invalid: %1")
                      .arg(parseError.errorString()));
         return false;
+    }
+
+    if (serialized.object().value(QStringLiteral("format")).toString() ==
+        QLatin1String("classiCAD.ordinary-blend")) {
+        QVector<SceneObject> objects;
+        QVector<DocumentCollection> collections;
+        QVector<DocumentMaterial> materials;
+        BlenderSceneImportReport importReport;
+        if (!importBlenderScene(path, QStringLiteral("original"), &objects,
+                                &collections, &materials, &importReport,
+                                errorMessage)) {
+            return false;
+        }
+        Document restored;
+        Document::Snapshot snapshot = restored.snapshot();
+        const LayerId targetLayer = snapshot.activeLayerId;
+        quint64 nextObjectValue = 1;
+        for (SceneObject &object : objects) {
+            object.id = ObjectId::fromValue(nextObjectValue++);
+            object.layerId = targetLayer;
+        }
+        snapshot.collections = std::move(collections);
+        snapshot.objects = std::move(objects);
+        snapshot.materials = std::move(materials);
+        snapshot.nextObjectValue = nextObjectValue;
+        snapshot.nextCollectionValue = quint64(snapshot.collections.size()) + 1;
+        snapshot.settings.importedBlenderScenes = importReport.scenes;
+        snapshot.settings.importedBlenderColorLuts =
+            importReport.importedBlenderColorLuts;
+        snapshot.settings.importedBlenderColorLutMetadata =
+            importReport.importedBlenderColorLutMetadata;
+        for (const QJsonValue &sceneValue : importReport.scenes) {
+            const QJsonArray viewLayers = sceneValue.toObject().value(
+                QStringLiteral("view_layers")).toArray();
+            if (!viewLayers.isEmpty()) {
+                snapshot.settings.activeViewLayerKey = viewLayers.first()
+                    .toObject().value(QStringLiteral("key")).toString();
+                break;
+            }
+        }
+        restored.restoreSnapshot(snapshot);
+        *document = std::move(restored);
+        if (cameraSettings != nullptr) *cameraSettings = ProjectViewportCameraSettings{};
+        if (ordinaryImportReport != nullptr)
+            *ordinaryImportReport = std::move(importReport);
+        if (errorMessage != nullptr) errorMessage->clear();
+        return true;
     }
 
     ProjectViewportCameraSettings restoredCameraSettings;

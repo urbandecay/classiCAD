@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace classiCAD {
 namespace {
@@ -169,6 +170,237 @@ float sampleTextureAlphaRepeat(const QImage &image, const QPointF &uv)
 }
 
 } // namespace
+
+bool compositeRasterWorkbenchSurfaces(
+    QImage *colorImage,
+    const QVector<ViewportRenderObject> &objects,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    bool antialias,
+    const std::function<void(QPainter &, const ViewportRenderObject &)> &drawObject)
+{
+    if (colorImage == nullptr || colorImage->isNull() || objects.isEmpty() ||
+        !drawObject || !std::isfinite(devicePixelRatio) ||
+        devicePixelRatio <= 0.0) {
+        return false;
+    }
+    const int width = colorImage->width();
+    const int height = colorImage->height();
+    const qint64 pixelCount64 = qint64(width) * height;
+    // Bound the transient CPU buffers. Existing painter rendering remains the
+    // fallback if a large supersampled viewport exceeds this budget.
+    if (width <= 0 || height <= 0 || pixelCount64 > 1000000) return false;
+    for (const ViewportRenderObject &object : objects) {
+        if (!object.preparedDepthGeometry ||
+            object.preparedDepthGeometry->surfaceVertices.size() < 3 ||
+            object.preparedDepthGeometry->surfaceVertices.size() % 3 != 0) {
+            return false;
+        }
+    }
+    const int pixelCount = static_cast<int>(pixelCount64);
+    const float noDepth = -std::numeric_limits<float>::infinity();
+    QVector<float> opaqueDepth(pixelCount, noDepth);
+    QVector<QRgb> opaqueColor(pixelCount, qRgba(0, 0, 0, 0));
+    QVector<float> accumRed(pixelCount, 0.0f);
+    QVector<float> accumGreen(pixelCount, 0.0f);
+    QVector<float> accumBlue(pixelCount, 0.0f);
+    QVector<float> accumWeight(pixelCount, 0.0f);
+    QVector<float> revealage(pixelCount, 1.0f);
+    const qreal dpr = devicePixelRatio;
+    const Point3D cameraPosition = transform.cameraPosition(viewportSize);
+    const Point3D viewDirection = transform.viewDirection();
+
+    const auto rasterDepth = [&](const ViewportRenderObject &object,
+                                 QVector<float> *depthBuffer) {
+        depthBuffer->fill(noDepth, pixelCount);
+        if (!object.preparedDepthGeometry) return;
+        const QVector<QVector3D> &vertices =
+            object.preparedDepthGeometry->surfaceVertices;
+        for (int tri = 0; tri + 2 < vertices.size(); tri += 3) {
+            QPointF screen[3];
+            float viewDepth[3];
+            bool valid = true;
+            for (int corner = 0; corner < 3; ++corner) {
+                const QVector3D &v = vertices[tri + corner];
+                const Point3D world(v.x() + object.preparedGeometryOffset.x,
+                                    v.y() + object.preparedGeometryOffset.y,
+                                    v.z() + object.preparedGeometryOffset.z);
+                if (!transform.worldPointToScreen(world, viewportSize,
+                                                  &screen[corner])) {
+                    valid = false;
+                    break;
+                }
+                if (transform.isPerspectiveEnabled()) {
+                    viewDepth[corner] = static_cast<float>(
+                        (world.x - cameraPosition.x) * viewDirection.x +
+                        (world.y - cameraPosition.y) * viewDirection.y +
+                        (world.z - cameraPosition.z) * viewDirection.z);
+                } else {
+                    viewDepth[corner] = static_cast<float>(
+                        transform.worldDirectionToView(world).towardCamera);
+                }
+            }
+            if (!valid) continue;
+            const qreal area = (screen[1].x() - screen[0].x()) *
+                                   (screen[2].y() - screen[0].y()) -
+                               (screen[1].y() - screen[0].y()) *
+                                   (screen[2].x() - screen[0].x());
+            if (std::abs(area) < 1.0e-12) continue;
+            const qreal triangleMinX =
+                std::min({screen[0].x(), screen[1].x(), screen[2].x()});
+            const qreal triangleMaxX =
+                std::max({screen[0].x(), screen[1].x(), screen[2].x()});
+            const qreal triangleMinY =
+                std::min({screen[0].y(), screen[1].y(), screen[2].y()});
+            const qreal triangleMaxY =
+                std::max({screen[0].y(), screen[1].y(), screen[2].y()});
+            if (triangleMaxX < 0.0 || triangleMinX >= viewportSize.width() ||
+                triangleMaxY < 0.0 || triangleMinY >= viewportSize.height()) {
+                continue;
+            }
+            const int minX = std::clamp(
+                qFloor(triangleMinX * dpr),
+                0, width - 1);
+            const int maxX = std::clamp(
+                qCeil(triangleMaxX * dpr),
+                0, width - 1);
+            const int minY = std::clamp(
+                qFloor(triangleMinY * dpr),
+                0, height - 1);
+            const int maxY = std::clamp(
+                qCeil(triangleMaxY * dpr),
+                0, height - 1);
+            for (int y = minY; y <= maxY; ++y) {
+                const qreal py = (y + 0.5) / dpr;
+                for (int x = minX; x <= maxX; ++x) {
+                    const qreal px = (x + 0.5) / dpr;
+                    const qreal b1 = ((px - screen[0].x()) *
+                                          (screen[2].y() - screen[0].y()) -
+                                      (py - screen[0].y()) *
+                                          (screen[2].x() - screen[0].x())) / area;
+                    const qreal b2 = ((screen[1].x() - screen[0].x()) *
+                                          (py - screen[0].y()) -
+                                      (screen[1].y() - screen[0].y()) *
+                                          (px - screen[0].x())) / area;
+                    const qreal b0 = 1.0 - b1 - b2;
+                    if (b0 < 0.0 || b1 < 0.0 || b2 < 0.0) continue;
+                    qreal z;
+                    if (transform.isPerspectiveEnabled()) {
+                        const qreal reciprocal =
+                            b0 / std::max<qreal>(viewDepth[0], 1.0e-9) +
+                            b1 / std::max<qreal>(viewDepth[1], 1.0e-9) +
+                            b2 / std::max<qreal>(viewDepth[2], 1.0e-9);
+                        if (reciprocal <= 1.0e-12) continue;
+                        z = 1.0 / reciprocal;
+                    } else {
+                        z = b0 * viewDepth[0] + b1 * viewDepth[1] +
+                            b2 * viewDepth[2];
+                    }
+                    float &stored = (*depthBuffer)[y * width + x];
+                    stored = std::max(stored, static_cast<float>(z));
+                }
+            }
+        }
+    };
+
+    QVector<float> objectDepth(pixelCount, noDepth);
+    const auto renderObject = [&](const ViewportRenderObject &object,
+                                  auto &&consume) {
+        QImage layer(colorImage->size(), QImage::Format_ARGB32_Premultiplied);
+        layer.setDevicePixelRatio(colorImage->devicePixelRatioF());
+        layer.fill(Qt::transparent);
+        QPainter layerPainter(&layer);
+        layerPainter.setRenderHint(QPainter::Antialiasing, antialias);
+        drawObject(layerPainter, object);
+        layerPainter.end();
+        rasterDepth(object, &objectDepth);
+        consume(layer);
+    };
+
+    // Opaque color/depth is established before any translucent fragment.
+    for (const ViewportRenderObject &object : objects) {
+        renderObject(object, [&](const QImage &layer) {
+            for (int y = 0; y < height; ++y) {
+                const auto *row = reinterpret_cast<const QRgb *>(layer.constScanLine(y));
+                for (int x = 0; x < width; ++x) {
+                    const int index = y * width + x;
+                    const QRgb pixel = row[x];
+                    if (qAlpha(pixel) < 254 || objectDepth[index] == noDepth)
+                        continue;
+                    if (objectDepth[index] > opaqueDepth[index]) {
+                        opaqueDepth[index] = objectDepth[index];
+                        opaqueColor[index] = pixel;
+                    }
+                }
+            }
+        });
+    }
+
+    // A second color pass supplies partial-alpha layers. Constant unit weights
+    // keep the resolve deterministic; Blender's depth-weighted OIT kernel is
+    // intentionally not claimed here.
+    for (const ViewportRenderObject &object : objects) {
+        renderObject(object, [&](const QImage &layer) {
+            for (int y = 0; y < height; ++y) {
+                const auto *row = reinterpret_cast<const QRgb *>(layer.constScanLine(y));
+                for (int x = 0; x < width; ++x) {
+                    const int index = y * width + x;
+                    const QRgb pixel = row[x];
+                    const int alphaByte = qAlpha(pixel);
+                    if (alphaByte == 0 || alphaByte >= 254 ||
+                        objectDepth[index] == noDepth ||
+                        objectDepth[index] <= opaqueDepth[index]) {
+                        continue;
+                    }
+                    const float alpha = alphaByte / 255.0f;
+                    const float invAlpha = 1.0f / alpha;
+                    accumRed[index] += qRed(pixel) * invAlpha * alpha;
+                    accumGreen[index] += qGreen(pixel) * invAlpha * alpha;
+                    accumBlue[index] += qBlue(pixel) * invAlpha * alpha;
+                    accumWeight[index] += alpha;
+                    revealage[index] *= 1.0f - alpha;
+                }
+            }
+        });
+    }
+
+    for (int y = 0; y < height; ++y) {
+        auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));
+        for (int x = 0; x < width; ++x) {
+            const int index = y * width + x;
+            const float transAlpha = 1.0f - revealage[index];
+            QRgb surface = opaqueColor[index];
+            if (transAlpha > 0.0f && accumWeight[index] > 0.0f) {
+                const float invWeight = 1.0f / accumWeight[index];
+                const int transR = qRound(accumRed[index] * invWeight);
+                const int transG = qRound(accumGreen[index] * invWeight);
+                const int transB = qRound(accumBlue[index] * invWeight);
+                const float opaqueAlpha = qAlpha(surface) / 255.0f;
+                const float outAlpha = transAlpha + opaqueAlpha * (1.0f - transAlpha);
+                const int outR = qRound(transR * transAlpha + qRed(surface) * (1.0f - transAlpha));
+                const int outG = qRound(transG * transAlpha + qGreen(surface) * (1.0f - transAlpha));
+                const int outB = qRound(transB * transAlpha + qBlue(surface) * (1.0f - transAlpha));
+                surface = qPremultiply(qRgba(
+                    std::clamp(outR, 0, 255),
+                    std::clamp(outG, 0, 255),
+                    std::clamp(outB, 0, 255),
+                    std::clamp(qRound(outAlpha * 255.0f), 0, 255)));
+            }
+            if (qAlpha(surface) == 0) continue;
+            const QRgb old = destination[x];
+            const float a = qAlpha(surface) / 255.0f;
+            const float oldAlpha = qAlpha(old) / 255.0f;
+            const float remain = 1.0f - a;
+            destination[x] = qRgba(
+                std::clamp(qRound(qRed(surface) + qRed(old) * remain), 0, 255),
+                std::clamp(qRound(qGreen(surface) + qGreen(old) * remain), 0, 255),
+                std::clamp(qRound(qBlue(surface) + qBlue(old) * remain), 0, 255),
+                std::clamp(qRound((a + oldAlpha * remain) * 255.0f), 0, 255));
+        }
+    }
+    return true;
+}
 
 void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QVector<ViewportRenderObject> &objects,

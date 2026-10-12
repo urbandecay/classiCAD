@@ -8590,6 +8590,7 @@ protected:
         bool gpuActiveToolPreview = false;
         bool gpuActivePicturePreviewRendered = false;
         int extrudePreviewCapStrokeIndex = 0;
+        bool rasterSurfaceBatchRendered = false;
         QVector<ViewportRenderObject> sceneDrawObjects = visibleShapes;
         if (nativeRenderer == nullptr) {
             const auto hasSurfaceGeometry = [](const ViewportRenderObject &object) {
@@ -8643,6 +8644,29 @@ protected:
                  surfaceIndex < surfaceDrawSlots.size(); ++surfaceIndex) {
                 sceneDrawObjects[surfaceDrawSlots.at(surfaceIndex)] =
                     surfaceDrawObjects.at(surfaceIndex);
+            }
+            if (viewportShadingSettings_.mode == ViewportShadingMode::Solid &&
+                !surfaceDrawObjects.isEmpty()) {
+                rasterSurfaceBatchRendered = compositeRasterWorkbenchSurfaces(
+                    &committedSceneLayer, surfaceDrawObjects,
+                    viewportTransform_, renderFrame.viewportSize,
+                    committedSceneLayer.devicePixelRatioF(),
+                    viewportAaMode_ != 0,
+                    [this](QPainter &surfacePainter,
+                           const ViewportRenderObject &object) {
+                        drawShape(surfacePainter, object.shape, false,
+                                  object.selected, true, object.layerColor,
+                                  object.layerLineType,
+                                  object.layerLineWeightMm, object.objectId,
+                                  object.geometryRevision,
+                                  object.preparedDepthGeometry.data(),
+                                  object.preparedGeometryOffset,
+                                  object.displayColorSceneLinear,
+                                  object.workbenchMaterial,
+                                  object.displayName, object.libraryPath,
+                                  object.meshObjectTransform,
+                                  object.meshMaterials);
+                    });
             }
         }
         for (const ViewportRenderObject &renderObject : sceneDrawObjects) {
@@ -9709,7 +9733,14 @@ protected:
                 }
                 continue;
             }
-            if (scalePreview || rotatePreview) {
+            if (rasterSurfaceBatchRendered &&
+                (geometryType == GeometryType::NurbsSurface ||
+                 geometryType == GeometryType::NurbsSolid ||
+                 geometryType == GeometryType::PolygonMesh)) {
+                // Surface color has already been depth-composited into the
+                // fallback scene layer. Continue through the loop so the
+                // existing stroke/cage collection remains active.
+            } else if (scalePreview || rotatePreview) {
                 drawShape(scenePainter,
                           visibleShape,
                           false,

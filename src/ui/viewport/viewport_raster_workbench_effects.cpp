@@ -263,7 +263,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 std::min({p0.y(), p1.y(), p2.y()}))), 0, height - 1);
             const int maxY = std::clamp(static_cast<int>(std::ceil(
                 std::max({p0.y(), p1.y(), p2.y()}))), 0, height - 1);
-            const quint64 id = object.objectId.value();
+            const quint64 id = object.objectId.value() |
+                               (object.selected ? 0x80000000ull : 0ull);
             for (int y = minY; y <= maxY; ++y) {
                 for (int x = minX; x <= maxX; ++x) {
                     const qreal px = x + 0.5;
@@ -294,11 +295,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     if (settings.outline) {
         QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage result = source.copy();
+        constexpr quint64 selectedIdMask = 0x80000000ull;
         const QColor outline = settings.outlineColor;
-        const float outlineAlpha = static_cast<float>(outline.alphaF());
-        const float outlineRed = static_cast<float>(outline.red());
-        const float outlineGreen = static_cast<float>(outline.green());
-        const float outlineBlue = static_cast<float>(outline.blue());
+        const QColor selectionOutline = viewportSelectionColor();
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
             const int depthY = std::clamp(
@@ -310,17 +309,27 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     0, width - 1);
                 const quint64 objectId = samples[depthY * width + depthX].objectId;
                 int differentNeighbors = 0;
+                bool selectedEdge = (objectId & selectedIdMask) != 0;
                 constexpr std::array<QPoint, 4> neighbors = {
                     QPoint(1, 0), QPoint(-1, 0), QPoint(0, 1), QPoint(0, -1)};
                 for (const QPoint &offset : neighbors) {
                     const int sx = std::clamp(depthX + offset.x(), 0, width - 1);
                     const int sy = std::clamp(depthY + offset.y(), 0, height - 1);
-                    differentNeighbors +=
-                        samples[sy * width + sx].objectId != objectId;
+                    const quint64 neighborId =
+                        samples[sy * width + sx].objectId;
+                    differentNeighbors += neighborId != objectId;
+                    selectedEdge = selectedEdge ||
+                                   (neighborId & selectedIdMask) != 0;
                 }
                 const float edgeOpacity = differentNeighbors * 0.25f;
-                const float sourceAlpha = outlineAlpha * edgeOpacity;
+                const QColor &edgeColor = selectedEdge
+                                              ? selectionOutline : outline;
+                const float sourceAlpha =
+                    static_cast<float>(edgeColor.alphaF()) * edgeOpacity;
                 if (sourceAlpha <= 0.0f) continue;
+                const float outlineRed = static_cast<float>(edgeColor.red());
+                const float outlineGreen = static_cast<float>(edgeColor.green());
+                const float outlineBlue = static_cast<float>(edgeColor.blue());
                 const QRgb pixel = source.pixel(x, y);
                 const float dstAlpha = qAlpha(pixel) / 255.0f;
                 const float outAlpha = sourceAlpha +

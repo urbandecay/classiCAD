@@ -1260,7 +1260,10 @@ bool ViewportSurfaceRenderer::initialize()
                 // applies the active display transform before compositing.
                 float alpha = uBaseColor.a;
                 if (uEditModeSelected) {
-                    color = mix(color, uEditSelectionColor,
+                    vec3 selectionColor = uSceneLinearOutput
+                        ? srgbToDisplayLinear(uEditSelectionColor)
+                        : uEditSelectionColor;
+                    color = mix(color, selectionColor,
                                 uEditSelectionMix);
                 }
                 float signedViewDepth = dot(vWorldPosition - uCameraPosition,

@@ -10,6 +10,7 @@
 #include "core/serialization/document_serializer.h"
 
 #include <QDir>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -24,9 +25,11 @@
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
+#include <QtEndian>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -35,6 +38,22 @@ namespace {
 constexpr auto kPinnedBlenderVersion = "5.2.2";
 constexpr qint64 kBlenderTimeoutMilliseconds = 180000;
 constexpr qint64 kCopyChunkSize = 1024 * 1024;
+constexpr qsizetype kColorLutByteCount = 65 * 65 * 65 * 3 * 4;
+constexpr qsizetype kColorLutTotalByteLimit = 32 * 1024 * 1024;
+
+bool isFiniteColorLutPayload(const QByteArray &bytes)
+{
+    if (bytes.size() != kColorLutByteCount) return false;
+    const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
+    for (qsizetype offset = 0; offset < bytes.size();
+         offset += static_cast<qsizetype>(sizeof(quint32))) {
+        const quint32 bits = qFromLittleEndian<quint32>(source + offset);
+        float value = 0.0f;
+        std::memcpy(&value, &bits, sizeof(value));
+        if (!std::isfinite(value)) return false;
+    }
+    return true;
+}
 
 void setError(QString *errorMessage, const QString &message)
 {
@@ -1582,7 +1601,7 @@ bool importBlenderScene(const QString &path,
     if (root.value(QStringLiteral("format")).toString() !=
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
-        bridgeVersion != 10) {
+        (bridgeVersion != 10 && bridgeVersion != 11)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -1619,6 +1638,55 @@ bool importBlenderScene(const QString &path,
     const QJsonArray unsupportedFeatures =
         root.value(QStringLiteral("unsupported_features")).toArray();
     QStringList warnings;
+    QHash<QString, QByteArray> importedBlenderColorLuts;
+    const QJsonValue colorLutsValue = root.value(QStringLiteral("color_luts"));
+    if (bridgeVersion >= 11 && !colorLutsValue.isArray()) {
+        setError(errorMessage, QStringLiteral("The Blender scene extraction has no color LUT table"));
+        return false;
+    }
+    qsizetype importedLutBytes = 0;
+    for (const QJsonValue &lutValue : colorLutsValue.toArray()) {
+        if (!lutValue.isObject()) {
+            warnings.append(QStringLiteral("A Blender scene color LUT record is invalid and was skipped"));
+            continue;
+        }
+        const QJsonObject lut = lutValue.toObject();
+        const QString id = lut.value(QStringLiteral("id")).toString();
+        const QString encoded = lut.value(QStringLiteral("data_base64")).toString();
+        const bool idValid = id.size() == 64 && std::all_of(
+            id.cbegin(), id.cend(), [](QChar c) {
+                return (c >= QLatin1Char('0') && c <= QLatin1Char('9')) ||
+                       (c >= QLatin1Char('a') && c <= QLatin1Char('f'));
+            });
+        const QByteArray base64 = encoded.toLatin1();
+        const auto decoding = QByteArray::fromBase64Encoding(
+            base64, QByteArray::AbortOnBase64DecodingErrors);
+        const QByteArray bytes = decoding.decoded;
+        const QString digest = QString::fromLatin1(
+            QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+        const bool metadataValid = idValid &&
+            lut.value(QStringLiteral("size")).toInt(-1) == 65 &&
+            lut.value(QStringLiteral("domain_min")).isDouble() &&
+            lut.value(QStringLiteral("domain_min")).toDouble() == 0.0 &&
+            lut.value(QStringLiteral("domain_max")).isDouble() &&
+            lut.value(QStringLiteral("domain_max")).toDouble() == 2.0 &&
+            lut.value(QStringLiteral("encoding")).toString() ==
+                QLatin1String("rgb-f32-le-base64");
+        if (!metadataValid || decoding.decodingStatus != QByteArray::Base64DecodingStatus::Ok ||
+            !isFiniteColorLutPayload(bytes) || digest != id) {
+            warnings.append(QStringLiteral("Blender color LUT %1 is invalid (expected a verified 65³ RGB float LUT) and was skipped")
+                                .arg(id.isEmpty() ? QStringLiteral("<missing id>") : id));
+            continue;
+        }
+        if (importedBlenderColorLuts.contains(id)) continue;
+        if (importedBlenderColorLuts.size() >= 8 ||
+            importedLutBytes + bytes.size() > kColorLutTotalByteLimit) {
+            warnings.append(QStringLiteral("Blender color LUT %1 exceeds the import limit of 8 LUTs or 32 MiB and was skipped").arg(id));
+            continue;
+        }
+        importedLutBytes += bytes.size();
+        importedBlenderColorLuts.insert(id, bytes);
+    }
     QVector<SceneObject> imported;
     QVector<DocumentCollection> importedCollections;
     QVector<DocumentMaterial> importedMaterials;
@@ -1642,6 +1710,17 @@ bool importBlenderScene(const QString &path,
             setError(errorMessage,
                      QStringLiteral("A Blender scene record is incomplete"));
             return false;
+        }
+        const QJsonObject colorManagement =
+            scene.value(QStringLiteral("color_management")).toObject();
+        const QJsonValue lutIdValue = colorManagement.value(QStringLiteral("lut_id"));
+        const QString lutId = lutIdValue.toString();
+        if (!lutIdValue.isUndefined() &&
+            (!lutIdValue.isString() ||
+             (!lutId.isEmpty() && !importedBlenderColorLuts.contains(lutId)))) {
+            warnings.append(QStringLiteral("Scene %1 references color LUT %2, which is missing or invalid; scene metadata was retained")
+                                .arg(scene.value(QStringLiteral("name")).toString(),
+                                     lutId.isEmpty() ? QStringLiteral("<invalid id>") : lutId));
         }
         const QJsonObject renderOutput =
             scene.value(QStringLiteral("render_output")).toObject();
@@ -1843,6 +1922,7 @@ bool importBlenderScene(const QString &path,
         report->warningMessage = conciseImportWarnings(
             warnings, skippedCount, unsupportedFeatureCount);
         report->scenes = importedSceneRecords;
+        report->importedBlenderColorLuts = importedBlenderColorLuts;
     }
     QSet<QString> usedMaterialIds;
     for (const SceneObject &object : imported) {

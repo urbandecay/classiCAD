@@ -169,6 +169,8 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("displayDevice"), colorDisplayDevice);
     cameraJson.insert(QStringLiteral("viewTransform"), viewTransform);
     cameraJson.insert(QStringLiteral("look"), colorLook);
+    if (!colorLutId.isEmpty())
+        cameraJson.insert(QStringLiteral("lutId"), colorLutId);
     cameraJson.insert(QStringLiteral("exposure"), colorExposure);
     cameraJson.insert(QStringLiteral("gamma"), colorGamma);
     cameraJson.insert(QStringLiteral("colorManagementApplied"),

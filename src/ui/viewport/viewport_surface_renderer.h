@@ -103,7 +103,9 @@ private:
         bool snapshotDepth,
         bool *snapshotDepthReady);
     bool ensureMatcapTexture(const QString &presetName);
-    bool ensureAgxDisplayTexture(int colorTransform);
+    bool ensureAgxDisplayTexture(int colorTransform,
+                                 const QString &customLutId = {},
+                                 const QByteArray &customLutBytes = {});
     bool ensureCavityJitterTexture(int totalSamples);
     GLuint ensureImageTexture(const QString &path, bool srgb);
     GLuint ensureImageTexture(const QString &path,
@@ -140,6 +142,8 @@ private:
     unsigned int matcapTexture_ = 0;
     unsigned int agxDisplayTexture_ = 0;
     int agxDisplayTextureTransform_ = -1;
+    QString agxDisplayTextureCustomId_;
+    QHash<QString, GLuint> customDisplayTextures_;
     GLuint cavityJitterTexture_ = 0;
     int cavityJitterSampleCount_ = 0;
     unsigned int shadowTexture_ = 0;

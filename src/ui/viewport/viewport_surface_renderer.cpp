@@ -227,10 +227,13 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         if (texture != 0) glDeleteTextures(1, &texture);
     }
     imageTextures_.clear();
-    if (agxDisplayTexture_ != 0) {
+    if (agxDisplayTexture_ != 0 && agxDisplayTextureTransform_ != 4) {
         glDeleteTextures(1, &agxDisplayTexture_);
-        agxDisplayTexture_ = 0;
     }
+    for (GLuint texture : customDisplayTextures_)
+        if (texture != 0) glDeleteTextures(1, &texture);
+    customDisplayTextures_.clear();
+    agxDisplayTexture_ = 0;
     if (cavityJitterTexture_ != 0) {
         glDeleteTextures(1, &cavityJitterTexture_);
         cavityJitterTexture_ = 0;
@@ -496,7 +499,11 @@ bool ViewportSurfaceRenderer::initialize()
         {
             color = max(color, vec3(0.0)) * exp2(uColorExposure);
             vec3 displayColor;
-            if (uColorTransform == 1 || !uAgxDisplayAvailable) {
+            if (uColorTransform == 1) {
+                displayColor = sceneLinearToSrgb(color);
+            } else if (uColorTransform == 4 && !uAgxDisplayAvailable) {
+                displayColor = color;
+            } else if (!uAgxDisplayAvailable) {
                 displayColor = sceneLinearToSrgb(color);
             } else {
                 vec3 bounded = clamp(color, vec3(0.0), vec3(2.0));
@@ -2402,16 +2409,42 @@ GLuint ViewportSurfaceRenderer::ensureImageTexture(
     return texture;
 }
 
-bool ViewportSurfaceRenderer::ensureAgxDisplayTexture(int colorTransform)
+bool ViewportSurfaceRenderer::ensureAgxDisplayTexture(
+    int colorTransform, const QString &customLutId,
+    const QByteArray &customLutBytes)
 {
+    if (colorTransform == 4) {
+        const auto cached = customDisplayTextures_.constFind(customLutId);
+        if (cached != customDisplayTextures_.cend()) {
+            agxDisplayTexture_ = cached.value();
+            agxDisplayTextureTransform_ = 4;
+            agxDisplayTextureCustomId_ = customLutId;
+            return true;
+        }
+    }
     if (agxDisplayTexture_ != 0 &&
-        agxDisplayTextureTransform_ == colorTransform) {
+        agxDisplayTextureTransform_ == colorTransform &&
+        (colorTransform != 4 || agxDisplayTextureCustomId_ == customLutId)) {
         return true;
     }
-    const QVector<float> &lut = colorTransform == 2
+    QVector<float> customValues;
+    if (colorTransform == 4) {
+        constexpr qsizetype count = 65 * 65 * 65 * 3;
+        if (customLutId.size() != 64 || customLutBytes.size() != count * 4)
+            return false;
+        customValues.resize(count);
+        const auto *source = reinterpret_cast<const uchar *>(customLutBytes.constData());
+        for (qsizetype i = 0; i < count; ++i) {
+            const quint32 bits = qFromLittleEndian<quint32>(source + i * 4);
+            std::memcpy(&customValues[i], &bits, sizeof(bits));
+            if (!std::isfinite(customValues[i])) return false;
+        }
+    }
+    const QVector<float> &builtinLut = colorTransform == 2
         ? workbenchPbrNeutralDisplayLutData()
         : colorTransform == 3 ? workbenchFilmicDisplayLutData()
                              : workbenchAgxDisplayLutData();
+    const QVector<float> &lut = colorTransform == 4 ? customValues : builtinLut;
     if (lut.size() != workbenchAgxDisplayLutSize *
                           workbenchAgxDisplayLutSize *
                           workbenchAgxDisplayLutSize * 3) {
@@ -2422,6 +2455,8 @@ bool ViewportSurfaceRenderer::ensureAgxDisplayTexture(int colorTransform)
     GLint previousBinding = 0;
     glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
     glGetIntegerv(GL_TEXTURE_BINDING_3D, &previousBinding);
+    if (agxDisplayTexture_ != 0 && agxDisplayTextureTransform_ != 4)
+        glDeleteTextures(1, &agxDisplayTexture_);
     glGenTextures(1, &agxDisplayTexture_);
     glBindTexture(GL_TEXTURE_3D, agxDisplayTexture_);
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -2435,6 +2470,9 @@ bool ViewportSurfaceRenderer::ensureAgxDisplayTexture(int colorTransform)
                  workbenchAgxDisplayLutSize, 0, GL_RGB, GL_FLOAT,
                  lut.constData());
     agxDisplayTextureTransform_ = colorTransform;
+    agxDisplayTextureCustomId_ = colorTransform == 4 ? customLutId : QString{};
+    if (colorTransform == 4)
+        customDisplayTextures_.insert(customLutId, agxDisplayTexture_);
     glBindTexture(GL_TEXTURE_3D, static_cast<GLuint>(previousBinding));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     return agxDisplayTexture_ != 0;
@@ -2940,7 +2978,9 @@ bool ViewportSurfaceRenderer::draw(
             ensureMatcapTexture(settings.matcapPreset);
         program_.setUniformValue("uMatcapAvailable", matcapAvailable);
         const bool agxDisplayAvailable = settings.colorTransform != 1 &&
-            ensureAgxDisplayTexture(settings.colorTransform);
+            ensureAgxDisplayTexture(settings.colorTransform,
+                                    settings.colorLutId,
+                                    settings.colorLutData);
         program_.setUniformValue("uAgxDisplayAvailable", agxDisplayAvailable);
         program_.setUniformValue("uColorTransform",
                                  settings.colorTransform);

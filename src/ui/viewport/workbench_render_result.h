@@ -28,6 +28,7 @@ struct WorkbenchRenderResult {
     QString colorDisplayDevice;
     QString viewTransform;
     QString colorLook;
+    QString colorLutId;
     qreal colorExposure = 0.0;
     qreal colorGamma = 1.0;
     bool colorManagementApplied = false;

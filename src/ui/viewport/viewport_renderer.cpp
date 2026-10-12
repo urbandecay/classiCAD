@@ -2355,7 +2355,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             }
             const QVector3D shaded = workbenchSceneLinearToDisplaySrgb(
                 shadedLinear, shadingSettings_.colorTransform,
-                shadingSettings_.colorExposure, shadingSettings_.colorGamma);
+                shadingSettings_.colorExposure, shadingSettings_.colorGamma,
+                shadingSettings_.colorLutData);
             QColor color = baseColor;
             color.setRedF(std::clamp<qreal>(shaded.x(), 0.0, 1.0));
             color.setGreenF(std::clamp<qreal>(shaded.y(), 0.0, 1.0));

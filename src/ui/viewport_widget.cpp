@@ -106,6 +106,7 @@
 #include <QLabel>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QJsonObject>
 #include <QLineF>
 #include <QImageReader>
@@ -957,19 +958,43 @@ bool applyImportedSceneColorManagement(
             QStringLiteral("view_transform")).toString();
         const QString look = colorManagement.value(
             QStringLiteral("look")).toString();
+        const QString lutId = colorManagement.value(
+            QStringLiteral("lut_id")).toString();
         const qreal exposure = colorManagement.value(
             QStringLiteral("exposure")).toDouble();
         const qreal gamma = colorManagement.value(
             QStringLiteral("gamma")).toDouble(1.0);
         if (displayDevice != QLatin1String("sRGB") ||
-            look != QLatin1String("None") ||
-            (transform != QLatin1String("AgX") &&
-             transform != QLatin1String("Standard") &&
-             transform != QLatin1String("Khronos PBR Neutral") &&
-             transform != QLatin1String("Filmic")) ||
             !std::isfinite(exposure) || !std::isfinite(gamma) || gamma <= 0.0) {
             return false;
         }
+        if (!lutId.isEmpty()) {
+            static const QRegularExpression sha256Pattern(
+                QStringLiteral("^[0-9a-f]{64}$"));
+            settings->colorTransform = 4;
+            settings->colorLutId = lutId;
+            settings->colorLutData.clear();
+            settings->colorExposure = std::clamp(exposure, -32.0, 32.0);
+            settings->colorGamma = std::clamp(gamma, 0.000001, 5.0);
+            const QByteArray lut = document.settings().importedBlenderColorLuts
+                .value(lutId);
+            constexpr qsizetype requiredBytes = 65 * 65 * 65 * 3 * 4;
+            if (!sha256Pattern.match(lutId).hasMatch() ||
+                lut.size() != requiredBytes) {
+                return false;
+            }
+            settings->colorLutData = lut;
+            return true;
+        }
+        if (look != QLatin1String("None") ||
+            (transform != QLatin1String("AgX") &&
+             transform != QLatin1String("Standard") &&
+             transform != QLatin1String("Khronos PBR Neutral") &&
+             transform != QLatin1String("Filmic"))) {
+            return false;
+        }
+        settings->colorLutId.clear();
+        settings->colorLutData.clear();
         settings->colorTransform =
             transform == QLatin1String("Standard") ? 1 :
             transform == QLatin1String("Khronos PBR Neutral") ? 2 :
@@ -6519,6 +6544,8 @@ public:
                 QStringLiteral("view_transform")).toString();
             result.colorLook = colorManagement.value(
                 QStringLiteral("look")).toString();
+            result.colorLutId = colorManagement.value(
+                QStringLiteral("lut_id")).toString();
             const qreal exposure = colorManagement.value(
                 QStringLiteral("exposure")).toDouble();
             const qreal gamma = colorManagement.value(

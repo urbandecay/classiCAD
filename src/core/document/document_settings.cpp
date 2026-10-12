@@ -2,11 +2,50 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "document_settings.h"
 
+#include <QCryptographicHash>
+#include <QtEndian>
 #include <QStringList>
+
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace classiCAD {
 namespace {
+
+constexpr qsizetype kColorLutByteCount = 65 * 65 * 65 * 3 * 4;
+constexpr qsizetype kColorLutTotalByteLimit = 32 * 1024 * 1024;
+
+bool areImportedColorLutsValid(
+    const QHash<QString, QByteArray> &colorLuts)
+{
+    if (colorLuts.size() > 8) return false;
+    qsizetype totalBytes = 0;
+    for (auto it = colorLuts.cbegin(); it != colorLuts.cend(); ++it) {
+        const QString &id = it.key();
+        const QByteArray &bytes = it.value();
+        if (id.size() != 64 || !std::all_of(
+                id.cbegin(), id.cend(), [](QChar c) {
+                    return (c >= QLatin1Char('0') && c <= QLatin1Char('9')) ||
+                           (c >= QLatin1Char('a') && c <= QLatin1Char('f'));
+                }) || bytes.size() != kColorLutByteCount ||
+            QString::fromLatin1(QCryptographicHash::hash(
+                bytes, QCryptographicHash::Sha256).toHex()) != id) {
+            return false;
+        }
+        const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
+        for (qsizetype offset = 0; offset < bytes.size();
+             offset += static_cast<qsizetype>(sizeof(quint32))) {
+            const quint32 bits = qFromLittleEndian<quint32>(source + offset);
+            float value = 0.0f;
+            std::memcpy(&value, &bits, sizeof(value));
+            if (!std::isfinite(value)) return false;
+        }
+        totalBytes += bytes.size();
+        if (totalBytes > kColorLutTotalByteLimit) return false;
+    }
+    return true;
+}
 
 bool parseLengthNumber(const QString &text, qreal *value)
 {
@@ -126,7 +165,8 @@ bool isValidDocumentSettings(const DocumentSettings &settings)
 {
     const bool validUnit = documentLengthUnitKey(settings.lengthUnit).size() > 0;
     return validUnit && std::isfinite(settings.gridSpacing) &&
-           settings.gridSpacing >= 1.0e-9 && settings.gridSpacing <= 1.0e9;
+           settings.gridSpacing >= 1.0e-9 && settings.gridSpacing <= 1.0e9 &&
+           areImportedColorLutsValid(settings.importedBlenderColorLuts);
 }
 
 qreal documentGridSpacingInMillimeters(const DocumentSettings &settings)

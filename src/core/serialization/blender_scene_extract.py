@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import struct
 import sys
 import tempfile
 import traceback
@@ -22,11 +23,114 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 10
+BRIDGE_FORMAT_VERSION = 11
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_COLOR_LUTS = 8
+MAX_COLOR_LUT_BYTES = 32 * 1024 * 1024
+COLOR_LUT_SIZE = 65
+COLOR_LUT_DOMAIN_MIN = 0.0
+COLOR_LUT_DOMAIN_MAX = 2.0
 SOURCE_PROJECT_NAMESPACE = ""
+
+
+def bake_color_lut(scene, lut_records, lut_bytes_by_id, unsupported):
+    """Bake Blender's selected scene-linear to sRGB display transform."""
+    item_id = stable_id(scene)
+    color_management = {
+        "display_device": scene.display_settings.display_device,
+        "view_transform": scene.view_settings.view_transform,
+        "look": scene.view_settings.look,
+        "exposure": finite_number(scene.view_settings.exposure),
+        "gamma": finite_number(scene.view_settings.gamma),
+    }
+    if color_management["display_device"].lower() != "srgb":
+        add_unsupported(unsupported, item_id, "color_management_lut",
+                        "only the sRGB display device can be represented by the scene LUT")
+        return color_management
+    if (color_management["look"].lower() == "none" and
+            color_management["view_transform"] in {
+                "AgX", "Standard", "Khronos PBR Neutral", "Filmic"
+            }):
+        # These are already represented by the importer's established paths.
+        return color_management
+    try:
+        import PyOpenColorIO as ocio
+
+        config = ocio.GetCurrentConfig()
+        display = color_management["display_device"]
+        wanted_transform = color_management["view_transform"]
+        view = next((name for name in config.getViews(display)
+                     if config.getDisplayViewTransformName(display, name) == wanted_transform), None)
+        if view is None:
+            # Some Blender configs use the view name as the view-transform name.
+            if wanted_transform in config.getViews(display):
+                view = wanted_transform
+            else:
+                raise ValueError("no OCIO sRGB view matches Blender view transform " + wanted_transform)
+        transform = ocio.DisplayViewTransform()
+        scene_linear = config.getColorSpaceNameByRole(ocio.ROLE_SCENE_LINEAR)
+        transform.setSrc(scene_linear)
+        transform.setDisplay(display)
+        transform.setView(view)
+        look = color_management["look"]
+        if look and look.lower() != "none":
+            look_definition = config.getLook(look)
+            if look_definition is None:
+                raise ValueError("selected OCIO look is unavailable: " + look)
+            # Blender's GetLooksResultColorSpace is the selected look's process
+            # space. Keeping both ends of the LookTransform there matches the
+            # processor's output color space before the display view transform.
+            look_result_space = look_definition.getProcessSpace()
+            if not look_result_space:
+                raise ValueError("selected OCIO look has no process color space")
+            look_transform = ocio.LookTransform()
+            look_transform.setSrc(scene_linear)
+            look_transform.setDst(look_result_space)
+            look_transform.setLooks(look)
+            transform.setLooksBypass(True)
+            transform.setSrc(look_result_space)
+            group = ocio.GroupTransform()
+            group.appendTransform(look_transform)
+            group.appendTransform(transform)
+            processor = config.getProcessor(group).getDefaultCPUProcessor()
+        else:
+            processor = config.getProcessor(transform).getDefaultCPUProcessor()
+        values = bytearray()
+        denominator = COLOR_LUT_SIZE - 1
+        # Existing consumers index ((blue * size + green) * size + red).
+        for b in range(COLOR_LUT_SIZE):
+            blue = COLOR_LUT_DOMAIN_MIN + (COLOR_LUT_DOMAIN_MAX - COLOR_LUT_DOMAIN_MIN) * b / denominator
+            for g in range(COLOR_LUT_SIZE):
+                green = COLOR_LUT_DOMAIN_MIN + (COLOR_LUT_DOMAIN_MAX - COLOR_LUT_DOMAIN_MIN) * g / denominator
+                for r in range(COLOR_LUT_SIZE):
+                    red = COLOR_LUT_DOMAIN_MIN + (COLOR_LUT_DOMAIN_MAX - COLOR_LUT_DOMAIN_MIN) * r / denominator
+                    color = processor.applyRGB([red, green, blue])
+                    for component in color:
+                        number = finite_number(component)
+                        values.extend(struct.pack("<f", number))
+        raw = bytes(values)
+        lut_id = hashlib.sha256(raw).hexdigest()
+        if lut_id not in lut_bytes_by_id:
+            if len(lut_records) >= MAX_COLOR_LUTS:
+                raise ValueError("scene color LUT limit exceeded (%d unique tables)" % MAX_COLOR_LUTS)
+            if sum(lut_bytes_by_id.values()) + len(raw) > MAX_COLOR_LUT_BYTES:
+                raise ValueError("scene color LUT byte limit exceeded (%d decoded bytes)" % MAX_COLOR_LUT_BYTES)
+            lut_bytes_by_id[lut_id] = len(raw)
+            lut_records.append({
+                "id": lut_id,
+                "size": COLOR_LUT_SIZE,
+                "domain_min": COLOR_LUT_DOMAIN_MIN,
+                "domain_max": COLOR_LUT_DOMAIN_MAX,
+                "encoding": "rgb-f32-le-base64",
+                "data_base64": base64.b64encode(raw).decode("ascii"),
+            })
+        color_management["lut_id"] = lut_id
+    except Exception as error:
+        add_unsupported(unsupported, item_id, "color_management_lut",
+                        "OCIO sRGB display/view transform could not be baked: " + str(error))
+    return color_management
 
 
 def require_pinned_blender():
@@ -790,8 +894,10 @@ def extract_scene(input_path, mode):
         "unsupported_items": [],
         "unsupported_features": [],
         "materials": {},
+        "color_luts": [],
         "summary": {},
     }
+    lut_bytes_by_id = {}
     object_count = 0
     mesh_count = 0
     surface_patch_count = 0
@@ -862,13 +968,9 @@ def extract_scene(input_path, mode):
             ),
             "object_ids": [],
             "active_camera": scene_camera_record(scene, depsgraph),
-            "color_management": {
-                "display_device": scene.display_settings.display_device,
-                "view_transform": scene.view_settings.view_transform,
-                "look": scene.view_settings.look,
-                "exposure": finite_number(scene.view_settings.exposure),
-                "gamma": finite_number(scene.view_settings.gamma),
-            },
+            "color_management": bake_color_lut(
+                scene, output["color_luts"], lut_bytes_by_id,
+                output["unsupported_features"]),
             "render_output": {
                 "resolution_x": int(render.resolution_x),
                 "resolution_y": int(render.resolution_y),

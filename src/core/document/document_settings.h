@@ -4,6 +4,8 @@
 
 #include <QString>
 #include <QJsonArray>
+#include <QHash>
+#include <QByteArray>
 
 namespace classiCAD {
 
@@ -26,6 +28,8 @@ struct DocumentSettings {
     // Imported Blender scene metadata, including each scene's active camera.
     // Kept scene-qualified because Blender files may contain multiple scenes.
     QJsonArray importedBlenderScenes;
+    // Exact decoded RGB float LUT bytes, keyed by their lowercase SHA-256.
+    QHash<QString, QByteArray> importedBlenderColorLuts;
 
     bool operator==(const DocumentSettings &) const = default;
 };

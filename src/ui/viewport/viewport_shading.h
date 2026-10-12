@@ -6,6 +6,7 @@
 
 #include <QColor>
 #include <QString>
+#include <QByteArray>
 
 namespace classiCAD {
 
@@ -103,8 +104,10 @@ struct ViewportShadingSettings {
     qreal shadowOffset = 0.1;
     qreal shadowFocus = 0.0;
     // Imported scene display transform controls used by offscreen scene renders.
-    // 0 AgX, 1 Standard, 2 Khronos PBR Neutral, 3 Filmic, on sRGB output.
+    // 0 AgX, 1 Standard, 2 Khronos PBR Neutral, 3 Filmic, 4 imported LUT.
     int colorTransform = 0;
+    QString colorLutId;
+    QByteArray colorLutData;
     qreal colorExposure = 0.0;
     qreal colorGamma = 1.0;
 

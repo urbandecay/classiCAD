@@ -3,6 +3,7 @@
 #include "core/serialization/shape_json_codec.h"
 
 #include <QByteArray>
+#include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
@@ -15,6 +16,29 @@
 namespace classiCAD {
 
 namespace {
+
+constexpr qsizetype kColorLutByteCount = 65 * 65 * 65 * 3 * 4;
+constexpr qsizetype kColorLutTotalByteLimit = 32 * 1024 * 1024;
+
+bool isValidImportedColorLuts(const QHash<QString, QByteArray> &luts)
+{
+    if (luts.size() > 8) return false;
+    qsizetype totalBytes = 0;
+    for (auto it = luts.cbegin(); it != luts.cend(); ++it) {
+        const QString &id = it.key();
+        if (id.size() != 64 || !std::all_of(id.cbegin(), id.cend(), [](QChar c) {
+                return (c >= QLatin1Char('0') && c <= QLatin1Char('9')) ||
+                       (c >= QLatin1Char('a') && c <= QLatin1Char('f'));
+            }) || it.value().size() != kColorLutByteCount ||
+            QString::fromLatin1(QCryptographicHash::hash(
+                it.value(), QCryptographicHash::Sha256).toHex()) != id) {
+            return false;
+        }
+        totalBytes += it.value().size();
+        if (totalBytes > kColorLutTotalByteLimit) return false;
+    }
+    return true;
+}
 
 void setError(QString *errorMessage, const QString &message)
 {
@@ -134,7 +158,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 14);
+    serialized.insert(QStringLiteral("version"), 15);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -143,6 +167,12 @@ QJsonObject documentToJson(const Document &document)
                     document.settings().activeViewLayerKey);
     settings.insert(QStringLiteral("importedBlenderScenes"),
                     document.settings().importedBlenderScenes);
+    QJsonObject colorLuts;
+    for (auto it = document.settings().importedBlenderColorLuts.cbegin();
+         it != document.settings().importedBlenderColorLuts.cend(); ++it) {
+        colorLuts.insert(it.key(), QString::fromLatin1(it.value().toBase64()));
+    }
+    settings.insert(QStringLiteral("importedBlenderColorLuts"), colorLuts);
     serialized.insert(QStringLiteral("settings"), settings);
     serialized.insert(QStringLiteral("activeLayerId"),
                       idToJson(document.activeLayerId().value()));
@@ -295,7 +325,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 14) {
+    if (version < 1 || version > 15) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -554,6 +584,42 @@ bool documentFromJson(const QJsonValue &value,
                 return false;
             }
             settings.importedBlenderScenes = importedScenes.toArray();
+        }
+        if (version >= 15) {
+            const QJsonValue lutValue = settingsObject.value(
+                QStringLiteral("importedBlenderColorLuts"));
+            if (!lutValue.isObject()) {
+                setError(errorMessage, QStringLiteral("invalid imported Blender color LUT table"));
+                return false;
+            }
+            const QJsonObject lutObject = lutValue.toObject();
+            qsizetype totalBytes = 0;
+            for (auto it = lutObject.begin(); it != lutObject.end(); ++it) {
+                if (!it.value().isString()) {
+                    setError(errorMessage, QStringLiteral("invalid imported Blender color LUT data"));
+                    return false;
+                }
+                const auto decoded = QByteArray::fromBase64Encoding(
+                    it.value().toString().toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+                const QByteArray bytes = decoded.decoded;
+                if (decoded.decodingStatus != QByteArray::Base64DecodingStatus::Ok ||
+                    bytes.size() != kColorLutByteCount ||
+                    QString::fromLatin1(QCryptographicHash::hash(
+                        bytes, QCryptographicHash::Sha256).toHex()) != it.key()) {
+                    setError(errorMessage, QStringLiteral("invalid imported Blender color LUT identity or data"));
+                    return false;
+                }
+                totalBytes += bytes.size();
+                if (lutObject.size() > 8 || totalBytes > kColorLutTotalByteLimit) {
+                    setError(errorMessage, QStringLiteral("imported Blender color LUT table exceeds its size limit"));
+                    return false;
+                }
+                settings.importedBlenderColorLuts.insert(it.key(), bytes);
+            }
+        }
+        if (!isValidImportedColorLuts(settings.importedBlenderColorLuts)) {
+            setError(errorMessage, QStringLiteral("invalid imported Blender color LUT table"));
+            return false;
         }
         if (!isValidDocumentSettings(settings)) {
             setError(errorMessage, QStringLiteral("invalid document grid settings"));

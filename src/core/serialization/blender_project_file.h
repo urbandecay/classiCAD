@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QString>
+#include <QHash>
+#include <QByteArray>
 #include <QJsonArray>
 #include <QVector>
 
@@ -57,6 +59,7 @@ struct BlenderSceneImportReport {
     QString importMode;
     QString warningMessage;
     QJsonArray scenes;
+    QHash<QString, QByteArray> importedBlenderColorLuts;
 };
 
 // Extracts supported Blender scene geometry through the pinned Python runtime.

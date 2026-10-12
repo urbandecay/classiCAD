@@ -1846,6 +1846,8 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
            << shading.curvatureValleyFactor
            << shading.xrayAlpha << shading.shadowIntensity
            << shading.shadowOffset << shading.shadowFocus;
+    stream << shading.colorTransform << shading.colorLutId
+           << shading.colorExposure << shading.colorGamma;
     // Only filled Workbench surfaces reach this pre-resolve scene image.
     // Curve/point/dimension wires and selection/tool overlays are drawn after
     // resolve; committed pictures are keyed separately by the caller.

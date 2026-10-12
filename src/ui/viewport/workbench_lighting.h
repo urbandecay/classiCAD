@@ -168,7 +168,8 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
     const QVector3D &inputColor,
     int colorTransform = 0,
     qreal exposure = 0.0,
-    qreal gamma = 1.0)
+    qreal gamma = 1.0,
+    const QByteArray &customLutBytes = {})
 {
     const float exposureScale = std::exp2(static_cast<float>(exposure));
     const QVector3D color(std::max(0.0f, inputColor.x()) * exposureScale,
@@ -182,7 +183,14 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
             ? workbenchPbrNeutralDisplayLutData()
             : colorTransform == 3 ? workbenchFilmicDisplayLutData()
                                   : workbenchAgxDisplayLutData();
-        if (lut.isEmpty()) {
+        const bool customLutValid = colorTransform != 4 ||
+            customLutBytes.size() == workbenchAgxDisplayLutSize *
+                workbenchAgxDisplayLutSize * workbenchAgxDisplayLutSize * 12;
+        if (!customLutValid) {
+            // An unresolved custom transform is intentionally not replaced by
+            // a built-in transform. Keep it visibly invalid/unmanaged.
+            displayColor = color;
+        } else if (lut.isEmpty() && colorTransform != 4) {
             displayColor = workbenchSceneLinearToSrgb(color);
         } else {
             const float maximumIndex = workbenchAgxDisplayLutSize - 1.0f;
@@ -203,12 +211,22 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
             const float tx = rx - x0;
             const float ty = gy - y0;
             const float tz = bz - z0;
-            const auto sample = [&lut](int red, int green, int blue) {
+            const auto sample = [&lut, &customLutBytes, colorTransform](int red, int green, int blue) {
                 const qsizetype index =
                     ((static_cast<qsizetype>(blue) *
                           workbenchAgxDisplayLutSize + green) *
                          workbenchAgxDisplayLutSize + red) * 3;
-                return QVector3D(lut[index], lut[index + 1], lut[index + 2]);
+                if (colorTransform != 4)
+                    return QVector3D(lut[index], lut[index + 1], lut[index + 2]);
+                const auto *bytes = reinterpret_cast<const uchar *>(customLutBytes.constData());
+                const auto value = [bytes](qsizetype component) {
+                    const quint32 bits = qFromLittleEndian<quint32>(
+                        bytes + component * static_cast<qsizetype>(sizeof(quint32)));
+                    float decoded = 0.0f;
+                    std::memcpy(&decoded, &bits, sizeof(decoded));
+                    return decoded;
+                };
+                return QVector3D(value(index), value(index + 1), value(index + 2));
             };
             const auto interpolate = [](const QVector3D &first,
                                         const QVector3D &second,
@@ -235,10 +253,11 @@ inline QVector3D workbenchSceneLinearToAgxSrgb(
     const QVector3D &inputColor,
     int colorTransform = 0,
     qreal exposure = 0.0,
-    qreal gamma = 1.0)
+    qreal gamma = 1.0,
+    const QByteArray &customLutBytes = {})
 {
     return workbenchSceneLinearToDisplaySrgb(inputColor, colorTransform,
-                                              exposure, gamma);
+                                              exposure, gamma, customLutBytes);
 }
 
 inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()

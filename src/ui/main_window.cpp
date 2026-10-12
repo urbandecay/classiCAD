@@ -677,6 +677,28 @@ private:
                 }
             }
             DocumentSettings settings = session_.document().settings();
+            qsizetype colorLutBytes = 0;
+            for (auto it = settings.importedBlenderColorLuts.cbegin();
+                 it != settings.importedBlenderColorLuts.cend(); ++it) {
+                colorLutBytes += it.value().size();
+            }
+            QStringList omittedColorLutIds;
+            for (auto it = report.importedBlenderColorLuts.cbegin();
+                 it != report.importedBlenderColorLuts.cend(); ++it) {
+                if (!settings.importedBlenderColorLuts.contains(it.key())) {
+                    if (settings.importedBlenderColorLuts.size() >= 8 ||
+                        colorLutBytes + it.value().size() > 32 * 1024 * 1024) {
+                        omittedColorLutIds.append(it.key());
+                        continue;
+                    }
+                    settings.importedBlenderColorLuts.insert(it.key(), it.value());
+                    colorLutBytes += it.value().size();
+                }
+            }
+            if (!omittedColorLutIds.isEmpty()) {
+                report.warningMessage += QStringLiteral("\nSome imported scene LUTs were omitted because the document limit is 8 LUTs or 32 MiB: %1")
+                                             .arg(omittedColorLutIds.join(QStringLiteral(", ")));
+            }
             for (const QJsonValue &sceneValue : report.scenes) {
                 const QJsonObject importedScene = sceneValue.toObject();
                 const QString sceneId = importedScene.value(

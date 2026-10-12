@@ -48,6 +48,31 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   surface depth when culling is requested. Matched visual comparison remains
   pending.
 
+### GPU Workbench X-Ray transparency, depth, and effects (2026-10-12)
+
+- Solid X-Ray now routes every non-preview surface range through transparent
+  accumulation, including ranges whose source material alpha is one. The
+  Workbench color shader multiplies interpolated source alpha by the resolved
+  X-Ray alpha once; the existing classiCAD `workbenchEffectiveAlpha` supplies
+  that same single multiplication. The accumulation pass disables depth
+  testing in X-Ray so the separate X-Ray depth-only pass used for CAD strokes
+  cannot hide rear surfaces. The transparent-depth pass then records nearest
+  surface depth and object IDs for the shared viewport targets.
+- Blender 5.2.2 sets `xray_mode` from the resolved alpha and routes each X-Ray
+  object to both transparent accumulation and transparent-depth passes in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L238-L250).
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L84-L92)
+  applies the global X-Ray alpha to the source alpha before OIT accumulation.
+  Blender disables shadow, cavity, and DOF flags in X-Ray mode in
+  [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L155-L165).
+- classiCAD keeps cavity and shadows suppressed in X-Ray, disables interactive
+  and offscreen DOF while X-Ray is active, and allows object outlines through
+  the private object-ID path. That path avoids relying on an opaque-only
+  shared prepass for X-Ray objects. If weighted-OIT target creation fails,
+  color falls back to depth-disabled sorted blending; that fallback does not
+  produce the shared transparent-depth/object-ID coverage. X-Ray color,
+  outline, and fallback behavior still need matched visual comparison.
+
 ### GPU Workbench orthographic-view depth of field (2026-10-12)
 
 - GPU depth of field now runs in orthographic views when a scene camera has

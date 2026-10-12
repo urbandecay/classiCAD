@@ -6786,7 +6786,8 @@ public:
                 const QSize &pixelSize, ViewportAaRenderer &aa,
                 BlenderGridRenderer &grid,
                 ViewportSceneRenderer &, ViewportSurfaceRenderer &surface) {
-                aa.setDepthOfField(settings.depthOfField,
+                aa.setDepthOfField(settings.depthOfField &&
+                                       !settings.xrayEnabled(),
                                    renderCamera.cameraPreferences(),
                                    renderCamera.isPerspectiveEnabled());
                 aa.setDisplayTransform(settings, true, transparentFilm);
@@ -10984,7 +10985,8 @@ protected:
                     renderFrame, renderShadingSettings, viewportAaMode_,
                     devicePixelRatioF(), sceneContentStateKey);
                 aaRenderer->setDepthOfField(
-                    viewportShadingSettings_.depthOfField,
+                    viewportShadingSettings_.depthOfField &&
+                        !viewportShadingSettings_.xrayEnabled(),
                     viewportTransform_.cameraPreferences(),
                     viewportTransform_.isPerspectiveEnabled());
                 aaRenderer->setDisplayTransform(renderShadingSettings, true);

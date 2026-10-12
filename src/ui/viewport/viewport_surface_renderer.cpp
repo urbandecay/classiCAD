@@ -4304,9 +4304,24 @@ bool ViewportSurfaceRenderer::draw(
             }
         }
     }
+    const bool solidXray = settings.mode == ViewportShadingMode::Solid &&
+                           settings.xrayEnabled() && !previewOverlay &&
+                           !selectionOverlay;
+    if (solidXray) {
+        // Workbench routes every X-Ray object through transparent accumulation,
+        // even when its source material is otherwise opaque. The shader applies
+        // xrayAlpha once when it computes the source alpha.
+        hasPartialAlpha = std::any_of(
+            ranges_.cbegin(), ranges_.cend(),
+            [](const DrawRange &range) { return range.count > 0; });
+    }
     const bool primarySceneEffectsDraw =
         settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
         !selectionOverlay && clearDepth && !settings.xrayEnabled() &&
+        !vertices_.isEmpty();
+    const bool outlineRequested =
+        settings.mode == ViewportShadingMode::Solid && settings.outline &&
+        !previewOverlay && !selectionOverlay && clearDepth &&
         !vertices_.isEmpty();
     if (settings.mode == ViewportShadingMode::Solid &&
         settings.backfaceCulling) {
@@ -4416,7 +4431,6 @@ bool ViewportSurfaceRenderer::draw(
     }
 
     const bool cavityRequested = primarySceneEffectsDraw && settings.cavity;
-    const bool outlineRequested = primarySceneEffectsDraw && settings.outline;
     const bool worldSsaoRequested = cavityRequested &&
         (settings.cavityType == ViewportCavityType::World ||
          settings.cavityType == ViewportCavityType::Both);
@@ -4433,7 +4447,7 @@ bool ViewportSurfaceRenderer::draw(
         ensureCavityJitterTexture(cavityTotalSampleCount);
     const bool ssaoEnabled = worldSsaoRequested && ssaoJitterReady;
     const bool sharedPrepassRequested = sharedTargets != nullptr &&
-        (cavityRequested || outlineRequested ||
+        (cavityRequested || (outlineRequested && !settings.xrayEnabled()) ||
          !frontOpaqueRangeIndices.isEmpty());
     bool sharedPrepassReady = false;
     bool cavityDepthReady = false;
@@ -5179,7 +5193,11 @@ bool ViewportSurfaceRenderer::draw(
         const auto drawTransparentTriangles = [&]() {
             if (!hasPartialAlpha) return;
             if (!weightedOitAvailable) {
-                glEnable(GL_DEPTH_TEST);
+                if (settings.xrayEnabled()) {
+                    glDisable(GL_DEPTH_TEST);
+                } else {
+                    glEnable(GL_DEPTH_TEST);
+                }
                 glDepthFunc(GL_LEQUAL);
                 glDepthMask(GL_FALSE);
                 glEnable(GL_BLEND);
@@ -5250,7 +5268,14 @@ bool ViewportSurfaceRenderer::draw(
                        transparencyPixelSize.height());
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             glDepthMask(GL_FALSE);
-            glEnable(GL_DEPTH_TEST);
+            if (settings.xrayEnabled()) {
+                // The X-Ray depth-only surface pass exists for post-resolve
+                // strokes, but must not hide rear faces from Workbench's
+                // transparent color accumulation.
+                glDisable(GL_DEPTH_TEST);
+            } else {
+                glEnable(GL_DEPTH_TEST);
+            }
             glDepthFunc(GL_LEQUAL);
             glDisable(GL_STENCIL_TEST);
             glEnable(GL_BLEND);
@@ -5831,13 +5856,14 @@ bool ViewportSurfaceRenderer::draw(
 
     if (settings.mode == ViewportShadingMode::Solid &&
         settings.outline && !previewOverlay && !selectionOverlay &&
-        !settings.xrayEnabled() && !vertices_.isEmpty()) {
+        !vertices_.isEmpty()) {
         const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
         const QSize pixelSize(qRound(viewportSize.width() * dpr),
                               qRound(viewportSize.height() * dpr));
         const bool sharedOutlineIdsReady = sharedPrepassReady &&
                                            transparentDepthCoverageReady;
         const bool useSharedOutlineIds = sharedOutlineIdsReady &&
+                                         !settings.xrayEnabled() &&
                                          outlineRequested;
         const bool outlineFramebufferReady = useSharedOutlineIds ||
             ensureObjectIdFramebuffer(pixelSize);

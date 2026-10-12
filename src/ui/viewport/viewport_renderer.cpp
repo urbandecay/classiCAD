@@ -1490,7 +1490,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             (point.y - camera.y) * view.y +
                             (point.z - camera.z) * view.z;
                         triangle.reciprocalDepths[corner] =
-                            1.0 / std::max<qreal>(cameraDepth, 1.0e-9);
+                            1.0 / std::max<qreal>(-cameraDepth, 1.0e-9);
                     } else {
                         triangle.reciprocalDepths[corner] = 1.0;
                     }
@@ -2992,9 +2992,12 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         const qreal dx = points[i].x + preparedOffset.x - cameraWorld.x;
                         const qreal dy = points[i].y + preparedOffset.y - cameraWorld.y;
                         const qreal dz = points[i].z + preparedOffset.z - cameraWorld.z;
+                        // viewDirection points from the scene toward the
+                        // camera; perspective projection depth increases in
+                        // the opposite (camera-forward) direction.
                         reciprocal[i] = 1.0 / std::max<qreal>(
-                            dx * viewDirection.x + dy * viewDirection.y +
-                                dz * viewDirection.z,
+                            -(dx * viewDirection.x + dy * viewDirection.y +
+                              dz * viewDirection.z),
                             1.0e-9);
                     }
                 }
@@ -3054,8 +3057,11 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     const qreal dx=points[i].x+preparedOffset.x-cameraWorld.x;
                     const qreal dy=points[i].y+preparedOffset.y-cameraWorld.y;
                     const qreal dz=points[i].z+preparedOffset.z-cameraWorld.z;
+                    // viewDirection points from the scene toward the
+                    // camera; perspective projection depth increases in
+                    // the opposite (camera-forward) direction.
                     reciprocal[i] = 1.0 / std::max<qreal>(
-                        dx*viewDirection.x+dy*viewDirection.y+dz*viewDirection.z,
+                        -(dx*viewDirection.x+dy*viewDirection.y+dz*viewDirection.z),
                         1.0e-9);
                 }
             }

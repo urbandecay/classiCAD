@@ -16,6 +16,10 @@ enum class ViewportRenderPass : quint32 {
     TransparentAccumulation = 1u << 2,
     TransparentResolve = 1u << 3,
     TransparentDepth = 1u << 4,
+    FrontTransparentAccumulation = 1u << 5,
+    FrontTransparentResolve = 1u << 6,
+    FrontTransparentDepth = 1u << 7,
+    FrontTransparentMerge = 1u << 8,
 };
 
 // Named completion and attachment report shared by the live viewport and
@@ -54,6 +58,8 @@ struct ViewportRenderTargets {
         FrontViewSpaceNormal = 1u << 11,
         FrontObjectId = 1u << 12,
         FrontOutlineId = 1u << 13,
+        FrontTransparentColor = 1u << 14,
+        FrontTransparentDepthAttachment = 1u << 15,
     };
 
     GLuint currentSampleColorTexture = 0;

@@ -97,9 +97,11 @@ private:
         const QSize &pixelSize,
         const ViewportRenderTargets &targets);
     bool mergeWorkbenchFrontAttachments(const ViewportRenderTargets &targets,
-                                        bool mergeColor);
+                                        bool mergeColor,
+                                        bool mergeNormal = true);
     bool ensureTransparencyFramebuffer(const QSize &pixelSize,
-                                      GLuint depthStencilTexture);
+                                      GLuint depthStencilTexture,
+                                      bool frontDomain = false);
     bool renderWorkbenchEffectPrepass(
         const ViewportTransform &transform,
         const QSize &viewportSize,
@@ -115,7 +117,8 @@ private:
         qreal devicePixelRatio,
         const ViewportShadingSettings &settings,
         const ViewportRenderTargets &targets,
-        const QVector<int> &rangeIndices);
+        const QVector<int> &rangeIndices,
+        bool excludeFrontCoverage = false);
     bool ensureMatcapTexture(const QString &presetName);
     bool ensureAgxDisplayTexture(int colorTransform,
                                  const QString &customLutId = {},
@@ -159,6 +162,9 @@ private:
     GLuint transparencyFramebuffer_ = 0;
     GLuint transparencyAccumulationTexture_ = 0;
     GLuint transparencyWeightTexture_ = 0;
+    GLuint frontTransparencyFramebuffer_ = 0;
+    GLuint frontTransparencyAccumulationTexture_ = 0;
+    GLuint frontTransparencyWeightTexture_ = 0;
     QSize transparencyFramebufferSize_;
     QVector<SurfaceVertex> vertices_;
     QVector<DrawRange> ranges_;

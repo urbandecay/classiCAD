@@ -106,13 +106,21 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   resolve. The unjittered viewport depth path also has a dedicated in-front
   depth target for scene occlusion and picking. C++ build passes; GPU image
   comparison remains pending.
-- Transparent show-in-front ranges still use classiCAD's existing regular OIT
-  or sorted fallback behavior. Blender uses separate regular and in-front OIT
-  accumulation, then source-ordered transparent-depth merging. The QPainter
-  fallback also has no separate in-front surface domain. Keep those differences
-  explicit; opaque support does not complete this pass family. Workbench's
-  transparent-depth pass does not write normals; in-front opaque geometry owns
-  its normal/material attachments during the earlier opaque stage.
+- GPU shared-target rendering now accumulates transparent show-in-front ranges
+  into independent weighted-OIT accumulation/weight targets against the
+  front depth domain. Ordinary transparent accumulation excludes opaque
+  front-owned coverage. The front result resolves over regular OIT color, then writes their
+  depth/object/outline IDs into the front attachments and merges those into the
+  shared depth/ID targets before regular transparent depth. The regular depth
+  pass discards front-owned coverage. This follows Blender's regular OIT,
+  front OIT, front transparent-depth merge, then regular transparent-depth
+  order. Front transparent depth deliberately preserves the normal attachment;
+  Blender's transparent-depth pass does not write normals, and front opaque
+  geometry owns its normal/material attachments.
+- In no-shared-target or target-allocation fallback cases, transparent ranges
+  retain the existing sorted/regular OIT behavior. The QPainter fallback has
+  no separate in-front surface domain. GPU pixel comparison remains pending;
+  these paths are not claimed as Blender parity.
 
 ### GPU Workbench two-blade aperture (2026-10-12)
 
@@ -373,7 +381,7 @@ Acceptance: each checkbox affects its matching wire category only, while other v
 |---|---|---|---|
 | Renderer ownership | `workbench_engine.cc` owns named opaque, transparent, transparent-depth, volume, outline, depth-of-field, and anti-aliasing passes. It draws those passes in a defined order using Blender's evaluated scene, draw manager, and GPU APIs. | `ViewportSurfaceRenderer` owns surface drawing and several effect passes; `ViewportAaRenderer` owns DOF, TAA/SMAA, and presentation; `viewport_widget.cpp` coordinates surfaces, regenerated depth, strokes, overlays, and grid. | Extract a classiCAD-owned pass coordinator and explicit render-target contract. Mirror Blender's responsibilities/order where applicable, while retaining Qt/OpenGL and the authoritative NURBS model. Do not try to link Blender's engine classes directly. |
 | TAA/SMAA resolve | Blender uses a centered jitter sequence, a 3x3 Blackman-Harris filter in log color, accumulated weights, and an SMAA resolve that fades as temporal samples accumulate. | The GPU implementation follows those algorithms closely. The QPainter fallback instead supersamples and downsamples; it does not run the GPU TAA/SMAA sequence. | Do not replace the GPU AA code based on the supplied screenshots. First compare matching GPU renders at AA Off, Single Pass, and 8 samples; inspect scene-linear output before display conversion. Treat the QPainter result as a separate approximation. |
-| Transparency/depth | Blender has separate transparent accumulation and transparent-depth passes following opaque drawing. The transparent-depth pass also handles `OBJECT_IN_FRONT` in a second depth domain and merges it into scene depth. | The GPU path uses weighted blended OIT with shared depth-stencil. The transparent-depth pass writes depth and object IDs while disabling its normal attachment output. The imported `show_in_front` flag reaches `ViewportRenderObject`, but rendering still uses the regular shared depth domain. The no-shared-depth and QPainter paths sort ranges/layers and have documented ordering limits. | Accumulation and resolve equations, weight limits, revealage, and the regular transparent depth test are source-matched. Blender's separate in-front opaque/transparent depth domains and their merge into scene depth remain unsupported; they require dedicated targets and pass sequencing. |
+| Transparency/depth | Blender has separate transparent accumulation and transparent-depth passes following opaque drawing. `OBJECT_IN_FRONT` uses a second depth domain and merges into scene depth before regular transparent depth excludes its pixels. | The primary GPU shared-target path uses independent regular/front weighted-OIT targets, resolves front color after regular OIT, then merges front transparent depth and IDs before regular transparent depth. The no-shared-target fallback retains sorted/regular behavior. QPainter has no separate in-front domain. | GPU opaque and transparent in-front domains are implemented with named pass/attachment reporting; Blender's transparent depth pass does not write normals, so the earlier opaque front normal remains. Matched GPU image comparison is pending; fallback and QPainter paths remain different. |
 | Outline and effects | Blender runs outline from its object-ID buffer, then DOF, then AA. Cavity/curvature uses Workbench-specific sample buffers and effect composition. | classiCAD generates normal/depth/object-ID inputs in its own prepass and uses custom outline/effect shaders. QPainter has separate software approximations. | Port and attribute the standalone shader/effect logic where inputs match. Preserve CAD-specific selection and NURBS tessellation handling. Validate each effect independently before combining them. |
 | Geometry and materials | Workbench consumes Blender evaluated object batches and Workbench material records; its render engine is integrated with Blender scene, dependency-graph, draw-manager, GPU, and render systems. | classiCAD sends derived tessellation of exact NURBS surfaces/solids to its GPU renderer. The surface renderer has its own material packing and draw ranges. | Keep NURBS authoritative and pass only derived display data to the renderer. A future shader system should provide evaluated Workbench inputs; do not create a second Blender-shaped scene/geometry model. |
 

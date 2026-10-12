@@ -446,7 +446,7 @@ def unsupported_object_record(obj, scene):
     elif obj.type == "SURFACE":
         record["reason"] = "surface has no supported NURBS patch"
     elif obj.type == "FONT":
-        record["reason"] = "Blender FONT objects are not imported"
+        record["reason"] = "FONT objects require evaluated mode for mesh conversion; source text is not represented"
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record
@@ -697,6 +697,7 @@ def extract_scene(input_path, mode):
     object_count = 0
     mesh_count = 0
     surface_patch_count = 0
+    font_mesh_count = 0
     collections_by_id = {stable_id(collection): collection
                          for collection in bpy.data.collections}
     scene_names_by_collection = {}
@@ -826,6 +827,39 @@ def extract_scene(input_path, mode):
                         "reason": "surface extraction failed; whole object skipped: " + str(error),
                     })
                 continue
+            if obj.type == "FONT":
+                if mode != "evaluated":
+                    output["unsupported_items"].append(
+                        unsupported_object_record(obj, scene))
+                    continue
+                try:
+                    item = extract_mesh_object(
+                        obj, scene, "evaluated", depsgraph, output["materials"],
+                        output["unsupported_features"])
+                    item["object_type"] = "MESH"
+                    item["source_object_type"] = "FONT"
+                    add_unsupported(
+                        output["unsupported_features"], item["object_id"],
+                        "font_to_mesh",
+                        "evaluated glyph geometry was imported as a mesh; editable text, font settings, and text layout were not retained")
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    output["items"].append(item)
+                    mesh_count += 1
+                    font_mesh_count += 1
+                except Exception as error:
+                    output["unsupported_items"].append({
+                        **object_metadata(obj, scene),
+                        "object_type": obj.type,
+                        "reason": "font mesh extraction failed; whole object skipped: " + str(error),
+                    })
+                continue
             if obj.type != "MESH":
                 output["unsupported_items"].append(unsupported_object_record(obj, scene))
                 continue
@@ -855,6 +889,7 @@ def extract_scene(input_path, mode):
         "source_object_occurrences": object_count,
         "mesh_items_extracted": mesh_count,
         "surface_patches_extracted": surface_patch_count,
+        "font_objects_meshed": font_mesh_count,
         "unsupported_item_occurrences": len(output["unsupported_items"]),
         "unsupported_feature_count": len(output["unsupported_features"]),
         "material_count": len(output["materials"]),

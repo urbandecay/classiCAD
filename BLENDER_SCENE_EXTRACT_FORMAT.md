@@ -13,6 +13,11 @@ is a row-major 4 by 4 world matrix. `vertices_local` contains local-space XYZ
 positions, so the native importer must retain the transform separately.
 `classiCAD_proxy_geometry` carries the classiCAD custom property used to mark
 NURBS display proxies; these are reported and skipped as source mesh geometry.
+In evaluated mode, Blender `FONT` objects use the same mesh record after
+`Object.to_mesh()` evaluation; `source_object_type` is `FONT`, and
+`evaluated_geometry_baked` records that the output is baked geometry. Original
+mode reports FONT objects as unsupported because the native model does not
+retain editable text.
 
 `polygons` is an array of ordered vertex-index loops, preserving face winding.
 `polygon_material_indices` has one slot index per polygon. `loop_vertex_indices`
@@ -48,7 +53,8 @@ references in the native scene model, but image pixels are not embedded and
 Blender shader-node graphs are not evaluated. Collection membership and hidden
 state are reported but are not currently retained.
 `summary` contains extraction counts only; it does not claim successful native
-import.
+import. `font_objects_meshed` counts evaluated FONT objects included in
+`mesh_items_extracted`.
 
 ## Curve object records
 

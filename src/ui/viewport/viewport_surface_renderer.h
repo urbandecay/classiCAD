@@ -96,6 +96,7 @@ private:
         qreal devicePixelRatio,
         const ViewportShadingSettings &settings,
         const ViewportRenderTargets &targets,
+        const QVector<int> &rangeIndices,
         bool snapshotDepth,
         bool *snapshotDepthReady);
     bool ensureMatcapTexture(const QString &presetName);

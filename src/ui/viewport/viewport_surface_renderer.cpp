@@ -1454,6 +1454,7 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     qreal devicePixelRatio,
     const ViewportShadingSettings &settings,
     const ViewportRenderTargets &targets,
+    const QVector<int> &rangeIndices,
     bool snapshotDepth,
     bool *snapshotDepthReady)
 {
@@ -1534,7 +1535,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
                                    static_cast<int>(sizeof(SurfaceVertex)));
         geometryDirty_ = false;
     }
-    for (int rangeIndex = 0; rangeIndex < ranges_.size(); ++rangeIndex) {
+    for (int rangeIndex : rangeIndices) {
+        if (rangeIndex < 0 || rangeIndex >= ranges_.size()) continue;
         const DrawRange &range = ranges_[rangeIndex];
         if (range.count <= 0) {
             continue;
@@ -2334,10 +2336,12 @@ bool ViewportSurfaceRenderer::draw(
             }
         }
     }
-    const bool primaryOpaqueSceneDraw =
+    const bool primarySceneEffectsDraw =
         settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
         !selectionOverlay && clearDepth && !settings.xrayEnabled() &&
-        !hasPartialAlpha && !vertices_.isEmpty();
+        !vertices_.isEmpty();
+    const bool primaryOpaqueSceneDraw =
+        primarySceneEffectsDraw && !hasPartialAlpha;
     if (settings.mode == ViewportShadingMode::Solid &&
         settings.backfaceCulling && !settings.xrayEnabled()) {
         glEnable(GL_CULL_FACE);
@@ -2443,7 +2447,7 @@ bool ViewportSurfaceRenderer::draw(
         glEnable(GL_BLEND);
     }
 
-    const bool cavityRequested = primaryOpaqueSceneDraw && settings.cavity;
+    const bool cavityRequested = primarySceneEffectsDraw && settings.cavity;
     const bool outlineRequested = primaryOpaqueSceneDraw && settings.outline;
     const bool worldSsaoRequested = cavityRequested &&
         (settings.cavityType == ViewportCavityType::World ||
@@ -2468,7 +2472,8 @@ bool ViewportSurfaceRenderer::draw(
         bool snapshotDepthReady = !ssaoEnabled;
         sharedPrepassReady = renderWorkbenchEffectPrepass(
             transform, viewportSize, devicePixelRatio, settings,
-            *sharedTargets, ssaoEnabled, &snapshotDepthReady);
+            *sharedTargets, opaqueRangeIndices, ssaoEnabled,
+            &snapshotDepthReady);
         cavityDepthReady = sharedPrepassReady && ssaoEnabled &&
                            snapshotDepthReady;
         if (sharedPrepassReady && populatedAttachments != nullptr) {
@@ -2998,6 +3003,15 @@ bool ViewportSurfaceRenderer::draw(
             }
             const float alpha = static_cast<float>(workbenchEffectiveAlpha(
                 sourceAlpha, settings, previewOverlay));
+            const bool rangeOpaque = alpha >= 1.0f - 1.0e-6f;
+            const bool rangeCavity = cavityAvailable && rangeOpaque;
+            program_.setUniformValue("uUseCavity", rangeCavity);
+            program_.setUniformValue("uUseSsao",
+                                     rangeCavity && ssaoEnabled &&
+                                         cavityDepthReady);
+            program_.setUniformValue("uUseCurvature",
+                                     rangeCavity &&
+                                         screenCurvatureRequested);
             program_.setUniformValue("uRoughness", roughness);
             program_.setUniformValue("uMetallic", metallic);
             program_.setUniformValue(

@@ -1196,6 +1196,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QColor color;
             QVector3D sceneLinearColor{0.8f, 0.8f, 0.8f};
             qreal sceneLinearAlpha = 1.0;
+            std::array<QVector3D, 3> attributeColors{};
+            bool hasAttributeColors = false;
             QVector3D normalView{0.0f, 0.0f, 1.0f};
             std::array<QVector3D, 3> cornerNormalsView{};
             QVector3D incidentView{0.0f, 0.0f, 1.0f};
@@ -1380,13 +1382,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
         const auto attributeColor = [&](int faceIndex,
                                         const QVector<int> &face,
                                         const std::array<int, 3> &triangle)
-            -> std::optional<QVector4D> {
+            -> std::optional<std::array<QVector3D, 3>> {
             if (activeAttribute == nullptr ||
                 activeAttribute->componentCount < 1 ||
                 activeAttribute->componentCount > 4) {
                 return std::nullopt;
             }
-            QVector4D color(0.0f, 0.0f, 0.0f, 0.0f);
+            std::array<QVector3D, 3> colors{};
+            int cornerIndex = 0;
             for (int loopIndex : triangle) {
                 int element = faceIndex;
                 if (activeAttribute->domain == MeshAttributeDomain::Point) {
@@ -1399,22 +1402,22 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                     activeAttribute->values.size()) {
                     return std::nullopt;
                 }
-                QVector4D sample(0.0f, 0.0f, 0.0f, 1.0f);
+                QVector3D sample;
                 if (activeAttribute->componentCount == 1) {
-                    sample = QVector4D(activeAttribute->values[base],
-                                       activeAttribute->values[base],
-                                       activeAttribute->values[base], 1.0f);
+                    const float value = activeAttribute->values[base];
+                    sample = QVector3D(value, value, value);
                 } else {
-                    sample.setX(activeAttribute->values[base]);
-                    sample.setY(activeAttribute->values[base + 1]);
-                    sample.setZ(activeAttribute->values[base + 2]);
-                    if (activeAttribute->componentCount == 4) {
-                        sample.setW(activeAttribute->values[base + 3]);
-                    }
+                    sample = QVector3D(activeAttribute->values[base],
+                                       activeAttribute->values[base + 1],
+                                       activeAttribute->values[base + 2]);
                 }
-                color += sample;
+                if (activeAttribute->colorSpace.contains(
+                        QStringLiteral("srgb"), Qt::CaseInsensitive)) {
+                    sample = workbenchSrgbToSceneLinear(sample);
+                }
+                colors[cornerIndex++] = sample;
             }
-            return color / 3.0f;
+            return colors;
         };
         for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
             const QVector<int> &face = mesh.faces[faceIndex];
@@ -1691,27 +1694,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     }
                     if (useWorkbenchColor &&
                         shadingSettings_.colorMode == ViewportColorMode::Attribute) {
-                        const std::optional<QVector4D> color =
+                        const std::optional<std::array<QVector3D, 3>> colors =
                             attributeColor(faceIndex, face, loopTriangle);
-                        if (color) {
-                            triangle.color = QColor::fromRgbF(
-                                std::clamp(qreal(color->x()), 0.0, 1.0),
-                                std::clamp(qreal(color->y()), 0.0, 1.0),
-                                std::clamp(qreal(color->z()), 0.0, 1.0),
-                                std::clamp(qreal(color->w()), 0.0, 1.0));
-                            QVector3D attributeSceneLinear(color->x(),
-                                                           color->y(),
-                                                           color->z());
-                            if (activeAttribute != nullptr &&
-                                activeAttribute->colorSpace.contains(
-                                    QStringLiteral("srgb"),
-                                    Qt::CaseInsensitive)) {
-                                attributeSceneLinear =
-                                    workbenchSrgbToSceneLinear(
-                                        attributeSceneLinear);
-                            }
-                            triangle.sceneLinearColor = attributeSceneLinear;
-                            triangle.sceneLinearAlpha = color->w();
+                        if (colors) {
+                            triangle.attributeColors = *colors;
+                            triangle.hasAttributeColors = true;
                         }
                     }
                     triangles.append(std::move(triangle));
@@ -1844,12 +1831,19 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         }
                         if (rgba[3] < 26) continue; // Blender's filtered alpha < 0.1 cutoff.
                         for (int component = 0; component < 3; ++component) {
-                            const float linear = triangle.texturePremultiplied &&
-                                    rgba[3] != 0 && rgba[3] != 255
-                                ? linearRgb[component] * 255.0f / rgba[3]
-                                : linearRgb[component];
-                            textureColor[component] *= linear;
+                            textureColor[component] =
+                                triangle.texturePremultiplied &&
+                                        rgba[3] != 0 && rgba[3] != 255
+                                    ? linearRgb[component] * 255.0f / rgba[3]
+                                    : linearRgb[component];
                         }
+                    }
+                    if (triangle.hasAttributeColors && !hasTexture) {
+                        textureColor =
+                            (triangle.attributeColors[0] * static_cast<float>(p0) +
+                             triangle.attributeColors[1] * static_cast<float>(p1) +
+                             triangle.attributeColors[2] * static_cast<float>(p2)) /
+                            static_cast<float>(denominator);
                     }
                     QVector3D shadedLinear = textureColor;
                     QVector3D normalView =

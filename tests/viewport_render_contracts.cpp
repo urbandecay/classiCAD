@@ -27,6 +27,7 @@
 #include <QPen>
 #include <QPixmap>
 #include <QSurfaceFormat>
+#include <QTemporaryDir>
 #include <QVector>
 
 #include <algorithm>
@@ -393,6 +394,94 @@ int main(int argc, char *argv[])
                         std::abs(matcapSurface.centerColor.blueF() -
                                  expectedMatcapColor.z()) < 0.025f,
                     "solid viewport shading must render NURBS faces with Workbench Studio and two-layer MatCap colors");
+
+    // Color-mode source contracts for the software renderer. The attribute
+    // triangle has three deliberately distinct corner colors; the texture
+    // sample is red while its material tint is green, so multiplying the two
+    // produces a visibly different (black) result from Blender's override.
+    Shape colorSourceMesh;
+    colorSourceMesh.geometryType = GeometryType::PolygonMesh;
+    colorSourceMesh.polygonMesh.vertices = {{-1.0, -1.0, 0.0},
+                                            {1.0, -1.0, 0.0},
+                                            {0.0, 1.0, 0.0}};
+    colorSourceMesh.polygonMesh.faces = {{0, 1, 2}};
+    colorSourceMesh.polygonMesh.faceMaterialIndices = {0};
+    MeshColorAttribute cornerColors;
+    cornerColors.name = QStringLiteral("Color");
+    cornerColors.domain = MeshAttributeDomain::Point;
+    cornerColors.colorSpace = QStringLiteral("scene_linear");
+    cornerColors.componentCount = 4;
+    cornerColors.values = {0.9f, 0.05f, 0.05f, 0.1f,
+                           0.05f, 0.9f, 0.05f, 0.2f,
+                           0.05f, 0.05f, 0.9f, 0.3f};
+    colorSourceMesh.polygonMesh.colorAttributes = {cornerColors};
+    colorSourceMesh.polygonMesh.activeColorAttributeName = cornerColors.name;
+
+    ViewportShadingSettings attributeSettings;
+    attributeSettings.mode = ViewportShadingMode::Solid;
+    attributeSettings.lightingMode = ViewportLightingMode::Flat;
+    attributeSettings.colorMode = ViewportColorMode::Attribute;
+    attributeSettings.outline = false;
+    attributeSettings.specularLighting = false;
+    const auto renderColorMesh = [&](const ViewportShadingSettings &settings,
+                                     const QVector<WorkbenchMaterialData> &materials) {
+        QImage image(surfaceViewportSize, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        surfaceRenderer.setShadingSettings(settings);
+        QPainter painter(&image);
+        surfaceRenderer.drawShape(
+            painter, colorSourceMesh, surfaceViewportSize, false, false, true,
+            QColor(), QString(), 0.0, ObjectId::invalid(), 0, nullptr, {},
+            std::nullopt, std::nullopt, QString(), QString(),
+            identityMeshObjectTransform, materials);
+        painter.end();
+        return image;
+    };
+    const QImage attributeImage = renderColorMesh(attributeSettings, {});
+    QPointF nearRedCorner;
+    QPointF nearGreenCorner;
+    const bool projectedColorSamples =
+        surfaceTransform.worldPointToScreen({-0.8, -0.8, 0.0},
+                                            surfaceViewportSize,
+                                            &nearRedCorner) &&
+        surfaceTransform.worldPointToScreen({0.8, -0.8, 0.0},
+                                            surfaceViewportSize,
+                                            &nearGreenCorner);
+    const QColor nearRedAttribute = attributeImage.pixelColor(
+        qRound(nearRedCorner.x()), qRound(nearRedCorner.y()));
+    const QColor nearGreenAttribute = attributeImage.pixelColor(
+        qRound(nearGreenCorner.x()), qRound(nearGreenCorner.y()));
+    passed &= check(projectedColorSamples &&
+                        nearRedAttribute.red() > nearRedAttribute.green() + 20 &&
+                        nearGreenAttribute.green() > nearGreenAttribute.red() + 20 &&
+                        nearRedAttribute.alpha() > 240 &&
+                        nearGreenAttribute.alpha() > 240,
+                    "QPainter Attribute mode must smoothly interpolate corner RGB while retaining material alpha");
+
+    QTemporaryDir colorTextureDirectory;
+    QImage sourceTexture(1, 1, QImage::Format_RGBA8888);
+    sourceTexture.fill(QColor(220, 30, 20, 255));
+    const QString colorTexturePath =
+        colorTextureDirectory.filePath(QStringLiteral("source.png"));
+    const bool savedColorTexture = sourceTexture.save(colorTexturePath);
+    colorSourceMesh.polygonMesh.uvMaps = {
+        {QStringLiteral("UVMap"), {QPointF(0.5, 0.5), QPointF(0.5, 0.5),
+                                   QPointF(0.5, 0.5)}}};
+    colorSourceMesh.polygonMesh.activeUvMapName = QStringLiteral("UVMap");
+    WorkbenchMaterialData greenTextureTint;
+    greenTextureTint.baseColorSceneLinear = QVector3D(0.02f, 0.9f, 0.02f);
+    greenTextureTint.alpha = 0.7;
+    greenTextureTint.textureImagePath = colorTexturePath;
+    greenTextureTint.textureImageInterpolation = QStringLiteral("Closest");
+    ViewportShadingSettings textureSettings = attributeSettings;
+    textureSettings.colorMode = ViewportColorMode::Texture;
+    const QImage textureImage = renderColorMesh(
+        textureSettings, {greenTextureTint});
+    const QColor sampledTexture = textureImage.pixelColor(80, 80);
+    passed &= check(savedColorTexture && colorTextureDirectory.isValid() &&
+                        sampledTexture.red() > sampledTexture.green() + 35 &&
+                        std::abs(sampledTexture.alpha() - 179) <= 2,
+                    "QPainter Texture mode must replace material RGB with the image sample and retain material alpha");
 
     QOpenGLContext context;
     context.setFormat(format);

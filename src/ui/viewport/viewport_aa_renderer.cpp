@@ -512,15 +512,21 @@ bool ViewportAaRenderer::initialize()
         {
             ivec2 p = ivec2(gl_FragCoord.xy);
             if (uStage == 0) {
+                ivec2 sourceSize = textureSize(uSource, 0);
+                ivec2 depthSize = textureSize(uDepth, 0);
                 ivec2 b = p * 2;
+                ivec2 p00 = min(b, sourceSize - 1);
+                ivec2 p10 = min(b + ivec2(1, 0), sourceSize - 1);
+                ivec2 p01 = min(b + ivec2(0, 1), sourceSize - 1);
+                ivec2 p11 = min(b + ivec2(1, 1), sourceSize - 1);
                 vec4 colors[4] = vec4[4](
-                    fetchColor(b, 0), fetchColor(b + ivec2(1, 0), 0),
-                    fetchColor(b + ivec2(0, 1), 0), fetchColor(b + ivec2(1, 1), 0));
+                    fetchColor(p00, 0), fetchColor(p10, 0),
+                    fetchColor(p01, 0), fetchColor(p11, 0));
                 float c[4];
-                c[0] = cocAtDepth(texelFetch(uDepth, b, 0).r);
-                c[1] = cocAtDepth(texelFetch(uDepth, b + ivec2(1, 0), 0).r);
-                c[2] = cocAtDepth(texelFetch(uDepth, b + ivec2(0, 1), 0).r);
-                c[3] = cocAtDepth(texelFetch(uDepth, b + ivec2(1, 1), 0).r);
+                c[0] = cocAtDepth(texelFetch(uDepth, min(b, depthSize - 1), 0).r);
+                c[1] = cocAtDepth(texelFetch(uDepth, min(b + ivec2(1, 0), depthSize - 1), 0).r);
+                c[2] = cocAtDepth(texelFetch(uDepth, min(b + ivec2(0, 1), depthSize - 1), 0).r);
+                c[3] = cocAtDepth(texelFetch(uDepth, min(b + ivec2(1, 1), depthSize - 1), 0).r);
                 float nearCoc = max(max(max(c[0], c[1]), max(c[2], c[3])), 0.0);
                 float farCoc = max(max(max(-c[0], -c[1]), max(-c[2], -c[3])), 0.0);
                 vec4 nearW = vec4(0.0);
@@ -536,13 +542,18 @@ bool ViewportAaRenderer::initialize()
                 return;
             }
             if (uStage == 1) {
+                ivec2 sourceSize = textureSize(uSource, uSourceLod);
                 ivec2 b = p * 2;
+                ivec2 p00 = min(b, sourceSize - 1);
+                ivec2 p10 = min(b + ivec2(1, 0), sourceSize - 1);
+                ivec2 p01 = min(b + ivec2(0, 1), sourceSize - 1);
+                ivec2 p11 = min(b + ivec2(1, 1), sourceSize - 1);
                 vec4 colors[4] = vec4[4](
-                    fetchColor(b, uSourceLod), fetchColor(b + ivec2(1, 0), uSourceLod),
-                    fetchColor(b + ivec2(0, 1), uSourceLod), fetchColor(b + ivec2(1, 1), uSourceLod));
+                    fetchColor(p00, uSourceLod), fetchColor(p10, uSourceLod),
+                    fetchColor(p01, uSourceLod), fetchColor(p11, uSourceLod));
                 vec2 cocs[4] = vec2[4](
-                    fetchCoc(b, uSourceLod), fetchCoc(b + ivec2(1, 0), uSourceLod),
-                    fetchCoc(b + ivec2(0, 1), uSourceLod), fetchCoc(b + ivec2(1, 1), uSourceLod));
+                    fetchCoc(p00, uSourceLod), fetchCoc(p10, uSourceLod),
+                    fetchCoc(p01, uSourceLod), fetchCoc(p11, uSourceLod));
                 float nearCoc = max(max(max(cocs[0].r, cocs[1].r), max(cocs[2].r, cocs[3].r)), 0.0);
                 float farCoc = max(max(max(cocs[0].g, cocs[1].g), max(cocs[2].g, cocs[3].g)), 0.0);
                 vec4 nearW = vec4(0.0);
@@ -908,8 +919,8 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     const bool depthOfFieldComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
-    const QSize halfSize(std::max(pixelSize.width() / 2, 1),
-                         std::max(pixelSize.height() / 2, 1));
+    const QSize halfSize(std::max((pixelSize.width() + 1) / 2, 1),
+                         std::max((pixelSize.height() + 1) / 2, 1));
     glGenTextures(1, &depthOfFieldSourceTexture_);
     glBindTexture(GL_TEXTURE_2D, depthOfFieldSourceTexture_);
     for (int level = 0; level < 3; ++level) {
@@ -1222,8 +1233,8 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_SCISSOR_TEST);
 
-    const QSize halfSize(std::max(targetSize_.width() / 2, 1),
-                         std::max(targetSize_.height() / 2, 1));
+    const QSize halfSize(std::max((targetSize_.width() + 1) / 2, 1),
+                         std::max((targetSize_.height() + 1) / 2, 1));
     const auto bindPass = [&](int stage, GLuint framebuffer, int width, int height,
                               GLuint color, GLuint coc, GLuint blur, int lod) {
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);

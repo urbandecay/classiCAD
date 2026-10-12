@@ -1226,6 +1226,11 @@ void ViewportSurfaceRenderer::prepareGeometry(
                       << object.workbenchMaterial.textureImageAlphaMode
                       << object.workbenchMaterial.textureImageInterpolation
                       << object.workbenchMaterial.textureImageExtension;
+            for (const DocumentImageTextureTile &tile :
+                 object.workbenchMaterial.textureImageTiles) {
+                keyStream << qint32(tile.number) << tile.filepath
+                          << tile.sourceFileExists;
+            }
         }
         if (hasMesh) {
             const PolygonMesh3D &mesh = object.shape.polygonMesh;
@@ -1246,7 +1251,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 for (const QPointF &uv : uvMap.cornerValues)
                     keyStream << double(uv.x()) << double(uv.y());
             }
-            for (const WorkbenchMaterialData &material : object.meshMaterials)
+            for (const WorkbenchMaterialData &material : object.meshMaterials) {
                 keyStream << material.textureImagePath
                           << QCryptographicHash::hash(
                                  material.textureImagePackedDataBase64.toLatin1(),
@@ -1255,6 +1260,11 @@ void ViewportSurfaceRenderer::prepareGeometry(
                           << material.textureImageAlphaMode
                           << material.textureImageInterpolation
                           << material.textureImageExtension;
+                for (const DocumentImageTextureTile &tile : material.textureImageTiles) {
+                    keyStream << qint32(tile.number) << tile.filepath
+                              << tile.sourceFileExists;
+                }
+            }
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
                 if (attribute.name != mesh.activeColorAttributeName) continue;
                 keyStream << attribute.name << qint32(attribute.domain)

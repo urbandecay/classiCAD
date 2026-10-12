@@ -646,6 +646,32 @@ bool parseBlenderMaterials(
                     return false;
                 }
                 reference.sourceFileExists = image.value(QStringLiteral("source_file_exists")).toBool();
+                const QJsonArray tiles = image.value(QStringLiteral("tiles")).toArray();
+                for (const QJsonValue &tileValue : tiles) {
+                    if (!tileValue.isObject()) continue;
+                    const QJsonObject tileObject = tileValue.toObject();
+                    const QJsonValue numberValue = tileObject.value(QStringLiteral("number"));
+                    const QJsonValue filepathValue = tileObject.value(QStringLiteral("filepath"));
+                    const QJsonValue existsValue = tileObject.value(QStringLiteral("source_file_exists"));
+                    if (!numberValue.isDouble() || !filepathValue.isString() ||
+                        !existsValue.isBool()) {
+                        if (warnings != nullptr) {
+                            warnings->append(QStringLiteral("%1: invalid tiled image entry")
+                                                 .arg(reference.imageName));
+                        }
+                        return false;
+                    }
+                    const int number = numberValue.toInt(-1);
+                    if (number < 1001 || number > 1999) {
+                        if (warnings != nullptr) {
+                            warnings->append(QStringLiteral("%1: invalid UDIM tile number")
+                                                 .arg(reference.imageName));
+                        }
+                        return false;
+                    }
+                    reference.tiles.append({number, filepathValue.toString(),
+                                            existsValue.toBool()});
+                }
                 if (!reference.imageName.isEmpty()) material.imageTextures.append(std::move(reference));
             }
             if (!classiCAD::isValidDocumentMaterial(material)) {
@@ -847,6 +873,18 @@ bool parseBlenderMeshItem(const QJsonObject &item,
                 result.workbenchMaterial.roughness = material.roughness;
                 result.workbenchMaterial.metallic = material.metallic;
                 result.workbenchMaterial.alpha = material.alpha;
+                for (const classiCAD::DocumentImageTextureReference &image :
+                     material.imageTextures) {
+                    if (image.tiles.isEmpty()) continue;
+                    result.workbenchMaterial.textureImageTiles = image.tiles;
+                    result.workbenchMaterial.textureImageSrgb =
+                        image.colorSpace.compare(QStringLiteral("sRGB"),
+                                                 Qt::CaseInsensitive) == 0;
+                    result.workbenchMaterial.textureImageAlphaMode = image.alphaMode;
+                    result.workbenchMaterial.textureImageInterpolation = image.interpolation;
+                    result.workbenchMaterial.textureImageExtension = image.extension;
+                    break;
+                }
                 fallbackMaterialSet = true;
             }
         }
@@ -1280,6 +1318,18 @@ bool parseBlenderSurfaceItem(
         result.workbenchMaterial.roughness = material.roughness;
         result.workbenchMaterial.metallic = material.metallic;
         result.workbenchMaterial.alpha = material.alpha;
+        for (const classiCAD::DocumentImageTextureReference &image :
+             material.imageTextures) {
+            if (image.tiles.isEmpty()) continue;
+            result.workbenchMaterial.textureImageTiles = image.tiles;
+            result.workbenchMaterial.textureImageSrgb =
+                image.colorSpace.compare(QStringLiteral("sRGB"),
+                                         Qt::CaseInsensitive) == 0;
+            result.workbenchMaterial.textureImageAlphaMode = image.alphaMode;
+            result.workbenchMaterial.textureImageInterpolation = image.interpolation;
+            result.workbenchMaterial.textureImageExtension = image.extension;
+            break;
+        }
     }
     result.geometry.geometryType = classiCAD::GeometryType::NurbsSurface;
     result.geometry.nurbsSurface = std::move(surface);

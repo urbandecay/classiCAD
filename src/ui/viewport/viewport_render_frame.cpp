@@ -144,25 +144,26 @@ ViewportRenderFrame buildViewportRenderFrame(
                             slotData.metallic = material.metallic;
                             slotData.alpha = material.alpha;
                             for (const DocumentImageTextureReference &image : material.imageTextures) {
+                                slotData.textureImageTiles = image.tiles;
+                                slotData.textureImageSrgb =
+                                    image.colorSpace.compare(QStringLiteral("sRGB"),
+                                                             Qt::CaseInsensitive) == 0;
+                                slotData.textureImageAlphaMode = image.alphaMode;
+                                slotData.textureImageInterpolation = image.interpolation;
+                                slotData.textureImageExtension = image.extension;
+                                if (!image.tiles.isEmpty()) {
+                                    // A UDIM template is not a single image
+                                    // path; retain its tile set as the active
+                                    // Workbench texture input.
+                                    break;
+                                }
                                 if (image.packed && !image.packedDataBase64.isEmpty()) {
                                     slotData.textureImagePackedDataBase64 =
                                         image.packedDataBase64;
-                                    slotData.textureImageSrgb =
-                                        image.colorSpace.compare(QStringLiteral("sRGB"),
-                                                                 Qt::CaseInsensitive) == 0;
-                                    slotData.textureImageAlphaMode = image.alphaMode;
-                                    slotData.textureImageInterpolation = image.interpolation;
-                                    slotData.textureImageExtension = image.extension;
                                     break;
                                 }
                                 if (image.sourceFileExists && !image.filepath.isEmpty()) {
                                     slotData.textureImagePath = image.filepath;
-                                    slotData.textureImageSrgb =
-                                        image.colorSpace.compare(QStringLiteral("sRGB"),
-                                                                 Qt::CaseInsensitive) == 0;
-                                    slotData.textureImageAlphaMode = image.alphaMode;
-                                    slotData.textureImageInterpolation = image.interpolation;
-                                    slotData.textureImageExtension = image.extension;
                                     break;
                                 }
                             }

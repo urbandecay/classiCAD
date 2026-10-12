@@ -153,6 +153,22 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
         QStringLiteral("textureImageInterpolation")).toString(QStringLiteral("Linear"));
     restored.textureImageExtension = object.value(
         QStringLiteral("textureImageExtension")).toString(QStringLiteral("REPEAT"));
+    const QJsonValue tilesValue = object.value(QStringLiteral("textureImageTiles"));
+    if (!tilesValue.isUndefined()) {
+        if (!tilesValue.isArray()) return false;
+        for (const QJsonValue &tileValue : tilesValue.toArray()) {
+            if (!tileValue.isObject()) return false;
+            const QJsonObject tileObject = tileValue.toObject();
+            const QJsonValue numberValue = tileObject.value(QStringLiteral("number"));
+            const QJsonValue filepathValue = tileObject.value(QStringLiteral("filepath"));
+            const QJsonValue existsValue = tileObject.value(QStringLiteral("sourceFileExists"));
+            const int number = numberValue.toInt(-1);
+            if (!numberValue.isDouble() || number < 1001 || number > 1999 ||
+                !filepathValue.isString() || !existsValue.isBool()) return false;
+            restored.textureImageTiles.append({number, filepathValue.toString(),
+                                               existsValue.toBool()});
+        }
+    }
     *material = restored;
     return true;
 }
@@ -162,7 +178,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 15);
+    serialized.insert(QStringLiteral("version"), 16);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -257,6 +273,15 @@ QJsonObject documentToJson(const Document &document)
             image.insert(QStringLiteral("packedDataBase64"), reference.packedDataBase64);
             image.insert(QStringLiteral("packed"), reference.packed);
             image.insert(QStringLiteral("sourceFileExists"), reference.sourceFileExists);
+            QJsonArray tiles;
+            for (const DocumentImageTextureTile &tile : reference.tiles) {
+                QJsonObject tileObject;
+                tileObject.insert(QStringLiteral("number"), tile.number);
+                tileObject.insert(QStringLiteral("filepath"), tile.filepath);
+                tileObject.insert(QStringLiteral("sourceFileExists"), tile.sourceFileExists);
+                tiles.append(tileObject);
+            }
+            image.insert(QStringLiteral("tiles"), tiles);
             imageTextures.append(image);
         }
         record.insert(QStringLiteral("imageTextures"), imageTextures);
@@ -309,6 +334,16 @@ QJsonObject documentToJson(const Document &document)
                                  sceneObject.workbenchMaterial.textureImageInterpolation);
         workbenchMaterial.insert(QStringLiteral("textureImageExtension"),
                                  sceneObject.workbenchMaterial.textureImageExtension);
+        QJsonArray textureImageTiles;
+        for (const DocumentImageTextureTile &tile :
+             sceneObject.workbenchMaterial.textureImageTiles) {
+            QJsonObject tileObject;
+            tileObject.insert(QStringLiteral("number"), tile.number);
+            tileObject.insert(QStringLiteral("filepath"), tile.filepath);
+            tileObject.insert(QStringLiteral("sourceFileExists"), tile.sourceFileExists);
+            textureImageTiles.append(tileObject);
+        }
+        workbenchMaterial.insert(QStringLiteral("textureImageTiles"), textureImageTiles);
         serializedObject.insert(QStringLiteral("workbenchMaterial"),
                                 workbenchMaterial);
         if (sceneObject.geometry.geometryType == GeometryType::PolygonMesh) {
@@ -335,7 +370,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 15) {
+    if (version < 1 || version > 16) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -548,6 +583,32 @@ bool documentFromJson(const QJsonValue &value,
                     }
                     reference.packed = image.value(QStringLiteral("packed")).toBool();
                     reference.sourceFileExists = image.value(QStringLiteral("sourceFileExists")).toBool();
+                    const QJsonValue tilesValue = image.value(QStringLiteral("tiles"));
+                    if (!tilesValue.isUndefined() && !tilesValue.isArray()) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid document image texture tiles"));
+                        return false;
+                    }
+                    for (const QJsonValue &tileValue : tilesValue.toArray()) {
+                        if (!tileValue.isObject()) {
+                            setError(errorMessage,
+                                     QStringLiteral("invalid document image texture tile"));
+                            return false;
+                        }
+                        const QJsonObject tileObject = tileValue.toObject();
+                        const QJsonValue numberValue = tileObject.value(QStringLiteral("number"));
+                        const QJsonValue filepathValue = tileObject.value(QStringLiteral("filepath"));
+                        const QJsonValue existsValue = tileObject.value(QStringLiteral("sourceFileExists"));
+                        const int number = numberValue.toInt(-1);
+                        if (!numberValue.isDouble() || number < 1001 || number > 1999 ||
+                            !filepathValue.isString() || !existsValue.isBool()) {
+                            setError(errorMessage,
+                                     QStringLiteral("invalid document image texture tile"));
+                            return false;
+                        }
+                        reference.tiles.append({number, filepathValue.toString(),
+                                                existsValue.toBool()});
+                    }
                     material.imageTextures.append(std::move(reference));
                 }
             }

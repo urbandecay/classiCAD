@@ -227,6 +227,27 @@ def image_references(material):
         image = getattr(node, "image", None)
         if image is None:
             continue
+        image_tiles = []
+        if getattr(image, "source", "") == "TILED":
+            # Blender Workbench maps floor(UV) to the tile grid (1001 at
+            # (0, 0), increasing across X, then Y). Preserve the explicit
+            # tile numbers and resolve the conventional <UDIM> path token
+            # while the source .blend path context is available.
+            filepath_template = (
+                bpy.path.abspath(image.filepath) if image.filepath else ""
+            )
+            for tile in getattr(image, "tiles", ()):
+                tile_number = int(tile.number)
+                tile_path = filepath_template.replace("<UDIM>", str(tile_number))
+                image_tiles.append(
+                    {
+                        "number": tile_number,
+                        "filepath": tile_path,
+                        "source_file_exists": bool(
+                            tile_path and os.path.isfile(tile_path)
+                        ),
+                    }
+                )
         packed_data_base64 = ""
         packed_data_error = ""
         packed_file = getattr(image, "packed_file", None)
@@ -265,6 +286,7 @@ def image_references(material):
                     (os.path.isfile(bpy.path.abspath(image.filepath))
                      if image.filepath else False)
                 ),
+                "tiles": image_tiles,
                 "color_space": image.colorspace_settings.name,
                 "alpha_mode": image.alpha_mode,
                 "interpolation": node.interpolation,

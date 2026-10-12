@@ -22,6 +22,14 @@ inline constexpr MeshObjectTransform identityMeshObjectTransform{
     0.0, 0.0, 1.0, 0.0,
     0.0, 0.0, 0.0, 1.0};
 
+// One Blender tiled-image entry. Tile numbers follow Blender's UDIM numbering
+// (1001 is UV tile (0, 0)); the renderer may load these lazily by path.
+struct DocumentImageTextureTile {
+    int number = 1001;
+    QString filepath;
+    bool sourceFileExists = false;
+};
+
 // Workbench material inputs are stored in scene-linear RGB, matching Blender's
 // material data. These values affect viewport display only; they do not alter
 // the exact NURBS geometry stored in SceneObject::geometry.
@@ -30,13 +38,15 @@ struct WorkbenchMaterialData {
     qreal roughness = 0.4;
     qreal metallic = 0.0;
     qreal alpha = 1.0;
-    // First external image reference retained for the Workbench Texture mode.
+    // Single-image input retained for Workbench Texture mode. Tiled-image
+    // entries travel separately in textureImageTiles.
     QString textureImagePath;
     bool textureImageSrgb = true;
     QString textureImageAlphaMode = QStringLiteral("STRAIGHT");
     QString textureImageInterpolation = QStringLiteral("Linear");
     QString textureImageExtension = QStringLiteral("REPEAT");
     QString textureImagePackedDataBase64;
+    QVector<DocumentImageTextureTile> textureImageTiles;
 };
 
 // Shared imported material datablock. Mesh slots refer to this record by id.
@@ -57,6 +67,7 @@ struct DocumentImageTextureReference {
     QString packedDataBase64;
     bool packed = false;
     bool sourceFileExists = false;
+    QVector<DocumentImageTextureTile> tiles;
 };
 
 struct DocumentMaterial {
@@ -68,7 +79,7 @@ struct DocumentMaterial {
     float metallic = 0.0f;
     float alpha = 1.0f;
     // Source image references are retained without evaluating node graphs.
-    // The GPU Texture path currently consumes only an active external image.
+    // Workbench Texture mode resolves the active Image Texture Node.
     QVector<DocumentImageTextureReference> imageTextures;
 };
 

@@ -699,13 +699,7 @@ bool SessionSerializer::read(const QString &path,
         const QJsonArray shapeArray = shapesValue.toArray();
         shapes.reserve(shapeArray.size());
         for (const QJsonValue &shapeValue : shapeArray) {
-            Shape shape{GeometryType::Invalid,
-                        {},
-                        Shape::NurbsCurve2D{},
-                        ArcMode::TwoPoint,
-                        0.0,
-                        {},
-                        {}};
+            Shape shape;
             if (!shapeFromJson(shapeValue, &shape)) {
                 return fail(errorMessage, QStringLiteral("Invalid legacy shape record."));
             }

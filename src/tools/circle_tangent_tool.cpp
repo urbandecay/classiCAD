@@ -816,6 +816,7 @@ bool isCircleTangentTarget(const Shape &shape)
     case GeometryType::NurbsSurface:
     case GeometryType::NurbsSolid:
     case GeometryType::PolygonMesh:
+    case GeometryType::ScalarVolume:
         return false;
     }
     return false;

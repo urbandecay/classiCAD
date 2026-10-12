@@ -6,7 +6,7 @@ namespace classiCAD {
 
 bool isPersistentGeometryType(GeometryType type)
 {
-    return type >= GeometryType::Line && type <= GeometryType::PolygonMesh;
+    return type >= GeometryType::Line && type <= GeometryType::ScalarVolume;
 }
 
 bool isDimensionGeometryType(GeometryType type)
@@ -50,6 +50,8 @@ QString geometryTypeName(GeometryType type)
         return QStringLiteral("NURBS Solid");
     case GeometryType::PolygonMesh:
         return QStringLiteral("Polygon Mesh");
+    case GeometryType::ScalarVolume:
+        return QStringLiteral("Scalar Volume");
     case GeometryType::Invalid:
         return QStringLiteral("Invalid");
     }
@@ -71,7 +73,7 @@ bool geometryTypeFromLegacyValue(int value, GeometryType *type)
 bool geometryTypeFromValue(int value, GeometryType *type)
 {
     if (type == nullptr || value < static_cast<int>(GeometryType::Line) ||
-        value > static_cast<int>(GeometryType::PolygonMesh)) {
+        value > static_cast<int>(GeometryType::ScalarVolume)) {
         return false;
     }
 

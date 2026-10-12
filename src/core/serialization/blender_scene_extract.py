@@ -23,7 +23,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 14
+BRIDGE_FORMAT_VERSION = 15
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -34,6 +34,10 @@ COLOR_LUT_DOMAIN_MIN = 0.0
 COLOR_LUT_DOMAIN_MAX = 16.0
 COLOR_LUT_SHAPER = "log2_1p"
 COLOR_LUT_SHAPER_SCALE = 64.0
+# Volume transport keeps sparse active voxels/tiles compact and bounded.
+MAX_VOLUME_GRID_RECORDS = 262144
+MAX_VOLUME_GRID_VOXELS = 16 * 1024 * 1024
+MAX_VOLUME_GRID_PAYLOAD_BYTES = 16 * 1024 * 1024
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -817,6 +821,208 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
             evaluated_obj.to_mesh_clear()
 
 
+def extract_scalar_volume_grid(obj, scene, depsgraph):
+    """Extract one bounded scalar VolumeGrid through Geometry Nodes fields.
+
+    Blender exposes grid metadata but not voxel arrays through bpy. Grid To
+    Points exposes active voxel/tile indices and values as fields; storing
+    those fields on a temporary realized mesh makes them readable through the
+    supported evaluated-mesh attribute API.
+    """
+    evaluated_source_object = obj.evaluated_get(depsgraph)
+    evaluated_geometry = evaluated_source_object.evaluated_geometry()
+    evaluated_volume = evaluated_geometry.volume
+    volume = evaluated_volume if evaluated_volume is not None else obj.data
+    grids = list(volume.grids)
+    if not grids:
+        raise ValueError("volume has no readable grids")
+    float_grids = [grid for grid in grids
+                   if grid.data_type == "FLOAT" and grid.channels == 1]
+    if not float_grids:
+        raise ValueError("volume has no single-channel FLOAT grid")
+    named_density = [grid for grid in float_grids if grid.name == "density"]
+    if named_density:
+        grid = named_density[0]
+    elif len(float_grids) == 1:
+        grid = float_grids[0]
+    else:
+        raise ValueError("volume has multiple FLOAT grids and no unique density grid")
+
+    if not grid.is_loaded:
+        load_result = grid.load()
+        if load_result is False or not grid.is_loaded:
+            raise ValueError("volume grid could not be loaded")
+
+    node_group = None
+    helper_mesh = None
+    helper_object = None
+    evaluated_object = None
+    evaluated_mesh = None
+    try:
+        node_group = bpy.data.node_groups.new(
+            "classiCAD Volume Extraction", "GeometryNodeTree")
+        node_group.interface.new_socket(
+            name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        nodes = node_group.nodes
+        object_info = nodes.new("GeometryNodeObjectInfo")
+        object_info.inputs["Object"].default_value = obj
+        object_info.transform_space = "ORIGINAL"
+        named_grid = nodes.new("GeometryNodeGetNamedGrid")
+        named_grid.data_type = "FLOAT"
+        named_grid.inputs["Name"].default_value = grid.name
+        named_grid.inputs["Remove"].default_value = False
+        grid_points = nodes.new("GeometryNodeGridToPoints")
+        grid_points.data_type = "FLOAT"
+        grid_info = nodes.new("GeometryNodeGridInfo")
+        grid_info.data_type = "FLOAT"
+        points_to_vertices = nodes.new("GeometryNodePointsToVertices")
+        output = nodes.new("NodeGroupOutput")
+        node_group.links.new(object_info.outputs["Geometry"],
+                             named_grid.inputs["Volume"])
+        node_group.links.new(named_grid.outputs["Grid"], grid_points.inputs["Grid"])
+        node_group.links.new(named_grid.outputs["Grid"], grid_info.inputs["Grid"])
+        node_group.links.new(grid_points.outputs["Points"],
+                             points_to_vertices.inputs["Points"])
+
+        geometry_socket = points_to_vertices.outputs["Mesh"]
+        captured_fields = [
+            ("value", "FLOAT", grid_points.outputs["Value"]),
+            ("x", "INT", grid_points.outputs["X"]),
+            ("y", "INT", grid_points.outputs["Y"]),
+            ("z", "INT", grid_points.outputs["Z"]),
+            ("is_tile", "BOOLEAN", grid_points.outputs["Is Tile"]),
+            ("extent", "INT", grid_points.outputs["Extent"]),
+            ("background", "FLOAT", grid_info.outputs["Background Value"]),
+        ]
+        for attribute_name, data_type, field_socket in captured_fields:
+            store = nodes.new("GeometryNodeStoreNamedAttribute")
+            store.domain = "POINT"
+            store.data_type = data_type
+            store.inputs["Name"].default_value = "_classiCAD_volume_" + attribute_name
+            node_group.links.new(geometry_socket, store.inputs["Geometry"])
+            node_group.links.new(field_socket, store.inputs["Value"])
+            geometry_socket = store.outputs["Geometry"]
+        node_group.links.new(geometry_socket, output.inputs["Geometry"])
+
+        helper_mesh = bpy.data.meshes.new("classiCAD Volume Extraction Mesh")
+        helper_object = bpy.data.objects.new("classiCAD Volume Extraction", helper_mesh)
+        scene.collection.objects.link(helper_object)
+        modifier = helper_object.modifiers.new("classiCAD Volume Extraction", "NODES")
+        modifier.node_group = node_group
+        bpy.context.view_layer.update()
+        evaluated_object = helper_object.evaluated_get(depsgraph)
+        evaluated_mesh = evaluated_object.to_mesh(
+            preserve_all_data_layers=True, depsgraph=depsgraph)
+        if evaluated_mesh is None:
+            raise ValueError("Geometry Nodes did not realize the volume grid")
+        if len(evaluated_mesh.vertices) <= 0:
+            raise ValueError("volume grid has no active voxels")
+        if len(evaluated_mesh.vertices) > MAX_VOLUME_GRID_RECORDS:
+            raise ValueError("volume grid exceeds the active record cap (%d)" %
+                             MAX_VOLUME_GRID_RECORDS)
+
+        def attribute_data(name):
+            attribute = evaluated_mesh.attributes.get("_classiCAD_volume_" + name)
+            if attribute is None or len(attribute.data) != len(evaluated_mesh.vertices):
+                raise ValueError("volume grid extraction is missing attribute " + name)
+            return attribute.data
+
+        values = attribute_data("value")
+        xs = attribute_data("x")
+        ys = attribute_data("y")
+        zs = attribute_data("z")
+        tile_flags = attribute_data("is_tile")
+        extents = attribute_data("extent")
+        background_values = attribute_data("background")
+        background = float(background_values[0].value)
+        if not math.isfinite(background):
+            raise ValueError("volume grid background value is non-finite")
+
+        records = []
+        encoded_record_bytes = 0
+        expanded_voxel_count = 0
+        minimum = [None, None, None]
+        maximum = [None, None, None]
+        for index in range(len(evaluated_mesh.vertices)):
+            x = int(xs[index].value)
+            y = int(ys[index].value)
+            z = int(zs[index].value)
+            extent = int(extents[index].value)
+            is_tile = bool(tile_flags[index].value)
+            value = float(values[index].value)
+            if extent < 1 or (not is_tile and extent != 1):
+                raise ValueError("volume grid has an invalid voxel tile extent")
+            if not math.isfinite(value):
+                raise ValueError("volume grid contains a non-finite voxel value")
+            expanded_voxel_count += extent * extent * extent
+            if expanded_voxel_count > MAX_VOLUME_GRID_VOXELS:
+                raise ValueError("volume grid exceeds the expanded voxel cap (%d)" %
+                                 MAX_VOLUME_GRID_VOXELS)
+            coordinates = (x, y, z)
+            for axis in range(3):
+                lower = coordinates[axis]
+                upper = lower + extent - 1
+                minimum[axis] = lower if minimum[axis] is None else min(minimum[axis], lower)
+                maximum[axis] = upper if maximum[axis] is None else max(maximum[axis], upper)
+            record = [x, y, z, extent, is_tile, value]
+            encoded_record_bytes += len(json.dumps(
+                record, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+            if encoded_record_bytes + len(records) > MAX_VOLUME_GRID_PAYLOAD_BYTES:
+                raise ValueError("volume grid payload exceeds the byte cap (%d)" %
+                                 MAX_VOLUME_GRID_PAYLOAD_BYTES)
+            records.append(record)
+
+        active_bounds = minimum + maximum
+        dimensions = [maximum[axis] - minimum[axis] + 1 for axis in range(3)]
+        dense_voxel_count = dimensions[0] * dimensions[1] * dimensions[2]
+        if dense_voxel_count > MAX_VOLUME_GRID_VOXELS:
+            raise ValueError("volume grid dense bounds exceed the voxel cap (%d)" %
+                             MAX_VOLUME_GRID_VOXELS)
+        grid_payload = {
+            "name": grid.name,
+            "data_type": grid.data_type,
+            "channels": int(grid.channels),
+            "grid_to_object": matrix_values(grid.matrix_object),
+            "object_to_world": matrix_values(obj.matrix_world),
+            "background": background,
+            "active_bounds": active_bounds,
+            "expanded_voxel_count": expanded_voxel_count,
+            "dense_voxel_count": dense_voxel_count,
+            "active_records": records,
+        }
+        # Estimate the final compact JSON size without serializing the full
+        # potentially large record array a second time.
+        payload_header = dict(grid_payload)
+        payload_header["active_records"] = []
+        payload_bytes = len(json.dumps(
+            payload_header, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        payload_bytes += encoded_record_bytes + max(0, len(records) - 1)
+        if payload_bytes > MAX_VOLUME_GRID_PAYLOAD_BYTES:
+            raise ValueError("volume grid payload exceeds the byte cap (%d)" %
+                             MAX_VOLUME_GRID_PAYLOAD_BYTES)
+
+        return {
+            "volume_grid": grid_payload,
+            "volume_display": {
+                "density": finite_number(obj.data.display.density),
+                "render_space": str(obj.data.render.space),
+                "interpolation_method": str(obj.data.display.interpolation_method),
+                "use_slice": bool(obj.data.display.use_slice),
+                "slice_axis": str(obj.data.display.slice_axis),
+                "slice_depth": finite_number(obj.data.display.slice_depth),
+            },
+        }
+    finally:
+        if evaluated_object is not None and evaluated_mesh is not None:
+            evaluated_object.to_mesh_clear()
+        if helper_object is not None:
+            bpy.data.objects.remove(helper_object, do_unlink=True)
+        if helper_mesh is not None and helper_mesh.users == 0:
+            bpy.data.meshes.remove(helper_mesh)
+        if node_group is not None and node_group.users == 0:
+            bpy.data.node_groups.remove(node_group)
+
+
 def unsupported_object_record(obj, scene):
     record = object_metadata(obj, scene)
     record["object_type"] = obj.type
@@ -831,6 +1037,8 @@ def unsupported_object_record(obj, scene):
         record["reason"] = "FONT objects require evaluated mode for mesh conversion; source text is not represented"
     elif obj.type == "META":
         record["reason"] = "METABALL objects require evaluated mode for mesh conversion; original metaball data is not represented"
+    elif obj.type == "VOLUME":
+        record["reason"] = "volume has no supported single-channel FLOAT grid"
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record
@@ -1121,6 +1329,7 @@ def extract_scene(input_path, mode):
     mesh_count = 0
     surface_patch_count = 0
     font_mesh_count = 0
+    volume_grid_count = 0
     collections_by_id = {stable_id(collection): collection
                          for collection in bpy.data.collections}
     scene_names_by_collection = {}
@@ -1338,6 +1547,31 @@ def extract_scene(input_path, mode):
                         "reason": "metaball mesh extraction failed; whole object skipped: " + str(error),
                     })
                 continue
+            if obj.type == "VOLUME":
+                try:
+                    volume_depsgraph = depsgraph or depsgraph_for_scene(scene)
+                    item = object_metadata(obj, scene)
+                    item["object_type"] = "VOLUME"
+                    item["import_mode"] = mode
+                    item.update(extract_scalar_volume_grid(
+                        obj, scene, volume_depsgraph))
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    output["items"].append(item)
+                    volume_grid_count += 1
+                except Exception as error:
+                    output["unsupported_items"].append({
+                        **object_metadata(obj, scene),
+                        "object_type": obj.type,
+                        "reason": "volume extraction failed; whole object skipped: " + str(error),
+                    })
+                continue
             if obj.type != "MESH":
                 output["unsupported_items"].append(unsupported_object_record(obj, scene))
                 continue
@@ -1375,6 +1609,7 @@ def extract_scene(input_path, mode):
         "mesh_items_extracted": mesh_count,
         "surface_patches_extracted": surface_patch_count,
         "font_objects_meshed": font_mesh_count,
+        "volume_grids_extracted": volume_grid_count,
         "unsupported_item_occurrences": len(output["unsupported_items"]),
         "unsupported_feature_count": len(output["unsupported_features"]),
         "material_count": len(output["materials"]),

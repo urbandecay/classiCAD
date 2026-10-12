@@ -10,6 +10,7 @@
 
 #include "core/geometry/nurbs_surface.h"
 #include "core/geometry/nurbs_solid.h"
+#include "core/geometry/scalar_volume.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/viewport/viewport_transform.h"
 
@@ -24,6 +25,7 @@
 #include <QPen>
 #include <QPixmap>
 #include <QSurfaceFormat>
+#include <QVector>
 
 #include <algorithm>
 #include <cstddef>
@@ -419,6 +421,9 @@ int main(int argc, char *argv[])
             bool gpuShadowDrawSucceeded = false;
             bool gpuSceneStrokeSuppressesPostOutline = false;
             bool gpuWireLinearBlendMatches = false;
+            bool gpuVolumeDrawSucceeded = false;
+            bool gpuVolumePassReported = false;
+            int gpuVolumeChangedPixels = 0;
             const QSize glSize(640, 480);
             ViewportTransform gpuTransform;
             gpuTransform.zoom() = 17.28;
@@ -515,6 +520,82 @@ int main(int argc, char *argv[])
                         gpuMatcapShading);
                     functions.glFinish();
                     gpuMatcapImage = framebuffer.toImage();
+
+                    QVector<float> clearSceneDepth(glSize.width() *
+                                                       glSize.height(),
+                                                   1.0f);
+                    GLuint sceneDepthTexture = 0;
+                    functions.glGenTextures(1, &sceneDepthTexture);
+                    functions.glBindTexture(GL_TEXTURE_2D,
+                                            sceneDepthTexture);
+                    functions.glTexParameteri(GL_TEXTURE_2D,
+                                              GL_TEXTURE_MIN_FILTER,
+                                              GL_NEAREST);
+                    functions.glTexParameteri(GL_TEXTURE_2D,
+                                              GL_TEXTURE_MAG_FILTER,
+                                              GL_NEAREST);
+                    functions.glTexParameteri(GL_TEXTURE_2D,
+                                              GL_TEXTURE_WRAP_S,
+                                              GL_CLAMP_TO_EDGE);
+                    functions.glTexParameteri(GL_TEXTURE_2D,
+                                              GL_TEXTURE_WRAP_T,
+                                              GL_CLAMP_TO_EDGE);
+                    functions.glTexImage2D(
+                        GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+                        glSize.width(), glSize.height(), 0,
+                        GL_DEPTH_COMPONENT, GL_FLOAT,
+                        clearSceneDepth.constData());
+
+                    ScalarVolume3D scalarVolume;
+                    scalarVolume.name = QStringLiteral("density");
+                    scalarVolume.activeBounds = {-1, -1, -1, 0, 0, 0};
+                    scalarVolume.expandedVoxelCount = 8;
+                    scalarVolume.denseVoxelCount = 8;
+                    scalarVolume.activeRecords.append(
+                        {-1, -1, -1, 2, true, 1.0f});
+                    scalarVolume.displayDensity = 32.0f;
+                    scalarVolume.densityScale = 32.0f;
+                    ViewportRenderObject volumeObject;
+                    volumeObject.shape.geometryType =
+                        GeometryType::ScalarVolume;
+                    volumeObject.shape.scalarVolume = scalarVolume;
+                    volumeObject.displayColorSceneLinear =
+                        QVector4D(4.0f, 0.15f, 0.05f, 1.0f);
+                    ViewportRenderTargets volumeTargets;
+                    volumeTargets.depthTexture = sceneDepthTexture;
+                    volumeTargets.pixelSize = glSize;
+                    volumeTargets.validAttachments =
+                        ViewportRenderTargets::Depth;
+                    ViewportRenderPassReport volumePassReport;
+                    ViewportShadingSettings volumeShading = gpuSolidShading;
+                    volumeShading.colorMode = ViewportColorMode::Object;
+                    functions.glBindTexture(GL_TEXTURE_2D, 0);
+                    framebuffer.bind();
+                    functions.glViewport(0, 0, glSize.width(),
+                                         glSize.height());
+                    functions.glClearColor(34.0f / 255.0f,
+                                           34.0f / 255.0f,
+                                           34.0f / 255.0f, 1.0f);
+                    functions.glClear(GL_COLOR_BUFFER_BIT |
+                                      GL_DEPTH_BUFFER_BIT);
+                    gpuVolumeDrawSucceeded = gpuSurfaceRenderer.draw(
+                        {volumeObject}, gpuTransform, glSize, 1.0,
+                        volumeShading, false, true, false,
+                        &volumeTargets, &volumePassReport);
+                    functions.glFinish();
+                    const QImage gpuVolumeImage = framebuffer.toImage();
+                    for (int y = 0; y < gpuVolumeImage.height(); ++y) {
+                        for (int x = 0; x < gpuVolumeImage.width(); ++x) {
+                            const QColor pixel =
+                                gpuVolumeImage.pixelColor(x, y);
+                            gpuVolumeChangedPixels +=
+                                pixel.red() != 34 || pixel.green() != 34 ||
+                                pixel.blue() != 34;
+                        }
+                    }
+                    gpuVolumePassReported = volumePassReport.passCompleted(
+                        ViewportRenderPass::Volume);
+                    functions.glDeleteTextures(1, &sceneDepthTexture);
                     framebuffer.release();
                 }
             }
@@ -800,6 +881,10 @@ int main(int argc, char *argv[])
                                 gpuShadowDrawSucceeded &&
                                 !gpuShadowImage.isNull(),
                             "OpenGL NURBS cubes must match Blender face colors, show outlines, retain outward bottom faces under culling, and render the Shadow option");
+            passed &= check(gpuVolumeDrawSucceeded && gpuVolumePassReported,
+                            "a bounded scalar volume must complete the GPU volume pass");
+            passed &= check(gpuVolumeChangedPixels > 100,
+                            "a bounded scalar volume must change offscreen framebuffer pixels");
         }
     }
 

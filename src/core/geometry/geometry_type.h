@@ -27,6 +27,7 @@ enum class GeometryType : int {
     NurbsSurface = 14,
     NurbsSolid = 15,
     PolygonMesh = 16,
+    ScalarVolume = 17,
 };
 
 bool isPersistentGeometryType(GeometryType type);

@@ -121,6 +121,15 @@ private:
         const ViewportRenderTargets &targets,
         const QVector<int> &rangeIndices,
         bool excludeFrontCoverage = false);
+    bool renderScalarVolumes(const QVector<ViewportRenderObject> &objects,
+                             const ViewportTransform &transform,
+                             const QSize &viewportSize,
+                             qreal devicePixelRatio,
+                             const ViewportShadingSettings &settings,
+                             bool sceneLinearOutput,
+                             int sampleIndex,
+                             GLuint sceneDepthTexture,
+                             GLuint frontDepthTexture);
     bool ensureMatcapTexture(const QString &presetName);
     bool ensureAgxDisplayTexture(int colorTransform,
                                  const QString &customLutId = {},
@@ -143,6 +152,7 @@ private:
     QOpenGLShaderProgram objectIdProgram_;
     QOpenGLShaderProgram workbenchEffectProgram_;
     QOpenGLShaderProgram shadowProgram_;
+    QOpenGLShaderProgram scalarVolumeProgram_;
     QOpenGLShaderProgram transparencyResolveProgram_;
     QOpenGLShaderProgram frontMergeProgram_;
     QOpenGLVertexArrayObject vertexArray_;
@@ -176,6 +186,7 @@ private:
     QString agxDisplayTextureCustomId_;
     QHash<QString, GLuint> customDisplayTextures_;
     GLuint cavityJitterTexture_ = 0;
+    GLuint scalarVolumeTexture_ = 0;
     int cavityJitterSampleCount_ = 0;
     unsigned int shadowTexture_ = 0;
     unsigned int shadowFramebuffer_ = 0;

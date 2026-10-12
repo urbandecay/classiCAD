@@ -415,7 +415,7 @@ bool runBlenderAdapter(const QString &operation,
     }
     if (!process.waitForFinished(kBlenderTimeoutMilliseconds)) {
         process.kill();
-        process.waitForFinished();
+        process.waitForFinished(5000);
         setError(errorMessage,
                  QStringLiteral("Blender took too long to %1 the project")
                      .arg(operation == QLatin1String("save")
@@ -500,7 +500,7 @@ bool runBlenderSceneExtractor(const QString &inputPath,
     }
     if (!process.waitForFinished(kBlenderTimeoutMilliseconds)) {
         process.kill();
-        process.waitForFinished();
+        process.waitForFinished(5000);
         setError(errorMessage,
                  QStringLiteral("Blender took too long to extract this scene"));
         return false;
@@ -1382,6 +1382,161 @@ bool parseBlenderSurfaceItem(
     return true;
 }
 
+bool parseBlenderScalarVolumeItem(
+    const QJsonObject &item,
+    const QHash<QString, classiCAD::CollectionId> &collectionIds,
+    classiCAD::SceneObject *sceneObject,
+    QString *errorMessage)
+{
+    if (sceneObject == nullptr) return false;
+    const QJsonObject source = item.value(QStringLiteral("volume_grid")).toObject();
+    const QJsonObject display = item.value(QStringLiteral("volume_display")).toObject();
+    classiCAD::ScalarVolume3D volume;
+    volume.name = source.value(QStringLiteral("name")).toString();
+    volume.dataType = source.value(QStringLiteral("data_type")).toString();
+    const auto readMatrix = [&](const QJsonValue &value,
+                                classiCAD::ScalarVolumeMatrix *matrix) {
+        if (!value.isArray() || value.toArray().size() != 4) return false;
+        const QJsonArray rows = value.toArray();
+        for (int row = 0; row < 4; ++row) {
+            if (!rows[row].isArray() || rows[row].toArray().size() != 4) return false;
+            const QJsonArray columns = rows[row].toArray();
+            for (int column = 0; column < 4; ++column) {
+                if (!columns[column].isDouble() || !std::isfinite(columns[column].toDouble())) return false;
+                (*matrix)[static_cast<size_t>(row * 4 + column)] = columns[column].toDouble();
+            }
+        }
+        return classiCAD::isValidScalarVolumeMatrix(*matrix);
+    };
+    const QJsonValue channels = source.value(QStringLiteral("channels"));
+    const QJsonValue background = source.value(QStringLiteral("background"));
+    const QJsonValue expanded = source.value(QStringLiteral("expanded_voxel_count"));
+    const QJsonValue dense = source.value(QStringLiteral("dense_voxel_count"));
+    const QJsonArray bounds = source.value(QStringLiteral("active_bounds")).toArray();
+    if (volume.name.isEmpty() || !channels.isDouble() ||
+        std::floor(channels.toDouble()) != channels.toDouble() ||
+        !background.isDouble() || !std::isfinite(background.toDouble()) ||
+        std::abs(background.toDouble()) > std::numeric_limits<float>::max() ||
+        !expanded.isDouble() || std::floor(expanded.toDouble()) != expanded.toDouble() ||
+        expanded.toDouble() < 0.0 || expanded.toDouble() > 64.0 * 1024.0 * 1024.0 ||
+        !dense.isDouble() ||
+        std::floor(dense.toDouble()) != dense.toDouble() || dense.toDouble() < 0.0 ||
+        dense.toDouble() > 64.0 * 1024.0 * 1024.0 ||
+        bounds.size() != 6 ||
+        !readMatrix(source.value(QStringLiteral("grid_to_object")), &volume.gridToObject) ||
+        !readMatrix(source.value(QStringLiteral("object_to_world")), &volume.objectToWorld)) {
+        setError(errorMessage, QStringLiteral("scalar volume grid metadata is invalid"));
+        return false;
+    }
+    volume.channels = channels.toInt();
+    volume.background = static_cast<float>(background.toDouble());
+    volume.expandedVoxelCount = static_cast<std::uint64_t>(expanded.toDouble());
+    volume.denseVoxelCount = static_cast<std::uint64_t>(dense.toDouble());
+    for (int i = 0; i < 6; ++i) {
+        int coordinate = 0;
+        if (!jsonInteger(bounds[i], &coordinate)) {
+            setError(errorMessage, QStringLiteral("scalar volume active bounds are invalid"));
+            return false;
+        }
+        volume.activeBounds[static_cast<size_t>(i)] = coordinate;
+    }
+    const QJsonArray records = source.value(QStringLiteral("active_records")).toArray();
+    if (records.isEmpty() || records.size() > 1'000'000) {
+        setError(errorMessage, QStringLiteral("scalar volume active record count is invalid"));
+        return false;
+    }
+    volume.activeRecords.reserve(records.size());
+    for (const QJsonValue &recordValue : records) {
+        if (!recordValue.isArray() || recordValue.toArray().size() != 6) {
+            setError(errorMessage, QStringLiteral("scalar volume active record is malformed"));
+            return false;
+        }
+        const QJsonArray record = recordValue.toArray();
+        int values[4]{};
+        for (int i = 0; i < 4; ++i) {
+            if (!jsonInteger(record[i], &values[i])) {
+                setError(errorMessage, QStringLiteral("scalar volume voxel coordinate is invalid"));
+                return false;
+            }
+        }
+        if (!record[4].isBool() || !record[5].isDouble() ||
+            !std::isfinite(record[5].toDouble()) ||
+            std::abs(record[5].toDouble()) > std::numeric_limits<float>::max()) {
+            setError(errorMessage, QStringLiteral("scalar volume voxel value is invalid"));
+            return false;
+        }
+        volume.activeRecords.append({values[0], values[1], values[2], values[3],
+                                     record[4].toBool(), static_cast<float>(record[5].toDouble())});
+    }
+    const QJsonValue density = display.value(QStringLiteral("density"));
+    const QJsonValue sliceDepth = display.value(QStringLiteral("slice_depth"));
+    const QJsonValue renderSpace = display.value(QStringLiteral("render_space"));
+    if (!density.isDouble() || !std::isfinite(density.toDouble()) ||
+        density.toDouble() < 0.0 || density.toDouble() > std::numeric_limits<float>::max() ||
+        !renderSpace.isString() ||
+        !display.value(QStringLiteral("interpolation_method")).isString() ||
+        !display.value(QStringLiteral("use_slice")).isBool() ||
+        !display.value(QStringLiteral("slice_axis")).isString() ||
+        !sliceDepth.isDouble() || !std::isfinite(sliceDepth.toDouble()) ||
+        std::abs(sliceDepth.toDouble()) > std::numeric_limits<float>::max()) {
+        setError(errorMessage, QStringLiteral("scalar volume display settings are invalid"));
+        return false;
+    }
+    volume.displayDensity = static_cast<float>(density.toDouble());
+    volume.renderSpace = renderSpace.toString();
+    if (!classiCAD::scalarVolumeDensityScale(volume.renderSpace,
+                                              volume.objectToWorld,
+                                              volume.displayDensity,
+                                              &volume.densityScale)) {
+        setError(errorMessage, QStringLiteral("scalar volume density scale is invalid"));
+        return false;
+    }
+    volume.interpolationMethod = display.value(QStringLiteral("interpolation_method")).toString();
+    volume.useSlice = display.value(QStringLiteral("use_slice")).toBool();
+    volume.sliceAxis = display.value(QStringLiteral("slice_axis")).toString();
+    volume.sliceDepth = static_cast<float>(sliceDepth.toDouble());
+    if (!classiCAD::validateScalarVolume(volume)) {
+        setError(errorMessage, QStringLiteral("scalar volume payload exceeds limits or is inconsistent"));
+        return false;
+    }
+
+    classiCAD::SceneObject result;
+    result.displayName = item.value(QStringLiteral("name")).toString();
+    result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    result.showInFront = item.value(QStringLiteral("showInFront")).toBool(false);
+    result.hideViewport = item.value(QStringLiteral("hide_viewport")).toBool(false);
+    result.hideRender = item.value(QStringLiteral("hide_render")).toBool(false);
+    result.hideSelect = item.value(QStringLiteral("hide_select")).toBool(false);
+    result.hiddenInViewport = result.hideViewport;
+    result.viewLayerHidden = item.value(QStringLiteral("view_layer_hidden")).toObject();
+    QVector<double> objectColor;
+    if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")), 4, &objectColor)) {
+        setError(errorMessage, QStringLiteral("volume display color is invalid"));
+        return false;
+    }
+    if (std::any_of(objectColor.cbegin(), objectColor.cend(), [](double value) {
+            return std::abs(value) > std::numeric_limits<float>::max();
+        })) {
+        setError(errorMessage, QStringLiteral("volume display color exceeds float range"));
+        return false;
+    }
+    result.displayColorSceneLinear = QVector4D(static_cast<float>(objectColor[0]),
+        static_cast<float>(objectColor[1]), static_cast<float>(objectColor[2]),
+        static_cast<float>(objectColor[3]));
+    for (const QJsonValue &collectionValue : item.value(QStringLiteral("collection_ids")).toArray()) {
+        const QString collectionId = collectionValue.toString();
+        if (collectionId.isEmpty() || !collectionIds.contains(collectionId)) {
+            setError(errorMessage, QStringLiteral("volume references an unknown Blender collection"));
+            return false;
+        }
+        result.collectionIds.append(collectionIds.value(collectionId));
+    }
+    result.geometry.geometryType = classiCAD::GeometryType::ScalarVolume;
+    result.geometry.scalarVolume = std::move(volume);
+    *sceneObject = std::move(result);
+    return true;
+}
+
 QString conciseImportWarnings(const QStringList &warnings,
                               int skippedObjects,
                               int unsupportedFeatures)
@@ -1746,7 +1901,7 @@ bool importBlenderScene(const QString &path,
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
         (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
-         bridgeVersion != 13 && bridgeVersion != 14)) {
+         bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -2072,7 +2227,8 @@ bool importBlenderScene(const QString &path,
         if (objectId.isEmpty() ||
             (objectType != QLatin1String("MESH") &&
              objectType != QLatin1String("CURVE") &&
-             objectType != QLatin1String("SURFACE"))) {
+             objectType != QLatin1String("SURFACE") &&
+             objectType != QLatin1String("VOLUME"))) {
             ++skippedCount;
             warnings.append(QStringLiteral("A Blender scene record has missing identity or an unexpected object type and was skipped"));
             continue;
@@ -2110,7 +2266,10 @@ bool importBlenderScene(const QString &path,
         const int warningCountBeforeItem = warnings.size();
         SceneObject sceneObject;
         QString itemError;
-        const bool parsed = objectType == QLatin1String("MESH")
+        const bool parsed = objectType == QLatin1String("VOLUME")
+            ? parseBlenderScalarVolumeItem(item, collectionIdsBySource,
+                                           &sceneObject, &itemError)
+            : objectType == QLatin1String("MESH")
             ? parseBlenderMeshItem(
                   item, collectionIdsBySource, materialsById,
                   source.value(QStringLiteral("blender_version")).toString(),

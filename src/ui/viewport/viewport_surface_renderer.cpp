@@ -600,6 +600,10 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         glDeleteTextures(1, &shadowTexture_);
         shadowTexture_ = 0;
     }
+    if (scalarVolumeTexture_ != 0) {
+        glDeleteTextures(1, &scalarVolumeTexture_);
+        scalarVolumeTexture_ = 0;
+    }
     if (shadowFramebuffer_ != 0) {
         glDeleteFramebuffers(1, &shadowFramebuffer_);
         shadowFramebuffer_ = 0;
@@ -1437,6 +1441,216 @@ bool ViewportSurfaceRenderer::initialize()
         }
     )glsl";
 
+    // The scalar-volume cubic sampler, Bayer jitter, density integration, and
+    // sample scheduling adapt Blender Workbench 5.2.2. Source references:
+    // Blender Authors, workbench_volume.cc and shaders/workbench_volume.bsl.hh
+    // (GPL-2.0-or-later); adapted here for classiCAD's bounded sparse-grid
+    // transport and Qt/OpenGL render targets.
+    static constexpr const char *scalarVolumeVertexShader = R"glsl(
+        #version 330 core
+        void main()
+        {
+            vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+            gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+        }
+    )glsl";
+    static constexpr const char *scalarVolumeFragmentShader = R"glsl(
+        #version 330 core
+        uniform sampler2D uSceneDepth;
+        uniform sampler2D uFrontDepth;
+        uniform sampler3D uDensity;
+        uniform sampler3D uAgxDisplayTexture;
+        uniform bool uUseFrontDepth;
+        uniform bool uSceneLinearOutput;
+        uniform bool uAgxDisplayAvailable;
+        uniform int uColorTransform;
+        uniform int uAgxDisplayLutSize;
+        uniform int uAgxDisplayLutShaper;
+        uniform vec2 uAgxDisplayLutDomain;
+        uniform float uAgxDisplayLutShaperScale;
+        uniform float uColorExposure;
+        uniform float uColorGamma;
+        uniform mat4 uInverseViewProjection;
+        uniform mat4 uWorldToGrid;
+        uniform vec3 uViewDirection;
+        uniform vec3 uBoundsMin;
+        uniform vec3 uGridSize;
+        uniform vec3 uBaseColor;
+        uniform float uDensityScale;
+        uniform bool uUseSlice;
+        uniform int uSliceAxis;
+        uniform float uSliceDepth;
+        uniform float uSliceStepWorld;
+        uniform float uStepLength;
+        uniform int uMaxSlice;
+        uniform int uInterpolation;
+        uniform int uMaxSteps;
+        uniform float uNoiseOffset;
+        out vec4 fragmentColor;
+        vec3 sceneLinearToDisplay(vec3 color)
+        {
+            color = max(color, vec3(0.0)) * exp2(uColorExposure);
+            vec3 displayColor;
+            if (uColorTransform == 4 && !uAgxDisplayAvailable) {
+                displayColor = color;
+            } else if (uColorTransform == 1 || !uAgxDisplayAvailable) {
+                color = max(color, vec3(0.0));
+                vec3 low = color * 12.92;
+                vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
+                displayColor = mix(high, low, lessThanEqual(color, vec3(0.0031308)));
+            } else {
+                vec3 bounded = clamp(color, vec3(uAgxDisplayLutDomain.x),
+                                     vec3(uAgxDisplayLutDomain.y)) -
+                               vec3(uAgxDisplayLutDomain.x);
+                float span = max(uAgxDisplayLutDomain.y - uAgxDisplayLutDomain.x,
+                                 1.0e-20);
+                vec3 normalized = bounded / span;
+                if (uAgxDisplayLutShaper == 1) {
+                    float denominator = log2(1.0 + uAgxDisplayLutShaperScale * span);
+                    normalized = log2(vec3(1.0) +
+                                      uAgxDisplayLutShaperScale * bounded) /
+                                 max(denominator, 1.0e-20);
+                }
+                vec3 coordinate = (clamp(normalized, vec3(0.0), vec3(1.0)) *
+                    float(uAgxDisplayLutSize - 1) + 0.5) /
+                    float(uAgxDisplayLutSize);
+                displayColor = texture(uAgxDisplayTexture, coordinate).rgb;
+            }
+            return pow(max(displayColor, vec3(0.0)),
+                       vec3(1.0 / max(uColorGamma, 0.000001)));
+        }
+        vec4 resolveVolumeColor(vec3 premultiplied, float alpha)
+        {
+            if (!uSceneLinearOutput) {
+                vec3 straightColor = alpha > 0.0
+                    ? premultiplied / alpha : vec3(0.0);
+                premultiplied = sceneLinearToDisplay(straightColor) * alpha;
+            }
+            return vec4(premultiplied, alpha);
+        }
+        vec3 worldAt(vec2 uv, float depth)
+        {
+            vec4 p = uInverseViewProjection *
+                vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+            return p.xyz / max(abs(p.w), 1.0e-20) * sign(p.w);
+        }
+        bool intersectBox(vec3 origin, vec3 direction,
+                          out float nearT, out float farT)
+        {
+            nearT = 0.0;
+            farT = 1.0;
+            for (int axis = 0; axis < 3; ++axis) {
+                if (abs(direction[axis]) < 1.0e-9) {
+                    if (origin[axis] < 0.0 || origin[axis] > 1.0) return false;
+                } else {
+                    float a = -origin[axis] / direction[axis];
+                    float b = (1.0 - origin[axis]) / direction[axis];
+                    nearT = max(nearT, min(a, b));
+                    farT = min(farT, max(a, b));
+                }
+            }
+            return farT > nearT;
+        }
+        float sampleDensity(vec3 coordinate)
+        {
+            if (uInterpolation == 0) {
+                ivec3 size = textureSize(uDensity, 0);
+                ivec3 cell = clamp(ivec3(floor(coordinate * vec3(size))),
+                                   ivec3(0), size - ivec3(1));
+                return texelFetch(uDensity, cell, 0).r;
+            }
+            if (uInterpolation == 2) {
+                ivec3 size = textureSize(uDensity, 0);
+                vec3 co = coordinate * vec3(size);
+                vec3 tc = floor(co - 0.5) + 0.5;
+                vec3 f = co - tc;
+                vec3 f2 = f * f;
+                vec3 f3 = f2 * f;
+                vec3 w3 = f3 / 6.0;
+                vec3 w0 = -w3 + f2 * 0.5 - f * 0.5 + 1.0 / 6.0;
+                vec3 w1 = f3 * 0.5 - f2 + 2.0 / 3.0;
+                vec3 w2 = 1.0 - w0 - w1 - w3;
+                vec3 s0 = w0 + w1;
+                vec3 s1 = w2 + w3;
+                vec3 f0 = w1 / max(s0, vec3(1.0e-20));
+                vec3 f1 = w3 / max(s1, vec3(1.0e-20));
+                vec2 x = (tc.xx + vec2(-1.0, 1.0) + vec2(f0.x, f1.x)) / float(size.x);
+                vec2 y = (tc.yy + vec2(-1.0, 1.0) + vec2(f0.y, f1.y)) / float(size.y);
+                vec2 z = (tc.zz + vec2(-1.0, 1.0) + vec2(f0.z, f1.z)) / float(size.z);
+                float value = 0.0;
+                value += texture(uDensity, vec3(x.x, y.x, z.x)).r * s0.x * s0.y * s0.z;
+                value += texture(uDensity, vec3(x.y, y.x, z.x)).r * s1.x * s0.y * s0.z;
+                value += texture(uDensity, vec3(x.x, y.y, z.x)).r * s0.x * s1.y * s0.z;
+                value += texture(uDensity, vec3(x.y, y.y, z.x)).r * s1.x * s1.y * s0.z;
+                value += texture(uDensity, vec3(x.x, y.x, z.y)).r * s0.x * s0.y * s1.z;
+                value += texture(uDensity, vec3(x.y, y.x, z.y)).r * s1.x * s0.y * s1.z;
+                value += texture(uDensity, vec3(x.x, y.y, z.y)).r * s0.x * s1.y * s1.z;
+                value += texture(uDensity, vec3(x.y, y.y, z.y)).r * s1.x * s1.y * s1.z;
+                return value;
+            }
+            return texture(uDensity, coordinate).r;
+        }
+        void main()
+        {
+            vec2 uv = gl_FragCoord.xy / vec2(textureSize(uSceneDepth, 0));
+            if (uUseFrontDepth &&
+                texelFetch(uFrontDepth, ivec2(gl_FragCoord.xy), 0).r < 1.0) discard;
+            float sceneDepth = texelFetch(uSceneDepth, ivec2(gl_FragCoord.xy), 0).r;
+            vec3 worldStart = worldAt(uv, 0.0);
+            vec3 worldEnd = worldAt(uv, min(sceneDepth, 1.0));
+            vec3 worldRay = worldEnd - worldStart;
+            vec3 gridStart = (uWorldToGrid * vec4(worldStart, 1.0)).xyz;
+            vec3 gridRay = (uWorldToGrid * vec4(worldRay, 0.0)).xyz;
+            vec3 texStart = (gridStart - uBoundsMin + 0.5) / uGridSize;
+            vec3 texRay = gridRay / uGridSize;
+            if (uUseSlice) {
+                if (uSliceAxis < 0 || uSliceAxis > 2 ||
+                    abs(texRay[uSliceAxis]) < 1.0e-9) discard;
+                float t = (uSliceDepth - texStart[uSliceAxis]) /
+                          texRay[uSliceAxis];
+                if (t < 0.0 || t > 1.0) discard;
+                vec3 coordinate = texStart + texRay * t;
+                if (any(lessThan(coordinate, vec3(0.0))) ||
+                    any(greaterThan(coordinate, vec3(1.0)))) discard;
+                float density = max(sampleDensity(coordinate), 0.0) * uDensityScale;
+                float opacity = 1.0 - exp(-density * uSliceStepWorld);
+                fragmentColor = resolveVolumeColor(
+                    uBaseColor * opacity * 0.25, opacity);
+                return;
+            }
+            float nearT, farT;
+            if (!intersectBox(texStart, texRay, nearT, farT)) discard;
+            float worldRayLength = max(length(worldRay), 1.0e-20);
+            float viewCosine = max(abs(dot(normalize(worldRay),
+                                           normalize(uViewDirection))), 1.0e-6);
+            // Blender steps in view-space z distance. Perspective rays use
+            // its secant factor to convert that step to ray distance.
+            float rayStepWorld = uStepLength / viewCosine;
+            float dt = rayStepWorld / worldRayLength;
+            float worldChordLength = worldRayLength * (farT - nearT);
+            const float dither[16] = float[16](0.0, 8.0, 2.0, 10.0,
+                12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0,
+                15.0, 7.0, 13.0, 5.0);
+            ivec2 pixel = ivec2(gl_FragCoord.xy) % 4;
+            float noise = fract((dither[pixel.x * 4 + pixel.y] +
+                                 0.5) / 16.0 + uNoiseOffset);
+            vec3 radiance = vec3(0.0);
+            float transmittance = 1.0;
+            for (int i = 0; i < uMaxSteps; ++i) {
+                if (i >= uMaxSlice || (float(i) + noise) * rayStepWorld >= worldChordLength ||
+                    transmittance <= 0.01) break;
+                float t = nearT + (float(i) + noise) * dt;
+                float density = max(sampleDensity(texStart + texRay * t), 0.0) * uDensityScale;
+                if (density <= 1.0e-7) continue;
+                float stepTransmittance = exp(-density * rayStepWorld);
+                float stepOpacity = 1.0 - stepTransmittance;
+                radiance += transmittance * uBaseColor * (stepOpacity * 0.25);
+                transmittance *= stepTransmittance;
+            }
+            fragmentColor = resolveVolumeColor(radiance, 1.0 - transmittance);
+        }
+    )glsl";
+
     static constexpr const char *objectIdVertexShader = R"glsl(
         #version 330 core
         layout(location = 0) in vec3 aPosition;
@@ -1858,6 +2072,11 @@ bool ViewportSurfaceRenderer::initialize()
         !shadowProgram_.addShaderFromSourceCode(QOpenGLShader::Fragment,
                                                 shadowFragmentShader) ||
         !shadowProgram_.link() ||
+        !scalarVolumeProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Vertex, scalarVolumeVertexShader) ||
+        !scalarVolumeProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Fragment, scalarVolumeFragmentShader) ||
+        !scalarVolumeProgram_.link() ||
         !transparencyResolveProgram_.addShaderFromSourceCode(
             QOpenGLShader::Vertex, transparencyResolveVertexShader) ||
         !transparencyResolveProgram_.addShaderFromSourceCode(
@@ -1874,6 +2093,7 @@ bool ViewportSurfaceRenderer::initialize()
             << "Workbench effects:" << workbenchEffectProgram_.log()
             << "Outline:" << outlineProgram_.log()
             << "Shadow:" << shadowProgram_.log()
+            << "Scalar volume:" << scalarVolumeProgram_.log()
             << "Transparency resolve:" << transparencyResolveProgram_.log();
         return false;
     }
@@ -4186,6 +4406,333 @@ bool ViewportSurfaceRenderer::ensureCavityJitterTexture(int totalSamples)
     return true;
 }
 
+bool ViewportSurfaceRenderer::renderScalarVolumes(
+    const QVector<ViewportRenderObject> &objects,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const ViewportShadingSettings &settings,
+    bool sceneLinearOutput,
+    int sampleIndex,
+    GLuint sceneDepthTexture,
+    GLuint frontDepthTexture)
+{
+    if (sceneDepthTexture == 0 || viewportSize.isEmpty()) return false;
+    GLint maxTextureSize = 0;
+    glGetIntegerv(GL_MAX_3D_TEXTURE_SIZE, &maxTextureSize);
+    const int dimensionLimit = std::min(512, maxTextureSize);
+    if (dimensionLimit < 2) return false;
+
+    const QMatrix4x4 viewProjection =
+        viewportViewProjection(transform, viewportSize);
+    bool inverseValid = false;
+    const QMatrix4x4 inverseViewProjection =
+        viewProjection.inverted(&inverseValid);
+    if (!inverseValid) return false;
+
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture2D = 0;
+    GLint previousTexture2DUnit2 = 0;
+    GLint previousTexture3DUnit3 = 0;
+    GLint previousTexture3D = 0;
+    GLint previousProgram = 0;
+    GLint previousBlendSourceRgb = GL_ONE;
+    GLint previousBlendDestinationRgb = GL_ZERO;
+    GLint previousBlendSourceAlpha = GL_ONE;
+    GLint previousBlendDestinationAlpha = GL_ZERO;
+    GLint previousBlendEquationRgb = GL_FUNC_ADD;
+    GLint previousBlendEquationAlpha = GL_FUNC_ADD;
+    GLint previousViewport[4] = {0, 0, 0, 0};
+    GLboolean previousDepthMask = GL_TRUE;
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSourceRgb);
+    glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDestinationRgb);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &previousBlendSourceAlpha);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &previousBlendDestinationAlpha);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &previousBlendEquationRgb);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &previousBlendEquationAlpha);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    scalarVolumeProgram_.bind();
+    scalarVolumeProgram_.setUniformValue("uSceneDepth", 0);
+    scalarVolumeProgram_.setUniformValue("uDensity", 1);
+    scalarVolumeProgram_.setUniformValue("uFrontDepth", 2);
+    scalarVolumeProgram_.setUniformValue("uAgxDisplayTexture", 3);
+    scalarVolumeProgram_.setUniformValue("uUseFrontDepth", frontDepthTexture != 0);
+    scalarVolumeProgram_.setUniformValue("uSceneLinearOutput", sceneLinearOutput);
+    const bool displayAvailable = !sceneLinearOutput && settings.colorTransform != 1 &&
+        ensureAgxDisplayTexture(settings.colorTransform, settings.colorLutId,
+                                settings.colorLutData, settings.colorLutMetadata);
+    scalarVolumeProgram_.setUniformValue("uAgxDisplayAvailable", displayAvailable);
+    scalarVolumeProgram_.setUniformValue("uColorTransform", settings.colorTransform);
+    scalarVolumeProgram_.setUniformValue("uAgxDisplayLutSize",
+        settings.colorTransform == 4 ? settings.colorLutMetadata.size
+                                    : workbenchAgxDisplayLutSize);
+    scalarVolumeProgram_.setUniformValue("uAgxDisplayLutDomain",
+        QVector2D(float(settings.colorTransform == 4 ? settings.colorLutMetadata.domainMin : 0.0),
+                  float(settings.colorTransform == 4 ? settings.colorLutMetadata.domainMax : workbenchAgxDisplayLutMaximum)));
+    scalarVolumeProgram_.setUniformValue("uAgxDisplayLutShaper",
+        settings.colorTransform == 4 && settings.colorLutMetadata.shaper == QStringLiteral("log2_1p") ? 1 : 0);
+    scalarVolumeProgram_.setUniformValue("uAgxDisplayLutShaperScale",
+        float(settings.colorTransform == 4 ? settings.colorLutMetadata.shaperScale : 1.0));
+    scalarVolumeProgram_.setUniformValue("uColorExposure", float(settings.colorExposure));
+    scalarVolumeProgram_.setUniformValue("uColorGamma", float(settings.colorGamma));
+    scalarVolumeProgram_.setUniformValue("uInverseViewProjection",
+                                        inverseViewProjection);
+    const Point3D worldViewDirection = transform.viewDirection();
+    scalarVolumeProgram_.setUniformValue("uViewDirection",
+        QVector3D(float(worldViewDirection.x), float(worldViewDirection.y),
+                  float(worldViewDirection.z)).normalized());
+    double haltonNoise = 0.0;
+    double haltonFraction = 1.0 / 3.0;
+    for (int index = std::max(0, sampleIndex); index > 0; index /= 3) {
+        haltonNoise += (index % 3) * haltonFraction;
+        haltonFraction /= 3.0;
+    }
+    scalarVolumeProgram_.setUniformValue("uNoiseOffset",
+                                         static_cast<float>(haltonNoise));
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2D);
+    glBindTexture(GL_TEXTURE_2D, sceneDepthTexture);
+    glActiveTexture(GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_3D, &previousTexture3D);
+    glActiveTexture(GL_TEXTURE2);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2DUnit2);
+    glBindTexture(GL_TEXTURE_2D, frontDepthTexture);
+    glActiveTexture(GL_TEXTURE3);
+    glGetIntegerv(GL_TEXTURE_BINDING_3D, &previousTexture3DUnit3);
+    glBindTexture(GL_TEXTURE_3D, agxDisplayTexture_);
+    glActiveTexture(GL_TEXTURE1);
+    if (scalarVolumeTexture_ == 0) glGenTextures(1, &scalarVolumeTexture_);
+    if (scalarVolumeTexture_ == 0) {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2DUnit2));
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_3D, static_cast<GLuint>(previousTexture3DUnit3));
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_3D, static_cast<GLuint>(previousTexture3D));
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2D));
+        glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        scalarVolumeProgram_.release();
+        return false;
+    }
+    glBindTexture(GL_TEXTURE_3D, scalarVolumeTexture_);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+    const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
+    glViewport(0, 0, qRound(viewportSize.width() * dpr),
+               qRound(viewportSize.height() * dpr));
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
+                        GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    bool rendered = false;
+    for (const ViewportRenderObject &object : objects) {
+        if (object.shape.geometryType != GeometryType::ScalarVolume ||
+            !validateScalarVolume(object.shape.scalarVolume)) {
+            continue;
+        }
+        const ScalarVolume3D &volume = object.shape.scalarVolume;
+        const int nx = volume.activeBounds[3] - volume.activeBounds[0] + 1;
+        const int ny = volume.activeBounds[4] - volume.activeBounds[1] + 1;
+        const int nz = volume.activeBounds[5] - volume.activeBounds[2] + 1;
+        const quint64 voxelCount = quint64(nx) * quint64(ny) * quint64(nz);
+        // Dense GPU upload is deliberately bounded: large sparse grids remain
+        // valid imported data, but are omitted from this viewport proxy.
+        if (nx <= 0 || ny <= 0 || nz <= 0 || nx > dimensionLimit ||
+            ny > dimensionLimit || nz > dimensionLimit ||
+            voxelCount > 16ull * 1024ull * 1024ull) {
+            continue;
+        }
+        QVector<float> voxels(static_cast<qsizetype>(voxelCount),
+                              volume.background);
+        for (const ScalarVolumeActiveRecord &record : volume.activeRecords) {
+            for (int z = 0; z < record.extent; ++z) {
+                for (int y = 0; y < record.extent; ++y) {
+                    for (int x = 0; x < record.extent; ++x) {
+                        const int vx = record.x + x - volume.activeBounds[0];
+                        const int vy = record.y + y - volume.activeBounds[1];
+                        const int vz = record.z + z - volume.activeBounds[2];
+                        const qsizetype index =
+                            (qsizetype(vz) * ny + vy) * nx + vx;
+                        voxels[index] = record.value;
+                    }
+                }
+            }
+        }
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_R32F, nx, ny, nz, 0,
+                     GL_RED, GL_FLOAT, voxels.constData());
+        QMatrix4x4 gridToObject;
+        QMatrix4x4 objectToWorld;
+        for (int row = 0; row < 4; ++row) {
+            for (int column = 0; column < 4; ++column) {
+                gridToObject(row, column) = static_cast<float>(
+                    volume.gridToObject[std::size_t(row * 4 + column)]);
+                objectToWorld(row, column) = static_cast<float>(
+                    volume.objectToWorld[std::size_t(row * 4 + column)]);
+            }
+        }
+        QMatrix4x4 placement;
+        placement.translate(float(object.placementTranslation.x),
+                            float(object.placementTranslation.y),
+                            float(object.placementTranslation.z));
+        objectToWorld = placement * objectToWorld;
+        bool gridInverseValid = false;
+        bool objectInverseValid = false;
+        const QMatrix4x4 objectToGrid = gridToObject.inverted(&gridInverseValid);
+        const QMatrix4x4 worldToObject = objectToWorld.inverted(&objectInverseValid);
+        if (!gridInverseValid || !objectInverseValid) continue;
+        const QMatrix4x4 worldToGrid = objectToGrid * worldToObject;
+        scalarVolumeProgram_.setUniformValue("uWorldToGrid", worldToGrid);
+        scalarVolumeProgram_.setUniformValue(
+            "uBoundsMin", QVector3D(volume.activeBounds[0],
+                                    volume.activeBounds[1],
+                                    volume.activeBounds[2]));
+        scalarVolumeProgram_.setUniformValue(
+            "uGridSize", QVector3D(float(nx), float(ny), float(nz)));
+        QVector3D baseColor = workbenchDefaultSolidMaterialDiffuseColor();
+        switch (settings.colorMode) {
+        case ViewportColorMode::Material:
+        case ViewportColorMode::Attribute:
+        case ViewportColorMode::Texture:
+            if (object.hasWorkbenchMaterial)
+                baseColor = object.workbenchMaterial.baseColorSceneLinear;
+            break;
+        case ViewportColorMode::Object:
+            baseColor = QVector3D(object.displayColorSceneLinear);
+            break;
+        case ViewportColorMode::Random: {
+            const QColor randomColor = workbenchRandomColor(
+                object.objectId.value(), object.displayName, object.libraryPath);
+            baseColor = workbenchRec709ToSceneLinear(
+                QVector3D(randomColor.redF(), randomColor.greenF(),
+                          randomColor.blueF()));
+            break;
+        }
+        case ViewportColorMode::Custom:
+            baseColor = workbenchSrgbToSceneLinear(
+                QVector3D(settings.customColor.redF(),
+                          settings.customColor.greenF(),
+                          settings.customColor.blueF()));
+            break;
+        }
+        scalarVolumeProgram_.setUniformValue("uBaseColor", baseColor);
+        scalarVolumeProgram_.setUniformValue(
+            "uDensityScale", std::max(0.0f, volume.densityScale));
+        int sliceAxis = -1;
+        const QString requestedSliceAxis = volume.sliceAxis.toUpper();
+        if (requestedSliceAxis.endsWith(QLatin1Char('X'))) sliceAxis = 0;
+        else if (requestedSliceAxis.endsWith(QLatin1Char('Y'))) sliceAxis = 1;
+        else if (requestedSliceAxis.endsWith(QLatin1Char('Z'))) sliceAxis = 2;
+        if (sliceAxis < 0) {
+            const QVector3D absoluteDirection(float(worldViewDirection.x),
+                                              float(worldViewDirection.y),
+                                              float(worldViewDirection.z));
+            sliceAxis = absoluteDirection.x() >= absoluteDirection.y() &&
+                        absoluteDirection.x() >= absoluteDirection.z() ? 0 :
+                        absoluteDirection.y() >= absoluteDirection.z() ? 1 : 2;
+        }
+        const QVector3D sliceMin(float(volume.activeBounds[0]) - 0.5f,
+                                 float(volume.activeBounds[1]) - 0.5f,
+                                 float(volume.activeBounds[2]) - 0.5f);
+        const QVector3D sliceMax(float(volume.activeBounds[3]) + 0.5f,
+                                 float(volume.activeBounds[4]) + 0.5f,
+                                 float(volume.activeBounds[5]) + 0.5f);
+        const QMatrix4x4 gridToWorld = objectToWorld * gridToObject;
+        QVector3D worldMin(std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::max());
+        QVector3D worldMax(std::numeric_limits<float>::lowest(),
+                           std::numeric_limits<float>::lowest(),
+                           std::numeric_limits<float>::lowest());
+        for (int corner = 0; corner < 8; ++corner) {
+            const QVector3D gridCorner((corner & 1) ? sliceMax.x() : sliceMin.x(),
+                                       (corner & 2) ? sliceMax.y() : sliceMin.y(),
+                                       (corner & 4) ? sliceMax.z() : sliceMin.z());
+            const QVector3D worldCorner = gridToWorld.map(gridCorner);
+            worldMin.setX(std::min(worldMin.x(), worldCorner.x()));
+            worldMin.setY(std::min(worldMin.y(), worldCorner.y()));
+            worldMin.setZ(std::min(worldMin.z(), worldCorner.z()));
+            worldMax.setX(std::max(worldMax.x(), worldCorner.x()));
+            worldMax.setY(std::max(worldMax.y(), worldCorner.y()));
+            worldMax.setZ(std::max(worldMax.z(), worldCorner.z()));
+        }
+        const QVector3D worldDimensions = worldMax - worldMin;
+        const float sliceStepWorld = std::max(1.0e-16f,
+            worldDimensions[sliceAxis] * 0.05f);
+        scalarVolumeProgram_.setUniformValue("uUseSlice", volume.useSlice);
+        scalarVolumeProgram_.setUniformValue("uSliceAxis", sliceAxis);
+        scalarVolumeProgram_.setUniformValue("uSliceDepth",
+            std::clamp(volume.sliceDepth, 0.0f, 1.0f));
+        scalarVolumeProgram_.setUniformValue("uSliceStepWorld", sliceStepWorld);
+        const QVector3D sliceCount(float(nx) * 5.0f,
+                                   float(ny) * 5.0f,
+                                   float(nz) * 5.0f);
+        const QVector3D worldSize(
+            gridToWorld.mapVector(QVector3D(float(nx), 0.0f, 0.0f)).length(),
+            gridToWorld.mapVector(QVector3D(0.0f, float(ny), 0.0f)).length(),
+            gridToWorld.mapVector(QVector3D(0.0f, 0.0f, float(nz))).length());
+        const QVector3D sampleSpacing(worldSize.x() / sliceCount.x(),
+                                      worldSize.y() / sliceCount.y(),
+                                      worldSize.z() / sliceCount.z());
+        const float stepLength = std::max(1.0e-16f, sampleSpacing.length());
+        const int maxSlice = std::max({int(sliceCount.x()), int(sliceCount.y()),
+                                       int(sliceCount.z())});
+        scalarVolumeProgram_.setUniformValue("uStepLength", stepLength);
+        scalarVolumeProgram_.setUniformValue("uMaxSlice", maxSlice);
+        // Blender's CLOSEST is nearest-neighbor and CUBIC is a B-spline.
+        scalarVolumeProgram_.setUniformValue(
+            "uInterpolation", volume.interpolationMethod == QLatin1String("CLOSEST")
+                ? 0 : volume.interpolationMethod == QLatin1String("CUBIC") ? 2 : 1);
+        // The 512-voxel per-axis texture bound yields a maximum Blender
+        // sample count of 2560 (512 * 5).
+        scalarVolumeProgram_.setUniformValue("uMaxSteps", 2560);
+        GLint previousVertexArray = 0;
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+        vertexArray_.bind();
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+        rendered = true;
+    }
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_3D, static_cast<GLuint>(previousTexture3D));
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2DUnit2));
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_3D, static_cast<GLuint>(previousTexture3DUnit3));
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2D));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    glDepthMask(previousDepthMask);
+    if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    if (previousBlend) glEnable(GL_BLEND);
+    else glDisable(GL_BLEND);
+    glBlendFuncSeparate(static_cast<GLenum>(previousBlendSourceRgb),
+                        static_cast<GLenum>(previousBlendDestinationRgb),
+                        static_cast<GLenum>(previousBlendSourceAlpha),
+                        static_cast<GLenum>(previousBlendDestinationAlpha));
+    glBlendEquationSeparate(static_cast<GLenum>(previousBlendEquationRgb),
+                            static_cast<GLenum>(previousBlendEquationAlpha));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glUseProgram(static_cast<GLuint>(previousProgram));
+    return rendered;
+}
+
 bool ViewportSurfaceRenderer::draw(
     const QVector<ViewportRenderObject> &objects,
     const ViewportTransform &transform,
@@ -5858,6 +6405,21 @@ bool ViewportSurfaceRenderer::draw(
 
     if (!hasPartialAlpha) {
         transparentDepthCoverageReady = true;
+    }
+
+    // Blender's Workbench submits volumes after transparent depth, before
+    // outlines and post effects. The imported scalar-grid path follows the
+    // same ordering so opaque and resolved transparent surfaces clip its ray.
+    if (settings.mode == ViewportShadingMode::Solid && !previewOverlay &&
+        !selectionOverlay && !settings.xrayEnabled() && sharedTargets != nullptr) {
+        if (renderScalarVolumes(objects, transform, viewportSize,
+                                devicePixelRatio, settings, sceneLinearOutput,
+                                sharedTargets->sampleIndex,
+                                sharedTargets->depthTexture,
+                                sharedTargets->frontDepthTexture) &&
+            passReport != nullptr) {
+            passReport->markPassCompleted(ViewportRenderPass::Volume);
+        }
     }
 
     if (settings.mode == ViewportShadingMode::Solid &&

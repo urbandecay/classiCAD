@@ -21,6 +21,7 @@ enum class ViewportRenderPass : quint32 {
     FrontTransparentDepth = 1u << 7,
     FrontTransparentMerge = 1u << 8,
     FrontOpaqueColor = 1u << 9,
+    Volume = 1u << 10,
 };
 
 // Named completion and attachment report shared by the live viewport and

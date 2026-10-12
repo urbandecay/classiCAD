@@ -7,6 +7,7 @@
 #include "core/geometry/nurbs_surface.h"
 #include "core/geometry/nurbs_solid.h"
 #include "core/geometry/polygon_mesh.h"
+#include "core/geometry/scalar_volume.h"
 #include "core/geometry/work_plane.h"
 
 #include <QByteArray>
@@ -56,6 +57,7 @@ struct Shape {
     NurbsSurface3D nurbsSurface;
     NurbsExtrusionSolid3D nurbsSolid;
     PolygonMesh3D polygonMesh;
+    ScalarVolume3D scalarVolume;
 };
 
 inline QVector<NurbsSurface3D> shapeSurfaceFaces(const Shape &shape)

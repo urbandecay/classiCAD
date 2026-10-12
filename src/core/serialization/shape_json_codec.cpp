@@ -48,6 +48,151 @@ bool point3DFromJson(const QJsonValue &value, Point3D *point)
     return true;
 }
 
+QJsonArray scalarVolumeMatrixToJson(const ScalarVolumeMatrix &matrix)
+{
+    QJsonArray rows;
+    for (int row = 0; row < 4; ++row) {
+        QJsonArray columns;
+        for (int column = 0; column < 4; ++column)
+            columns.append(matrix[static_cast<size_t>(row * 4 + column)]);
+        rows.append(columns);
+    }
+    return rows;
+}
+
+bool scalarVolumeMatrixFromJson(const QJsonValue &value,
+                                ScalarVolumeMatrix *matrix)
+{
+    if (matrix == nullptr || !value.isArray() || value.toArray().size() != 4)
+        return false;
+    ScalarVolumeMatrix parsed{};
+    const QJsonArray rows = value.toArray();
+    for (int row = 0; row < 4; ++row) {
+        if (!rows[row].isArray() || rows[row].toArray().size() != 4)
+            return false;
+        const QJsonArray columns = rows[row].toArray();
+        for (int column = 0; column < 4; ++column) {
+            if (!columns[column].isDouble() ||
+                !std::isfinite(columns[column].toDouble())) return false;
+            parsed[static_cast<size_t>(row * 4 + column)] =
+                columns[column].toDouble();
+        }
+    }
+    if (!isValidScalarVolumeMatrix(parsed)) return false;
+    *matrix = parsed;
+    return true;
+}
+
+QJsonObject scalarVolumeToJson(const ScalarVolume3D &volume)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("name"), volume.name);
+    object.insert(QStringLiteral("dataType"), volume.dataType);
+    object.insert(QStringLiteral("channels"), volume.channels);
+    object.insert(QStringLiteral("background"), volume.background);
+    object.insert(QStringLiteral("displayDensity"), volume.displayDensity);
+    object.insert(QStringLiteral("renderSpace"), volume.renderSpace);
+    object.insert(QStringLiteral("interpolationMethod"), volume.interpolationMethod);
+    object.insert(QStringLiteral("useSlice"), volume.useSlice);
+    object.insert(QStringLiteral("sliceAxis"), volume.sliceAxis);
+    object.insert(QStringLiteral("sliceDepth"), volume.sliceDepth);
+    object.insert(QStringLiteral("gridToObject"), scalarVolumeMatrixToJson(volume.gridToObject));
+    object.insert(QStringLiteral("objectToWorld"), scalarVolumeMatrixToJson(volume.objectToWorld));
+    QJsonArray bounds;
+    for (int value : volume.activeBounds) bounds.append(value);
+    object.insert(QStringLiteral("activeBounds"), bounds);
+    object.insert(QStringLiteral("expandedVoxelCount"),
+                  static_cast<double>(volume.expandedVoxelCount));
+    object.insert(QStringLiteral("denseVoxelCount"),
+                  static_cast<double>(volume.denseVoxelCount));
+    QJsonArray records;
+    for (const ScalarVolumeActiveRecord &record : volume.activeRecords) {
+        records.append(QJsonArray{record.x, record.y, record.z, record.extent,
+                                  record.isTile, record.value});
+    }
+    object.insert(QStringLiteral("activeRecords"), records);
+    return object;
+}
+
+bool scalarVolumeFromJson(const QJsonValue &value, ScalarVolume3D *volume)
+{
+    if (volume == nullptr || !value.isObject()) return false;
+    const QJsonObject object = value.toObject();
+    ScalarVolume3D parsed;
+    const QJsonValue channels = object.value(QStringLiteral("channels"));
+    const QJsonValue count = object.value(QStringLiteral("expandedVoxelCount"));
+    const QJsonValue denseCount = object.value(QStringLiteral("denseVoxelCount"));
+    const QJsonValue boundsValue = object.value(QStringLiteral("activeBounds"));
+    const QJsonValue recordsValue = object.value(QStringLiteral("activeRecords"));
+    const QJsonValue density = object.value(QStringLiteral("displayDensity"));
+    const QJsonValue sliceDepth = object.value(QStringLiteral("sliceDepth"));
+    if (!object.value(QStringLiteral("name")).isString() ||
+        !object.value(QStringLiteral("dataType")).isString() ||
+        !channels.isDouble() || std::floor(channels.toDouble()) != channels.toDouble() ||
+        !object.value(QStringLiteral("background")).isDouble() ||
+        std::abs(object.value(QStringLiteral("background")).toDouble()) >
+            std::numeric_limits<float>::max() ||
+        !density.isDouble() || !object.value(QStringLiteral("renderSpace")).isString() ||
+        !std::isfinite(density.toDouble()) || density.toDouble() < 0.0 ||
+        density.toDouble() > std::numeric_limits<float>::max() ||
+        !object.value(QStringLiteral("interpolationMethod")).isString() ||
+        !object.value(QStringLiteral("useSlice")).isBool() ||
+        !object.value(QStringLiteral("sliceAxis")).isString() || !sliceDepth.isDouble() ||
+        !std::isfinite(sliceDepth.toDouble()) ||
+        std::abs(sliceDepth.toDouble()) > std::numeric_limits<float>::max() ||
+        !scalarVolumeMatrixFromJson(object.value(QStringLiteral("gridToObject")), &parsed.gridToObject) ||
+        !scalarVolumeMatrixFromJson(object.value(QStringLiteral("objectToWorld")), &parsed.objectToWorld) ||
+        !boundsValue.isArray() || boundsValue.toArray().size() != 6 ||
+        !count.isDouble() || std::floor(count.toDouble()) != count.toDouble() ||
+        count.toDouble() < 0.0 || count.toDouble() > 64.0 * 1024.0 * 1024.0 ||
+        !denseCount.isDouble() || std::floor(denseCount.toDouble()) != denseCount.toDouble() ||
+        denseCount.toDouble() < 0.0 || denseCount.toDouble() > 64.0 * 1024.0 * 1024.0 ||
+        !recordsValue.isArray() || recordsValue.toArray().size() > 1'000'000) return false;
+    parsed.name = object.value(QStringLiteral("name")).toString();
+    parsed.dataType = object.value(QStringLiteral("dataType")).toString();
+    parsed.channels = channels.toInt();
+    parsed.background = static_cast<float>(object.value(QStringLiteral("background")).toDouble());
+    parsed.displayDensity = static_cast<float>(density.toDouble());
+    parsed.renderSpace = object.value(QStringLiteral("renderSpace")).toString();
+    parsed.interpolationMethod = object.value(QStringLiteral("interpolationMethod")).toString();
+    parsed.useSlice = object.value(QStringLiteral("useSlice")).toBool();
+    parsed.sliceAxis = object.value(QStringLiteral("sliceAxis")).toString();
+    parsed.sliceDepth = static_cast<float>(sliceDepth.toDouble());
+    if (!scalarVolumeDensityScale(parsed.renderSpace, parsed.objectToWorld,
+                                  parsed.displayDensity, &parsed.densityScale)) return false;
+    parsed.expandedVoxelCount = static_cast<std::uint64_t>(count.toDouble());
+    parsed.denseVoxelCount = static_cast<std::uint64_t>(denseCount.toDouble());
+    const QJsonArray bounds = boundsValue.toArray();
+    for (int i = 0; i < 6; ++i) {
+        if (!bounds[i].isDouble() || std::floor(bounds[i].toDouble()) != bounds[i].toDouble() ||
+            bounds[i].toDouble() < std::numeric_limits<int>::min() ||
+            bounds[i].toDouble() > std::numeric_limits<int>::max()) return false;
+        parsed.activeBounds[static_cast<size_t>(i)] = bounds[i].toInt();
+    }
+    const QJsonArray records = recordsValue.toArray();
+    parsed.activeRecords.reserve(records.size());
+    for (const QJsonValue &recordValue : records) {
+        if (!recordValue.isArray() || recordValue.toArray().size() != 6) return false;
+        const QJsonArray record = recordValue.toArray();
+        int values[4]{};
+        for (int i = 0; i < 4; ++i) {
+            if (!record[i].isDouble() || std::floor(record[i].toDouble()) != record[i].toDouble() ||
+                record[i].toDouble() < std::numeric_limits<int>::min() ||
+                record[i].toDouble() > std::numeric_limits<int>::max()) return false;
+            values[i] = record[i].toInt();
+        }
+        if (!record[4].isBool() || !record[5].isDouble() ||
+            !std::isfinite(record[5].toDouble()) ||
+            std::abs(record[5].toDouble()) > std::numeric_limits<float>::max()) return false;
+        parsed.activeRecords.append({values[0], values[1], values[2], values[3],
+                                     record[4].toBool(),
+                                     static_cast<float>(record[5].toDouble())});
+    }
+    if (!validateScalarVolume(parsed)) return false;
+    *volume = std::move(parsed);
+    return true;
+}
+
 QJsonObject workPlaneFrameToJson(const WorkPlaneFrame &frame)
 {
     QJsonObject value;
@@ -578,6 +723,10 @@ QJsonObject shapeToJson(const Shape &shape)
     object.insert(QStringLiteral("nurbs"), nurbsToJson(shape.nurbs));
     object.insert(QStringLiteral("nurbsSurface"),
                   nurbsSurfaceToJson(shape.nurbsSurface));
+    if (shape.geometryType == GeometryType::ScalarVolume) {
+        object.insert(QStringLiteral("scalarVolume"),
+                      scalarVolumeToJson(shape.scalarVolume));
+    }
     if (shape.geometryType == GeometryType::PolygonMesh) {
         object.insert(QStringLiteral("polygonMesh"), polygonMeshToJson(shape.polygonMesh));
     }
@@ -759,6 +908,10 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
         !polygonMeshFromJson(polygonMeshValue, &polygonMesh)) {
         return false;
     }
+    ScalarVolume3D scalarVolume;
+    if (geometryType == GeometryType::ScalarVolume &&
+        !scalarVolumeFromJson(object.value(QStringLiteral("scalarVolume")),
+                              &scalarVolume)) return false;
     QImage pictureImage;
     NurbsExtrusionSolid3D nurbsSolid;
     if (geometryType == GeometryType::NurbsSolid) {
@@ -998,6 +1151,7 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
     shape->nurbsSurface = nurbsSurface;
     shape->nurbsSolid = nurbsSolid;
     shape->polygonMesh = std::move(polygonMesh);
+    shape->scalarVolume = std::move(scalarVolume);
     shape->arcMode = static_cast<ArcMode>(arcModeValue);
     shape->arcSweep = arcSweepValue.toDouble();
     shape->subdivisionParameters = subdivisionParameters;

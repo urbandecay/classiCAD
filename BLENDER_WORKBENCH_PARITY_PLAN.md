@@ -860,6 +860,7 @@ Acceptance: each checkbox affects its matching wire category only, while other v
 | Area | Blender 5.2.2 | classiCAD now | Phase Two direction |
 |---|---|---|---|
 | Renderer ownership | `workbench_engine.cc` owns named opaque, transparent, transparent-depth, volume, outline, depth-of-field, and anti-aliasing passes. It draws those passes in a defined order using Blender's evaluated scene, draw manager, and GPU APIs. | `ViewportSurfaceRenderer` owns surface drawing and several effect passes; `ViewportAaRenderer` owns DOF, TAA/SMAA, and presentation; `viewport_widget.cpp` coordinates surfaces, regenerated depth, strokes, overlays, and grid. | Extract a classiCAD-owned pass coordinator and explicit render-target contract. Mirror Blender's responsibilities/order where applicable, while retaining Qt/OpenGL and the authoritative NURBS model. Do not try to link Blender's engine classes directly. |
+| Volume data and rendering | Workbench reads the active evaluated scalar grid, uses Blender's volume texture transforms and display density, draws after transparent depth, and ray-marches with per-axis five samples per voxel, Bayer/Halton jitter, and closest/linear/cubic sampling. The pinned Workbench volume shader leaves shadow sampling as a TODO. | Blender import transfers one bounded single-channel `FLOAT` grid through evaluated Geometry Nodes mesh attributes; native JSON stores sparse voxel/tile records and display controls. `ViewportSurfaceRenderer` reconstructs a bounded dense texture and draws a volume pass in the matching pass slot. The QPainter fallback has no volume renderer. | Preserve this first bounded scalar path and keep its caps visible. Multi/vector grids, animation, oversized dense bounds, and QPainter volume rendering remain separate follow-up work. |
 | TAA/SMAA resolve | Blender uses a centered jitter sequence, a 3x3 Blackman-Harris filter in log color, accumulated weights, and an SMAA resolve that fades as temporal samples accumulate. | The GPU implementation follows those algorithms closely. The QPainter fallback instead supersamples and downsamples; it does not run the GPU TAA/SMAA sequence. | Do not replace the GPU AA code based on the supplied screenshots. First compare matching GPU renders at AA Off, Single Pass, and 8 samples; inspect scene-linear output before display conversion. Treat the QPainter result as a separate approximation. |
 | Transparency/depth | Blender has separate transparent accumulation and transparent-depth passes following opaque drawing. `OBJECT_IN_FRONT` uses a second depth domain and merges into scene depth before regular transparent depth excludes its pixels. | The primary GPU shared-target path uses independent regular/front weighted-OIT targets, resolves front color after regular OIT, then merges front transparent depth and IDs before regular transparent depth. The no-shared-target fallback retains sorted/regular behavior. QPainter has no separate in-front domain. | GPU opaque and transparent in-front domains are implemented with named pass/attachment reporting; Blender's transparent depth pass does not write normals, so the earlier opaque front normal remains. Matched GPU image comparison is pending; fallback and QPainter paths remain different. |
 | Outline and effects | Blender runs outline from its object-ID buffer, then DOF, then AA. Cavity/curvature uses Workbench-specific sample buffers and effect composition. | classiCAD generates normal/depth/object-ID inputs in its own prepass and uses custom outline/effect shaders. QPainter has separate software approximations. | Port and attribute the standalone shader/effect logic where inputs match. Preserve CAD-specific selection and NURBS tessellation handling. Validate each effect independently before combining them. |
@@ -957,16 +958,28 @@ depth domain. Visual depth comparison remains open.
   screenshot's soft cube edge. Distinguishing a filled silhouette from a
   post-resolve CAD stroke and making a matched GPU comparison are still
   required to localize it.
-- The Blender `VOLUME` object path remains a data-model prerequisite, not an
-  omitted shader call: the extractor currently records the object as
-  unsupported, and classiCAD has no persistent voxel-grid model or serializer.
-  Blender's Python `VolumeGrid` API exposes metadata and transforms but not a
-  voxel-array accessor. A first bounded port needs a supported route for a
-  scalar density payload (for example, Blender-side dense extraction or a
-  linked OpenVDB reader), then a separate volume texture/raymarch pass.
-  General multi-grid, animated, and vector-field support remains out of scope
-  until that contract exists. References: [VolumeGrid API](https://docs.blender.org/api/5.2/bpy.types.VolumeGrid.html),
+- A bounded Blender `VOLUME` path is now implemented. The Blender 5.2.2
+  extractor uses Geometry Nodes (`Get Named Grid` → `Grid to Points` →
+  `Points to Vertices`) to transfer active voxel/tile values through evaluated
+  mesh attributes because the Python `VolumeGrid` API has no voxel-array
+  accessor. classiCAD stores one single-channel `FLOAT` grid, sparse active
+  voxel/tile records, bounds, transforms, display density, render space,
+  interpolation, and slice controls in the native model and JSON. Blender's
+  `density` grid is preferred; otherwise exactly one scalar `FLOAT` grid must
+  exist. The import caps extraction at 262,144 active records, 16M expanded
+  voxels, 16M dense-bounds voxels, and 16 MiB of grid payload. The GPU pass
+  rebuilds a dense texture only for bounds at most 512 per axis and 16M voxels,
+  then ray-marches after transparent depth and before outlines, DOF, and AA.
+  Its sampling follows Blender's per-axis five samples per voxel, Bayer/Halton
+  jitter, closest/linear/B-spline interpolation, and view-ray distance factor;
+  the loop is capped at 2,560 iterations, matching the 512-axis texture cap.
+  Blender's Workbench volume shader still has a TODO for volume shadows, so
+  this path does not add them. Remaining limits are multiple/vector grids,
+  animated grids, OpenVDB features beyond the extracted active scalar field,
+  dense bounds above the GPU cap, and the QPainter fallback. References:
+  [VolumeGrid API](https://docs.blender.org/api/5.2/bpy.types.VolumeGrid.html),
   [Workbench volume pass](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_volume.cc),
+  [Workbench volume shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh),
   and [Blender volume developer docs](https://developer.blender.org/docs/features/objects/volume/).
 - The sRGB-only custom-LUT gate is required by the current output contract.
   OCIO's `DisplayViewTransform` emits values in the selected display's encoding
@@ -978,17 +991,25 @@ depth domain. Visual depth comparison remains open.
   color spaces](https://opencolorio.readthedocs.io/en/latest/guides/authoring/displays_views.html)
   and [Blender's pinned display color-management path](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_color_management.cc).
 
-### Workbench volume pass remains unsupported (2026-10-12)
+### Bounded scalar volume pass (2026-10-12)
 
-- Blender 5.2.2 draws its volume pass after transparent depth and before
-  outline, depth of field, and anti-aliasing in
-  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L500-L506).
-- classiCAD's shared scene coordinator has no volume pass, and Blender scene
-  import does not currently create a volume object or transfer volume grids.
-  There is no payload for a Workbench volume shader to consume. Adding only
-  an empty pass hook would not render Blender volume objects; a real port first
-  needs a volume data/import contract, then a GPU volume draw stage in the same
-  position in the shared viewport/render-result pass sequence.
+- Blender 5.2.2 draws volumes after transparent depth and before outline, depth
+  of field, and anti-aliasing. classiCAD now imports one bounded scalar grid,
+  persists it through native JSON, and renders it in that same scene-pass slot.
+- The pass adapts Blender's `resolution * 5` per-axis sample count, maximum
+  sample count, transformed world step length, Bayer dither, Halton sample
+  offset, closest/linear/cubic interpolation, slice opacity, and perspective
+  view-ray correction. `BKE_volume_density_scale` is reproduced for OBJECT and
+  WORLD render spaces. The renderer's dense proxy is capped at 512 voxels per
+  axis and 16M voxels; the ray loop is capped at 2,560 samples.
+- A direct `QOpenGLContext` + `QOffscreenSurface` + FBO contract renders a
+  synthetic active volume, confirms the `Volume` pass is reported, and checks
+  that more than 100 pixels change. This does not launch the classiCAD window.
+- The port remains bounded to a single-channel FLOAT grid. Multiple/vector
+  grids, animation, volumes above the dense GPU bounds, and QPainter volume
+  rendering remain unsupported. Blender's Workbench volume shader itself
+  leaves shadows as a TODO. A matched Blender/classiCAD image comparison is
+  still required for visual sign-off.
 
 ### Implementation plan
 
@@ -1005,6 +1026,7 @@ depth domain. Visual depth comparison remains open.
 - Viewport and Workbench render-result GPU paths share the same named scene passes and attachment contract.
 - Each newly ported pass has a pinned Blender 5.2.2 source reference, preserved attribution, and a comparison result; existing NURBS/surface contracts remain unchanged.
 - The future shader system can provide Workbench's supported material values through `WorkbenchMaterialData` and existing mesh/draw-range data without changing the render-pass API or creating a second material model; arbitrary node graphs are out of scope. Imported UDIM metadata and packed tile bytes survive native save/reopen; GPU and QPainter mesh/trimmed-NURBS/untrimmed-NURBS color and effect-alpha paths consume tiles. The GPU depth-map shadow-alpha fallback remains limited to its supported mesh and untrimmed-NURBS inputs; GPU shadow-map and object-ID alpha masking support trimmed surfaces using tessellation UVs, while stencil shadow-volume casters do not sample texture alpha. The QPainter Solid fallback has no shadow pass; CPU shadow rendering is out of scope. GPU per-tile extension modes are implemented. Cross-tile filter continuity is not part of Blender 5.2.2 behavior.
+- A bounded single-channel Blender `VOLUME` grid imports, survives native save/reopen, and renders through the GPU Volume pass after transparent depth; sampling, density scale, slice controls, and Blender's pass order are source-aligned. Multiple/vector grids, animation, oversized dense bounds, and the QPainter fallback remain explicit limits.
 - QPainter differences remain separately described until that backend is explicitly brought into scope.
 
 ### Stage 5: Parity review

@@ -675,8 +675,7 @@ bool ViewportAaRenderer::initialize()
                 float angle = atan(disk.y, disk.x) - uApertureRotation;
                 float sector = mod(angle + 0.5 * bladeAngle, bladeAngle) -
                                0.5 * bladeAngle;
-                float polygonRadius = cos(0.5 * bladeAngle) /
-                                      max(cos(sector), 1e-5);
+                float polygonRadius = cos(0.5 * bladeAngle) / cos(sector);
                 disk *= polygonRadius;
             }
             // Blender stores the aperture ratio as an X scale reciprocal:

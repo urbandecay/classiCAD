@@ -499,13 +499,12 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   their existing attachments and ordering. Auxiliary surface draws without a
   shareable scene depth texture retain a range-level back-to-front fallback;
   the primary viewport scene uses OIT.
-- classiCAD's scene texture is `GL_SRGB8_ALPHA8` with `GL_FRAMEBUFFER_SRGB`
-  disabled, and the surface shader applies its display transform before
-  output. OIT accumulation and resolve therefore use that same display-sRGB
-  numeric space so translucent pixels composite consistently with the opaque
-  scene target. Blender accumulates its lit color before display conversion,
-  so the exact transform placement still differs. Build and GPU image
-  validation are pending.
+- Live GPU scene rendering now uses an `GL_RGBA16F` scene-linear target. The
+  primary weighted-OIT pass accumulates lit scene-linear color and resolves it
+  over the scene-linear opaque target before DOF and temporal AA; presentation
+  applies exposure, the view transform/LUT, and gamma afterward. Auxiliary
+  surface draws without the shared scene-linear framebuffer retain their
+  display-space resolve. Matched GPU visual comparison remains pending.
 
 ## Raster Workbench trimmed-surface effect coverage (2026-10-12)
 

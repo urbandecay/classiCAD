@@ -115,6 +115,8 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QOpenGLContext>
+#include <QOpenGLFunctions>
 #include <QPainterPath>
 #include <QPen>
 #include <QPaintEvent>
@@ -10860,10 +10862,35 @@ protected:
                         !gpuActiveToolPreview || !gpuPreviewRendered,
                         viewportOverlay_.snapLabelsVisible());
             }
+            QVector<float> fallbackSceneDepth;
+            const qreal fallbackDpr = std::max<qreal>(devicePixelRatioF(), 1.0);
+            const QSize fallbackPixelSize(
+                qRound(renderFrame.viewportSize.width() * fallbackDpr),
+                qRound(renderFrame.viewportSize.height() * fallbackDpr));
+            const qint64 fallbackDepthCount =
+                qint64(fallbackPixelSize.width()) * fallbackPixelSize.height();
+            bool fallbackSceneDepthAvailable = false;
+            if (!sceneDrawn && fallbackPixelSize.width() > 0 &&
+                fallbackPixelSize.height() > 0 && fallbackDepthCount <=
+                    16LL * 1024LL * 1024LL) {
+                if (QOpenGLContext *context = QOpenGLContext::currentContext()) {
+                    QOpenGLFunctions *functions = context->functions();
+                    fallbackSceneDepth.resize(int(fallbackDepthCount));
+                    fallbackSceneDepth.fill(1.0f);
+                    functions->glReadPixels(
+                        0, 0, fallbackPixelSize.width(),
+                        fallbackPixelSize.height(), GL_DEPTH_COMPONENT,
+                        GL_FLOAT, fallbackSceneDepth.data());
+                    fallbackSceneDepthAvailable = true;
+                }
+            }
             painter.endNativePainting();
             if (!sceneDrawn) {
                 const auto drawPreparedStroke =
-                    [this, &painter](const ViewportSceneStroke &stroke) {
+                    [this, &painter, &fallbackSceneDepth, fallbackPixelSize,
+                     fallbackDpr, fallbackSceneDepthAvailable,
+                     &overlayCamera, &renderFrame](
+                        const ViewportSceneStroke &stroke) {
                     if (!stroke.preparedDepthGeometry ||
                         stroke.preparedDepthGeometry->preciseLineVertices.isEmpty()) {
                         return false;
@@ -10875,33 +10902,158 @@ protected:
                                 ViewportSmoothWireCategory::EditMode
                             ? smoothWiresEditMode_
                             : smoothWiresOverlay_);
-                    QPen pen(stroke.color);
-                    pen.setWidthF(std::max(1.0f, stroke.width));
-                    pen.setCapStyle(Qt::RoundCap);
-                    pen.setJoinStyle(Qt::RoundJoin);
-                    painter.setPen(pen);
                     const QVector<Point3D> &segments =
                         stroke.preparedDepthGeometry->preciseLineVertices;
-                    for (int pointIndex = 0;
-                         pointIndex + 1 < segments.size();
-                         pointIndex += 2) {
-                        Point3D first = segments[pointIndex];
-                        Point3D second = segments[pointIndex + 1];
-                        first.x += stroke.worldOffset.x;
-                        first.y += stroke.worldOffset.y;
-                        first.z += stroke.worldOffset.z;
-                        second.x += stroke.worldOffset.x;
-                        second.y += stroke.worldOffset.y;
-                        second.z += stroke.worldOffset.z;
-                        QPointF firstScreen;
-                        QPointF secondScreen;
-                        if (viewportTransform_.worldPointToScreen(
-                                first, size(), &firstScreen) &&
-                            viewportTransform_.worldPointToScreen(
-                                second, size(), &secondScreen)) {
-                            painter.drawLine(firstScreen, secondScreen);
+                    const QVector<QVector4D> &colors = stroke.lineVertexColors;
+                    const ViewportSceneStrokePattern pattern =
+                        viewportSceneStrokePattern(stroke,
+                            stroke.width * float(fallbackDpr));
+                    const bool hasDepth = fallbackSceneDepthAvailable;
+                    const QMatrix4x4 viewProjection = viewportViewProjection(
+                        overlayCamera, renderFrame.viewportSize);
+                    const auto projectedDepth = [&](const Point3D &world) {
+                        const QVector4D clip = viewProjection * QVector4D(
+                            float(world.x), float(world.y), float(world.z), 1.0f);
+                        if (!std::isfinite(clip.w()) ||
+                            std::abs(clip.w()) <= 1.0e-8f) {
+                            return qreal(1.0);
                         }
+                        return qreal(clip.z() / clip.w()) * 0.5 + 0.5;
+                    };
+                    const auto depthVisible = [&](const Point3D &world,
+                                                  const QPointF &screen,
+                                                  bool frontPass) {
+                        if (!hasDepth) return frontPass;
+                        const int x = std::clamp(
+                            qRound(screen.x() * fallbackDpr), 0,
+                            fallbackPixelSize.width() - 1);
+                        const int yTop = std::clamp(
+                            qRound(screen.y() * fallbackDpr), 0,
+                            fallbackPixelSize.height() - 1);
+                        const int y = fallbackPixelSize.height() - 1 - yTop;
+                        const float surfaceDepth = fallbackSceneDepth[
+                            y * fallbackPixelSize.width() + x];
+                        const qreal strokeDepth = projectedDepth(world);
+                        const bool visible = strokeDepth <= surfaceDepth + 0.0005;
+                        return frontPass ? visible : !visible;
+                    };
+                    const auto colorAt = [&](int vertex, qreal t,
+                                             qreal fade) {
+                        QColor color = stroke.color;
+                        if (colors.size() == segments.size()) {
+                            const QVector4D a = colors[vertex];
+                            const QVector4D b = colors[vertex + 1];
+                            const QVector4D m = a * float(1.0 - t) +
+                                                b * float(t);
+                            color.setRedF(std::clamp<qreal>(
+                                qreal(color.redF()) * m.x(), 0.0, 1.0));
+                            color.setGreenF(std::clamp<qreal>(
+                                qreal(color.greenF()) * m.y(), 0.0, 1.0));
+                            color.setBlueF(std::clamp<qreal>(
+                                qreal(color.blueF()) * m.z(), 0.0, 1.0));
+                            color.setAlphaF(std::clamp<qreal>(
+                                qreal(color.alphaF()) * m.w() * fade, 0.0, 1.0));
+                        } else {
+                            color.setAlphaF(color.alphaF() * fade);
+                        }
+                        return color;
+                    };
+                    const auto patternOn = [&](qreal pixelPosition) {
+                        if (pattern.style == ViewportSceneLineStyle::Solid) {
+                            return true;
+                        }
+                        if (pattern.style == ViewportSceneLineStyle::Dashed) {
+                            return std::fmod(std::max<qreal>(pixelPosition, 0.0),
+                                             pattern.periodPixels) <
+                                   pattern.onLengthPixels;
+                        }
+                        if (pattern.style == ViewportSceneLineStyle::Dotted) {
+                            const qreal phase = std::fmod(
+                                std::max<qreal>(pixelPosition, 0.0),
+                                pattern.periodPixels);
+                            return std::min(phase,
+                                pattern.periodPixels - phase) <=
+                                   pattern.onLengthPixels * 0.5;
+                        }
+                        qreal phase = std::fmod(
+                            std::max<qreal>(pixelPosition, 0.0),
+                            pattern.periodPixels);
+                        for (int i = 0; i < pattern.segmentCount; ++i) {
+                            const qreal length = pattern.segmentsPixels[
+                                static_cast<std::size_t>(i)];
+                            if (phase < length) return (i % 2) == 0;
+                            phase -= length;
+                        }
+                        return true;
+                    };
+                    const auto drawPass = [&](bool frontPass, qreal fade) {
+                        qreal connectedPatternOffset = 0.0;
+                        bool hasPrevious = false;
+                        Point3D previousEnd;
+                        for (int pointIndex = 0;
+                             pointIndex + 1 < segments.size(); pointIndex += 2) {
+                            Point3D first = segments[pointIndex];
+                            Point3D second = segments[pointIndex + 1];
+                            first.x += stroke.worldOffset.x;
+                            first.y += stroke.worldOffset.y;
+                            first.z += stroke.worldOffset.z;
+                            second.x += stroke.worldOffset.x;
+                            second.y += stroke.worldOffset.y;
+                            second.z += stroke.worldOffset.z;
+                            if (hasPrevious &&
+                                (std::abs(first.x - previousEnd.x) > 1.0e-6 ||
+                                 std::abs(first.y - previousEnd.y) > 1.0e-6 ||
+                                 std::abs(first.z - previousEnd.z) > 1.0e-6)) {
+                                connectedPatternOffset = 0.0;
+                            }
+                            QPointF firstScreen;
+                            QPointF secondScreen;
+                            if (!viewportTransform_.worldPointToScreen(
+                                    first, size(), &firstScreen) ||
+                                !viewportTransform_.worldPointToScreen(
+                                    second, size(), &secondScreen)) {
+                                hasPrevious = false;
+                                connectedPatternOffset = 0.0;
+                                continue;
+                            }
+                            const qreal length = QLineF(firstScreen,
+                                                        secondScreen).length();
+                            const int subdivisions = std::max(1, qCeil(length));
+                            for (int sample = 0; sample < subdivisions; ++sample) {
+                                const qreal ta = qreal(sample) / subdivisions;
+                                const qreal tb = qreal(sample + 1) / subdivisions;
+                                const qreal tm = (ta + tb) * 0.5;
+                                const qreal patternPosition =
+                                    (connectedPatternOffset + tm * length) *
+                                    fallbackDpr;
+                                if (!patternOn(patternPosition)) continue;
+                                const QPointF a = firstScreen +
+                                    (secondScreen - firstScreen) * ta;
+                                const QPointF b = firstScreen +
+                                    (secondScreen - firstScreen) * tb;
+                                const Point3D worldMid{
+                                    first.x + (second.x - first.x) * tm,
+                                    first.y + (second.y - first.y) * tm,
+                                    first.z + (second.z - first.z) * tm};
+                                if (!depthVisible(worldMid, a + (b - a) * 0.5,
+                                                  frontPass)) continue;
+                                QPen pen(colorAt(pointIndex, tm, fade));
+                                pen.setWidthF(std::max<qreal>(
+                                    1.0, qreal(stroke.width)));
+                                pen.setCapStyle(Qt::RoundCap);
+                                pen.setJoinStyle(Qt::RoundJoin);
+                                painter.setPen(pen);
+                                painter.drawLine(a, b);
+                            }
+                            connectedPatternOffset += length;
+                            previousEnd = second;
+                            hasPrevious = true;
+                        }
+                    };
+                    if (viewportShadingSettings_.xrayEnabled()) {
+                        drawPass(false, 0.5);
                     }
+                    drawPass(true, 1.0);
                     painter.restore();
                     return true;
                 };

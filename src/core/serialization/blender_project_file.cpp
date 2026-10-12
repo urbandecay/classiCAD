@@ -1736,7 +1736,7 @@ bool importBlenderScene(const QString &path,
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
         (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
-         bridgeVersion != 13)) {
+         bridgeVersion != 13 && bridgeVersion != 14)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

@@ -15,7 +15,9 @@
 #include <QString>
 #include <QColor>
 #include <QRect>
+#include <QJsonObject>
 #include <QVector>
+#include <QStringList>
 #include <QWidget>
 
 #include <functional>
@@ -166,6 +168,8 @@ public:
     virtual void prepareForDocumentReplacement() = 0;
     virtual void applyProjectCameraSettings(
         const ProjectViewportCameraSettings &settings) = 0;
+    virtual QStringList applyImportedBlenderShading(
+        const QJsonObject &shading) = 0;
     virtual void refreshAfterProjectImport() = 0;
     virtual void refreshAfterNewDocument() = 0;
     // Compatibility adapters retained for interaction regressions and older

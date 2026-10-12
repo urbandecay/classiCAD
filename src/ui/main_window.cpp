@@ -503,6 +503,25 @@ private:
 
         const bool importedOrdinaryBlend =
             !ordinaryImportReport.blenderVersion.isEmpty();
+        if (importedOrdinaryBlend && !ordinaryImportReport.scenes.isEmpty()) {
+            const QJsonObject scene = ordinaryImportReport.scenes.first().toObject();
+            const QJsonObject shading = scene.value(
+                QStringLiteral("workbench_shading")).toObject();
+            if (!shading.isEmpty()) {
+                const QStringList unsupported =
+                    viewport_->applyImportedBlenderShading(shading);
+                if (!unsupported.isEmpty()) {
+                    const QString summary = QStringLiteral(
+                        "Solid viewport settings not reproduced: %1")
+                        .arg(unsupported.join(QStringLiteral(", ")));
+                    ordinaryImportReport.warningMessage =
+                        ordinaryImportReport.warningMessage.isEmpty()
+                            ? summary
+                            : ordinaryImportReport.warningMessage +
+                                  QStringLiteral("; ") + summary;
+                }
+            }
+        }
         // Opening a normal Blender file imports its supported scene data into
         // a new classiCAD document. Never let Ctrl+S replace that source file.
         currentProjectPath_ = importedOrdinaryBlend

@@ -1,7 +1,7 @@
 # Blender Scene Extraction JSON
 
 `src/core/serialization/blender_scene_extract.py` runs inside Blender 5.2.2 and
-emits `classiCAD.blender-scene-extract`, bridge format version `13`. This is a transport
+emits `classiCAD.blender-scene-extract`, bridge format version `14`. This is a transport
 format for the native importer; it is not classiCAD's saved document schema.
 
 ## Mesh object records
@@ -70,6 +70,23 @@ and view-layer visibility are retained by the native importer.
 `summary` contains extraction counts only; it does not claim successful native
 import. `font_objects_meshed` counts evaluated FONT objects included in
 `mesh_items_extracted`.
+
+Each scene record contains `workbench_shading`, copied from Blender 5.2.2
+`Scene.display.shading` plus its enclosing `SceneDisplay` values. It carries the
+Solid light and studio-light selection, color/background modes and colors,
+shadow/cavity/curvature/outline/specular controls, world-space lighting,
+backface culling, X-Ray, camera DOF, light direction, and scene AO/shadow
+controls. Its `unsupported` array names source settings that classiCAD does not
+currently reproduce, including scene lights/world lighting, the actual World
+background, and studio-light background imagery or intensity adjustments.
+`show_xray_wireframe` is separate from `show_xray`. Studio-light rotation is
+transported in radians and converted to classiCAD's degree setting. The
+extractor emits `matcap_flip_x: null` and records it unsupported because
+Blender 5.2.2 does not expose that flag through scene shading RNA. Only bundled
+studio-light and MatCap presets can be selected; unavailable custom assets are
+reported unsupported. Opening an ordinary `.blend` imports into a new
+classiCAD document, so Save As is required to create a native project and Save
+must not overwrite the source Blender file.
 
 ## Curve object records
 

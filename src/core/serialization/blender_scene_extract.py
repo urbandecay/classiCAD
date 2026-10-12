@@ -23,7 +23,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 13
+BRIDGE_FORMAT_VERSION = 14
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -497,6 +497,74 @@ def scene_camera_record(scene, depsgraph=None):
         "dof_aperture_rotation": finite_number(data.dof.aperture_rotation),
         "dof_aperture_ratio": finite_number(data.dof.aperture_ratio),
     }
+
+
+def workbench_shading_record(scene):
+    """Capture scene-level Workbench Solid inputs exposed by Blender 5.2.2."""
+    shading = scene.display.shading
+    matcap_flip_x = getattr(shading, "matcap_flip_x", None)
+    world_space_lighting = getattr(shading, "use_world_space_lighting", None)
+    if world_space_lighting is None:
+        world_space_lighting = not bool(shading.use_studiolight_view_rotation)
+    selected_studio_light = getattr(shading, "selected_studio_light", None)
+    record = {
+        "light": str(shading.light),
+        "studio_light": str(getattr(shading, "studio_light", "")),
+        "selected_studio_light": str(getattr(selected_studio_light, "name", "")),
+        "color_type": str(shading.color_type),
+        "single_color": vector_values(shading.single_color),
+        "background_type": str(shading.background_type),
+        "background_color": vector_values(shading.background_color),
+        "show_shadows": bool(shading.show_shadows),
+        "shadow_intensity": finite_number(shading.shadow_intensity),
+        "show_cavity": bool(shading.show_cavity),
+        "cavity_type": str(shading.cavity_type),
+        "cavity_ridge_factor": finite_number(shading.cavity_ridge_factor),
+        "cavity_valley_factor": finite_number(shading.cavity_valley_factor),
+        "curvature_ridge_factor": finite_number(shading.curvature_ridge_factor),
+        "curvature_valley_factor": finite_number(shading.curvature_valley_factor),
+        "show_object_outline": bool(shading.show_object_outline),
+        "object_outline_color": vector_values(shading.object_outline_color),
+        "show_specular_highlight": bool(shading.show_specular_highlight),
+        "use_world_space_lighting": bool(world_space_lighting),
+        "show_backface_culling": bool(shading.show_backface_culling),
+        "show_xray": bool(shading.show_xray),
+        "show_xray_wireframe": bool(shading.show_xray_wireframe),
+        "xray_alpha": finite_number(shading.xray_alpha),
+        "matcap_flip_x": (bool(matcap_flip_x)
+                           if matcap_flip_x is not None else None),
+        "use_dof": bool(shading.use_dof),
+        "light_direction": vector_values(scene.display.light_direction),
+        "shadow_shift": finite_number(scene.display.shadow_shift),
+        "shadow_focus": finite_number(scene.display.shadow_focus),
+        "cavity_distance": finite_number(scene.display.matcap_ssao_distance),
+        "cavity_attenuation": finite_number(scene.display.matcap_ssao_attenuation),
+        "cavity_samples": int(scene.display.matcap_ssao_samples),
+        "use_scene_lights_render": bool(shading.use_scene_lights_render),
+        "use_scene_world_render": bool(shading.use_scene_world_render),
+        "studiolight_background_alpha": finite_number(shading.studiolight_background_alpha),
+        "studiolight_background_blur": finite_number(shading.studiolight_background_blur),
+        "studiolight_intensity": finite_number(shading.studiolight_intensity),
+        "studiolight_rotate_z": finite_number(shading.studiolight_rotate_z),
+        "unsupported": [],
+    }
+    unsupported = []
+    if record["use_scene_lights_render"]:
+        unsupported.append("use_scene_lights_render")
+    if record["use_scene_world_render"]:
+        unsupported.append("use_scene_world_render")
+    if record["background_type"] == "WORLD":
+        unsupported.append("background_type:WORLD (scene World background is not represented)")
+    if record["studiolight_background_alpha"] > 0.0:
+        unsupported.append("studiolight_background_alpha")
+    if record["studiolight_background_blur"] != 0.5:
+        unsupported.append("studiolight_background_blur")
+    if record["studiolight_intensity"] != 1.0:
+        unsupported.append("studiolight_intensity")
+    if matcap_flip_x is None:
+        unsupported.append("matcap_flip_x (not exposed by Blender 5.2.2 scene shading RNA)")
+    record["unsupported"] = unsupported
+    return record
 
 
 def view_layer_key(scene, view_layer):
@@ -1091,6 +1159,7 @@ def extract_scene(input_path, mode):
             ),
             "object_ids": [],
             "active_camera": scene_camera_record(scene, depsgraph),
+            "workbench_shading": workbench_shading_record(scene),
             "color_management": bake_color_lut(
                 scene, output["color_luts"], lut_bytes_by_id,
                 output["unsupported_features"]),

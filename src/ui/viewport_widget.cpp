@@ -6796,6 +6796,182 @@ public:
         emitCoordinateUpdate();
     }
 
+    QStringList applyImportedBlenderShading(
+        const QJsonObject &source) override
+    {
+        QStringList unsupported;
+        for (const QJsonValue &value : source.value(
+                 QStringLiteral("unsupported")).toArray()) {
+            if (value.isString()) unsupported.append(value.toString());
+        }
+
+        ViewportShadingSettings settings;
+        const auto parseColor = [&source, &unsupported](const QString &key,
+                                                        QColor *destination) {
+            if (destination == nullptr) return;
+            const QJsonArray values = source.value(key).toArray();
+            if (values.size() != 3 || !values[0].isDouble() ||
+                !values[1].isDouble() || !values[2].isDouble()) {
+                unsupported.append(key + QStringLiteral(" (invalid color data)"));
+                return;
+            }
+            float components[3]{};
+            for (int index = 0; index < 3; ++index) {
+                const double value = values[index].toDouble();
+                if (!std::isfinite(value)) {
+                    unsupported.append(key + QStringLiteral(" (non-finite color)"));
+                    return;
+                }
+                components[index] = static_cast<float>(std::clamp(value, 0.0, 1.0));
+            }
+            const QVector3D linear(components[0], components[1], components[2]);
+            const QVector3D srgb = workbenchSceneLinearToSrgb(linear);
+            *destination = QColor::fromRgbF(srgb.x(), srgb.y(), srgb.z());
+        };
+        const auto readNumber = [&source, &unsupported](const QString &key,
+                                                        qreal minimum,
+                                                        qreal maximum,
+                                                        qreal *destination) {
+            const QJsonValue value = source.value(key);
+            if (destination == nullptr || !value.isDouble() ||
+                !std::isfinite(value.toDouble())) {
+                unsupported.append(key + QStringLiteral(" (invalid numeric value)"));
+                return;
+            }
+            *destination = std::clamp(value.toDouble(), minimum, maximum);
+        };
+        const auto readBoolean = [&source, &unsupported](const QString &key,
+                                                        bool *destination) {
+            const QJsonValue value = source.value(key);
+            if (destination == nullptr || !value.isBool()) {
+                unsupported.append(key + QStringLiteral(" (invalid boolean value)"));
+                return;
+            }
+            *destination = value.toBool();
+        };
+
+        const QString light = source.value(QStringLiteral("light")).toString();
+        if (light == QLatin1String("STUDIO")) {
+            settings.lightingMode = ViewportLightingMode::Studio;
+        } else if (light == QLatin1String("MATCAP")) {
+            settings.lightingMode = ViewportLightingMode::MatCap;
+        } else if (light == QLatin1String("FLAT")) {
+            settings.lightingMode = ViewportLightingMode::Flat;
+        } else {
+            unsupported.append(QStringLiteral("light (%1)").arg(light));
+        }
+        QString lightName = source.value(QStringLiteral("selected_studio_light"))
+                                .toString().section(QLatin1Char('/'), -1);
+        if (lightName.endsWith(QStringLiteral(".sl"), Qt::CaseInsensitive) ||
+            lightName.endsWith(QStringLiteral(".exr"), Qt::CaseInsensitive)) {
+            lightName.chop(3);
+        }
+        if (settings.lightingMode == ViewportLightingMode::Studio) {
+            const QString preset = lightName.compare(QStringLiteral("DEFAULT"),
+                                                     Qt::CaseInsensitive) == 0
+                                       ? QStringLiteral("Default") : lightName;
+            QFile file(QStringLiteral(":/workbench-lighting/studio/%1.sl")
+                           .arg(preset.toLower()));
+            if (preset == QLatin1String("Default") || file.exists()) {
+                settings.studioLightPreset = preset;
+            } else {
+                unsupported.append(QStringLiteral("studio_light (%1; not bundled)")
+                                       .arg(lightName));
+            }
+        } else if (settings.lightingMode == ViewportLightingMode::MatCap) {
+            QFile image(QStringLiteral(":/workbench-lighting/matcap/%1_diffuse.png")
+                            .arg(lightName.toLower()));
+            if (image.exists()) {
+                settings.matcapPreset = lightName;
+            } else {
+                unsupported.append(QStringLiteral("MatCap (%1; not bundled)")
+                                       .arg(lightName));
+            }
+        }
+        qreal rotationRadians = 0.0;
+        readNumber(QStringLiteral("studiolight_rotate_z"), -3.141592653589793,
+                   3.141592653589793, &rotationRadians);
+        settings.studioLightRotationDegrees = qRound(qRadiansToDegrees(rotationRadians));
+
+        const QString colorType = source.value(QStringLiteral("color_type")).toString();
+        if (colorType == QLatin1String("MATERIAL")) settings.colorMode = ViewportColorMode::Material;
+        else if (colorType == QLatin1String("SINGLE")) settings.colorMode = ViewportColorMode::Custom;
+        else if (colorType == QLatin1String("OBJECT")) settings.colorMode = ViewportColorMode::Object;
+        else if (colorType == QLatin1String("RANDOM")) settings.colorMode = ViewportColorMode::Random;
+        else if (colorType == QLatin1String("VERTEX")) settings.colorMode = ViewportColorMode::Attribute;
+        else if (colorType == QLatin1String("TEXTURE")) settings.colorMode = ViewportColorMode::Texture;
+        else unsupported.append(QStringLiteral("color_type (%1)").arg(colorType));
+        parseColor(QStringLiteral("single_color"), &settings.customColor);
+
+        const QString backgroundType = source.value(QStringLiteral("background_type")).toString();
+        if (backgroundType == QLatin1String("THEME")) settings.backgroundMode = ViewportBackgroundMode::Theme;
+        else if (backgroundType == QLatin1String("WORLD")) settings.backgroundMode = ViewportBackgroundMode::World;
+        else if (backgroundType == QLatin1String("VIEWPORT")) settings.backgroundMode = ViewportBackgroundMode::Custom;
+        else unsupported.append(QStringLiteral("background_type (%1)").arg(backgroundType));
+        parseColor(QStringLiteral("background_color"), &settings.customBackgroundColor);
+
+        readBoolean(QStringLiteral("show_shadows"), &settings.shadows);
+        readNumber(QStringLiteral("shadow_intensity"), 0.0, 1.0,
+                   &settings.shadowIntensity);
+        readBoolean(QStringLiteral("show_cavity"), &settings.cavity);
+        const QString cavityType = source.value(QStringLiteral("cavity_type")).toString();
+        if (cavityType == QLatin1String("WORLD")) settings.cavityType = ViewportCavityType::World;
+        else if (cavityType == QLatin1String("SCREEN")) settings.cavityType = ViewportCavityType::Screen;
+        else if (cavityType == QLatin1String("BOTH")) settings.cavityType = ViewportCavityType::Both;
+        else unsupported.append(QStringLiteral("cavity_type (%1)").arg(cavityType));
+        readNumber(QStringLiteral("cavity_distance"), 0.0, 100000.0,
+                   &settings.cavityDistance);
+        readNumber(QStringLiteral("cavity_attenuation"), 0.0, 100000.0,
+                   &settings.cavityAttenuation);
+        const QJsonValue cavitySamples = source.value(QStringLiteral("cavity_samples"));
+        if (cavitySamples.isDouble()) settings.cavitySamples = std::clamp(cavitySamples.toInt(), 1, 512);
+        else unsupported.append(QStringLiteral("cavity_samples (invalid integer)"));
+        readNumber(QStringLiteral("cavity_ridge_factor"), 0.0, 250.0,
+                   &settings.cavityRidgeFactor);
+        readNumber(QStringLiteral("cavity_valley_factor"), 0.0, 250.0,
+                   &settings.cavityValleyFactor);
+        readNumber(QStringLiteral("curvature_ridge_factor"), 0.0, 2.0,
+                   &settings.curvatureRidgeFactor);
+        readNumber(QStringLiteral("curvature_valley_factor"), 0.0, 2.0,
+                   &settings.curvatureValleyFactor);
+
+        readBoolean(QStringLiteral("show_object_outline"), &settings.outline);
+        parseColor(QStringLiteral("object_outline_color"), &settings.outlineColor);
+        readBoolean(QStringLiteral("show_specular_highlight"), &settings.specularLighting);
+        readBoolean(QStringLiteral("use_world_space_lighting"), &settings.worldSpaceLighting);
+        readBoolean(QStringLiteral("show_backface_culling"), &settings.backfaceCulling);
+        readBoolean(QStringLiteral("show_xray"), &settings.xray);
+        readBoolean(QStringLiteral("show_xray_wireframe"), &settings.xrayWireframe);
+        readNumber(QStringLiteral("xray_alpha"), 0.0, 1.0, &settings.xrayAlpha);
+        readBoolean(QStringLiteral("use_dof"), &settings.depthOfField);
+        readNumber(QStringLiteral("shadow_shift"), 0.0, 1.0, &settings.shadowOffset);
+        readNumber(QStringLiteral("shadow_focus"), 0.0, 1.0, &settings.shadowFocus);
+        const QJsonArray lightDirection = source.value(QStringLiteral("light_direction")).toArray();
+        if (lightDirection.size() == 3 && lightDirection[0].isDouble() &&
+            lightDirection[1].isDouble() && lightDirection[2].isDouble()) {
+            QVector3D direction(float(lightDirection[0].toDouble()),
+                                float(lightDirection[1].toDouble()),
+                                float(lightDirection[2].toDouble()));
+            if (std::isfinite(direction.x()) && std::isfinite(direction.y()) &&
+                std::isfinite(direction.z()) && !qFuzzyIsNull(direction.length())) {
+                settings.shadowDirection = direction.normalized();
+            } else {
+                unsupported.append(QStringLiteral("light_direction (invalid vector)"));
+            }
+        } else {
+            unsupported.append(QStringLiteral("light_direction (invalid vector)"));
+        }
+        const QJsonValue matcapFlip = source.value(QStringLiteral("matcap_flip_x"));
+        if (matcapFlip.isBool()) settings.matcapFlipX = matcapFlip.toBool();
+
+        viewportShadingSettings_ = settings;
+        viewportRenderer_.setShadingSettings(viewportShadingSettings_);
+        refreshShadingPopover();
+        notifyViewStateChanged();
+        update();
+        return unsupported;
+    }
+
     void refreshAfterProjectImport() override
     {
         normalizeDisconnectedPolyCurveObjects();

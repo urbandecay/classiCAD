@@ -777,17 +777,20 @@ bool ViewportSurfaceRenderer::initialize()
         #version 330 core
         layout(location = 0) in vec3 aPosition;
         layout(location = 1) in vec3 aNormal;
+        layout(location = 3) in vec2 aUv;
         uniform mat4 uViewProjection;
         uniform vec3 uWorldOffset;
         uniform vec3 uViewRight;
         uniform vec3 uViewUp;
         uniform vec3 uViewFacing;
         out vec3 vNormalView;
+        out vec2 vUv;
         void main()
         {
             vNormalView = vec3(dot(aNormal, uViewRight),
                                dot(aNormal, uViewUp),
                                dot(aNormal, uViewFacing));
+            vUv = aUv;
             gl_Position = uViewProjection *
                           vec4(aPosition + uWorldOffset, 1.0);
         }
@@ -801,13 +804,21 @@ bool ViewportSurfaceRenderer::initialize()
     static constexpr const char *workbenchEffectFragmentShader = R"glsl(
         #version 330 core
         in vec3 vNormalView;
+        in vec2 vUv;
         uniform uint uObjectId;
         uniform uint uOutlineObjectId;
+        uniform bool uUseTextureAlphaMask;
+        uniform bool uTextureAlphaCutoff;
+        uniform sampler2D uWorkbenchImage;
         layout(location = 0) out vec4 fragmentViewNormal;
         layout(location = 1) out uint fragmentObjectId;
         layout(location = 2) out uint fragmentOutlineObjectId;
         void main()
         {
+            if (uUseTextureAlphaMask && uTextureAlphaCutoff &&
+                texture(uWorkbenchImage, vUv).a < 0.1) {
+                discard;
+            }
             fragmentViewNormal = vec4(normalize(vNormalView), 1.0);
             fragmentObjectId = uObjectId;
             fragmentOutlineObjectId = uOutlineObjectId;
@@ -1474,6 +1485,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     GLint previousViewport[4] = {};
     GLint previousDepthFunction = GL_LESS;
     GLint previousProgram = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture0 = 0;
     GLboolean previousDepthMask = GL_TRUE;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
@@ -1485,10 +1498,13 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     glGetIntegerv(GL_VIEWPORT, previousViewport);
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
     glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
 
     glBindFramebuffer(GL_FRAMEBUFFER, workbenchEffectFramebuffer_);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
     glViewport(0, 0, pixelSize.width(), pixelSize.height());
     glDisable(GL_SCISSOR_TEST);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1526,6 +1542,11 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
         workbenchEffectProgram_.uniformLocation("uObjectId");
     const GLint outlineObjectIdUniformLocation =
         workbenchEffectProgram_.uniformLocation("uOutlineObjectId");
+    workbenchEffectProgram_.setUniformValue("uWorkbenchImage", 0);
+    const GLint useTextureAlphaMaskUniformLocation =
+        workbenchEffectProgram_.uniformLocation("uUseTextureAlphaMask");
+    const GLint textureAlphaCutoffUniformLocation =
+        workbenchEffectProgram_.uniformLocation("uTextureAlphaCutoff");
 
     vertexArray_.bind();
     vertexBuffer_.bind();
@@ -1550,6 +1571,21 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
         }
         glUniform1ui(objectIdUniformLocation, objectId);
         glUniform1ui(outlineObjectIdUniformLocation, outlineObjectId);
+        const QString alphaMode = range.workbenchMaterial.textureImageAlphaMode;
+        const bool ignoreTextureAlpha =
+            alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||
+            alphaMode.compare(QStringLiteral("IGNORE"), Qt::CaseInsensitive) == 0 ||
+            alphaMode.compare(QStringLiteral("CHANNEL_PACKED"),
+                              Qt::CaseInsensitive) == 0;
+        const GLuint imageTexture = settings.colorMode == ViewportColorMode::Texture &&
+                range.useTextureColor
+            ? ensureImageTexture(range.textureImagePath,
+                                 range.workbenchMaterial.textureImagePackedDataBase64,
+                                 range.textureImageSrgb)
+            : 0;
+        glUniform1i(useTextureAlphaMaskUniformLocation, imageTexture != 0);
+        glUniform1i(textureAlphaCutoffUniformLocation, !ignoreTextureAlpha);
+        glBindTexture(GL_TEXTURE_2D, imageTexture);
         workbenchEffectProgram_.setUniformValue(
             "uWorldOffset",
             QVector3D(static_cast<float>(range.offset.x),
@@ -1588,6 +1624,8 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
                       static_cast<GLuint>(previousDrawFramebuffer));
     glBindFramebuffer(GL_READ_FRAMEBUFFER,
                       static_cast<GLuint>(previousReadFramebuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glViewport(previousViewport[0], previousViewport[1],
                previousViewport[2], previousViewport[3]);
     glColorMask(previousColorMask[0], previousColorMask[1],

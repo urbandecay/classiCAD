@@ -223,6 +223,37 @@ fallback now samples NURBS Texture with exact-domain UVs for untrimmed surfaces.
 
 Acceptance: each checkbox affects its matching wire category only, while other viewport layers retain their expected antialiasing.
 
+## Phase Two proposal: Workbench render and resolve convergence
+
+### Source comparison
+
+| Area | Blender 5.2.2 | classiCAD now | Phase Two direction |
+|---|---|---|---|
+| Renderer ownership | `workbench_engine.cc` owns named opaque, transparent, transparent-depth, volume, outline, depth-of-field, and anti-aliasing passes. It draws those passes in a defined order using Blender's evaluated scene, draw manager, and GPU APIs. | `ViewportSurfaceRenderer` owns surface drawing and several effect passes; `ViewportAaRenderer` owns DOF, TAA/SMAA, and presentation; `viewport_widget.cpp` coordinates surfaces, regenerated depth, strokes, overlays, and grid. | Extract a classiCAD-owned pass coordinator and explicit render-target contract. Mirror Blender's responsibilities/order where applicable, while retaining Qt/OpenGL and the authoritative NURBS model. Do not try to link Blender's engine classes directly. |
+| TAA/SMAA resolve | Blender uses a centered jitter sequence, a 3x3 Blackman-Harris filter in log color, accumulated weights, and an SMAA resolve that fades as temporal samples accumulate. | The GPU implementation follows those algorithms closely. The QPainter fallback instead supersamples and downsamples; it does not run the GPU TAA/SMAA sequence. | Do not replace the GPU AA code based on the supplied screenshots. First compare matching GPU renders at AA Off, Single Pass, and 8 samples; inspect scene-linear output before display conversion. Treat the QPainter result as a separate approximation. |
+| Transparency/depth | Blender has separate transparent accumulation and transparent-depth passes following opaque drawing. | The GPU path uses weighted blended OIT with shared depth-stencil. The no-shared-depth and QPainter paths sort ranges/layers and have documented ordering limits. | Compare blend equations, depth tests/writes, and transparent-depth semantics against Blender. Port the source behavior that maps to classiCAD's attachments; keep unsupported fallback limits explicit. |
+| Outline and effects | Blender runs outline from its object-ID buffer, then DOF, then AA. Cavity/curvature uses Workbench-specific sample buffers and effect composition. | classiCAD generates normal/depth/object-ID inputs in its own prepass and uses custom outline/effect shaders. QPainter has separate software approximations. | Port and attribute the standalone shader/effect logic where inputs match. Preserve CAD-specific selection and NURBS tessellation handling. Validate each effect independently before combining them. |
+| Geometry and materials | Workbench consumes Blender evaluated object batches and Workbench material records; its render engine is integrated with Blender scene, dependency-graph, draw-manager, GPU, and render systems. | classiCAD sends derived tessellation of exact NURBS surfaces/solids to its GPU renderer. The surface renderer has its own material packing and draw ranges. | Keep NURBS authoritative and pass only derived display data to the renderer. A future shader system should provide evaluated Workbench inputs; do not create a second Blender-shaped scene/geometry model. |
+
+The previously supplied cube screenshots are not a controlled edge-quality comparison: the recorded views differ (`Ortho` versus `User Perspective`), the visible geometry differs, and the output dimensions differ. The source audit found no clear defect in the GPU TAA/SMAA equations that explains the soft edge. The cause remains unverified until a same-geometry, same-camera, same-size comparison separates rasterization, AA, and display conversion.
+
+### Implementation plan
+
+1. **Establish a comparable baseline.** Use the same hard-edged cube, viewport pixel dimensions, projection and camera pose, clipping range, color transform, and selection/overlay state in Blender 5.2.2 and classiCAD. Capture classiCAD's native GPU path separately from QPainter. Compare AA Off, Single Pass, and 8 samples, both idle and while navigating. Save pre-AA, post-AA scene-linear, and final display-transformed outputs so edge softness can be attributed to a specific stage. Do not call the AA port complete until the edge profiles and remaining differences are recorded.
+2. **Make pass boundaries explicit.** Build a classiCAD render packet from `ViewportRenderFrame` and its derived geometry/material ranges, then move pass sequencing out of `viewport_widget.cpp` into a renderer coordinator. Give color, depth, normal, object-ID, and transparency attachments explicit owners and lifetimes. Use the same GPU scene-pass sequence for the interactive viewport and Workbench render result; keep CAD editing overlays and the grid in their existing post-resolve layer.
+3. **Port source-level pass behavior in bounded groups.** Compare opaque/material and depth state first; then transparent accumulation/depth; then object-ID outline and cavity/curvature; then camera-gated DOF and final resolve/presentation. For each group, adapt Blender 5.2.2 source/shaders where they are separable, preserve Blender attribution/license headers, and record any input or backend adaptation. Keep the existing TAA/SMAA implementation unless the controlled comparison identifies a concrete mismatch.
+4. **Define the shader-system seam now.** Have the future classiCAD material/shader evaluator provide the values Workbench consumes: base/display color, normal, roughness, metallic, alpha, color-attribute data, UVs, and the supported image-texture result. Workbench does not evaluate arbitrary shader-node graphs, so this interface connects the future system to Workbench without porting Blender's complete node compiler.
+5. **Keep fallback scope honest.** Preserve the QPainter path for fallback, but compare and document it separately; do not claim that supersampling is equivalent to Blender's GPU pass graph. If CPU visual parity becomes a requirement, make it a separate rendering backend project after the GPU path is stable.
+
+### Phase Two acceptance
+
+- A repeatable, nonblank comparison uses identical geometry, camera, viewport size, color transform, AA setting, and overlay state.
+- Intermediate outputs identify whether any edge/color difference appears in geometry shading, effect composition, AA resolve, or display conversion.
+- Viewport and Workbench render-result GPU paths share the same named scene passes and attachment contract.
+- Each newly ported pass has a pinned Blender 5.2.2 source reference, preserved attribution, and a comparison result; existing NURBS/surface contracts remain unchanged.
+- The future shader system can provide the Workbench material inputs through one documented adapter without changing the render-pass API.
+- QPainter differences remain separately described until that backend is explicitly brought into scope.
+
 ### Stage 5: Parity review
 
 Status: in progress; the implementation and source reviews found the blockers listed above. The team has not signed off on full parity.

@@ -992,7 +992,7 @@ bool importedSceneCameraTransform(const Document &document,
     return true;
 }
 
-bool applyImportedSceneColorManagement(
+bool applyImportedRenderColorManagement(
     const Document &document, ViewportShadingSettings *settings)
 {
     if (settings == nullptr) return false;
@@ -6761,7 +6761,7 @@ public:
         }
         ViewportShadingSettings settings = viewportShadingSettings_;
         result.colorManagementApplied =
-            applyImportedSceneColorManagement(document_, &settings);
+            applyImportedRenderColorManagement(document_, &settings);
         const bool captureSceneLinearCombined =
             result.blenderImageFormat.compare(QLatin1String("HDR"),
                                                Qt::CaseInsensitive) == 0 ||
@@ -8636,7 +8636,12 @@ protected:
         const ViewportRenderFrame renderFrame = viewportRenderFrame();
         ViewportShadingSettings renderShadingSettings =
             viewportShadingSettings_;
-        applyImportedSceneColorManagement(document_, &renderShadingSettings);
+        // Blender's ordinary Workbench Solid viewport uses the default view
+        // transform. Scene render settings apply to its Rendered viewport or
+        // when View3D Scene Lights/Scene World is enabled. classiCAD does not
+        // currently expose those View3D modes, so keep the interactive view
+        // on its default AgX settings. Offscreen Workbench results apply the
+        // imported scene settings through applyImportedRenderColorManagement.
         viewportRenderer_.setShadingSettings(renderShadingSettings);
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
         QHash<quint64, QSet<int>> weldedVertexSelections;

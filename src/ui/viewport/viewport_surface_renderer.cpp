@@ -546,6 +546,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform vec3 uEditSelectionColor;
         uniform float uEditSelectionMix;
         uniform vec3 uCameraPosition;
+        uniform float uOrthographicTransparencyDepthOffset;
         uniform vec3 uViewRight;
         uniform vec3 uViewUp;
         uniform vec3 uViewFacing;
@@ -1009,8 +1010,16 @@ bool ViewportSurfaceRenderer::initialize()
                     color = mix(color, uEditSelectionColor,
                                 uEditSelectionMix);
                 }
-                float viewDepth = abs(dot(vWorldPosition - uCameraPosition,
-                                          uViewFacing));
+                float signedViewDepth = dot(vWorldPosition - uCameraPosition,
+                                            uViewFacing);
+                // Perspective linear_zdepth is signed eye-space z. In
+                // orthographic projection Blender returns depth from the near
+                // plane, whose eye is offset from the view target.
+                float viewDepth = uPerspective
+                    ? abs(signedViewDepth)
+                    : max(uOrthographicTransparencyDepthOffset -
+                              signedViewDepth,
+                          0.0);
                 float depthRatio = viewDepth / 5.0;
                 float farRatio = viewDepth / 200.0;
                 farRatio *= farRatio;
@@ -3995,10 +4004,23 @@ bool ViewportSurfaceRenderer::draw(
                                              {1.0, 0.0, 0.0});
         const Point3D viewFacing = viewDirection;
         const Point3D cameraPosition = transform.cameraPosition(viewportSize);
+        float orthographicTransparencyDepthOffset = 0.0f;
+        if (!transform.isPerspectiveEnabled()) {
+            const ViewportCameraState camera = transform.cameraState();
+            const ViewportCameraPreferences cameraPreferences =
+                transform.cameraPreferences();
+            const qreal orthographicEyeDistance = std::min(
+                cameraPreferences.clipEnd,
+                std::max<qreal>(1000.0, camera.gridViewDistance));
+            orthographicTransparencyDepthOffset = static_cast<float>(
+                orthographicEyeDistance - cameraPreferences.clipStart);
+        }
         program_.setUniformValue("uViewRight", asVector(viewRight));
         program_.setUniformValue("uViewUp", asVector(viewUp));
         program_.setUniformValue("uViewFacing", asVector(viewFacing));
         program_.setUniformValue("uCameraPosition", asVector(cameraPosition));
+        program_.setUniformValue("uOrthographicTransparencyDepthOffset",
+                                 orthographicTransparencyDepthOffset);
         program_.setUniformValue("uPerspective",
                                  transform.isPerspectiveEnabled());
         const WorkbenchStudioLighting &lighting =

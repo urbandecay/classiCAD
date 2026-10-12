@@ -104,6 +104,20 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   produce equivalent alpha composition with its straight-alpha shader; matched
   GPU output comparison remains pending.
 
+### GPU scene-stroke alpha composition (2026-10-12)
+
+- The classiCAD GPU scene-stroke shader emits straight RGB and coverage-scaled
+  alpha, so its blend state now uses source-over alpha factors separately from
+  RGB. This avoids squaring antialias coverage in the destination alpha.
+- This is specific to classiCAD's coverage-blended strokes. Blender 5.2.2's
+  overlay wireframe pass writes its wire color directly and records line data
+  for the later overlay antialias path; it does not use this classiCAD blend
+  state. Pinned sources:
+  [`overlay_wireframe.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_wireframe.hh#L948-L970)
+  and
+  [`overlay_wireframe_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_wireframe_frag.glsl#L400-L407).
+- The C++ build passes; matched viewport image comparison remains pending.
+
 ### Transparent depth and Blender Object In Front (2026-10-12)
 
 - Blender 5.2.2 stages opaque `OBJECT_IN_FRONT` geometry against scene depth,

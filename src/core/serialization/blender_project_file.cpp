@@ -6,6 +6,7 @@
 #include "core/geometry/geometry_type.h"
 #include "core/geometry/nurbs_surface_tessellator.h"
 #include "core/geometry/polygon_mesh.h"
+#include "core/geometry/work_plane.h"
 #include "core/serialization/document_serializer.h"
 
 #include <QDir>
@@ -957,6 +958,113 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     return true;
 }
 
+bool parseBlenderPolyCurveItem(
+    const QJsonObject &item,
+    const QHash<QString, classiCAD::CollectionId> &collectionIds,
+    classiCAD::SceneObject *sceneObject,
+    QString *errorMessage)
+{
+    if (sceneObject == nullptr ||
+        item.value(QStringLiteral("object_type")).toString() != QLatin1String("CURVE")) {
+        setError(errorMessage, QStringLiteral("object is not a Blender curve"));
+        return false;
+    }
+    const QJsonArray sourceSplines = item.value(QStringLiteral("splines")).toArray();
+    if (sourceSplines.isEmpty()) {
+        setError(errorMessage, QStringLiteral("curve has no supported POLY splines"));
+        return false;
+    }
+
+    classiCAD::SceneObject result;
+    result.displayName = item.value(QStringLiteral("name")).toString();
+    result.libraryPath = item.value(QStringLiteral("library_path")).toString();
+    for (const QJsonValue &collectionValue :
+         item.value(QStringLiteral("collection_ids")).toArray()) {
+        const QString sourceId = collectionValue.toString();
+        if (sourceId.isEmpty() || !collectionIds.contains(sourceId)) {
+            setError(errorMessage,
+                     QStringLiteral("object references an unknown Blender collection"));
+            return false;
+        }
+        result.collectionIds.append(collectionIds.value(sourceId));
+    }
+    QVector<double> objectColor;
+    if (!jsonNumberArray(item.value(QStringLiteral("display_color_linear")), 4,
+                         &objectColor)) {
+        setError(errorMessage, QStringLiteral("object display color is invalid"));
+        return false;
+    }
+    result.displayColorSceneLinear = QVector4D(
+        static_cast<float>(objectColor[0]), static_cast<float>(objectColor[1]),
+        static_cast<float>(objectColor[2]), static_cast<float>(objectColor[3]));
+
+    QVector<classiCAD::NurbsCurve3D> curves;
+    curves.reserve(sourceSplines.size());
+    for (const QJsonValue &splineValue : sourceSplines) {
+        if (!splineValue.isObject()) {
+            setError(errorMessage, QStringLiteral("POLY spline record is invalid"));
+            return false;
+        }
+        const QJsonArray sourcePoints =
+            splineValue.toObject().value(QStringLiteral("control_points_world")).toArray();
+        if (sourcePoints.size() < 2) {
+            setError(errorMessage,
+                     QStringLiteral("POLY spline needs at least two control points"));
+            return false;
+        }
+        classiCAD::NurbsCurve3D curve;
+        curve.dimension = 3;
+        curve.degree = 1;
+        curve.order = 2;
+        curve.rational = false;
+        curve.controlPoints.reserve(sourcePoints.size());
+        curve.normalCoordinates.reserve(sourcePoints.size());
+        curve.weights.fill(1.0, sourcePoints.size());
+        curve.knots.reserve(sourcePoints.size());
+        for (int pointIndex = 0; pointIndex < sourcePoints.size(); ++pointIndex) {
+            QVector<double> xyz;
+            if (!jsonNumberArray(sourcePoints[pointIndex], 3, &xyz)) {
+                setError(errorMessage,
+                         QStringLiteral("POLY spline control point is invalid"));
+                return false;
+            }
+            curve.controlPoints.append(QPointF(xyz[0], xyz[1]));
+            curve.normalCoordinates.append(xyz[2]);
+            // A degree-one clamped uniform vector reduces to integer knots
+            // after Rhino's two redundant outer entries are removed.
+            curve.knots.append(static_cast<double>(pointIndex));
+        }
+        QString validationError;
+        if (!classiCAD::validateNurbsCurve(curve, &validationError)) {
+            setError(errorMessage, validationError);
+            return false;
+        }
+        curves.append(std::move(curve));
+    }
+
+    result.geometry.workPlane = classiCAD::WorkPlane::XY;
+    result.geometry.workPlaneOffset = 0.0;
+    result.geometry.workPlaneFrame =
+        classiCAD::makeWorkPlaneFrame(classiCAD::WorkPlane::XY, 0.0);
+    if (curves.size() == 1) {
+        result.geometry.geometryType = classiCAD::GeometryType::Nurbs;
+        result.geometry.nurbs = std::move(curves.first());
+    } else {
+        result.geometry.geometryType = classiCAD::GeometryType::PolyCurve;
+        result.geometry.components = std::move(curves);
+        result.geometry.componentWorkPlaneFrames.fill(
+            result.geometry.workPlaneFrame, result.geometry.components.size());
+    }
+    const QJsonObject visibility = item.value(QStringLiteral("visibility")).toObject();
+    result.hideViewport = visibility.value(QStringLiteral("hide_viewport")).toBool();
+    result.hideRender = visibility.value(QStringLiteral("hide_render")).toBool();
+    result.hiddenInViewport = visibility.value(QStringLiteral("hidden_in_viewport")).toBool();
+    result.hideSelect = visibility.value(QStringLiteral("hide_select")).toBool();
+    result.viewLayerHidden = item.value(QStringLiteral("view_layer_hidden")).toObject();
+    *sceneObject = std::move(result);
+    return true;
+}
+
 QString conciseImportWarnings(const QStringList &warnings,
                               int skippedObjects,
                               int unsupportedFeatures)
@@ -1269,7 +1377,7 @@ bool importBlenderScene(const QString &path,
     if (root.value(QStringLiteral("format")).toString() !=
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
-        bridgeVersion != 6) {
+        bridgeVersion != 7) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;
@@ -1447,11 +1555,12 @@ bool importBlenderScene(const QString &path,
     for (const QJsonValue &itemValue : sourceItems) {
         const QJsonObject item = itemValue.toObject();
         const QString objectId = item.value(QStringLiteral("object_id")).toString();
+        const QString objectType = item.value(QStringLiteral("object_type")).toString();
         if (objectId.isEmpty() ||
-            item.value(QStringLiteral("object_type")).toString() !=
-                QLatin1String("MESH")) {
+            (objectType != QLatin1String("MESH") &&
+             objectType != QLatin1String("CURVE"))) {
             ++skippedCount;
-            warnings.append(QStringLiteral("A Blender mesh record has missing identity or an unexpected object type and was skipped"));
+            warnings.append(QStringLiteral("A Blender scene record has missing identity or an unexpected object type and was skipped"));
             continue;
         }
         if (importedIds.contains(objectId)) {
@@ -1487,16 +1596,22 @@ bool importBlenderScene(const QString &path,
         const int warningCountBeforeItem = warnings.size();
         SceneObject sceneObject;
         QString itemError;
-        if (!parseBlenderMeshItem(item, collectionIdsBySource, materialsById,
-                                  source.value(QStringLiteral("blender_version")).toString(),
-                                  mode,
-                                  &sceneObject,
-                                  &warnings, &itemError)) {
+        const bool parsed = objectType == QLatin1String("MESH")
+            ? parseBlenderMeshItem(
+                  item, collectionIdsBySource, materialsById,
+                  source.value(QStringLiteral("blender_version")).toString(),
+                  mode, &sceneObject, &warnings, &itemError)
+            : parseBlenderPolyCurveItem(item, collectionIdsBySource,
+                                        &sceneObject, &itemError);
+        if (!parsed) {
             ++skippedCount;
-            warnings.append(QStringLiteral("%1: mesh skipped: %2")
+            warnings.append(QStringLiteral("%1: object skipped: %2")
                                 .arg(blenderItemLabel(item), itemError));
             continue;
         }
+        sceneObject.blenderSourceVersion =
+            source.value(QStringLiteral("blender_version")).toString();
+        sceneObject.blenderMeshImportMode = mode;
         sceneObject.defaultViewLayerKey =
             item.value(QStringLiteral("default_view_layer_key")).toString();
         if (!sceneObject.defaultViewLayerKey.isEmpty() &&

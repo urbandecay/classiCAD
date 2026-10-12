@@ -22,7 +22,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 6
+BRIDGE_FORMAT_VERSION = 7
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -416,11 +416,67 @@ def unsupported_object_record(obj, scene):
     if obj.type == "EMPTY" and obj.instance_collection is not None:
         record["reason"] = "collection instance is metadata only; no geometry was fabricated"
         record["instance_collection"] = obj.instance_collection.name_full
-    elif obj.type in {"CURVE", "SURFACE", "FONT"}:
-        record["reason"] = "requires the exact Blender NURBS/curve import path"
+    elif obj.type == "CURVE":
+        record["reason"] = "curve has no supported POLY spline; NURBS and BEZIER splines are not imported"
+    elif obj.type in {"SURFACE", "FONT"}:
+        record["reason"] = "Blender SURFACE and FONT objects are not imported"
     else:
         record["reason"] = "no matching classiCAD scene-object geometry type"
     return record
+
+
+def extract_poly_curve_object(obj, scene, unsupported):
+    """Extract only exact POLY spline control points, baked to world XYZ."""
+    from mathutils import Vector
+
+    item_id = stable_id(obj)
+    item = object_metadata(obj, scene)
+    item["object_type"] = "CURVE"
+    item["splines"] = []
+    if item["library_path_exists"] is False:
+        add_unsupported(unsupported, item_id, "linked_library",
+                        "linked Blender library file is missing: " + item["library_path"])
+    curve_data = obj.data
+    if float(curve_data.bevel_depth) > 0.0 or float(curve_data.extrude) > 0.0:
+        add_unsupported(
+            unsupported, item_id, "curve_surface_geometry",
+            "bevel or extrude surface geometry is omitted; only source spline centerlines are imported",
+        )
+    if getattr(curve_data, "bevel_object", None) is not None:
+        add_unsupported(
+            unsupported, item_id, "curve_bevel_object",
+            "bevel-object surface geometry is omitted; only source spline centerlines are imported",
+        )
+    if (curve_data.dimensions == "2D" and
+            getattr(curve_data, "fill_mode", "NONE") != "NONE"):
+        add_unsupported(
+            unsupported, item_id, "curve_2d_fill",
+            "2D curve fill surfaces are omitted; only source spline centerlines are imported",
+        )
+    for spline_index, spline in enumerate(obj.data.splines):
+        if spline.type != "POLY":
+            add_unsupported(
+                unsupported, item_id,
+                "spline:%d:%s" % (spline_index, spline.type),
+                "only POLY splines are imported; NURBS and BEZIER splines are unsupported",
+            )
+            continue
+        points = []
+        for point in spline.points:
+            world = obj.matrix_world @ Vector((point.co[0], point.co[1], point.co[2]))
+            points.append(vector_values(world))
+        if spline.use_cyclic_u and points and points[-1] != points[0]:
+            points.append(list(points[0]))
+        if len(points) < 2:
+            add_unsupported(unsupported, item_id,
+                            "spline:%d:POLY" % spline_index,
+                            "POLY spline has fewer than two control points")
+            continue
+        item["splines"].append({"control_points_world": points})
+    for modifier in obj.modifiers:
+        add_unsupported(unsupported, item_id, "modifier:" + modifier.name,
+                        "exact spline import preserves source control points; modifier was not applied")
+    return item
 
 
 def depsgraph_for_scene(scene):
@@ -548,6 +604,22 @@ def extract_scene(input_path, mode):
             object_count += 1
             object_id = stable_id(obj)
             scene_record["object_ids"].append(object_id)
+            if obj.type == "CURVE":
+                item = extract_poly_curve_object(
+                    obj, scene, output["unsupported_features"])
+                if item["splines"]:
+                    item["view_layer_hidden"] = {
+                        view_layer_key(scene, view_layer): object_hidden_in_layer(obj, view_layer)
+                        for view_layer in scene.view_layers
+                    }
+                    item["default_view_layer_key"] = (
+                        view_layer_key(scene, scene.view_layers[0])
+                        if len(scene.view_layers) else ""
+                    )
+                    output["items"].append(item)
+                else:
+                    output["unsupported_items"].append(unsupported_object_record(obj, scene))
+                continue
             if obj.type != "MESH":
                 output["unsupported_items"].append(unsupported_object_record(obj, scene))
                 continue

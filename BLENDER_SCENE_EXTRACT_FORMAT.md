@@ -1,7 +1,7 @@
 # Blender Scene Extraction JSON
 
 `src/core/serialization/blender_scene_extract.py` runs inside Blender 5.2.2 and
-emits `classiCAD.blender-scene-extract`, format version `8`. This is a transport
+emits `classiCAD.blender-scene-extract`, format version `9`. This is a transport
 format for the native importer; it is not classiCAD's saved document schema.
 
 ## Mesh object records
@@ -57,8 +57,16 @@ in `splines` has an explicit `type`. `POLY` records contain
 `control_points_world`; cyclic polylines repeat their first point at the end.
 `BEZIER` records contain `spans_world`, with each cubic span ordered as start
 point, outgoing handle, incoming handle, end point. Cyclic Bezier splines include
-the final-to-first span. Every point is transformed by the source object's
-`matrix_world` during extraction. The native importer stores each POLY spline
-as a degree-one NURBS and each Bezier span as a separate nonrational clamped
-degree-three NURBS component. Blender NURBS splines remain explicitly
-unsupported. Bevel, extrude, bevel-object, and 2D fill surfaces remain omitted.
+the final-to-first span. `NURBS` records contain `degree`, Euclidean
+`control_points_world`, per-point `weights`, a `rational` flag, and reduced
+Rhino/openNURBS `knots`. Blender's generated full knot vector is reconstructed
+from its order, cyclic, endpoint, and Bezier settings using the pinned 5.2.2
+kernel rules, then its two redundant outer knots are removed. Cyclic NURBS
+records append the first `order - 1` control points and weights to represent
+Blender's wrapped evaluation net. Every point is transformed by the source
+object's `matrix_world` during extraction; weights are not transformed. The
+native importer stores these as dimension-3 NURBS components, preserving the
+source knot domain and rational data. The native importer stores each POLY
+spline as a degree-one NURBS and each Bezier span as a separate nonrational
+clamped degree-three NURBS component. Bevel, extrude, bevel-object, and 2D fill
+surfaces remain omitted.

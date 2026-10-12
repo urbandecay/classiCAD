@@ -22,7 +22,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 8
+BRIDGE_FORMAT_VERSION = 9
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -80,6 +80,31 @@ def matrix_values(matrix):
 
 def add_unsupported(report, item, feature, reason):
     report.append({"item_id": item, "feature": feature, "reason": reason})
+
+
+def blender_nurbs_knots(point_count, order, cyclic, endpoint, bezier):
+    """Mirror Blender 5.2.2 BKE's generated U knot vector."""
+    repeat_inner = order - 1 if bezier else 1
+    head = order - (1 if cyclic else 0) if endpoint else min(2, repeat_inner)
+    tail = 2 * order - 1 if cyclic else (order if endpoint else 0)
+    knot_count = point_count + order + (order - 1 if cyclic else 0)
+    knots = [0.0] * knot_count
+    repeat = head
+    current = 0.0
+    offset = 1 if endpoint and cyclic else 0
+    if offset:
+        knots[0] = current
+        current += 1.0
+    for index in range(offset, knot_count - tail):
+        knots[index] = current
+        repeat -= 1
+        if repeat == 0:
+            current += 1.0
+            repeat = repeat_inner
+    tail_index = knot_count - tail
+    for index in range(tail):
+        knots[tail_index + index] = current + (knots[index] - knots[0])
+    return knots
 
 
 def image_references(material):
@@ -417,7 +442,7 @@ def unsupported_object_record(obj, scene):
         record["reason"] = "collection instance is metadata only; no geometry was fabricated"
         record["instance_collection"] = obj.instance_collection.name_full
     elif obj.type == "CURVE":
-        record["reason"] = "curve has no supported POLY or BEZIER spline; NURBS splines are not imported"
+        record["reason"] = "curve has no supported POLY, BEZIER, or NURBS spline"
     elif obj.type in {"SURFACE", "FONT"}:
         record["reason"] = "Blender SURFACE and FONT objects are not imported"
     else:
@@ -426,7 +451,7 @@ def unsupported_object_record(obj, scene):
 
 
 def extract_poly_curve_object(obj, scene, unsupported):
-    """Extract exact POLY points and cubic BEZIER spans in world XYZ."""
+    """Extract supported source splines in world XYZ."""
     from mathutils import Vector
 
     item_id = stable_id(obj)
@@ -454,11 +479,11 @@ def extract_poly_curve_object(obj, scene, unsupported):
             "2D curve fill surfaces are omitted; only source spline centerlines are imported",
         )
     for spline_index, spline in enumerate(obj.data.splines):
-        if spline.type not in {"POLY", "BEZIER"}:
+        if spline.type not in {"POLY", "BEZIER", "NURBS"}:
             add_unsupported(
                 unsupported, item_id,
                 "spline:%d:%s" % (spline_index, spline.type),
-                "Blender NURBS splines are unsupported",
+                "unsupported Blender spline type",
             )
             continue
         if spline.type == "POLY":
@@ -474,6 +499,40 @@ def extract_poly_curve_object(obj, scene, unsupported):
                                 "POLY spline has fewer than two control points")
                 continue
             item["splines"].append({"type": "POLY", "control_points_world": points})
+            continue
+
+        if spline.type == "NURBS":
+            source_points = list(spline.points)
+            order = int(spline.order_u)
+            if len(source_points) < order or order < 2:
+                add_unsupported(unsupported, item_id,
+                                "spline:%d:NURBS" % spline_index,
+                                "NURBS spline has fewer control points than its order")
+                continue
+            cyclic = bool(spline.use_cyclic_u)
+            weights = []
+            points = []
+            for point in source_points:
+                world = obj.matrix_world @ Vector((point.co[0], point.co[1], point.co[2]))
+                points.append(vector_values(world))
+                weights.append(finite_number(point.co[3]))
+            if cyclic:
+                for index in range(order - 1):
+                    points.append(list(points[index]))
+                    weights.append(weights[index])
+            full_knots = blender_nurbs_knots(
+                len(source_points), order, cyclic,
+                bool(spline.use_endpoint_u), bool(spline.use_bezier_u))
+            if len(full_knots) != len(points) + order:
+                raise ValueError("Blender generated an inconsistent NURBS knot vector")
+            item["splines"].append({
+                "type": "NURBS",
+                "degree": order - 1,
+                "control_points_world": points,
+                "weights": weights,
+                "rational": any(weight != 1.0 for weight in weights),
+                "knots": full_knots[1:-1],
+            })
             continue
 
         bezier_points = list(spline.bezier_points)

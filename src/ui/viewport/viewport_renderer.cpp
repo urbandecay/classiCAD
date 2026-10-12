@@ -1119,6 +1119,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QVector3D sceneLinearColor{0.8f, 0.8f, 0.8f};
             QVector3D normalView{0.0f, 0.0f, 1.0f};
             QVector3D incidentView{0.0f, 0.0f, 1.0f};
+            std::array<Point3D, 3> worldPoints{};
             qreal roughness = 0.4;
             qreal metallic = 0.0;
             qreal depth = 0.0;
@@ -1428,6 +1429,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 }
                 for (int corner = 0; corner < 3; ++corner) {
                     const Point3D &point = vertices[corner];
+                    triangle.worldPoints[corner] = point;
                     QPointF screen;
                     if (!transform_.worldPointToScreen(point, viewportSize, &screen)) {
                         projected = false;
@@ -1560,6 +1562,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
             static_cast<float>(meshViewUp.z));
         const QVector3D meshViewRight = workbenchNormalize(
             QVector3D::crossProduct(meshViewUpVector, meshViewFacing));
+        const Point3D meshCameraPosition =
+            transform_.cameraPosition(viewportSize);
         meshViewLighting = workbenchStudioLightingForView(
             meshViewLighting, shadingSettings_.studioLightRotationDegrees,
             shadingSettings_.worldSpaceLighting, meshViewRight,
@@ -1663,11 +1667,37 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             triangle.sceneLinearColor[component];
                     }
                     QVector3D shadedLinear = textureColor;
+                    QVector3D incidentView = triangle.incidentView;
+                    if (transform_.isPerspectiveEnabled()) {
+                        // Workbench derives its incident vector per fragment.
+                        // Reconstruct this pixel's perspective-correct world
+                        // position using the same weights as texture sampling.
+                        const Point3D &point0 = triangle.worldPoints[0];
+                        const Point3D &point1 = triangle.worldPoints[1];
+                        const Point3D &point2 = triangle.worldPoints[2];
+                        const Point3D samplePosition{
+                            (point0.x * p0 + point1.x * p1 + point2.x * p2) /
+                                denominator,
+                            (point0.y * p0 + point1.y * p1 + point2.y * p2) /
+                                denominator,
+                            (point0.z * p0 + point1.z * p1 + point2.z * p2) /
+                                denominator};
+                        const QVector3D incidentWorld = workbenchNormalize(
+                            QVector3D(
+                                static_cast<float>(meshCameraPosition.x - samplePosition.x),
+                                static_cast<float>(meshCameraPosition.y - samplePosition.y),
+                                static_cast<float>(meshCameraPosition.z - samplePosition.z)),
+                            meshViewFacing);
+                        incidentView = {
+                            QVector3D::dotProduct(incidentWorld, meshViewRight),
+                            QVector3D::dotProduct(incidentWorld, meshViewUpVector),
+                            QVector3D::dotProduct(incidentWorld, meshViewFacing)};
+                    }
                     if (shadingSettings_.lightingMode ==
                         ViewportLightingMode::Studio) {
                         shadedLinear = workbenchStudioShade(
                             textureColor, triangle.normalView,
-                            triangle.incidentView,
+                            incidentView,
                             static_cast<float>(triangle.roughness),
                             static_cast<float>(triangle.metallic),
                             meshViewLighting);
@@ -1675,7 +1705,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                ViewportLightingMode::MatCap) {
                         shadedLinear = workbenchMatcapShade(
                             shadingSettings_.matcapPreset, textureColor,
-                            triangle.normalView, triangle.incidentView,
+                            triangle.normalView, incidentView,
                             shadingSettings_.specularLighting);
                     }
                     const QVector3D displayColor =

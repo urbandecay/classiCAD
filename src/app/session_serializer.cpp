@@ -459,6 +459,12 @@ bool SessionSerializer::write(const QString &path,
                              view.cameraPreferences.focusDistance);
     cameraPreferences.insert(QStringLiteral("fStop"),
                              view.cameraPreferences.fStop);
+    cameraPreferences.insert(QStringLiteral("apertureBlades"),
+                             view.cameraPreferences.apertureBlades);
+    cameraPreferences.insert(QStringLiteral("apertureRotationRadians"),
+                             view.cameraPreferences.apertureRotationRadians);
+    cameraPreferences.insert(QStringLiteral("apertureRatio"),
+                             view.cameraPreferences.apertureRatio);
     cameraPreferences.insert(QStringLiteral("sensorWidthMillimeters"),
                              view.cameraPreferences.sensorWidthMillimeters);
     root.insert(QStringLiteral("cameraPreferences"), cameraPreferences);
@@ -560,6 +566,9 @@ bool SessionSerializer::read(const QString &path,
         const QJsonValue focusDistanceValue =
             preferences.value(QStringLiteral("focusDistance"));
         const QJsonValue fStopValue = preferences.value(QStringLiteral("fStop"));
+        const QJsonValue apertureBladesValue = preferences.value(QStringLiteral("apertureBlades"));
+        const QJsonValue apertureRotationValue = preferences.value(QStringLiteral("apertureRotationRadians"));
+        const QJsonValue apertureRatioValue = preferences.value(QStringLiteral("apertureRatio"));
         const QJsonValue sensorWidthValue =
             preferences.value(QStringLiteral("sensorWidthMillimeters"));
         restored.view.cameraPreferences = {
@@ -569,6 +578,9 @@ bool SessionSerializer::read(const QString &path,
             sceneCameraEnabledValue.toBool(false),
             focusDistanceValue.toDouble(10000.0),
             fStopValue.toDouble(2.8),
+            apertureBladesValue.toInt(0),
+            apertureRotationValue.toDouble(0.0),
+            apertureRatioValue.toDouble(1.0),
             sensorWidthValue.toDouble(36.0)};
         if (!focalLengthValue.isDouble() || !clipStartValue.isDouble() ||
             !clipEndValue.isDouble() ||
@@ -585,6 +597,14 @@ bool SessionSerializer::read(const QString &path,
             !std::isfinite(restored.view.cameraPreferences.fStop) ||
             restored.view.cameraPreferences.fStop < 0.1 ||
             restored.view.cameraPreferences.fStop > 128.0 ||
+            restored.view.cameraPreferences.apertureBlades < 0 ||
+            restored.view.cameraPreferences.apertureBlades > 16 ||
+            !std::isfinite(restored.view.cameraPreferences.apertureRotationRadians) ||
+            restored.view.cameraPreferences.apertureRotationRadians < -3.141592653589793 ||
+            restored.view.cameraPreferences.apertureRotationRadians > 3.141592653589793 ||
+            !std::isfinite(restored.view.cameraPreferences.apertureRatio) ||
+            restored.view.cameraPreferences.apertureRatio < 0.01 ||
+            restored.view.cameraPreferences.apertureRatio > 1.0e6 ||
             !std::isfinite(restored.view.cameraPreferences.sensorWidthMillimeters) ||
             restored.view.cameraPreferences.sensorWidthMillimeters < 1.0 ||
             restored.view.cameraPreferences.sensorWidthMillimeters > 100.0 ||

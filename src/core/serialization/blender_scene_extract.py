@@ -299,6 +299,9 @@ def scene_camera_record(scene, depsgraph=None):
         "dof_enabled": bool(data.dof.use_dof),
         "dof_focus_distance": finite_number(dof_focus_distance),
         "dof_f_stop": finite_number(data.dof.aperture_fstop),
+        "dof_aperture_blades": int(data.dof.aperture_blades),
+        "dof_aperture_rotation": finite_number(data.dof.aperture_rotation),
+        "dof_aperture_ratio": finite_number(data.dof.aperture_ratio),
     }
 
 

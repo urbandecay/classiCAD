@@ -41,6 +41,9 @@ struct ProjectViewportCameraSettings {
     bool sceneCameraEnabled = false;
     double focusDistance = 10000.0;
     double fStop = 2.8;
+    int apertureBlades = 0;
+    double apertureRotationRadians = 0.0;
+    double apertureRatio = 1.0;
     double sensorWidthMillimeters = 36.0;
     ProjectViewportViewState view;
     bool storedInProject = false;

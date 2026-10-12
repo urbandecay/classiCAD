@@ -885,6 +885,11 @@ bool importedSceneCameraTransform(const Document &document,
         cameraRecord.value(QStringLiteral("dof_enabled")).toBool();
     preferences.focusDistance = cameraNumber("dof_focus_distance", 10000.0);
     preferences.fStop = cameraNumber("dof_f_stop", 2.8);
+    preferences.apertureBlades = cameraRecord.value(
+        QStringLiteral("dof_aperture_blades")).toInt(0);
+    preferences.apertureRotationRadians = cameraNumber(
+        "dof_aperture_rotation", 0.0);
+    preferences.apertureRatio = cameraNumber("dof_aperture_ratio", 1.0);
     if (!cameraTransform->setCameraPreferences(preferences)) return false;
 
     ViewportCameraState state = cameraTransform->cameraState();
@@ -6443,6 +6448,9 @@ public:
         cameraSettings.sceneCameraEnabled = preferences.sceneCameraEnabled;
         cameraSettings.focusDistance = preferences.focusDistance;
         cameraSettings.fStop = preferences.fStop;
+        cameraSettings.apertureBlades = preferences.apertureBlades;
+        cameraSettings.apertureRotationRadians = preferences.apertureRotationRadians;
+        cameraSettings.apertureRatio = preferences.apertureRatio;
         cameraSettings.sensorWidthMillimeters = preferences.sensorWidthMillimeters;
         const ViewportCameraState viewState = viewportTransform_.cameraState();
         const Point3D target = viewportTransform_.viewTarget();
@@ -6555,6 +6563,9 @@ public:
         result.camera.sceneCameraEnabled = renderPreferences.sceneCameraEnabled;
         result.camera.focusDistance = renderPreferences.focusDistance;
         result.camera.fStop = renderPreferences.fStop;
+        result.camera.apertureBlades = renderPreferences.apertureBlades;
+        result.camera.apertureRotationRadians = renderPreferences.apertureRotationRadians;
+        result.camera.apertureRatio = renderPreferences.apertureRatio;
         result.camera.sensorWidthMillimeters =
             usingSceneCamera
                 ? sceneCameraSensorWidth
@@ -6712,6 +6723,9 @@ public:
                 cameraSettings.sceneCameraEnabled,
                 cameraSettings.focusDistance,
                 cameraSettings.fStop,
+                cameraSettings.apertureBlades,
+                cameraSettings.apertureRotationRadians,
+                cameraSettings.apertureRatio,
                 cameraSettings.sensorWidthMillimeters};
             viewportTransform_.setCameraPreferences(preferences);
         }

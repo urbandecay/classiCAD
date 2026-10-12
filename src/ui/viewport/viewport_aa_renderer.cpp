@@ -475,6 +475,9 @@ bool ViewportAaRenderer::initialize()
         uniform float uFocalLengthMillimeters;
         uniform float uSensorWidthMillimeters;
         uniform float uFStop;
+        uniform int uApertureBlades;
+        uniform float uApertureRotation;
+        uniform float uApertureRatio;
         layout(location = 0) out vec4 outColor;
         layout(location = 1) out vec4 outCoc;
         float cocAtDepth(float depth)
@@ -499,6 +502,22 @@ bool ViewportAaRenderer::initialize()
         vec2 fetchCoc(ivec2 p, int lod)
         {
             return texelFetch(uCoc, p, lod).rg;
+        }
+        vec2 shapeAperture(vec2 disk)
+        {
+            if (uApertureBlades >= 3) {
+                float bladeAngle = 6.28318530718 / float(uApertureBlades);
+                float angle = atan(disk.y, disk.x) - uApertureRotation;
+                float sector = mod(angle + 0.5 * bladeAngle, bladeAngle) -
+                               0.5 * bladeAngle;
+                float polygonRadius = cos(0.5 * bladeAngle) /
+                                      max(cos(sector), 1e-5);
+                disk *= polygonRadius;
+            }
+            float ratio = max(uApertureRatio, 0.01);
+            if (ratio > 1.0) disk.x *= ratio;
+            else disk.y /= ratio;
+            return disk;
         }
         vec4 weightedFour(vec4 a, vec4 b, vec4 c, vec4 d,
                           vec4 weights)
@@ -581,6 +600,7 @@ bool ViewportAaRenderer::initialize()
                         if (max(abs(x), abs(y)) != ring) continue;
                         vec2 square = vec2(x, y) / 3.0;
                         vec2 disk = square * sqrt(max(vec2(0.0), 1.0 - square.yx * square.yx * 0.5));
+                        disk = shapeAperture(disk);
                         float radius = length(disk);
                         vec2 uv = clamp(vUv + disk * centerCoc / vec2(size),
                                         0.5 / vec2(size), 1.0 - 0.5 / vec2(size));
@@ -1266,6 +1286,12 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
             "uSensorWidthMillimeters",
             float(depthOfFieldOptics_.sensorWidthMillimeters));
         depthOfFieldProgram_.setUniformValue("uFStop", float(depthOfFieldOptics_.fStop));
+        depthOfFieldProgram_.setUniformValue("uApertureBlades",
+                                             depthOfFieldOptics_.apertureBlades);
+        depthOfFieldProgram_.setUniformValue("uApertureRotation",
+            float(depthOfFieldOptics_.apertureRotationRadians));
+        depthOfFieldProgram_.setUniformValue("uApertureRatio",
+            float(depthOfFieldOptics_.apertureRatio));
         glDrawArrays(GL_TRIANGLES, 0, 3);
     };
 

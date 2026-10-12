@@ -17,6 +17,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QtMath>
@@ -153,6 +154,9 @@ public:
                 sceneCameraCheckBox_->isChecked(),
                 focusDistanceSpinBox_->value(),
                 fStopSpinBox_->value(),
+                apertureBladesSpinBox_->value(),
+                apertureRotationSpinBox_->value() * 3.141592653589793 / 180.0,
+                apertureRatioSpinBox_->value(),
                 sensorWidthSpinBox_->value()};
     }
 
@@ -565,6 +569,25 @@ private:
         fStopSpinBox_->setValue(cameraPreferences.fStop);
         fStopSpinBox_->setObjectName(QStringLiteral("sceneCameraFStopPreference"));
         cameraLayout->addRow(QStringLiteral("F-stop"), fStopSpinBox_);
+        apertureBladesSpinBox_ = new QSpinBox;
+        apertureBladesSpinBox_->setRange(0, 16);
+        apertureBladesSpinBox_->setValue(cameraPreferences.apertureBlades);
+        apertureBladesSpinBox_->setObjectName(QStringLiteral("sceneCameraApertureBladesPreference"));
+        cameraLayout->addRow(QStringLiteral("Aperture blades"), apertureBladesSpinBox_);
+        apertureRotationSpinBox_ = new QDoubleSpinBox;
+        apertureRotationSpinBox_->setRange(-180.0, 180.0);
+        apertureRotationSpinBox_->setDecimals(1);
+        apertureRotationSpinBox_->setValue(cameraPreferences.apertureRotationRadians *
+                                           180.0 / 3.141592653589793);
+        apertureRotationSpinBox_->setSuffix(QStringLiteral("°"));
+        apertureRotationSpinBox_->setObjectName(QStringLiteral("sceneCameraApertureRotationPreference"));
+        cameraLayout->addRow(QStringLiteral("Aperture rotation"), apertureRotationSpinBox_);
+        apertureRatioSpinBox_ = new QDoubleSpinBox;
+        apertureRatioSpinBox_->setRange(0.01, 1000000.0);
+        apertureRatioSpinBox_->setDecimals(3);
+        apertureRatioSpinBox_->setValue(cameraPreferences.apertureRatio);
+        apertureRatioSpinBox_->setObjectName(QStringLiteral("sceneCameraApertureRatioPreference"));
+        cameraLayout->addRow(QStringLiteral("Aperture ratio"), apertureRatioSpinBox_);
         sensorWidthSpinBox_ = new QDoubleSpinBox;
         sensorWidthSpinBox_->setRange(1.0, 100.0);
         sensorWidthSpinBox_->setDecimals(1);
@@ -843,6 +866,9 @@ private:
     QCheckBox *sceneCameraCheckBox_ = nullptr;
     QDoubleSpinBox *focusDistanceSpinBox_ = nullptr;
     QDoubleSpinBox *fStopSpinBox_ = nullptr;
+    QSpinBox *apertureBladesSpinBox_ = nullptr;
+    QDoubleSpinBox *apertureRotationSpinBox_ = nullptr;
+    QDoubleSpinBox *apertureRatioSpinBox_ = nullptr;
     QDoubleSpinBox *sensorWidthSpinBox_ = nullptr;
     QDoubleSpinBox *clipStartSpinBox_ = nullptr;
     QDoubleSpinBox *clipEndSpinBox_ = nullptr;

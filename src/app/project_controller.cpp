@@ -20,6 +20,12 @@ bool validCameraPreferences(const ProjectViewportCameraSettings &settings)
            std::isfinite(settings.focusDistance) && settings.focusDistance > 0.0 &&
            settings.focusDistance <= 1.0e9 && std::isfinite(settings.fStop) &&
            settings.fStop >= 0.1 && settings.fStop <= 128.0 &&
+           settings.apertureBlades >= 0 && settings.apertureBlades <= 16 &&
+           std::isfinite(settings.apertureRotationRadians) &&
+           settings.apertureRotationRadians >= -3.141592653589793 &&
+           settings.apertureRotationRadians <= 3.141592653589793 &&
+           std::isfinite(settings.apertureRatio) && settings.apertureRatio >= 0.01 &&
+           settings.apertureRatio <= 1.0e6 &&
            std::isfinite(settings.sensorWidthMillimeters) &&
            settings.sensorWidthMillimeters >= 1.0 &&
            settings.sensorWidthMillimeters <= 100.0;

@@ -128,6 +128,12 @@ bool isValidProjectViewportCameraSettings(
         settings.focusDistance <= 0.0 || settings.focusDistance > 1.0e9 ||
         !std::isfinite(settings.fStop) || settings.fStop < 0.1 ||
         settings.fStop > 128.0 ||
+        settings.apertureBlades < 0 || settings.apertureBlades > 16 ||
+        !std::isfinite(settings.apertureRotationRadians) ||
+        settings.apertureRotationRadians < -3.141592653589793 ||
+        settings.apertureRotationRadians > 3.141592653589793 ||
+        !std::isfinite(settings.apertureRatio) || settings.apertureRatio < 0.01 ||
+        settings.apertureRatio > 1.0e6 ||
         !std::isfinite(settings.sensorWidthMillimeters) ||
         settings.sensorWidthMillimeters < 1.0 ||
         settings.sensorWidthMillimeters > 100.0) {
@@ -170,6 +176,10 @@ QJsonObject projectViewportCameraSettingsToJson(
                       settings.sceneCameraEnabled);
     serialized.insert(QStringLiteral("focusDistance"), settings.focusDistance);
     serialized.insert(QStringLiteral("fStop"), settings.fStop);
+    serialized.insert(QStringLiteral("apertureBlades"), settings.apertureBlades);
+    serialized.insert(QStringLiteral("apertureRotationRadians"),
+                      settings.apertureRotationRadians);
+    serialized.insert(QStringLiteral("apertureRatio"), settings.apertureRatio);
     serialized.insert(QStringLiteral("sensorWidthMillimeters"),
                       settings.sensorWidthMillimeters);
     if (settings.view.storedInProject) {
@@ -239,6 +249,10 @@ bool projectViewportCameraSettingsFromJson(
     settings->sceneCameraEnabled = sceneCameraEnabled.toBool(false);
     settings->focusDistance = camera.value(QStringLiteral("focusDistance")).toDouble(10000.0);
     settings->fStop = camera.value(QStringLiteral("fStop")).toDouble(2.8);
+    settings->apertureBlades = camera.value(QStringLiteral("apertureBlades")).toInt(0);
+    settings->apertureRotationRadians = camera.value(
+        QStringLiteral("apertureRotationRadians")).toDouble(0.0);
+    settings->apertureRatio = camera.value(QStringLiteral("apertureRatio")).toDouble(1.0);
     settings->sensorWidthMillimeters = camera.value(QStringLiteral("sensorWidthMillimeters")).toDouble(36.0);
     settings->storedInProject = true;
 

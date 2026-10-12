@@ -779,6 +779,12 @@ bool ViewportTransform::setCameraPreferences(
         preferences.focusDistance > 1.0e9 ||
         !std::isfinite(preferences.fStop) || preferences.fStop < 0.1 ||
         preferences.fStop > 128.0 ||
+        preferences.apertureBlades < 0 || preferences.apertureBlades > 16 ||
+        !std::isfinite(preferences.apertureRotationRadians) ||
+        preferences.apertureRotationRadians < -3.141592653589793 ||
+        preferences.apertureRotationRadians > 3.141592653589793 ||
+        !std::isfinite(preferences.apertureRatio) ||
+        preferences.apertureRatio < 0.01 || preferences.apertureRatio > 1.0e6 ||
         !std::isfinite(preferences.sensorWidthMillimeters) ||
         preferences.sensorWidthMillimeters < 1.0 ||
         preferences.sensorWidthMillimeters > 100.0) {

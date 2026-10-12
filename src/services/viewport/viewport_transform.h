@@ -42,6 +42,9 @@ struct ViewportCameraPreferences {
     bool sceneCameraEnabled = false;
     qreal focusDistance = 10000.0;
     qreal fStop = 2.8;
+    int apertureBlades = 0;
+    qreal apertureRotationRadians = 0.0;
+    qreal apertureRatio = 1.0;
     qreal sensorWidthMillimeters = 36.0;
 };
 

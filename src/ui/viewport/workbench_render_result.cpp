@@ -153,6 +153,10 @@ bool WorkbenchRenderResult::saveCombinedImage(
                       camera.sceneCameraEnabled);
     cameraJson.insert(QStringLiteral("focusDistance"), camera.focusDistance);
     cameraJson.insert(QStringLiteral("fStop"), camera.fStop);
+    cameraJson.insert(QStringLiteral("apertureBlades"), camera.apertureBlades);
+    cameraJson.insert(QStringLiteral("apertureRotationRadians"),
+                      camera.apertureRotationRadians);
+    cameraJson.insert(QStringLiteral("apertureRatio"), camera.apertureRatio);
     cameraJson.insert(QStringLiteral("sensorWidthMillimeters"),
                       camera.sensorWidthMillimeters);
     cameraJson.insert(QStringLiteral("outputWidthPixels"), combined.width());

@@ -114,6 +114,13 @@ StoredPreferences loadStoredPreferences()
         QStringLiteral("viewport/focusDistance"), camera.focusDistance).toDouble();
     camera.fStop = settings.value(QStringLiteral("viewport/fStop"),
                                   camera.fStop).toDouble();
+    camera.apertureBlades = settings.value(QStringLiteral("viewport/apertureBlades"),
+                                           camera.apertureBlades).toInt();
+    camera.apertureRotationRadians = settings.value(
+        QStringLiteral("viewport/apertureRotationRadians"),
+        camera.apertureRotationRadians).toDouble();
+    camera.apertureRatio = settings.value(QStringLiteral("viewport/apertureRatio"),
+                                          camera.apertureRatio).toDouble();
     camera.sensorWidthMillimeters = settings.value(
         QStringLiteral("viewport/sensorWidthMillimeters"),
         camera.sensorWidthMillimeters).toDouble();
@@ -273,6 +280,12 @@ void saveCameraPreferences(const ViewportCameraPreferences &preferences)
         settings.setValue(QStringLiteral("viewport/focusDistance"),
                           preferences.focusDistance);
         settings.setValue(QStringLiteral("viewport/fStop"), preferences.fStop);
+        settings.setValue(QStringLiteral("viewport/apertureBlades"),
+                          preferences.apertureBlades);
+        settings.setValue(QStringLiteral("viewport/apertureRotationRadians"),
+                          preferences.apertureRotationRadians);
+        settings.setValue(QStringLiteral("viewport/apertureRatio"),
+                          preferences.apertureRatio);
         settings.setValue(QStringLiteral("viewport/sensorWidthMillimeters"),
                           preferences.sensorWidthMillimeters);
     });

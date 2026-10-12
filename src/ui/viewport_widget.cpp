@@ -118,6 +118,7 @@
 #include <QPen>
 #include <QPaintEvent>
 #include <QPushButton>
+#include <QQuaternion>
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QPixmap>
@@ -770,6 +771,136 @@ QVector<QPair<int, int>> surfaceComponentEdgeVertices(const Shape &shape,
             edges[edge] = {boundary.firstVertex, boundary.lastVertex};
     }
     return edges;
+}
+
+bool importedSceneCameraTransform(const Document &document,
+                                  const QSize &outputSize,
+                                  ViewportTransform *cameraTransform,
+                                  qreal *actualSensorWidth)
+{
+    if (cameraTransform == nullptr || outputSize.isEmpty()) return false;
+    const QJsonArray scenes = document.settings().importedBlenderScenes;
+    const QString activeLayer = document.settings().activeViewLayerKey;
+    QJsonObject cameraRecord;
+    bool selectedScene = false;
+    for (const QJsonValue &sceneValue : scenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        bool matchesActiveLayer = activeLayer.isEmpty();
+        if (!activeLayer.isEmpty()) {
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key")).toString() ==
+                    activeLayer) {
+                    matchesActiveLayer = true;
+                    break;
+                }
+            }
+        }
+        if (!matchesActiveLayer) continue;
+        selectedScene = true;
+        const QJsonValue activeCamera =
+            scene.value(QStringLiteral("active_camera"));
+        if (activeCamera.isObject()) cameraRecord = activeCamera.toObject();
+        break;
+    }
+    if (!selectedScene || cameraRecord.isEmpty()) return false;
+    const QString cameraType =
+        cameraRecord.value(QStringLiteral("camera_type")).toString();
+    if (cameraType != QLatin1String("PERSP") &&
+        cameraType != QLatin1String("ORTHO")) return false;
+
+    const QJsonArray matrix =
+        cameraRecord.value(QStringLiteral("matrix_world")).toArray();
+    if (matrix.size() != 4) return false;
+    qreal values[4][4] = {};
+    for (int row = 0; row < 4; ++row) {
+        const QJsonArray matrixRow = matrix[row].toArray();
+        if (matrixRow.size() != 4) return false;
+        for (int column = 0; column < 4; ++column) {
+            if (!matrixRow[column].isDouble() ||
+                !std::isfinite(matrixRow[column].toDouble())) return false;
+            values[row][column] = matrixRow[column].toDouble();
+        }
+    }
+    const auto cameraNumber = [&cameraRecord](const char *key,
+                                               qreal fallback) {
+        const QJsonValue value = cameraRecord.value(QLatin1String(key));
+        return value.isDouble() && std::isfinite(value.toDouble())
+                   ? value.toDouble() : fallback;
+    };
+    const qreal lens = cameraNumber("lens_millimeters", 50.0);
+    const qreal sensorWidth = cameraNumber("sensor_width_millimeters", 36.0);
+    const qreal sensorHeight = cameraNumber("sensor_height_millimeters", 24.0);
+    const qreal clipStart = cameraNumber("clip_start", 0.01);
+    const qreal clipEnd = cameraNumber("clip_end", 1000.0);
+    if (lens <= 0.0 || sensorWidth <= 0.0 || sensorHeight <= 0.0 ||
+        clipStart <= 0.0 || clipEnd <= clipStart) return false;
+    if (actualSensorWidth != nullptr) *actualSensorWidth = sensorWidth;
+
+    QVector3D right{float(values[0][0]), float(values[1][0]),
+                    float(values[2][0])};
+    QVector3D up{float(values[0][1]), float(values[1][1]),
+                 float(values[2][1])};
+    if (right.lengthSquared() < 1.0e-12f) return false;
+    right.normalize();
+    up -= right * QVector3D::dotProduct(right, up);
+    if (up.lengthSquared() < 1.0e-12f) return false;
+    up.normalize();
+    QVector3D backward = QVector3D::crossProduct(right, up).normalized();
+    if (backward.lengthSquared() < 1.0e-12f) return false;
+    const QQuaternion orientation = QQuaternion::fromAxes(right, up, backward);
+
+    ViewportCameraPreferences preferences = cameraTransform->cameraPreferences();
+    preferences.focalLengthMillimeters = lens;
+    preferences.clipStart = clipStart;
+    preferences.clipEnd = clipEnd;
+    const qreal fittedSensorExtent =
+        cameraRecord.value(QStringLiteral("sensor_fit")).toString() ==
+                QLatin1String("VERTICAL") ||
+            (cameraRecord.value(QStringLiteral("sensor_fit")).toString() ==
+                 QLatin1String("AUTO") && outputSize.height() > outputSize.width())
+            ? sensorHeight : sensorWidth;
+    // ViewportTransform's interactive frustum includes Blender's viewport
+    // projection zoom factor of two. A scene camera uses the full render
+    // sensor, so halve this internal extent to cancel that viewport-only term.
+    preferences.sensorWidthMillimeters = fittedSensorExtent * 0.5;
+    preferences.sceneCameraEnabled =
+        cameraRecord.value(QStringLiteral("dof_enabled")).toBool();
+    preferences.focusDistance = cameraNumber("dof_focus_distance", 10000.0);
+    preferences.fStop = cameraNumber("dof_f_stop", 2.8);
+    if (!cameraTransform->setCameraPreferences(preferences)) return false;
+
+    ViewportCameraState state = cameraTransform->cameraState();
+    state.hasOrientation = true;
+    state.orientation = {orientation.scalar(), orientation.x(),
+                         orientation.y(), orientation.z()};
+    state.preset = cameraType == QLatin1String("PERSP")
+                       ? ViewportViewPreset::Perspective
+                       : ViewportViewPreset::Custom;
+    state.pan = {};
+    state.perspective = cameraType == QLatin1String("PERSP");
+    const Point3D cameraPosition{values[0][3], values[1][3], values[2][3]};
+    if (state.perspective) {
+        state.zoom = 2.0;
+        state.orbitPivot = {cameraPosition.x - backward.x() * 30.0,
+                            cameraPosition.y - backward.y() * 30.0,
+                            cameraPosition.z - backward.z() * 30.0};
+    } else {
+        const qreal orthoScale = cameraNumber("orthographic_scale", 10.0);
+        if (orthoScale <= 0.0) return false;
+        const qreal sensorFitExtent = std::max(outputSize.width(),
+                                               outputSize.height());
+        const qreal focalPixels = sensorFitExtent * lens /
+            (preferences.sensorWidthMillimeters * 2.0);
+        const qreal desiredPixelsPerUnit =
+            (outputSize.width() >= outputSize.height()
+                 ? outputSize.width() : outputSize.height()) / orthoScale;
+        state.zoom = desiredPixelsPerUnit * 60.0 /
+                     std::max<qreal>(focalPixels, 1.0e-12);
+        state.orbitPivot = cameraPosition;
+    }
+    cameraTransform->setCameraState(state);
+    return true;
 }
 
 } // namespace
@@ -6284,6 +6415,22 @@ public:
         }
         result.camera = projectCameraSettings();
         ViewportTransform renderCamera = viewportTransform_;
+        qreal sceneCameraSensorWidth = 0.0;
+        const bool usingSceneCamera = importedSceneCameraTransform(
+            document_, outputSize, &renderCamera, &sceneCameraSensorWidth);
+        const ViewportCameraPreferences renderPreferences =
+            renderCamera.cameraPreferences();
+        result.camera.focalLengthMillimeters =
+            renderPreferences.focalLengthMillimeters;
+        result.camera.clipStart = renderPreferences.clipStart;
+        result.camera.clipEnd = renderPreferences.clipEnd;
+        result.camera.sceneCameraEnabled = renderPreferences.sceneCameraEnabled;
+        result.camera.focusDistance = renderPreferences.focusDistance;
+        result.camera.fStop = renderPreferences.fStop;
+        result.camera.sensorWidthMillimeters =
+            usingSceneCamera
+                ? sceneCameraSensorWidth
+                : renderPreferences.sensorWidthMillimeters;
         ViewportRenderFrameInput input;
         ViewportRenderFrame renderFrame = buildViewportRenderFrame(
             document_, renderCamera, outputSize, input);
@@ -6370,6 +6517,29 @@ public:
             }
         }
         result.camera.view.perspective = renderCamera.isPerspectiveEnabled();
+        if (usingSceneCamera) {
+            const ViewportCameraState state = renderCamera.cameraState();
+            const Point3D target = renderCamera.viewTarget();
+            result.camera.view.zoom = state.zoom;
+            result.camera.view.panX = state.pan.x();
+            result.camera.view.panY = state.pan.y();
+            result.camera.view.orbitPivotX = state.orbitPivot.x;
+            result.camera.view.orbitPivotY = state.orbitPivot.y;
+            result.camera.view.orbitPivotZ = state.orbitPivot.z;
+            result.camera.view.yawRadians = state.yawRadians;
+            result.camera.view.pitchRadians = state.pitchRadians;
+            result.camera.view.preset = static_cast<int>(state.preset);
+            result.camera.view.gridViewDistance = state.gridViewDistance;
+            result.camera.view.orientationW = state.orientation.w;
+            result.camera.view.orientationX = state.orientation.x;
+            result.camera.view.orientationY = state.orientation.y;
+            result.camera.view.orientationZ = state.orientation.z;
+            result.camera.view.hasOrientation = state.hasOrientation;
+            result.camera.view.targetX = target.x;
+            result.camera.view.targetY = target.y;
+            result.camera.view.targetZ = target.z;
+            result.camera.view.storedInProject = true;
+        }
         result.outputFormat = QStringLiteral("PNG + PFM depth");
         return result;
     }

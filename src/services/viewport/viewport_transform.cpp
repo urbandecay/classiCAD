@@ -77,7 +77,6 @@ ViewportOrientation ViewportOrientation::slerp(
 
 namespace {
 
-constexpr qreal kViewportSensorWidthMillimeters = 36.0;
 constexpr qreal kViewportReferenceDistance = 60.0;
 constexpr qreal kBlenderStartupViewDistance = 18.38804817199707;
 constexpr qreal kBlenderStartupViewZoom =
@@ -105,12 +104,14 @@ bool isAxisAlignedOrthographicView(ViewportViewPreset preset)
     return false;
 }
 
-qreal viewportFocalLengthPixels(const QSize &viewportSize, qreal lensMillimeters)
+qreal viewportFocalLengthPixels(const QSize &viewportSize,
+                               qreal lensMillimeters,
+                               qreal sensorWidthMillimeters)
 {
     const qreal sensorFitExtent = std::max(viewportSize.width(),
                                            viewportSize.height());
     return sensorFitExtent * lensMillimeters /
-           (kViewportSensorWidthMillimeters * kBlenderViewportProjectionZoom);
+           (sensorWidthMillimeters * kBlenderViewportProjectionZoom);
 }
 
 qreal perspectiveReferenceDistance(const ViewportCameraPreferences &preferences)
@@ -338,7 +339,8 @@ qreal ViewportTransform::viewScalePixelsPerWorldUnit(
         return zoom_;
     }
     return viewportFocalLengthPixels(
-               viewportSize, cameraPreferences_.focalLengthMillimeters) *
+               viewportSize, cameraPreferences_.focalLengthMillimeters,
+               cameraPreferences_.sensorWidthMillimeters) *
            zoom_ / kViewportReferenceDistance;
 }
 
@@ -396,7 +398,8 @@ bool ViewportTransform::screenToWorkPlane(
     const CameraBasis basis = cameraBasis(orientation_);
     const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
     const qreal focalLength = viewportFocalLengthPixels(
-        viewportSize, cameraPreferences_.focalLengthMillimeters);
+        viewportSize, cameraPreferences_.focalLengthMillimeters,
+        cameraPreferences_.sensorWidthMillimeters);
 
     const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0;
     const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y();
@@ -482,7 +485,8 @@ bool ViewportTransform::screenToWorkPlaneUnclipped(
     Vec3 rayDirection;
     if (perspective_) {
         const qreal focalLength = viewportFocalLengthPixels(
-            viewportSize, cameraPreferences_.focalLengthMillimeters);
+            viewportSize, cameraPreferences_.focalLengthMillimeters,
+            cameraPreferences_.sensorWidthMillimeters);
         const qreal cameraDistance = perspectiveCameraDistance(
             zoom_, cameraPreferences_);
         rayOrigin = subtract(target, multiply(basis.forward, cameraDistance));
@@ -536,7 +540,8 @@ bool ViewportTransform::screenToWorldAxis(const QPointF &screenPosition,
     Vec3 rayDirection;
     if (perspective_) {
         const qreal focal = viewportFocalLengthPixels(
-            viewportSize, cameraPreferences_.focalLengthMillimeters);
+            viewportSize, cameraPreferences_.focalLengthMillimeters,
+            cameraPreferences_.sensorWidthMillimeters);
         rayOrigin = subtract(target, multiply(basis.forward,
             perspectiveCameraDistance(zoom_, cameraPreferences_)));
         rayDirection = normalized(add(basis.forward,
@@ -606,7 +611,8 @@ bool ViewportTransform::worldPointToScreen(const Point3D &worldPosition,
     qreal scale = viewScalePixelsPerWorldUnit(viewportSize);
     if (perspective_) {
         const qreal focalLength = viewportFocalLengthPixels(
-            viewportSize, cameraPreferences_.focalLengthMillimeters);
+            viewportSize, cameraPreferences_.focalLengthMillimeters,
+            cameraPreferences_.sensorWidthMillimeters);
         const qreal cameraDistance = perspectiveCameraDistance(
             zoom_, cameraPreferences_);
         const qreal depth = cameraDistance + dot(relative, basis.forward);
@@ -647,7 +653,8 @@ bool ViewportTransform::worldPointToScreenUnclipped(
     qreal scale = viewScalePixelsPerWorldUnit(viewportSize);
     if (perspective_) {
         const qreal focalLength = viewportFocalLengthPixels(
-            viewportSize, cameraPreferences_.focalLengthMillimeters);
+            viewportSize, cameraPreferences_.focalLengthMillimeters,
+            cameraPreferences_.sensorWidthMillimeters);
         const qreal cameraDistance = perspectiveCameraDistance(zoom_,
                                                                cameraPreferences_);
         const qreal depth = cameraDistance + dot(relative, basis.forward);
@@ -1109,7 +1116,8 @@ void ViewportTransform::panByPixels(const QPointF &delta,
 {
     if (perspective_) {
         const qreal focalLength = viewportFocalLengthPixels(
-            viewportSize, cameraPreferences_.focalLengthMillimeters);
+            viewportSize, cameraPreferences_.focalLengthMillimeters,
+            cameraPreferences_.sensorWidthMillimeters);
         const qreal worldUnitsPerPixel =
             perspectiveCameraDistance(zoom_, cameraPreferences_) /
             std::max<qreal>(focalLength, 1.0e-15);

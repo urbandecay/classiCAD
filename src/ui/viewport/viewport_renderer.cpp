@@ -57,12 +57,21 @@ void sampleWorkbenchImage(const QImage &image,
     }
     const bool repeat = extension.compare(QStringLiteral("REPEAT"),
                                          Qt::CaseInsensitive) == 0;
+    const bool mirror = extension.compare(QStringLiteral("MIRROR"),
+                                         Qt::CaseInsensitive) == 0;
     const bool clip = extension.compare(QStringLiteral("CLIP"),
                                         Qt::CaseInsensitive) == 0;
     const auto texel = [&](int x, int y, int component) -> qreal {
         if (clip && (x < 0 || x >= image.width() || y < 0 || y >= image.height()))
             return 0.0;
-        if (repeat) {
+        if (mirror) {
+            x = (x % (2 * image.width()) + 2 * image.width()) %
+                (2 * image.width());
+            y = (y % (2 * image.height()) + 2 * image.height()) %
+                (2 * image.height());
+            if (x >= image.width()) x = 2 * image.width() - 1 - x;
+            if (y >= image.height()) y = 2 * image.height() - 1 - y;
+        } else if (repeat) {
             x = (x % image.width() + image.width()) % image.width();
             y = (y % image.height() + image.height()) % image.height();
         } else {

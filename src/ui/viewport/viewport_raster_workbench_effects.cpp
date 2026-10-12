@@ -189,6 +189,8 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
     }
     const bool repeat = triangle.extension.compare(
         QStringLiteral("REPEAT"), Qt::CaseInsensitive) == 0;
+    const bool mirror = triangle.extension.compare(
+        QStringLiteral("MIRROR"), Qt::CaseInsensitive) == 0;
     const bool clip = triangle.extension.compare(
         QStringLiteral("CLIP"), Qt::CaseInsensitive) == 0;
     qreal u = uv.x();
@@ -196,7 +198,7 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
     if (repeat) {
         u -= std::floor(u);
         v -= std::floor(v);
-    } else if (!clip) {
+    } else if (!clip && !mirror) {
         u = std::clamp(u, 0.0, 1.0);
         v = std::clamp(v, 0.0, 1.0);
     } else if (u <= -2.0 / image.width() || u >= 1.0 + 2.0 / image.width() ||
@@ -214,7 +216,14 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
     const auto alphaAt = [&](int px, int py) -> qreal {
         if (clip && (px < 0 || px >= image.width() ||
                      py < 0 || py >= image.height())) return 0.0;
-        if (repeat) {
+        if (mirror) {
+            px = (px % (2 * image.width()) + 2 * image.width()) %
+                 (2 * image.width());
+            py = (py % (2 * image.height()) + 2 * image.height()) %
+                 (2 * image.height());
+            if (px >= image.width()) px = 2 * image.width() - 1 - px;
+            if (py >= image.height()) py = 2 * image.height() - 1 - py;
+        } else if (repeat) {
             px = (px % image.width() + image.width()) % image.width();
             py = (py % image.height() + image.height()) % image.height();
         } else {

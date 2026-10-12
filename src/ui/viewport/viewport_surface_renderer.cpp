@@ -57,7 +57,9 @@ void configureWorkbenchImageTexture(GLuint texture,
     const QString extension = material.textureImageExtension.toUpper();
     const GLint wrap = extension == QStringLiteral("CLIP")
         ? GL_CLAMP_TO_BORDER
-        : extension == QStringLiteral("EXTEND") ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+        : extension == QStringLiteral("EXTEND") ? GL_CLAMP_TO_EDGE
+        : extension == QStringLiteral("MIRROR") ? GL_MIRRORED_REPEAT
+                                                 : GL_REPEAT;
     QOpenGLFunctions *functions = QOpenGLContext::currentContext()->functions();
     functions->glBindTexture(GL_TEXTURE_2D, texture);
     functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);

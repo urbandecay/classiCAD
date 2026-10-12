@@ -61,8 +61,8 @@ struct DocumentImageTextureReference {
     QString colorSpace;
     // Blender Image.alpha_mode: STRAIGHT, PREMUL, CHANNEL_PACKED, or NONE.
     QString alphaMode = QStringLiteral("STRAIGHT");
-    // Blender Image Texture node sampling settings. These defaults match a
-    // newly created Blender Image Texture node.
+    // Blender image-texture node sampling settings. Environment Texture uses
+    // the Workbench sampler's Extend default when no extension is exposed.
     QString interpolation = QStringLiteral("Linear");
     QString extension = QStringLiteral("REPEAT");
     // Base64 packed image bytes from Blender scene import, empty for external
@@ -82,7 +82,8 @@ struct DocumentMaterial {
     float metallic = 0.0f;
     float alpha = 1.0f;
     // Source image references are retained without evaluating node graphs.
-    // Workbench Texture mode resolves the active Image Texture Node.
+    // Workbench Texture mode resolves the active Image Texture or Environment
+    // Texture node's image, without evaluating the surrounding node graph.
     QVector<DocumentImageTextureReference> imageTextures;
 };
 

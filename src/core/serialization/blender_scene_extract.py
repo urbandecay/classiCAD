@@ -230,11 +230,13 @@ def image_references(material):
     tree = getattr(material, "node_tree", None)
     if tree is None:
         return references
-    # Workbench's Texture color source uses the active Image Texture Node.
-    # Do not guess from node-tree iteration order or evaluate a node graph.
+    # Workbench's Texture color source uses the active image-bearing texture
+    # node. Blender 5.2.2 supports Image Texture and Environment Texture here;
+    # do not guess from node-tree order or evaluate a node graph.
     active_node = getattr(tree.nodes, "active", None)
     for node in ([active_node] if active_node is not None else []):
-        if getattr(node, "type", "") != "TEX_IMAGE":
+        node_type = getattr(node, "type", "")
+        if node_type not in {"TEX_IMAGE", "TEX_ENVIRONMENT"}:
             continue
         image = getattr(node, "image", None)
         if image is None:
@@ -335,8 +337,12 @@ def image_references(material):
                 "tiles": image_tiles,
                 "color_space": image.colorspace_settings.name,
                 "alpha_mode": image.alpha_mode,
-                "interpolation": node.interpolation,
-                "extension": node.extension,
+                "interpolation": getattr(node, "interpolation", "Linear"),
+                # Environment Texture has no extension control. Workbench's
+                # default sampler uses Extend; Image Texture defaults Repeat.
+                "extension": getattr(
+                    node, "extension",
+                    "EXTEND" if node_type == "TEX_ENVIRONMENT" else "REPEAT"),
             }
         )
     return references

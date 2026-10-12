@@ -2410,7 +2410,8 @@ bool ViewportSurfaceRenderer::ensureAgxDisplayTexture(int colorTransform)
     }
     const QVector<float> &lut = colorTransform == 2
         ? workbenchPbrNeutralDisplayLutData()
-        : workbenchAgxDisplayLutData();
+        : colorTransform == 3 ? workbenchFilmicDisplayLutData()
+                             : workbenchAgxDisplayLutData();
     if (lut.size() != workbenchAgxDisplayLutSize *
                           workbenchAgxDisplayLutSize *
                           workbenchAgxDisplayLutSize * 3) {

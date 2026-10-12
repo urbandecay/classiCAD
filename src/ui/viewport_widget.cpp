@@ -965,13 +965,15 @@ bool applyImportedSceneColorManagement(
             look != QLatin1String("None") ||
             (transform != QLatin1String("AgX") &&
              transform != QLatin1String("Standard") &&
-             transform != QLatin1String("Khronos PBR Neutral")) ||
+             transform != QLatin1String("Khronos PBR Neutral") &&
+             transform != QLatin1String("Filmic")) ||
             !std::isfinite(exposure) || !std::isfinite(gamma) || gamma <= 0.0) {
             return false;
         }
         settings->colorTransform =
             transform == QLatin1String("Standard") ? 1 :
-            transform == QLatin1String("Khronos PBR Neutral") ? 2 : 0;
+            transform == QLatin1String("Khronos PBR Neutral") ? 2 :
+            transform == QLatin1String("Filmic") ? 3 : 0;
         settings->colorExposure = std::clamp(exposure, -32.0, 32.0);
         settings->colorGamma = std::clamp(gamma, 0.000001, 5.0);
         return true;

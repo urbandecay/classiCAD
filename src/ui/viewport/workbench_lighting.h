@@ -140,6 +140,30 @@ inline const QVector<float> &workbenchPbrNeutralDisplayLutData()
     return values;
 }
 
+inline const QVector<float> &workbenchFilmicDisplayLutData()
+{
+    static const QVector<float> values = [] {
+        QFile file(QStringLiteral(
+            ":/workbench-lighting/color/filmic_srgb_65.bin"));
+        if (!file.open(QIODevice::ReadOnly)) return QVector<float>{};
+        const QByteArray bytes = file.readAll();
+        constexpr qsizetype valueCount =
+            workbenchAgxDisplayLutSize * workbenchAgxDisplayLutSize *
+            workbenchAgxDisplayLutSize * 3;
+        if (bytes.size() != valueCount * static_cast<qsizetype>(sizeof(quint32)))
+            return QVector<float>{};
+        QVector<float> result(valueCount);
+        const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
+        for (qsizetype index = 0; index < valueCount; ++index) {
+            const quint32 bits = qFromLittleEndian<quint32>(
+                source + index * sizeof(quint32));
+            std::memcpy(&result[index], &bits, sizeof(bits));
+        }
+        return result;
+    }();
+    return values;
+}
+
 inline QVector3D workbenchSceneLinearToDisplaySrgb(
     const QVector3D &inputColor,
     int colorTransform = 0,
@@ -156,7 +180,8 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
     } else {
         const QVector<float> &lut = colorTransform == 2
             ? workbenchPbrNeutralDisplayLutData()
-            : workbenchAgxDisplayLutData();
+            : colorTransform == 3 ? workbenchFilmicDisplayLutData()
+                                  : workbenchAgxDisplayLutData();
         if (lut.isEmpty()) {
             displayColor = workbenchSceneLinearToSrgb(color);
         } else {

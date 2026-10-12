@@ -8,6 +8,7 @@ varying fastest. The viewport samples it trilinearly on both CPU and GPU.
 
 `khronos_pbr_neutral_srgb_65.bin` is baked from Blender 5.2.2's
 `Khronos PBR Neutral` view on the sRGB display using the same LUT layout.
+`filmic_srgb_65.bin` is baked from Blender 5.2.2's `Filmic` view on sRGB.
 `Standard` remains an analytic sRGB transfer curve in the renderer.
 
 Regenerate it with Blender's bundled PyOpenColorIO module:
@@ -20,6 +21,7 @@ The generator also accepts `--display` and `--view`; for example:
 
 ```sh
 python generate_agx_lut.py /path/to/blender/datafiles/colormanagement/config.ocio khronos_pbr_neutral_srgb_65.bin --display sRGB --view "Khronos PBR Neutral"
+python generate_agx_lut.py /path/to/blender/datafiles/colormanagement/config.ocio filmic_srgb_65.bin --display sRGB --view Filmic
 ```
 
 The transform follows Blender's OpenColorIO configuration, based on AgX by

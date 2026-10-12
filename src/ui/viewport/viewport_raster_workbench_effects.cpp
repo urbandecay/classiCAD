@@ -198,11 +198,21 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
     if (repeat) {
         u -= std::floor(u);
         v -= std::floor(v);
+    } else if (mirror) {
+        // Reduce to one mirrored pair before converting coordinates to
+        // integer texels; this both preserves the extension mode at arbitrary
+        // UV magnitudes and avoids overflowing the texel index conversion.
+        u = std::fmod(u, 2.0);
+        v = std::fmod(v, 2.0);
+        if (u < 0.0) u += 2.0;
+        if (v < 0.0) v += 2.0;
     } else if (!clip && !mirror) {
         u = std::clamp(u, 0.0, 1.0);
         v = std::clamp(v, 0.0, 1.0);
-    } else if (u <= -2.0 / image.width() || u >= 1.0 + 2.0 / image.width() ||
-               v <= -2.0 / image.height() || v >= 1.0 + 2.0 / image.height()) {
+    } else if (clip && (u <= -2.0 / image.width() ||
+               u >= 1.0 + 2.0 / image.width() ||
+               v <= -2.0 / image.height() ||
+               v >= 1.0 + 2.0 / image.height())) {
         return 0.0f;
     }
     const qreal x = u * image.width() - 0.5;

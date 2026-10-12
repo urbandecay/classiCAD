@@ -911,8 +911,9 @@ depth as `SFLOAT_32_DEPTH_UINT_8` in its Workbench render-target setup
 ([`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L555-L582)).
 classiCAD's primary Solid scene depth, in-front depth, sample-zero depth
 preservation target, cavity depth snapshot, and object-ID depth-stencil target
-now use D32F/S8 or D32F depth storage as appropriate. Packed depth-stencil
-texture allocations use `GL_FLOAT_32_UNSIGNED_INT_24_8_REV`; depth readback
+now use D32F/S8. The cavity snapshot retains stencil storage so its depth blits
+match the scene and in-front source formats. Packed depth-stencil texture
+allocations use `GL_FLOAT_32_UNSIGNED_INT_24_8_REV`; depth readback
 continues through `GL_DEPTH_COMPONENT`/`GL_FLOAT`, so no CPU path unpacks a
 24-bit depth field. This preserves Blender's 32-bit floating-point depth
 precision across scene/in-front comparisons, AA depth restoration, and the

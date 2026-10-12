@@ -2451,9 +2451,10 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
     if (cavityDepthTexture_ == 0) {
         glGenTextures(1, &cavityDepthTexture_);
         glBindTexture(GL_TEXTURE_2D, cavityDepthTexture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8,
                      pixelSize.width(), pixelSize.height(), 0,
-                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+                     GL_DEPTH_STENCIL,
+                     GL_FLOAT_32_UNSIGNED_INT_24_8_REV, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -2488,7 +2489,7 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
         glGenFramebuffers(1, &cavityDepthFramebuffer_);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, cavityDepthFramebuffer_);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, cavityDepthTexture_, 0);
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);

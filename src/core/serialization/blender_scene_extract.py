@@ -9,6 +9,7 @@ required mesh record before creating native scene objects.
 """
 
 import base64
+import hashlib
 import json
 import math
 import os
@@ -21,10 +22,11 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 5
+BRIDGE_FORMAT_VERSION = 6
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
+SOURCE_PROJECT_NAMESPACE = ""
 
 
 def require_pinned_blender():
@@ -48,7 +50,17 @@ def source_library_exists(id_block):
 
 
 def stable_id(id_block):
-    return source_library_path(id_block) + "::" + id_block.name_full
+    if not SOURCE_PROJECT_NAMESPACE:
+        raise RuntimeError("source Blender project namespace was not initialized")
+    return (SOURCE_PROJECT_NAMESPACE + "::" + source_library_path(id_block)
+            + "::" + id_block.name_full)
+
+
+def source_project_namespace(filepath):
+    if not filepath:
+        raise RuntimeError("Blender did not provide the source project filepath")
+    normalized_path = os.path.normcase(os.path.realpath(os.path.abspath(filepath)))
+    return hashlib.sha256(normalized_path.encode("utf-8")).hexdigest()
 
 
 def finite_number(value):
@@ -420,17 +432,21 @@ def depsgraph_for_scene(scene):
 
 
 def extract_scene(input_path, mode):
+    global SOURCE_PROJECT_NAMESPACE
     require_pinned_blender()
     if mode not in {"original", "evaluated"}:
         raise ValueError("mode must be 'original' or 'evaluated'")
     bpy.ops.wm.open_mainfile(filepath=os.path.abspath(input_path))
     require_pinned_blender()
+    source_filepath = bpy.data.filepath
+    SOURCE_PROJECT_NAMESPACE = source_project_namespace(source_filepath)
 
     output = {
         "format": BRIDGE_FORMAT,
         "format_version": BRIDGE_FORMAT_VERSION,
         "source": {
-            "filepath": bpy.data.filepath,
+            "filepath": source_filepath,
+            "project_namespace": SOURCE_PROJECT_NAMESPACE,
             "blender_version": bpy.app.version_string,
             "blender_version_tuple": list(bpy.app.version[:3]),
             "import_mode": mode,

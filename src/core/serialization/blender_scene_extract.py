@@ -267,6 +267,8 @@ def image_references(material):
                 ),
                 "color_space": image.colorspace_settings.name,
                 "alpha_mode": image.alpha_mode,
+                "interpolation": node.interpolation,
+                "extension": node.extension,
             }
         )
     return references

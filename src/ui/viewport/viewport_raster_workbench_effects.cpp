@@ -47,6 +47,8 @@ qreal rasterDofKernelRotation(int x, int y)
 struct TextureAlphaTriangle {
     QImage image;
     std::array<QPointF, 3> uvs{};
+    QString interpolation = QStringLiteral("Linear");
+    QString extension = QStringLiteral("REPEAT");
     bool cutout = false;
 };
 
@@ -153,37 +155,85 @@ QImage loadTextureAlphaImage(const WorkbenchMaterialData &material)
     return image.convertToFormat(QImage::Format_RGBA8888);
 }
 
-int repeatedTextureIndex(int index, int size)
+float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
+                         const QPointF &uv)
 {
-    const int wrapped = index % size;
-    return wrapped < 0 ? wrapped + size : wrapped;
-}
-
-float sampleTextureAlphaRepeat(const QImage &image, const QPointF &uv)
-{
+    const QImage &image = triangle.image;
     if (image.isNull() || !std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
         return 1.0f;
     }
-    const qreal wrappedU = uv.x() - std::floor(uv.x());
-    const qreal wrappedV = uv.y() - std::floor(uv.y());
-    const qreal x = wrappedU * image.width() - 0.5;
-    const qreal y = wrappedV * image.height() - 0.5;
+    const bool repeat = triangle.extension.compare(
+        QStringLiteral("REPEAT"), Qt::CaseInsensitive) == 0;
+    const bool clip = triangle.extension.compare(
+        QStringLiteral("CLIP"), Qt::CaseInsensitive) == 0;
+    qreal u = uv.x();
+    qreal v = uv.y();
+    if (repeat) {
+        u -= std::floor(u);
+        v -= std::floor(v);
+    } else if (!clip) {
+        u = std::clamp(u, 0.0, 1.0);
+        v = std::clamp(v, 0.0, 1.0);
+    } else if (u <= -2.0 / image.width() || u >= 1.0 + 2.0 / image.width() ||
+               v <= -2.0 / image.height() || v >= 1.0 + 2.0 / image.height()) {
+        return 0.0f;
+    }
+    const qreal x = u * image.width() - 0.5;
+    const qreal y = v * image.height() - 0.5;
     const int x0 = static_cast<int>(std::floor(x));
     const int y0 = static_cast<int>(std::floor(y));
     const qreal tx = x - x0;
     const qreal ty = y - y0;
-    const int x1 = repeatedTextureIndex(x0 + 1, image.width());
-    const int y1 = repeatedTextureIndex(y0 + 1, image.height());
-    const int wrappedX0 = repeatedTextureIndex(x0, image.width());
-    const int wrappedY0 = repeatedTextureIndex(y0, image.height());
-    const auto alphaAt = [&image](int px, int py) {
+    const bool closest = triangle.interpolation.compare(
+        QStringLiteral("Closest"), Qt::CaseInsensitive) == 0;
+    const auto alphaAt = [&](int px, int py) -> qreal {
+        if (clip && (px < 0 || px >= image.width() ||
+                     py < 0 || py >= image.height())) return 0.0;
+        if (repeat) {
+            px = (px % image.width() + image.width()) % image.width();
+            py = (py % image.height() + image.height()) % image.height();
+        } else {
+            px = std::clamp(px, 0, image.width() - 1);
+            py = std::clamp(py, 0, image.height() - 1);
+        }
         return image.constScanLine(py)[px * 4 + 3] / 255.0;
     };
-    const qreal top = alphaAt(wrappedX0, wrappedY0) * (1.0 - tx) +
-                      alphaAt(x1, wrappedY0) * tx;
-    const qreal bottom = alphaAt(wrappedX0, y1) * (1.0 - tx) +
-                         alphaAt(x1, y1) * tx;
-    return static_cast<float>(top * (1.0 - ty) + bottom * ty);
+    if (closest) {
+        return static_cast<float>(alphaAt(
+            static_cast<int>(std::floor(u * image.width())),
+            static_cast<int>(std::floor(v * image.height()))));
+    }
+    const bool cubic = triangle.interpolation.compare(
+        QStringLiteral("Cubic"), Qt::CaseInsensitive) == 0 ||
+        triangle.interpolation.compare(
+            QStringLiteral("Smart"), Qt::CaseInsensitive) == 0;
+    if (cubic) {
+        const auto weight = [](qreal t, int offset) {
+            const qreal distance = std::abs(t - offset);
+            if (distance < 1.0)
+                return (4.0 - 6.0 * distance * distance +
+                        3.0 * distance * distance * distance) / 6.0;
+            if (distance < 2.0) {
+                const qreal remainder = 2.0 - distance;
+                return remainder * remainder * remainder / 6.0;
+            }
+            return 0.0;
+        };
+        qreal result = 0.0;
+        for (int j = -1; j <= 2; ++j) {
+            for (int i = -1; i <= 2; ++i) {
+                result += alphaAt(x0 + i, y0 + j) *
+                          weight(tx, i) * weight(ty, j);
+            }
+        }
+        return static_cast<float>(std::clamp(result, 0.0, 1.0));
+    }
+    const qreal top = alphaAt(x0, y0) * (1.0 - tx) +
+                      alphaAt(x0 + 1, y0) * tx;
+    const qreal bottom = alphaAt(x0, y0 + 1) * (1.0 - tx) +
+                         alphaAt(x0 + 1, y0 + 1) * tx;
+    return static_cast<float>(std::clamp(
+        top * (1.0 - ty) + bottom * ty, 0.0, 1.0));
 }
 
 } // namespace
@@ -590,6 +640,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     TextureAlphaTriangle textureAlphaTriangle;
                     if (textureAlphaCutout) {
                         textureAlphaTriangle.image = alphaImage;
+                        textureAlphaTriangle.interpolation =
+                            object.meshMaterials[faceSlot].textureImageInterpolation;
+                        textureAlphaTriangle.extension =
+                            object.meshMaterials[faceSlot].textureImageExtension;
                         textureAlphaTriangle.cutout = true;
                         for (int corner = 0; corner < 3; ++corner) {
                             const QPointF uv = activeUvMap->cornerValues[
@@ -629,6 +683,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     TextureAlphaTriangle &alphaTriangle =
                         textureAlphaTriangles[triangle / 3];
                     alphaTriangle.image = alphaImage;
+                    alphaTriangle.interpolation =
+                        object.workbenchMaterial.textureImageInterpolation;
+                    alphaTriangle.extension =
+                        object.workbenchMaterial.textureImageExtension;
                     alphaTriangle.cutout = true;
                     for (int corner = 0; corner < 3; ++corner) {
                         const QPointF uv =
@@ -720,8 +778,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                              textureAlphaTriangle->uvs[1] * corrected1 +
                              textureAlphaTriangle->uvs[2] * corrected2) /
                             denominator;
-                        if (sampleTextureAlphaRepeat(
-                                textureAlphaTriangle->image, uv) < 0.1f) {
+                        if (sampleTextureAlpha(*textureAlphaTriangle, uv) < 0.1f) {
                             continue;
                         }
                     }

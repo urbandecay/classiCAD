@@ -45,6 +45,71 @@ namespace {
 constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
 
+void sampleWorkbenchImage(const QImage &image,
+                          const QPointF &uv,
+                          const QString &interpolation,
+                          const QString &extension,
+                          uchar *rgba)
+{
+    if (image.isNull()) {
+        std::fill(rgba, rgba + 4, uchar(0));
+        return;
+    }
+    const bool repeat = extension.compare(QStringLiteral("REPEAT"),
+                                         Qt::CaseInsensitive) == 0;
+    const bool clip = extension.compare(QStringLiteral("CLIP"),
+                                        Qt::CaseInsensitive) == 0;
+    const auto texel = [&](int x, int y, int component) -> qreal {
+        if (clip && (x < 0 || x >= image.width() || y < 0 || y >= image.height()))
+            return 0.0;
+        if (repeat) {
+            x = (x % image.width() + image.width()) % image.width();
+            y = (y % image.height() + image.height()) % image.height();
+        } else {
+            x = std::clamp(x, 0, image.width() - 1);
+            y = std::clamp(y, 0, image.height() - 1);
+        }
+        return image.constScanLine(y)[x * 4 + component];
+    };
+    const bool closest = interpolation.compare(QStringLiteral("Closest"),
+                                               Qt::CaseInsensitive) == 0;
+    if (closest) {
+        const int x = qFloor(uv.x() * image.width());
+        const int y = qFloor(uv.y() * image.height());
+        for (int c = 0; c < 4; ++c)
+            rgba[c] = static_cast<uchar>(qRound(texel(x, y, c)));
+        return;
+    }
+    const qreal tx = uv.x() * image.width() - 0.5;
+    const qreal ty = uv.y() * image.height() - 0.5;
+    const int x0 = qFloor(tx), y0 = qFloor(ty);
+    const qreal fx = tx - x0, fy = ty - y0;
+    const bool cubic = interpolation.compare(QStringLiteral("Cubic"),
+                                              Qt::CaseInsensitive) == 0 ||
+                       interpolation.compare(QStringLiteral("Smart"),
+                                              Qt::CaseInsensitive) == 0;
+    for (int c = 0; c < 4; ++c) {
+        qreal value = 0.0;
+        if (cubic) {
+            const auto weight = [](qreal t, int i) {
+                // Blender's cubic image sampling uses a cubic B-spline.
+                const qreal x = std::abs(t - i);
+                if (x < 1.0) return (4.0 - 6.0*x*x + 3.0*x*x*x) / 6.0;
+                if (x < 2.0) { const qreal a = 2.0 - x; return a*a*a / 6.0; }
+                return 0.0;
+            };
+            for (int j = -1; j <= 2; ++j)
+                for (int i = -1; i <= 2; ++i)
+                    value += texel(x0 + i, y0 + j, c) * weight(fx, i) * weight(fy, j);
+        } else {
+            const qreal a = texel(x0, y0, c) * (1.0 - fx) + texel(x0 + 1, y0, c) * fx;
+            const qreal b = texel(x0, y0 + 1, c) * (1.0 - fx) + texel(x0 + 1, y0 + 1, c) * fx;
+            value = a * (1.0 - fy) + b * fy;
+        }
+        rgba[c] = static_cast<uchar>(std::clamp(qRound(value), 0, 255));
+    }
+}
+
 quint32 blenderStringHash(const QByteArray &bytes, quint32 seed = 0)
 {
     constexpr quint32 multiplier = 0x5bd1e995U;
@@ -1010,6 +1075,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QImage texture;
             bool texturePremultiplied = false;
             bool textureSrgb = true;
+            QString textureInterpolation = QStringLiteral("Linear");
+            QString textureExtension = QStringLiteral("REPEAT");
             std::array<QPointF, 3> uvs{};
             std::array<qreal, 3> reciprocalDepths{};
         };
@@ -1286,6 +1353,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                              Qt::CaseInsensitive) == 0;
                             triangle.textureSrgb =
                                 meshMaterials[materialIndex].textureImageSrgb;
+                            triangle.textureInterpolation =
+                                meshMaterials[materialIndex].textureImageInterpolation;
+                            triangle.textureExtension =
+                                meshMaterials[materialIndex].textureImageExtension;
                         }
                         triangle.uvs = triangleUvs;
                         const Point3D ab{vertices[1].x - vertices[0].x,
@@ -1410,28 +1481,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
             }
             QImage raster(width, height, QImage::Format_RGBA8888);
             raster.fill(Qt::transparent);
-            const auto wrap = [](int coordinate, int extent) {
-                const int wrapped = coordinate % extent;
-                return wrapped < 0 ? wrapped + extent : wrapped;
-            };
-            const auto channel = [&](int x, int y, int component) {
-                const uchar *pixel = texture.constScanLine(wrap(y, texture.height())) +
-                                     wrap(x, texture.width()) * 4;
-                return qreal(pixel[component]);
-            };
             const auto sample = [&](const QPointF &uv, uchar *rgba) {
-                const qreal tx = uv.x() * texture.width() - 0.5;
-                const qreal ty = uv.y() * texture.height() - 0.5;
-                const int x0 = qFloor(tx), y0 = qFloor(ty);
-                const qreal fx = tx - x0, fy = ty - y0;
-                for (int component = 0; component < 4; ++component) {
-                    const qreal topValue = channel(x0, y0, component) * (1.0 - fx) +
-                                           channel(x0 + 1, y0, component) * fx;
-                    const qreal bottomValue = channel(x0, y0 + 1, component) * (1.0 - fx) +
-                                              channel(x0 + 1, y0 + 1, component) * fx;
-                    rgba[component] = static_cast<uchar>(std::clamp(
-                        qRound(topValue * (1.0 - fy) + bottomValue * fy), 0, 255));
-                }
+                sampleWorkbenchImage(texture, uv, triangle.textureInterpolation,
+                                     triangle.textureExtension, rgba);
             };
             const qreal alpha = triangle.color.alphaF();
             for (int y = 0; y < height; ++y) {
@@ -2554,11 +2606,6 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             }
             QImage raster(right-left, bottom-top, QImage::Format_ARGB32_Premultiplied);
             raster.fill(Qt::transparent);
-            const auto wrap = [](int n, int size) { const int r = n % size; return r < 0 ? r + size : r; };
-            const auto texel = [&](int x, int y, int channel) {
-                return qreal(nurbsTexture.constScanLine(wrap(y, nurbsTexture.height()))[
-                    wrap(x, nurbsTexture.width()) * 4 + channel]);
-            };
             for (int y = 0; y < raster.height(); ++y) {
                 auto *row = reinterpret_cast<QRgb *>(raster.scanLine(y));
                 for (int x = 0; x < raster.width(); ++x) {
@@ -2571,14 +2618,10 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     const qreal denominator=cw0+cw1+cw2;
                     if (denominator <= 1.0e-12) continue;
                     const QPointF uv = (triangle.uvs[0]*cw0 + triangle.uvs[1]*cw1 + triangle.uvs[2]*cw2) / denominator;
-                    const qreal tx = uv.x()*nurbsTexture.width()-0.5, ty = uv.y()*nurbsTexture.height()-0.5;
-                    const int x0=qFloor(tx), y0=qFloor(ty); const qreal fx=tx-x0, fy=ty-y0;
                     uchar rgba[4];
-                    for(int c=0;c<4;++c) {
-                        const qreal a=texel(x0,y0,c)*(1-fx)+texel(x0+1,y0,c)*fx;
-                        const qreal b=texel(x0,y0+1,c)*(1-fx)+texel(x0+1,y0+1,c)*fx;
-                        rgba[c]=static_cast<uchar>(std::clamp(qRound(a*(1-fy)+b*fy),0,255));
-                    }
+                    sampleWorkbenchImage(nurbsTexture, uv,
+                                         material.textureImageInterpolation,
+                                         material.textureImageExtension, rgba);
                     if (!textureAlphaIgnored && rgba[3] < 26) continue;
                     const qreal alpha = shaded.alphaF() * (textureAlphaIgnored ? 1.0 : rgba[3]/255.0);
                     const bool premultiplied = material.textureImageAlphaMode.compare(

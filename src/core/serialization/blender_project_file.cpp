@@ -622,6 +622,10 @@ bool parseBlenderMaterials(
                 reference.colorSpace = image.value(QStringLiteral("color_space")).toString();
                 reference.alphaMode = image.value(QStringLiteral("alpha_mode"))
                                           .toString(QStringLiteral("STRAIGHT"));
+                reference.interpolation = image.value(QStringLiteral("interpolation"))
+                                              .toString(QStringLiteral("Linear"));
+                reference.extension = image.value(QStringLiteral("extension"))
+                                          .toString(QStringLiteral("REPEAT"));
                 reference.packed = image.value(QStringLiteral("packed")).toBool();
                 reference.packedDataBase64 = image.value(QStringLiteral("packed_data_base64"))
                                                  .toString();

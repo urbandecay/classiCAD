@@ -34,6 +34,8 @@ struct WorkbenchMaterialData {
     QString textureImagePath;
     bool textureImageSrgb = true;
     QString textureImageAlphaMode = QStringLiteral("STRAIGHT");
+    QString textureImageInterpolation = QStringLiteral("Linear");
+    QString textureImageExtension = QStringLiteral("REPEAT");
     QString textureImagePackedDataBase64;
 };
 
@@ -46,6 +48,10 @@ struct DocumentImageTextureReference {
     QString colorSpace;
     // Blender Image.alpha_mode: STRAIGHT, PREMUL, CHANNEL_PACKED, or NONE.
     QString alphaMode = QStringLiteral("STRAIGHT");
+    // Blender Image Texture node sampling settings. These defaults match a
+    // newly created Blender Image Texture node.
+    QString interpolation = QStringLiteral("Linear");
+    QString extension = QStringLiteral("REPEAT");
     // Base64 packed image bytes from Blender scene import, empty for external
     // images or packed data omitted by the transport size limit.
     QString packedDataBase64;

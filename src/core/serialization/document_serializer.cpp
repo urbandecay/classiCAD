@@ -149,6 +149,10 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
         !scalar(QStringLiteral("alpha"), &restored.alpha)) {
         return false;
     }
+    restored.textureImageInterpolation = object.value(
+        QStringLiteral("textureImageInterpolation")).toString(QStringLiteral("Linear"));
+    restored.textureImageExtension = object.value(
+        QStringLiteral("textureImageExtension")).toString(QStringLiteral("REPEAT"));
     *material = restored;
     return true;
 }
@@ -248,6 +252,8 @@ QJsonObject documentToJson(const Document &document)
             image.insert(QStringLiteral("filepath"), reference.filepath);
             image.insert(QStringLiteral("colorSpace"), reference.colorSpace);
             image.insert(QStringLiteral("alphaMode"), reference.alphaMode);
+            image.insert(QStringLiteral("interpolation"), reference.interpolation);
+            image.insert(QStringLiteral("extension"), reference.extension);
             image.insert(QStringLiteral("packedDataBase64"), reference.packedDataBase64);
             image.insert(QStringLiteral("packed"), reference.packed);
             image.insert(QStringLiteral("sourceFileExists"), reference.sourceFileExists);
@@ -299,6 +305,10 @@ QJsonObject documentToJson(const Document &document)
                                  sceneObject.workbenchMaterial.metallic);
         workbenchMaterial.insert(QStringLiteral("alpha"),
                                  sceneObject.workbenchMaterial.alpha);
+        workbenchMaterial.insert(QStringLiteral("textureImageInterpolation"),
+                                 sceneObject.workbenchMaterial.textureImageInterpolation);
+        workbenchMaterial.insert(QStringLiteral("textureImageExtension"),
+                                 sceneObject.workbenchMaterial.textureImageExtension);
         serializedObject.insert(QStringLiteral("workbenchMaterial"),
                                 workbenchMaterial);
         if (sceneObject.geometry.geometryType == GeometryType::PolygonMesh) {
@@ -523,6 +533,10 @@ bool documentFromJson(const QJsonValue &value,
                     reference.colorSpace = image.value(QStringLiteral("colorSpace")).toString();
                     reference.alphaMode = image.value(QStringLiteral("alphaMode"))
                                               .toString(QStringLiteral("STRAIGHT"));
+                    reference.interpolation = image.value(QStringLiteral("interpolation"))
+                                                  .toString(QStringLiteral("Linear"));
+                    reference.extension = image.value(QStringLiteral("extension"))
+                                             .toString(QStringLiteral("REPEAT"));
                     reference.packedDataBase64 = image.value(QStringLiteral("packedDataBase64"))
                                                      .toString();
                     if (reference.packedDataBase64.size() > 44 * 1024 * 1024 ||

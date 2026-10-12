@@ -20,6 +20,7 @@
 #include <QCryptographicHash>
 #include <QBuffer>
 #include <QOpenGLContext>
+#include <QOpenGLFunctions>
 #include <QVector2D>
 #include <QVector3D>
 #include <QVector4D>
@@ -35,6 +36,40 @@ namespace classiCAD {
 namespace {
 
 constexpr int kWorkbenchShadowMapSize = 1024;
+
+int workbenchTextureInterpolation(const QString &interpolation)
+{
+    if (interpolation.compare(QStringLiteral("Closest"), Qt::CaseInsensitive) == 0)
+        return 1;
+    if (interpolation.compare(QStringLiteral("Cubic"), Qt::CaseInsensitive) == 0 ||
+        interpolation.compare(QStringLiteral("Smart"), Qt::CaseInsensitive) == 0)
+        return 2;
+    return 0;
+}
+
+void configureWorkbenchImageTexture(GLuint texture,
+                                    const WorkbenchMaterialData &material)
+{
+    if (texture == 0) return;
+    const bool closest = workbenchTextureInterpolation(
+        material.textureImageInterpolation) == 1;
+    const GLint filter = closest ? GL_NEAREST : GL_LINEAR;
+    const QString extension = material.textureImageExtension.toUpper();
+    const GLint wrap = extension == QStringLiteral("CLIP")
+        ? GL_CLAMP_TO_BORDER
+        : extension == QStringLiteral("EXTEND") ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+    QOpenGLFunctions *functions = QOpenGLContext::currentContext()->functions();
+    functions->glBindTexture(GL_TEXTURE_2D, texture);
+    functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+    functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    functions->glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    if (wrap == GL_CLAMP_TO_BORDER) {
+        const GLfloat transparent[4] = {0.f, 0.f, 0.f, 0.f};
+        functions->glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR,
+                                    transparent);
+    }
+}
 
 QVector3D workbenchShadowDirectionWorld(
     const ViewportShadingSettings &settings)
@@ -343,8 +378,36 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uUseAttributeColor;
         uniform bool uUseTextureColor;
         uniform sampler2D uWorkbenchImage;
+        uniform int uTextureInterpolation;
         uniform bool uTexturePremultiplied;
         uniform bool uTextureAlphaCutoff;
+        vec4 sampleWorkbenchImage(vec2 uv)
+        {
+            if (uTextureInterpolation == 1) {
+                return texture(uWorkbenchImage, uv);
+            }
+            if (uTextureInterpolation != 2) {
+                return texture(uWorkbenchImage, uv);
+            }
+            vec2 size = vec2(textureSize(uWorkbenchImage, 0));
+            vec2 p = uv * size - 0.5;
+            vec2 base = floor(p);
+            vec2 f = fract(p);
+            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+            vec2 w3 = f * f * f / 6.0;
+            vec4 result = vec4(0.0);
+            for (int y = 0; y < 4; ++y) {
+                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
+                for (int x = 0; x < 4; ++x) {
+                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
+                    result += texture(uWorkbenchImage,
+                        (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size) * wx * wy;
+                }
+            }
+            return result;
+        }
         uniform bool uEditModeSelected;
         uniform vec3 uEditSelectionColor;
         uniform float uEditSelectionMix;
@@ -694,7 +757,7 @@ bool ViewportSurfaceRenderer::initialize()
             }
             vec3 textureColor = vec3(1.0);
             if (uUseTextureColor) {
-                vec4 imageColor = texture(uWorkbenchImage, vUv);
+                vec4 imageColor = sampleWorkbenchImage(vUv);
                 if (uTextureAlphaCutoff && imageColor.a < 0.1) {
                     discard;
                 }
@@ -923,13 +986,36 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uUseTextureAlphaMask;
         uniform bool uTextureAlphaCutoff;
         uniform sampler2D uWorkbenchImage;
+        uniform int uTextureInterpolation;
         layout(location = 0) out vec4 fragmentViewNormal;
         layout(location = 1) out uint fragmentObjectId;
         layout(location = 2) out uint fragmentOutlineObjectId;
+        vec4 sampleWorkbenchAlphaImage(vec2 uv)
+        {
+            if (uTextureInterpolation != 2) return texture(uWorkbenchImage, uv);
+            vec2 size = vec2(textureSize(uWorkbenchImage, 0));
+            vec2 p = uv * size - 0.5;
+            vec2 base = floor(p);
+            vec2 f = fract(p);
+            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+            vec2 w3 = f * f * f / 6.0;
+            vec4 result = vec4(0.0);
+            for (int y = 0; y < 4; ++y) {
+                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
+                for (int x = 0; x < 4; ++x) {
+                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
+                    result += texture(uWorkbenchImage,
+                        (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size) * wx * wy;
+                }
+            }
+            return result;
+        }
         void main()
         {
             if (uUseTextureAlphaMask && uTextureAlphaCutoff &&
-                texture(uWorkbenchImage, vUv).a < 0.1) {
+                sampleWorkbenchAlphaImage(vUv).a < 0.1) {
                 discard;
             }
             fragmentViewNormal = vec4(normalize(vNormalView), 1.0);
@@ -1006,10 +1092,33 @@ bool ViewportSurfaceRenderer::initialize()
         in vec2 vUv;
         uniform sampler2D uShadowAlphaTexture;
         uniform bool uUseShadowAlphaMask;
+        uniform int uTextureInterpolation;
+        vec4 sampleShadowAlphaImage(vec2 uv)
+        {
+            if (uTextureInterpolation != 2) return texture(uShadowAlphaTexture, uv);
+            vec2 size = vec2(textureSize(uShadowAlphaTexture, 0));
+            vec2 p = uv * size - 0.5;
+            vec2 base = floor(p);
+            vec2 f = fract(p);
+            vec2 w0 = (1.0 - f) * (1.0 - f) * (1.0 - f) / 6.0;
+            vec2 w1 = (3.0 * f * f * f - 6.0 * f * f + 4.0) / 6.0;
+            vec2 w2 = (-3.0 * f * f * f + 3.0 * f * f + 3.0 * f + 1.0) / 6.0;
+            vec2 w3 = f * f * f / 6.0;
+            vec4 result = vec4(0.0);
+            for (int y = 0; y < 4; ++y) {
+                float wy = y == 0 ? w0.y : y == 1 ? w1.y : y == 2 ? w2.y : w3.y;
+                for (int x = 0; x < 4; ++x) {
+                    float wx = x == 0 ? w0.x : x == 1 ? w1.x : x == 2 ? w2.x : w3.x;
+                    result += texture(uShadowAlphaTexture,
+                        (base + vec2(float(x - 1), float(y - 1)) + 0.5) / size) * wx * wy;
+                }
+            }
+            return result;
+        }
         void main()
         {
             if (uUseShadowAlphaMask &&
-                texture(uShadowAlphaTexture, vUv).a < 0.1) {
+                sampleShadowAlphaImage(vUv).a < 0.1) {
                 discard;
             }
         }
@@ -1110,7 +1219,9 @@ void ViewportSurfaceRenderer::prepareGeometry(
                              object.workbenchMaterial.textureImagePackedDataBase64.toLatin1(),
                              QCryptographicHash::Sha256)
                       << object.workbenchMaterial.textureImageSrgb
-                      << object.workbenchMaterial.textureImageAlphaMode;
+                      << object.workbenchMaterial.textureImageAlphaMode
+                      << object.workbenchMaterial.textureImageInterpolation
+                      << object.workbenchMaterial.textureImageExtension;
         }
         if (hasMesh) {
             const PolygonMesh3D &mesh = object.shape.polygonMesh;
@@ -1137,7 +1248,9 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                  material.textureImagePackedDataBase64.toLatin1(),
                                  QCryptographicHash::Sha256)
                           << material.textureImageSrgb
-                          << material.textureImageAlphaMode;
+                          << material.textureImageAlphaMode
+                          << material.textureImageInterpolation
+                          << material.textureImageExtension;
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
                 if (attribute.name != mesh.activeColorAttributeName) continue;
                 keyStream << attribute.name << qint32(attribute.domain)
@@ -1829,6 +1942,10 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
             : 0;
         glUniform1i(useTextureAlphaMaskUniformLocation, imageTexture != 0);
         glUniform1i(textureAlphaCutoffUniformLocation, !ignoreTextureAlpha);
+        workbenchEffectProgram_.setUniformValue(
+            "uTextureInterpolation", workbenchTextureInterpolation(
+                range.workbenchMaterial.textureImageInterpolation));
+        configureWorkbenchImageTexture(imageTexture, range.workbenchMaterial);
         glBindTexture(GL_TEXTURE_2D, imageTexture);
         workbenchEffectProgram_.setUniformValue(
             "uWorldOffset",
@@ -2003,6 +2120,10 @@ bool ViewportSurfaceRenderer::renderShadowMap(
                                  range.workbenchMaterial.textureImagePackedDataBase64,
                                  range.textureImageSrgb)
             : 0;
+        shadowProgram_.setUniformValue(
+            "uTextureInterpolation", workbenchTextureInterpolation(
+                range.workbenchMaterial.textureImageInterpolation));
+        configureWorkbenchImageTexture(alphaTexture, range.workbenchMaterial);
         shadowProgram_.setUniformValue("uUseShadowAlphaMask", alphaTexture != 0);
         glBindTexture(GL_TEXTURE_2D, alphaTexture);
         glDrawArrays(GL_TRIANGLES, range.first, range.count);
@@ -3279,6 +3400,10 @@ bool ViewportSurfaceRenderer::draw(
                                      range.workbenchMaterial.textureImagePackedDataBase64,
                                      range.textureImageSrgb) : 0;
             program_.setUniformValue("uUseTextureColor", imageTexture != 0);
+            program_.setUniformValue(
+                "uTextureInterpolation", workbenchTextureInterpolation(
+                    range.workbenchMaterial.textureImageInterpolation));
+            configureWorkbenchImageTexture(imageTexture, range.workbenchMaterial);
             const QString alphaMode = range.workbenchMaterial.textureImageAlphaMode;
             const bool ignoreTextureAlpha =
                 alphaMode.compare(QStringLiteral("NONE"), Qt::CaseInsensitive) == 0 ||

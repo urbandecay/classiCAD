@@ -151,6 +151,8 @@ ViewportRenderFrame buildViewportRenderFrame(
                                         image.colorSpace.compare(QStringLiteral("sRGB"),
                                                                  Qt::CaseInsensitive) == 0;
                                     slotData.textureImageAlphaMode = image.alphaMode;
+                                    slotData.textureImageInterpolation = image.interpolation;
+                                    slotData.textureImageExtension = image.extension;
                                     break;
                                 }
                                 if (image.sourceFileExists && !image.filepath.isEmpty()) {
@@ -159,6 +161,8 @@ ViewportRenderFrame buildViewportRenderFrame(
                                         image.colorSpace.compare(QStringLiteral("sRGB"),
                                                                  Qt::CaseInsensitive) == 0;
                                     slotData.textureImageAlphaMode = image.alphaMode;
+                                    slotData.textureImageInterpolation = image.interpolation;
+                                    slotData.textureImageExtension = image.extension;
                                     break;
                                 }
                             }

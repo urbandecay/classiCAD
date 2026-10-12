@@ -85,7 +85,9 @@ void sampleWorkbenchImage(const QImage &image,
                           const QPointF &uv,
                           const QString &interpolation,
                           const QString &extension,
-                          uchar *rgba)
+                          uchar *rgba,
+                          float *linearRgb = nullptr,
+                          bool srgb = false)
 {
     if (image.isNull()) {
         std::fill(rgba, rgba + 4, uchar(0));
@@ -121,8 +123,14 @@ void sampleWorkbenchImage(const QImage &image,
     if (closest) {
         const int x = qFloor(uv.x() * image.width());
         const int y = qFloor(uv.y() * image.height());
-        for (int c = 0; c < 4; ++c)
+        for (int c = 0; c < 4; ++c) {
             rgba[c] = static_cast<uchar>(qRound(texel(x, y, c)));
+            if (linearRgb != nullptr && c < 3) {
+                const float encoded = rgba[c] / 255.0f;
+                linearRgb[c] = srgb
+                    ? workbenchSrgbToSceneLinear(encoded) : encoded;
+            }
+        }
         return;
     }
     const qreal tx = uv.x() * image.width() - 0.5;
@@ -130,10 +138,27 @@ void sampleWorkbenchImage(const QImage &image,
     const int x0 = qFloor(tx), y0 = qFloor(ty);
     const qreal fx = tx - x0, fy = ty - y0;
     for (int c = 0; c < 4; ++c) {
-        const qreal a = texel(x0, y0, c) * (1.0 - fx) + texel(x0 + 1, y0, c) * fx;
-        const qreal b = texel(x0, y0 + 1, c) * (1.0 - fx) + texel(x0 + 1, y0 + 1, c) * fx;
-        const qreal value = a * (1.0 - fy) + b * fy;
+        const qreal topLeft = texel(x0, y0, c);
+        const qreal topRight = texel(x0 + 1, y0, c);
+        const qreal bottomLeft = texel(x0, y0 + 1, c);
+        const qreal bottomRight = texel(x0 + 1, y0 + 1, c);
+        const qreal top = topLeft * (1.0 - fx) + topRight * fx;
+        const qreal bottom = bottomLeft * (1.0 - fx) + bottomRight * fx;
+        const qreal value = top * (1.0 - fy) + bottom * fy;
         rgba[c] = static_cast<uchar>(std::clamp(qRound(value), 0, 255));
+        if (linearRgb != nullptr && c < 3) {
+            const auto linearized = [&](qreal encoded) {
+                const float normalized = static_cast<float>(encoded / 255.0);
+                return srgb ? workbenchSrgbToSceneLinear(normalized)
+                            : normalized;
+            };
+            const qreal linearTop = linearized(topLeft) * (1.0 - fx) +
+                                    linearized(topRight) * fx;
+            const qreal linearBottom = linearized(bottomLeft) * (1.0 - fx) +
+                                       linearized(bottomRight) * fx;
+            linearRgb[c] = static_cast<float>(
+                linearTop * (1.0 - fy) + linearBottom * fy);
+        }
     }
 }
 
@@ -141,7 +166,9 @@ bool sampleWorkbenchUdimImage(const QHash<int, QImage> &tiles,
                              const QPointF &uv,
                              const QString &interpolation,
                              const QString &extension,
-                             uchar *rgba)
+                             uchar *rgba,
+                             float *linearRgb = nullptr,
+                             bool srgb = false)
 {
     if (!std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
         rgba[0] = 255;
@@ -173,7 +200,7 @@ bool sampleWorkbenchUdimImage(const QHash<int, QImage> &tiles,
     sampleWorkbenchImage(tile.value(),
                          QPointF(uv.x() - tileU,
                                  1.0 - (sourceV - tileV)),
-                         interpolation, extension, rgba);
+                         interpolation, extension, rgba, linearRgb, srgb);
     return true;
 }
 
@@ -1780,11 +1807,13 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             (triangle.uvs[0] * p0 + triangle.uvs[1] * p1 +
                              triangle.uvs[2] * p2) / denominator;
                         uchar rgba[4];
+                        float linearRgb[3]{};
                         if (triangle.tiledTexture) {
                             if (!sampleWorkbenchUdimImage(
                                     triangle.textureTiles, uv,
                                     triangle.textureInterpolation,
-                                    triangle.textureExtension, rgba)) {
+                                    triangle.textureExtension, rgba,
+                                    linearRgb, triangle.textureSrgb)) {
                                 // Blender Workbench displays absent UDIM tiles as
                                 // magenta so the incomplete image stays visible.
                                 pixel[0] = 255;
@@ -1796,20 +1825,17 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         } else {
                             sampleWorkbenchImage(texture, uv,
                                                  triangle.textureInterpolation,
-                                                 triangle.textureExtension, rgba);
+                                                 triangle.textureExtension, rgba,
+                                                 linearRgb,
+                                                 triangle.textureSrgb);
                         }
                         if (rgba[3] < 26) continue; // Blender's filtered alpha < 0.1 cutoff.
                         pixelAlpha *= rgba[3] / 255.0;
                         for (int component = 0; component < 3; ++component) {
-                            const qreal channelValue = triangle.texturePremultiplied &&
+                            const float linear = triangle.texturePremultiplied &&
                                     rgba[3] != 0 && rgba[3] != 255
-                                ? qreal(rgba[component]) * 255.0 / rgba[3]
-                                : qreal(rgba[component]);
-                            const float normalized =
-                                static_cast<float>(channelValue / 255.0);
-                            const float linear = triangle.textureSrgb
-                                ? workbenchSrgbToSceneLinear(normalized)
-                                : normalized;
+                                ? linearRgb[component] * 255.0f / rgba[3]
+                                : linearRgb[component];
                             textureColor[component] *= linear;
                         }
                     }
@@ -3108,35 +3134,31 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     if (denominator <= 1.0e-12) continue;
                     const QPointF uv = (triangle.uvs[0]*cw0 + triangle.uvs[1]*cw1 + triangle.uvs[2]*cw2) / denominator;
                     uchar rgba[4];
+                    float linearRgb[3]{};
                     if (nurbsTiledTexture) {
                         if (!sampleWorkbenchUdimImage(
                                 nurbsTextureTiles, uv,
                                 material.textureImageInterpolation,
-                                material.textureImageExtension, rgba)) {
+                                material.textureImageExtension, rgba,
+                                linearRgb, nurbsTextureSrgb)) {
                             row[x] = qPremultiply(qRgba(255, 0, 255, 255));
                             continue;
                         }
                     } else {
                         sampleWorkbenchImage(nurbsTexture, uv,
                                              material.textureImageInterpolation,
-                                             material.textureImageExtension, rgba);
+                                             material.textureImageExtension, rgba,
+                                             linearRgb, nurbsTextureSrgb);
                     }
                     if (!textureAlphaIgnored && rgba[3] < 26) continue;
                     const qreal alpha = shaded.alphaF() * (textureAlphaIgnored ? 1.0 : rgba[3]/255.0);
                     const bool premultiplied = material.textureImageAlphaMode.compare(
                         QStringLiteral("PREMUL"), Qt::CaseInsensitive) == 0;
-                    const auto textureChannel = [&](int c) {
-                        return premultiplied && rgba[3] > 0 && rgba[3] < 255
-                            ? qreal(rgba[c]) * 255.0 / rgba[3]
-                            : qreal(rgba[c]);
-                    };
                     QVector3D textureColor;
                     for (int channel = 0; channel < 3; ++channel) {
-                        const float sampled = static_cast<float>(
-                            textureChannel(channel) / 255.0);
-                        const float linear = nurbsTextureSrgb
-                            ? workbenchSrgbToSceneLinear(sampled)
-                            : sampled;
+                        const float linear = premultiplied && rgba[3] > 0 && rgba[3] < 255
+                            ? linearRgb[channel] * 255.0f / rgba[3]
+                            : linearRgb[channel];
                         textureColor[channel] =
                             baseColorVector[channel] * linear;
                     }

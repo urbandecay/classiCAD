@@ -4306,7 +4306,7 @@ bool ViewportSurfaceRenderer::draw(
         !selectionOverlay && clearDepth && !settings.xrayEnabled() &&
         !vertices_.isEmpty();
     if (settings.mode == ViewportShadingMode::Solid &&
-        settings.backfaceCulling && !settings.xrayEnabled()) {
+        settings.backfaceCulling) {
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
     } else {
@@ -4377,7 +4377,6 @@ bool ViewportSurfaceRenderer::draw(
         glDepthFunc(GL_LESS);
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
-        glDisable(GL_CULL_FACE);
 
         vertexArray_.bind();
         vertexBuffer_.bind();
@@ -5495,7 +5494,9 @@ bool ViewportSurfaceRenderer::draw(
                 // Render opaque surfaces first to establish depth, then blend
                 // translucent surfaces back-to-front without updating depth.
                 glEnable(GL_DEPTH_TEST);
-                glDepthFunc(GL_LESS);
+                // The opaque subset retains Workbench's LESS_EQUAL depth
+                // test even when transparent ranges share this draw.
+                glDepthFunc(GL_LEQUAL);
                 glDepthMask(GL_TRUE);
                 glDisable(GL_BLEND);
                 for (int index : opaqueRangeIndices) {

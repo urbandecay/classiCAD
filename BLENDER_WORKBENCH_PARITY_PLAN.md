@@ -28,9 +28,25 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   `DRW_STATE_DEPTH_LESS_EQUAL` in
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L108-L124).
   classiCAD previously used `GL_LESS` in the opaque Solid branch of
-  `ViewportSurfaceRenderer::draw`, rejecting equal-depth fragments. This is a
-  state-level parity fix. The C++ build passed after the change; matched
-  visual comparison remains pending.
+  `ViewportSurfaceRenderer::draw`, rejecting equal-depth fragments. The
+  mixed-alpha route had a second opaque subset draw state that also used
+  `GL_LESS`; it now uses `GL_LEQUAL` before the transparent blend pass.
+  Blender keeps opaque G-buffer state at `DRW_STATE_DEPTH_LESS_EQUAL`
+  independently of the following transparent pass, per the same pinned
+  source. This is a state-level parity fix; matched visual comparison remains
+  pending.
+
+### GPU Workbench X-Ray backface culling (2026-10-12)
+
+- Solid X-Ray now retains backface culling when the setting is enabled. Blender
+  5.2.2 derives `cull_state` from the backface-culling shading flag without
+  conditioning it on X-Ray, and includes that state in
+  [`TransparentPass::sync`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L231-L247).
+  classiCAD previously disabled culling for all X-Ray fills, including its
+  depth-only X-Ray surface pass. Its depth-only pass now follows the same
+  culling state, so backfaces neither contribute color nor replace front
+  surface depth when culling is requested. Matched visual comparison remains
+  pending.
 
 ### Workbench Image Texture interpolation (2026-10-12)
 
@@ -584,6 +600,16 @@ This checklist preserves the specific differences reported in the initial compar
   opening a `.blend` and File > Import > Blender Scene apply the first imported
   scene record's viewport shading after a successful document import; the
   importer retains scene-level records independently for render use.
+- Studio preset import prefers Blender's selected `StudioLight` datablock
+  name and falls back to the saved `studio_light` enum when that pointer is
+  unavailable. Non-default studio-light intensity and studio-light background
+  opacity/blur remain unsupported: they need lighting/background shader paths
+  and controls in addition to import-field handling. Scene Lights/Scene World
+  render modes also remain outside this interactive Solid settings mapping.
+- Blender's `studiolight_rotate_z` is stored in radians over [-π, π], while
+  classiCAD's rotation slider uses [0°, 360°]. Import now wraps converted
+  degrees into the slider range so a negative Blender angle displays the same
+  orientation in the control instead of clamping visually to 0°.
 - Studio lighting uses Blender's Workbench studio-light behavior and presets. MatCap uses the selected MatCap and its orientation. Flat uses an unlit flat result. Workbench does not shade objects with scene lights.
 - The color modes have distinct data sources: Material reads Workbench material display values; Object reads the object's display color; Random derives a stable color from object identity; Attribute reads the chosen color attribute; Texture reads the supported image texture and UV mapping; Custom uses the user-selected color.
 - Background choices, color management, object alpha, and material settings must feed the same final result as the chosen shading mode.
@@ -642,6 +668,8 @@ Acceptance: changing each AA option visibly changes the expected full viewport o
 Status: implemented for supported Workbench inputs. Object, Random, Material, and Custom/Single inputs reach filled NURBS surfaces/solids in both renderers and persist in document version 11. Native objects persist display name and library path; both renderers use these for Blender-style Random identity, with an ObjectId fallback for older nameless objects. The Blender scene importer reads mesh identity, object color, shared materials, face material assignments, UV maps, color attributes, active selectors, and active Image Texture Node references. Material image reference metadata persists through document save/load, including node/image names, source paths, color-space and alpha modes, and packed bytes up to 32 MiB per image. GPU and QPainter mesh display support Material, Object, Random, Custom, Attribute, and Texture. Both Texture paths sample external and packed images with perspective-correct UVs; QPainter evaluates each target sample using reciprocal camera-forward depth. Both apply Blender's PREMUL unpremultiplication and conditional 0.1 alpha cutoff; QPainter cutout interpolation and filtering may differ. Missing images or UV maps fall back to Material. GPU and QPainter NURBS Texture sample trimmed and untrimmed `NurbsSurface` geometry with exact-domain UVs from tessellation parameters. Blender's NURBS tessellation samples uniformly across the active parameter domain before normalizing grid indices, so these mappings match its legacy surface conversion. Texture-alpha cutout applies to trimmed and untrimmed NURBS in GPU color, object-ID, shadow, and QPainter color/effect paths; trim boundaries remain tessellated approximations. Solid Edit Mode strokes and Theme-mode wire strokes have distinct configurable theme colors in the shading popover, persisted with viewport update-session state; classiCAD does not import Blender user themes. Surface roughness/metallic/source-alpha values follow Blender 5.2.2 `Material::pack_data`: clamp to [0,1], square-root remap roughness, round all three to 8-bit UNorm, then apply X-Ray opacity to the packed source alpha. Preview fills also pack their default roughness 0.4 through this path, while retaining fixed 0.5 alpha. Blender's Custom source supplies RGB to `Material(float3)`, which packs alpha 1; classiCAD also forces the source opaque. classiCAD has no object/material appearance editor. NURBS transparency ordering remains approximate or unsupported.
 
 - Blender Image Texture node interpolation and extension settings are now captured, stored per material image reference, persisted in native documents, and used by GPU/QPainter color and alpha sampling. Supported modes are Closest, Linear, Cubic/Smart and Repeat, Extend, Clip, Mirror. QPainter alpha reduces mirrored UVs modulo two before texel lookup, so Mirror works at arbitrary UV magnitudes. GPU UDIM samples now apply extension modes per tile; cross-tile filtering is not part of Blender 5.2.2's sampling path; cubic-filter details remain approximate.
+
+- A source audit found that QPainter color sampling previously bilinearly interpolated encoded sRGB bytes and decoded the result afterward, while the GPU uploads sRGB images as `GL_SRGB8_ALPHA8`, so GPU filtering decodes each color texel before interpolation. QPainter mesh and NURBS color sampling now computes its sRGB linear RGB result per texel before bilinear interpolation; alpha filtering and PREMUL unpremultiplication still happen at their existing stages. Blender's sampling and material setup are in [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L60) and [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L35-L83); classiCAD's GPU sRGB texture allocation is in `viewport_surface_renderer.cpp` (`ensureImageTexture` and `ensureUdimTexture`), and the corrected QPainter sampling is in `viewport_renderer.cpp`. This narrows the color-sampling difference; visual parity remains unverified.
 
 - Perspective textured NURBS in the QPainter fallback shades each pixel from its perspective-correct world position, matching the GPU path's per-fragment view direction for Studio specular and MatCap shading. Untextured NURBS tessellation triangles now rasterize and shade per pixel using their flat triangle normal; perspective samples reconstruct world position, while orthographic incident direction remains constant. Untextured Workbench polygon meshes now also use per-pixel Studio/MatCap shading with perspective-correct incident direction, scene-linear color sources, and the existing corner-normal interpolation. Non-Workbench mesh drawing and over-cap fallback retain polygon fills. Visual parity remains unverified.
 

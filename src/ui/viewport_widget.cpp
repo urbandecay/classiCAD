@@ -7009,6 +7009,13 @@ public:
         }
         QString lightName = source.value(QStringLiteral("selected_studio_light"))
                                 .toString().section(QLatin1Char('/'), -1);
+        if (lightName.isEmpty() &&
+            settings.lightingMode == ViewportLightingMode::Studio) {
+            // Blender 5.2.2 still exposes the legacy `studio_light` enum
+            // alongside selected_studio_light; use it when the selected
+            // StudioLight pointer is unavailable in a saved file.
+            lightName = source.value(QStringLiteral("studio_light")).toString();
+        }
         if (lightName.endsWith(QStringLiteral(".sl"), Qt::CaseInsensitive) ||
             lightName.endsWith(QStringLiteral(".exr"), Qt::CaseInsensitive)) {
             lightName.chop(3);
@@ -7038,7 +7045,9 @@ public:
         qreal rotationRadians = 0.0;
         readNumber(QStringLiteral("studiolight_rotate_z"), -3.141592653589793,
                    3.141592653589793, &rotationRadians);
-        settings.studioLightRotationDegrees = qRound(qRadiansToDegrees(rotationRadians));
+        int rotationDegrees = qRound(qRadiansToDegrees(rotationRadians)) % 360;
+        if (rotationDegrees < 0) rotationDegrees += 360;
+        settings.studioLightRotationDegrees = rotationDegrees;
 
         const QString colorType = source.value(QStringLiteral("color_type")).toString();
         if (colorType == QLatin1String("MATERIAL")) settings.colorMode = ViewportColorMode::Material;

@@ -10646,7 +10646,41 @@ protected:
                 }
             }
             if (!surfacesDrawn) {
-                for (const ViewportRenderObject &renderObject : visibleShapes) {
+                QVector<ViewportRenderObject> fallbackDrawObjects = visibleShapes;
+                QHash<quint64, qreal> fallbackViewDepths;
+                const auto averageViewDepth = [this](
+                    const ViewportRenderObject &object) {
+                    const QVector<QVector3D> *vertices =
+                        object.preparedDepthGeometry
+                            ? &object.preparedDepthGeometry->surfaceVertices
+                            : nullptr;
+                    if (vertices == nullptr || vertices->isEmpty()) {
+                        return viewportTransform_.worldDirectionToView(
+                            object.placementTranslation).towardCamera;
+                    }
+                    qreal depth = 0.0;
+                    for (const QVector3D &vertex : *vertices) {
+                        const Point3D world(
+                            vertex.x() + object.preparedGeometryOffset.x,
+                            vertex.y() + object.preparedGeometryOffset.y,
+                            vertex.z() + object.preparedGeometryOffset.z);
+                        depth += viewportTransform_.worldDirectionToView(world)
+                                     .towardCamera;
+                    }
+                    return depth / vertices->size();
+                };
+                for (const ViewportRenderObject &object : fallbackDrawObjects) {
+                    fallbackViewDepths.insert(object.objectId.value(),
+                                              averageViewDepth(object));
+                }
+                std::stable_sort(
+                    fallbackDrawObjects.begin(), fallbackDrawObjects.end(),
+                    [&fallbackViewDepths](const ViewportRenderObject &a,
+                                          const ViewportRenderObject &b) {
+                        return fallbackViewDepths.value(a.objectId.value()) <
+                               fallbackViewDepths.value(b.objectId.value());
+                    });
+                for (const ViewportRenderObject &renderObject : fallbackDrawObjects) {
                     const GeometryType type = renderObject.shape.geometryType;
                     if (type == GeometryType::NurbsSurface ||
                         type == GeometryType::NurbsSolid ||

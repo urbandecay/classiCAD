@@ -1177,6 +1177,9 @@ def extract_scene(input_path, mode):
                 "resolution_percentage": int(render.resolution_percentage),
                 "pixel_aspect_x": finite_number(render.pixel_aspect_x),
                 "pixel_aspect_y": finite_number(render.pixel_aspect_y),
+                # Blender backs RenderSettings.film_transparent with the
+                # R_ALPHAPREMUL render alpha-mode bit used by Workbench.
+                "film_transparent": bool(render.film_transparent),
                 "render_aa": str(scene.display.render_aa),
                 "file_format": render.image_settings.file_format,
                 "color_mode": render.image_settings.color_mode,

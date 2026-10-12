@@ -59,7 +59,8 @@ public:
                          QVector<float> *depth,
                          QString *errorMessage = nullptr,
                          QVector<float> *sceneLinearRgba = nullptr,
-                         int antiAliasingMode = -1);
+                        int antiAliasingMode = -1,
+                         bool transparentFilm = false);
     bool pickScenePoint(const QPointF &screenPosition,
                         const ViewportTransform &transform,
                         const QSize &viewportSize,

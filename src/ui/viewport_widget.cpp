@@ -6583,6 +6583,8 @@ public:
             }
             const QJsonObject renderOutput =
                 scene.value(QStringLiteral("render_output")).toObject();
+            result.transparentFilm = renderOutput.value(
+                QStringLiteral("film_transparent")).toBool(false);
             const QString renderAa = renderOutput.value(
                 QStringLiteral("render_aa")).toString();
             if (renderAa == QLatin1String("OFF")) renderAntiAliasingMode = 0;
@@ -6685,11 +6687,12 @@ public:
             result.blenderImageFormat.compare(QLatin1String("OPEN_EXR"),
                                                Qt::CaseInsensitive) == 0 &&
             WorkbenchRenderResult::openExrWriterAvailable();
+        const bool transparentFilm = result.transparentFilm;
         if (captureSceneLinearCombined) result.sceneLinearSize = outputSize;
         gpuSurface_->renderOffscreen(
             outputSize,
             renderCamera,
-            [&renderFrame, &settings, &renderCamera](
+            [&renderFrame, &settings, &renderCamera, transparentFilm](
                 const QSize &pixelSize, ViewportAaRenderer &aa,
                 BlenderGridRenderer &grid,
                 ViewportSceneRenderer &, ViewportSurfaceRenderer &surface) {
@@ -6697,7 +6700,8 @@ public:
                                    renderCamera.cameraPreferences(),
                                    renderCamera.isPerspectiveEnabled());
                 aa.setDisplayTransform(settings, true);
-                if (!grid.renderBackgroundToCurrentFramebuffer(
+                if (!transparentFilm &&
+                    !grid.renderBackgroundToCurrentFramebuffer(
                         pixelSize, 1.0,
                         viewportShadingBackgroundColor(settings), true)) {
                     return false;
@@ -6723,7 +6727,7 @@ public:
             },
             &result.combined, &result.depth, nullptr,
             captureSceneLinearCombined ? &result.sceneLinearRgba : nullptr,
-            renderAntiAliasingMode);
+            renderAntiAliasingMode, transparentFilm);
         if (result.isValid()) {
             // CAD dimensions are committed scene annotations, not transient
             // editor overlays. Include them in the saved result at the chosen

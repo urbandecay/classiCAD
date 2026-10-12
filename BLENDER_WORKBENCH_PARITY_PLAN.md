@@ -72,6 +72,18 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   PNG/TIFF path remains normalized and display-referred. Blender's registered
   pass lifecycle, multi-pass result API, and matched visual output remain open.
 
+### Transparent-film Combined alpha (2026-10-12)
+
+- Blender 5.2.2 exposes `RenderSettings.film_transparent` as the
+  `R_ALPHAPREMUL` bit of `Scene.r.alphamode`; Workbench uses that same bit to
+  leave its render background transparent. The importer retains this setting
+  with render-output metadata. The offscreen Combined path clears to zero and
+  skips its viewport background only when transparent film is enabled;
+  interactive viewport rendering remains opaque. Pinned sources:
+  [`rna_scene.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_scene.cc#L7233),
+  [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L175-L184),
+  and [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L488-L494).
+
 ### Weighted transparency resolve (2026-10-12)
 
 - The GPU weighted-OIT resolve now divides accumulated RGB directly by the

@@ -1933,7 +1933,11 @@ bool importBlenderScene(const QString &path,
         }
         const QString imageColorMode = renderOutput.value(
             QStringLiteral("color_mode")).toString();
+        const QJsonValue filmTransparentValue = renderOutput.value(
+            QStringLiteral("film_transparent"));
         if (!renderOutput.value(QStringLiteral("file_format")).isString() ||
+            (!filmTransparentValue.isUndefined() &&
+             !filmTransparentValue.isBool()) ||
             (imageColorMode != QLatin1String("BW") &&
              imageColorMode != QLatin1String("RGB") &&
              imageColorMode != QLatin1String("RGBA")) ||

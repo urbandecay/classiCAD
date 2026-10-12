@@ -24,6 +24,7 @@ struct WorkbenchRenderResult {
     QVector<float> depth;
     bool combinedPassAvailable = true;
     bool depthPassAvailable = true;
+    bool transparentFilm = false;
     ProjectViewportCameraSettings camera;
     QString outputFormat = QStringLiteral("PNG + PFM depth");
     QString blenderImageFormat = QStringLiteral("PNG");

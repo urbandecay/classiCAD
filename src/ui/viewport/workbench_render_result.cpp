@@ -291,6 +291,7 @@ bool WorkbenchRenderResult::saveCombinedImage(
                       QStringLiteral("Blender Workbench view-Z; background is 1e10"));
     cameraJson.insert(QStringLiteral("depthPassAvailable"),
                       depthPassAvailable);
+    cameraJson.insert(QStringLiteral("filmTransparent"), transparentFilm);
     cameraJson.insert(QStringLiteral("combinedPassAvailable"),
                       combinedPassAvailable);
     QJsonObject poseJson;

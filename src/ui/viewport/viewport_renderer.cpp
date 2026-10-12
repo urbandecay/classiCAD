@@ -2907,24 +2907,17 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const QVector3D baseColorVector = sourceColorLinear;
         const auto shade = [&](const QVector3D &sourceNormal,
                                const Point3D &sourcePosition,
-                               const QVector3D &surfaceBaseColor) {
-            const QVector3D normalWorld = workbenchNormalize(
+                               const QVector3D &surfaceBaseColor,
+                               bool frontFacing) {
+            QVector3D normalWorld = workbenchNormalize(
                 reverseOrientation && preparedGeometry == nullptr
                     ? -sourceNormal
                     : sourceNormal,
                 QVector3D(0.0f, 0.0f, 1.0f));
-            if (shadingSettings_.backfaceCulling) {
-                const QVector3D position(
-                    static_cast<float>(sourcePosition.x + preparedOffset.x),
-                    static_cast<float>(sourcePosition.y + preparedOffset.y),
-                    static_cast<float>(sourcePosition.z + preparedOffset.z));
-                const QVector3D towardCamera = transform_.isPerspectiveEnabled()
-                    ? workbenchNormalize(camera - position, worldFacing)
-                    : -worldFacing;
-                if (QVector3D::dotProduct(normalWorld, towardCamera) <= 0.0f) {
-                    QColor culled(Qt::transparent);
-                    return culled;
-                }
+            // Blender flips opaque backface normals in its normal prepass.
+            // Its transparent pass uses interpolated normals unchanged.
+            if (alpha >= 1.0 && !frontFacing) {
+                normalWorld = -normalWorld;
             }
             const QVector3D normalView(
                 QVector3D::dotProduct(normalWorld, worldRight),
@@ -3022,20 +3015,29 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 !project(triangle.c, &screenC)) {
                 return;
             }
+            const qreal area = (screenB.x() - screenA.x()) *
+                                   (screenC.y() - screenA.y()) -
+                               (screenB.y() - screenA.y()) *
+                                   (screenC.x() - screenA.x());
+            if (std::abs(area) < 1.0e-12) return;
+            // QPainter's screen Y axis points down, so a negative projected
+            // signed area corresponds to Blender/OpenGL's CCW front face.
+            bool frontFacing = area < 0.0;
+            if (reverseOrientation && preparedGeometry == nullptr) {
+                frontFacing = !frontFacing;
+            }
+            if (shadingSettings_.backfaceCulling && !frontFacing) return;
             painter.setPen(Qt::NoPen);
             const Point3D center{(triangle.a.x + triangle.b.x + triangle.c.x) / 3.0,
                                  (triangle.a.y + triangle.b.y + triangle.c.y) / 3.0,
                                  (triangle.a.z + triangle.b.z + triangle.c.z) / 3.0};
             const QColor shaded = shade(triangle.normal, center,
-                                        baseColorVector);
+                                        baseColorVector, frontFacing);
             if ((!nurbsTiledTexture && nurbsTexture.isNull()) ||
                 !triangle.hasUvs) {
                 // Shade untextured triangles per sample as Workbench's resolve
                 // pass does. Keep the triangle's flat normal, while varying
                 // the incident direction across perspective views.
-                const qreal area = (screenB.x() - screenA.x()) * (screenC.y() - screenA.y()) -
-                                   (screenB.y() - screenA.y()) * (screenC.x() - screenA.x());
-                if (std::abs(area) < 1.0e-12) return;
                 const int left = qFloor(std::max<qreal>(0, std::min({screenA.x(), screenB.x(), screenC.x()})));
                 const int top = qFloor(std::max<qreal>(0, std::min({screenA.y(), screenB.y(), screenC.y()})));
                 const int right = qCeil(std::min<qreal>(viewportSize.width(), std::max({screenA.x(), screenB.x(), screenC.x()})));
@@ -3092,7 +3094,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         }
                         const QColor sample = shade(triangle.normal,
                                                     shadingPosition,
-                                                    baseColorVector);
+                                                    baseColorVector,
+                                                    frontFacing);
                         row[x] = qPremultiply(qRgba(sample.red(), sample.green(),
                                                     sample.blue(), sample.alpha()));
                     }
@@ -3103,9 +3106,6 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             // QPainter has no perspective-correct textured-triangle primitive.
             // Rasterize the projected triangle and correct UV interpolation by
             // reciprocal camera depth, as the polygon-mesh fallback does.
-            const qreal area = (screenB.x() - screenA.x()) * (screenC.y() - screenA.y()) -
-                               (screenB.y() - screenA.y()) * (screenC.x() - screenA.x());
-            if (std::abs(area) < 1.0e-12) return;
             const int left = qFloor(std::max<qreal>(0, std::min({screenA.x(), screenB.x(), screenC.x()})));
             const int top = qFloor(std::max<qreal>(0, std::min({screenA.y(), screenB.y(), screenC.y()})));
             const int right = qCeil(std::min<qreal>(viewportSize.width(), std::max({screenA.x(), screenB.x(), screenC.x()})));
@@ -3186,7 +3186,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     }
                     const QColor textured = shade(triangle.normal,
                                                   shadingPosition,
-                                                  textureColor);
+                                                  textureColor,
+                                                  frontFacing);
                     const int red = textured.red();
                     const int green = textured.green();
                     const int blue = textured.blue();

@@ -1104,9 +1104,10 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenTextures(1, &frontDepthTexture_);
     glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8,
                  pixelSize.width(), pixelSize.height(), 0,
-                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+                 GL_DEPTH_STENCIL,
+                 GL_FLOAT_32_UNSIGNED_INT_24_8_REV, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glGenTextures(1, &frontViewSpaceNormalTexture_);
@@ -1165,9 +1166,10 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glBindTexture(GL_TEXTURE_2D, depthTexture_);
     // A packed attachment is supported on drivers that reject separate
     // depth textures and stencil renderbuffers in the same framebuffer.
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8,
                  pixelSize.width(), pixelSize.height(), 0,
-                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+                 GL_DEPTH_STENCIL,
+                 GL_FLOAT_32_UNSIGNED_INT_24_8_REV, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -1453,9 +1455,10 @@ bool ViewportAaRenderer::ensureSampleZeroDepthTarget()
 
     glGenTextures(1, &sampleZeroDepthTexture_);
     glBindTexture(GL_TEXTURE_2D, sampleZeroDepthTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8,
                  targetSize_.width(), targetSize_.height(), 0,
-                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+                 GL_DEPTH_STENCIL,
+                 GL_FLOAT_32_UNSIGNED_INT_24_8_REV, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glGenFramebuffers(1, &sampleZeroDepthFramebuffer_);

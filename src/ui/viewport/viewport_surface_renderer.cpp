@@ -2041,7 +2041,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 matrix[1] * (matrix[4] * matrix[10] - matrix[6] * matrix[8]) +
                 matrix[2] * (matrix[4] * matrix[9] - matrix[5] * matrix[8]);
             const bool reflected = std::isfinite(linearDeterminant) &&
-                                   linearDeterminant < -1.0e-12;
+                                   linearDeterminant < 0.0;
             const MeshUvMap *activeUvMap = nullptr;
             for (const MeshUvMap &uvMap : mesh.uvMaps) {
                 if (uvMap.name == mesh.activeUvMapName) {
@@ -2363,7 +2363,7 @@ bool ViewportSurfaceRenderer::ensureObjectIdFramebuffer(
 
     glGenRenderbuffers(1, &objectIdDepthStencil_);
     glBindRenderbuffer(GL_RENDERBUFFER, objectIdDepthStencil_);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8,
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8,
                           pixelSize.width(), pixelSize.height());
 
     glGenFramebuffers(1, &objectIdFramebuffer_);
@@ -2451,9 +2451,9 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
     if (cavityDepthTexture_ == 0) {
         glGenTextures(1, &cavityDepthTexture_);
         glBindTexture(GL_TEXTURE_2D, cavityDepthTexture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
                      pixelSize.width(), pixelSize.height(), 0,
-                     GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);

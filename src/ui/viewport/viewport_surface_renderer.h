@@ -90,6 +90,8 @@ private:
     bool ensureWorkbenchEffectFramebuffers(
         const QSize &pixelSize,
         const ViewportRenderTargets &targets);
+    bool ensureTransparencyFramebuffer(const QSize &pixelSize,
+                                      GLuint depthStencilTexture);
     bool renderWorkbenchEffectPrepass(
         const ViewportTransform &transform,
         const QSize &viewportSize,
@@ -112,6 +114,7 @@ private:
     QOpenGLShaderProgram objectIdProgram_;
     QOpenGLShaderProgram workbenchEffectProgram_;
     QOpenGLShaderProgram shadowProgram_;
+    QOpenGLShaderProgram transparencyResolveProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject outlineVertexArray_;
     QOpenGLVertexArrayObject shadowVolumeVertexArray_;
@@ -127,6 +130,10 @@ private:
     GLuint cavityDepthFramebuffer_ = 0;
     GLuint cavityDepthTexture_ = 0;
     QSize workbenchEffectFramebufferSize_;
+    GLuint transparencyFramebuffer_ = 0;
+    GLuint transparencyAccumulationTexture_ = 0;
+    GLuint transparencyWeightTexture_ = 0;
+    QSize transparencyFramebufferSize_;
     QVector<SurfaceVertex> vertices_;
     QVector<DrawRange> ranges_;
     unsigned int matcapTexture_ = 0;

@@ -271,11 +271,24 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         glDeleteTextures(1, &cavityDepthTexture_);
         cavityDepthTexture_ = 0;
     }
+    if (transparencyFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &transparencyFramebuffer_);
+        transparencyFramebuffer_ = 0;
+    }
+    if (transparencyAccumulationTexture_ != 0) {
+        glDeleteTextures(1, &transparencyAccumulationTexture_);
+        transparencyAccumulationTexture_ = 0;
+    }
+    if (transparencyWeightTexture_ != 0) {
+        glDeleteTextures(1, &transparencyWeightTexture_);
+        transparencyWeightTexture_ = 0;
+    }
     program_.removeAllShaders();
     outlineProgram_.removeAllShaders();
     objectIdProgram_.removeAllShaders();
     workbenchEffectProgram_.removeAllShaders();
     shadowProgram_.removeAllShaders();
+    transparencyResolveProgram_.removeAllShaders();
 }
 
 bool ViewportSurfaceRenderer::initialize()
@@ -383,7 +396,9 @@ bool ViewportSurfaceRenderer::initialize()
         uniform int uCavitySampleEnd;
         uniform int uCavitySamplesPerIteration;
         uniform float uCavitySampleCountInv;
+        uniform bool uTransparencyAccumulation;
         out vec4 fragmentColor;
+        layout(location = 1) out vec4 transparencyWeight;
 
         float fastReciprocal(float value)
         {
@@ -768,8 +783,51 @@ bool ViewportSurfaceRenderer::initialize()
                     mix(displayLinear, uEditSelectionColor,
                         uEditSelectionMix));
             }
-            fragmentColor = vec4(color,
-                                 uBaseColor.a);
+            if (uTransparencyAccumulation) {
+                // Blender 5.2.2 Workbench's Eq. 7 weight, using eye-space
+                // depth. The GL blend state accumulates weighted RGB and
+                // multiplies the destination alpha into revealage.
+                float alpha = uBaseColor.a;
+                float viewDepth = abs(dot(vWorldPosition - uCameraPosition,
+                                          uViewFacing));
+                float depthRatio = viewDepth / 5.0;
+                float farRatio = viewDepth / 200.0;
+                farRatio *= farRatio;
+                float weight = clamp(
+                    10.0 / ((1.0e-5 + depthRatio * depthRatio) +
+                            farRatio * (farRatio * farRatio)),
+                    1.0e-2, 3.0e2);
+                fragmentColor = vec4(color * (alpha * weight), alpha);
+                transparencyWeight = vec4(alpha * weight, 0.0, 0.0, 1.0);
+            } else {
+                fragmentColor = vec4(color, uBaseColor.a);
+                transparencyWeight = vec4(0.0);
+            }
+        }
+    )glsl";
+
+    static constexpr const char *transparencyResolveVertexShader = R"glsl(
+        #version 330 core
+        out vec2 vUv;
+        void main()
+        {
+            vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+            vUv = p * 0.5;
+            gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+        }
+    )glsl";
+    static constexpr const char *transparencyResolveFragmentShader = R"glsl(
+        #version 330 core
+        in vec2 vUv;
+        uniform sampler2D uAccumulation;
+        uniform sampler2D uWeight;
+        out vec4 fragmentColor;
+        void main()
+        {
+            vec4 accumulation = texture(uAccumulation, vUv);
+            float weight = texture(uWeight, vUv).r;
+            fragmentColor = vec4(accumulation.rgb / max(weight, 1.0e-4),
+                                 1.0 - accumulation.a);
         }
     )glsl";
 
@@ -909,13 +967,19 @@ bool ViewportSurfaceRenderer::initialize()
                                                 shadowVertexShader) ||
         !shadowProgram_.addShaderFromSourceCode(QOpenGLShader::Fragment,
                                                 shadowFragmentShader) ||
-        !shadowProgram_.link()) {
+        !shadowProgram_.link() ||
+        !transparencyResolveProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Vertex, transparencyResolveVertexShader) ||
+        !transparencyResolveProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Fragment, transparencyResolveFragmentShader) ||
+        !transparencyResolveProgram_.link()) {
         qWarning().noquote()
             << "Viewport shader setup failed. Surface:" << program_.log()
             << "Object ID:" << objectIdProgram_.log()
             << "Workbench effects:" << workbenchEffectProgram_.log()
             << "Outline:" << outlineProgram_.log()
-            << "Shadow:" << shadowProgram_.log();
+            << "Shadow:" << shadowProgram_.log()
+            << "Transparency resolve:" << transparencyResolveProgram_.log();
         return false;
     }
 
@@ -1482,6 +1546,83 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
         return false;
     }
     return true;
+}
+
+bool ViewportSurfaceRenderer::ensureTransparencyFramebuffer(
+    const QSize &pixelSize,
+    GLuint depthStencilTexture)
+{
+    if (pixelSize.isEmpty() || depthStencilTexture == 0) return false;
+
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    if (transparencyFramebufferSize_ != pixelSize) {
+        if (transparencyFramebuffer_ != 0) {
+            glDeleteFramebuffers(1, &transparencyFramebuffer_);
+            transparencyFramebuffer_ = 0;
+        }
+        if (transparencyAccumulationTexture_ != 0) {
+            glDeleteTextures(1, &transparencyAccumulationTexture_);
+            transparencyAccumulationTexture_ = 0;
+        }
+        if (transparencyWeightTexture_ != 0) {
+            glDeleteTextures(1, &transparencyWeightTexture_);
+            transparencyWeightTexture_ = 0;
+        }
+        transparencyFramebufferSize_ = pixelSize;
+
+        glGenTextures(1, &transparencyAccumulationTexture_);
+        glBindTexture(GL_TEXTURE_2D, transparencyAccumulationTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+                     pixelSize.width(), pixelSize.height(), 0,
+                     GL_RGBA, GL_HALF_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glGenTextures(1, &transparencyWeightTexture_);
+        glBindTexture(GL_TEXTURE_2D, transparencyWeightTexture_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R16F,
+                     pixelSize.width(), pixelSize.height(), 0,
+                     GL_RED, GL_HALF_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glGenFramebuffers(1, &transparencyFramebuffer_);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, transparencyFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D,
+                           transparencyAccumulationTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_2D, transparencyWeightTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                           GL_TEXTURE_2D, depthStencilTexture, 0);
+    const GLenum drawAttachments[] = {GL_COLOR_ATTACHMENT0,
+                                      GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, drawAttachments);
+    const bool complete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    return complete;
 }
 
 bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
@@ -2918,63 +3059,65 @@ bool ViewportSurfaceRenderer::draw(
                                        static_cast<int>(sizeof(SurfaceVertex)));
             geometryDirty_ = false;
         }
-        struct TransparentTriangle {
+        struct TransparentRange {
             int rangeIndex = -1;
-            int firstVertex = 0;
             qreal projectedDepth = 0.0;
         };
-        QVector<TransparentTriangle> transparentTriangles;
+        QVector<int> transparentRangeIndices;
+        QVector<TransparentRange> fallbackTransparentRanges;
         for (int index = 0; index < ranges_.size(); ++index) {
             const DrawRange &range = ranges_[index];
             if (range.count <= 0) {
                 continue;
             }
             if (opaqueRangeIndices.contains(index)) continue;
-            // A range can cover a large or concave tessellated NURBS surface.
-            // Sorting one average for the whole object lets distant parts
-            // incorrectly occlude nearer parts, so order its display triangles
-            // independently while keeping the saved NURBS and shared display
-            // tessellation unchanged.
-            for (int first = range.first;
-                 first + 2 < range.first + range.count; first += 3) {
-                QVector4D center;
-                for (int vertexIndex = first; vertexIndex < first + 3;
-                     ++vertexIndex) {
-                    const SurfaceVertex &vertex = vertices_[vertexIndex];
-                    center += QVector4D(vertex.x, vertex.y, vertex.z, 1.0f);
-                }
-                center /= 3.0f;
-                center.setX(center.x() + static_cast<float>(range.offset.x));
-                center.setY(center.y() + static_cast<float>(range.offset.y));
-                center.setZ(center.z() + static_cast<float>(range.offset.z));
-                const QVector4D clip = viewProjection * center;
-                const qreal depth = std::abs(clip.w()) > 1.0e-8f
-                    ? static_cast<qreal>(clip.z() / clip.w())
-                    : static_cast<qreal>(clip.z());
-                transparentTriangles.append(
-                    {index, first, std::isfinite(depth) ? depth : 0.0});
+            transparentRangeIndices.append(index);
+            // The shared AA scene framebuffer supplies depth-stencil for the
+            // weighted OIT pass. Keep a coarse object-order fallback for
+            // auxiliary draws that have no shareable depth texture.
+            QVector4D center;
+            for (int vertexIndex = range.first;
+                 vertexIndex < range.first + range.count; ++vertexIndex) {
+                const SurfaceVertex &vertex = vertices_[vertexIndex];
+                center += QVector4D(vertex.x, vertex.y, vertex.z, 1.0f);
             }
+            center /= static_cast<float>(range.count);
+            center.setX(center.x() + static_cast<float>(range.offset.x));
+            center.setY(center.y() + static_cast<float>(range.offset.y));
+            center.setZ(center.z() + static_cast<float>(range.offset.z));
+            const QVector4D clip = viewProjection * center;
+            const qreal depth = std::abs(clip.w()) > 1.0e-8f
+                ? static_cast<qreal>(clip.z() / clip.w())
+                : static_cast<qreal>(clip.z());
+            fallbackTransparentRanges.append(
+                {index, std::isfinite(depth) ? depth : 0.0});
         }
-        std::stable_sort(transparentTriangles.begin(),
-                         transparentTriangles.end(),
-                         [](const TransparentTriangle &left,
-                            const TransparentTriangle &right) {
+        std::stable_sort(fallbackTransparentRanges.begin(),
+                         fallbackTransparentRanges.end(),
+                         [](const TransparentRange &left,
+                            const TransparentRange &right) {
                              if (left.projectedDepth !=
                                  right.projectedDepth) {
                                  return left.projectedDepth >
                                         right.projectedDepth;
                              }
-                             if (left.rangeIndex != right.rangeIndex) {
-                                 return left.rangeIndex < right.rangeIndex;
-                             }
-                             return left.firstVertex < right.firstVertex;
+                             return left.rangeIndex < right.rangeIndex;
                          });
+        const QSize transparencyPixelSize(
+            qRound(viewportSize.width() * dpr),
+            qRound(viewportSize.height() * dpr));
+        const bool weightedOitAvailable = hasPartialAlpha &&
+            sharedTargets != nullptr &&
+            sharedTargets->pixelSize == transparencyPixelSize &&
+            ensureTransparencyFramebuffer(transparencyPixelSize,
+                                          sharedTargets->depthTexture);
 
         const auto drawRange = [&](const DrawRange &range,
                                    bool volumeShadowed,
                                    bool enableShadows,
                                    int firstVertex,
-                                   int vertexCount) {
+                                   int vertexCount,
+                                   bool transparencyAccumulation = false) {
             program_.setUniformValue("uShadowVolumeShadowed",
                                      volumeShadowed);
             program_.setUniformValue("uUseShadows",
@@ -3081,22 +3224,146 @@ bool ViewportSurfaceRenderer::draw(
                 "uBaseColor",
                 QVector4D(baseColorLinear.x(), baseColorLinear.y(),
                           baseColorLinear.z(), alpha));
+            program_.setUniformValue("uTransparencyAccumulation",
+                                     transparencyAccumulation);
             glDrawArrays(GL_TRIANGLES, firstVertex, vertexCount);
         };
         const auto drawTransparentTriangles = [&]() {
             if (!hasPartialAlpha) return;
+            if (!weightedOitAvailable) {
+                glEnable(GL_DEPTH_TEST);
+                glDepthFunc(GL_LEQUAL);
+                glDepthMask(GL_FALSE);
+                glEnable(GL_BLEND);
+                glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+                for (const TransparentRange &range : fallbackTransparentRanges) {
+                    const DrawRange &draw = ranges_[range.rangeIndex];
+                    drawRange(draw, false, false, draw.first, draw.count);
+                }
+                glDepthFunc(GL_LESS);
+                return;
+            }
+
+            GLint previousDrawFramebuffer = 0;
+            GLint previousReadFramebuffer = 0;
+            GLint previousViewport[4] = {0, 0, 0, 0};
+            GLint previousDepthFunction = GL_LESS;
+            GLint previousBlendSourceRgb = GL_ONE;
+            GLint previousBlendDestinationRgb = GL_ZERO;
+            GLint previousBlendSourceAlpha = GL_ONE;
+            GLint previousBlendDestinationAlpha = GL_ZERO;
+            GLint previousBlendEquationRgb = GL_FUNC_ADD;
+            GLint previousBlendEquationAlpha = GL_FUNC_ADD;
+            GLint previousActiveTexture = GL_TEXTURE0;
+            GLint previousTexture0 = 0;
+            GLint previousTexture1 = 0;
+            GLboolean previousDepthMask = GL_TRUE;
+            GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+            const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+            const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+            const GLboolean previousStencilTest = glIsEnabled(GL_STENCIL_TEST);
+            const GLboolean previousFramebufferSrgb =
+                glIsEnabled(GL_FRAMEBUFFER_SRGB);
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,
+                          &previousDrawFramebuffer);
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                          &previousReadFramebuffer);
+            glGetIntegerv(GL_VIEWPORT, previousViewport);
+            glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+            glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSourceRgb);
+            glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDestinationRgb);
+            glGetIntegerv(GL_BLEND_SRC_ALPHA, &previousBlendSourceAlpha);
+            glGetIntegerv(GL_BLEND_DST_ALPHA, &previousBlendDestinationAlpha);
+            glGetIntegerv(GL_BLEND_EQUATION_RGB, &previousBlendEquationRgb);
+            glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &previousBlendEquationAlpha);
+            glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+            glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+            glActiveTexture(GL_TEXTURE0);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
+            glActiveTexture(GL_TEXTURE1);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture1);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, transparencyFramebuffer_);
+            glViewport(0, 0, transparencyPixelSize.width(),
+                       transparencyPixelSize.height());
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glDepthMask(GL_FALSE);
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LEQUAL);
+            glDisable(GL_STENCIL_TEST);
+            glEnable(GL_BLEND);
+            glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+            glBlendFuncSeparate(GL_ONE, GL_ONE,
+                                GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+            const GLfloat clearAccumulation[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            const GLfloat clearWeight[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            glClearBufferfv(GL_COLOR, 0, clearAccumulation);
+            glClearBufferfv(GL_COLOR, 1, clearWeight);
+            program_.setUniformValue("uTransparencyAccumulation", true);
+            for (const int rangeIndex : transparentRangeIndices) {
+                const DrawRange &range = ranges_[rangeIndex];
+                drawRange(range, false, false, range.first, range.count, true);
+            }
+            program_.setUniformValue("uTransparencyAccumulation", false);
+
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                              static_cast<GLuint>(previousDrawFramebuffer));
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(previousReadFramebuffer));
+            glViewport(previousViewport[0], previousViewport[1],
+                       previousViewport[2], previousViewport[3]);
+            glDisable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
+            glDisable(GL_STENCIL_TEST);
+            // The AA scene target is SRGB8_ALPHA8 but intentionally stores
+            // the already display-transformed shader values without another
+            // framebuffer sRGB conversion. Blend the resolve in that same
+            // numeric space as the opaque surface output.
+            glDisable(GL_FRAMEBUFFER_SRGB);
             glEnable(GL_BLEND);
             glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
             glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                                 GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-            for (const TransparentTriangle &triangle : transparentTriangles) {
-                drawRange(ranges_[triangle.rangeIndex], false, false,
-                          triangle.firstVertex, 3);
-            }
-            glDepthFunc(GL_LESS);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, transparencyAccumulationTexture_);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, transparencyWeightTexture_);
+            transparencyResolveProgram_.bind();
+            transparencyResolveProgram_.setUniformValue("uAccumulation", 0);
+            transparencyResolveProgram_.setUniformValue("uWeight", 1);
+            vertexArray_.bind();
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            transparencyResolveProgram_.release();
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D,
+                          static_cast<GLuint>(previousTexture0));
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D,
+                          static_cast<GLuint>(previousTexture1));
+            glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+            if (previousFramebufferSrgb) glEnable(GL_FRAMEBUFFER_SRGB);
+            else glDisable(GL_FRAMEBUFFER_SRGB);
+            glColorMask(previousColorMask[0], previousColorMask[1],
+                        previousColorMask[2], previousColorMask[3]);
+            glDepthMask(previousDepthMask);
+            glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+            if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+            else glDisable(GL_DEPTH_TEST);
+            if (previousBlend) glEnable(GL_BLEND);
+            else glDisable(GL_BLEND);
+            glBlendEquationSeparate(static_cast<GLenum>(previousBlendEquationRgb),
+                                    static_cast<GLenum>(previousBlendEquationAlpha));
+            glBlendFuncSeparate(static_cast<GLenum>(previousBlendSourceRgb),
+                                static_cast<GLenum>(previousBlendDestinationRgb),
+                                static_cast<GLenum>(previousBlendSourceAlpha),
+                                static_cast<GLenum>(previousBlendDestinationAlpha));
+            if (previousStencilTest) glEnable(GL_STENCIL_TEST);
+            else glDisable(GL_STENCIL_TEST);
+            program_.bind();
         };
         const auto drawSurfaceRanges = [&](bool volumeShadowed,
                                            bool includeTransparent) {

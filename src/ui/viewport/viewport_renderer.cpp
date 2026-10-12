@@ -2305,22 +2305,41 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                                           viewportSize,
                                                           screen);
         };
-        const auto drawTriangle = [&](const Point3D &a,
-                                      const Point3D &b,
-                                      const Point3D &c,
-                                      const QVector3D &normal) {
-            QPointF screenA;
-            QPointF screenB;
-            QPointF screenC;
-            if (!project(a, &screenA) || !project(b, &screenB) ||
-                !project(c, &screenC)) {
-                return;
-            }
-            painter.setPen(Qt::NoPen);
+        struct SurfaceFillTriangle {
+            Point3D a;
+            Point3D b;
+            Point3D c;
+            QVector3D normal;
+            qreal depth = 0.0;
+        };
+        QVector<SurfaceFillTriangle> fillTriangles;
+        const auto appendTriangle = [&](const Point3D &a,
+                                        const Point3D &b,
+                                        const Point3D &c,
+                                        const QVector3D &normal) {
             const Point3D center{(a.x + b.x + c.x) / 3.0,
                                  (a.y + b.y + c.y) / 3.0,
                                  (a.z + b.z + c.z) / 3.0};
-            painter.setBrush(shade(normal, center));
+            const Point3D worldCenter{center.x + preparedOffset.x,
+                                      center.y + preparedOffset.y,
+                                      center.z + preparedOffset.z};
+            fillTriangles.append({a, b, c, normal,
+                transform_.worldDirectionToView(worldCenter).towardCamera});
+        };
+        const auto drawTriangle = [&](const SurfaceFillTriangle &triangle) {
+            QPointF screenA;
+            QPointF screenB;
+            QPointF screenC;
+            if (!project(triangle.a, &screenA) ||
+                !project(triangle.b, &screenB) ||
+                !project(triangle.c, &screenC)) {
+                return;
+            }
+            painter.setPen(Qt::NoPen);
+            const Point3D center{(triangle.a.x + triangle.b.x + triangle.c.x) / 3.0,
+                                 (triangle.a.y + triangle.b.y + triangle.c.y) / 3.0,
+                                 (triangle.a.z + triangle.b.z + triangle.c.z) / 3.0};
+            painter.setBrush(shade(triangle.normal, center));
             painter.drawPolygon(QPolygonF{screenA, screenB, screenC});
         };
 
@@ -2340,8 +2359,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                 const auto point = [&preparedOffset](const QVector3D &value) {
                     return Point3D{value.x(), value.y(), value.z()};
                 };
-                drawTriangle(point(vertices[index]), point(vertices[index + 1]),
-                             point(vertices[index + 2]), normal);
+                appendTriangle(point(vertices[index]), point(vertices[index + 1]),
+                               point(vertices[index + 2]), normal);
             }
         } else {
             PreparedNurbsSurfaceTessellation localTessellation;
@@ -2366,9 +2385,17 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     const QVector3D ac(static_cast<float>(c.x - a.x),
                                        static_cast<float>(c.y - a.y),
                                        static_cast<float>(c.z - a.z));
-                    drawTriangle(a, b, c, QVector3D::crossProduct(ab, ac));
+                    appendTriangle(a, b, c, QVector3D::crossProduct(ab, ac));
                 }
             }
+        }
+        std::stable_sort(fillTriangles.begin(), fillTriangles.end(),
+                         [](const SurfaceFillTriangle &a,
+                            const SurfaceFillTriangle &b) {
+                             return a.depth < b.depth;
+                         });
+        for (const SurfaceFillTriangle &triangle : fillTriangles) {
+            drawTriangle(triangle);
         }
         painter.restore();
         return;

@@ -479,6 +479,27 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
   checks enabled, and `git diff --check` passed. Stage 7 is complete for the
   available hardware; other GPU models have not been checked.
 
+## Weighted blended transparency follow-up (2026-10-11)
+
+- Replaced the primary scene path's projected-centroid per-triangle ordering
+  with weighted blended OIT. The pass follows Blender 5.2.2 Workbench's
+  boundary: opaque surfaces establish depth first; transparent fragments
+  depth-test without depth writes into RGBA16F accumulation and R16F weight
+  targets attached alongside shared scene depth-stencil; a resolve composites
+  color and revealage over the scene before AA resolve. Accumulation uses
+  Workbench's Eq. 7 depth weight and `GPU_BLEND_OIT` factors (RGB ONE/ONE,
+  alpha ZERO/ONE_MINUS_SRC_ALPHA). Opaque, effects, and outline passes retain
+  their existing attachments and ordering. Auxiliary surface draws without a
+  shareable scene depth texture retain a range-level back-to-front fallback;
+  the primary viewport scene uses OIT.
+- classiCAD's scene texture is `GL_SRGB8_ALPHA8` with `GL_FRAMEBUFFER_SRGB`
+  disabled, and the surface shader applies its display transform before
+  output. OIT accumulation and resolve therefore use that same display-sRGB
+  numeric space so translucent pixels composite consistently with the opaque
+  scene target. Blender accumulates its lit color before display conversion,
+  so the exact transform placement still differs. Build and GPU image
+  validation are pending.
+
 ## Upstream behavioral references
 
 - [Blender overlay grid setup](https://github.com/blender/blender/blob/main/source/blender/draw/engines/overlay/overlay_grid.hh)
@@ -492,3 +513,7 @@ adapts the relevant algorithms to its Qt/OpenGL architecture.
 - [Blender smooth view](https://github.com/blender/blender/blob/main/source/blender/editors/space_view3d/view3d_navigate_smoothview.cc)
 - [Blender 5.2 viewport turntable and trackball rotation](https://github.com/blender/blender/blob/v5.2.0/source/blender/editors/space_view3d/view3d_navigate_view_rotate.cc)
 - [Blender viewport camera parameters](https://github.com/blender/blender/blob/main/source/blender/blenkernel/intern/camera.cc)
+- [Blender 5.2.2 Workbench transparent pass and framebuffer attachments](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc)
+- [Blender 5.2.2 Workbench transparent accumulation shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl)
+- [Blender 5.2.2 Workbench transparent resolve shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_resolve_frag.glsl)
+- [Blender 5.2.2 OpenGL OIT blend factors](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/opengl/gl_state.cc)

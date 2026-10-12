@@ -394,10 +394,11 @@ private:
         window.resize(1000, 760);
         auto *layout = new QVBoxLayout(&window);
         auto *info = new QLabel(
-            QStringLiteral("Combined: %1 × %2 .%3 (%4, written 8-bit)   •   Depth: linear camera distance PFM")
+            QStringLiteral("Combined: %1 × %2 .%3 (%4, %5-bit file from 8-bit render)   •   Depth: linear camera distance PFM")
                 .arg(outputSize.width()).arg(outputSize.height())
                 .arg(result.combinedFileExtension())
-                .arg(result.colorMode), &window);
+                .arg(result.colorMode)
+                .arg(result.writtenColorDepth()), &window);
         layout->addWidget(info);
         auto *preview = new QLabel(&window);
         preview->setAlignment(Qt::AlignCenter);

@@ -28,6 +28,7 @@ struct WorkbenchRenderResult {
 
     bool savePng(const QString &path, QString *errorMessage = nullptr) const;
     QString combinedFileExtension() const;
+    int writtenColorDepth() const;
     bool saveCombinedImage(const QString &path,
                            QString *errorMessage = nullptr) const;
     bool saveDepthPfm(const QString &path,

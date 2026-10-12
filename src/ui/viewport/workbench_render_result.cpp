@@ -51,6 +51,15 @@ QString WorkbenchRenderResult::combinedFileExtension() const
     return fileExtension(format);
 }
 
+int WorkbenchRenderResult::writtenColorDepth() const
+{
+    const QString extension = combinedFileExtension();
+    return colorDepth == 16 &&
+                   (extension == QLatin1String("png") ||
+                    extension == QLatin1String("tif"))
+               ? 16 : 8;
+}
+
 bool WorkbenchRenderResult::saveCombinedImage(
     const QString &path, QString *errorMessage) const
 {
@@ -65,15 +74,25 @@ bool WorkbenchRenderResult::saveCombinedImage(
         writerFormat != QLatin1String("png")) {
         writerFormat = QStringLiteral("png");
     }
-    QImage output = combined;
     const QString mode = colorMode.toUpper();
-    if (mode == QLatin1String("RGB")) {
-        output = output.convertToFormat(QImage::Format_RGB888);
-    } else if (mode == QLatin1String("BW")) {
-        output = output.convertToFormat(QImage::Format_Grayscale8);
-    } else {
-        output = output.convertToFormat(QImage::Format_RGBA8888);
-    }
+    const int outputDepth = writtenColorDepth();
+    const auto makeOutputImage = [this, &mode, outputDepth]() {
+        QImage::Format format = QImage::Format_RGBA8888;
+        if (outputDepth == 16) {
+            if (mode == QLatin1String("BW"))
+                format = QImage::Format_Grayscale16;
+            else if (mode == QLatin1String("RGB"))
+                format = QImage::Format_RGBX64;
+            else
+                format = QImage::Format_RGBA64;
+        } else if (mode == QLatin1String("RGB")) {
+            format = QImage::Format_RGB888;
+        } else if (mode == QLatin1String("BW")) {
+            format = QImage::Format_Grayscale8;
+        }
+        return combined.convertToFormat(format);
+    };
+    QImage output = makeOutputImage();
 
     QJsonObject cameraJson;
     cameraJson.insert(QStringLiteral("focalLengthMillimeters"),
@@ -93,7 +112,8 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("writtenImageFormat"), writerFormat);
     cameraJson.insert(QStringLiteral("colorMode"), mode);
     cameraJson.insert(QStringLiteral("sourceColorDepth"), colorDepth);
-    cameraJson.insert(QStringLiteral("writtenColorDepth"), 8);
+    cameraJson.insert(QStringLiteral("writtenColorDepth"), outputDepth);
+    cameraJson.insert(QStringLiteral("renderPrecisionBits"), 8);
     cameraJson.insert(QStringLiteral("depthPass"),
                       QStringLiteral("linear camera-space distance; zero is background"));
     QJsonObject poseJson;
@@ -125,10 +145,27 @@ bool WorkbenchRenderResult::saveCombinedImage(
                        QJsonDocument::Compact)));
 
     QImageWriter writer(path, writerFormat.toLatin1());
-    if (!writer.write(output)) {
+    bool written = writer.write(output);
+    QString writeError = writer.errorString();
+    if (!written && outputDepth == 16) {
+        output = combined.convertToFormat(
+            mode == QLatin1String("RGB") ? QImage::Format_RGB888
+            : mode == QLatin1String("BW") ? QImage::Format_Grayscale8
+                                             : QImage::Format_RGBA8888);
+        cameraJson.insert(QStringLiteral("writtenColorDepth"), 8);
+        output.setText(QStringLiteral("classiCAD.RenderType"),
+                       QStringLiteral("WorkbenchOffscreenScene"));
+        output.setText(QStringLiteral("classiCAD.Camera"),
+                       QString::fromUtf8(QJsonDocument(cameraJson).toJson(
+                           QJsonDocument::Compact)));
+        QImageWriter fallbackWriter(path, writerFormat.toLatin1());
+        written = fallbackWriter.write(output);
+        if (!written) writeError = fallbackWriter.errorString();
+    }
+    if (!written) {
         if (errorMessage != nullptr)
             *errorMessage = QStringLiteral("Could not write combined render: %1")
-                                .arg(writer.errorString());
+                                .arg(writeError);
         return false;
     }
     if (errorMessage != nullptr) errorMessage->clear();

@@ -824,6 +824,30 @@ private:
             }
             if (viewport_ != nullptr) {
                 viewport_->refreshAfterProjectImport();
+                if (!report.scenes.isEmpty()) {
+                    const QJsonObject scene = report.scenes.first().toObject();
+                    QJsonObject shading = scene.value(
+                        QStringLiteral("workbench_viewport_shading")).toObject();
+                    if (shading.isEmpty()) {
+                        // Keep compatibility with older extractors and files
+                        // that do not contain a saved VIEW_3D area.
+                        shading = scene.value(
+                            QStringLiteral("workbench_shading")).toObject();
+                    }
+                    if (!shading.isEmpty()) {
+                        const QStringList unsupported =
+                            viewport_->applyImportedBlenderShading(shading);
+                        if (!unsupported.isEmpty()) {
+                            const QString summary = QStringLiteral(
+                                "Solid viewport settings not reproduced: %1")
+                                .arg(unsupported.join(QStringLiteral(", ")));
+                            report.warningMessage = report.warningMessage.isEmpty()
+                                ? summary
+                                : report.warningMessage + QStringLiteral("; ") +
+                                      summary;
+                        }
+                    }
+                }
             }
         }
 

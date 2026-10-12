@@ -304,7 +304,7 @@ def layer_collection_records(scene, view_layer):
             "path": current_path,
             "exclude": bool(node.exclude),
             "hide_viewport": bool(node.hide_viewport),
-            "hide_render": bool(node.hide_render),
+            "hide_render": bool(node.collection.hide_render),
         })
         for child in node.children:
             visit(child, current_path)
@@ -809,20 +809,24 @@ def extract_scene(input_path, mode):
                     "hide_viewport": state["hide_viewport"],
                     "hide_render": state["hide_render"],
                 })
+    parent_ids_by_collection = {}
+    for parent in collections_by_id.values():
+        parent_id = stable_id(parent)
+        for child in parent.children:
+            parent_ids_by_collection.setdefault(stable_id(child), set()).add(
+                parent_id
+            )
     for collection in collections_by_id.values():
-        parent_ids = sorted(
-            stable_id(parent) for parent in collections_by_id.values()
-            if collection in parent.children
-        )
+        collection_id = stable_id(collection)
         output["collections"].append({
-            "collection_id": stable_id(collection),
+            "collection_id": collection_id,
             "name": collection.name_full,
             "library_path": source_library_path(collection),
-            "parent_ids": parent_ids,
-            "source_scene_names": sorted(scene_names_by_collection.get(stable_id(collection), set())),
+            "parent_ids": sorted(parent_ids_by_collection.get(collection_id, set())),
+            "source_scene_names": sorted(scene_names_by_collection.get(collection_id, set())),
             "hide_viewport": bool(collection.hide_viewport),
             "hide_render": bool(collection.hide_render),
-            "view_layer_states": states_by_collection.get(stable_id(collection), []),
+            "view_layer_states": states_by_collection.get(collection_id, []),
         })
     for scene in bpy.data.scenes:
         depsgraph = depsgraph_for_scene(scene) if mode == "evaluated" else None

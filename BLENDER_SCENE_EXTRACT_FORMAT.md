@@ -58,8 +58,11 @@ The importer validates required topology and finite coordinates before
 committing any mesh object. Image paths are retained as material source
 references in the native scene model; available packed image bytes within the
 transport limit are also retained. Blender shader-node graphs are not evaluated.
-Collection membership, hierarchy, and view-layer visibility are transported
-and retained by the native importer.
+Collection records preserve collection-wide viewport and render hide flags.
+View-layer instance records carry `exclude` and `hide_viewport`; Blender exposes
+`hide_render` on the underlying `Collection`, so the transport repeats that
+collection-wide value for each instance path. Collection membership, hierarchy,
+and view-layer visibility are retained by the native importer.
 `summary` contains extraction counts only; it does not claim successful native
 import. `font_objects_meshed` counts evaluated FONT objects included in
 `mesh_items_extracted`.

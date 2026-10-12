@@ -999,6 +999,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QColor color;
             qreal depth = 0.0;
             QImage texture;
+            bool texturePremultiplied = false;
             std::array<QPointF, 3> uvs{};
             std::array<qreal, 3> reciprocalDepths{};
         };
@@ -1071,25 +1072,11 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 }
                 if (loaded.isNull()) return nullptr;
                 loaded = loaded.convertToFormat(QImage::Format_RGBA8888);
-                const bool premultiplied =
-                    alphaMode.compare(QStringLiteral("PREMUL"), Qt::CaseInsensitive) == 0;
                 for (int y = 0; y < loaded.height(); ++y) {
                     auto *row = loaded.scanLine(y);
                     for (int x = 0; x < loaded.width(); ++x) {
                         uchar *pixel = row + x * 4;
-                        const int alpha = pixel[3];
                         if (ignoreAlpha) {
-                            pixel[3] = 255;
-                        } else if (alpha < 26) { // GPU cutoff is alpha < 0.1.
-                            pixel[3] = 0;
-                        } else {
-                            if (premultiplied && alpha != 255) {
-                                pixel[0] = static_cast<uchar>(std::min(255, pixel[0] * 255 / alpha));
-                                pixel[1] = static_cast<uchar>(std::min(255, pixel[1] * 255 / alpha));
-                                pixel[2] = static_cast<uchar>(std::min(255, pixel[2] * 255 / alpha));
-                            }
-                            // Workbench uses alpha as a cutout mask, not as
-                            // translucent material blending.
                             pixel[3] = 255;
                         }
                     }
@@ -1275,6 +1262,15 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             ViewportColorMode::Texture && hasUvs &&
                         textureForFace(faceIndex) != nullptr) {
                         triangle.texture = *textureForFace(faceIndex);
+                        const int materialIndex =
+                            mesh.faceMaterialIndices.value(faceIndex, 0);
+                        if (materialIndex >= 0 &&
+                            materialIndex < meshMaterials.size()) {
+                            triangle.texturePremultiplied =
+                                meshMaterials[materialIndex].textureImageAlphaMode
+                                    .compare(QStringLiteral("PREMUL"),
+                                             Qt::CaseInsensitive) == 0;
+                        }
                         triangle.uvs = triangleUvs;
                     }
                     if (useWorkbenchColor &&
@@ -1300,69 +1296,112 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          });
         painter.save();
         painter.setPen(selected ? QPen(curveColor, 1.5) : Qt::NoPen);
-        const auto drawTexturePatch = [&](const QImage &texture,
-                                          const std::array<QPointF, 3> &uvs,
-                                          const std::array<QPointF, 3> &points) {
-            const QPolygonF source{uvs[0], uvs[1], uvs[2]};
-            const QPolygonF screen{points[0], points[1], points[2]};
-            QPolygonF sourceQuad = source;
-            QPolygonF screenQuad = screen;
-            sourceQuad.append(source[0] + source[2] - source[1]);
-            screenQuad.append(screen[0] + screen[2] - screen[1]);
-            QTransform map;
-            if (!QTransform::quadToQuad(sourceQuad, screenQuad, map)) return false;
-            QBrush textureBrush(texture);
-            QTransform brushTransform;
-            brushTransform.scale(1.0 / texture.width(), 1.0 / texture.height());
-            textureBrush.setTransform(brushTransform);
+        const auto drawTextureTriangle = [&](const MeshTriangle &triangle) {
+            const QImage &texture = triangle.texture;
+            const qreal area = (triangle.points[1].x() - triangle.points[0].x()) *
+                                   (triangle.points[2].y() - triangle.points[0].y()) -
+                               (triangle.points[1].y() - triangle.points[0].y()) *
+                                   (triangle.points[2].x() - triangle.points[0].x());
+            if (std::abs(area) < 1.0e-12 || texture.isNull()) return;
+            const qreal minX = std::clamp(
+                std::min({triangle.points[0].x(), triangle.points[1].x(), triangle.points[2].x()}),
+                0.0, qreal(viewportSize.width()));
+            const qreal maxX = std::clamp(
+                std::max({triangle.points[0].x(), triangle.points[1].x(), triangle.points[2].x()}),
+                0.0, qreal(viewportSize.width()));
+            const qreal minY = std::clamp(
+                std::min({triangle.points[0].y(), triangle.points[1].y(), triangle.points[2].y()}),
+                0.0, qreal(viewportSize.height()));
+            const qreal maxY = std::clamp(
+                std::max({triangle.points[0].y(), triangle.points[1].y(), triangle.points[2].y()}),
+                0.0, qreal(viewportSize.height()));
+            if (maxX <= minX || maxY <= minY) return;
+            const QTransform transform = painter.transform();
+            const qreal dpr = painter.device() != nullptr
+                ? painter.device()->devicePixelRatioF() : 1.0;
+            const qreal scaleX = std::max<qreal>(
+                1.0e-6, std::abs(transform.m11()) * dpr);
+            const qreal scaleY = std::max<qreal>(
+                1.0e-6, std::abs(transform.m22()) * dpr);
+            const int left = qFloor(minX);
+            const int top = qFloor(minY);
+            const int width = std::max(1, qCeil((maxX - left) * scaleX));
+            const int height = std::max(1, qCeil((maxY - top) * scaleY));
+            if (width > 16384 || height > 16384 ||
+                qint64(width) * height > 64 * 1024 * 1024) {
+                return;
+            }
+            QImage raster(width, height, QImage::Format_RGBA8888);
+            raster.fill(Qt::transparent);
+            const auto wrap = [](int coordinate, int extent) {
+                const int wrapped = coordinate % extent;
+                return wrapped < 0 ? wrapped + extent : wrapped;
+            };
+            const auto channel = [&](int x, int y, int component) {
+                const uchar *pixel = texture.constScanLine(wrap(y, texture.height())) +
+                                     wrap(x, texture.width()) * 4;
+                return qreal(pixel[component]);
+            };
+            const auto sample = [&](const QPointF &uv, uchar *rgba) {
+                const qreal tx = uv.x() * texture.width() - 0.5;
+                const qreal ty = uv.y() * texture.height() - 0.5;
+                const int x0 = qFloor(tx), y0 = qFloor(ty);
+                const qreal fx = tx - x0, fy = ty - y0;
+                for (int component = 0; component < 4; ++component) {
+                    const qreal topValue = channel(x0, y0, component) * (1.0 - fx) +
+                                           channel(x0 + 1, y0, component) * fx;
+                    const qreal bottomValue = channel(x0, y0 + 1, component) * (1.0 - fx) +
+                                              channel(x0 + 1, y0 + 1, component) * fx;
+                    rgba[component] = static_cast<uchar>(std::clamp(
+                        qRound(topValue * (1.0 - fy) + bottomValue * fy), 0, 255));
+                }
+            };
+            const qreal alpha = triangle.color.alphaF();
+            for (int y = 0; y < height; ++y) {
+                uchar *row = raster.scanLine(y);
+                const qreal py = top + (y + 0.5) / scaleY;
+                for (int x = 0; x < width; ++x) {
+                    const qreal px = left + (x + 0.5) / scaleX;
+                    const qreal b1 = ((px - triangle.points[0].x()) *
+                                          (triangle.points[2].y() - triangle.points[0].y()) -
+                                      (py - triangle.points[0].y()) *
+                                          (triangle.points[2].x() - triangle.points[0].x())) / area;
+                    const qreal b2 = ((triangle.points[1].x() - triangle.points[0].x()) *
+                                          (py - triangle.points[0].y()) -
+                                      (triangle.points[1].y() - triangle.points[0].y()) *
+                                          (px - triangle.points[0].x())) / area;
+                    const qreal b0 = 1.0 - b1 - b2;
+                    if (b0 < 0.0 || b1 < 0.0 || b2 < 0.0) continue;
+                    const qreal p0 = b0 * triangle.reciprocalDepths[0];
+                    const qreal p1 = b1 * triangle.reciprocalDepths[1];
+                    const qreal p2 = b2 * triangle.reciprocalDepths[2];
+                    const qreal denominator = p0 + p1 + p2;
+                    if (denominator <= 1.0e-12) continue;
+                    const QPointF uv = (triangle.uvs[0] * p0 + triangle.uvs[1] * p1 +
+                                        triangle.uvs[2] * p2) / denominator;
+                    uchar rgba[4];
+                    sample(uv, rgba);
+                    if (rgba[3] < 26) continue; // Blender's filtered alpha < 0.1 cutoff.
+                    uchar *pixel = row + x * 4;
+                    for (int component = 0; component < 3; ++component) {
+                        const qreal channelValue = triangle.texturePremultiplied &&
+                                rgba[3] != 0 && rgba[3] != 255
+                            ? qreal(rgba[component]) * 255.0 / rgba[3]
+                            : rgba[component];
+                        pixel[component] = static_cast<uchar>(std::clamp(
+                            qRound(channelValue), 0, 255));
+                    }
+                    pixel[3] = static_cast<uchar>(qRound(alpha * 255.0));
+                }
+            }
             painter.save();
-            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-            painter.setTransform(map, true);
-            painter.setBrush(textureBrush);
-            painter.drawPolygon(source);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+            painter.drawImage(QRectF(left, top, width / scaleX, height / scaleY), raster);
             painter.restore();
-            return true;
         };
         for (const MeshTriangle &triangle : triangles) {
             if (!triangle.texture.isNull() && triangle.points.size() == 3) {
-                constexpr int subdivisions = 8;
-                bool mapped = true;
-                const auto patchVertex = [&](int i, int j) {
-                    const qreal b = qreal(i) / subdivisions;
-                    const qreal c = qreal(j) / subdivisions;
-                    const std::array<qreal, 3> weights{1.0 - b - c, b, c};
-                    QPointF uv;
-                    QPointF point;
-                    qreal denominator = 0.0;
-                    for (int k = 0; k < 3; ++k) {
-                        const qreal corrected = weights[k] * triangle.reciprocalDepths[k];
-                        denominator += corrected;
-                        uv += triangle.uvs[k] * corrected;
-                        point += triangle.points[k] * weights[k];
-                    }
-                    if (std::abs(denominator) > 1.0e-12) uv /= denominator;
-                    return std::pair<QPointF, QPointF>{uv, point};
-                };
-                for (int i = 0; i < subdivisions && mapped; ++i) {
-                    for (int j = 0; j < subdivisions - i && mapped; ++j) {
-                        const auto a = patchVertex(i, j);
-                        const auto b = patchVertex(i + 1, j);
-                        const auto c = patchVertex(i, j + 1);
-                        mapped = drawTexturePatch(triangle.texture,
-                            {a.first, b.first, c.first},
-                            {a.second, b.second, c.second});
-                        if (mapped && i + j < subdivisions - 1) {
-                            const auto d = patchVertex(i + 1, j + 1);
-                            mapped = drawTexturePatch(triangle.texture,
-                                {b.first, d.first, c.first},
-                                {b.second, d.second, c.second});
-                        }
-                    }
-                }
-                if (!mapped) {
-                    painter.setBrush(triangle.color);
-                    painter.drawPolygon(triangle.points);
-                }
+                drawTextureTriangle(triangle);
             } else {
                 painter.setBrush(triangle.color);
                 painter.drawPolygon(triangle.points);

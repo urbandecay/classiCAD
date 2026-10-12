@@ -38,7 +38,8 @@ public:
                           qreal devicePixelRatio,
                           const ViewportTransform &camera,
                           const QByteArray &historyKey,
-                          bool interactive);
+                          bool interactive,
+                          bool sceneRender = false);
     const ViewportTransform &sampleCamera() const noexcept;
     bool sceneSampleActive() const noexcept;
 
@@ -55,6 +56,7 @@ public:
 private:
     bool initialize();
     bool ensureTargets(const QSize &pixelSize);
+    bool ensureSampleZeroDepthTarget();
     bool ensureDisplayTransformTexture();
     bool runDepthOfField(GLuint sourceTexture);
     void destroyTargets();
@@ -79,9 +81,12 @@ private:
     QOpenGLVertexArrayObject vertexArray_;
     GLuint sceneFramebuffer_ = 0;
     GLuint attachmentClearFramebuffer_ = 0;
+    GLuint sampleZeroDepthFramebuffer_ = 0;
+    QSize sampleZeroDepthSize_;
     GLuint sceneColorTexture_ = 0;
     GLuint displayTransformTexture_ = 0;
     GLuint depthTexture_ = 0;
+    GLuint sampleZeroDepthTexture_ = 0;
     GLuint viewSpaceNormalTexture_ = 0;
     GLuint objectIdTexture_ = 0;
     GLuint frontColorTexture_ = 0;
@@ -133,6 +138,7 @@ private:
     bool initialized_ = false;
     bool sceneSampleActive_ = false;
     bool temporalSample_ = false;
+    bool sceneRender_ = false;
 };
 
 QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,

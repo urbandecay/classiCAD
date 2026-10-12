@@ -987,6 +987,11 @@ void ViewportAaRenderer::destroyTargets()
         glDeleteFramebuffers(1, &attachmentClearFramebuffer_);
         attachmentClearFramebuffer_ = 0;
     }
+    if (sampleZeroDepthFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &sampleZeroDepthFramebuffer_);
+        sampleZeroDepthFramebuffer_ = 0;
+    }
+    sampleZeroDepthSize_ = {};
     if (sceneColorTexture_ != 0) {
         glDeleteTextures(1, &sceneColorTexture_);
         sceneColorTexture_ = 0;
@@ -1000,6 +1005,10 @@ void ViewportAaRenderer::destroyTargets()
     if (depthTexture_ != 0) {
         glDeleteTextures(1, &depthTexture_);
         depthTexture_ = 0;
+    }
+    if (sampleZeroDepthTexture_ != 0) {
+        glDeleteTextures(1, &sampleZeroDepthTexture_);
+        sampleZeroDepthTexture_ = 0;
     }
     if (viewSpaceNormalTexture_ != 0) {
         glDeleteTextures(1, &viewSpaceNormalTexture_);
@@ -1389,7 +1398,8 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
                        static_cast<GLuint>(previousRenderbuffer));
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-    if (!sceneComplete || !frontComplete || !attachmentsComplete || !historyComplete ||
+    if (!sceneComplete || !frontComplete || !attachmentsComplete ||
+        !historyComplete ||
         !resolveComplete || !depthOfFieldComplete || !dofPrepareComplete ||
         !dofBlurComplete || !dofMipComplete || !edgeComplete || !weightComplete ||
         !textureDataValid) {
@@ -1415,13 +1425,74 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     return true;
 }
 
+bool ViewportAaRenderer::ensureSampleZeroDepthTarget()
+{
+    if (sampleZeroDepthFramebuffer_ != 0 &&
+        sampleZeroDepthTexture_ != 0 && sampleZeroDepthSize_ == targetSize_) {
+        return true;
+    }
+    if (sampleZeroDepthFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &sampleZeroDepthFramebuffer_);
+        sampleZeroDepthFramebuffer_ = 0;
+    }
+    if (sampleZeroDepthTexture_ != 0) {
+        glDeleteTextures(1, &sampleZeroDepthTexture_);
+        sampleZeroDepthTexture_ = 0;
+    }
+    sampleZeroDepthSize_ = {};
+
+    GLint previousReadFramebuffer = 0;
+    GLint previousDrawFramebuffer = 0;
+    GLint previousTexture = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    glGenTextures(1, &sampleZeroDepthTexture_);
+    glBindTexture(GL_TEXTURE_2D, sampleZeroDepthTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8,
+                 targetSize_.width(), targetSize_.height(), 0,
+                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &sampleZeroDepthFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, sampleZeroDepthFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                           GL_TEXTURE_2D, sampleZeroDepthTexture_, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    const bool complete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    if (!complete) {
+        glDeleteFramebuffers(1, &sampleZeroDepthFramebuffer_);
+        glDeleteTextures(1, &sampleZeroDepthTexture_);
+        sampleZeroDepthFramebuffer_ = 0;
+        sampleZeroDepthTexture_ = 0;
+        return false;
+    }
+    sampleZeroDepthSize_ = targetSize_;
+    return true;
+}
+
 bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
                                           qreal devicePixelRatio,
                                           const ViewportTransform &camera,
                                           const QByteArray &historyKey,
-                                          bool interactive)
+                                          bool interactive,
+                                          bool sceneRender)
 {
     sceneSampleActive_ = false;
+    sceneRender_ = sceneRender;
     if (!initialize()) {
         return false;
     }
@@ -1429,6 +1500,9 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     const QSize requestedPixelSize(qRound(logicalSize.width() * dpr),
                                    qRound(logicalSize.height() * dpr));
     if (!ensureTargets(requestedPixelSize)) {
+        return false;
+    }
+    if (sceneRender && !ensureSampleZeroDepthTarget()) {
         return false;
     }
 
@@ -2042,6 +2116,7 @@ bool ViewportAaRenderer::finishSceneSample()
     if (!sceneSampleActive_) {
         return false;
     }
+    const int completedSampleIndex = accumulatedSampleCount_;
     sceneSampleActive_ = false;
     const bool accumulate = mode_ != static_cast<int>(ViewportAntiAliasingMode::Off);
     GLuint sampleColorTexture = sceneColorTexture_;
@@ -2153,6 +2228,39 @@ bool ViewportAaRenderer::finishSceneSample()
         if (previousFramebufferSrgb) glEnable(GL_FRAMEBUFFER_SRGB);
         else glDisable(GL_FRAMEBUFFER_SRGB);
         glUseProgram(static_cast<GLuint>(previousProgram));
+    }
+
+    // Workbench scene renders accumulate color across TAA samples but keep
+    // depth from sample zero. The interactive viewport intentionally leaves
+    // each sample's depth current for its overlays and subsequent redraws.
+    if (sceneRender_ && temporalSample_) {
+        GLint previousReadFramebuffer = 0;
+        GLint previousDrawFramebuffer = 0;
+        const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+        glDisable(GL_SCISSOR_TEST);
+        if (completedSampleIndex == 0) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneFramebuffer_);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                              sampleZeroDepthFramebuffer_);
+            glBlitFramebuffer(0, 0, targetSize_.width(), targetSize_.height(),
+                              0, 0, targetSize_.width(), targetSize_.height(),
+                              GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        } else if (accumulatedSampleCount_ >= requestedSampleCount_) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              sampleZeroDepthFramebuffer_);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneFramebuffer_);
+            glBlitFramebuffer(0, 0, targetSize_.width(), targetSize_.height(),
+                              0, 0, targetSize_.width(), targetSize_.height(),
+                              GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(previousReadFramebuffer));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                          static_cast<GLuint>(previousDrawFramebuffer));
+        if (previousScissor) glEnable(GL_SCISSOR_TEST);
+        else glDisable(GL_SCISSOR_TEST);
     }
 
     targets_.currentSampleColorTexture = sceneColorTexture_;

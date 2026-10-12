@@ -884,10 +884,17 @@ time.
 Committed CAD dimensions remain post-render, screen-space annotations in
 Combined; their fixed-pixel labels/arrows have no corresponding Z samples.
 Offscreen rendering accumulates the imported Blender `scene.display.render_aa`
-mode before capturing Combined and depth. Older imports without that field use
-classiCAD's viewport AA preference. Blender's render AA enum is `OFF`, `FXAA`,
-or 5/8/11/16/32 samples, as declared in the pinned
-[SceneDisplay API](https://docs.blender.org/api/5.0/bpy.types.SceneDisplay.html).
+mode before capturing Combined and depth. For multi-sample scene renders,
+classiCAD keeps sample-zero depth while accumulating all samples for color,
+matching Blender's Workbench `AntiAliasingPass`: it saves sample-zero depth and
+restores it on the last render sample. The first jitter position is centered;
+interactive viewport accumulation continues to expose each current sample's
+depth. Older imports without the AA field use classiCAD's viewport AA
+preference. Blender's render AA enum is `OFF`, `FXAA`, or 5/8/11/16/32 samples,
+as declared in the pinned [SceneDisplay API](https://docs.blender.org/api/5.0/bpy.types.SceneDisplay.html).
+Source: [Workbench AA depth preservation](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L259-L280).
+The depth routing is source-aligned; an image comparison against Blender's
+Combined and Z outputs remains to verify the result visually.
 
 ### Workbench volume pass remains unsupported (2026-10-12)
 

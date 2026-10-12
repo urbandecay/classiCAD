@@ -199,7 +199,7 @@ bool ViewportGpuSurface::renderOffscreen(
     const QByteArray historyKey = QByteArrayLiteral("workbench-render-result-") +
                                   QByteArray::number(++offscreenRenderSerial_);
     bool sampleStarted = aaRenderer_->beginSceneSample(
-        pixelSize, 1.0, camera, historyKey, false);
+        pixelSize, 1.0, camera, historyKey, false, true);
     bool drawn = false;
     if (sceneLinearRgba != nullptr) sceneLinearRgba->clear();
     if (sampleStarted) {
@@ -209,7 +209,7 @@ bool ViewportGpuSurface::renderOffscreen(
             const bool needsAnotherSample = aaRenderer_->finishSceneSample();
             if (!drawn || !needsAnotherSample) break;
             sampleStarted = aaRenderer_->beginSceneSample(
-                pixelSize, 1.0, camera, historyKey, false);
+                pixelSize, 1.0, camera, historyKey, false, true);
             if (!sampleStarted) drawn = false;
         } while (sampleStarted);
         if (drawn && sceneLinearRgba != nullptr) {

@@ -776,21 +776,32 @@ bool ViewportAaRenderer::initialize()
                 vec4 sum = vec4(0.0);
                 float total = 0.0;
                 ivec2 size = textureSize(uSource, 0);
-                // Blender 5.2.2 get_random_vector() reads channel 1 of its
-                // 64x64 EEVEE blue-noise LUT (the workbench jitter texture's
-                // alpha), then adds the temporal noise offset before rotation.
+                // Blender 5.2.2 get_random_vector() combines interleaved
+                // gradient noise with channel 1 of the 64x64 EEVEE blue-noise
+                // LUT. It jitters the gather origin; it does not rotate the
+                // sample pattern.
                 ivec2 noiseCoord = ivec2(gl_FragCoord.xy) % 64;
                 float blueNoise = texelFetch(uNoise, noiseCoord, 0).r;
+                float ign = fract(uJitterOffset + 52.9829189 * fract(
+                    0.06711056 * gl_FragCoord.x +
+                    0.00583715 * gl_FragCoord.y));
                 float angle = 6.28318530718 * fract(blueNoise + uJitterOffset);
-                mat2 jitter = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
+                vec2 randomVector = vec2(cos(angle), sin(angle)) * sqrt(ign);
+                vec2 noiseOffset = randomVector * 0.2 *
+                    clamp(centerCoc * 0.2 - 4.0, 0.0, 1.0);
+                // Workbench's inverted_viewport_size is in full-resolution
+                // pixels while this gather samples half-resolution textures.
+                vec2 halfTexelScale = 0.5 / vec2(size);
                 for (int ring = 0; ring <= 3; ++ring) {
                   for (int y = -ring; y <= ring; ++y) {
                     for (int x = -ring; x <= ring; ++x) {
                         if (max(abs(x), abs(y)) != ring) continue;
                         vec2 square = vec2(x, y) / 3.0;
-                        vec2 disk = shapeAperture(jitter * squareToCircle(square));
-                        float radius = length(disk);
-                        vec2 uv = clamp(vUv + disk * centerCoc / vec2(size),
+                        vec2 circle = squareToCircle(square);
+                        float radius = length(circle);
+                        vec2 disk = shapeAperture(circle);
+                        vec2 uv = clamp(vUv + (noiseOffset + disk) *
+                                        centerCoc * halfTexelScale,
                                         0.5 / vec2(size), 1.0 - 0.5 / vec2(size));
                         vec2 sampleCoc = texture(uCoc, uv).rg;
                         float sampleRadius = max(sampleCoc.r, sampleCoc.g) * 100.0;

@@ -107,6 +107,8 @@ bool WorkbenchRenderResult::saveCombinedImage(
                       camera.sensorWidthMillimeters);
     cameraJson.insert(QStringLiteral("outputWidthPixels"), combined.width());
     cameraJson.insert(QStringLiteral("outputHeightPixels"), combined.height());
+    cameraJson.insert(QStringLiteral("pixelAspectX"), pixelAspectX);
+    cameraJson.insert(QStringLiteral("pixelAspectY"), pixelAspectY);
     cameraJson.insert(QStringLiteral("outputFormat"), outputFormat);
     cameraJson.insert(QStringLiteral("blenderImageFormat"), blenderImageFormat);
     cameraJson.insert(QStringLiteral("writtenImageFormat"), writerFormat);

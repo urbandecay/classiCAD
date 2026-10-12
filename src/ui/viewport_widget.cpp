@@ -6451,6 +6451,14 @@ public:
             if (!activeScene) continue;
             const QJsonObject renderOutput =
                 scene.value(QStringLiteral("render_output")).toObject();
+            const qreal pixelAspectX = renderOutput.value(
+                QStringLiteral("pixel_aspect_x")).toDouble(1.0);
+            const qreal pixelAspectY = renderOutput.value(
+                QStringLiteral("pixel_aspect_y")).toDouble(1.0);
+            if (std::isfinite(pixelAspectX) && pixelAspectX > 0.0)
+                result.pixelAspectX = pixelAspectX;
+            if (std::isfinite(pixelAspectY) && pixelAspectY > 0.0)
+                result.pixelAspectY = pixelAspectY;
             result.blenderImageFormat = renderOutput.value(
                 QStringLiteral("file_format")).toString(QStringLiteral("PNG"));
             result.colorMode = renderOutput.value(

@@ -20,6 +20,8 @@ struct WorkbenchRenderResult {
     QString blenderImageFormat = QStringLiteral("PNG");
     QString colorMode = QStringLiteral("RGBA");
     int colorDepth = 8;
+    qreal pixelAspectX = 1.0;
+    qreal pixelAspectY = 1.0;
 
     bool isValid() const noexcept
     {

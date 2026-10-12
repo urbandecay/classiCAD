@@ -70,15 +70,18 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
                                 qreal devicePixelRatio,
                                 const ViewportShadingSettings &settings)
 {
-    if (colorImage == nullptr || colorImage->isNull() || !settings.cavity ||
+    if (colorImage == nullptr || colorImage->isNull() ||
+        (!settings.cavity && !settings.outline) ||
         settings.mode != ViewportShadingMode::Solid || settings.xrayEnabled() ||
         viewportSize.isEmpty()) {
         return;
     }
 
-    // Workbench's opaque resolve runs cavity after lighting. Preserve its
-    // scene-wide transparent-scene restriction in this fallback as well.
+    // Workbench resolves object outlines from visible IDs independently of
+    // cavity. Cavity remains limited to opaque draws in this software path.
+    bool cavityEnabled = settings.cavity;
     for (const ViewportRenderObject &object : objects) {
+        if (!cavityEnabled) break;
         if (object.shape.geometryType != GeometryType::NurbsSurface &&
             object.shape.geometryType != GeometryType::NurbsSolid &&
             !(object.shape.geometryType == GeometryType::PolygonMesh &&
@@ -92,17 +95,27 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
                                     settings.colorMode == ViewportColorMode::Texture
                                 ? object.workbenchMaterial.alpha
                                 : object.displayColorSceneLinear.w();
-        if (alpha < 0.999f) return;
+        if (alpha < 0.999f) {
+            cavityEnabled = false;
+            break;
+        }
         if (object.shape.geometryType == GeometryType::PolygonMesh &&
             (settings.colorMode == ViewportColorMode::Material ||
              settings.colorMode == ViewportColorMode::Attribute ||
              settings.colorMode == ViewportColorMode::Texture)) {
             for (const WorkbenchMaterialData &material : object.meshMaterials) {
-                if (material.alpha < 0.999f) return;
+                if (material.alpha < 0.999f) {
+                    cavityEnabled = false;
+                    break;
+                }
             }
+            if (!cavityEnabled) break;
             for (const PolygonMeshMaterialSlot &slot :
                  object.shape.polygonMesh.materialSlots) {
-                if (slot.alpha < 0.999f) return;
+                if (slot.alpha < 0.999f) {
+                    cavityEnabled = false;
+                    break;
+                }
             }
         }
     }
@@ -246,6 +259,57 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
             }
         }
     }
+
+    if (settings.outline) {
+        QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
+        QImage result = source.copy();
+        const QColor outline = settings.outlineColor;
+        const float outlineAlpha = static_cast<float>(outline.alphaF());
+        const float outlineRed = static_cast<float>(outline.red());
+        const float outlineGreen = static_cast<float>(outline.green());
+        const float outlineBlue = static_cast<float>(outline.blue());
+        for (int y = 0; y < outputHeight; ++y) {
+            QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
+            const int depthY = std::clamp(
+                qRound((y + 0.5) / colorDpr * dpr), 0, height - 1);
+            for (int x = 0; x < outputWidth; ++x) {
+                const int depthX = std::clamp(
+                    qRound((x + 0.5) / colorDpr * dpr), 0, width - 1);
+                const quint64 objectId = samples[depthY * width + depthX].objectId;
+                if (objectId == 0) continue;
+                bool edge = false;
+                constexpr std::array<QPoint, 4> neighbors = {
+                    QPoint(1, 0), QPoint(-1, 0), QPoint(0, 1), QPoint(0, -1)};
+                for (const QPoint &offset : neighbors) {
+                    const int sx = depthX + offset.x();
+                    const int sy = depthY + offset.y();
+                    if (sx < 0 || sy < 0 || sx >= width || sy >= height ||
+                        samples[sy * width + sx].objectId != objectId) {
+                        edge = true;
+                        break;
+                    }
+                }
+                if (!edge || outlineAlpha <= 0.0f) continue;
+                const QRgb pixel = source.pixel(x, y);
+                const float dstAlpha = qAlpha(pixel) / 255.0f;
+                const float outAlpha = outlineAlpha +
+                                       dstAlpha * (1.0f - outlineAlpha);
+                const auto blend = [&](int dst, float src) {
+                    if (outAlpha <= 0.0f) return 0;
+                    return std::clamp(qRound(
+                        (src * outlineAlpha + dst * dstAlpha *
+                         (1.0f - outlineAlpha)) / outAlpha), 0, 255);
+                };
+                out[x] = qRgba(blend(qRed(pixel), outlineRed),
+                               blend(qGreen(pixel), outlineGreen),
+                               blend(qBlue(pixel), outlineBlue),
+                               std::clamp(qRound(outAlpha * 255.0f), 0, 255));
+            }
+        }
+        *colorImage = result.convertToFormat(colorImage->format());
+    }
+
+    if (!cavityEnabled) return;
 
     const bool ssao = settings.cavityType == ViewportCavityType::World ||
                       settings.cavityType == ViewportCavityType::Both;

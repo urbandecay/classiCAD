@@ -10,10 +10,9 @@
 
 namespace classiCAD {
 
-// Software equivalent of Workbench's screen-space cavity composite for the
-// QPainter fallback. The color image is shaded first; this pass resolves a
-// scene-wide depth/normal/object-ID buffer from NURBS display triangles and
-// imported polygon-mesh triangles.
+// Software Workbench screen-space effects for the QPainter fallback. The color
+// image is shaded first; this pass resolves a scene-wide depth/normal/object-ID
+// buffer from NURBS display triangles and imported polygon-mesh triangles.
 void applyRasterWorkbenchCavity(QImage *colorImage,
                                 const QVector<ViewportRenderObject> &objects,
                                 const ViewportTransform &transform,

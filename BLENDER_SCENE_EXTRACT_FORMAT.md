@@ -47,7 +47,9 @@ their identity, scene, parent, collections, visibility, and reason. A malformed
 mesh is skipped whole and receives a reason there. `unsupported_features` is
 per-item and covers data such as custom split normals, unsupported attributes,
 shape keys, missing linked libraries/images, unapplied modifiers, and
-shader-node graphs.
+shader-node graphs. Meshes also report `loose_geometry` when they contain edges
+not used by polygon boundaries or isolated vertices; the native polygon mesh
+stores polygon faces only, so those elements are omitted.
 Supported mesh, curve, and surface child objects also report
 `parent_hierarchy`: their world-space geometry/transform is retained, but the
 Blender parent relationship itself is not represented in the native scene

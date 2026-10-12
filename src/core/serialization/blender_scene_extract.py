@@ -360,6 +360,39 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
             [int(vertex_index) for vertex_index in polygon.vertices]
             for polygon in mesh.polygons
         ]
+        polygon_edges = set()
+        polygon_vertices = set()
+        for polygon in mesh.polygons:
+            vertices = [int(vertex_index) for vertex_index in polygon.vertices]
+            polygon_vertices.update(vertices)
+            if len(vertices) > 1:
+                for index, vertex_index in enumerate(vertices):
+                    next_vertex_index = vertices[(index + 1) % len(vertices)]
+                    polygon_edges.add(tuple(sorted((vertex_index,
+                                                    next_vertex_index))))
+        mesh_edges = [
+            tuple(sorted((int(edge.vertices[0]), int(edge.vertices[1]))))
+            for edge in mesh.edges
+        ]
+        loose_edge_count = sum(edge not in polygon_edges for edge in mesh_edges)
+        edge_vertices = {vertex_index for edge in mesh_edges for vertex_index in edge}
+        isolated_vertex_count = sum(
+            1 for vertex in mesh.vertices
+            if int(vertex.index) not in polygon_vertices and
+            int(vertex.index) not in edge_vertices
+        )
+        if loose_edge_count or isolated_vertex_count:
+            details = []
+            if loose_edge_count:
+                details.append("%d loose edge(s)" % loose_edge_count)
+            if isolated_vertex_count:
+                details.append("%d isolated vertex/vertices" % isolated_vertex_count)
+            add_unsupported(
+                unsupported, item_id, "loose_geometry",
+                "Blender mesh contains %s; classiCAD PolygonMesh3D stores "
+                "polygon faces only, so these elements are omitted" %
+                " and ".join(details),
+            )
         item["polygon_material_indices"] = [
             int(polygon.material_index) for polygon in mesh.polygons
         ]

@@ -46,12 +46,14 @@ reports the loss of parametric modifier editability.
 their identity, scene, parent, collections, visibility, and reason. A malformed
 mesh is skipped whole and receives a reason there. `unsupported_features` is
 per-item and covers data such as custom split normals, unsupported attributes,
-missing linked libraries/images, unapplied modifiers, and shader-node graphs.
+shape keys, missing linked libraries/images, unapplied modifiers, and
+shader-node graphs.
 The importer validates required topology and finite coordinates before
 committing any mesh object. Image paths are retained as material source
-references in the native scene model, but image pixels are not embedded and
-Blender shader-node graphs are not evaluated. Collection membership and hidden
-state are reported but are not currently retained.
+references in the native scene model; available packed image bytes within the
+transport limit are also retained. Blender shader-node graphs are not evaluated.
+Collection membership, hierarchy, and view-layer visibility are transported
+and retained by the native importer.
 `summary` contains extraction counts only; it does not claim successful native
 import. `font_objects_meshed` counts evaluated FONT objects included in
 `mesh_items_extracted`.

@@ -326,6 +326,16 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
     if item["library_path_exists"] is False:
         add_unsupported(unsupported, item_id, "linked_library",
                         "linked Blender library file is missing: " + item["library_path"])
+    source_mesh = getattr(obj, "data", None)
+    if (getattr(source_mesh, "shape_keys", None) is not None and
+            len(source_mesh.shape_keys.key_blocks) > 1):
+        if mode == "evaluated":
+            reason = ("shape key animation and alternate key states are not represented; "
+                      "only the current evaluated shape was imported")
+        else:
+            reason = ("shape keys are not represented; only the mesh's base geometry "
+                      "was imported")
+        add_unsupported(unsupported, item_id, "shape_keys", reason)
     if mode == "evaluated":
         evaluated_obj = obj.evaluated_get(depsgraph)
         mesh = evaluated_obj.to_mesh(preserve_all_data_layers=True,

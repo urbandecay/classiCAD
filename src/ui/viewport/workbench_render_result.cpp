@@ -13,12 +13,14 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <vector>
 
 #ifdef CLASSICAD_HAS_OPENEXR
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfFrameBuffer.h>
 #include <OpenEXR/ImfHeader.h>
 #include <OpenEXR/ImfOutputFile.h>
+#include <OpenEXR/ImfRgba.h>
 #endif
 
 namespace classiCAD {
@@ -121,36 +123,85 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
     try {
         const int width = sceneLinearSize.width();
         const int height = sceneLinearSize.height();
+        const bool halfPrecision = colorDepth == 16;
         OPENEXR_IMF_NAMESPACE::Header header(width, height);
+        if (std::isfinite(pixelAspectX) && std::isfinite(pixelAspectY) &&
+            pixelAspectX > 0.0 && pixelAspectY > 0.0) {
+            // Blender's OpenEXR writer stores ppm_y / ppm_x. The PNG/TIFF
+            // path maps pixelAspectX/Y to dots-per-meter with the same
+            // convention, so the resulting pixel width/height ratio is X/Y.
+            header.pixelAspectRatio() =
+                static_cast<float>(pixelAspectX / pixelAspectY);
+        }
         using namespace OPENEXR_IMF_NAMESPACE;
-        header.channels().insert("R", Channel(FLOAT));
-        header.channels().insert("G", Channel(FLOAT));
-        header.channels().insert("B", Channel(FLOAT));
-        header.channels().insert("A", Channel(FLOAT));
+        const PixelType pixelType = halfPrecision ? HALF : FLOAT;
+        header.channels().insert("R", Channel(pixelType));
+        header.channels().insert("G", Channel(pixelType));
+        header.channels().insert("B", Channel(pixelType));
+        header.channels().insert("A", Channel(pixelType));
         const bool includeDepth = hasSceneLinearDepthPass();
         if (includeDepth) {
-            header.channels().insert("Z", Channel(FLOAT));
+            header.channels().insert("Z", Channel(pixelType));
         }
         FrameBuffer frameBuffer;
-        char *base = reinterpret_cast<char *>(
-            const_cast<float *>(sceneLinearRgba.constData()));
-        const size_t xStride = 4 * sizeof(float);
-        const size_t yStride = size_t(width) * xStride;
-        frameBuffer.insert("R", Slice(FLOAT, base, xStride, yStride, 1, 1, 0.0));
-        frameBuffer.insert("G", Slice(FLOAT, base + sizeof(float), xStride,
-                                      yStride, 1, 1, 0.0));
-        frameBuffer.insert("B", Slice(FLOAT, base + 2 * sizeof(float), xStride,
-                                      yStride, 1, 1, 0.0));
-        frameBuffer.insert("A", Slice(FLOAT, base + 3 * sizeof(float), xStride,
-                                      yStride, 1, 1, 0.0));
-        if (includeDepth) {
-            char *depthBase = reinterpret_cast<char *>(
-                const_cast<float *>(depth.constData()));
-            const size_t depthXStride = sizeof(float);
-            const size_t depthYStride = size_t(width) * depthXStride;
-            frameBuffer.insert(
-                "Z", Slice(FLOAT, depthBase, depthXStride, depthYStride,
-                           1, 1, 0.0));
+        if (halfPrecision) {
+            // Blender clamps float render channels to the finite HALF range
+            // before converting them to OpenEXR half precision.
+            constexpr float halfMaximum = 65504.0f;
+            const auto toHalfRange = [halfMaximum](float value) {
+                return std::clamp(value, -halfMaximum, halfMaximum);
+            };
+            std::vector<Rgba> halfColor(size_t(width) * size_t(height));
+            for (size_t index = 0; index < halfColor.size(); ++index) {
+                const float *source = sceneLinearRgba.constData() + index * 4;
+                halfColor[index] = Rgba(toHalfRange(source[0]),
+                                        toHalfRange(source[1]),
+                                        toHalfRange(source[2]),
+                                        toHalfRange(source[3]));
+            }
+            constexpr size_t componentStride = sizeof(Rgba) / 4;
+            char *halfBase = reinterpret_cast<char *>(&halfColor.front().r);
+            const size_t xStride = sizeof(Rgba);
+            const size_t yStride = size_t(width) * xStride;
+            frameBuffer.insert("R", Slice(HALF, halfBase, xStride, yStride));
+            frameBuffer.insert("G", Slice(HALF, halfBase + componentStride,
+                                          xStride, yStride));
+            frameBuffer.insert("B", Slice(HALF, halfBase + 2 * componentStride,
+                                          xStride, yStride));
+            frameBuffer.insert("A", Slice(HALF, halfBase + 3 * componentStride,
+                                          xStride, yStride));
+            if (includeDepth) {
+                std::vector<Rgba> halfDepth(size_t(width) * size_t(height));
+                for (size_t index = 0; index < halfDepth.size(); ++index) {
+                    halfDepth[index].r = toHalfRange(depth.constData()[index]);
+                }
+                char *depthBase =
+                    reinterpret_cast<char *>(&halfDepth.front().r);
+                frameBuffer.insert(
+                    "Z", Slice(HALF, depthBase, sizeof(Rgba),
+                               size_t(width) * sizeof(Rgba)));
+            }
+        } else {
+            char *base = reinterpret_cast<char *>(
+                const_cast<float *>(sceneLinearRgba.constData()));
+            const size_t xStride = 4 * sizeof(float);
+            const size_t yStride = size_t(width) * xStride;
+            frameBuffer.insert("R", Slice(FLOAT, base, xStride, yStride, 1, 1, 0.0));
+            frameBuffer.insert("G", Slice(FLOAT, base + sizeof(float), xStride,
+                                          yStride, 1, 1, 0.0));
+            frameBuffer.insert("B", Slice(FLOAT, base + 2 * sizeof(float), xStride,
+                                          yStride, 1, 1, 0.0));
+            frameBuffer.insert("A", Slice(FLOAT, base + 3 * sizeof(float), xStride,
+                                          yStride, 1, 1, 0.0));
+            if (includeDepth) {
+                char *depthBase = reinterpret_cast<char *>(
+                    const_cast<float *>(depth.constData()));
+                const size_t depthXStride = sizeof(float);
+                const size_t depthYStride = size_t(width) * depthXStride;
+                frameBuffer.insert(
+                    "Z", Slice(FLOAT, depthBase, depthXStride, depthYStride,
+                               1, 1, 0.0));
+            }
         }
         const QByteArray encodedPath = QFile::encodeName(path);
         OutputFile output(encodedPath.constData(), header);
@@ -196,7 +247,7 @@ int WorkbenchRenderResult::writtenColorDepth() const
 {
     const QString extension = combinedFileExtension();
     if (extension == QLatin1String("exr") && openExrWriterAvailable())
-        return 32;
+        return colorDepth == 16 ? 16 : 32;
     return colorDepth == 16 &&
                    (extension == QLatin1String("png") ||
                     extension == QLatin1String("tif"))

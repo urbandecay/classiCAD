@@ -46,6 +46,40 @@ namespace {
 constexpr int kFadeBucketCount = 256;
 constexpr int kGridLineHalfCount = 75;
 
+QVector3D transformWorkbenchMeshNormal(const std::array<double, 16> &matrix,
+                                       const Point3D &normal)
+{
+    const double a = matrix[0], b = matrix[1], c = matrix[2];
+    const double d = matrix[4], e = matrix[5], f = matrix[6];
+    const double g = matrix[8], h = matrix[9], i = matrix[10];
+    const double cofactors[9] = {
+        e * i - f * h, f * g - d * i, d * h - e * g,
+        c * h - b * i, a * i - c * g, b * g - a * h,
+        b * f - c * e, c * d - a * f, a * e - b * d};
+    const double determinant = a * cofactors[0] + b * cofactors[1] +
+                               c * cofactors[2];
+    if (!std::isfinite(determinant) || std::abs(determinant) <= 1.0e-15 ||
+        !std::isfinite(normal.x) || !std::isfinite(normal.y) ||
+        !std::isfinite(normal.z)) {
+        return {};
+    }
+    QVector3D result(
+        static_cast<float>((cofactors[0] * normal.x +
+                            cofactors[1] * normal.y +
+                            cofactors[2] * normal.z) / determinant),
+        static_cast<float>((cofactors[3] * normal.x +
+                            cofactors[4] * normal.y +
+                            cofactors[5] * normal.z) / determinant),
+        static_cast<float>((cofactors[6] * normal.x +
+                            cofactors[7] * normal.y +
+                            cofactors[8] * normal.z) / determinant));
+    if (!std::isfinite(result.x()) || !std::isfinite(result.y()) ||
+        !std::isfinite(result.z()) || result.lengthSquared() <= 1.0e-16f) {
+        return {};
+    }
+    return result.normalized();
+}
+
 void sampleWorkbenchImage(const QImage &image,
                           const QPointF &uv,
                           const QString &interpolation,
@@ -1118,6 +1152,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QColor color;
             QVector3D sceneLinearColor{0.8f, 0.8f, 0.8f};
             QVector3D normalView{0.0f, 0.0f, 1.0f};
+            std::array<QVector3D, 3> cornerNormalsView{};
             QVector3D incidentView{0.0f, 0.0f, 1.0f};
             std::array<Point3D, 3> worldPoints{};
             qreal roughness = 0.4;
@@ -1506,6 +1541,28 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             QVector3D::dotProduct(normalWorld, worldRight),
                             QVector3D::dotProduct(normalWorld, worldUp),
                             QVector3D::dotProduct(normalWorld, worldFacing));
+                        for (int corner = 0; corner < 3; ++corner) {
+                            QVector3D cornerNormalWorld = normalWorld;
+                            const int loopIndex = firstCorner +
+                                loopTriangle[corner];
+                            if (loopIndex >= 0 &&
+                                loopIndex < mesh.cornerNormals.size()) {
+                                const QVector3D transformedNormal =
+                                    transformWorkbenchMeshNormal(
+                                        meshTransform,
+                                        mesh.cornerNormals[loopIndex]);
+                                if (transformedNormal.lengthSquared() > 1.0e-16f) {
+                                    cornerNormalWorld = transformedNormal;
+                                }
+                            }
+                            triangle.cornerNormalsView[corner] = {
+                                QVector3D::dotProduct(cornerNormalWorld,
+                                                     worldRight),
+                                QVector3D::dotProduct(cornerNormalWorld,
+                                                     worldUp),
+                                QVector3D::dotProduct(cornerNormalWorld,
+                                                     worldFacing)};
+                        }
                         const Point3D center{(vertices[0].x + vertices[1].x + vertices[2].x) / 3.0,
                                              (vertices[0].y + vertices[1].y + vertices[2].y) / 3.0,
                                              (vertices[0].z + vertices[1].z + vertices[2].z) / 3.0};
@@ -1667,6 +1724,16 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             triangle.sceneLinearColor[component];
                     }
                     QVector3D shadedLinear = textureColor;
+                    QVector3D normalView =
+                        (triangle.cornerNormalsView[0] * static_cast<float>(p0) +
+                         triangle.cornerNormalsView[1] * static_cast<float>(p1) +
+                         triangle.cornerNormalsView[2] * static_cast<float>(p2)) /
+                        static_cast<float>(denominator);
+                    if (normalView.lengthSquared() <= 1.0e-16f) {
+                        normalView = triangle.normalView;
+                    } else {
+                        normalView.normalize();
+                    }
                     QVector3D incidentView = triangle.incidentView;
                     if (transform_.isPerspectiveEnabled()) {
                         // Workbench derives its incident vector per fragment.
@@ -1696,7 +1763,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     if (shadingSettings_.lightingMode ==
                         ViewportLightingMode::Studio) {
                         shadedLinear = workbenchStudioShade(
-                            textureColor, triangle.normalView,
+                            textureColor, normalView,
                             incidentView,
                             static_cast<float>(triangle.roughness),
                             static_cast<float>(triangle.metallic),
@@ -1705,7 +1772,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                ViewportLightingMode::MatCap) {
                         shadedLinear = workbenchMatcapShade(
                             shadingSettings_.matcapPreset, textureColor,
-                            triangle.normalView, incidentView,
+                            normalView, incidentView,
                             shadingSettings_.specularLighting);
                     }
                     const QVector3D displayColor =

@@ -2893,8 +2893,71 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         baseColorVector);
             if ((!nurbsTiledTexture && nurbsTexture.isNull()) ||
                 !triangle.hasUvs) {
-                painter.setBrush(shaded);
-                painter.drawPolygon(QPolygonF{screenA, screenB, screenC});
+                // Shade untextured triangles per sample as Workbench's resolve
+                // pass does. Keep the triangle's flat normal, while varying
+                // the incident direction across perspective views.
+                const qreal area = (screenB.x() - screenA.x()) * (screenC.y() - screenA.y()) -
+                                   (screenB.y() - screenA.y()) * (screenC.x() - screenA.x());
+                if (std::abs(area) < 1.0e-12) return;
+                const int left = qFloor(std::max<qreal>(0, std::min({screenA.x(), screenB.x(), screenC.x()})));
+                const int top = qFloor(std::max<qreal>(0, std::min({screenA.y(), screenB.y(), screenC.y()})));
+                const int right = qCeil(std::min<qreal>(viewportSize.width(), std::max({screenA.x(), screenB.x(), screenC.x()})));
+                const int bottom = qCeil(std::min<qreal>(viewportSize.height(), std::max({screenA.y(), screenB.y(), screenC.y()})));
+                if (right <= left || bottom <= top) return;
+                if (qint64(right - left) * (bottom - top) > 4000000) {
+                    painter.setBrush(shaded);
+                    painter.drawPolygon(QPolygonF{screenA, screenB, screenC});
+                    return;
+                }
+                const Point3D cameraWorld = transform_.cameraPosition(viewportSize);
+                const Point3D viewDirection = transform_.viewDirection();
+                const Point3D points[3] = {triangle.a, triangle.b, triangle.c};
+                qreal reciprocal[3] = {1.0, 1.0, 1.0};
+                if (transform_.isPerspectiveEnabled()) {
+                    for (int i = 0; i < 3; ++i) {
+                        const qreal dx = points[i].x + preparedOffset.x - cameraWorld.x;
+                        const qreal dy = points[i].y + preparedOffset.y - cameraWorld.y;
+                        const qreal dz = points[i].z + preparedOffset.z - cameraWorld.z;
+                        reciprocal[i] = 1.0 / std::max<qreal>(
+                            dx * viewDirection.x + dy * viewDirection.y +
+                                dz * viewDirection.z,
+                            1.0e-9);
+                    }
+                }
+                QImage raster(right - left, bottom - top,
+                              QImage::Format_ARGB32_Premultiplied);
+                raster.fill(Qt::transparent);
+                for (int y = 0; y < raster.height(); ++y) {
+                    auto *row = reinterpret_cast<QRgb *>(raster.scanLine(y));
+                    for (int x = 0; x < raster.width(); ++x) {
+                        const qreal px = left + x + 0.5;
+                        const qreal py = top + y + 0.5;
+                        const qreal w1 = ((px - screenA.x()) * (screenC.y() - screenA.y()) -
+                                          (py - screenA.y()) * (screenC.x() - screenA.x())) / area;
+                        const qreal w2 = ((screenB.x() - screenA.x()) * (py - screenA.y()) -
+                                          (screenB.y() - screenA.y()) * (px - screenA.x())) / area;
+                        const qreal w0 = 1.0 - w1 - w2;
+                        if (w0 < 0.0 || w1 < 0.0 || w2 < 0.0) continue;
+                        const qreal cw0 = w0 * reciprocal[0];
+                        const qreal cw1 = w1 * reciprocal[1];
+                        const qreal cw2 = w2 * reciprocal[2];
+                        const qreal denominator = cw0 + cw1 + cw2;
+                        if (denominator <= 1.0e-12) continue;
+                        Point3D shadingPosition = center;
+                        if (transform_.isPerspectiveEnabled()) {
+                            shadingPosition = {
+                                (points[0].x * cw0 + points[1].x * cw1 + points[2].x * cw2) / denominator,
+                                (points[0].y * cw0 + points[1].y * cw1 + points[2].y * cw2) / denominator,
+                                (points[0].z * cw0 + points[1].z * cw1 + points[2].z * cw2) / denominator};
+                        }
+                        const QColor sample = shade(triangle.normal,
+                                                    shadingPosition,
+                                                    baseColorVector);
+                        row[x] = qPremultiply(qRgba(sample.red(), sample.green(),
+                                                    sample.blue(), sample.alpha()));
+                    }
+                }
+                painter.drawImage(QPoint(left, top), raster);
                 return;
             }
             // QPainter has no perspective-correct textured-triangle primitive.

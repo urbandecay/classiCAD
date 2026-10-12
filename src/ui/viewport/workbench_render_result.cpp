@@ -8,6 +8,7 @@
 #include <QImageWriter>
 
 #include <algorithm>
+#include <cmath>
 
 namespace classiCAD {
 
@@ -58,6 +59,27 @@ void applyImageWriterSettings(QImageWriter *writer,
         else if (codec == QLatin1String("PACKBITS"))
             writer->setCompression(2);
     }
+}
+
+void applyPixelAspectMetadata(QImage *image, qreal aspectX, qreal aspectY)
+{
+    if (image == nullptr || image->isNull() || !std::isfinite(aspectX) ||
+        !std::isfinite(aspectY) || aspectX <= 0.0 || aspectY <= 0.0) {
+        return;
+    }
+
+    // QImage writers that support per-axis resolution metadata (including
+    // PNG pHYs and TIFF resolution tags) encode non-square pixel aspect as
+    // inverse pixel density. Keep the values moderate and their ratio equal
+    // to Blender's pixel_aspect_x / pixel_aspect_y.
+    constexpr qreal referenceDotsPerMeter = 10000.0;
+    const qreal maximumAspect = std::max(aspectX, aspectY);
+    const int dotsPerMeterX = std::max(
+        1, qRound(referenceDotsPerMeter * aspectY / maximumAspect));
+    const int dotsPerMeterY = std::max(
+        1, qRound(referenceDotsPerMeter * aspectX / maximumAspect));
+    image->setDotsPerMeterX(dotsPerMeterX);
+    image->setDotsPerMeterY(dotsPerMeterY);
 }
 
 } // namespace
@@ -119,6 +141,7 @@ bool WorkbenchRenderResult::saveCombinedImage(
         return combined.convertToFormat(format);
     };
     QImage output = makeOutputImage();
+    applyPixelAspectMetadata(&output, pixelAspectX, pixelAspectY);
 
     QJsonObject cameraJson;
     cameraJson.insert(QStringLiteral("focalLengthMillimeters"),
@@ -192,6 +215,7 @@ bool WorkbenchRenderResult::saveCombinedImage(
             mode == QLatin1String("RGB") ? QImage::Format_RGB888
             : mode == QLatin1String("BW") ? QImage::Format_Grayscale8
                                              : QImage::Format_RGBA8888);
+        applyPixelAspectMetadata(&output, pixelAspectX, pixelAspectY);
         cameraJson.insert(QStringLiteral("writtenColorDepth"), 8);
         output.setText(QStringLiteral("classiCAD.RenderType"),
                        QStringLiteral("WorkbenchOffscreenScene"));

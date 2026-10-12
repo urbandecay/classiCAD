@@ -51,6 +51,7 @@ public:
 private:
     bool initialize();
     bool ensureTargets(const QSize &pixelSize);
+    bool runDepthOfField(GLuint sourceTexture);
     void destroyTargets();
     void drawSmaaResolve(float mixFactor);
     void drawPresentation(GLuint sourceTexture,
@@ -68,6 +69,7 @@ private:
     ViewportRenderTargets targets_;
     QOpenGLShaderProgram accumulateProgram_;
     QOpenGLShaderProgram presentProgram_;
+    QOpenGLShaderProgram depthOfFieldProgram_;
     std::array<QOpenGLShaderProgram, 3> smaaPrograms_;
     QOpenGLVertexArrayObject vertexArray_;
     GLuint sceneFramebuffer_ = 0;
@@ -82,6 +84,14 @@ private:
     GLuint resolvedColorTexture_ = 0;
     GLuint depthOfFieldFramebuffer_ = 0;
     GLuint depthOfFieldColorTexture_ = 0;
+    GLuint depthOfFieldSourceTexture_ = 0;
+    GLuint depthOfFieldCocTexture_ = 0;
+    GLuint depthOfFieldBlurTexture_ = 0;
+    GLuint depthOfFieldPrepareFramebuffer_ = 0;
+    GLuint depthOfFieldBlurFramebuffer_ = 0;
+    GLuint depthOfFieldMipColorTexture_ = 0;
+    GLuint depthOfFieldMipCocTexture_ = 0;
+    GLuint depthOfFieldMipFramebuffer_ = 0;
     GLuint smaaEdgeFramebuffer_ = 0;
     GLuint smaaEdgeTexture_ = 0;
     GLuint smaaWeightFramebuffer_ = 0;

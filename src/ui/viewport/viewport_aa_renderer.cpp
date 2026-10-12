@@ -305,6 +305,7 @@ ViewportAaRenderer::~ViewportAaRenderer()
     }
     accumulateProgram_.removeAllShaders();
     presentProgram_.removeAllShaders();
+    depthOfFieldProgram_.removeAllShaders();
 }
 
 void ViewportAaRenderer::setMode(int mode)
@@ -457,6 +458,166 @@ bool ViewportAaRenderer::initialize()
                                  source.a);
         }
     )glsl";
+    // Workbench 5.2.2's DOF is a half-resolution, multi-pass gather. This
+    // stage-dispatched shader keeps the passes explicit while sharing their
+    // optical CoC calculation and texture bindings.
+    static constexpr const char *depthOfFieldFragmentShader = R"glsl(
+        #version 330 core
+        in vec2 vUv;
+        uniform sampler2D uSource;
+        uniform sampler2D uCoc;
+        uniform sampler2D uDepth;
+        uniform sampler2D uBlur;
+        uniform int uStage;
+        uniform int uSourceLod;
+        uniform vec2 uNearFar;
+        uniform float uFocusDistance;
+        uniform float uFocalLengthMillimeters;
+        uniform float uSensorWidthMillimeters;
+        uniform float uFStop;
+        layout(location = 0) out vec4 outColor;
+        layout(location = 1) out vec4 outCoc;
+        float cocAtDepth(float depth)
+        {
+            float z = (uNearFar.x * uNearFar.y) /
+                max(uNearFar.y - depth * (uNearFar.y - uNearFar.x), 1e-6);
+            float f = uFocalLengthMillimeters;
+            float focus = uFocusDistance;
+            return (0.5 * f * f / max(uFStop * abs(focus - f), 1e-6)) *
+                   ((focus - z) / max(z, 1e-6)) *
+                   (float(textureSize(uDepth, 0).x) /
+                    max(uSensorWidthMillimeters, 1e-6));
+        }
+        vec2 encodeCoc(float coc)
+        {
+            return vec2(max(coc, 0.0), max(-coc, 0.0)) / 100.0;
+        }
+        vec4 fetchColor(ivec2 p, int lod)
+        {
+            return texelFetch(uSource, p, lod);
+        }
+        vec2 fetchCoc(ivec2 p, int lod)
+        {
+            return texelFetch(uCoc, p, lod).rg;
+        }
+        vec4 weightedFour(vec4 a, vec4 b, vec4 c, vec4 d,
+                          vec4 weights)
+        {
+            float total = dot(weights, vec4(1.0));
+            return total > 1e-6 ?
+                (a * weights.x + b * weights.y + c * weights.z + d * weights.w) / total :
+                (a + b + c + d) * 0.25;
+        }
+        void main()
+        {
+            ivec2 p = ivec2(gl_FragCoord.xy);
+            if (uStage == 0) {
+                ivec2 b = p * 2;
+                vec4 colors[4] = vec4[4](
+                    fetchColor(b, 0), fetchColor(b + ivec2(1, 0), 0),
+                    fetchColor(b + ivec2(0, 1), 0), fetchColor(b + ivec2(1, 1), 0));
+                float c[4];
+                c[0] = cocAtDepth(texelFetch(uDepth, b, 0).r);
+                c[1] = cocAtDepth(texelFetch(uDepth, b + ivec2(1, 0), 0).r);
+                c[2] = cocAtDepth(texelFetch(uDepth, b + ivec2(0, 1), 0).r);
+                c[3] = cocAtDepth(texelFetch(uDepth, b + ivec2(1, 1), 0).r);
+                float nearCoc = max(max(max(c[0], c[1]), max(c[2], c[3])), 0.0);
+                float farCoc = max(max(max(-c[0], -c[1]), max(-c[2], -c[3])), 0.0);
+                vec4 nearW = vec4(0.0);
+                vec4 farW = vec4(0.0);
+                for (int i = 0; i < 4; ++i) {
+                    nearW[i] = c[i] > 0.0 ? clamp(1.0 - abs(nearCoc - c[i]), 0.0, 1.0) : 0.0;
+                    farW[i] = c[i] < 0.0 ? clamp(1.0 - abs(farCoc + c[i]), 0.0, 1.0) : 0.0;
+                }
+                vec4 weights = dot(farW, vec4(1.0)) > 0.0 ? farW : nearW;
+                outColor = clamp(weightedFour(colors[0], colors[1], colors[2], colors[3], weights), 0.0, 3.0);
+                outCoc = vec4(encodeCoc(nearCoc) + vec2(0.0, farCoc / 100.0),
+                              0.0, 1.0);
+                return;
+            }
+            if (uStage == 1) {
+                ivec2 b = p * 2;
+                vec4 colors[4] = vec4[4](
+                    fetchColor(b, uSourceLod), fetchColor(b + ivec2(1, 0), uSourceLod),
+                    fetchColor(b + ivec2(0, 1), uSourceLod), fetchColor(b + ivec2(1, 1), uSourceLod));
+                vec2 cocs[4] = vec2[4](
+                    fetchCoc(b, uSourceLod), fetchCoc(b + ivec2(1, 0), uSourceLod),
+                    fetchCoc(b + ivec2(0, 1), uSourceLod), fetchCoc(b + ivec2(1, 1), uSourceLod));
+                float nearCoc = max(max(max(cocs[0].r, cocs[1].r), max(cocs[2].r, cocs[3].r)), 0.0);
+                float farCoc = max(max(max(cocs[0].g, cocs[1].g), max(cocs[2].g, cocs[3].g)), 0.0);
+                vec4 nearW = vec4(0.0);
+                vec4 farW = vec4(0.0);
+                for (int i = 0; i < 4; ++i) {
+                    float n = cocs[i].r * 100.0;
+                    float f = cocs[i].g * 100.0;
+                    nearW[i] = n > 0.0 ? clamp(1.0 - abs(nearCoc * 100.0 - n), 0.0, 1.0) : 0.0;
+                    farW[i] = f > 0.0 ? clamp(1.0 - abs(farCoc * 100.0 - f), 0.0, 1.0) : 0.0;
+                }
+                vec4 weights = dot(farW, vec4(1.0)) > 0.0 ? farW : nearW;
+                outColor = weightedFour(colors[0], colors[1], colors[2], colors[3], weights);
+                outCoc = vec4(nearCoc, farCoc, 0.0, 1.0);
+                return;
+            }
+            if (uStage == 2) {
+                float centerCoc = max(texture(uCoc, vUv).r,
+                                      texture(uCoc, vUv).g) * 100.0;
+                vec4 sum = vec4(0.0);
+                float total = 0.0;
+                ivec2 size = textureSize(uSource, 0);
+                for (int ring = 0; ring <= 3; ++ring) {
+                  for (int y = -ring; y <= ring; ++y) {
+                    for (int x = -ring; x <= ring; ++x) {
+                        if (max(abs(x), abs(y)) != ring) continue;
+                        vec2 square = vec2(x, y) / 3.0;
+                        vec2 disk = square * sqrt(max(vec2(0.0), 1.0 - square.yx * square.yx * 0.5));
+                        float radius = length(disk);
+                        vec2 uv = clamp(vUv + disk * centerCoc / vec2(size),
+                                        0.5 / vec2(size), 1.0 - 0.5 / vec2(size));
+                        vec2 sampleCoc = texture(uCoc, uv).rg;
+                        float sampleRadius = max(sampleCoc.r, sampleCoc.g) * 100.0;
+                        float weight = sampleRadius * smoothstep(radius * centerCoc - 0.5,
+                                                                  radius * centerCoc + 0.5,
+                                                                  sampleRadius);
+                        if (weight > 0.0) {
+                            float lod = clamp(log2(max(sampleRadius, 1.0)) - 2.0, 0.0, 2.0);
+                            sum += textureLod(uSource, uv, lod) * weight;
+                            total += weight;
+                        }
+                    }
+                  }
+                }
+                outColor = total > 0.0 ? sum / total : textureLod(uSource, vUv, 0.0);
+                outCoc = vec4(0.0);
+                return;
+            }
+            if (uStage == 3) {
+                vec2 size = vec2(textureSize(uBlur, 0));
+                vec2 uv = gl_FragCoord.xy / size;
+                float coc = max(texture(uCoc, uv).r, texture(uCoc, uv).g) * 100.0;
+                float radius = clamp(coc - 9.0, 0.0, 1.0);
+                vec4 values[9];
+                int n = 0;
+                for (int y = -1; y <= 1; ++y)
+                    for (int x = -1; x <= 1; ++x)
+                        values[n++] = texture(uBlur, uv + vec2(x, y) / size * radius);
+                for (int i = 0; i < 9; ++i)
+                    for (int j = i + 1; j < 9; ++j) {
+                        vec4 lo = min(values[i], values[j]);
+                        vec4 hi = max(values[i], values[j]);
+                        values[i] = lo;
+                        values[j] = hi;
+                    }
+                outColor = values[4];
+                outCoc = vec4(0.0);
+                return;
+            }
+            float depth = texelFetch(uDepth, p, 0).r;
+            float coc = abs(cocAtDepth(depth));
+            float blend = smoothstep(1.0, 3.0, coc);
+            outColor = mix(texture(uSource, vUv), texture(uBlur, vUv), blend);
+            outCoc = vec4(0.0);
+        }
+    )glsl";
     QByteArray smaaLibrary;
     QByteArray smaaVertexTemplate;
     QByteArray smaaFragmentTemplate;
@@ -499,7 +660,12 @@ bool ViewportAaRenderer::initialize()
                                                  fullscreenVertexShader) ||
         !presentProgram_.addShaderFromSourceCode(QOpenGLShader::Fragment,
                                                  presentFragmentShader) ||
-        !presentProgram_.link() || !smaaProgramsReady ||
+        !presentProgram_.link() ||
+        !depthOfFieldProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Vertex, fullscreenVertexShader) ||
+        !depthOfFieldProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Fragment, depthOfFieldFragmentShader) ||
+        !depthOfFieldProgram_.link() || !smaaProgramsReady ||
         !vertexArray_.create()) {
         qWarning().noquote() << "Viewport AA shader setup failed:"
                              << accumulateProgram_.log()
@@ -520,6 +686,24 @@ void ViewportAaRenderer::destroyTargets()
         glDeleteTextures(1, &depthOfFieldColorTexture_);
         depthOfFieldColorTexture_ = 0;
     }
+    const GLuint dofFramebuffers[] = {depthOfFieldPrepareFramebuffer_,
+                                      depthOfFieldBlurFramebuffer_,
+                                      depthOfFieldMipFramebuffer_};
+    glDeleteFramebuffers(3, dofFramebuffers);
+    depthOfFieldPrepareFramebuffer_ = 0;
+    depthOfFieldBlurFramebuffer_ = 0;
+    depthOfFieldMipFramebuffer_ = 0;
+    const GLuint dofTextures[] = {depthOfFieldSourceTexture_,
+                                  depthOfFieldCocTexture_,
+                                  depthOfFieldBlurTexture_,
+                                  depthOfFieldMipColorTexture_,
+                                  depthOfFieldMipCocTexture_};
+    glDeleteTextures(5, dofTextures);
+    depthOfFieldSourceTexture_ = 0;
+    depthOfFieldCocTexture_ = 0;
+    depthOfFieldBlurTexture_ = 0;
+    depthOfFieldMipColorTexture_ = 0;
+    depthOfFieldMipCocTexture_ = 0;
     if (resolveFramebuffer_ != 0) {
         glDeleteFramebuffers(1, &resolveFramebuffer_);
         resolveFramebuffer_ = 0;
@@ -724,6 +908,84 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     const bool depthOfFieldComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
+    const QSize halfSize(std::max(pixelSize.width() / 2, 1),
+                         std::max(pixelSize.height() / 2, 1));
+    glGenTextures(1, &depthOfFieldSourceTexture_);
+    glBindTexture(GL_TEXTURE_2D, depthOfFieldSourceTexture_);
+    for (int level = 0; level < 3; ++level) {
+        const int width = std::max(halfSize.width() >> level, 1);
+        const int height = std::max(halfSize.height() >> level, 1);
+        glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA16F, width, height, 0,
+                     GL_RGBA, GL_HALF_FLOAT, nullptr);
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenTextures(1, &depthOfFieldCocTexture_);
+    glBindTexture(GL_TEXTURE_2D, depthOfFieldCocTexture_);
+    for (int level = 0; level < 3; ++level) {
+        const int width = std::max(halfSize.width() >> level, 1);
+        const int height = std::max(halfSize.height() >> level, 1);
+        glTexImage2D(GL_TEXTURE_2D, level, GL_RG8, width, height, 0,
+                     GL_RG, GL_UNSIGNED_BYTE, nullptr);
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, &depthOfFieldPrepareFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldPrepareFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, depthOfFieldSourceTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_2D, depthOfFieldCocTexture_, 0);
+    glDrawBuffers(2, attachmentDrawBuffers);
+    const bool dofPrepareComplete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    const QSize mipScratchSize(std::max(halfSize.width() / 2, 1),
+                               std::max(halfSize.height() / 2, 1));
+    glGenTextures(1, &depthOfFieldMipColorTexture_);
+    glBindTexture(GL_TEXTURE_2D, depthOfFieldMipColorTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, mipScratchSize.width(),
+                 mipScratchSize.height(), 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenTextures(1, &depthOfFieldMipCocTexture_);
+    glBindTexture(GL_TEXTURE_2D, depthOfFieldMipCocTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, mipScratchSize.width(),
+                 mipScratchSize.height(), 0, GL_RG, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &depthOfFieldMipFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldMipFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           depthOfFieldMipColorTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                           depthOfFieldMipCocTexture_, 0);
+    glDrawBuffers(2, attachmentDrawBuffers);
+    const bool dofMipComplete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    glGenTextures(1, &depthOfFieldBlurTexture_);
+    glBindTexture(GL_TEXTURE_2D, depthOfFieldBlurTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, halfSize.width(),
+                 halfSize.height(), 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenFramebuffers(1, &depthOfFieldBlurFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldBlurFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, depthOfFieldBlurTexture_, 0);
+    glDrawBuffers(1, &drawAttachment);
+    const bool dofBlurComplete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
     glGenTextures(1, &smaaEdgeTexture_);
     glBindTexture(GL_TEXTURE_2D, smaaEdgeTexture_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, pixelSize.width(),
@@ -799,13 +1061,17 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     if (!sceneComplete || !attachmentsComplete || !historyComplete ||
-        !resolveComplete || !depthOfFieldComplete || !edgeComplete || !weightComplete ||
+        !resolveComplete || !depthOfFieldComplete || !dofPrepareComplete ||
+        !dofBlurComplete || !dofMipComplete || !edgeComplete || !weightComplete ||
         !textureDataValid) {
         qWarning() << "Viewport AA target allocation failed"
                    << "scene=" << sceneComplete
                    << "attachments=" << attachmentsComplete
                    << "history=" << historyComplete
                    << "resolve=" << resolveComplete
+                   << "dof prepare=" << dofPrepareComplete
+                   << "dof blur=" << dofBlurComplete
+                   << "dof mip=" << dofMipComplete
                    << "smaa edges=" << edgeComplete
                    << "smaa weights=" << weightComplete
                    << "smaa data=" << textureDataValid;
@@ -924,6 +1190,156 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     targets_.validAttachments = 0;
     sceneSampleActive_ = true;
     return true;
+}
+
+bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
+{
+    if (sourceTexture == 0 || depthOfFieldPrepareFramebuffer_ == 0 ||
+        depthOfFieldBlurFramebuffer_ == 0 || depthOfFieldFramebuffer_ == 0 ||
+        !depthOfFieldProgram_.isLinked()) {
+        return false;
+    }
+
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousProgram = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTextures[4] = {};
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    for (int unit = 0; unit < 4; ++unit) {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextures[unit]);
+    }
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousDepth = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_SCISSOR_TEST);
+
+    const QSize halfSize(std::max(targetSize_.width() / 2, 1),
+                         std::max(targetSize_.height() / 2, 1));
+    const auto bindPass = [&](int stage, GLuint framebuffer, int width, int height,
+                              GLuint color, GLuint coc, GLuint blur, int lod) {
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glViewport(0, 0, width, height);
+        glUseProgram(static_cast<GLuint>(depthOfFieldProgram_.programId()));
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, color);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, coc);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, depthTexture_);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, blur);
+        depthOfFieldProgram_.setUniformValue("uSource", 0);
+        depthOfFieldProgram_.setUniformValue("uCoc", 1);
+        depthOfFieldProgram_.setUniformValue("uDepth", 2);
+        depthOfFieldProgram_.setUniformValue("uBlur", 3);
+        depthOfFieldProgram_.setUniformValue("uStage", stage);
+        depthOfFieldProgram_.setUniformValue("uSourceLod", lod);
+        depthOfFieldProgram_.setUniformValue(
+            "uNearFar", QVector2D(float(depthOfFieldOptics_.clipStart),
+                                  float(depthOfFieldOptics_.clipEnd)));
+        depthOfFieldProgram_.setUniformValue(
+            "uFocusDistance", float(depthOfFieldOptics_.focusDistance));
+        depthOfFieldProgram_.setUniformValue(
+            "uFocalLengthMillimeters",
+            float(depthOfFieldOptics_.focalLengthMillimeters));
+        depthOfFieldProgram_.setUniformValue(
+            "uSensorWidthMillimeters",
+            float(depthOfFieldOptics_.sensorWidthMillimeters));
+        depthOfFieldProgram_.setUniformValue("uFStop", float(depthOfFieldOptics_.fStop));
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    };
+
+    bool complete = true;
+    const GLenum mrtAttachments[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldPrepareFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                          depthOfFieldSourceTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D,
+                          depthOfFieldCocTexture_, 0);
+    glDrawBuffers(2, mrtAttachments);
+    complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (complete) {
+        bindPass(0, depthOfFieldPrepareFramebuffer_, halfSize.width(),
+                 halfSize.height(), sourceTexture, sourceTexture,
+                 depthOfFieldBlurTexture_, 0);
+    }
+
+    for (int sourceLod = 0; complete && sourceLod < 2; ++sourceLod) {
+        const int destinationLod = sourceLod + 1;
+        const int width = std::max(halfSize.width() >> destinationLod, 1);
+        const int height = std::max(halfSize.height() >> destinationLod, 1);
+        glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldMipFramebuffer_);
+        glDrawBuffers(2, mrtAttachments);
+        complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        if (complete) {
+            bindPass(1, depthOfFieldMipFramebuffer_, width, height,
+                     depthOfFieldSourceTexture_, depthOfFieldCocTexture_,
+                     depthOfFieldBlurTexture_, sourceLod);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, depthOfFieldMipFramebuffer_);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, depthOfFieldSourceTexture_);
+            glCopyTexSubImage2D(GL_TEXTURE_2D, destinationLod, 0, 0,
+                                0, 0, width, height);
+            glReadBuffer(GL_COLOR_ATTACHMENT1);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, depthOfFieldCocTexture_);
+            glCopyTexSubImage2D(GL_TEXTURE_2D, destinationLod, 0, 0,
+                                0, 0, width, height);
+            glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldMipFramebuffer_);
+        }
+    }
+
+    if (complete) {
+        const GLenum colorAttachment = GL_COLOR_ATTACHMENT0;
+        glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldBlurFramebuffer_);
+        glDrawBuffers(1, &colorAttachment);
+        bindPass(2, depthOfFieldBlurFramebuffer_, halfSize.width(),
+                 halfSize.height(), depthOfFieldSourceTexture_,
+                 depthOfFieldCocTexture_, depthOfFieldBlurTexture_, 0);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldPrepareFramebuffer_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               depthOfFieldSourceTexture_, 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                               GL_TEXTURE_2D, 0, 0);
+        glDrawBuffers(1, &colorAttachment);
+        bindPass(3, depthOfFieldPrepareFramebuffer_, halfSize.width(),
+                 halfSize.height(), sourceTexture,
+                 depthOfFieldCocTexture_, depthOfFieldBlurTexture_, 0);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, depthOfFieldFramebuffer_);
+        glDrawBuffers(1, &colorAttachment);
+        bindPass(4, depthOfFieldFramebuffer_, targetSize_.width(),
+                 targetSize_.height(), sourceTexture, depthOfFieldCocTexture_,
+                 depthOfFieldSourceTexture_, 0);
+    }
+
+    glUseProgram(static_cast<GLuint>(previousProgram));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    for (int unit = 0; unit < 4; ++unit) {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTextures[unit]));
+    }
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    if (previousBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (previousDepth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (previousScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+    return complete;
 }
 
 const ViewportTransform &ViewportAaRenderer::sampleCamera() const noexcept
@@ -1181,11 +1597,9 @@ bool ViewportAaRenderer::finishSceneSample()
                                  depthTexture_ != 0 &&
                                  depthOfFieldFramebuffer_ != 0;
     if (useDepthOfField) {
-        const GLint dofViewport[4] = {0, 0, targetSize_.width(),
-                                      targetSize_.height()};
-        drawPresentation(sceneColorTexture_, depthOfFieldFramebuffer_,
-                         dofViewport, false, true);
-        sampleColorTexture = depthOfFieldColorTexture_;
+        if (runDepthOfField(sceneColorTexture_)) {
+            sampleColorTexture = depthOfFieldColorTexture_;
+        }
     }
     GLuint presentTexture = sampleColorTexture;
     if (accumulate) {

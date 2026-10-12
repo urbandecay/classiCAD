@@ -269,6 +269,18 @@ def scene_camera_record(scene, depsgraph=None):
         return None
     evaluated = camera.evaluated_get(depsgraph) if depsgraph is not None else camera
     data = evaluated.data
+    dof_focus_distance = finite_number(data.dof.focus_distance)
+    focus_object = data.dof.focus_object
+    if focus_object is not None:
+        focus_evaluated = (focus_object.evaluated_get(depsgraph)
+                           if depsgraph is not None else focus_object)
+        camera_position = evaluated.matrix_world.translation
+        focus_position = focus_evaluated.matrix_world.translation
+        camera_backward = evaluated.matrix_world.to_3x3().col[2].normalized()
+        # Match BKE_camera_object_dof_distance(): measure the focus target's
+        # distance along the camera's local +Z axis, not Euclidean distance.
+        dof_focus_distance = max(
+            abs(camera_backward.dot(camera_position - focus_position)), 1.0e-5)
     return {
         "object_id": stable_id(camera),
         "name": camera.name_full,
@@ -285,7 +297,7 @@ def scene_camera_record(scene, depsgraph=None):
         "shift_y": finite_number(data.shift_y),
         "orthographic_scale": finite_number(data.ortho_scale),
         "dof_enabled": bool(data.dof.use_dof),
-        "dof_focus_distance": finite_number(data.dof.focus_distance),
+        "dof_focus_distance": finite_number(dof_focus_distance),
         "dof_f_stop": finite_number(data.dof.aperture_fstop),
     }
 

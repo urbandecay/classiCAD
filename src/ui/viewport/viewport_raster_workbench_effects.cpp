@@ -178,7 +178,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const ViewportShadingSettings &settings)
 {
     if (colorImage == nullptr || colorImage->isNull() ||
-        (!settings.cavity && !settings.outline) ||
+        (!settings.cavity && !settings.outline && !settings.depthOfField) ||
         settings.mode != ViewportShadingMode::Solid || settings.xrayEnabled() ||
         viewportSize.isEmpty()) {
         return;
@@ -188,6 +188,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // depth/normal buffer so transparent surfaces neither occlude its samples
     // nor receive its shading.
     const bool cavityEnabled = settings.cavity;
+    const ViewportCameraPreferences cameraOptics = transform.cameraPreferences();
+    const bool perspective = transform.isPerspectiveEnabled();
+    const bool depthOfFieldEnabled = settings.depthOfField && perspective &&
+                                     cameraOptics.sceneCameraEnabled;
 
     const int outputWidth = colorImage->width();
     const int outputHeight = colorImage->height();
@@ -201,7 +205,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     QVector<RasterSample> opaqueSamples;
     if (cavityEnabled) opaqueSamples.resize(width * height);
     const Point3D towardCamera = transform.viewDirection();
-    const bool perspective = transform.isPerspectiveEnabled();
     const Point3D camera = perspective
                                ? transform.cameraPosition(viewportSize)
                                : Point3D{};
@@ -517,7 +520,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         *colorImage = result.convertToFormat(colorImage->format());
     }
 
-    if (!cavityEnabled) return;
+    if (cavityEnabled) {
 
     const bool ssao = settings.cavityType == ViewportCavityType::World ||
                       settings.cavityType == ViewportCavityType::Both;
@@ -627,6 +630,80 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
     }
     *colorImage = result.convertToFormat(colorImage->format());
+    }
+
+    // QPainter fallback approximation: use the software-resolved visible
+    // surface depth to estimate a physical circle of confusion, then gather
+    // a small disk of same-or-behind-depth colors. This is intentionally
+    // camera-gated and runs only for perspective scene-camera optics.
+    if (depthOfFieldEnabled) {
+        const QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
+        QImage dofResult = source.copy();
+        constexpr std::array<QPointF, 12> disk{{
+            {0.0, 0.0}, {0.527, 0.085}, {-0.040, 0.536},
+            {-0.670, -0.179}, {0.244, -0.647}, {0.765, 0.429},
+            {-0.315, 0.847}, {-0.897, 0.310}, {0.493, 0.749},
+            {0.901, -0.312}, {-0.527, -0.757}, {0.089, -0.956}}};
+        const qreal focal = cameraOptics.focalLengthMillimeters;
+        const qreal focus = cameraOptics.focusDistance;
+        const qreal fStop = cameraOptics.fStop;
+        const qreal sensorWidth = std::max<qreal>(cameraOptics.sensorWidthMillimeters,
+                                                   1.0e-6);
+        if (std::isfinite(focal) && focal > 0.0 && std::isfinite(focus) &&
+            focus > focal && std::isfinite(fStop) && fStop > 0.0) {
+            for (int y = 0; y < outputHeight; ++y) {
+                QRgb *out = reinterpret_cast<QRgb *>(dofResult.scanLine(y));
+                const int depthY = std::clamp(
+                    static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
+                    0, height - 1);
+                for (int x = 0; x < outputWidth; ++x) {
+                    const int depthX = std::clamp(
+                        static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
+                        0, width - 1);
+                    const RasterSample &center = samples[depthY * width + depthX];
+                    if (center.objectId == 0 || center.depth <= 0.0f) continue;
+                    const qreal z = center.depth;
+                    const qreal cocMm = std::abs(
+                        (focal * focal / (fStop * (focus - focal))) *
+                        ((z - focus) / std::max<qreal>(z, 1.0e-6)));
+                    const qreal radius = std::clamp(
+                        cocMm * outputWidth / sensorWidth, 0.0, 12.0) * colorDpr;
+                    if (radius < 0.75 * colorDpr) continue;
+                    qreal red = 0.0, green = 0.0, blue = 0.0;
+                    int count = 0;
+                    for (const QPointF &tap : disk) {
+                        const int sx = std::clamp(qRound(x + tap.x() * radius),
+                                                  0, outputWidth - 1);
+                        const int sy = std::clamp(qRound(y + tap.y() * radius),
+                                                  0, outputHeight - 1);
+                        const int sampleX = std::clamp(
+                            static_cast<int>(std::floor((sx + 0.5) / colorDpr * dpr)),
+                            0, width - 1);
+                        const int sampleY = std::clamp(
+                            static_cast<int>(std::floor((sy + 0.5) / colorDpr * dpr)),
+                            0, height - 1);
+                        const RasterSample &neighbor = samples[sampleY * width + sampleX];
+                        if (neighbor.objectId != 0 &&
+                            neighbor.depth < center.depth -
+                                std::max(1.0e-4f, std::abs(center.depth) * 0.002f))
+                            continue;
+                        const QRgb pixel = source.pixel(sx, sy);
+                        red += qRed(pixel); green += qGreen(pixel); blue += qBlue(pixel);
+                        ++count;
+                    }
+                    if (count == 0) continue;
+                    const QRgb original = source.pixel(x, y);
+                    const qreal mix = std::clamp(radius / (6.0 * colorDpr), 0.0, 1.0);
+                    out[x] = qRgba(
+                        qRound(qRed(original) * (1.0 - mix) + red / count * mix),
+                        qRound(qGreen(original) * (1.0 - mix) + green / count * mix),
+                        qRound(qBlue(original) * (1.0 - mix) + blue / count * mix),
+                        qAlpha(original));
+                }
+            }
+            *colorImage = dofResult.convertToFormat(colorImage->format());
+        }
+    }
 }
 
 } // namespace classiCAD

@@ -514,8 +514,14 @@ private:
             !ordinaryImportReport.blenderVersion.isEmpty();
         if (importedOrdinaryBlend && !ordinaryImportReport.scenes.isEmpty()) {
             const QJsonObject scene = ordinaryImportReport.scenes.first().toObject();
-            const QJsonObject shading = scene.value(
-                QStringLiteral("workbench_shading")).toObject();
+            QJsonObject shading = scene.value(
+                QStringLiteral("workbench_viewport_shading")).toObject();
+            if (shading.isEmpty()) {
+                // Older extractors and headless imports may not have a saved
+                // VIEW_3D area; retain their scene-level shading fallback.
+                shading = scene.value(
+                    QStringLiteral("workbench_shading")).toObject();
+            }
             if (!shading.isEmpty()) {
                 const QStringList unsupported =
                     viewport_->applyImportedBlenderShading(shading);

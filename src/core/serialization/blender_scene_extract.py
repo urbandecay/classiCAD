@@ -505,9 +505,10 @@ def scene_camera_record(scene, depsgraph=None):
     }
 
 
-def workbench_shading_record(scene):
-    """Capture scene-level Workbench Solid inputs exposed by Blender 5.2.2."""
-    shading = scene.display.shading
+def workbench_shading_record(scene, shading=None):
+    """Capture Workbench Solid inputs, optionally from a saved 3D view."""
+    if shading is None:
+        shading = scene.display.shading
     matcap_flip_x = getattr(shading, "matcap_flip_x", None)
     world_space_lighting = getattr(shading, "use_world_space_lighting", None)
     if world_space_lighting is None:
@@ -569,6 +570,31 @@ def workbench_shading_record(scene):
         unsupported.append("matcap_flip_x (not exposed by Blender 5.2.2 scene shading RNA)")
     record["unsupported"] = unsupported
     return record
+
+
+def saved_viewport_shading_record(scene):
+    """Return the deterministically selected saved VIEW_3D shading record.
+
+    Prefer the active window screen when that window is editing this scene.
+    Otherwise screens are ordered by name; areas are ordered from top to
+    bottom, then left to right. Temporary screens are ignored so this stays
+    tied to a persistent saved layout rather than a transient popup view.
+    """
+    screens = [screen for screen in bpy.data.screens
+               if not bool(getattr(screen, "is_temporary", False))]
+    screens.sort(key=lambda screen: screen.name_full)
+    window = getattr(bpy.context, "window", None)
+    active_screen = getattr(window, "screen", None)
+    if getattr(window, "scene", None) == scene and active_screen in screens:
+        screens.remove(active_screen)
+        screens.insert(0, active_screen)
+    for screen in screens:
+        areas = sorted(screen.areas, key=lambda area: (-area.y, area.x))
+        for area in areas:
+            if area.type == "VIEW_3D":
+                return workbench_shading_record(
+                    scene, area.spaces.active.shading)
+    return None
 
 
 def view_layer_key(scene, view_layer):
@@ -1166,6 +1192,7 @@ def extract_scene(input_path, mode):
             "object_ids": [],
             "active_camera": scene_camera_record(scene, depsgraph),
             "workbench_shading": workbench_shading_record(scene),
+            "workbench_viewport_shading": saved_viewport_shading_record(scene),
             "color_management": bake_color_lut(
                 scene, output["color_luts"], lut_bytes_by_id,
                 output["unsupported_features"]),

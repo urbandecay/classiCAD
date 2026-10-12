@@ -279,6 +279,22 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   [`workbench_world_light_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_world_light_lib.glsl#L580-L713).
   Matched QPainter output comparison remains pending.
 
+### QPainter NURBS material-color fallback (2026-10-12)
+
+- When an imported NURBS surface has no Workbench material record, the
+  QPainter Material/Attribute/Texture fallback now uses its imported object
+  display color and alpha. It uses the default 0.8 gray only when that object
+  color is unavailable. Blender 5.2.2 initializes Workbench's material base
+  color from `ob.color` before applying material data in
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L19-L33).
+- A persisted `hasWorkbenchMaterial` flag now distinguishes an assigned
+  material from the default material payload. The GPU surface path uses the
+  object display color and alpha when that flag is false, and uses material
+  values when true. Imported NURBS surfaces set the flag only when they have
+  an assigned material; per-face mesh material ranges continue to use their
+  assigned material values. Native documents write version 20; older
+  documents retain their previous material appearance when loaded.
+
 ### GPU opaque backface normal orientation (2026-10-12)
 
 - Opaque fragments now flip their interpolated view normal when the fragment
@@ -539,6 +555,16 @@ This checklist preserves the specific differences reported in the initial compar
 
 ### Workbench shading
 
+- Blender imports now keep two shading records: `workbench_shading` remains
+  sourced from `scene.display.shading` and `scene.display` for scene-level
+  Workbench render settings, while interactive viewport settings come from
+  `workbench_viewport_shading`, captured from a saved `VIEW_3D` area's active
+  `SpaceView3D.shading`. The extractor deterministically prefers the active
+  window's screen when it is showing the scene being extracted; otherwise it
+  scans non-temporary saved screens by name, then their 3D view areas top-to-
+  bottom and left-to-right. If no saved 3D area exists, import falls back to
+  the scene-level record. A .blend can have several 3D views with different
+  shading, so classiCAD imports one representative view by this policy.
 - Studio lighting uses Blender's Workbench studio-light behavior and presets. MatCap uses the selected MatCap and its orientation. Flat uses an unlit flat result. Workbench does not shade objects with scene lights.
 - The color modes have distinct data sources: Material reads Workbench material display values; Object reads the object's display color; Random derives a stable color from object identity; Attribute reads the chosen color attribute; Texture reads the supported image texture and UV mapping; Custom uses the user-selected color.
 - Background choices, color management, object alpha, and material settings must feed the same final result as the chosen shading mode.

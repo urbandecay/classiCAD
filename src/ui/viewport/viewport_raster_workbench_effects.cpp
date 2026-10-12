@@ -128,7 +128,7 @@ float objectSourceAlpha(const ViewportRenderObject &object,
         colorMode == ViewportColorMode::Texture) {
         return object.hasWorkbenchMaterial
                    ? object.workbenchMaterial.alpha
-                   : object.displayColorSceneLinear.w();
+                   : 1.0f;
     }
     return object.displayColorSceneLinear.w();
 }

@@ -524,7 +524,10 @@ qreal workbenchSourceAlpha(ViewportColorMode colorMode,
     case ViewportColorMode::Material:
     case ViewportColorMode::Attribute:
     case ViewportColorMode::Texture:
-        return hasWorkbenchMaterial ? material.alpha : objectAlpha;
+        // Blender's object-color alpha is used by Object and Random color
+        // modes. These modes use the Workbench material alpha, whose default
+        // is opaque when no material slot is assigned.
+        return hasWorkbenchMaterial ? material.alpha : 1.0;
     case ViewportColorMode::Object:
     case ViewportColorMode::Random:
         return objectAlpha;
@@ -5112,11 +5115,6 @@ bool ViewportSurfaceRenderer::draw(
                         baseColorLinear = material.baseColorSceneLinear;
                         roughness = static_cast<float>(material.roughness);
                         metallic = static_cast<float>(material.metallic);
-                    } else {
-                        baseColorLinear = QVector3D(
-                            range.displayColorSceneLinear.x(),
-                            range.displayColorSceneLinear.y(),
-                            range.displayColorSceneLinear.z());
                     }
                     break;
                 case ViewportColorMode::Object:

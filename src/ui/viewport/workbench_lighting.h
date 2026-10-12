@@ -293,8 +293,9 @@ inline QVector3D workbenchSceneLinearToAgxSrgb(
 
 inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()
 {
-    // Blender's factory-startup material uses diffuse_color = (0.8, 0.8, 0.8).
-    // This value is already scene-linear; it must not be decoded as sRGB.
+    // Blender's BKE_material_default_empty() keeps the DNA Material defaults:
+    // r/g/b = 0.8 and alpha = 1.0. This color is scene-linear; do not decode
+    // it as sRGB.
     return {0.8f, 0.8f, 0.8f};
 }
 

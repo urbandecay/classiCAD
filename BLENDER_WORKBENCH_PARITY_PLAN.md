@@ -373,7 +373,9 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   the allowed two-blade setting produces the corresponding slit aperture
   instead of falling back to a circular disk. The previous `>= 3` threshold
   disagreed with Blender 5.2.2 `DofPass::setup_samples`; see the pinned source
-  link below. Other aperture geometry and image parity remain unverified.
+  link below. Polygon sector orientation now also matches Blender: rotation is
+  applied once to sample coordinates after the sector radius is calculated.
+  Other aperture geometry and image parity remain unverified.
 
 ### GPU Workbench DOF half-resolution sizing (2026-10-12)
 
@@ -397,8 +399,10 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   and smoothstep interval also match the pinned shader. Aperture shaping follows
   Blender's `denom = T - (2π/blades) * floor((blades*T + π)/(2π))`, polygon
   radius `cos(π/blades) / cos(denom)`, `T += rotation`, and reciprocal X ratio.
-  The shader's sector/modulo form is algebraically equivalent. Its denominator
-  no longer has an epsilon floor, preserving Blender's two-blade edge equation.
+  The sector angle is computed before adding aperture rotation, matching
+  Blender's setup; the former shader subtracted rotation in the sector angle
+  and then added it again for sample coordinates. Its denominator no longer
+  has an epsilon floor, preserving Blender's two-blade edge equation.
   Aperture and overall output still need visual comparison.
   Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap
   full-resolution gather and has no median pass. Its aperture shaping now uses

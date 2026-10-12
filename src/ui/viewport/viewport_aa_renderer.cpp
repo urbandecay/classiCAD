@@ -684,7 +684,7 @@ bool ViewportAaRenderer::initialize()
             // count above one, including the two-blade slit aperture.
             if (uApertureBlades > 1) {
                 float bladeAngle = 6.28318530718 / float(uApertureBlades);
-                float angle = atan(disk.y, disk.x) - uApertureRotation;
+                float angle = atan(disk.y, disk.x);
                 float sector = mod(angle + 0.5 * bladeAngle, bladeAngle) -
                                0.5 * bladeAngle;
                 float polygonRadius = cos(0.5 * bladeAngle) / cos(sector);

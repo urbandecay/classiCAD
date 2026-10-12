@@ -20,6 +20,15 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 
 ## Current classiCAD status
 
+### GPU Workbench curvature sample spacing (2026-10-12)
+
+- GPU curvature neighbor reads now use `uiScale / viewportSize` offsets in
+  normalized texture coordinates, matching Blender 5.2.2's curvature shader.
+  Previously classiCAD rounded the UI scale to an integer texel, which
+  quantized fractional device-pixel ratios. Curvature controls and cavity
+  sample scheduling are unchanged. The C++ build passes; GPU image comparison
+  remains pending.
+
 ### Background regression correction
 
 Compared with GitHub `origin/feature/3d-workplanes` commit `6722914`, the theme
@@ -243,6 +252,17 @@ Phase Two category audit: Blender 5.2.2 Workbench UDIM lookup in [`workbench_ima
 
 Phase Two Category 8 source audit: the GPU TAA/SMAA weights, log-space accumulation, SMAA edge/area/search stages, temporal mix, and resolve follow Blender 5.2.2 closely, so no duplicate shader rewrite was made. QPainter still uses supersampling rather than Workbench temporal accumulation. Custom display LUTs now carry their domain and shaper through extraction, import, native serialization, CPU rendering, GPU surface/transparency rendering, and AA presentation; the 65³ log-shaped [0, 16] table still needs a matched output/precision comparison. Keep the QPainter and display-transform differences explicit until those comparisons are available.
 
+Phase Two orthographic OIT depth audit: Blender 5.2.2's pinned
+[`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L402-L470)
+linearizes orthographic `gl_FragCoord.z` as distance from the near plane. The
+GPU path previously used absolute distance from the view target, which differs
+because the orthographic projection eye is offset from that target. It now
+uses `eyeDistance - clipStart - dot(worldPosition - viewTarget, viewFacing)`;
+`eyeDistance` matches classiCAD's orthographic projection setup, clamped by
+`clipEnd`, and the result is clamped at zero. Perspective OIT retains absolute
+eye-space depth. This change is limited to the primary GPU OIT weight; sorted
+fallbacks and QPainter are unchanged. Pixel comparison remains open.
+
 ### Implementation plan
 
 1. **Establish a comparable baseline.** Use the same hard-edged cube, viewport pixel dimensions, projection and camera pose, clipping range, color transform, and selection/overlay state in Blender 5.2.2 and classiCAD. Capture classiCAD's native GPU path separately from QPainter. Compare AA Off, Single Pass, and 8 samples, both idle and while navigating. Save pre-AA, post-AA scene-linear, and final display-transformed outputs so edge softness can be attributed to a specific stage. Do not call the AA port complete until the edge profiles and remaining differences are recorded.
@@ -308,6 +328,7 @@ Use these pinned source files as the implementation authority:
 - [Workbench cavity implementation](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc)
 - [Workbench cavity jitter texture generation](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L74-L98)
 - [Workbench cavity jitter sampling shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L41-L63)
+- [Workbench curvature sampling shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_curvature.bsl.hh#L17-L49)
 - [Blender blue-noise LUT used by Workbench](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/eevee/eevee_lut.cc#L6190-L6200)
 - [Workbench shading cavity and curvature RNA ranges](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_space.cc#L4268-L4396)
 - [Scene Display SSAO RNA ranges](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_scene.cc#L7245-L7257)

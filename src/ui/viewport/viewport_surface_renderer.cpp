@@ -853,29 +853,29 @@ bool ViewportSurfaceRenderer::initialize()
             return 0.25 / control;
         }
 
-        float workbenchCurvature(ivec2 pixel, ivec2 size)
+        float workbenchCurvature(vec2 screenCoordinate, ivec2 size)
         {
-            int pixelOffset = max(1, int(round(uCavityUiScale)));
-            ivec2 upPixel = clamp(pixel + ivec2(0, pixelOffset),
-                                  ivec2(0), size - 1);
-            ivec2 downPixel = clamp(pixel - ivec2(0, pixelOffset),
-                                    ivec2(0), size - 1);
-            ivec2 rightPixel = clamp(pixel + ivec2(pixelOffset, 0),
-                                     ivec2(0), size - 1);
-            ivec2 leftPixel = clamp(pixel - ivec2(pixelOffset, 0),
-                                    ivec2(0), size - 1);
-            uint objectUp = texelFetch(uCavityObjectId, upPixel, 0).r;
-            uint objectDown = texelFetch(uCavityObjectId, downPixel, 0).r;
-            uint objectRight = texelFetch(uCavityObjectId, rightPixel, 0).r;
-            uint objectLeft = texelFetch(uCavityObjectId, leftPixel, 0).r;
+            // Blender offsets these samples by ui_scale in normalized
+            // viewport coordinates. Keep the fractional scale (for example,
+            // on non-integer device pixel ratios) instead of rounding it to
+            // a whole texel before sampling.
+            vec2 offset = vec2(uCavityUiScale) / vec2(size);
+            vec2 upCoordinate = screenCoordinate + vec2(0.0, offset.y);
+            vec2 downCoordinate = screenCoordinate - vec2(0.0, offset.y);
+            vec2 rightCoordinate = screenCoordinate + vec2(offset.x, 0.0);
+            vec2 leftCoordinate = screenCoordinate - vec2(offset.x, 0.0);
+            uint objectUp = texture(uCavityObjectId, upCoordinate).r;
+            uint objectDown = texture(uCavityObjectId, downCoordinate).r;
+            uint objectRight = texture(uCavityObjectId, rightCoordinate).r;
+            uint objectLeft = texture(uCavityObjectId, leftCoordinate).r;
             if (objectUp != objectDown || objectRight != objectLeft ||
                 (objectUp == 0u && objectRight == 0u)) {
                 return 0.0;
             }
-            float normalUp = texelFetch(uCavityNormal, upPixel, 0).g;
-            float normalDown = texelFetch(uCavityNormal, downPixel, 0).g;
-            float normalRight = texelFetch(uCavityNormal, rightPixel, 0).r;
-            float normalLeft = texelFetch(uCavityNormal, leftPixel, 0).r;
+            float normalUp = texture(uCavityNormal, upCoordinate).g;
+            float normalDown = texture(uCavityNormal, downCoordinate).g;
+            float normalRight = texture(uCavityNormal, rightCoordinate).r;
+            float normalLeft = texture(uCavityNormal, leftCoordinate).r;
             float normalDifference = (normalUp - normalDown) +
                                      (normalRight - normalLeft);
             if (normalDifference < 0.0) {
@@ -947,7 +947,6 @@ bool ViewportSurfaceRenderer::initialize()
                 color = diffuse * baseColor + specular;
             }
             if (uUseCavity) {
-                ivec2 pixel = ivec2(gl_FragCoord.xy);
                 ivec2 size = textureSize(uCavityNormal, 0);
                 vec2 screenCoordinate = gl_FragCoord.xy / vec2(size);
                 float cavityAmount = 0.0;
@@ -963,7 +962,7 @@ bool ViewportSurfaceRenderer::initialize()
                     edgeAmount = cavity.y;
                 }
                 float curvature = uUseCurvature
-                                      ? workbenchCurvature(pixel, size)
+                                      ? workbenchCurvature(screenCoordinate, size)
                                       : 0.0;
                 color *= clamp((1.0 - cavityAmount) * (1.0 + edgeAmount) *
                                    (1.0 + curvature),

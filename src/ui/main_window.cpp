@@ -2398,16 +2398,20 @@ private:
         initialValues.rotateToolPreferences = viewport_->rotateToolPreferences();
         initialValues.viewportAaMode = viewport_->viewportAntiAliasingMode();
         initialValues.smoothWiresOverlay = viewport_->smoothWiresOverlay();
-        initialValues.smoothWiresEditMode = viewport_->smoothWiresEditMode();
+        // The saved checkbox value may differ from the active value until
+        // restart. Keep showing the requested value while previewing only
+        // settings that take effect live.
+        const bool activeSmoothWiresEditMode = viewport_->smoothWiresEditMode();
 
         PreferencesDialogValues selectedValues;
         const auto previewViewportQuality =
-            [this](int mode, bool overlay, bool editMode) {
+            [this, activeSmoothWiresEditMode](int mode, bool overlay, bool) {
                 if (viewport_ == nullptr) {
                     return;
                 }
                 viewport_->setViewportAntiAliasingMode(mode);
-                viewport_->setSmoothWirePreferences(overlay, editMode);
+                viewport_->setSmoothWirePreferences(overlay,
+                                                    activeSmoothWiresEditMode);
             };
         if (!showPreferencesDialog(this, initialValues, &selectedValues,
                                    previewViewportQuality)) {
@@ -2416,7 +2420,7 @@ private:
             viewport_->setViewportAntiAliasingMode(initialValues.viewportAaMode);
             viewport_->setSmoothWirePreferences(
                 initialValues.smoothWiresOverlay,
-                initialValues.smoothWiresEditMode);
+                activeSmoothWiresEditMode);
             return;
         }
         applyPanButton(selectedValues.panButton, true);
@@ -2430,6 +2434,11 @@ private:
         applyViewportAntiAliasingMode(selectedValues.viewportAaMode, true);
         applySmoothWirePreferences(selectedValues.smoothWiresOverlay,
                                    selectedValues.smoothWiresEditMode, true);
+        if (selectedValues.smoothWiresEditMode != activeSmoothWiresEditMode) {
+            statusBar()->showMessage(
+                QStringLiteral("Edit Mode Smooth Wires will take effect after restarting classiCAD."),
+                10000);
+        }
     }
 
     void openDocumentGridSettings()
@@ -2535,7 +2544,8 @@ private:
     void applySmoothWirePreferences(bool overlay, bool editMode, bool save)
     {
         if (viewport_ == nullptr) return;
-        viewport_->setSmoothWirePreferences(overlay, editMode);
+        viewport_->setSmoothWirePreferences(overlay,
+                                            viewport_->smoothWiresEditMode());
         if (save) saveSmoothWirePreferences(overlay, editMode);
     }
 

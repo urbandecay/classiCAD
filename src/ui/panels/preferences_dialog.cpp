@@ -397,6 +397,8 @@ private:
         smoothWiresEditModeCheckBox_->setChecked(smoothWiresEditMode);
         smoothWiresEditModeCheckBox_->setObjectName(
             QStringLiteral("smoothWiresEditModePreference"));
+        smoothWiresEditModeCheckBox_->setToolTip(
+            QStringLiteral("Changes take effect after restarting classiCAD."));
         qualityLayout->addRow(QString(), smoothWiresEditModeCheckBox_);
         const auto previewQuality = [this] {
             if (viewportQualityPreview_) {

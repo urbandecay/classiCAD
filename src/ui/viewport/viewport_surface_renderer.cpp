@@ -1109,7 +1109,10 @@ bool ViewportSurfaceRenderer::initialize()
             // Blender 5.2.2 clamps its resolved weight to this range in
             // workbench_transparent_resolve_frag.glsl.
             float resolvedWeight = clamp(weight, 1.0e-4, 5.0e4);
-            vec3 color = max(accumulation.rgb / resolvedWeight, vec3(0.0));
+            // Blender resolves the signed weighted sum directly. Keep this
+            // scene-linear value intact here; display transforms can apply
+            // their own gamut/domain handling below.
+            vec3 color = accumulation.rgb / resolvedWeight;
             if (uSceneLinearOutput) {
                 fragmentColor = vec4(color, 1.0 - accumulation.a);
                 return;

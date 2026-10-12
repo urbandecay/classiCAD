@@ -181,7 +181,9 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("colorMode"), mode);
     cameraJson.insert(QStringLiteral("sourceColorDepth"), colorDepth);
     cameraJson.insert(QStringLiteral("writtenColorDepth"), outputDepth);
-    cameraJson.insert(QStringLiteral("renderPrecisionBits"), 8);
+    cameraJson.insert(QStringLiteral("renderPrecisionBits"), 16);
+    cameraJson.insert(QStringLiteral("renderPrecision"),
+                      QStringLiteral("display-referred normalized RGBA; no HDR range"));
     cameraJson.insert(QStringLiteral("depthPass"),
                       QStringLiteral("linear camera-space distance; zero is background"));
     QJsonObject poseJson;
@@ -224,6 +226,7 @@ bool WorkbenchRenderResult::saveCombinedImage(
                                              : QImage::Format_RGBA8888);
         applyPixelAspectMetadata(&output, pixelAspectX, pixelAspectY);
         cameraJson.insert(QStringLiteral("writtenColorDepth"), 8);
+        cameraJson.insert(QStringLiteral("renderPrecisionBits"), 16);
         output.setText(QStringLiteral("classiCAD.RenderType"),
                        QStringLiteral("WorkbenchOffscreenScene"));
         output.setText(QStringLiteral("classiCAD.Camera"),

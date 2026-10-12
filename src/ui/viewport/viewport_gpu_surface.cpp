@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <utility>
 
 namespace classiCAD {
 
@@ -161,7 +163,9 @@ bool ViewportGpuSurface::renderOffscreen(
     functions.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
     QOpenGLFramebufferObjectFormat format;
     format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
-    format.setInternalTextureFormat(GL_RGBA8);
+    // The presentation pass is display-referred, but retain its normalized
+    // channel values at 16-bit precision for high-depth image writers.
+    format.setInternalTextureFormat(GL_RGBA16);
     format.setSamples(0);
     QOpenGLFramebufferObject target(pixelSize, format);
     if (!target.isValid() || !target.bind()) {
@@ -228,7 +232,26 @@ bool ViewportGpuSurface::renderOffscreen(
                     : nearClip + normalizedDepth * (farClip - nearClip);
             }
         }
-        *combined = target.toImage(true).convertToFormat(QImage::Format_RGBA8888);
+        QImage readback(pixelSize, QImage::Format_RGBA64);
+        if (readback.isNull()) {
+            drawn = false;
+        } else {
+            QVector<quint16> colorBottomUp(pixelSize.width() *
+                                           pixelSize.height() * 4);
+            functions.glReadPixels(0, 0, pixelSize.width(), pixelSize.height(),
+                                   GL_RGBA, GL_UNSIGNED_SHORT,
+                                   colorBottomUp.data());
+            const qsizetype rowBytes = qsizetype(pixelSize.width()) * 8;
+            for (int row = 0; row < pixelSize.height(); ++row) {
+                std::memcpy(readback.scanLine(row),
+                            reinterpret_cast<const uchar *>(
+                                colorBottomUp.constData() +
+                                qsizetype(pixelSize.height() - 1 - row) *
+                                    pixelSize.width() * 4),
+                            size_t(rowBytes));
+            }
+            *combined = std::move(readback);
+        }
     }
     functions.glBindFramebuffer(GL_FRAMEBUFFER,
                                 static_cast<GLuint>(previousFramebuffer));

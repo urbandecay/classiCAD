@@ -42,20 +42,42 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   sample scheduling are unchanged. The C++ build passes; GPU image comparison
   remains pending.
 
-### Offscreen render precision gap (2026-10-12)
+### Offscreen render precision improvement and remaining float gap (2026-10-12)
 
 - Blender's Workbench image-render path allocates its color target as
   `SFLOAT_16_16_16_16` and reads the Combined pass as four float channels;
   see [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L602-L651)
   and its float readback at [lines 654-671](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L654-L671).
-  classiCAD's GPU scene intermediates are RGBA16F, but `renderOffscreen`
-  presents into an RGBA8 framebuffer and returns a `QImage`; requesting 16-bit
-  output later converts that already quantized image to a 16-bit container.
-  Therefore high precision and HDR values are lost before file writing, even
-  when the selected output format supports 16-bit channels. This remains a
-  concrete offscreen pipeline parity gap; no source change is included because
-  the safe fix crosses the render-result API, presentation/readback, and image
-  writer paths rather than fitting a bounded pass-composition edit.
+  classiCAD's offscreen presentation target is now normalized RGBA16, read back
+  with `glReadPixels(GL_RGBA, GL_UNSIGNED_SHORT)` into a top-down
+  `QImage::Format_RGBA64`. This preserves up to 16 bits per display-referred
+  channel through the result image. The existing Qt writer path requests
+  `Format_RGBA64` for 16-bit PNG/TIFF and falls back to an 8-bit QImage if that
+  write fails; other supported output formats remain 8-bit. The sidecar image
+  metadata records 16-bit render precision and explicitly identifies it as
+  normalized display-referred data.
+- This is not Blender's float Combined pass. The normalized RGBA16 presentation
+  target clamps values to [0, 1] after display transform, so scene-linear values,
+  highlights above display white, and HDR range are not preserved. Blender
+  allocates an SFLOAT_16_16_16_16 target and reads Combined as four float
+  channels; see [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L602-L651)
+  and its float readback at [lines 654-671](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L654-L671).
+  Exact float Combined/HDR output still needs a float render-result API and a
+  float-capable writer path (for example OpenEXR), separate from this display
+  precision improvement.
+
+### Weighted transparency resolve (2026-10-12)
+
+- The GPU weighted-OIT resolve now divides accumulated RGB directly by the
+  Blender-clamped accumulated weight without clamping negative channels to
+  zero. Blender 5.2.2's pinned
+  [`workbench_transparent_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_resolve_frag.glsl#L269-L286)
+  performs that same signed division. The accumulation weighting, weight
+  limits, and revealage resolve also match its pinned
+  [`workbench_transparent_accum_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_transparent_accum_frag.glsl#L435-L470).
+- classiCAD retains local camera-depth reconstruction and a resolve path that
+  accounts for its scene-linear and display-transform stages; these remain
+  renderer adaptations requiring matched visual comparison.
 
 ### GPU Workbench two-blade aperture (2026-10-12)
 

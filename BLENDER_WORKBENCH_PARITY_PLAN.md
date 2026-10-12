@@ -128,9 +128,8 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 - The GPU path has Blender's CoC-aware three-level downsample, half-resolution
   ring gather, 3x3 median, and resolve. Its gather ring samples now use
   Workbench's square-to-circle mapping and rotate per pixel with an AA-sample
-  offset. The jitter uses a deterministic shader hash rather than Blender's
-  blue-noise texture, and exact gather weights/texture sampling still need
-  source-by-source comparison. The QPainter fallback remains a fixed 12-tap
+  offset. Rotation now reads the second channel of the shared 64x64 EEVEE
+  blue-noise LUT, matching Blender 5.2.2 `get_random_vector`: `bn = texelFetch(noise_tx, ivec2(gl_FragCoord.xy) % 64, 0).a`, then `angle = 2π * fract(bn + noise_offset)`. The existing cavity header stores that channel as RG's second byte and the DOF path uploads it as a separate single-channel noise texture. The ring gather uses the angle for rotation; Blender's source additionally uses `sqrt(ign)` radial scaling and an IGN-based sample offset, which do not map to this ring kernel. Exact gather weights/texture sampling still need source-by-source comparison. Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap
   full-resolution gather and has no median pass. Image comparison remains
   open. Pinned gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L783-L899); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
 

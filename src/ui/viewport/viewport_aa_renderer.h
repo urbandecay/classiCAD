@@ -97,6 +97,7 @@ private:
     GLuint depthOfFieldMipColorTexture_ = 0;
     GLuint depthOfFieldMipCocTexture_ = 0;
     GLuint depthOfFieldMipFramebuffer_ = 0;
+    GLuint depthOfFieldNoiseTexture_ = 0;
     GLuint smaaEdgeFramebuffer_ = 0;
     GLuint smaaEdgeTexture_ = 0;
     GLuint smaaWeightFramebuffer_ = 0;

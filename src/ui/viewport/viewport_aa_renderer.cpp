@@ -7,6 +7,7 @@
 #include "blender_grid_renderer.h"
 #include "core/serialization/shape_json_codec.h"
 #include "workbench_lighting.h"
+#include "viewport_cavity_blue_noise.h"
 
 #include <QDataStream>
 #include <QFile>
@@ -303,6 +304,10 @@ ViewportAaRenderer::~ViewportAaRenderer()
         return;
     }
     destroyTargets();
+    if (depthOfFieldNoiseTexture_ != 0) {
+        glDeleteTextures(1, &depthOfFieldNoiseTexture_);
+        depthOfFieldNoiseTexture_ = 0;
+    }
     if (vertexArray_.isCreated()) {
         vertexArray_.destroy();
     }
@@ -621,6 +626,7 @@ bool ViewportAaRenderer::initialize()
         uniform sampler2D uCoc;
         uniform sampler2D uDepth;
         uniform sampler2D uBlur;
+        uniform sampler2D uNoise;
         uniform int uStage;
         uniform int uSourceLod;
         uniform vec2 uNearFar;
@@ -770,11 +776,12 @@ bool ViewportAaRenderer::initialize()
                 vec4 sum = vec4(0.0);
                 float total = 0.0;
                 ivec2 size = textureSize(uSource, 0);
-                // Blender rotates the deterministic sample set with a
-                // per-pixel noise value plus the current AA sample offset.
-                float noise = fract(sin(dot(gl_FragCoord.xy,
-                                            vec2(12.9898, 78.233))) * 43758.5453);
-                float angle = 6.28318530718 * fract(noise + uJitterOffset);
+                // Blender 5.2.2 get_random_vector() reads channel 1 of its
+                // 64x64 EEVEE blue-noise LUT (the workbench jitter texture's
+                // alpha), then adds the temporal noise offset before rotation.
+                ivec2 noiseCoord = ivec2(gl_FragCoord.xy) % 64;
+                float blueNoise = texelFetch(uNoise, noiseCoord, 0).r;
+                float angle = 6.28318530718 * fract(blueNoise + uJitterOffset);
                 mat2 jitter = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
                 for (int ring = 0; ring <= 3; ++ring) {
                   for (int y = -ring; y <= ring; ++y) {
@@ -1419,6 +1426,34 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
 
 bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
 {
+    if (depthOfFieldNoiseTexture_ == 0) {
+        const QByteArray blueNoiseRg = QByteArray::fromBase64(QByteArray(
+            detail::kWorkbenchCavityBlueNoiseRgBase64,
+            static_cast<qsizetype>(sizeof(detail::kWorkbenchCavityBlueNoiseRgBase64) - 1)));
+        constexpr int noiseSize = 64;
+        constexpr int channels = 2;
+        if (blueNoiseRg.size() != noiseSize * noiseSize * channels) return false;
+        std::array<float, noiseSize * noiseSize> alphaNoise{};
+        for (int i = 0; i < noiseSize * noiseSize; ++i)
+            alphaNoise[static_cast<std::size_t>(i)] =
+                static_cast<unsigned char>(blueNoiseRg.at(i * channels + 1)) /
+                256.0f;
+        GLint previousActiveTexture = GL_TEXTURE0;
+        GLint previousTextureBinding = 0;
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+        glActiveTexture(GL_TEXTURE0);
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBinding);
+        glGenTextures(1, &depthOfFieldNoiseTexture_);
+        glBindTexture(GL_TEXTURE_2D, depthOfFieldNoiseTexture_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, noiseSize, noiseSize, 0,
+                     GL_RED, GL_FLOAT, alphaNoise.data());
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTextureBinding));
+        glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    }
     const auto &optics = depthOfFieldOptics_;
     const float focalLengthSceneUnits =
         float(optics.focalLengthMillimeters * 0.001);
@@ -1444,13 +1479,13 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
     GLint previousViewport[4] = {};
     GLint previousProgram = 0;
     GLint previousActiveTexture = GL_TEXTURE0;
-    GLint previousTextures[4] = {};
+    GLint previousTextures[5] = {};
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
     glGetIntegerv(GL_VIEWPORT, previousViewport);
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
-    for (int unit = 0; unit < 4; ++unit) {
+    for (int unit = 0; unit < 5; ++unit) {
         glActiveTexture(GL_TEXTURE0 + unit);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextures[unit]);
     }
@@ -1476,10 +1511,13 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
         glBindTexture(GL_TEXTURE_2D, depthTexture_);
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, blur);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, depthOfFieldNoiseTexture_);
         depthOfFieldProgram_.setUniformValue("uSource", 0);
         depthOfFieldProgram_.setUniformValue("uCoc", 1);
         depthOfFieldProgram_.setUniformValue("uDepth", 2);
         depthOfFieldProgram_.setUniformValue("uBlur", 3);
+        depthOfFieldProgram_.setUniformValue("uNoise", 4);
         depthOfFieldProgram_.setUniformValue("uStage", stage);
         depthOfFieldProgram_.setUniformValue("uSourceLod", lod);
         depthOfFieldProgram_.setUniformValue(
@@ -1580,7 +1618,7 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
                       static_cast<GLuint>(previousReadFramebuffer));
     glViewport(previousViewport[0], previousViewport[1],
                previousViewport[2], previousViewport[3]);
-    for (int unit = 0; unit < 4; ++unit) {
+    for (int unit = 0; unit < 5; ++unit) {
         glActiveTexture(GL_TEXTURE0 + unit);
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTextures[unit]));
     }

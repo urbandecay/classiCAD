@@ -354,12 +354,21 @@ bool ViewportAaRenderer::ensureDisplayTransformTexture()
         displayTransformTextureAvailable_ = false;
         return false;
     }
+    const ImportedBlenderColorLutMetadata &metadata =
+        displaySettings_.colorLutMetadata;
+    const QString lutCacheKey = displaySettings_.colorLutId + QLatin1Char('|') +
+        QString::number(metadata.size) + QLatin1Char('|') +
+        QString::number(metadata.domainMin, 'g', 17) + QLatin1Char('|') +
+        QString::number(metadata.domainMax, 'g', 17) + QLatin1Char('|') +
+        metadata.shaper + QLatin1Char('|') +
+        QString::number(metadata.shaperScale, 'g', 17);
     if (displayTransformTexture_ != 0 &&
         displayTransformTextureMode_ == displaySettings_.colorTransform &&
-        displayTransformTextureLutId_ == displaySettings_.colorLutId) {
+        displayTransformTextureLutId_ == lutCacheKey) {
         return displayTransformTextureAvailable_;
     }
-    const int edge = workbenchAgxDisplayLutSize;
+    const int edge = displaySettings_.colorTransform == 4
+        ? metadata.size : workbenchAgxDisplayLutSize;
     const qsizetype expectedBytes = qsizetype(edge) * edge * edge * 12;
     const QVector<float> *builtin = nullptr;
     if (displaySettings_.colorTransform == 2) {
@@ -369,9 +378,16 @@ bool ViewportAaRenderer::ensureDisplayTransformTexture()
     } else if (displaySettings_.colorTransform != 4) {
         builtin = &workbenchAgxDisplayLutData();
     }
-    if ((builtin != nullptr && builtin->size() != edge * edge * edge * 3) ||
+    if (edge < 2 || edge > 140 ||
+        (builtin != nullptr && builtin->size() != edge * edge * edge * 3) ||
         (displaySettings_.colorTransform == 4 &&
-         displaySettings_.colorLutData.size() != expectedBytes)) {
+         (displaySettings_.colorLutData.size() != expectedBytes ||
+          !std::isfinite(metadata.domainMin) ||
+          !std::isfinite(metadata.domainMax) ||
+          metadata.domainMax <= metadata.domainMin ||
+          !std::isfinite(metadata.shaperScale) || metadata.shaperScale <= 0.0 ||
+          (metadata.shaper != QStringLiteral("linear") &&
+           metadata.shaper != QStringLiteral("log2_1p"))))) {
         displayTransformTextureAvailable_ = false;
         return false;
     }
@@ -409,7 +425,7 @@ bool ViewportAaRenderer::ensureDisplayTransformTexture()
     while (glGetError() != GL_NO_ERROR) {
     }
     glBindTexture(GL_TEXTURE_3D, displayTransformTexture_);
-    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGB16F, edge, edge, edge, 0,
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGB32F, edge, edge, edge, 0,
                  GL_RGB, GL_FLOAT, values);
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -420,7 +436,7 @@ bool ViewportAaRenderer::ensureDisplayTransformTexture()
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     displayTransformTextureAvailable_ = glGetError() == GL_NO_ERROR;
     displayTransformTextureMode_ = displaySettings_.colorTransform;
-    displayTransformTextureLutId_ = displaySettings_.colorLutId;
+    displayTransformTextureLutId_ = lutCacheKey;
     return displayTransformTextureAvailable_;
 }
 
@@ -476,6 +492,10 @@ bool ViewportAaRenderer::initialize()
         uniform sampler3D uDisplayLut;
         uniform bool uDisplayLutAvailable;
         uniform int uColorTransform;
+        uniform int uDisplayLutSize;
+        uniform vec2 uDisplayLutDomain;
+        uniform int uDisplayLutShaper;
+        uniform float uDisplayLutShaperScale;
         uniform float uExposure;
         uniform float uGamma;
         layout(location = 0) out vec4 fragmentColor;
@@ -557,8 +577,23 @@ bool ViewportAaRenderer::initialize()
                 (!uDisplayLutAvailable && uColorTransform != 4)) {
                 color = linearToSrgb(color);
             } else if (uDisplayLutAvailable) {
-                vec3 bounded = clamp(color, vec3(0.0), vec3(2.0));
-                vec3 coordinate = (bounded * 32.0 + 0.5) / 65.0;
+                vec3 bounded = clamp(color, vec3(uDisplayLutDomain.x),
+                                     vec3(uDisplayLutDomain.y)) -
+                               vec3(uDisplayLutDomain.x);
+                float span = max(uDisplayLutDomain.y - uDisplayLutDomain.x,
+                                 0.000001);
+                vec3 normalized = bounded / span;
+                if (uDisplayLutShaper == 1) {
+                    float denominator = log2(1.0 +
+                        uDisplayLutShaperScale * span);
+                    normalized = log2(vec3(1.0) +
+                        uDisplayLutShaperScale * bounded) /
+                        max(denominator, 0.000001);
+                }
+                vec3 coordinate =
+                    (clamp(normalized, vec3(0.0), vec3(1.0)) *
+                     float(uDisplayLutSize - 1) + 0.5) /
+                    float(uDisplayLutSize);
                 color = texture(uDisplayLut, coordinate).rgb;
             }
             return pow(max(color, vec3(0.0)),
@@ -1714,6 +1749,23 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     presentProgram_.setUniformValue("uDisplayLutAvailable", transformAvailable);
     presentProgram_.setUniformValue("uColorTransform",
                                     displaySettings_.colorTransform);
+    const bool customDisplayLut = displaySettings_.colorTransform == 4;
+    const ImportedBlenderColorLutMetadata &lutMetadata =
+        displaySettings_.colorLutMetadata;
+    presentProgram_.setUniformValue(
+        "uDisplayLutSize", customDisplayLut
+            ? lutMetadata.size : workbenchAgxDisplayLutSize);
+    presentProgram_.setUniformValue(
+        "uDisplayLutDomain",
+        QVector2D(customDisplayLut ? lutMetadata.domainMin : 0.0,
+                  customDisplayLut ? lutMetadata.domainMax : 2.0));
+    presentProgram_.setUniformValue(
+        "uDisplayLutShaper",
+        customDisplayLut && lutMetadata.shaper == QStringLiteral("log2_1p")
+            ? 1 : 0);
+    presentProgram_.setUniformValue(
+        "uDisplayLutShaperScale",
+        static_cast<float>(customDisplayLut ? lutMetadata.shaperScale : 1.0));
     presentProgram_.setUniformValue("uExposure",
                                     static_cast<float>(displaySettings_.colorExposure));
     presentProgram_.setUniformValue("uGamma",

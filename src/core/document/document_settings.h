@@ -19,6 +19,15 @@ enum class DocumentLengthUnit {
     Foot,
 };
 
+struct ImportedBlenderColorLutMetadata {
+    int size = 65;
+    double domainMin = 0.0;
+    double domainMax = 2.0;
+    QString shaper = QStringLiteral("linear");
+    double shaperScale = 1.0;
+    bool operator==(const ImportedBlenderColorLutMetadata &) const = default;
+};
+
 struct DocumentSettings {
     DocumentLengthUnit lengthUnit = DocumentLengthUnit::Millimeter;
     qreal gridSpacing = 1.0;
@@ -30,6 +39,8 @@ struct DocumentSettings {
     QJsonArray importedBlenderScenes;
     // Exact decoded RGB float LUT bytes, keyed by their lowercase SHA-256.
     QHash<QString, QByteArray> importedBlenderColorLuts;
+    // Metadata is keyed by the LUT payload's SHA-256, which remains its identity.
+    QHash<QString, ImportedBlenderColorLutMetadata> importedBlenderColorLutMetadata;
 
     bool operator==(const DocumentSettings &) const = default;
 };

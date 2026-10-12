@@ -981,12 +981,17 @@ bool applyImportedSceneColorManagement(
             settings->colorGamma = std::clamp(gamma, 0.000001, 5.0);
             const QByteArray lut = document.settings().importedBlenderColorLuts
                 .value(lutId);
-            constexpr qsizetype requiredBytes = 65 * 65 * 65 * 3 * 4;
+            const ImportedBlenderColorLutMetadata metadata =
+                document.settings().importedBlenderColorLutMetadata.value(lutId);
+            const qsizetype requiredBytes = qsizetype(metadata.size) *
+                metadata.size * metadata.size * 3 * 4;
             if (!sha256Pattern.match(lutId).hasMatch() ||
+                metadata.size < 2 || metadata.size > 140 ||
                 lut.size() != requiredBytes) {
                 return false;
             }
             settings->colorLutData = lut;
+            settings->colorLutMetadata = metadata;
             return true;
         }
         if (look != QLatin1String("None") ||

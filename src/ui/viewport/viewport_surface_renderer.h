@@ -116,7 +116,8 @@ private:
     bool ensureMatcapTexture(const QString &presetName);
     bool ensureAgxDisplayTexture(int colorTransform,
                                  const QString &customLutId = {},
-                                 const QByteArray &customLutBytes = {});
+                                 const QByteArray &customLutBytes = {},
+                                 const ImportedBlenderColorLutMetadata &customLutMetadata = {});
     bool ensureCavityJitterTexture(int totalSamples);
     GLuint ensureImageTexture(const QString &path, bool srgb);
     GLuint ensureImageTexture(const QString &path,

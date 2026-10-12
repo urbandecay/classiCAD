@@ -6,6 +6,8 @@
  * matches Blender's factory-startup "Default" studio light. */
 #pragma once
 
+#include "core/document/document_settings.h"
+
 #include <QFile>
 #include <QByteArray>
 #include <QColor>
@@ -169,7 +171,8 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
     int colorTransform = 0,
     qreal exposure = 0.0,
     qreal gamma = 1.0,
-    const QByteArray &customLutBytes = {})
+    const QByteArray &customLutBytes = {},
+    const ImportedBlenderColorLutMetadata &customLutMetadata = {})
 {
     const float exposureScale = std::exp2(static_cast<float>(exposure));
     const QVector3D color(std::max(0.0f, inputColor.x()) * exposureScale,
@@ -183,9 +186,18 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
             ? workbenchPbrNeutralDisplayLutData()
             : colorTransform == 3 ? workbenchFilmicDisplayLutData()
                                   : workbenchAgxDisplayLutData();
+        const int lutSize = colorTransform == 4
+            ? customLutMetadata.size : workbenchAgxDisplayLutSize;
         const bool customLutValid = colorTransform != 4 ||
-            customLutBytes.size() == workbenchAgxDisplayLutSize *
-                workbenchAgxDisplayLutSize * workbenchAgxDisplayLutSize * 12;
+            (lutSize >= 2 && lutSize <= 140 &&
+             std::isfinite(customLutMetadata.domainMin) &&
+             std::isfinite(customLutMetadata.domainMax) &&
+             customLutMetadata.domainMax > customLutMetadata.domainMin &&
+             std::isfinite(customLutMetadata.shaperScale) &&
+             customLutMetadata.shaperScale > 0.0 &&
+             (customLutMetadata.shaper == QStringLiteral("linear") ||
+              customLutMetadata.shaper == QStringLiteral("log2_1p")) &&
+             customLutBytes.size() == qsizetype(lutSize) * lutSize * lutSize * 12);
         if (!customLutValid) {
             // An unresolved custom transform is intentionally not replaced by
             // a built-in transform. Keep it visibly invalid/unmanaged.
@@ -193,11 +205,27 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
         } else if (lut.isEmpty() && colorTransform != 4) {
             displayColor = workbenchSceneLinearToSrgb(color);
         } else {
-            const float maximumIndex = workbenchAgxDisplayLutSize - 1.0f;
-            const auto coordinate = [maximumIndex](float value) {
-                return std::clamp(value, 0.0f,
-                                  workbenchAgxDisplayLutMaximum) *
-                       maximumIndex / workbenchAgxDisplayLutMaximum;
+            const float maximumIndex = lutSize - 1.0f;
+            const auto coordinate = [maximumIndex, colorTransform,
+                                     &customLutMetadata](float value) {
+                if (colorTransform != 4) {
+                    return std::clamp(value, 0.0f,
+                                      workbenchAgxDisplayLutMaximum) *
+                           maximumIndex / workbenchAgxDisplayLutMaximum;
+                }
+                const double minimum = customLutMetadata.domainMin;
+                const double span = customLutMetadata.domainMax - minimum;
+                const double clamped = std::clamp(
+                    static_cast<double>(value), minimum,
+                    customLutMetadata.domainMax) - minimum;
+                double normalized = clamped / span;
+                if (customLutMetadata.shaper == QStringLiteral("log2_1p")) {
+                    const double scale = customLutMetadata.shaperScale;
+                    normalized = std::log2(1.0 + scale * clamped) /
+                        std::log2(1.0 + scale * span);
+                }
+                return static_cast<float>(std::clamp(normalized, 0.0, 1.0) *
+                                          maximumIndex);
             };
             const float rx = coordinate(color.x());
             const float gy = coordinate(color.y());
@@ -205,17 +233,18 @@ inline QVector3D workbenchSceneLinearToDisplaySrgb(
             const int x0 = static_cast<int>(rx);
             const int y0 = static_cast<int>(gy);
             const int z0 = static_cast<int>(bz);
-            const int x1 = std::min(x0 + 1, workbenchAgxDisplayLutSize - 1);
-            const int y1 = std::min(y0 + 1, workbenchAgxDisplayLutSize - 1);
-            const int z1 = std::min(z0 + 1, workbenchAgxDisplayLutSize - 1);
+            const int x1 = std::min(x0 + 1, lutSize - 1);
+            const int y1 = std::min(y0 + 1, lutSize - 1);
+            const int z1 = std::min(z0 + 1, lutSize - 1);
             const float tx = rx - x0;
             const float ty = gy - y0;
             const float tz = bz - z0;
-            const auto sample = [&lut, &customLutBytes, colorTransform](int red, int green, int blue) {
+            const auto sample = [&lut, &customLutBytes, colorTransform,
+                                 lutSize](int red, int green, int blue) {
                 const qsizetype index =
                     ((static_cast<qsizetype>(blue) *
-                          workbenchAgxDisplayLutSize + green) *
-                         workbenchAgxDisplayLutSize + red) * 3;
+                          lutSize + green) *
+                         lutSize + red) * 3;
                 if (colorTransform != 4)
                     return QVector3D(lut[index], lut[index + 1], lut[index + 2]);
                 const auto *bytes = reinterpret_cast<const uchar *>(customLutBytes.constData());
@@ -254,10 +283,12 @@ inline QVector3D workbenchSceneLinearToAgxSrgb(
     int colorTransform = 0,
     qreal exposure = 0.0,
     qreal gamma = 1.0,
-    const QByteArray &customLutBytes = {})
+    const QByteArray &customLutBytes = {},
+    const ImportedBlenderColorLutMetadata &customLutMetadata = {})
 {
     return workbenchSceneLinearToDisplaySrgb(inputColor, colorTransform,
-                                              exposure, gamma, customLutBytes);
+                                              exposure, gamma, customLutBytes,
+                                              customLutMetadata);
 }
 
 inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()

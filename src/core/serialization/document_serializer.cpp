@@ -17,23 +17,30 @@ namespace classiCAD {
 
 namespace {
 
-constexpr qsizetype kColorLutByteCount = 65 * 65 * 65 * 3 * 4;
 constexpr qsizetype kColorLutTotalByteLimit = 32 * 1024 * 1024;
 
-bool isValidImportedColorLuts(const QHash<QString, QByteArray> &luts)
+bool isValidImportedColorLuts(
+    const QHash<QString, QByteArray> &luts,
+    const QHash<QString, ImportedBlenderColorLutMetadata> &metadata)
 {
-    if (luts.size() > 8) return false;
+    if (luts.size() > 8 || metadata.size() != luts.size()) return false;
     qsizetype totalBytes = 0;
     for (auto it = luts.cbegin(); it != luts.cend(); ++it) {
         const QString &id = it.key();
         if (id.size() != 64 || !std::all_of(id.cbegin(), id.cend(), [](QChar c) {
                 return (c >= QLatin1Char('0') && c <= QLatin1Char('9')) ||
                        (c >= QLatin1Char('a') && c <= QLatin1Char('f'));
-            }) || it.value().size() != kColorLutByteCount ||
+            }) || !metadata.contains(it.key()) ||
             QString::fromLatin1(QCryptographicHash::hash(
                 it.value(), QCryptographicHash::Sha256).toHex()) != id) {
             return false;
         }
+        const ImportedBlenderColorLutMetadata &lut = metadata[it.key()];
+        if (lut.size < 2 || lut.size > 140 ||
+            !std::isfinite(lut.domainMin) || !std::isfinite(lut.domainMax) ||
+            lut.domainMax <= lut.domainMin ||
+            it.value().size() != qsizetype(lut.size) * lut.size * lut.size * 3 * 4)
+            return false;
         totalBytes += it.value().size();
         if (totalBytes > kColorLutTotalByteLimit) return false;
     }
@@ -178,7 +185,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 16);
+    serialized.insert(QStringLiteral("version"), 17);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -190,7 +197,17 @@ QJsonObject documentToJson(const Document &document)
     QJsonObject colorLuts;
     for (auto it = document.settings().importedBlenderColorLuts.cbegin();
          it != document.settings().importedBlenderColorLuts.cend(); ++it) {
-        colorLuts.insert(it.key(), QString::fromLatin1(it.value().toBase64()));
+        const ImportedBlenderColorLutMetadata metadata =
+            document.settings().importedBlenderColorLutMetadata.value(it.key());
+        QJsonObject record;
+        record.insert(QStringLiteral("data_base64"),
+                      QString::fromLatin1(it.value().toBase64()));
+        record.insert(QStringLiteral("size"), metadata.size);
+        record.insert(QStringLiteral("domain_min"), metadata.domainMin);
+        record.insert(QStringLiteral("domain_max"), metadata.domainMax);
+        record.insert(QStringLiteral("shaper"), metadata.shaper);
+        record.insert(QStringLiteral("shaper_scale"), metadata.shaperScale);
+        colorLuts.insert(it.key(), record);
     }
     settings.insert(QStringLiteral("importedBlenderColorLuts"), colorLuts);
     serialized.insert(QStringLiteral("settings"), settings);
@@ -370,7 +387,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 16) {
+    if (version < 1 || version > 17) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -670,15 +687,59 @@ bool documentFromJson(const QJsonValue &value,
             const QJsonObject lutObject = lutValue.toObject();
             qsizetype totalBytes = 0;
             for (auto it = lutObject.begin(); it != lutObject.end(); ++it) {
-                if (!it.value().isString()) {
+                QString encoded;
+                ImportedBlenderColorLutMetadata metadata;
+                if (version >= 17) {
+                    if (!it.value().isObject()) {
+                        setError(errorMessage, QStringLiteral("invalid imported Blender color LUT record"));
+                        return false;
+                    }
+                    const QJsonObject record = it.value().toObject();
+                    const QJsonValue sizeValue = record.value(QStringLiteral("size"));
+                    const QJsonValue minValue = record.value(QStringLiteral("domain_min"));
+                    const QJsonValue maxValue = record.value(QStringLiteral("domain_max"));
+                    const QJsonValue shaperValue = record.value(QStringLiteral("shaper"));
+                    const QJsonValue scaleValue = record.value(QStringLiteral("shaper_scale"));
+                    metadata.size = sizeValue.toInt(-1);
+                    metadata.domainMin = minValue.toDouble(
+                        std::numeric_limits<double>::quiet_NaN());
+                    metadata.domainMax = maxValue.toDouble(
+                        std::numeric_limits<double>::quiet_NaN());
+                    metadata.shaper = shaperValue.toString();
+                    metadata.shaperScale = scaleValue.toDouble(
+                        std::numeric_limits<double>::quiet_NaN());
+                    if (!sizeValue.isDouble() ||
+                        std::floor(sizeValue.toDouble()) != metadata.size ||
+                        !minValue.isDouble() || !maxValue.isDouble() ||
+                        !shaperValue.isString() || !scaleValue.isDouble()) {
+                        setError(errorMessage, QStringLiteral("invalid imported Blender color LUT metadata"));
+                        return false;
+                    }
+                    encoded = record.value(QStringLiteral("data_base64")).toString();
+                    if (!record.value(QStringLiteral("data_base64")).isString()) {
+                        setError(errorMessage, QStringLiteral("invalid imported Blender color LUT data"));
+                        return false;
+                    }
+                } else if (it.value().isString()) {
+                    encoded = it.value().toString();
+                    metadata = {};
+                } else {
                     setError(errorMessage, QStringLiteral("invalid imported Blender color LUT data"));
                     return false;
                 }
                 const auto decoded = QByteArray::fromBase64Encoding(
-                    it.value().toString().toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+                    encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
                 const QByteArray bytes = decoded.decoded;
                 if (decoded.decodingStatus != QByteArray::Base64DecodingStatus::Ok ||
-                    bytes.size() != kColorLutByteCount ||
+                    metadata.size < 2 || metadata.size > 140 ||
+                    !std::isfinite(metadata.domainMin) ||
+                    !std::isfinite(metadata.domainMax) ||
+                    metadata.domainMax <= metadata.domainMin ||
+                    (metadata.shaper != QStringLiteral("linear") &&
+                     metadata.shaper != QStringLiteral("log2_1p")) ||
+                    !std::isfinite(metadata.shaperScale) ||
+                    metadata.shaperScale <= 0.0 ||
+                    bytes.size() != qsizetype(metadata.size) * metadata.size * metadata.size * 3 * 4 ||
                     QString::fromLatin1(QCryptographicHash::hash(
                         bytes, QCryptographicHash::Sha256).toHex()) != it.key()) {
                     setError(errorMessage, QStringLiteral("invalid imported Blender color LUT identity or data"));
@@ -690,9 +751,11 @@ bool documentFromJson(const QJsonValue &value,
                     return false;
                 }
                 settings.importedBlenderColorLuts.insert(it.key(), bytes);
+                settings.importedBlenderColorLutMetadata.insert(it.key(), metadata);
             }
         }
-        if (!isValidImportedColorLuts(settings.importedBlenderColorLuts)) {
+        if (!isValidImportedColorLuts(settings.importedBlenderColorLuts,
+                                      settings.importedBlenderColorLutMetadata)) {
             setError(errorMessage, QStringLiteral("invalid imported Blender color LUT table"));
             return false;
         }

@@ -13,13 +13,13 @@
 namespace classiCAD {
 namespace {
 
-constexpr qsizetype kColorLutByteCount = 65 * 65 * 65 * 3 * 4;
 constexpr qsizetype kColorLutTotalByteLimit = 32 * 1024 * 1024;
 
 bool areImportedColorLutsValid(
-    const QHash<QString, QByteArray> &colorLuts)
+    const QHash<QString, QByteArray> &colorLuts,
+    const QHash<QString, ImportedBlenderColorLutMetadata> &metadata)
 {
-    if (colorLuts.size() > 8) return false;
+    if (colorLuts.size() > 8 || metadata.size() != colorLuts.size()) return false;
     qsizetype totalBytes = 0;
     for (auto it = colorLuts.cbegin(); it != colorLuts.cend(); ++it) {
         const QString &id = it.key();
@@ -28,9 +28,19 @@ bool areImportedColorLutsValid(
                 id.cbegin(), id.cend(), [](QChar c) {
                     return (c >= QLatin1Char('0') && c <= QLatin1Char('9')) ||
                            (c >= QLatin1Char('a') && c <= QLatin1Char('f'));
-                }) || bytes.size() != kColorLutByteCount ||
+            }) || !metadata.contains(id) ||
             QString::fromLatin1(QCryptographicHash::hash(
                 bytes, QCryptographicHash::Sha256).toHex()) != id) {
+            return false;
+        }
+        const ImportedBlenderColorLutMetadata &lut = metadata[id];
+        if (lut.size < 2 || lut.size > 140 ||
+            !std::isfinite(lut.domainMin) || !std::isfinite(lut.domainMax) ||
+            lut.domainMax <= lut.domainMin ||
+            (lut.shaper != QStringLiteral("linear") &&
+             lut.shaper != QStringLiteral("log2_1p")) ||
+            !std::isfinite(lut.shaperScale) || lut.shaperScale <= 0.0 ||
+            bytes.size() != qsizetype(lut.size) * lut.size * lut.size * 3 * 4) {
             return false;
         }
         const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
@@ -166,7 +176,8 @@ bool isValidDocumentSettings(const DocumentSettings &settings)
     const bool validUnit = documentLengthUnitKey(settings.lengthUnit).size() > 0;
     return validUnit && std::isfinite(settings.gridSpacing) &&
            settings.gridSpacing >= 1.0e-9 && settings.gridSpacing <= 1.0e9 &&
-           areImportedColorLutsValid(settings.importedBlenderColorLuts);
+           areImportedColorLutsValid(settings.importedBlenderColorLuts,
+                                     settings.importedBlenderColorLutMetadata);
 }
 
 qreal documentGridSpacingInMillimeters(const DocumentSettings &settings)

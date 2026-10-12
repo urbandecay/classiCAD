@@ -3,6 +3,7 @@
 #pragma once
 
 #include "workbench_lighting.h"
+#include "core/document/document_settings.h"
 
 #include <QColor>
 #include <QString>
@@ -108,6 +109,7 @@ struct ViewportShadingSettings {
     int colorTransform = 0;
     QString colorLutId;
     QByteArray colorLutData;
+    ImportedBlenderColorLutMetadata colorLutMetadata;
     qreal colorExposure = 0.0;
     qreal colorGamma = 1.0;
 

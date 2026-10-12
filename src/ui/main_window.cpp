@@ -701,6 +701,7 @@ private:
                 colorLutBytes += it.value().size();
             }
             QStringList omittedColorLutIds;
+            QStringList conflictingColorLutIds;
             for (auto it = report.importedBlenderColorLuts.cbegin();
                  it != report.importedBlenderColorLuts.cend(); ++it) {
                 if (!settings.importedBlenderColorLuts.contains(it.key())) {
@@ -710,12 +711,21 @@ private:
                         continue;
                     }
                     settings.importedBlenderColorLuts.insert(it.key(), it.value());
+                    settings.importedBlenderColorLutMetadata.insert(
+                        it.key(), report.importedBlenderColorLutMetadata.value(it.key()));
                     colorLutBytes += it.value().size();
+                } else if (settings.importedBlenderColorLutMetadata.value(it.key()) !=
+                           report.importedBlenderColorLutMetadata.value(it.key())) {
+                    conflictingColorLutIds.append(it.key());
                 }
             }
             if (!omittedColorLutIds.isEmpty()) {
                 report.warningMessage += QStringLiteral("\nSome imported scene LUTs were omitted because the document limit is 8 LUTs or 32 MiB: %1")
                                              .arg(omittedColorLutIds.join(QStringLiteral(", ")));
+            }
+            if (!conflictingColorLutIds.isEmpty()) {
+                report.warningMessage += QStringLiteral("\nSome imported LUT references reused an existing payload ID with different domain/shaper metadata; existing document metadata was retained: %1")
+                                             .arg(conflictingColorLutIds.join(QStringLiteral(", ")));
             }
             for (const QJsonValue &sceneValue : report.scenes) {
                 const QJsonObject importedScene = sceneValue.toObject();

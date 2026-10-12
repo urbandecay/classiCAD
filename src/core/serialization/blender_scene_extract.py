@@ -23,7 +23,7 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 11
+BRIDGE_FORMAT_VERSION = 12
 # Keep a single packed image from expanding the extractor's JSON transport
 # without bound. The limit applies to the decoded image bytes.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
@@ -31,7 +31,9 @@ MAX_COLOR_LUTS = 8
 MAX_COLOR_LUT_BYTES = 32 * 1024 * 1024
 COLOR_LUT_SIZE = 65
 COLOR_LUT_DOMAIN_MIN = 0.0
-COLOR_LUT_DOMAIN_MAX = 2.0
+COLOR_LUT_DOMAIN_MAX = 16.0
+COLOR_LUT_SHAPER = "log2_1p"
+COLOR_LUT_SHAPER_SCALE = 64.0
 SOURCE_PROJECT_NAMESPACE = ""
 
 
@@ -100,12 +102,20 @@ def bake_color_lut(scene, lut_records, lut_bytes_by_id, unsupported):
         values = bytearray()
         denominator = COLOR_LUT_SIZE - 1
         # Existing consumers index ((blue * size + green) * size + red).
+        log_range = math.log2(1.0 + COLOR_LUT_SHAPER_SCALE *
+                              (COLOR_LUT_DOMAIN_MAX - COLOR_LUT_DOMAIN_MIN))
+
+        def sample_value(index):
+            t = index / denominator
+            shaped = math.exp2(t * log_range) - 1.0
+            return COLOR_LUT_DOMAIN_MIN + shaped / COLOR_LUT_SHAPER_SCALE
+
         for b in range(COLOR_LUT_SIZE):
-            blue = COLOR_LUT_DOMAIN_MIN + (COLOR_LUT_DOMAIN_MAX - COLOR_LUT_DOMAIN_MIN) * b / denominator
+            blue = sample_value(b)
             for g in range(COLOR_LUT_SIZE):
-                green = COLOR_LUT_DOMAIN_MIN + (COLOR_LUT_DOMAIN_MAX - COLOR_LUT_DOMAIN_MIN) * g / denominator
+                green = sample_value(g)
                 for r in range(COLOR_LUT_SIZE):
-                    red = COLOR_LUT_DOMAIN_MIN + (COLOR_LUT_DOMAIN_MAX - COLOR_LUT_DOMAIN_MIN) * r / denominator
+                    red = sample_value(r)
                     color = processor.applyRGB([red, green, blue])
                     for component in color:
                         number = finite_number(component)
@@ -123,6 +133,8 @@ def bake_color_lut(scene, lut_records, lut_bytes_by_id, unsupported):
                 "size": COLOR_LUT_SIZE,
                 "domain_min": COLOR_LUT_DOMAIN_MIN,
                 "domain_max": COLOR_LUT_DOMAIN_MAX,
+                "shaper": COLOR_LUT_SHAPER,
+                "shaper_scale": COLOR_LUT_SHAPER_SCALE,
                 "encoding": "rgb-f32-le-base64",
                 "data_base64": base64.b64encode(raw).decode("ascii"),
             })

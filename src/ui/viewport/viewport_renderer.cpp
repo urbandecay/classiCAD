@@ -1613,7 +1613,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             shadedLinear, shadingSettings_.colorTransform,
                             shadingSettings_.colorExposure,
                             shadingSettings_.colorGamma,
-                            shadingSettings_.colorLutData);
+                            shadingSettings_.colorLutData,
+                            shadingSettings_.colorLutMetadata);
                     pixel[0] = static_cast<uchar>(std::clamp(
                         qRound(displayColor.x() * 255.0f), 0, 255));
                     pixel[1] = static_cast<uchar>(std::clamp(
@@ -2584,7 +2585,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
             const QVector3D shaded = workbenchSceneLinearToDisplaySrgb(
                 shadedLinear, shadingSettings_.colorTransform,
                 shadingSettings_.colorExposure, shadingSettings_.colorGamma,
-                shadingSettings_.colorLutData);
+                shadingSettings_.colorLutData,
+                shadingSettings_.colorLutMetadata);
             QColor color = baseColor;
             color.setRedF(std::clamp<qreal>(shaded.x(), 0.0, 1.0));
             color.setGreenF(std::clamp<qreal>(shaded.y(), 0.0, 1.0));

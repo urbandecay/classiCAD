@@ -7,6 +7,7 @@
 #include <QVector>
 
 #include "core/document/scene_object.h"
+#include "core/document/document_settings.h"
 #include "core/document/document_collection.h"
 
 namespace classiCAD {
@@ -60,6 +61,7 @@ struct BlenderSceneImportReport {
     QString warningMessage;
     QJsonArray scenes;
     QHash<QString, QByteArray> importedBlenderColorLuts;
+    QHash<QString, ImportedBlenderColorLutMetadata> importedBlenderColorLutMetadata;
 };
 
 // Extracts supported Blender scene geometry through the pinned Python runtime.

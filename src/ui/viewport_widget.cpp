@@ -6585,6 +6585,24 @@ public:
                 scene.value(QStringLiteral("render_output")).toObject();
             result.transparentFilm = renderOutput.value(
                 QStringLiteral("film_transparent")).toBool(false);
+            const QJsonArray worldColor = renderOutput.value(
+                QStringLiteral("world_color_scene_linear")).toArray();
+            if (worldColor.size() == 3 && worldColor[0].isDouble() &&
+                worldColor[1].isDouble() && worldColor[2].isDouble()) {
+                result.sceneWorldColorAvailable = true;
+                result.sceneWorldColorSceneLinear = QVector3D(
+                    static_cast<float>(worldColor[0].toDouble()),
+                    static_cast<float>(worldColor[1].toDouble()),
+                    static_cast<float>(worldColor[2].toDouble()));
+            }
+            result.backgroundType = renderOutput.value(
+                QStringLiteral("background_type")).toString();
+            result.renderUsesSceneWorldBackground =
+                !result.backgroundType.isEmpty() &&
+                result.backgroundType != QLatin1String("VIEWPORT");
+            result.transparentBackground = result.transparentFilm ||
+                (result.renderUsesSceneWorldBackground &&
+                 !result.sceneWorldColorAvailable);
             const QString renderAa = renderOutput.value(
                 QStringLiteral("render_aa")).toString();
             if (renderAa == QLatin1String("OFF")) renderAntiAliasingMode = 0;
@@ -6688,23 +6706,35 @@ public:
                                                Qt::CaseInsensitive) == 0 &&
             WorkbenchRenderResult::openExrWriterAvailable();
         const bool transparentFilm = result.transparentFilm;
+        const bool useSceneWorldBackground =
+            !transparentFilm && result.renderUsesSceneWorldBackground &&
+            result.sceneWorldColorAvailable;
+        const bool noSceneWorldBackground =
+            !transparentFilm && result.renderUsesSceneWorldBackground &&
+            !result.sceneWorldColorAvailable;
+        const QVector3D sceneWorldColor = result.sceneWorldColorSceneLinear;
         if (captureSceneLinearCombined) result.sceneLinearSize = outputSize;
         gpuSurface_->renderOffscreen(
             outputSize,
             renderCamera,
-            [&renderFrame, &settings, &renderCamera, transparentFilm](
+            [&renderFrame, &settings, &renderCamera, transparentFilm,
+             useSceneWorldBackground, noSceneWorldBackground,
+             sceneWorldColor](
                 const QSize &pixelSize, ViewportAaRenderer &aa,
                 BlenderGridRenderer &grid,
                 ViewportSceneRenderer &, ViewportSurfaceRenderer &surface) {
                 aa.setDepthOfField(settings.depthOfField,
                                    renderCamera.cameraPreferences(),
                                    renderCamera.isPerspectiveEnabled());
-                aa.setDisplayTransform(settings, true);
-                if (!transparentFilm &&
-                    !grid.renderBackgroundToCurrentFramebuffer(
-                        pixelSize, 1.0,
-                        viewportShadingBackgroundColor(settings), true)) {
-                    return false;
+                aa.setDisplayTransform(settings, true, transparentFilm);
+                if (!transparentFilm && !noSceneWorldBackground) {
+                    const bool backgroundDrawn = useSceneWorldBackground
+                        ? grid.renderBackgroundToCurrentFramebuffer(
+                              pixelSize, 1.0, sceneWorldColor)
+                        : grid.renderBackgroundToCurrentFramebuffer(
+                              pixelSize, 1.0,
+                              viewportShadingBackgroundColor(settings), true);
+                    if (!backgroundDrawn) return false;
                 }
                 ViewportWorkbenchSceneColorPassRequest passRequest;
                 passRequest.sharedTargets = &aa.targets();
@@ -6727,7 +6757,8 @@ public:
             },
             &result.combined, &result.depth, nullptr,
             captureSceneLinearCombined ? &result.sceneLinearRgba : nullptr,
-            renderAntiAliasingMode, transparentFilm);
+            renderAntiAliasingMode, transparentFilm,
+            noSceneWorldBackground);
         if (result.isValid()) {
             // CAD dimensions are committed scene annotations, not transient
             // editor overlays. Include them in the saved result at the chosen

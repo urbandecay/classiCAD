@@ -22,6 +22,7 @@
 #include <QSurfaceFormat>
 #include <QSize>
 #include <QMatrix4x4>
+#include <QVector3D>
 
 #include <memory>
 
@@ -60,6 +61,10 @@ public:
                                               qreal devicePixelRatio,
                                               const QColor &solidColor = QColor(),
                                               bool sceneLinearOutput = false);
+    bool renderBackgroundToCurrentFramebuffer(
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const QVector3D &solidColorSceneLinear);
     bool renderUnjitteredSceneDepthToCurrentFramebuffer(
         const ViewportTransform &transform,
         const QSize &viewportSize,
@@ -105,6 +110,12 @@ public:
 private:
     bool initialize();
     bool initializeResources();
+    bool renderBackgroundWithColors(const QSize &viewportSize,
+                                    qreal devicePixelRatio,
+                                    const QVector3D &highColor,
+                                    const QVector3D &lowColor,
+                                    bool colorsSceneLinear,
+                                    bool sceneLinearOutput);
     bool ensureFramebuffer(const QSize &pixelSize);
     bool ensureFrontDepthFramebuffer(const QSize &pixelSize);
     void mergeFrontDepthToCurrentFramebuffer(const QSize &pixelSize);

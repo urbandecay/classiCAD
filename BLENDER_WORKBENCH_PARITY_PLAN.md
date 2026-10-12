@@ -72,6 +72,26 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   PNG/TIFF path remains normalized and display-referred. Blender's registered
   pass lifecycle, multi-pass result API, and matched visual output remain open.
 
+### Opaque-film scene World background (2026-10-12)
+
+- Blender Workbench imports each scene's `World.color` as scene-linear RGB in
+  render-output metadata. For opaque-film offscreen Combined results,
+  classiCAD uses this color when Workbench `background_type` is not
+  `VIEWPORT`; `VIEWPORT` keeps its imported shading color. If that background
+  type is selected but the scene has no World, the offscreen target remains
+  transparent as Blender's zero clear color does. Transparent film also
+  clears without drawing a background. The World color reaches the scene-linear
+  target directly without an 8-bit `QColor` conversion; the interactive
+  viewport background path is unchanged.
+- Blender 5.2.2 chooses `shading.background_color` only for `VIEWPORT` and
+  otherwise uses `scene->world` horizon RGB while rendering opaque film in
+  [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L175-L183).
+  Workbench clears its render framebuffer from that state color in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L488-L494).
+  Blender's [`rna_world.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_world.cc#L235-L240)
+  maps `World.color` to the horizon-color field. Matched image comparison
+  remains pending.
+
 ### Transparent-film Combined alpha (2026-10-12)
 
 - Blender 5.2.2 exposes `RenderSettings.film_transparent` as the
@@ -83,6 +103,13 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   [`rna_scene.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_scene.cc#L7233),
   [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L175-L184),
   and [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L488-L494).
+- For transparent-film PNG/TIFF output, the presentation transform now
+  unpremultiplies RGB before the nonlinear view transform and premultiplies the
+  result afterward. Blender's color-managed output path predivides premultiplied
+  render buffers before processing; see
+  [`colormanagement.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/colormanagement.cc#L1574-L1582)
+  and [lines 2124-2165](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/colormanagement.cc#L2124-L2165).
+  The scene-linear Combined EXR payload remains premultiplied and unchanged.
 
 ### Weighted transparency resolve (2026-10-12)
 

@@ -342,10 +342,13 @@ void ViewportAaRenderer::setDepthOfField(
 }
 
 void ViewportAaRenderer::setDisplayTransform(
-    const ViewportShadingSettings &settings, bool sourceIsSceneLinear)
+    const ViewportShadingSettings &settings,
+    bool sourceIsSceneLinear,
+    bool sourceHasPremultipliedAlpha)
 {
     displaySettings_ = settings;
     sourceIsSceneLinear_ = sourceIsSceneLinear;
+    sourceHasPremultipliedAlpha_ = sourceHasPremultipliedAlpha;
     if (sceneSampleActive_) {
         targets_.sceneLinearColorTexture = sourceIsSceneLinear
             ? sceneColorTexture_ : 0;
@@ -494,6 +497,7 @@ bool ViewportAaRenderer::initialize()
         uniform vec2 uPixelSize;
         uniform bool uEncodeDisplay;
         uniform bool uApplyViewTransform;
+        uniform bool uPremultipliedAlpha;
         uniform sampler3D uDisplayLut;
         uniform bool uDisplayLutAvailable;
         uniform int uColorTransform;
@@ -608,10 +612,18 @@ bool ViewportAaRenderer::initialize()
         {
             vec4 source = uUseDepthOfField ? dofGather(vUv) : texture(uSource, vUv);
             vec3 outputColor = source.rgb;
+            bool predivide = uPremultipliedAlpha && uApplyViewTransform;
+            if (predivide) {
+                outputColor = source.a > 0.0
+                    ? outputColor / source.a : vec3(0.0);
+            }
             if (uApplyViewTransform) {
                 outputColor = transformColor(outputColor);
             } else if (uEncodeDisplay) {
                 outputColor = linearToSrgb(outputColor);
+            }
+            if (predivide) {
+                outputColor *= source.a;
             }
             fragmentColor = vec4(outputColor, source.a);
         }
@@ -1925,6 +1937,8 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
                                 depthOfFieldPerspective_ && depthTexture_ != 0);
     presentProgram_.setUniformValue("uEncodeDisplay", encodeDisplay);
     presentProgram_.setUniformValue("uApplyViewTransform", sourceIsSceneLinear_);
+    presentProgram_.setUniformValue("uPremultipliedAlpha",
+                                    sourceHasPremultipliedAlpha_);
     presentProgram_.setUniformValue("uDisplayLutAvailable", transformAvailable);
     presentProgram_.setUniformValue("uColorTransform",
                                     displaySettings_.colorTransform);

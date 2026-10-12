@@ -792,6 +792,33 @@ bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
     const QColor &solidColor,
     bool sceneLinearOutput)
 {
+    const QColor high = solidColor.isValid() ? solidColor : QColor(61, 61, 61);
+    const QColor low = solidColor.isValid() ? solidColor : QColor(48, 48, 48);
+    return renderBackgroundWithColors(
+        viewportSize, devicePixelRatio,
+        QVector3D(high.redF(), high.greenF(), high.blueF()),
+        QVector3D(low.redF(), low.greenF(), low.blueF()), false,
+        sceneLinearOutput);
+}
+
+bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector3D &solidColorSceneLinear)
+{
+    return renderBackgroundWithColors(
+        viewportSize, devicePixelRatio, solidColorSceneLinear,
+        solidColorSceneLinear, true, true);
+}
+
+bool BlenderGridRenderer::renderBackgroundWithColors(
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    const QVector3D &highColor,
+    const QVector3D &lowColor,
+    bool colorsSceneLinear,
+    bool sceneLinearOutput)
+{
     if (viewportSize.isEmpty() || QOpenGLContext::currentContext() == nullptr) {
         return false;
     }
@@ -833,20 +860,12 @@ bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
             "uViewportSize",
             QVector2D(static_cast<float>(viewportSize.width() * dpr),
                       static_cast<float>(viewportSize.height() * dpr)));
-        const QColor high = solidColor.isValid()
-                                ? solidColor
-                                : QColor(61, 61, 61);
-        const QColor low = solidColor.isValid()
-                               ? solidColor
-                               : QColor(48, 48, 48);
-        backgroundProgram_.setUniformValue(
-            "uHighGradient", QVector3D(high.redF(), high.greenF(),
-                                       high.blueF()));
-        backgroundProgram_.setUniformValue(
-            "uGradient", QVector3D(low.redF(), low.greenF(),
-                                   low.blueF()));
+        backgroundProgram_.setUniformValue("uHighGradient", highColor);
+        backgroundProgram_.setUniformValue("uGradient", lowColor);
         backgroundProgram_.setUniformValue("uSceneLinearOutput",
                                            sceneLinearOutput ? 1 : 0);
+        backgroundProgram_.setUniformValue("uColorsSceneLinear",
+                                           colorsSceneLinear ? 1 : 0);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     backgroundProgram_.release();

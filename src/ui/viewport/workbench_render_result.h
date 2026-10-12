@@ -8,6 +8,7 @@
 #include <QSize>
 #include <QString>
 #include <QVector>
+#include <QVector3D>
 
 #include <limits>
 
@@ -25,6 +26,11 @@ struct WorkbenchRenderResult {
     bool combinedPassAvailable = true;
     bool depthPassAvailable = true;
     bool transparentFilm = false;
+    bool transparentBackground = false;
+    QString backgroundType;
+    bool sceneWorldColorAvailable = false;
+    QVector3D sceneWorldColorSceneLinear;
+    bool renderUsesSceneWorldBackground = false;
     ProjectViewportCameraSettings camera;
     QString outputFormat = QStringLiteral("PNG + PFM depth");
     QString blenderImageFormat = QStringLiteral("PNG");

@@ -6,6 +6,7 @@ uniform vec2 uViewportSize;
 uniform vec3 uHighGradient;
 uniform vec3 uGradient;
 uniform int uSceneLinearOutput;
+uniform int uColorsSceneLinear;
 
 out vec4 fragmentColor;
 
@@ -30,16 +31,20 @@ void main()
                                  1.0);
 
     if (uSceneLinearOutput != 0) {
-        // QColor components are sRGB encoded. Decode before interpolation so
-        // this pass can feed a scene-linear render target.
-        vec3 highLinear = mix(uHighGradient / 12.92,
-                              pow((uHighGradient + 0.055) / 1.055,
-                                  vec3(2.4)),
-                              step(vec3(0.04045), uHighGradient));
-        vec3 lowLinear = mix(uGradient / 12.92,
-                             pow((uGradient + 0.055) / 1.055,
+        vec3 highLinear = uHighGradient;
+        vec3 lowLinear = uGradient;
+        if (uColorsSceneLinear == 0) {
+            // QColor components are sRGB encoded. Decode before
+            // interpolation so this pass can feed a scene-linear target.
+            highLinear = mix(uHighGradient / 12.92,
+                             pow((uHighGradient + 0.055) / 1.055,
                                  vec3(2.4)),
-                             step(vec3(0.04045), uGradient));
+                             step(vec3(0.04045), uHighGradient));
+            lowLinear = mix(uGradient / 12.92,
+                            pow((uGradient + 0.055) / 1.055,
+                                vec3(2.4)),
+                            step(vec3(0.04045), uGradient));
+        }
         vec3 color = mix(highLinear, lowLinear, gradientFactor);
         fragmentColor = vec4(color, 1.0);
         return;

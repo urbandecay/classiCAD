@@ -1180,6 +1180,13 @@ def extract_scene(input_path, mode):
                 # Blender backs RenderSettings.film_transparent with the
                 # R_ALPHAPREMUL render alpha-mode bit used by Workbench.
                 "film_transparent": bool(render.film_transparent),
+                # World.color is scene-linear and is the opaque Workbench
+                # render background when shading.background_type is not
+                # VIEWPORT.
+                "world_color_scene_linear": (
+                    vector_values(scene.world.color) if scene.world else None
+                ),
+                "background_type": str(scene.display.shading.background_type),
                 "render_aa": str(scene.display.render_aa),
                 "file_format": render.image_settings.file_format,
                 "color_mode": render.image_settings.color_mode,

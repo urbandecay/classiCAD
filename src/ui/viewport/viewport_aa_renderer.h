@@ -29,7 +29,8 @@ public:
                          const ViewportCameraPreferences &optics,
                          bool perspectiveView);
     void setDisplayTransform(const ViewportShadingSettings &settings,
-                             bool sourceIsSceneLinear);
+                             bool sourceIsSceneLinear,
+                             bool sourceHasPremultipliedAlpha = false);
 
     // Returns true after binding a single-sample scene target. The supplied
     // history key must change whenever pixels in the Workbench scene change.
@@ -116,6 +117,7 @@ private:
     bool depthOfFieldPerspective_ = false;
     ViewportShadingSettings displaySettings_;
     bool sourceIsSceneLinear_ = false;
+    bool sourceHasPremultipliedAlpha_ = false;
     bool displayTransformTextureAvailable_ = false;
     int displayTransformTextureMode_ = -1;
     QString displayTransformTextureLutId_;

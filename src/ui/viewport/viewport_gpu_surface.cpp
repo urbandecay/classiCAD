@@ -150,7 +150,8 @@ bool ViewportGpuSurface::renderOffscreen(
     QString *errorMessage,
     QVector<float> *sceneLinearRgba,
     int antiAliasingMode,
-    bool transparentFilm)
+    bool transparentFilm,
+    bool transparentBackground)
 {
     if (!isValid() || pixelSize.isEmpty() || !draw || combined == nullptr ||
         depth == nullptr || aaRenderer_ == nullptr) {
@@ -186,7 +187,8 @@ bool ViewportGpuSurface::renderOffscreen(
     functions.glDepthMask(GL_TRUE);
     functions.glClearDepth(1.0);
     functions.glClearColor(0.0f, 0.0f, 0.0f,
-                           transparentFilm ? 0.0f : 1.0f);
+                           transparentFilm || transparentBackground
+                               ? 0.0f : 1.0f);
     functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
                       GL_STENCIL_BUFFER_BIT);
     const int previousAaMode = aaRenderer_->mode();

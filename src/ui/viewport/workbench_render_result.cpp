@@ -3,6 +3,7 @@
 #include "workbench_render_result.h"
 
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QFile>
 #include <QImageWriter>
@@ -292,6 +293,20 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("depthPassAvailable"),
                       depthPassAvailable);
     cameraJson.insert(QStringLiteral("filmTransparent"), transparentFilm);
+    cameraJson.insert(QStringLiteral("backgroundType"), backgroundType);
+    cameraJson.insert(QStringLiteral("transparentBackground"),
+                      transparentBackground);
+    cameraJson.insert(QStringLiteral("sceneWorldBackgroundUsed"),
+                      !transparentFilm && renderUsesSceneWorldBackground &&
+                          sceneWorldColorAvailable);
+    if (sceneWorldColorAvailable) {
+        QJsonArray worldColor;
+        worldColor.append(sceneWorldColorSceneLinear.x());
+        worldColor.append(sceneWorldColorSceneLinear.y());
+        worldColor.append(sceneWorldColorSceneLinear.z());
+        cameraJson.insert(QStringLiteral("sceneWorldColorSceneLinear"),
+                          worldColor);
+    }
     cameraJson.insert(QStringLiteral("combinedPassAvailable"),
                       combinedPassAvailable);
     QJsonObject poseJson;

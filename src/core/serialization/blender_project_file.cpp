@@ -1935,9 +1935,26 @@ bool importBlenderScene(const QString &path,
             QStringLiteral("color_mode")).toString();
         const QJsonValue filmTransparentValue = renderOutput.value(
             QStringLiteral("film_transparent"));
+        const QJsonValue worldColorValue = renderOutput.value(
+            QStringLiteral("world_color_scene_linear"));
+        const QJsonValue renderBackgroundTypeValue = renderOutput.value(
+            QStringLiteral("background_type"));
+        QVector<double> worldColorSceneLinear;
+        bool worldColorValid = worldColorValue.isUndefined() ||
+                               worldColorValue.isNull();
+        if (worldColorValue.isArray()) {
+            worldColorValid = jsonNumberArray(worldColorValue, 3,
+                                              &worldColorSceneLinear);
+        }
         if (!renderOutput.value(QStringLiteral("file_format")).isString() ||
             (!filmTransparentValue.isUndefined() &&
              !filmTransparentValue.isBool()) ||
+            !worldColorValid ||
+            (!renderBackgroundTypeValue.isUndefined() &&
+             (!renderBackgroundTypeValue.isString() ||
+              (renderBackgroundTypeValue.toString() != QLatin1String("THEME") &&
+               renderBackgroundTypeValue.toString() != QLatin1String("WORLD") &&
+               renderBackgroundTypeValue.toString() != QLatin1String("VIEWPORT")))) ||
             (imageColorMode != QLatin1String("BW") &&
              imageColorMode != QLatin1String("RGB") &&
              imageColorMode != QLatin1String("RGBA")) ||

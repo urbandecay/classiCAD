@@ -61,14 +61,26 @@ float saturate(float value)
     return std::clamp(value, 0.0f, 1.0f);
 }
 
+float objectSourceAlpha(const ViewportRenderObject &object,
+                        ViewportColorMode colorMode)
+{
+    if (colorMode == ViewportColorMode::Custom) return 1.0f;
+    if (colorMode == ViewportColorMode::Material ||
+        colorMode == ViewportColorMode::Attribute ||
+        colorMode == ViewportColorMode::Texture) {
+        return object.workbenchMaterial.alpha;
+    }
+    return object.displayColorSceneLinear.w();
+}
+
 } // namespace
 
-void applyRasterWorkbenchCavity(QImage *colorImage,
-                                const QVector<ViewportRenderObject> &objects,
-                                const ViewportTransform &transform,
-                                const QSize &viewportSize,
-                                qreal devicePixelRatio,
-                                const ViewportShadingSettings &settings)
+void applyRasterWorkbenchEffects(QImage *colorImage,
+                                 const QVector<ViewportRenderObject> &objects,
+                                 const ViewportTransform &transform,
+                                 const QSize &viewportSize,
+                                 qreal devicePixelRatio,
+                                 const ViewportShadingSettings &settings)
 {
     if (colorImage == nullptr || colorImage->isNull() ||
         (!settings.cavity && !settings.outline) ||
@@ -138,6 +150,7 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
               validatePolygonMesh(object.shape.polygonMesh))) {
             continue;
         }
+        if (objectSourceAlpha(object, settings.colorMode) <= 0.0f) continue;
         ViewportDepthGeometry fallback;
         const ViewportDepthGeometry *geometry =
             object.preparedDepthGeometry.data();
@@ -160,7 +173,25 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
                                         m[10] * local.z + m[11]) / divisor));
             };
             int firstCorner = 0;
-            for (const QVector<int> &face : mesh.faces) {
+            for (int faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex) {
+                const QVector<int> &face = mesh.faces[faceIndex];
+                if (settings.colorMode == ViewportColorMode::Material ||
+                    settings.colorMode == ViewportColorMode::Attribute ||
+                    settings.colorMode == ViewportColorMode::Texture) {
+                    const int slotIndex = mesh.faceMaterialIndices.value(
+                        faceIndex, -1);
+                    float faceAlpha = object.workbenchMaterial.alpha;
+                    if (slotIndex >= 0 && slotIndex < object.meshMaterials.size()) {
+                        faceAlpha = object.meshMaterials[slotIndex].alpha;
+                    } else if (slotIndex >= 0 &&
+                               slotIndex < mesh.materialSlots.size()) {
+                        faceAlpha = mesh.materialSlots[slotIndex].alpha;
+                    }
+                    if (faceAlpha <= 0.0f) {
+                        firstCorner += face.size();
+                        continue;
+                    }
+                }
                 const int faceFirstCorner = firstCorner;
                 QVector<Point3D> points;
                 points.reserve(face.size());
@@ -271,34 +302,34 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
             const int depthY = std::clamp(
-                qRound((y + 0.5) / colorDpr * dpr), 0, height - 1);
+                static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
+                0, height - 1);
             for (int x = 0; x < outputWidth; ++x) {
                 const int depthX = std::clamp(
-                    qRound((x + 0.5) / colorDpr * dpr), 0, width - 1);
+                    static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
+                    0, width - 1);
                 const quint64 objectId = samples[depthY * width + depthX].objectId;
-                if (objectId == 0) continue;
-                bool edge = false;
+                int differentNeighbors = 0;
                 constexpr std::array<QPoint, 4> neighbors = {
                     QPoint(1, 0), QPoint(-1, 0), QPoint(0, 1), QPoint(0, -1)};
                 for (const QPoint &offset : neighbors) {
-                    const int sx = depthX + offset.x();
-                    const int sy = depthY + offset.y();
-                    if (sx < 0 || sy < 0 || sx >= width || sy >= height ||
-                        samples[sy * width + sx].objectId != objectId) {
-                        edge = true;
-                        break;
-                    }
+                    const int sx = std::clamp(depthX + offset.x(), 0, width - 1);
+                    const int sy = std::clamp(depthY + offset.y(), 0, height - 1);
+                    differentNeighbors +=
+                        samples[sy * width + sx].objectId != objectId;
                 }
-                if (!edge || outlineAlpha <= 0.0f) continue;
+                const float edgeOpacity = differentNeighbors * 0.25f;
+                const float sourceAlpha = outlineAlpha * edgeOpacity;
+                if (sourceAlpha <= 0.0f) continue;
                 const QRgb pixel = source.pixel(x, y);
                 const float dstAlpha = qAlpha(pixel) / 255.0f;
-                const float outAlpha = outlineAlpha +
-                                       dstAlpha * (1.0f - outlineAlpha);
+                const float outAlpha = sourceAlpha +
+                                       dstAlpha * (1.0f - sourceAlpha);
                 const auto blend = [&](int dst, float src) {
                     if (outAlpha <= 0.0f) return 0;
                     return std::clamp(qRound(
-                        (src * outlineAlpha + dst * dstAlpha *
-                         (1.0f - outlineAlpha)) / outAlpha), 0, 255);
+                        (src * sourceAlpha + dst * dstAlpha *
+                         (1.0f - sourceAlpha)) / outAlpha), 0, 255);
                 };
                 out[x] = qRgba(blend(qRed(pixel), outlineRed),
                                blend(qGreen(pixel), outlineGreen),
@@ -387,10 +418,12 @@ void applyRasterWorkbenchCavity(QImage *colorImage,
     for (int y = 0; y < outputHeight; ++y) {
         QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
         const int depthY = std::clamp(
-            qRound((y + 0.5) / colorDpr * dpr), 0, height - 1);
+            static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
+            0, height - 1);
         for (int x = 0; x < outputWidth; ++x) {
             const int depthX = std::clamp(
-                qRound((x + 0.5) / colorDpr * dpr), 0, width - 1);
+                static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
+                0, width - 1);
             const float factor = factors[depthY * width + depthX];
             if (factor == 1.0f) continue;
             const QRgb pixel = source.pixel(x, y);

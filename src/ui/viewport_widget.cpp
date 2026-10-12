@@ -10714,7 +10714,7 @@ protected:
             }
         } else {
             rasterScenePainter.end();
-            applyRasterWorkbenchCavity(
+            applyRasterWorkbenchEffects(
                 &committedSceneLayer, visibleShapes, viewportTransform_,
                 renderFrame.viewportSize, devicePixelRatioF(),
                 renderShadingSettings);

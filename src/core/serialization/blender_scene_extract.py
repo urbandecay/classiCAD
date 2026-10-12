@@ -581,6 +581,20 @@ def extract_surface_patches(obj, scene, materials, unsupported):
                     unsupported, source_id, "material_library:" + record["name"],
                     "linked Blender material library file is missing: " +
                     record["library_path"])
+            for image in record["image_textures"]:
+                if image["packed_data_error"]:
+                    add_unsupported(
+                        unsupported, source_id,
+                        "image_texture:" + image["image_name"],
+                        image["packed_data_error"],
+                    )
+                if not image["source_file_exists"]:
+                    add_unsupported(
+                        unsupported, source_id,
+                        "image_texture:" + image["image_name"],
+                        "external image is missing or has no filepath: " +
+                        image["filepath"],
+                    )
         else:
             material_ids.append("")
     patches = []

@@ -83,6 +83,15 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   registered pass lifecycle, multi-pass result API, and matched visual output
   remain open.
 
+- EXR output now honors RGB color mode by writing only R/G/B for both HALF and
+  FLOAT channel storage. The scene-linear payload is already premultiplied, so
+  its RGB values already represent compositing against black; the writer
+  preserves them unchanged and omits A. Blender's pinned
+  [`openexr_api.cpp`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/openexr/openexr_api.cpp#L652-L710)
+  includes A only when the source image has alpha; RGB mode therefore omits
+  that channel. BW mode remains a separate gap: classiCAD still writes the
+  existing RGBA channels instead of Blender's grayscale output.
+
 - TIFF compression currently does not preserve all Blender codec settings.
   Blender 5.2.2's `ImageFormatData` defaults to DEFLATE and maps DEFLATE,
   LZW, PACKBITS, and NONE to separate TIFF writer flags in

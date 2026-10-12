@@ -137,15 +137,22 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
         }
         using namespace OPENEXR_IMF_NAMESPACE;
         const PixelType pixelType = halfPrecision ? HALF : FLOAT;
+        const bool rgbOnly = colorMode.compare(QLatin1String("RGB"),
+                                               Qt::CaseInsensitive) == 0;
         header.channels().insert("R", Channel(pixelType));
         header.channels().insert("G", Channel(pixelType));
         header.channels().insert("B", Channel(pixelType));
-        header.channels().insert("A", Channel(pixelType));
+        if (!rgbOnly) {
+            header.channels().insert("A", Channel(pixelType));
+        }
         const bool includeDepth = hasSceneLinearDepthPass();
         if (includeDepth) {
             header.channels().insert("Z", Channel(pixelType));
         }
         FrameBuffer frameBuffer;
+        std::vector<Rgba> halfColor;
+        std::vector<Rgba> halfDepth;
+        std::vector<float> rgbChannels;
         if (halfPrecision) {
             // Blender clamps float render channels to the finite HALF range
             // before converting them to OpenEXR half precision.
@@ -153,7 +160,7 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
             const auto toHalfRange = [halfMaximum](float value) {
                 return std::clamp(value, -halfMaximum, halfMaximum);
             };
-            std::vector<Rgba> halfColor(size_t(width) * size_t(height));
+            halfColor.resize(size_t(width) * size_t(height));
             for (size_t index = 0; index < halfColor.size(); ++index) {
                 const float *source = sceneLinearRgba.constData() + index * 4;
                 halfColor[index] = Rgba(toHalfRange(source[0]),
@@ -170,10 +177,13 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
                                           xStride, yStride));
             frameBuffer.insert("B", Slice(HALF, halfBase + 2 * componentStride,
                                           xStride, yStride));
-            frameBuffer.insert("A", Slice(HALF, halfBase + 3 * componentStride,
-                                          xStride, yStride));
+            if (!rgbOnly) {
+                frameBuffer.insert("A", Slice(HALF,
+                                              halfBase + 3 * componentStride,
+                                              xStride, yStride));
+            }
             if (includeDepth) {
-                std::vector<Rgba> halfDepth(size_t(width) * size_t(height));
+                halfDepth.resize(size_t(width) * size_t(height));
                 for (size_t index = 0; index < halfDepth.size(); ++index) {
                     halfDepth[index].r = toHalfRange(depth.constData()[index]);
                 }
@@ -184,17 +194,37 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
                                size_t(width) * sizeof(Rgba)));
             }
         } else {
-            char *base = reinterpret_cast<char *>(
-                const_cast<float *>(sceneLinearRgba.constData()));
-            const size_t xStride = 4 * sizeof(float);
-            const size_t yStride = size_t(width) * xStride;
-            frameBuffer.insert("R", Slice(FLOAT, base, xStride, yStride, 1, 1, 0.0));
-            frameBuffer.insert("G", Slice(FLOAT, base + sizeof(float), xStride,
-                                          yStride, 1, 1, 0.0));
-            frameBuffer.insert("B", Slice(FLOAT, base + 2 * sizeof(float), xStride,
-                                          yStride, 1, 1, 0.0));
-            frameBuffer.insert("A", Slice(FLOAT, base + 3 * sizeof(float), xStride,
-                                          yStride, 1, 1, 0.0));
+            if (rgbOnly) {
+                rgbChannels.resize(size_t(width) * size_t(height) * 3);
+                for (size_t index = 0; index < size_t(width) * size_t(height);
+                     ++index) {
+                    const float *source = sceneLinearRgba.constData() + index * 4;
+                    float *destination = rgbChannels.data() + index * 3;
+                    destination[0] = source[0];
+                    destination[1] = source[1];
+                    destination[2] = source[2];
+                }
+                char *base = reinterpret_cast<char *>(rgbChannels.data());
+                const size_t xStride = 3 * sizeof(float);
+                const size_t yStride = size_t(width) * xStride;
+                frameBuffer.insert("R", Slice(FLOAT, base, xStride, yStride));
+                frameBuffer.insert("G", Slice(FLOAT, base + sizeof(float),
+                                              xStride, yStride));
+                frameBuffer.insert("B", Slice(FLOAT, base + 2 * sizeof(float),
+                                              xStride, yStride));
+            } else {
+                char *base = reinterpret_cast<char *>(
+                    const_cast<float *>(sceneLinearRgba.constData()));
+                const size_t xStride = 4 * sizeof(float);
+                const size_t yStride = size_t(width) * xStride;
+                frameBuffer.insert("R", Slice(FLOAT, base, xStride, yStride, 1, 1, 0.0));
+                frameBuffer.insert("G", Slice(FLOAT, base + sizeof(float), xStride,
+                                              yStride, 1, 1, 0.0));
+                frameBuffer.insert("B", Slice(FLOAT, base + 2 * sizeof(float), xStride,
+                                              yStride, 1, 1, 0.0));
+                frameBuffer.insert("A", Slice(FLOAT, base + 3 * sizeof(float), xStride,
+                                              yStride, 1, 1, 0.0));
+            }
             if (includeDepth) {
                 char *depthBase = reinterpret_cast<char *>(
                     const_cast<float *>(depth.constData()));

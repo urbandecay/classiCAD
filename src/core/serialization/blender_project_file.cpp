@@ -647,12 +647,16 @@ bool parseBlenderMaterials(
                 }
                 reference.sourceFileExists = image.value(QStringLiteral("source_file_exists")).toBool();
                 const QJsonArray tiles = image.value(QStringLiteral("tiles")).toArray();
+                qsizetype packedTileBytes = 0;
                 for (const QJsonValue &tileValue : tiles) {
                     if (!tileValue.isObject()) continue;
                     const QJsonObject tileObject = tileValue.toObject();
                     const QJsonValue numberValue = tileObject.value(QStringLiteral("number"));
                     const QJsonValue filepathValue = tileObject.value(QStringLiteral("filepath"));
                     const QJsonValue existsValue = tileObject.value(QStringLiteral("source_file_exists"));
+                    const QJsonValue packedDataValue = tileObject.value(
+                        QStringLiteral("packed_data_base64"));
+                    const QString packedData = packedDataValue.toString();
                     if (!numberValue.isDouble() || !filepathValue.isString() ||
                         !existsValue.isBool()) {
                         if (warnings != nullptr) {
@@ -669,8 +673,30 @@ bool parseBlenderMaterials(
                         }
                         return false;
                     }
+                    QString validPackedData;
+                    if (!packedDataValue.isUndefined() && !packedDataValue.isString()) {
+                        if (warnings != nullptr) warnings->append(
+                            QStringLiteral("%1: malformed packed UDIM tile %2 was omitted")
+                                .arg(reference.imageName).arg(number));
+                    } else if (packedData.size() > 44 * 1024 * 1024) {
+                        if (warnings != nullptr) warnings->append(
+                            QStringLiteral("%1: packed UDIM tile %2 exceeds the encoded payload limit and was omitted")
+                                .arg(reference.imageName).arg(number));
+                    } else if (!packedData.isEmpty()) {
+                        const QByteArray decoded = QByteArray::fromBase64(
+                            packedData.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+                        if (decoded.isEmpty() || decoded.size() > 32 * 1024 * 1024 ||
+                            packedTileBytes + decoded.size() > 32 * 1024 * 1024) {
+                            if (warnings != nullptr) warnings->append(
+                                QStringLiteral("%1: packed UDIM tile %2 is malformed or exceeds the 32 MiB per-image limit and was omitted")
+                                    .arg(reference.imageName).arg(number));
+                        } else {
+                            packedTileBytes += decoded.size();
+                            validPackedData = packedData;
+                        }
+                    }
                     reference.tiles.append({number, filepathValue.toString(),
-                                            existsValue.toBool()});
+                                            existsValue.toBool(), validPackedData});
                 }
                 if (!reference.imageName.isEmpty()) material.imageTextures.append(std::move(reference));
             }
@@ -1655,7 +1681,8 @@ bool importBlenderScene(const QString &path,
     if (root.value(QStringLiteral("format")).toString() !=
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
-        (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12)) {
+        (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
+         bridgeVersion != 13)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

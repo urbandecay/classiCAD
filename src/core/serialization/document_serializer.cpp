@@ -163,17 +163,29 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
     const QJsonValue tilesValue = object.value(QStringLiteral("textureImageTiles"));
     if (!tilesValue.isUndefined()) {
         if (!tilesValue.isArray()) return false;
+        qsizetype packedTileBytes = 0;
         for (const QJsonValue &tileValue : tilesValue.toArray()) {
             if (!tileValue.isObject()) return false;
             const QJsonObject tileObject = tileValue.toObject();
             const QJsonValue numberValue = tileObject.value(QStringLiteral("number"));
             const QJsonValue filepathValue = tileObject.value(QStringLiteral("filepath"));
             const QJsonValue existsValue = tileObject.value(QStringLiteral("sourceFileExists"));
+            const QJsonValue packedDataValue = tileObject.value(QStringLiteral("packedDataBase64"));
             const int number = numberValue.toInt(-1);
             if (!numberValue.isDouble() || number < 1001 || number > 1999 ||
-                !filepathValue.isString() || !existsValue.isBool()) return false;
+                !filepathValue.isString() || !existsValue.isBool() ||
+                (!packedDataValue.isUndefined() && !packedDataValue.isString())) return false;
+            const QString packedData = packedDataValue.toString();
+            if (packedData.size() > 44 * 1024 * 1024)
+                return false;
+            const QByteArray decoded = packedData.isEmpty() ? QByteArray{} :
+                QByteArray::fromBase64(packedData.toLatin1(),
+                    QByteArray::AbortOnBase64DecodingErrors);
+            if (!packedData.isEmpty() && decoded.isEmpty()) return false;
+            packedTileBytes += decoded.size();
+            if (packedTileBytes > 32 * 1024 * 1024) return false;
             restored.textureImageTiles.append({number, filepathValue.toString(),
-                                               existsValue.toBool()});
+                                               existsValue.toBool(), packedData});
         }
     }
     *material = restored;
@@ -185,7 +197,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 17);
+    serialized.insert(QStringLiteral("version"), 18);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -296,6 +308,7 @@ QJsonObject documentToJson(const Document &document)
                 tileObject.insert(QStringLiteral("number"), tile.number);
                 tileObject.insert(QStringLiteral("filepath"), tile.filepath);
                 tileObject.insert(QStringLiteral("sourceFileExists"), tile.sourceFileExists);
+                tileObject.insert(QStringLiteral("packedDataBase64"), tile.packedDataBase64);
                 tiles.append(tileObject);
             }
             image.insert(QStringLiteral("tiles"), tiles);
@@ -358,6 +371,7 @@ QJsonObject documentToJson(const Document &document)
             tileObject.insert(QStringLiteral("number"), tile.number);
             tileObject.insert(QStringLiteral("filepath"), tile.filepath);
             tileObject.insert(QStringLiteral("sourceFileExists"), tile.sourceFileExists);
+            tileObject.insert(QStringLiteral("packedDataBase64"), tile.packedDataBase64);
             textureImageTiles.append(tileObject);
         }
         workbenchMaterial.insert(QStringLiteral("textureImageTiles"), textureImageTiles);
@@ -387,7 +401,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 17) {
+    if (version < 1 || version > 18) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -606,6 +620,7 @@ bool documentFromJson(const QJsonValue &value,
                                  QStringLiteral("invalid document image texture tiles"));
                         return false;
                     }
+                    qsizetype packedTileBytes = 0;
                     for (const QJsonValue &tileValue : tilesValue.toArray()) {
                         if (!tileValue.isObject()) {
                             setError(errorMessage,
@@ -616,15 +631,38 @@ bool documentFromJson(const QJsonValue &value,
                         const QJsonValue numberValue = tileObject.value(QStringLiteral("number"));
                         const QJsonValue filepathValue = tileObject.value(QStringLiteral("filepath"));
                         const QJsonValue existsValue = tileObject.value(QStringLiteral("sourceFileExists"));
+                        const QJsonValue packedDataValue = tileObject.value(
+                            QStringLiteral("packedDataBase64"));
                         const int number = numberValue.toInt(-1);
                         if (!numberValue.isDouble() || number < 1001 || number > 1999 ||
-                            !filepathValue.isString() || !existsValue.isBool()) {
+                            !filepathValue.isString() || !existsValue.isBool() ||
+                            (!packedDataValue.isUndefined() && !packedDataValue.isString())) {
                             setError(errorMessage,
                                      QStringLiteral("invalid document image texture tile"));
                             return false;
                         }
+                        const QString packedData = packedDataValue.toString();
+                        if (packedData.size() > 44 * 1024 * 1024) {
+                            setError(errorMessage,
+                                     QStringLiteral("document packed UDIM tile exceeds the size limit"));
+                            return false;
+                        }
+                        const QByteArray decoded = packedData.isEmpty() ? QByteArray{} :
+                            QByteArray::fromBase64(packedData.toLatin1(),
+                                QByteArray::AbortOnBase64DecodingErrors);
+                        if (!packedData.isEmpty() && decoded.isEmpty()) {
+                            setError(errorMessage,
+                                     QStringLiteral("invalid document packed UDIM tile"));
+                            return false;
+                        }
+                        packedTileBytes += decoded.size();
+                        if (packedTileBytes > 32 * 1024 * 1024) {
+                            setError(errorMessage,
+                                     QStringLiteral("document packed UDIM tiles exceed the per-image size limit"));
+                            return false;
+                        }
                         reference.tiles.append({number, filepathValue.toString(),
-                                                existsValue.toBool()});
+                                                existsValue.toBool(), packedData});
                     }
                     material.imageTextures.append(std::move(reference));
                 }

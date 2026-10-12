@@ -23,11 +23,14 @@ inline constexpr MeshObjectTransform identityMeshObjectTransform{
     0.0, 0.0, 0.0, 1.0};
 
 // One Blender tiled-image entry. Tile numbers follow Blender's UDIM numbering
-// (1001 is UV tile (0, 0)); the renderer may load these lazily by path.
+// (1001 is UV tile (0, 0)); renderers prefer packed bytes and fall back to path.
 struct DocumentImageTextureTile {
     int number = 1001;
     QString filepath;
     bool sourceFileExists = false;
+    // Base64 encoded packed bytes for this exact UDIM tile, empty when the
+    // tile is external or Blender omitted it due to the aggregate byte cap.
+    QString packedDataBase64;
 };
 
 // Workbench material inputs are stored in scene-linear RGB, matching Blender's

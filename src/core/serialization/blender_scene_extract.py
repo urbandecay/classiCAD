@@ -23,9 +23,9 @@ import bpy
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 12
-# Keep a single packed image from expanding the extractor's JSON transport
-# without bound. The limit applies to the decoded image bytes.
+BRIDGE_FORMAT_VERSION = 13
+# Keep packed image data from expanding the extractor's JSON transport without
+# bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
 MAX_COLOR_LUTS = 8
 MAX_COLOR_LUT_BYTES = 32 * 1024 * 1024
@@ -240,6 +240,12 @@ def image_references(material):
         if image is None:
             continue
         image_tiles = []
+        packed_tile_bytes = 0
+        packed_tiles = {
+            int(getattr(packed, "tile_number", 0)): packed
+            for packed in getattr(image, "packed_files", ())
+            if int(getattr(packed, "tile_number", 0)) > 0
+        }
         if getattr(image, "source", "") == "TILED":
             # Blender Workbench maps floor(UV) to the tile grid (1001 at
             # (0, 0), increasing across X, then Y). Preserve the explicit
@@ -251,6 +257,27 @@ def image_references(material):
             for tile in getattr(image, "tiles", ()):
                 tile_number = int(tile.number)
                 tile_path = filepath_template.replace("<UDIM>", str(tile_number))
+                packed_tile = packed_tiles.get(tile_number)
+                tile_packed_data_base64 = ""
+                tile_packed_data_error = ""
+                if packed_tile is not None:
+                    try:
+                        payload = bytes(packed_tile.packed_file.data)
+                        if len(payload) > MAX_PACKED_IMAGE_BYTES:
+                            tile_packed_data_error = (
+                                "packed UDIM tiles exceed the %d-byte per-image transport limit"
+                                % MAX_PACKED_IMAGE_BYTES
+                            )
+                        elif packed_tile_bytes + len(payload) > MAX_PACKED_IMAGE_BYTES:
+                            tile_packed_data_error = (
+                                "packed UDIM tiles exceed the %d-byte per-image transport limit"
+                                % MAX_PACKED_IMAGE_BYTES
+                            )
+                        else:
+                            packed_tile_bytes += len(payload)
+                            tile_packed_data_base64 = base64.b64encode(payload).decode("ascii")
+                    except Exception as error:
+                        tile_packed_data_error = "could not read packed UDIM tile bytes: " + str(error)
                 image_tiles.append(
                     {
                         "number": tile_number,
@@ -258,11 +285,16 @@ def image_references(material):
                         "source_file_exists": bool(
                             tile_path and os.path.isfile(tile_path)
                         ),
+                        "packed_data_base64": tile_packed_data_base64,
+                        "packed_data_error": tile_packed_data_error,
                     }
                 )
         packed_data_base64 = ""
         packed_data_error = ""
-        packed_file = getattr(image, "packed_file", None)
+        is_tiled = getattr(image, "source", "") == "TILED"
+        # Blender exposes per-tile packed payloads for UDIM images. Do not
+        # duplicate a tiled image's legacy singular packed_file here.
+        packed_file = None if is_tiled else getattr(image, "packed_file", None)
         if packed_file is not None:
             packed_size = int(getattr(packed_file, "size", len(packed_file.data)))
             if packed_size > MAX_PACKED_IMAGE_BYTES:
@@ -290,11 +322,13 @@ def image_references(material):
                 # still in Blender; classiCAD never interprets Blender paths.
                 "filepath": (bpy.path.abspath(image.filepath)
                              if image.filepath else ""),
-                "packed": packed_file is not None,
+                "packed": packed_file is not None or bool(packed_tiles),
                 "packed_data_base64": packed_data_base64,
                 "packed_data_error": packed_data_error,
                 "source_file_exists": (
-                    True if image.packed_file is not None else
+                    bool(packed_file is not None or any(
+                        tile["source_file_exists"] or tile["packed_data_base64"]
+                        for tile in image_tiles)) or
                     (os.path.isfile(bpy.path.abspath(image.filepath))
                      if image.filepath else False)
                 ),
@@ -601,7 +635,8 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
                     )
                 for image in record["image_textures"]:
                     if (image["image_library_path_exists"] is False and
-                            not image["packed_data_base64"]):
+                            not image["packed_data_base64"] and not any(
+                                tile["packed_data_base64"] for tile in image["tiles"])):
                         add_unsupported(
                             unsupported, item_id,
                             "image_library:" + image["image_name"],
@@ -614,6 +649,14 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
                             "image_texture:" + image["image_name"],
                             image["packed_data_error"],
                         )
+                    for tile in image["tiles"]:
+                        if tile["packed_data_error"]:
+                            add_unsupported(
+                                unsupported, item_id,
+                                "image_texture_tile:%s:%d" %
+                                (image["image_name"], tile["number"]),
+                                tile["packed_data_error"],
+                            )
                     if not image["source_file_exists"]:
                         add_unsupported(
                             unsupported, item_id,
@@ -833,7 +876,8 @@ def extract_surface_patches(obj, scene, materials, unsupported):
                     record["library_path"])
             for image in record["image_textures"]:
                 if (image["image_library_path_exists"] is False and
-                        not image["packed_data_base64"]):
+                        not image["packed_data_base64"] and not any(
+                            tile["packed_data_base64"] for tile in image["tiles"])):
                     add_unsupported(
                         unsupported, source_id,
                         "image_library:" + image["image_name"],
@@ -846,6 +890,14 @@ def extract_surface_patches(obj, scene, materials, unsupported):
                         "image_texture:" + image["image_name"],
                         image["packed_data_error"],
                     )
+                for tile in image["tiles"]:
+                    if tile["packed_data_error"]:
+                        add_unsupported(
+                            unsupported, source_id,
+                            "image_texture_tile:%s:%d" %
+                            (image["image_name"], tile["number"]),
+                            tile["packed_data_error"],
+                        )
                 if not image["source_file_exists"]:
                     add_unsupported(
                         unsupported, source_id,

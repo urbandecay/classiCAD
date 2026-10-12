@@ -31,6 +31,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QSet>
+#include <QCryptographicHash>
 
 #include <algorithm>
 #include <array>
@@ -1181,7 +1182,9 @@ void ViewportRenderer::drawShape(QPainter &painter,
             for (const DocumentImageTextureTile &tile : material.textureImageTiles) {
                 sourceKey += QStringLiteral("|%1:%2:%3")
                     .arg(tile.number).arg(tile.filepath)
-                    .arg(tile.sourceFileExists ? 1 : 0);
+                    .arg(tile.sourceFileExists ? 1 : 0) + QStringLiteral(":") +
+                    QString::fromLatin1(QCryptographicHash::hash(
+                        tile.packedDataBase64.toLatin1(), QCryptographicHash::Sha256).toHex());
             }
             const QString cacheKey = sourceKey + QLatin1Char('|') + alphaMode.toUpper();
             auto found = textureImages.find(cacheKey);
@@ -1194,11 +1197,25 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                                      const QString &packedData) {
                     QImage loaded;
                     if (!packedData.isEmpty()) {
-                        loaded.loadFromData(QByteArray::fromBase64(
-                            packedData.toLatin1()));
-                    } else {
-                        loaded.load(imagePath);
+                        const QByteArray encoded = packedData.toLatin1();
+                        if (encoded.size() <= 44 * 1024 * 1024) {
+                            const QByteArray bytes = QByteArray::fromBase64(
+                                encoded, QByteArray::AbortOnBase64DecodingErrors);
+                            if (!bytes.isEmpty() && bytes.size() <= 32 * 1024 * 1024) {
+                                QBuffer buffer;
+                                buffer.setData(bytes);
+                                if (buffer.open(QIODevice::ReadOnly)) {
+                                    QImageReader reader(&buffer);
+                                    const QSize size = reader.size();
+                                    if (size.isValid() && size.width() <= 16384 &&
+                                        size.height() <= 16384 &&
+                                        static_cast<quint64>(size.width()) * size.height() <=
+                                            67108864ULL) loaded = reader.read();
+                                }
+                            }
+                        }
                     }
+                    if (loaded.isNull() && !imagePath.isEmpty()) loaded.load(imagePath);
                     if (loaded.isNull()) return QImage{};
                     loaded = loaded.convertToFormat(QImage::Format_RGBA8888);
                     for (int y = 0; y < loaded.height(); ++y) {
@@ -1210,13 +1227,35 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     return loaded;
                 };
                 MeshTextureSet loaded;
+                quint64 decodedTilePixels = 0;
+                qsizetype packedTileBytes = 0;
                 if (!packed.isEmpty() || (!path.isEmpty() && QFileInfo(path).isFile())) {
                     loaded.image = loadImage(path, packed);
                 }
                 for (const DocumentImageTextureTile &tile : material.textureImageTiles) {
-                    if (!tile.sourceFileExists || tile.number < 1001 ||
-                        tile.number > 1999 || tile.filepath.isEmpty()) continue;
-                    QImage tileImage = loadImage(tile.filepath, {});
+                    if ((!tile.sourceFileExists && tile.packedDataBase64.isEmpty()) ||
+                        tile.number < 1001 || tile.number > 1999) continue;
+                    QString packedTile = tile.packedDataBase64;
+                    if (!packedTile.isEmpty()) {
+                        const QByteArray encoded = packedTile.toLatin1();
+                        const QByteArray bytes = encoded.size() <= 44 * 1024 * 1024
+                            ? QByteArray::fromBase64(encoded,
+                                  QByteArray::AbortOnBase64DecodingErrors)
+                            : QByteArray{};
+                        if (bytes.isEmpty() || bytes.size() > 32 * 1024 * 1024 ||
+                            packedTileBytes + bytes.size() > 32 * 1024 * 1024) {
+                            packedTile.clear();
+                        } else {
+                            packedTileBytes += bytes.size();
+                        }
+                    }
+                    QImage tileImage = loadImage(tile.filepath, packedTile);
+                    const quint64 tilePixels = static_cast<quint64>(tileImage.width()) *
+                                               tileImage.height();
+                    if (tileImage.isNull() || tileImage.width() > 16384 ||
+                        tileImage.height() > 16384 || tilePixels > 67108864ULL ||
+                        decodedTilePixels + tilePixels > 67108864ULL) continue;
+                    decodedTilePixels += tilePixels;
                     if (!tileImage.isNull()) loaded.tiles.insert(tile.number,
                                                                  std::move(tileImage));
                 }
@@ -2402,35 +2441,65 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
                 QSet<int> loadedTileNumbers;
                 quint64 decodedTilePixels = 0;
+                qsizetype packedTileBytes = 0;
                 for (const DocumentImageTextureTile &tile :
                      material.textureImageTiles) {
-                    if (!tile.sourceFileExists || tile.number < 1001 ||
-                        tile.number > 1999 || tile.filepath.isEmpty() ||
+                    if ((!tile.sourceFileExists && tile.packedDataBase64.isEmpty()) ||
+                        tile.number < 1001 || tile.number > 1999 ||
                         loadedTileNumbers.contains(tile.number)) {
                         continue;
                     }
-                    const QFileInfo info(tile.filepath);
-                    const QByteArray suffix = info.suffix().toLower().toLatin1();
-                    if (!info.isFile() || !allowedFormats.contains(suffix) ||
-                        info.size() <= 0 ||
-                        info.size() > 256LL * 1024LL * 1024LL) {
-                        continue;
+                    QByteArray packedBytes;
+                    if (!tile.packedDataBase64.isEmpty()) {
+                        const QByteArray encoded = tile.packedDataBase64.toLatin1();
+                        if (encoded.size() <= 44 * 1024 * 1024) {
+                            packedBytes = QByteArray::fromBase64(
+                                encoded, QByteArray::AbortOnBase64DecodingErrors);
+                        }
+                        if (packedBytes.size() > 32 * 1024 * 1024 ||
+                            packedTileBytes + packedBytes.size() > 32 * 1024 * 1024) {
+                            packedBytes.clear();
+                        } else if (!packedBytes.isEmpty()) {
+                            packedTileBytes += packedBytes.size();
+                        }
                     }
-                    QImageReader tileReader(info.filePath());
-                    const QSize size = tileReader.size();
-                    if (!size.isValid() || size.width() > 16384 ||
-                        size.height() > 16384 ||
-                        static_cast<quint64>(size.width()) * size.height() >
-                            67108864ULL) {
-                        continue;
+                    QImage tileImage;
+                    if (!packedBytes.isEmpty()) {
+                        QBuffer buffer;
+                        buffer.setData(packedBytes);
+                        if (buffer.open(QIODevice::ReadOnly)) {
+                            QImageReader reader(&buffer);
+                            const QSize size = reader.size();
+                            if (size.isValid() && size.width() <= 16384 &&
+                                size.height() <= 16384 &&
+                                static_cast<quint64>(size.width()) * size.height() <=
+                                    67108864ULL &&
+                                decodedTilePixels + static_cast<quint64>(size.width()) *
+                                    size.height() <= 67108864ULL) {
+                                tileImage = reader.read();
+                            }
+                        }
                     }
-                    const quint64 tilePixels =
-                        static_cast<quint64>(size.width()) * size.height();
+                    if (tileImage.isNull() && tile.sourceFileExists &&
+                        !tile.filepath.isEmpty()) {
+                        const QFileInfo info(tile.filepath);
+                        const QByteArray suffix = info.suffix().toLower().toLatin1();
+                        if (info.isFile() && allowedFormats.contains(suffix) &&
+                            info.size() > 0 && info.size() <= 256LL * 1024LL * 1024LL) {
+                            QImageReader reader(info.filePath());
+                            const QSize size = reader.size();
+                            if (size.isValid() && size.width() <= 16384 &&
+                                size.height() <= 16384 &&
+                                static_cast<quint64>(size.width()) * size.height() <=
+                                    67108864ULL) tileImage = reader.read();
+                        }
+                    }
+                    if (tileImage.isNull()) continue;
+                    const quint64 tilePixels = static_cast<quint64>(tileImage.width()) *
+                                               tileImage.height();
                     if (decodedTilePixels + tilePixels > 67108864ULL) {
                         continue;
                     }
-                    QImage tileImage = tileReader.read();
-                    if (tileImage.isNull()) continue;
                     decodedTilePixels += tilePixels;
                     loadedTileNumbers.insert(tile.number);
                     tileImage = tileImage.convertToFormat(QImage::Format_RGBA8888);

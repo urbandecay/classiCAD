@@ -3231,7 +3231,9 @@ ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTextu
     for (const DocumentImageTextureTile &tile : tiles) {
         const QFileInfo info(tile.filepath);
         cacheStream << qint32(tile.number) << tile.filepath << tile.sourceFileExists
-                    << info.size() << info.lastModified().toMSecsSinceEpoch();
+                    << info.size() << info.lastModified().toMSecsSinceEpoch()
+                    << QCryptographicHash::hash(tile.packedDataBase64.toLatin1(),
+                                                QCryptographicHash::Sha256);
     }
     const QString cacheKey = QStringLiteral("UDIM\n") + QString::fromLatin1(
         QCryptographicHash::hash(cacheMaterial, QCryptographicHash::Sha256).toHex());
@@ -3247,6 +3249,7 @@ ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTextu
     int maximumWidth = 0;
     int maximumHeight = 0;
     quint64 decodedPixelCount = 0;
+    qsizetype packedTileBytes = 0;
     for (const DocumentImageTextureTile &tile : tiles) {
         if (tile.number < 1001 || tile.number > 1999 ||
             seenNumbers.contains(tile.number)) continue;
@@ -3255,17 +3258,46 @@ ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTextu
         const QByteArray suffix = info.suffix().toLower().toLatin1();
         static const QSet<QByteArray> allowedFormats{
             "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp"};
-        if (!tile.sourceFileExists || !info.isFile() ||
-            !allowedFormats.contains(suffix) || info.size() <= 0 ||
-            info.size() > 256LL * 1024LL * 1024LL) continue;
-        QImageReader reader(tile.filepath);
-        const QSize size = reader.size();
-        if (!size.isValid() || size.width() > 16384 || size.height() > 16384 ||
-            static_cast<quint64>(size.width()) * size.height() > 67108864ULL) continue;
-        const quint64 tilePixels = static_cast<quint64>(size.width()) * size.height();
-        if (decodedPixelCount + tilePixels > 67108864ULL) continue;
-        QImage image = reader.read();
+        QByteArray packedBytes;
+        if (!tile.packedDataBase64.isEmpty()) {
+            const QByteArray encoded = tile.packedDataBase64.toLatin1();
+            if (encoded.size() <= 44 * 1024 * 1024) {
+                packedBytes = QByteArray::fromBase64(
+                    encoded, QByteArray::AbortOnBase64DecodingErrors);
+            }
+            if (packedBytes.size() > 32 * 1024 * 1024 ||
+                packedTileBytes + packedBytes.size() > 32 * 1024 * 1024) {
+                packedBytes.clear();
+            } else if (!packedBytes.isEmpty()) {
+                packedTileBytes += packedBytes.size();
+            }
+        }
+        QImage image;
+        if (!packedBytes.isEmpty()) {
+            QBuffer buffer;
+            buffer.setData(packedBytes);
+            if (buffer.open(QIODevice::ReadOnly)) {
+                QImageReader reader(&buffer);
+                const QSize size = reader.size();
+                if (size.isValid() && size.width() <= 16384 && size.height() <= 16384 &&
+                    static_cast<quint64>(size.width()) * size.height() <= 67108864ULL &&
+                    decodedPixelCount + static_cast<quint64>(size.width()) * size.height() <=
+                        67108864ULL) image = reader.read();
+            }
+        }
+        if (image.isNull() && tile.sourceFileExists && info.isFile() &&
+            allowedFormats.contains(suffix) && info.size() > 0 &&
+            info.size() <= 256LL * 1024LL * 1024LL) {
+            QImageReader reader(tile.filepath);
+            const QSize size = reader.size();
+            if (size.isValid() && size.width() <= 16384 && size.height() <= 16384 &&
+                static_cast<quint64>(size.width()) * size.height() <= 67108864ULL &&
+                decodedPixelCount + static_cast<quint64>(size.width()) * size.height() <=
+                    67108864ULL) image = reader.read();
+        }
         if (image.isNull()) continue;
+        const quint64 tilePixels = static_cast<quint64>(image.width()) * image.height();
+        if (decodedPixelCount + tilePixels > 67108864ULL) continue;
         decodedPixelCount += tilePixels;
         image = image.convertToFormat(QImage::Format_RGBA8888)
                      .mirrored(false, true);

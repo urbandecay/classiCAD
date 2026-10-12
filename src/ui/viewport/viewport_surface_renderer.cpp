@@ -5818,7 +5818,6 @@ bool ViewportSurfaceRenderer::draw(
                         ViewportRenderPass::TransparentDepth);
                     passReport->populatedAttachments |=
                         ViewportRenderTargets::Depth |
-                        ViewportRenderTargets::ViewSpaceNormal |
                         ViewportRenderTargets::ObjectId;
                 }
             }

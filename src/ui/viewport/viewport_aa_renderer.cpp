@@ -489,6 +489,7 @@ bool ViewportAaRenderer::initialize()
         uniform sampler2D uSource;
         uniform sampler2D uDepth;
         uniform bool uUseDepthOfField;
+        uniform bool uPerspective;
         uniform vec2 uNearFar;
         uniform float uFocusDistance;
         uniform float uFocalLengthMillimeters;
@@ -511,8 +512,10 @@ bool ViewportAaRenderer::initialize()
         float cocRadius(vec2 uv)
         {
             float depth = texture(uDepth, uv).r;
-            float z = (uNearFar.x * uNearFar.y) /
-                max(uNearFar.y - depth * (uNearFar.y - uNearFar.x), 1e-6);
+            float z = uPerspective
+                ? (uNearFar.x * uNearFar.y) /
+                    max(uNearFar.y - depth * (uNearFar.y - uNearFar.x), 1e-6)
+                : mix(uNearFar.x, uNearFar.y, depth);
             // Blender 5.2.2 converts camera lens/sensor millimeters to scene
             // units; view depth and focus distance remain in scene units.
             const float millimetersToSceneUnits = 0.001;
@@ -641,6 +644,7 @@ bool ViewportAaRenderer::initialize()
         uniform sampler2D uNoise;
         uniform int uStage;
         uniform int uSourceLod;
+        uniform bool uPerspective;
         uniform vec2 uNearFar;
         uniform float uFocusDistance;
         uniform float uFocalLengthMillimeters;
@@ -654,8 +658,10 @@ bool ViewportAaRenderer::initialize()
         layout(location = 1) out vec4 outCoc;
         float cocAtDepth(float depth)
         {
-            float z = (uNearFar.x * uNearFar.y) /
-                max(uNearFar.y - depth * (uNearFar.y - uNearFar.x), 1e-6);
+            float z = uPerspective
+                ? (uNearFar.x * uNearFar.y) /
+                    max(uNearFar.y - depth * (uNearFar.y - uNearFar.x), 1e-6)
+                : mix(uNearFar.x, uNearFar.y, depth);
             // Camera lens and sensor values are stored in millimeters, while
             // depth and focus distance use unscaled Blender scene coordinates.
             const float millimetersToSceneUnits = 0.001;
@@ -1638,6 +1644,8 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
         depthOfFieldProgram_.setUniformValue("uNoise", 4);
         depthOfFieldProgram_.setUniformValue("uStage", stage);
         depthOfFieldProgram_.setUniformValue("uSourceLod", lod);
+        depthOfFieldProgram_.setUniformValue("uPerspective",
+                                            depthOfFieldPerspective_);
         depthOfFieldProgram_.setUniformValue(
             "uNearFar", QVector2D(float(depthOfFieldOptics_.clipStart),
                                   float(depthOfFieldOptics_.clipEnd)));
@@ -1934,7 +1942,8 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
     presentProgram_.setUniformValue("uDepth", 1);
     presentProgram_.setUniformValue(
         "uUseDepthOfField", applyDepthOfField && depthOfFieldEnabled_ &&
-                                depthOfFieldPerspective_ && depthTexture_ != 0);
+                                depthTexture_ != 0);
+    presentProgram_.setUniformValue("uPerspective", depthOfFieldPerspective_);
     presentProgram_.setUniformValue("uEncodeDisplay", encodeDisplay);
     presentProgram_.setUniformValue("uApplyViewTransform", sourceIsSceneLinear_);
     presentProgram_.setUniformValue("uPremultipliedAlpha",
@@ -2037,7 +2046,6 @@ bool ViewportAaRenderer::finishSceneSample()
     const bool accumulate = mode_ != static_cast<int>(ViewportAntiAliasingMode::Off);
     GLuint sampleColorTexture = sceneColorTexture_;
     const bool useDepthOfField = depthOfFieldEnabled_ &&
-                                 depthOfFieldPerspective_ &&
                                  depthTexture_ != 0 &&
                                  depthOfFieldFramebuffer_ != 0;
     if (useDepthOfField) {

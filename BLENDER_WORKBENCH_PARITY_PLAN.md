@@ -48,6 +48,21 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   surface depth when culling is requested. Matched visual comparison remains
   pending.
 
+### GPU Workbench orthographic-view depth of field (2026-10-12)
+
+- GPU depth of field now runs in orthographic views when a scene camera has
+  depth of field enabled and Workbench's depth-of-field shading option is on.
+  Blender 5.2.2 sets `draw_dof` from those two conditions without requiring a
+  perspective viewport in [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L251-L252),
+  then resolves camera-space depth through `drw_depth_screen_to_view` in
+  [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L20-L32).
+  classiCAD had gated DOF on perspective projection and always decoded depth
+  with the perspective formula. Its DOF shader now uses the linear near/far
+  mapping for orthographic depth and retains the perspective formula for
+  perspective views. Pass order remains per sample: Workbench resolves DOF
+  before anti-aliasing, and classiCAD does the same. Matched orthographic-view
+  output comparison remains pending.
+
 ### Workbench Image Texture interpolation (2026-10-12)
 
 - GPU and QPainter Workbench sampling now use nearest only for `Closest` and
@@ -434,6 +449,15 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   composition. Front transparent color is reported as a completed pass and
   current-sample color output; no separate persistent attachment is claimed
   because its OIT result is composited directly into the current sample.
+- Transparent-depth completion now advertises only depth and object-ID
+  attachments. Blender 5.2.2's `TransparentDepthPass` binds depth, empty
+  material/normal attachments, and object ID in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L305-L333).
+  classiCAD likewise disables its normal draw buffer for this pass. View-space
+  normals remain valid only when
+  the earlier opaque effects prepass populated them. This prevents the AA
+  attachment-validity record from claiming an uninitialized normal texture in
+  transparent-only scenes without a cavity, outline, or front-object prepass.
 - Mixed-alpha Solid scenes now request the shared outline prepass. The shared
   object/outline IDs are used only when regular transparent depth and any
   required front transparent depth merge both completed; sorted or failed

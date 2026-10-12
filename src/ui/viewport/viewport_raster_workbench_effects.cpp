@@ -1020,9 +1020,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 ? edgeAmount / static_cast<float>(requested) * ridge
                 : 0.0f;
             ridgeResponse = saturate(ridgeResponse * invCount *
-                                     curvatureRidge * ridge);
+                                     curvatureRidge);
             valleyResponse = saturate(valleyResponse * invCount *
-                                      curvatureValley * valley);
+                                      curvatureValley);
             factors[y * width + x] = std::clamp(
                 (1.0f - cavityAmount) * (1.0f + edgeAmount) *
                     (1.0f + ridgeResponse + valleyResponse),

@@ -269,7 +269,9 @@ bool ViewportGpuSurface::renderOffscreen(
                 const float z = source[column];
                 if (!std::isfinite(z) || z >= 1.0f || nearClip <= 0.0f ||
                     farClip <= nearClip) {
-                    destination[column] = 0.0f;
+                    // Blender Workbench's Z pass uses 1e10 for background
+                    // pixels (and pixels without a valid depth sample).
+                    destination[column] = 1.0e10f;
                     continue;
                 }
                 const float normalizedDepth = std::clamp(z, 0.0f, 1.0f);

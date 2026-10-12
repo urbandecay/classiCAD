@@ -9700,6 +9700,14 @@ protected:
                     sceneStroke.color =
                         viewportShadingSettings_.themeWireColor;
                 }
+                // Blender's visible Overlay wire pass writes depth. Limit
+                // that behavior to committed Solid CAD wires; guides,
+                // component overlays, and transform previews remain no-write.
+                sceneStroke.writeDepth =
+                    viewportShadingSettings_.mode ==
+                        ViewportShadingMode::Solid &&
+                    !scalePreview && !rotatePreview &&
+                    sceneStroke.pointDiameter <= 0.0f;
                 if (controlPointsVisible_ && controlGuide.shape != nullptr) {
                     gpuStrokes.append(std::move(controlGuide));
                 }

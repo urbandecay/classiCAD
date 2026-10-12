@@ -68,6 +68,9 @@ struct ViewportSceneStroke {
     float pointDiameter = 0.0f;
     bool dashed = false;
     bool pointOutline = false;
+    // Opt-in for committed Solid-mode CAD wires that participate in the
+    // depth-writing Overlay wire pass. Transient/edit overlays stay disabled.
+    bool writeDepth = false;
     // Determines which Smooth Wires preference controls coverage. This is
     // independent from editModeWire, which selects the geometry/color style.
     ViewportSmoothWireCategory smoothWireCategory =

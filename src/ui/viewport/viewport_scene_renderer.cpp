@@ -1110,6 +1110,7 @@ bool ViewportSceneRenderer::draw(
         if (range.second == 0) {
             continue;
         }
+        glDepthMask(depthTest && stroke.writeDepth ? GL_TRUE : GL_FALSE);
         QOpenGLShaderProgram *nextProgram = stroke.pointDiameter > 0.0f
                                                 ? &pointProgram_ : &program_;
         if (nextProgram != boundProgram) {
@@ -1186,6 +1187,7 @@ bool ViewportSceneRenderer::draw(
                         next.width != stroke.width || nextRange.first != range.first + count ||
                         next.editModeWire != stroke.editModeWire ||
                         next.smoothWireCategory != stroke.smoothWireCategory ||
+                        next.writeDepth != stroke.writeDepth ||
                         QVector3D(next.worldOffset.x, next.worldOffset.y, next.worldOffset.z) != offset ||
                         viewportSceneStrokePattern(next, widthPixels).style !=
                             ViewportSceneLineStyle::Solid) break;

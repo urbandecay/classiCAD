@@ -427,6 +427,7 @@ int main(int argc, char *argv[])
             bool gpuVolumeDrawSucceeded = false;
             bool gpuVolumePassReported = false;
             int gpuVolumeChangedPixels = 0;
+            bool gpuLowDensityVolumePreserved = false;
             const QSize glSize(640, 480);
             ViewportTransform gpuTransform;
             gpuTransform.zoom() = 17.28;
@@ -718,6 +719,47 @@ int main(int argc, char *argv[])
                     }
                     gpuVolumePassReported = volumePassReport.passCompleted(
                         ViewportRenderPass::Volume);
+                    ScalarVolume3D lowDensityVolume = scalarVolume;
+                    lowDensityVolume.activeRecords[0].value = 1.0e-9f;
+                    ViewportRenderObject lowDensityVolumeObject = volumeObject;
+                    lowDensityVolumeObject.shape.scalarVolume = lowDensityVolume;
+                    QOpenGLFramebufferObjectFormat floatFramebufferFormat;
+                    floatFramebufferFormat.setAttachment(
+                        QOpenGLFramebufferObject::CombinedDepthStencil);
+                    floatFramebufferFormat.setInternalTextureFormat(GL_RGBA16F);
+                    QOpenGLFramebufferObject floatFramebuffer(
+                        glSize, floatFramebufferFormat);
+                    if (floatFramebuffer.isValid()) {
+                        floatFramebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        functions.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        const bool lowDensityDrawSucceeded =
+                            gpuSurfaceRenderer.draw(
+                                {lowDensityVolumeObject}, gpuTransform,
+                                glSize, 1.0, volumeShading, false, true,
+                                false, &volumeTargets, nullptr, true);
+                        QVector<GLfloat> lowDensityPixels(
+                            glSize.width() * glSize.height() * 4);
+                        functions.glReadPixels(
+                            0, 0, glSize.width(), glSize.height(), GL_RGBA,
+                            GL_FLOAT, lowDensityPixels.data());
+                        GLfloat maximumLowDensityAlpha = 0.0f;
+                        for (qsizetype pixel = 0;
+                             pixel < qsizetype(glSize.width()) *
+                                         glSize.height();
+                             ++pixel) {
+                            maximumLowDensityAlpha = std::max(
+                                maximumLowDensityAlpha,
+                                lowDensityPixels[pixel * 4 + 3]);
+                        }
+                        gpuLowDensityVolumePreserved =
+                            lowDensityDrawSucceeded &&
+                            maximumLowDensityAlpha > 0.0f;
+                        floatFramebuffer.release();
+                    }
                     functions.glDeleteTextures(1, &sceneDepthTexture);
                     framebuffer.release();
                 }
@@ -1009,6 +1051,8 @@ int main(int argc, char *argv[])
                             "a bounded scalar volume must complete the GPU volume pass");
             passed &= check(gpuVolumeChangedPixels > 100,
                             "a bounded scalar volume must change offscreen framebuffer pixels");
+            passed &= check(gpuLowDensityVolumePreserved,
+                            "low-density volume extinction must remain nonzero in the float target");
         }
     }
 

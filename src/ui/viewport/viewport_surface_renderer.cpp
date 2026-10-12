@@ -1613,9 +1613,11 @@ bool ViewportSurfaceRenderer::initialize()
                 if (any(lessThan(coordinate, vec3(0.0))) ||
                     any(greaterThan(coordinate, vec3(1.0)))) discard;
                 float density = max(sampleDensity(coordinate), 0.0) * uDensityScale;
-                float opacity = 1.0 - exp(-density * uSliceStepWorld);
+                float extinction = max(density, 1.0e-4);
+                float opacity = 1.0 - exp(-extinction * uSliceStepWorld);
+                float scatteringScale = density / extinction;
                 fragmentColor = resolveVolumeColor(
-                    uBaseColor * opacity * 0.25, opacity);
+                    uBaseColor * (opacity * scatteringScale * 0.25), opacity);
                 return;
             }
             float nearT, farT;
@@ -1641,10 +1643,12 @@ bool ViewportSurfaceRenderer::initialize()
                     transmittance <= 0.01) break;
                 float t = nearT + (float(i) + noise) * dt;
                 float density = max(sampleDensity(texStart + texRay * t), 0.0) * uDensityScale;
-                if (density <= 1.0e-7) continue;
-                float stepTransmittance = exp(-density * rayStepWorld);
+                float extinction = max(density, 1.0e-4);
+                float stepTransmittance = exp(-extinction * rayStepWorld);
                 float stepOpacity = 1.0 - stepTransmittance;
-                radiance += transmittance * uBaseColor * (stepOpacity * 0.25);
+                float scatteringScale = density / extinction;
+                radiance += transmittance * uBaseColor *
+                            (stepOpacity * scatteringScale * 0.25);
                 transmittance *= stepTransmittance;
             }
             fragmentColor = resolveVolumeColor(radiance, 1.0 - transmittance);

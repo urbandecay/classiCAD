@@ -1049,6 +1049,12 @@ depth domain. Visual depth comparison remains open.
   view-ray correction. `BKE_volume_density_scale` is reproduced for OBJECT and
   WORLD render spaces. The renderer's dense proxy is capped at 512 voxels per
   axis and 16M voxels; the ray loop is capped at 2,560 samples.
+- Ray-march and slice integration also match Blender's extinction floor:
+  extinction is `max(density, 1e-4)` while scattering remains proportional to
+  density, so premultiplied radiance includes `density / extinction`. A float
+  RGBA16F offscreen contract renders an effective density below the former
+  cutoff and confirms it contributes nonzero alpha. This follows Blender's
+  pinned [`workbench_volume.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_volume.bsl.hh#L225-L250).
 - A direct `QOpenGLContext` + `QOffscreenSurface` + FBO contract renders a
   synthetic active volume, confirms the `Volume` pass is reported, and checks
   that more than 100 pixels change. This does not launch the classiCAD window.

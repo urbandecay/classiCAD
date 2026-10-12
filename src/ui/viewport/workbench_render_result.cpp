@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <vector>
@@ -74,6 +75,150 @@ void applyImageWriterSettings(QImageWriter *writer,
         else if (codec == QLatin1String("PACKBITS"))
             writer->setCompression(2);
     }
+}
+
+bool saveRadianceHdr(const QString &path, const QVector<float> &rgba,
+                     const QSize &size, QString *errorMessage)
+{
+    const qsizetype pixelCount = qsizetype(size.width()) * size.height();
+    if (size.isEmpty() || pixelCount <= 0 ||
+        pixelCount > std::numeric_limits<qsizetype>::max() / 4 ||
+        rgba.size() != pixelCount * 4) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral(
+                "The scene-linear Combined pass is empty or has invalid dimensions");
+        }
+        return false;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        if (errorMessage != nullptr) *errorMessage = file.errorString();
+        return false;
+    }
+    QByteArray header("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y ");
+    header += QByteArray::number(size.height());
+    header += " +X ";
+    header += QByteArray::number(size.width());
+    header += '\n';
+    if (file.write(header) != header.size()) {
+        if (errorMessage != nullptr) *errorMessage = file.errorString();
+        return false;
+    }
+
+    struct RgbePixel {
+        std::uint8_t channel[4] = {0, 0, 0, 0};
+    };
+    const auto encodePixel = [](const float *source) {
+        RgbePixel result;
+        const auto nonnegativeFinite = [](float value) {
+            return std::isfinite(value) ? std::max(value, 0.0f) : 0.0f;
+        };
+        float red = nonnegativeFinite(source[0]);
+        float green = nonnegativeFinite(source[1]);
+        float blue = nonnegativeFinite(source[2]);
+        const float maximumRepresentable = std::nextafter(
+            std::ldexp(1.0f, 127), 0.0f);
+        red = std::min(red, maximumRepresentable);
+        green = std::min(green, maximumRepresentable);
+        blue = std::min(blue, maximumRepresentable);
+        const float maximum = std::max({red, green, blue});
+        if (maximum < 1.0e-32f) return result;
+
+        // RGBE's exponent byte tops out at 255, representing values below
+        // 2^127. Saturate larger float inputs to that representable range.
+        int exponent = 0;
+        const float mantissa = std::frexp(maximum, &exponent);
+        const float scale = mantissa * 256.0f / maximum;
+        const auto toByte = [scale, &nonnegativeFinite](float value) {
+            return static_cast<std::uint8_t>(std::clamp(
+                int(nonnegativeFinite(value) * scale), 0, 255));
+        };
+        result.channel[0] = toByte(red);
+        result.channel[1] = toByte(green);
+        result.channel[2] = toByte(blue);
+        result.channel[3] = static_cast<std::uint8_t>(exponent + 128);
+        return result;
+    };
+
+    const int width = size.width();
+    const bool useRle = width >= 8 && width <= 32767;
+    std::vector<RgbePixel> scanline(static_cast<size_t>(width));
+    std::vector<std::uint8_t> channel(static_cast<size_t>(width));
+    for (int y = 0; y < size.height(); ++y) {
+        const float *source = rgba.constData() + qsizetype(y) * width * 4;
+        for (int x = 0; x < width; ++x) {
+            scanline[size_t(x)] = encodePixel(source + size_t(x) * 4);
+        }
+        if (!useRle) {
+            const char *bytes = reinterpret_cast<const char *>(scanline.data());
+            if (file.write(bytes, qint64(scanline.size() * sizeof(RgbePixel))) !=
+                qint64(scanline.size() * sizeof(RgbePixel))) {
+                if (errorMessage != nullptr) *errorMessage = file.errorString();
+                return false;
+            }
+            continue;
+        }
+
+        const char scanlineHeader[4] = {
+            2, 2, char((width >> 8) & 0xff), char(width & 0xff)};
+        if (file.write(scanlineHeader, sizeof(scanlineHeader)) !=
+            qint64(sizeof(scanlineHeader))) {
+            if (errorMessage != nullptr) *errorMessage = file.errorString();
+            return false;
+        }
+        for (int component = 0; component < 4; ++component) {
+            for (int x = 0; x < width; ++x) {
+                channel[size_t(x)] = scanline[size_t(x)].channel[component];
+            }
+            int position = 0;
+            while (position < width) {
+                int runLength = 1;
+                while (position + runLength < width && runLength < 127 &&
+                       channel[size_t(position + runLength)] ==
+                           channel[size_t(position)]) {
+                    ++runLength;
+                }
+                if (runLength >= 4) {
+                    const char packet[2] = {
+                        char(128 + runLength), char(channel[size_t(position)])};
+                    if (file.write(packet, sizeof(packet)) !=
+                        qint64(sizeof(packet))) {
+                        if (errorMessage != nullptr)
+                            *errorMessage = file.errorString();
+                        return false;
+                    }
+                    position += runLength;
+                    continue;
+                }
+
+                const int literalStart = position;
+                position += runLength;
+                while (position < width && position - literalStart < 128) {
+                    runLength = 1;
+                    while (position + runLength < width && runLength < 127 &&
+                           channel[size_t(position + runLength)] ==
+                               channel[size_t(position)]) {
+                        ++runLength;
+                    }
+                    if (runLength >= 4) break;
+                    position += std::min(runLength,
+                                         128 - (position - literalStart));
+                }
+                const char count = char(position - literalStart);
+                if (file.write(&count, 1) != 1 ||
+                    file.write(reinterpret_cast<const char *>(
+                                   channel.data() + literalStart),
+                               position - literalStart) != position - literalStart) {
+                    if (errorMessage != nullptr)
+                        *errorMessage = file.errorString();
+                    return false;
+                }
+            }
+        }
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
 }
 
 void applyPixelAspectMetadata(QImage *image, qreal aspectX, qreal aspectY)
@@ -262,6 +407,10 @@ QString WorkbenchRenderResult::combinedFileExtension() const
         return openExrWriterAvailable() ? QStringLiteral("exr")
                                         : QStringLiteral("png");
     }
+    if (blenderImageFormat.compare(QLatin1String("HDR"),
+                                   Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("hdr");
+    }
     QString format = qtWriterFormat(blenderImageFormat);
     const QList<QByteArray> supported = QImageWriter::supportedImageFormats();
     const QByteArray requested = format.toLatin1();
@@ -303,6 +452,11 @@ bool WorkbenchRenderResult::saveCombinedImage(
                                    Qt::CaseInsensitive) == 0 &&
         openExrWriterAvailable()) {
         return saveCombinedOpenExr(path, errorMessage);
+    }
+    if (blenderImageFormat.compare(QLatin1String("HDR"),
+                                   Qt::CaseInsensitive) == 0) {
+        return saveRadianceHdr(path, sceneLinearRgba, sceneLinearSize,
+                               errorMessage);
     }
     QString writerFormat = qtWriterFormat(blenderImageFormat);
     const QString extension = combinedFileExtension();

@@ -6761,9 +6761,11 @@ public:
         result.colorManagementApplied =
             applyImportedSceneColorManagement(document_, &settings);
         const bool captureSceneLinearCombined =
-            result.blenderImageFormat.compare(QLatin1String("OPEN_EXR"),
-                                               Qt::CaseInsensitive) == 0 &&
-            WorkbenchRenderResult::openExrWriterAvailable();
+            result.blenderImageFormat.compare(QLatin1String("HDR"),
+                                               Qt::CaseInsensitive) == 0 ||
+            (result.blenderImageFormat.compare(QLatin1String("OPEN_EXR"),
+                                                Qt::CaseInsensitive) == 0 &&
+             WorkbenchRenderResult::openExrWriterAvailable());
         const bool transparentFilm = result.transparentFilm;
         const bool useSceneWorldBackground =
             !transparentFilm && result.renderUsesSceneWorldBackground &&

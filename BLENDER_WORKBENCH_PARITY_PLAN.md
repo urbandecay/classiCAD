@@ -648,8 +648,12 @@ This checklist preserves the specific differences reported in the initial compar
 - Background import audit found the `THEME`/`VIEWPORT`/`WORLD` gates mapped
   to Theme/Custom/World as Blender's enum defines them. The custom color is
   imported from scene-linear RGB and converted for classiCAD's background
-  output; World uses the retained scene-linear World color. No additional
-  mismatch was found in these background choices.
+  output; World uses the retained scene-linear World color. A missing World
+  now falls back to the Theme background, matching Blender 5.2.2's
+  `overlay_background.hh`: its World branch requires an assigned scene World,
+  otherwise drawing reaches the theme background-type switch. Returning an
+  invalid color delegates to classiCAD's existing Theme rendering path. See
+  the pinned [overlay background source](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_background.hh#L50-L77).
 - **Object-alpha gate correction (2026-10-12):** Blender Workbench carries
   `ob.color.a` into the transparent pass for Object and Random color modes.
   Material, Attribute, and Texture modes instead take alpha from their

@@ -180,9 +180,9 @@ QColor viewportShadingBackgroundColor(
                 linearToSrgb(worldColorSceneLinear->y()),
                 linearToSrgb(worldColorSceneLinear->z()));
         }
-        // Preserve the existing neutral fallback when no imported World is
-        // available.
-        return QColor(48, 48, 48);
+        // Blender's Solid viewport falls back to its theme background when
+        // the selected World background has no scene World assigned.
+        return {};
     }
     return {};
 }

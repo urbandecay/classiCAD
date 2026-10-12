@@ -145,6 +145,18 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   [`overlay_wireframe_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/shaders/overlay_wireframe_frag.glsl#L400-L407).
 - The C++ build passes; matched viewport image comparison remains pending.
 
+### QPainter cavity silhouette samples (2026-10-12)
+
+- The QPainter Solid cavity path now follows Blender's background-neighbor
+  rule: it reconstructs the offset sample on the receiver-depth camera plane
+  and offsets it by the configured cavity distance before evaluating its
+  signed displacement response. Blender 5.2.2 performs this for background
+  depth reads in
+  [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L535-L547).
+- Empty samples outside the image and the software rasterizer's discrete
+  neighborhood remain approximate; matched QPainter/Blender image comparison
+  has not been performed.
+
 ### Transparent depth and Blender Object In Front (2026-10-12)
 
 - Blender 5.2.2 stages opaque `OBJECT_IN_FRONT` geometry against scene depth,

@@ -1053,6 +1053,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         static_cast<float>(settings.curvatureRidgeFactor));
     const float curvatureValley = std::max(0.0f,
         static_cast<float>(settings.curvatureValleyFactor));
+    const Point3D viewUp = transform.viewUp();
+    const Point3D viewRight{
+        viewUp.y * towardCamera.z - viewUp.z * towardCamera.y,
+        viewUp.z * towardCamera.x - viewUp.x * towardCamera.z,
+        viewUp.x * towardCamera.y - viewUp.y * towardCamera.x};
+    const float cavityDistance = std::max(
+        0.0f, static_cast<float>(settings.cavityDistance));
 
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
@@ -1063,6 +1070,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             float ridgeResponse = 0.0f;
             float valleyResponse = 0.0f;
             int validNeighbors = 0;
+            bool hadBackgroundCavitySample = false;
             const float noiseAngle = rasterCavityNoise(x, y, 0) *
                                      6.28318530718f;
             const float rotationX = std::cos(noiseAngle);
@@ -1090,7 +1098,55 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const int sy = y + qRound(jitteredY * sampleDistance * step);
                 if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
                 const RasterSample &neighbor = opaqueSamples[sy * width + sx];
-                if (neighbor.objectId == 0) continue;
+                if (neighbor.objectId == 0) {
+                    if (ssao) {
+                        // Blender treats a background depth read as a point
+                        // at the receiver's depth, then moves it farther from
+                        // the camera by cavity_distance. Reconstruct that
+                        // point on the camera-facing plane through this pixel.
+                        QPointF planeOffset;
+                        const WorkPlaneFrame viewPlane =
+                            makeWorkPlaneFrameFromNormal(
+                                {center.position.x(), center.position.y(),
+                                 center.position.z()},
+                                towardCamera, viewRight);
+                        const QPointF sampleScreen(
+                            (sx + 0.5) / dpr, (sy + 0.5) / dpr);
+                        if (isValidWorkPlaneFrame(viewPlane) &&
+                            transform.screenToWorkPlane(
+                                sampleScreen, viewportSize, viewPlane,
+                                &planeOffset)) {
+                            const Point3D sampleOnPlane =
+                                workPlaneFramePointToWorld(planeOffset,
+                                                           viewPlane);
+                            const QVector3D backgroundPosition(
+                                static_cast<float>(sampleOnPlane.x -
+                                    towardCamera.x * cavityDistance),
+                                static_cast<float>(sampleOnPlane.y -
+                                    towardCamera.y * cavityDistance),
+                                static_cast<float>(sampleOnPlane.z -
+                                    towardCamera.z * cavityDistance));
+                            const QVector3D direction = backgroundPosition -
+                                                       center.position;
+                            const float distance = direction.length();
+                            const float cavityDot = QVector3D::dotProduct(
+                                direction, center.normal);
+                            const float edgeDot = -cavityDot;
+                            const float bias = 0.05f * distance + 0.0001f;
+                            const float distanceAttenuation = 1.0f /
+                                std::max(distance * (1.0f + distance *
+                                    distance * attenuation), 1.0e-8f);
+                            if (cavityDot > -bias)
+                                cavityAmount += cavityDot *
+                                                distanceAttenuation;
+                            if (edgeDot > bias)
+                                edgeAmount += edgeDot *
+                                              distanceAttenuation;
+                            hadBackgroundCavitySample = true;
+                        }
+                    }
+                    continue;
+                }
                 ++validNeighbors;
                 const float delta = neighbor.depth - center.depth;
                 if (ssao) {
@@ -1098,8 +1154,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     // rigid view rotation preserves vector length and dot
                     // products, so the retained world positions/normals give
                     // the same geometric response without inverse projection.
-                    const QVector3D direction =
-                        neighbor.position - center.position;
+                    const QVector3D direction = neighbor.position -
+                                                center.position;
                     const float distance = direction.length();
                     const float cavityDot = QVector3D::dotProduct(
                         direction, center.normal);
@@ -1124,8 +1180,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         ridgeResponse += 0.25f;
                 }
             }
-            if (validNeighbors == 0) continue;
-            const float invCount = 1.0f / static_cast<float>(validNeighbors);
+            if (validNeighbors == 0 && !hadBackgroundCavitySample) continue;
+            const float invCount = validNeighbors > 0
+                                       ? 1.0f / static_cast<float>(validNeighbors)
+                                       : 0.0f;
             cavityAmount = ssao
                 ? saturate(cavityAmount / static_cast<float>(requested) * valley)
                 : 0.0f;

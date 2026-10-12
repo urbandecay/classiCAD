@@ -809,7 +809,13 @@ bool ViewportAaRenderer::initialize()
                                                                   radius * centerCoc + 0.5,
                                                                   sampleRadius);
                         if (weight > 0.0) {
-                            float lod = clamp(log2(max(sampleRadius, 1.0)) - 2.0, 0.0, 2.0);
+                            // Match Workbench blur1's CoC-dependent mip
+                            // selection. Texture levels below zero resolve
+                            // to the base level, so clamp the logarithm there.
+                            float lod = max(log2(clamp(
+                                (sampleRadius + min(sampleRadius, centerCoc)) *
+                                    0.5 - 21.0,
+                                0.0, 16.0) * 0.25), 0.0);
                             sum += textureLod(uSource, uv, lod) * weight;
                             total += weight;
                         }

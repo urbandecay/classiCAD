@@ -119,13 +119,19 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   references: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L98-L100)
   and [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L24-L32).
 - The GPU path has Blender's CoC-aware three-level downsample, half-resolution
-  ring gather, 3x3 median, and resolve. Its per-pixel gather jitter now follows
+  ring gather, 3x3 median, and resolve. The 49 shader-generated square-ring
+  samples follow `DofPass::setup_samples`' perimeter enumeration and
+  square-to-circle radius mapping. Per-sample mip selection now follows the
+  pinned gather equation: `log2(clamp((coc + min(coc, max_radius)) * 0.5 -
+  21.0, 0.0, 16.0) * 0.25)`, with negative LOD clamped to the base level as
+  the texture sampler does. Its per-pixel gather jitter now follows
   pinned `get_random_vector`: it combines the second channel of the shared
   64x64 EEVEE blue-noise LUT with interleaved gradient noise, applies
   `sqrt(ign)`, scales the offset by the maximum CoC, and uses Blender's
   full-resolution pixel scale for the half-resolution gather. The sample
-  pattern is no longer rotated by per-pixel noise. The ring sample layout,
-  gather weights, and LOD selection still need source-by-source comparison.
+  pattern is no longer rotated by per-pixel noise. The per-sample CoC weight
+  and smoothstep interval also match the pinned shader. Aperture shaping still
+  needs source-by-source comparison.
   Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap
   full-resolution gather and has no median pass. Image comparison remains
   open. Pinned gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L783-L899); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.

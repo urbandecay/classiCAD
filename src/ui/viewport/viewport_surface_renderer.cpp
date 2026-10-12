@@ -2427,7 +2427,7 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
                                    targets.frontOutlineIdTexture != 0
                                ? targets.frontOutlineIdTexture
                                : workbenchOutlineIdTexture_, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, targets.depthTexture, 0);
     const GLenum drawAttachments[] = {
         GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
@@ -2653,9 +2653,7 @@ bool ViewportSurfaceRenderer::ensureTransparencyFramebuffer(
                            GL_TEXTURE_2D, accumulationTexture, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
                            GL_TEXTURE_2D, weightTexture, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER,
-                           frontDomain ? GL_DEPTH_ATTACHMENT
-                                       : GL_DEPTH_STENCIL_ATTACHMENT,
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, depthStencilTexture, 0);
     const GLenum drawAttachments[] = {GL_COLOR_ATTACHMENT0,
                                       GL_COLOR_ATTACHMENT1};
@@ -4463,6 +4461,7 @@ bool ViewportSurfaceRenderer::draw(
         !settings.xrayEnabled() && !previewOverlay && !selectionOverlay &&
         clearDepth;
     bool shadowVolumesAvailable = false;
+    bool frontShadowVolumesAvailable = false;
     bool sceneDepthPrepassReady = sharedPrepassReady;
     if (shadowMapRequested && !shadowVolumeRangeIndices.isEmpty()) {
         GLint stencilBits = 0;
@@ -4552,12 +4551,40 @@ bool ViewportSurfaceRenderer::draw(
         }
     }
 
+    if (shadowMapRequested && sharedTargets != nullptr &&
+        sharedTargets->frontFramebuffer != 0 &&
+        !frontOpaqueRangeIndices.isEmpty() &&
+        !shadowVolumeRangeIndices.isEmpty() && frontDomainReady) {
+        GLint previousDrawFramebuffer = 0;
+        GLint previousReadFramebuffer = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, sharedTargets->frontFramebuffer);
+        GLint frontStencilBits = 0;
+        glGetIntegerv(GL_STENCIL_BITS, &frontStencilBits);
+        if (frontStencilBits >= 8) {
+            QVector<int> frontOpaqueCasters = opaqueRangeIndices;
+            frontOpaqueCasters += frontOpaqueRangeIndices;
+            frontShadowVolumesAvailable = renderShadowVolumes(
+                workbenchShadowDirectionWorld(settings),
+                viewportViewProjection(transform, viewportSize), viewportSize,
+                devicePixelRatio, shadowVolumeRangeIndices,
+                frontOpaqueCasters);
+        }
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                          static_cast<GLuint>(previousDrawFramebuffer));
+        glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                          static_cast<GLuint>(previousReadFramebuffer));
+    }
+
     bool shadowMapAvailable = false;
     if (shadowMapRequested) {
         // The volume pass already covers every supported caster, including
         // transparent ones. In mixed-alpha scenes the map is only for ranges
         // whose topology could not enter that pass.
-        const bool fallbackOnly = shadowVolumesAvailable;
+        const bool fallbackOnly = shadowVolumesAvailable &&
+            (frontOpaqueRangeIndices.isEmpty() ||
+             frontShadowVolumesAvailable);
         const bool hasFallbackCasters = std::any_of(
             ranges_.cbegin(), ranges_.cend(),
             [fallbackOnly](const DrawRange &range) {
@@ -4569,7 +4596,8 @@ bool ViewportSurfaceRenderer::draw(
                 transform, viewportSize, settings, fallbackOnly);
         }
     }
-    const bool useShadows = shadowVolumesAvailable || shadowMapAvailable;
+    const bool useShadows = shadowVolumesAvailable ||
+                            frontShadowVolumesAvailable || shadowMapAvailable;
     if (sceneDepthPrepassReady) {
         glDepthFunc(GL_LEQUAL);
     }
@@ -5439,17 +5467,55 @@ bool ViewportSurfaceRenderer::draw(
                 return;
             }
             GLint previousFramebuffer = 0;
+            GLint previousReadFramebuffer = 0;
             GLint previousViewport[4] = {};
             GLint previousDepthFunction = GL_LESS;
+            GLint previousStencilFunc = GL_ALWAYS;
+            GLint previousStencilRef = 0;
+            GLint previousStencilValueMask = -1;
+            GLint previousStencilWriteMask = -1;
+            GLint previousStencilFail = GL_KEEP;
+            GLint previousStencilDepthFail = GL_KEEP;
+            GLint previousStencilDepthPass = GL_KEEP;
+            GLint previousStencilBackFunc = GL_ALWAYS;
+            GLint previousStencilBackRef = 0;
+            GLint previousStencilBackValueMask = -1;
+            GLint previousStencilBackWriteMask = -1;
+            GLint previousStencilBackFail = GL_KEEP;
+            GLint previousStencilBackDepthFail = GL_KEEP;
+            GLint previousStencilBackDepthPass = GL_KEEP;
             GLboolean previousDepthMask = GL_TRUE;
             GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE,
                                                GL_TRUE, GL_TRUE};
             const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
             const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+            const GLboolean previousStencilTest = glIsEnabled(GL_STENCIL_TEST);
             glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+            glGetIntegerv(GL_STENCIL_FUNC, &previousStencilFunc);
+            glGetIntegerv(GL_STENCIL_REF, &previousStencilRef);
+            glGetIntegerv(GL_STENCIL_VALUE_MASK, &previousStencilValueMask);
+            glGetIntegerv(GL_STENCIL_WRITEMASK, &previousStencilWriteMask);
+            glGetIntegerv(GL_STENCIL_FAIL, &previousStencilFail);
+            glGetIntegerv(GL_STENCIL_PASS_DEPTH_FAIL,
+                          &previousStencilDepthFail);
+            glGetIntegerv(GL_STENCIL_PASS_DEPTH_PASS,
+                          &previousStencilDepthPass);
+            glGetIntegerv(GL_STENCIL_BACK_FUNC, &previousStencilBackFunc);
+            glGetIntegerv(GL_STENCIL_BACK_REF, &previousStencilBackRef);
+            glGetIntegerv(GL_STENCIL_BACK_VALUE_MASK,
+                          &previousStencilBackValueMask);
+            glGetIntegerv(GL_STENCIL_BACK_WRITEMASK,
+                          &previousStencilBackWriteMask);
+            glGetIntegerv(GL_STENCIL_BACK_FAIL, &previousStencilBackFail);
+            glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_FAIL,
+                          &previousStencilBackDepthFail);
+            glGetIntegerv(GL_STENCIL_BACK_PASS_DEPTH_PASS,
+                          &previousStencilBackDepthPass);
             glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
             glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
             glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousFramebuffer);
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                          &previousReadFramebuffer);
             glGetIntegerv(GL_VIEWPORT, previousViewport);
             glBindFramebuffer(GL_FRAMEBUFFER, sharedTargets->frontFramebuffer);
             glDrawBuffer(GL_COLOR_ATTACHMENT0);
@@ -5460,12 +5526,29 @@ bool ViewportSurfaceRenderer::draw(
             glDepthMask(GL_TRUE);
             glDisable(GL_BLEND);
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-            for (int index : frontOpaqueRangeIndices) {
-                const DrawRange &range = ranges_[index];
-                drawRange(range, false, true, range.first, range.count);
+            glStencilMask(0u);
+            glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+            const auto drawFrontColorPass = [&](bool volumeShadowed) {
+                for (int index : frontOpaqueRangeIndices) {
+                    const DrawRange &range = ranges_[index];
+                    drawRange(range, volumeShadowed, true, range.first,
+                              range.count);
+                }
+            };
+            if (frontShadowVolumesAvailable) {
+                glEnable(GL_STENCIL_TEST);
+                glStencilFunc(GL_EQUAL, 0, 0xFFu);
+                drawFrontColorPass(false);
+                glStencilFunc(GL_NOTEQUAL, 0, 0xFFu);
+                drawFrontColorPass(true);
+            } else {
+                glDisable(GL_STENCIL_TEST);
+                drawFrontColorPass(false);
             }
-            glBindFramebuffer(GL_FRAMEBUFFER,
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
                               static_cast<GLuint>(previousFramebuffer));
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(previousReadFramebuffer));
             glViewport(previousViewport[0], previousViewport[1],
                        previousViewport[2], previousViewport[3]);
             glDepthFunc(static_cast<GLenum>(previousDepthFunction));
@@ -5476,6 +5559,28 @@ bool ViewportSurfaceRenderer::draw(
             else glDisable(GL_DEPTH_TEST);
             if (previousBlend) glEnable(GL_BLEND);
             else glDisable(GL_BLEND);
+            if (previousStencilTest) glEnable(GL_STENCIL_TEST);
+            else glDisable(GL_STENCIL_TEST);
+            glStencilFuncSeparate(GL_FRONT,
+                                  static_cast<GLenum>(previousStencilFunc),
+                                  previousStencilRef,
+                                  static_cast<GLuint>(previousStencilValueMask));
+            glStencilMaskSeparate(GL_FRONT,
+                                  static_cast<GLuint>(previousStencilWriteMask));
+            glStencilOpSeparate(GL_FRONT,
+                                static_cast<GLenum>(previousStencilFail),
+                                static_cast<GLenum>(previousStencilDepthFail),
+                                static_cast<GLenum>(previousStencilDepthPass));
+            glStencilFuncSeparate(
+                GL_BACK, static_cast<GLenum>(previousStencilBackFunc),
+                previousStencilBackRef,
+                static_cast<GLuint>(previousStencilBackValueMask));
+            glStencilMaskSeparate(
+                GL_BACK, static_cast<GLuint>(previousStencilBackWriteMask));
+            glStencilOpSeparate(
+                GL_BACK, static_cast<GLenum>(previousStencilBackFail),
+                static_cast<GLenum>(previousStencilBackDepthFail),
+                static_cast<GLenum>(previousStencilBackDepthPass));
             if (!mergeWorkbenchFrontAttachments(*sharedTargets, true)) {
                 qWarning() << "Workbench front color merge failed";
             } else if (passReport != nullptr) {

@@ -1077,9 +1077,9 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenTextures(1, &frontDepthTexture_);
     glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8,
                  pixelSize.width(), pixelSize.height(), 0,
-                 GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glGenTextures(1, &frontViewSpaceNormalTexture_);
@@ -1104,7 +1104,7 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
                            GL_TEXTURE_2D, frontObjectIdTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3,
                            GL_TEXTURE_2D, frontOutlineIdTexture_, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, frontDepthTexture_, 0);
     const GLenum frontDrawBuffers[] = {GL_COLOR_ATTACHMENT0,
                                        GL_COLOR_ATTACHMENT1,
@@ -1523,6 +1523,8 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     glClearBufferuiv(GL_COLOR, 2, frontClearId);
     glClearBufferuiv(GL_COLOR, 3, frontClearId);
     glClearBufferfv(GL_DEPTH, 0, frontClearDepth);
+    const GLint frontClearStencil = 0;
+    glClearBufferiv(GL_STENCIL, 0, &frontClearStencil);
     glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
     sceneSampleActive_ = true;
     return true;

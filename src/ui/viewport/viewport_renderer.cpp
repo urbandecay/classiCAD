@@ -1000,6 +1000,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             qreal depth = 0.0;
             QImage texture;
             std::array<QPointF, 3> uvs{};
+            std::array<qreal, 3> reciprocalDepths{};
         };
         QVector<MeshTriangle> triangles;
         const PolygonMesh3D &mesh = shape.polygonMesh;
@@ -1246,7 +1247,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         triangleUvs[corner] = QPointF(uv.x(), 1.0 - uv.y());
                     }
                 }
-                for (const Point3D &point : vertices) {
+                for (int corner = 0; corner < 3; ++corner) {
+                    const Point3D &point = vertices[corner];
                     QPointF screen;
                     if (!transform_.worldPointToScreen(point, viewportSize, &screen)) {
                         projected = false;
@@ -1255,6 +1257,17 @@ void ViewportRenderer::drawShape(QPainter &painter,
                     triangle.points.append(screen);
                     triangle.depth +=
                         transform_.worldDirectionToView(point).towardCamera / 3.0;
+                    if (transform_.isPerspectiveEnabled()) {
+                        const Point3D camera = transform_.cameraPosition(viewportSize);
+                        const Point3D view = transform_.viewDirection();
+                        const qreal cameraDepth = (point.x - camera.x) * view.x +
+                            (point.y - camera.y) * view.y +
+                            (point.z - camera.z) * view.z;
+                        triangle.reciprocalDepths[corner] =
+                            1.0 / std::max<qreal>(cameraDepth, 1.0e-9);
+                    } else {
+                        triangle.reciprocalDepths[corner] = 1.0;
+                    }
                 }
                 if (projected) {
                     triangle.color = faceColor;
@@ -1287,29 +1300,65 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          });
         painter.save();
         painter.setPen(selected ? QPen(curveColor, 1.5) : Qt::NoPen);
+        const auto drawTexturePatch = [&](const QImage &texture,
+                                          const std::array<QPointF, 3> &uvs,
+                                          const std::array<QPointF, 3> &points) {
+            const QPolygonF source{uvs[0], uvs[1], uvs[2]};
+            const QPolygonF screen{points[0], points[1], points[2]};
+            QPolygonF sourceQuad = source;
+            QPolygonF screenQuad = screen;
+            sourceQuad.append(source[0] + source[2] - source[1]);
+            screenQuad.append(screen[0] + screen[2] - screen[1]);
+            QTransform map;
+            if (!QTransform::quadToQuad(sourceQuad, screenQuad, map)) return false;
+            QBrush textureBrush(texture);
+            QTransform brushTransform;
+            brushTransform.scale(1.0 / texture.width(), 1.0 / texture.height());
+            textureBrush.setTransform(brushTransform);
+            painter.save();
+            painter.setTransform(map, true);
+            painter.setBrush(textureBrush);
+            painter.drawPolygon(source);
+            painter.restore();
+            return true;
+        };
         for (const MeshTriangle &triangle : triangles) {
             if (!triangle.texture.isNull() && triangle.points.size() == 3) {
-                const QPolygonF source{triangle.uvs[0], triangle.uvs[1],
-                                       triangle.uvs[2]};
-                const QPolygonF screen = triangle.points;
-                QPolygonF sourceQuad = source;
-                QPolygonF screenQuad = screen;
-                sourceQuad.append(source[0] + source[2] - source[1]);
-                screenQuad.append(screen[0] + screen[2] - screen[1]);
-                QTransform map;
-                if (QTransform::quadToQuad(sourceQuad, screenQuad, map)) {
-                    QBrush textureBrush(triangle.texture);
-                    QTransform brushTransform;
-                    brushTransform.scale(1.0 / triangle.texture.width(),
-                                         1.0 / triangle.texture.height());
-                    textureBrush.setTransform(brushTransform);
-                    QPolygonF uvTriangle = source;
-                    painter.save();
-                    painter.setTransform(map, true);
-                    painter.setBrush(textureBrush);
-                    painter.drawPolygon(uvTriangle);
-                    painter.restore();
-                } else {
+                constexpr int subdivisions = 8;
+                bool mapped = true;
+                const auto patchVertex = [&](int i, int j) {
+                    const qreal b = qreal(i) / subdivisions;
+                    const qreal c = qreal(j) / subdivisions;
+                    const std::array<qreal, 3> weights{1.0 - b - c, b, c};
+                    QPointF uv;
+                    QPointF point;
+                    qreal denominator = 0.0;
+                    for (int k = 0; k < 3; ++k) {
+                        const qreal corrected = weights[k] * triangle.reciprocalDepths[k];
+                        denominator += corrected;
+                        uv += triangle.uvs[k] * corrected;
+                        point += triangle.points[k] * weights[k];
+                    }
+                    if (std::abs(denominator) > 1.0e-12) uv /= denominator;
+                    return std::pair<QPointF, QPointF>{uv, point};
+                };
+                for (int i = 0; i < subdivisions && mapped; ++i) {
+                    for (int j = 0; j < subdivisions - i && mapped; ++j) {
+                        const auto a = patchVertex(i, j);
+                        const auto b = patchVertex(i + 1, j);
+                        const auto c = patchVertex(i, j + 1);
+                        mapped = drawTexturePatch(triangle.texture,
+                            {a.first, b.first, c.first},
+                            {a.second, b.second, c.second});
+                        if (mapped && i + j < subdivisions - 1) {
+                            const auto d = patchVertex(i + 1, j + 1);
+                            mapped = drawTexturePatch(triangle.texture,
+                                {b.first, d.first, c.first},
+                                {b.second, d.second, c.second});
+                        }
+                    }
+                }
+                if (!mapped) {
                     painter.setBrush(triangle.color);
                     painter.drawPolygon(triangle.points);
                 }

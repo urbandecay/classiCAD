@@ -86,10 +86,29 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   depth, and uses stencil classification. See the pinned
   [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L306-L369).
 - classiCAD currently writes transparent depth, normal, and object-ID data into
-  one shared attachment set with a single depth test. It has no matching
-  per-object in-front state, second depth attachment, or stencil classification,
-  so this Blender behavior needs a scene/render-target contract before it can
-  be ported correctly. The ordinary transparent depth test is source-matched.
+  one shared attachment set with a single depth test. The import transport does
+  not extract `Object.show_in_front`, `SceneObject` has no corresponding state,
+  and `ViewportRenderObject` cannot carry it to the surface renderer. The
+  ordinary transparent depth test is source-matched.
+- A safe port requires a coordinated contract: add `show_in_front` (or a
+  deliberately named `inFront`) to each supported Blender object record in
+  `blender_project_adapter.py`, document it in
+  `BLENDER_SCENE_EXTRACT_FORMAT.md`, parse it in every supported object parser
+  in `blender_project_file.cpp`, persist it in `document_serializer.cpp`, and
+  carry it through `SceneObject` and `ViewportRenderObject` into the transparent
+  depth pass. Collection membership and CAD layer visibility remain separate
+  and must not be changed by this flag.
+- The rendering half is not a field-only fix: `renderWorkbenchTransparentDepthPass`
+  currently draws all transparent ranges into the one shared Workbench effect
+  framebuffer/depth domain. Blender's pass needs in-front classification and
+  depth merging (including stencil semantics) so transparent in-front objects
+  and ordinary transparent objects update the correct depth/normal/object-ID
+  samples. `ViewportRenderTargets` and effect framebuffer setup therefore need
+  an explicit second depth-domain contract, plus coordinated shader/pass changes
+  in `viewport_surface_renderer.cpp` and the shared-target producer. Do not
+  enable partial in-front behavior until that contract is implemented; simply
+  sorting or disabling depth tests would produce incorrect occlusion and
+  effect inputs.
 
 ### GPU Workbench two-blade aperture (2026-10-12)
 
@@ -106,10 +125,14 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   scale. This matches Blender 5.2.2 for odd-sized render targets. Pinned
   references: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L98-L100)
   and [`workbench_effect_dof_resolve_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_resolve_frag.glsl#L24-L32).
-- The rest of the GPU gather remains approximate: Blender uses a CoC-aware
-  three-level downsample, jittered ring gather, and 3x3 median before resolve;
-  classiCAD currently uses a fixed 12-tap disk gather and full-resolution
-  median cleanup. Image comparison remains open.
+- The GPU path has Blender's CoC-aware three-level downsample, half-resolution
+  ring gather, 3x3 median, and resolve. Its gather ring samples now use
+  Workbench's square-to-circle mapping and rotate per pixel with an AA-sample
+  offset. The jitter uses a deterministic shader hash rather than Blender's
+  blue-noise texture, and exact gather weights/texture sampling still need
+  source-by-source comparison. The QPainter fallback remains a fixed 12-tap
+  full-resolution gather and has no median pass. Image comparison remains
+  open. Pinned gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L783-L899); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
 
 ### Background regression correction
 

@@ -631,6 +631,7 @@ bool ViewportAaRenderer::initialize()
         uniform int uApertureBlades;
         uniform float uApertureRotation;
         uniform float uApertureRatio;
+        uniform float uJitterOffset;
         layout(location = 0) out vec4 outColor;
         layout(location = 1) out vec4 outCoc;
         float cocAtDepth(float depth)
@@ -674,8 +675,25 @@ bool ViewportAaRenderer::initialize()
             }
             // Blender stores the aperture ratio as an X scale reciprocal:
             // sample.x = r * cos(T) * (1.0 / aperture_ratio).
-            disk.x /= max(uApertureRatio, 0.01);
-            return disk;
+            float angle = atan(disk.y, disk.x) + uApertureRotation;
+            float radius = length(disk);
+            return vec2(cos(angle) * radius / max(uApertureRatio, 0.01),
+                        sin(angle) * radius);
+        }
+        // Blender Workbench's square_to_circle mapping, applied to the
+        // concentric square rings used by DofPass::setup_samples.
+        vec2 squareToCircle(vec2 p)
+        {
+            float r;
+            float angle;
+            if (p.x > -p.y) {
+                if (p.x > p.y) { r = p.x; angle = 0.78539816339 * (p.y / p.x); }
+                else { r = p.y; angle = 0.78539816339 * (2.0 - p.x / p.y); }
+            } else {
+                if (p.x < p.y) { r = -p.x; angle = 0.78539816339 * (4.0 + p.y / p.x); }
+                else { r = -p.y; angle = p.y != 0.0 ? 0.78539816339 * (6.0 - p.x / p.y) : 0.0; }
+            }
+            return r * vec2(cos(angle), sin(angle));
         }
         vec4 weightedFour(vec4 a, vec4 b, vec4 c, vec4 d,
                           vec4 weights)
@@ -752,13 +770,18 @@ bool ViewportAaRenderer::initialize()
                 vec4 sum = vec4(0.0);
                 float total = 0.0;
                 ivec2 size = textureSize(uSource, 0);
+                // Blender rotates the deterministic sample set with a
+                // per-pixel noise value plus the current AA sample offset.
+                float noise = fract(sin(dot(gl_FragCoord.xy,
+                                            vec2(12.9898, 78.233))) * 43758.5453);
+                float angle = 6.28318530718 * fract(noise + uJitterOffset);
+                mat2 jitter = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
                 for (int ring = 0; ring <= 3; ++ring) {
                   for (int y = -ring; y <= ring; ++y) {
                     for (int x = -ring; x <= ring; ++x) {
                         if (max(abs(x), abs(y)) != ring) continue;
                         vec2 square = vec2(x, y) / 3.0;
-                        vec2 disk = square * sqrt(max(vec2(0.0), 1.0 - square.yx * square.yx * 0.5));
-                        disk = shapeAperture(disk);
+                        vec2 disk = shapeAperture(jitter * squareToCircle(square));
                         float radius = length(disk);
                         vec2 uv = clamp(vUv + disk * centerCoc / vec2(size),
                                         0.5 / vec2(size), 1.0 - 0.5 / vec2(size));
@@ -1477,6 +1500,10 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
             float(depthOfFieldOptics_.apertureRotationRadians));
         depthOfFieldProgram_.setUniformValue("uApertureRatio",
             float(depthOfFieldOptics_.apertureRatio));
+        depthOfFieldProgram_.setUniformValue(
+            "uJitterOffset",
+            float(accumulatedSampleCount_) /
+                float(std::max(requestedSampleCount_, 1)));
         glDrawArrays(GL_TRIANGLES, 0, 3);
     };
 

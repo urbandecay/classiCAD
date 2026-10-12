@@ -116,48 +116,68 @@ inline const QVector<float> &workbenchAgxDisplayLutData()
     return values;
 }
 
-inline QVector3D workbenchSceneLinearToAgxSrgb(const QVector3D &color)
+inline QVector3D workbenchSceneLinearToAgxSrgb(
+    const QVector3D &inputColor,
+    int colorTransform = 0,
+    qreal exposure = 0.0,
+    qreal gamma = 1.0)
 {
-    const QVector<float> &lut = workbenchAgxDisplayLutData();
-    if (lut.isEmpty()) {
-        return workbenchSceneLinearToSrgb(color);
+    const float exposureScale = std::exp2(static_cast<float>(exposure));
+    const QVector3D color(std::max(0.0f, inputColor.x()) * exposureScale,
+                          std::max(0.0f, inputColor.y()) * exposureScale,
+                          std::max(0.0f, inputColor.z()) * exposureScale);
+    QVector3D displayColor;
+    if (colorTransform == 1) {
+        displayColor = workbenchSceneLinearToSrgb(color);
+    } else {
+        const QVector<float> &lut = workbenchAgxDisplayLutData();
+        if (lut.isEmpty()) {
+            displayColor = workbenchSceneLinearToSrgb(color);
+        } else {
+            const float maximumIndex = workbenchAgxDisplayLutSize - 1.0f;
+            const auto coordinate = [maximumIndex](float value) {
+                return std::clamp(value, 0.0f,
+                                  workbenchAgxDisplayLutMaximum) *
+                       maximumIndex / workbenchAgxDisplayLutMaximum;
+            };
+            const float rx = coordinate(color.x());
+            const float gy = coordinate(color.y());
+            const float bz = coordinate(color.z());
+            const int x0 = static_cast<int>(rx);
+            const int y0 = static_cast<int>(gy);
+            const int z0 = static_cast<int>(bz);
+            const int x1 = std::min(x0 + 1, workbenchAgxDisplayLutSize - 1);
+            const int y1 = std::min(y0 + 1, workbenchAgxDisplayLutSize - 1);
+            const int z1 = std::min(z0 + 1, workbenchAgxDisplayLutSize - 1);
+            const float tx = rx - x0;
+            const float ty = gy - y0;
+            const float tz = bz - z0;
+            const auto sample = [&lut](int red, int green, int blue) {
+                const qsizetype index =
+                    ((static_cast<qsizetype>(blue) *
+                          workbenchAgxDisplayLutSize + green) *
+                         workbenchAgxDisplayLutSize + red) * 3;
+                return QVector3D(lut[index], lut[index + 1], lut[index + 2]);
+            };
+            const auto interpolate = [](const QVector3D &first,
+                                        const QVector3D &second,
+                                        float fraction) {
+                return first * (1.0f - fraction) + second * fraction;
+            };
+            const QVector3D lowerBlue = interpolate(
+                interpolate(sample(x0, y0, z0), sample(x1, y0, z0), tx),
+                interpolate(sample(x0, y1, z0), sample(x1, y1, z0), tx), ty);
+            const QVector3D upperBlue = interpolate(
+                interpolate(sample(x0, y0, z1), sample(x1, y0, z1), tx),
+                interpolate(sample(x0, y1, z1), sample(x1, y1, z1), tx), ty);
+            displayColor = interpolate(lowerBlue, upperBlue, tz);
+        }
     }
-
-    const float maximumIndex = workbenchAgxDisplayLutSize - 1.0f;
-    const auto coordinate = [maximumIndex](float value) {
-        return std::clamp(value, 0.0f, workbenchAgxDisplayLutMaximum) *
-               maximumIndex / workbenchAgxDisplayLutMaximum;
-    };
-    const float rx = coordinate(color.x());
-    const float gy = coordinate(color.y());
-    const float bz = coordinate(color.z());
-    const int x0 = static_cast<int>(rx);
-    const int y0 = static_cast<int>(gy);
-    const int z0 = static_cast<int>(bz);
-    const int x1 = std::min(x0 + 1, workbenchAgxDisplayLutSize - 1);
-    const int y1 = std::min(y0 + 1, workbenchAgxDisplayLutSize - 1);
-    const int z1 = std::min(z0 + 1, workbenchAgxDisplayLutSize - 1);
-    const float tx = rx - x0;
-    const float ty = gy - y0;
-    const float tz = bz - z0;
-    const auto sample = [&lut](int red, int green, int blue) {
-        const qsizetype index =
-            ((static_cast<qsizetype>(blue) * workbenchAgxDisplayLutSize +
-              green) * workbenchAgxDisplayLutSize + red) * 3;
-        return QVector3D(lut[index], lut[index + 1], lut[index + 2]);
-    };
-    const auto interpolate = [](const QVector3D &first,
-                                const QVector3D &second,
-                                float fraction) {
-        return first * (1.0f - fraction) + second * fraction;
-    };
-    const QVector3D lowerBlue = interpolate(
-        interpolate(sample(x0, y0, z0), sample(x1, y0, z0), tx),
-        interpolate(sample(x0, y1, z0), sample(x1, y1, z0), tx), ty);
-    const QVector3D upperBlue = interpolate(
-        interpolate(sample(x0, y0, z1), sample(x1, y0, z1), tx),
-        interpolate(sample(x0, y1, z1), sample(x1, y1, z1), tx), ty);
-    return interpolate(lowerBlue, upperBlue, tz);
+    const float exponent = 1.0f / static_cast<float>(
+        std::max<qreal>(gamma, 1.0e-6));
+    return {std::pow(std::max(0.0f, displayColor.x()), exponent),
+            std::pow(std::max(0.0f, displayColor.y()), exponent),
+            std::pow(std::max(0.0f, displayColor.z()), exponent)};
 }
 
 inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()

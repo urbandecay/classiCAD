@@ -924,6 +924,54 @@ bool importedSceneCameraTransform(const Document &document,
     return true;
 }
 
+bool applyImportedSceneColorManagement(
+    const Document &document, ViewportShadingSettings *settings)
+{
+    if (settings == nullptr) return false;
+    const QString activeLayer = document.settings().activeViewLayerKey;
+    for (const QJsonValue &sceneValue :
+         document.settings().importedBlenderScenes) {
+        const QJsonObject scene = sceneValue.toObject();
+        bool matchesActiveLayer = activeLayer.isEmpty();
+        if (!activeLayer.isEmpty()) {
+            for (const QJsonValue &layerValue :
+                 scene.value(QStringLiteral("view_layers")).toArray()) {
+                if (layerValue.toObject().value(QStringLiteral("key")).toString() ==
+                    activeLayer) {
+                    matchesActiveLayer = true;
+                    break;
+                }
+            }
+        }
+        if (!matchesActiveLayer) continue;
+        const QJsonObject colorManagement = scene.value(
+            QStringLiteral("color_management")).toObject();
+        const QString displayDevice = colorManagement.value(
+            QStringLiteral("display_device")).toString();
+        const QString transform = colorManagement.value(
+            QStringLiteral("view_transform")).toString();
+        const QString look = colorManagement.value(
+            QStringLiteral("look")).toString();
+        const qreal exposure = colorManagement.value(
+            QStringLiteral("exposure")).toDouble();
+        const qreal gamma = colorManagement.value(
+            QStringLiteral("gamma")).toDouble(1.0);
+        if (displayDevice != QLatin1String("sRGB") ||
+            look != QLatin1String("None") ||
+            (transform != QLatin1String("AgX") &&
+             transform != QLatin1String("Standard")) ||
+            !std::isfinite(exposure) || !std::isfinite(gamma) || gamma <= 0.0) {
+            return false;
+        }
+        settings->colorTransform = transform == QLatin1String("Standard")
+                                       ? 1 : 0;
+        settings->colorExposure = std::clamp(exposure, -32.0, 32.0);
+        settings->colorGamma = std::clamp(gamma, 0.000001, 5.0);
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 struct TransientPreviewStroke {
@@ -6528,18 +6576,7 @@ public:
         }
         ViewportShadingSettings settings = viewportShadingSettings_;
         result.colorManagementApplied =
-            result.colorDisplayDevice == QLatin1String("sRGB") &&
-            result.colorLook == QLatin1String("None") &&
-            (result.viewTransform == QLatin1String("AgX") ||
-             result.viewTransform == QLatin1String("Standard"));
-        if (result.colorManagementApplied) {
-            settings.colorTransform =
-                result.viewTransform == QLatin1String("Standard") ? 1 : 0;
-            settings.colorExposure = std::clamp(result.colorExposure,
-                                                -32.0, 32.0);
-            settings.colorGamma = std::clamp(result.colorGamma,
-                                             0.000001, 5.0);
-        }
+            applyImportedSceneColorManagement(document_, &settings);
         gpuSurface_->renderOffscreen(
             outputSize,
             [this, &renderFrame, &strokes, &settings, &renderCamera](
@@ -8206,10 +8243,13 @@ protected:
         const qreal baseGridStep = documentGridSpacingInMillimeters(document_.settings());
         viewportRenderer_.setGridBaseStep(baseGridStep);
         viewportRenderer_.setGridAppearance(gridAppearance_);
-        viewportRenderer_.setShadingSettings(viewportShadingSettings_);
         viewportRenderer_.setSmoothWirePreferences(
             smoothWiresOverlay_, smoothWiresEditMode_);
         const ViewportRenderFrame renderFrame = viewportRenderFrame();
+        ViewportShadingSettings renderShadingSettings =
+            viewportShadingSettings_;
+        applyImportedSceneColorManagement(document_, &renderShadingSettings);
+        viewportRenderer_.setShadingSettings(renderShadingSettings);
         const QVector<ViewportRenderObject> &visibleShapes = renderFrame.objects;
         QHash<quint64, QSet<int>> weldedVertexSelections;
         if (componentSelectionMode_ == ComponentSelectionMode::Vertex) {
@@ -10318,7 +10358,7 @@ protected:
                 }
 
                 const QByteArray historyKey = viewportAaHistoryKey(
-                    renderFrame, viewportShadingSettings_, viewportAaMode_,
+                    renderFrame, renderShadingSettings, viewportAaMode_,
                     devicePixelRatioF(), sceneContentStateKey);
                 aaRenderer->setDepthOfField(
                     viewportShadingSettings_.depthOfField,
@@ -10375,7 +10415,7 @@ protected:
                     surfaceRenderer->draw(
                         surfaceDrawObjects, sceneCamera,
                         renderFrame.viewportSize, devicePixelRatioF(),
-                        viewportShadingSettings_, false, true, false,
+                        renderShadingSettings, false, true, false,
                         aaRenderer != nullptr ? &aaRenderer->targets() : nullptr,
                         &populatedAttachments);
                 if (aaRenderer != nullptr && surfacesDrawn) {
@@ -10406,7 +10446,7 @@ protected:
                                       overlayCamera,
                                       renderFrame.viewportSize,
                                       devicePixelRatioF(),
-                                      viewportShadingSettings_,
+                                      renderShadingSettings,
                                       false,
                                       false,
                                       true);
@@ -10476,7 +10516,7 @@ protected:
                                      overlayCamera,
                                      renderFrame.viewportSize,
                                      devicePixelRatioF(),
-                                     viewportShadingSettings_,
+                                     renderShadingSettings,
                                      true,
                                      false);
             }
@@ -10487,7 +10527,7 @@ protected:
                     overlayCamera,
                     renderFrame.viewportSize,
                     devicePixelRatioF(),
-                    viewportShadingSettings_,
+                    renderShadingSettings,
                     false,
                     false);
             }
@@ -10497,7 +10537,7 @@ protected:
                                       overlayCamera,
                                       renderFrame.viewportSize,
                                       devicePixelRatioF(),
-                                      viewportShadingSettings_,
+                                      renderShadingSettings,
                                       false,
                                       false,
                                       true);
@@ -10643,7 +10683,7 @@ protected:
             applyRasterWorkbenchCavity(
                 &committedSceneLayer, visibleShapes, viewportTransform_,
                 renderFrame.viewportSize, devicePixelRatioF(),
-                viewportShadingSettings_);
+                renderShadingSettings);
             fillViewportBackground(
                 painter, rect(),
                 viewportShadingBackgroundColor(viewportShadingSettings_));

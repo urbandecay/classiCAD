@@ -914,6 +914,13 @@ bool importedSceneCameraTransform(const Document &document,
         state.orbitPivot = cameraPosition;
     }
     cameraTransform->setCameraState(state);
+    const qreal blenderViewFactor = fitVertical
+        ? outputSize.height() * pixelAspectY / pixelAspectX
+        : outputSize.width();
+    const qreal shiftX = cameraNumber("shift_x", 0.0);
+    const qreal shiftY = cameraNumber("shift_y", 0.0);
+    cameraTransform->setProjectionShiftPixels(
+        QPointF(shiftX * blenderViewFactor, shiftY * blenderViewFactor));
     return true;
 }
 

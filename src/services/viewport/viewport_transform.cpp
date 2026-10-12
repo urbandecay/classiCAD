@@ -401,8 +401,10 @@ bool ViewportTransform::screenToWorkPlane(
         viewportSize, cameraPreferences_.focalLengthMillimeters,
         cameraPreferences_.sensorWidthMillimeters);
 
-    const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0;
-    const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y();
+    const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0 +
+                         projectionShiftPixels_.x();
+    const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y() +
+                         projectionShiftPixels_.y();
     const qreal viewScale = viewScalePixelsPerWorldUnit(viewportSize);
     Vec3 rayOrigin;
     Vec3 rayDirection;
@@ -477,8 +479,10 @@ bool ViewportTransform::screenToWorkPlaneUnclipped(
 
     const CameraBasis basis = cameraBasis(orientation_);
     const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
-    const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0;
-    const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y();
+    const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0 +
+                         projectionShiftPixels_.x();
+    const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y() +
+                         projectionShiftPixels_.y();
     const qreal viewScale = std::max<qreal>(
         viewScalePixelsPerWorldUnit(viewportSize), 1.0e-15);
     Vec3 rayOrigin;
@@ -534,8 +538,10 @@ bool ViewportTransform::screenToWorldAxis(const QPointF &screenPosition,
     }
     const CameraBasis basis = cameraBasis(orientation_);
     const Vec3 target = cameraTarget(basis, pan_, orbitPivot_);
-    const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0;
-    const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y();
+    const qreal pixelX = screenPosition.x() - viewportSize.width() / 2.0 +
+                         projectionShiftPixels_.x();
+    const qreal pixelY = viewportSize.height() / 2.0 - screenPosition.y() +
+                         projectionShiftPixels_.y();
     Vec3 rayOrigin;
     Vec3 rayDirection;
     if (perspective_) {
@@ -629,8 +635,10 @@ bool ViewportTransform::worldPointToScreen(const Point3D &worldPosition,
             return false;
         }
     }
-    *screenPosition = QPointF(viewportSize.width() / 2.0 + viewX * scale,
-                              viewportSize.height() / 2.0 - viewY * scale);
+    *screenPosition = QPointF(viewportSize.width() / 2.0 + viewX * scale -
+                                  projectionShiftPixels_.x(),
+                              viewportSize.height() / 2.0 - viewY * scale +
+                                  projectionShiftPixels_.y());
     return std::isfinite(screenPosition->x()) &&
            std::isfinite(screenPosition->y());
 }
@@ -663,8 +671,10 @@ bool ViewportTransform::worldPointToScreenUnclipped(
         }
         scale = focalLength / depth;
     }
-    *screenPosition = QPointF(viewportSize.width() / 2.0 + viewX * scale,
-                              viewportSize.height() / 2.0 - viewY * scale);
+    *screenPosition = QPointF(viewportSize.width() / 2.0 + viewX * scale -
+                                  projectionShiftPixels_.x(),
+                              viewportSize.height() / 2.0 - viewY * scale +
+                                  projectionShiftPixels_.y());
     return std::isfinite(screenPosition->x()) &&
            std::isfinite(screenPosition->y());
 }
@@ -784,6 +794,12 @@ bool ViewportTransform::setCameraPreferences(
         minimumViewDistance(gridSpacing_),
         maximumOrthographicViewDistance(cameraPreferences_, gridSpacing_));
     return true;
+}
+
+void ViewportTransform::setProjectionShiftPixels(const QPointF &shift)
+{
+    if (!std::isfinite(shift.x()) || !std::isfinite(shift.y())) return;
+    projectionShiftPixels_ = shift;
 }
 
 void ViewportTransform::setGridSpacing(qreal gridSpacing)

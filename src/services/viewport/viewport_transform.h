@@ -176,6 +176,9 @@ public:
     Point3D cameraPosition(const QSize &viewportSize) const;
     ViewportCameraPreferences cameraPreferences() const;
     bool setCameraPreferences(const ViewportCameraPreferences &preferences);
+    // Off-axis camera-frustum offset in render pixels. Positive values follow
+    // Blender's camera shift convention (the image content moves left/down).
+    void setProjectionShiftPixels(const QPointF &shift);
     void setGridSpacing(qreal gridSpacing);
     ViewportNavigationPreferences navigationPreferences() const;
     void setNavigationPreferences(const ViewportNavigationPreferences &preferences);
@@ -217,6 +220,7 @@ private:
     qreal gridViewDistance_ = 60.0;
     qreal gridSpacing_ = 1.0;
     ViewportCameraPreferences cameraPreferences_;
+    QPointF projectionShiftPixels_;
     ViewportNavigationPreferences navigationPreferences_;
     bool orbitPivotLocked_ = false;
     Point3D trackballStartVector_{};

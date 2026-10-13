@@ -317,6 +317,18 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
 
 } // namespace
 
+float rasterWorkbenchCameraDepth(const QVector3D &position,
+                                 const Point3D &cameraPosition,
+                                 const Point3D &viewDirection,
+                                 bool perspective) noexcept
+{
+    const float projectedDepth = static_cast<float>(
+        (position.x() - cameraPosition.x) * viewDirection.x +
+        (position.y() - cameraPosition.y) * viewDirection.y +
+        (position.z() - cameraPosition.z) * viewDirection.z);
+    return perspective ? -projectedDepth : projectedDepth;
+}
+
 bool compositeRasterWorkbenchSurfaces(
     QImage *colorImage,
     const QVector<ViewportRenderObject> &objects,
@@ -902,10 +914,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 valid = valid && transform.worldPointToScreenUnclipped(
                                      point, viewportSize, &screen[corner]);
                 if (perspective) {
-                    const qreal cameraDepth =
+                    const qreal cameraDepth = -(
                         (point.x - camera.x) * towardCamera.x +
                         (point.y - camera.y) * towardCamera.y +
-                        (point.z - camera.z) * towardCamera.z;
+                        (point.z - camera.z) * towardCamera.z);
                     reciprocalDepth[corner] =
                         1.0 / std::max<qreal>(cameraDepth, 1.0e-9);
                 }
@@ -976,10 +988,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         world[0] * static_cast<float>(positionWeight0) +
                         world[1] * static_cast<float>(positionWeight1) +
                         world[2] * static_cast<float>(positionWeight2);
-                    const float z = static_cast<float>(
-                        interpolatedPosition.x() * towardCamera.x +
-                        interpolatedPosition.y() * towardCamera.y +
-                        interpolatedPosition.z() * towardCamera.z);
+                    const float z = rasterWorkbenchCameraDepth(
+                        interpolatedPosition, camera, towardCamera, perspective);
                     const QVector3D interpolatedNormal = normalized(
                         normal[0] * static_cast<float>(positionWeight0) +
                         normal[1] * static_cast<float>(positionWeight1) +

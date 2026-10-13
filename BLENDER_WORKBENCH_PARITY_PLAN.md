@@ -97,6 +97,22 @@ including orthographic and free-view projections. The QPainter approximation
 remains perspective-only. Any later statement below that says GPU DOF is off
 in ordinary free views or orthographic views is superseded by this correction.
 
+### QPainter Workbench DOF camera-relative depth (2026-10-12)
+
+- QPainter's perspective DOF samples now measure depth from the active view
+  camera, using the same camera-relative view-direction projection already
+  used for perspective-correct interpolation. The prior sample buffer stored
+  the absolute world projection while the CoC formula compared it with the
+  camera's focus distance. Translating the camera and scene together along
+  the view direction could therefore change blur despite preserving their
+  relative optical distances. The orthographic software path retains its
+  existing world-projection depth; QPainter DOF remains perspective-gated.
+- The offscreen viewport-render contract checks that a point's depth remains
+  eight scene units when the point and camera receive the same world
+  translation. This validates the depth metric used by the software effects,
+  not a matched visual DOF render. Aperture gather quality, orthographic QPainter
+  DOF, temporal jitter, and Blender image comparison remain open.
+
 ### Workbench Image Texture interpolation (2026-10-12)
 
 - GPU and QPainter Workbench sampling now use nearest only for `Closest` and
@@ -918,7 +934,7 @@ Status: partially implemented. GPU cavity/curvature and several existing effects
 - The GPU stencil-volume path now also accepts imported `PolygonMesh3D` objects only when their transformed triangulated surface is finite, nondegenerate, closed, consistently oriented (each indexed edge has exactly two oppositely directed uses), has one connected cycle in each vertex link, and every connected component has positive nonzero signed volume. Every face material range for that object must be opaque under the active Workbench alpha source. Loose vertices, open boundaries, duplicate/overused edges, pinched/disconnected vertex links, inconsistent winding, degenerate or inward/zero-volume components, mixed-alpha objects, and failed near-plane safety checks stay on the existing depth-map or depth-fail fallback. The volume topology is stored once on the first per-face draw range while every face range is marked as belonging to that caster, preventing fallback-map double drawing after a successful volume pass. This extends Blender's evaluated-mesh topology dispatch without making tessellation authoritative; runtime comparison remains open.
 - Keep the GPU depth-map fallback for unsupported/nonmanifold topology, nonplanar materialized solid faces, missing stencil buffers, and ranges that cannot use the volume path. The fallback rasterizes selected triangle ranges into a fixed 1024×1024 light-depth map. In Texture mode, polygon mesh casters with active UVs and per-face images, plus trimmed and untrimmed `NurbsSurface` ranges with tessellation UVs and texture data, filter alpha at Blender's 0.1 cutoff; NONE, IGNORE, and CHANNEL_PACKED modes bypass that mask. NURBS solids and ranges without a usable texture/UV alpha source remain unmasked. This describes the GPU depth-map fallback; the GPU stencil shadow path does not sample texture alpha. The QPainter Solid fallback does not render shadows; implementing CPU shadows remains out of scope for that fallback. Hard shadowing, map resolution, and remaining caster cases differ from Blender's ray-traced shadow option. In mixed-alpha scenes, opaque surfaces remain receivers and validated closed solids/open surfaces can cast volumes; transparent triangles draw afterward without shadow sampling. Branched/nonmanifold caster dispatch and Blender's ray-traced shadow option remain unsupported.
 - Map the stored scene light direction through Blender's Y/Z swap and X/Z sign change. Clamp Shift to Blender's `[0,1]` range and compute `focus = clamp(shadow_focus, 0.0001, 0.99999)`, `shadow_focus_edge = 1 - focus * (1 - shadow_shift)`, then apply `smoothstep(shadow_shift, shadow_focus_edge, -dot(N, light_direction_view))`; shadow intensity mixes the result with the unshadowed contribution. Keep the fallback depth bias fixed so Shift no longer changes map bias.
-- Keep GPU depth of field camera-gated by an active scene camera with DOF enabled, regardless of view projection. The QPainter approximation remains perspective-gated. Validate GPU and QPainter aperture blade/rotation/ratio shaping against Blender; investigate Blender's temporal jitter only if a temporal sample lifecycle is added.
+- Keep GPU depth of field camera-gated by an active scene camera with DOF enabled, regardless of view projection. The QPainter approximation remains perspective-gated and now uses camera-relative perspective sample depth; its focused offscreen contract checks translation invariance. Validate GPU and QPainter aperture blade/rotation/ratio shaping against Blender; investigate Blender's temporal jitter only if a temporal sample lifecycle is added.
 - Keep GPU cavity/curvature behavior aligned with Blender's composition; its parameter controls, sample scheduling, and blue-noise-derived jitter texture are wired. In mixed-alpha scenes the effect prepass and shader apply cavity only to opaque ranges. The QPainter fallback uses separate visible and opaque-only samples: transparent surfaces do not occlude cavity samples or receive cavity shading, and post-composite cavity is skipped where a translucent surface is visible above an opaque receiver. Its cavity pass on NURBS and imported polygon meshes remains approximate and needs visual comparison.
 - Derive all surface display data from the authoritative NURBS geometry. Do not convert committed surfaces into authoritative meshes.
 

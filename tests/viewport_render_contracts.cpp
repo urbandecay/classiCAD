@@ -6,6 +6,7 @@
 #include "ui/viewport/viewport_shading.h"
 #include "ui/viewport/viewport_scene_renderer.h"
 #include "ui/viewport/viewport_surface_renderer.h"
+#include "ui/viewport/viewport_raster_workbench_effects.h"
 #include "ui/viewport/viewport_aa_renderer.h"
 #include "ui/viewport/viewport_workbench_scene_pass_coordinator.h"
 #include "ui/viewport/workbench_render_result.h"
@@ -69,6 +70,24 @@ int main(int argc, char *argv[])
                         workbenchRenderDitherIntensity(
                             std::numeric_limits<qreal>::quiet_NaN(), 8) == 0.0,
                     "Blender render dither must apply only to finite nonnegative 8-bit byte output");
+
+    const Point3D dofCameraPosition{2.0, -3.0, 10.0};
+    const Point3D dofViewDirection{0.0, 0.0, 1.0};
+    const QVector3D dofFocusedPoint(2.0f, -3.0f, 2.0f);
+    const QVector3D dofWorldShift(7.0f, -11.0f, 19.0f);
+    const Point3D shiftedDofCameraPosition{
+        dofCameraPosition.x + dofWorldShift.x(),
+        dofCameraPosition.y + dofWorldShift.y(),
+        dofCameraPosition.z + dofWorldShift.z()};
+    passed &= check(
+        std::abs(rasterWorkbenchCameraDepth(
+                     dofFocusedPoint, dofCameraPosition,
+                     dofViewDirection, true) - 8.0f) < 1.0e-6f &&
+            std::abs(rasterWorkbenchCameraDepth(
+                         dofFocusedPoint + dofWorldShift,
+                         shiftedDofCameraPosition, dofViewDirection, true) -
+                     8.0f) < 1.0e-6f,
+        "QPainter Workbench DOF depth must stay camera-relative when the camera and scene translate together");
 
     QImage cpuDitherInput(1, 1, QImage::Format_RGBA64);
     cpuDitherInput.setPixelColor(0, 0, QColor::fromRgbF(0.18, 0.18, 0.18,

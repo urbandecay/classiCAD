@@ -1510,6 +1510,53 @@ int main(int argc, char *argv[])
                                 rawFaceImage.save(unselectedCapturePath),
                             "unselected outline-free NURBS cube baseline must be nonblank and save");
                     }
+                    const auto readAaSampleJitter = [&](int aaMode,
+                                                        int sampleIndex,
+                                                        QPointF *jitter) {
+                        if (!jitter || sampleIndex < 0) return false;
+                        ViewportAaRenderer aaRenderer;
+                        aaRenderer.setMode(aaMode);
+                        aaRenderer.setDisplayTransform(gpuSolidShading, true);
+                        const QByteArray historyKey =
+                            QByteArray("viewport-aa-jitter-contract-") +
+                            QByteArray::number(aaMode);
+                        for (int sample = 0; sample <= sampleIndex; ++sample) {
+                            if (!aaRenderer.beginSceneSample(
+                                    glSize, 1.0, gpuTransform, historyKey,
+                                    false, true)) {
+                                return false;
+                            }
+                            if (sample == sampleIndex) {
+                                *jitter = aaRenderer.sampleCamera()
+                                              .renderJitterPixels();
+                            }
+                            aaRenderer.finishSceneSample();
+                        }
+                        return true;
+                    };
+                    QPointF offJitter;
+                    QPointF singlePassJitter;
+                    QPointF multisampleFirstJitter;
+                    QPointF multisampleSecondJitter;
+                    const bool aaJitterContractRead =
+                        readAaSampleJitter(
+                            static_cast<int>(ViewportAntiAliasingMode::Off),
+                            0, &offJitter) &&
+                        readAaSampleJitter(
+                            static_cast<int>(ViewportAntiAliasingMode::SinglePass),
+                            0, &singlePassJitter) &&
+                        readAaSampleJitter(
+                            static_cast<int>(ViewportAntiAliasingMode::Samples8),
+                            0, &multisampleFirstJitter) &&
+                        readAaSampleJitter(
+                            static_cast<int>(ViewportAntiAliasingMode::Samples8),
+                            1, &multisampleSecondJitter);
+                    passed &= check(
+                        aaJitterContractRead && offJitter.isNull() &&
+                            singlePassJitter.isNull() &&
+                            multisampleFirstJitter.isNull() &&
+                            !multisampleSecondJitter.isNull(),
+                        "AA Off, Single Pass, and first multisample position are centered; later multisample positions are jittered");
                     const auto captureAaMode = [&](const char *environmentVariable,
                                                    int aaMode,
                                                    int expectedSamples,
@@ -1534,11 +1581,10 @@ int main(int argc, char *argv[])
                             }
                             const QPointF renderJitter =
                                 aaRenderer.sampleCamera().renderJitterPixels();
-                            const bool jitterMatchesMode =
-                                aaMode == static_cast<int>(
-                                              ViewportAntiAliasingMode::Off)
-                                    ? renderJitter.isNull()
-                                    : !renderJitter.isNull();
+                            const bool expectsJitter = aaMode >= 5 && sample > 0;
+                            const bool jitterMatchesMode = expectsJitter
+                                ? !renderJitter.isNull()
+                                : renderJitter.isNull();
                             if (!jitterMatchesMode) {
                                 captureSucceeded = false;
                                 aaRenderer.finishSceneSample();

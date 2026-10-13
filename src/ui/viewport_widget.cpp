@@ -80,6 +80,7 @@
 #include "viewport/viewport_geometry_cache.h"
 #include "viewport/viewport_wire_color.h"
 #include "viewport/workbench_lighting.h"
+#include "viewport/workbench_render_result.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -6793,8 +6794,12 @@ public:
         ViewportShadingSettings settings = viewportShadingSettings_;
         result.colorManagementApplied =
             applyImportedRenderColorManagement(document_, &settings);
-        settings.colorDitherIntensity = workbenchRenderDitherIntensity(
+        const qreal renderDitherIntensity = workbenchRenderDitherIntensity(
             settings.colorDitherIntensity, result.writtenColorDepth());
+        // Render results are dithered once at the final export stage, after
+        // QPainter annotations have been composited. Keep this off the GPU
+        // presentation pass so it does not run twice or affect live viewports.
+        settings.colorDitherIntensity = 0.0;
         const bool captureSceneLinearCombined =
             result.blenderImageFormat.compare(QLatin1String("HDR"),
                                                Qt::CaseInsensitive) == 0 ||
@@ -6879,7 +6884,10 @@ public:
                     object.geometryRevision);
             }
             annotationPainter.end();
-
+            applyWorkbenchRenderDither(&result.combined,
+                                       renderDitherIntensity,
+                                       result.writtenColorDepth(),
+                                       combinedUsesPremultipliedAlpha);
         }
         result.camera.view.perspective = renderCamera.isPerspectiveEnabled();
         if (usingSceneCamera) {

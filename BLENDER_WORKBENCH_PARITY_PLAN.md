@@ -1090,6 +1090,46 @@ Status: in progress; the implementation and source reviews found the blockers li
 - The user clarified that classiCAD's current viewport should be treated as Edit Mode; its separate Object Mode is planned for later. Do not use the missing Object Mode as an explanation for base surface, background, or grid differences. The supplied screenshots still are not a controlled render comparison: classiCAD reports `Ortho`, Blender reports `User Perspective`, and the visible scene geometry differs. Blender's mesh edit edges and curve edit wires are separate Overlay-engine geometry; classiCAD's Solid-mode CAD curve strokes and `NurbsSolid` face boundaries use the configurable edit-wire theme setting, while control geometry and selection behavior remain a distinct implementation. Compare base rendering separately from mode-specific overlays, with matching camera and geometry.
 - This is an adaptation of selected Blender shading equations and passes into classiCAD's renderer, not a verbatim port of Blender's complete Workbench and Overlay engines. The table above and stage notes remain the parity record.
 - Review execution confirmed the installed Blender runtime is 5.2.2 LTS and the classiCAD C++ build passes. Background extraction smoke checks now pass for original and evaluated mesh modes, POLY/BEZIER/NURBS curves, NURBS surface patches, nested collection parents and visibility records, and reporting omitted loose mesh geometry. An offscreen classiCAD startup reached viewport construction, but Qt could not create an OpenGL context; this does not validate the GPU renderer. A direct native-GPU offscreen cube render is now compared against Blender's background Workbench render at 640×480 for AA Off, Single Pass, and 8 samples. The Blender fixture can now independently render baseline, shadows, cavity, and outline modes. Blender 5.2.2 reference runs changed 111,858 pixels for shadows, 45,995 for cavity, and 2,410 for outline at an RGB threshold of 2. classiCAD's offscreen GPU contracts now require shadows to darken a pixel and World cavity to change a pixel against matching unselected, outline-free captures; cavity uses the shared-target scene-pass coordinator. These assert effect activation, not pixel parity. Scene-camera GPU projection now consumes Blender's sensor fit and dimensions, pixel aspect, camera shifts, orthographic scale, and exact clip range; depth readback uses that same range. A transform contract checks framing center, shift direction/magnitude, pixel-aspect scaling, and clip values. Matched Blender camera renders, annotation alignment with non-square pixels, the remaining comparison matrix, intermediate scene-linear captures, QPainter, and navigation cases remain open. Full parity is not signed off.
+- The AA capture comparison has a numerical edge-profile follow-up recorded in the [controlled cube baseline](#controlled-workbench-cube-baseline-2026-10-12): Off and Single Pass retain a one-pixel right-edge silhouette shift; 8-sample captures have matching bounds but differing edge coverage. The classiCAD jitter sequence matches Blender's source, and the captures do not yet identify a confident projection, rasterization, or resolve fix. AA equivalence and overall parity remain open.
+
+### Final display dither (2026-10-12)
+
+- Offscreen Workbench results now apply Blender 5.2.2's integer-coordinate
+  `hash_iqint3_f` and triangular-noise remap to the final display-referred
+  RGBA64 result after CAD annotations are composited. RGB receives
+  `0.0033 * render.dither_intensity`; alpha is unchanged. Premultiplied
+  transparent captures are unpremultiplied for the RGB perturbation and
+  premultiplied again. GPU presentation dither is disabled for this result, so
+  the export image is dithered exactly once. The ordinary interactive
+  viewport retains zero dither, and EXR/HDR scene-linear Combined data plus
+  16-bit PNG/TIFF output bypass the CPU operation.
+- Qt's top-down image rows are mapped to bottom-left render coordinates
+  (`y = height - 1 - row`), matching Blender's integer pixel convention; its
+  chunked CPU conversion likewise uses `y + start_y`. Contracts check the
+  Blender pixel vector, repeatability, RGB changes, alpha and
+  premultiplied-alpha preservation, 8-bit gating, and unchanged 16-bit output.
+  The focused render-contract test passes. References:
+  [Blender hash and triangular remap](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/intern/math_color_inline.cc#L230-L255), [integer pixel-coordinate contract](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenlib/BLI_math_color.h#L144-L152), and [float RGBA byte conversion](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/conversion.cc#L1131-L1143).
+
+### Scene-history invalidation and outline color (2026-10-12)
+
+- The temporal AA history key now includes polygon meshes as well as NURBS
+  surfaces/solids. It records geometry and prepared-geometry revisions,
+  transforms, selection and in-front state, object/material colors, per-face
+  mesh materials, texture source metadata and packed bytes, and component
+  tint-suppression state. It also keys the resolved scene-linear World color,
+  including the distinction between no World color and a present color.
+  Changes to mesh membership, geometry, selection, materials, textures,
+  NURBS texture paths, World color, or component selection therefore restart
+  accumulation instead of presenting stale history. An offscreen contract
+  checks key changes and verifies a completed sample sequence restarts at
+  sample zero after a mesh input changes.
+- Blender Workbench uses the configured object-outline color for all object
+  IDs. The GPU outline pass now uses that color for both selected and
+  unselected objects; CAD selection feedback remains in its separate overlay
+  path. An offscreen contract compares selected and unselected silhouette
+  pixels against matching outline-free baselines. QPainter outline composition
+  and broader effect pixel comparisons remain open.
 
 - Run the comparison matrix below against Blender 5.2.2.
 - Record remaining visual differences with a source or implementation explanation; capture images only when both applications show the same nonblank scene and matched view.

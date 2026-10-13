@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QVector3D>
 
+#include <algorithm>
 #include <limits>
 #include <cmath>
 
@@ -24,6 +25,54 @@ inline qreal workbenchRenderDitherIntensity(qreal intensity,
                    intensity > 0.0
                ? intensity
                : 0.0;
+}
+
+// Apply Blender's deterministic triangular dither to display-referred pixels
+// immediately before an 8-bit render export. The image is kept at 16-bit
+// precision until the caller performs its final byte conversion.
+inline void applyWorkbenchRenderDither(QImage *image, qreal intensity,
+                                       int writtenColorDepth,
+                                       bool premultipliedAlpha = false)
+{
+    if (image == nullptr || image->isNull() ||
+        workbenchRenderDitherIntensity(intensity, writtenColorDepth) == 0.0) {
+        return;
+    }
+    if (image->format() != QImage::Format_RGBA64) {
+        *image = image->convertToFormat(QImage::Format_RGBA64);
+        if (image->isNull()) return;
+    }
+    for (int row = 0; row < image->height(); ++row) {
+        auto *channels = reinterpret_cast<quint16 *>(image->scanLine(row));
+        const quint32 y = static_cast<quint32>(image->height() - 1 - row);
+        for (int column = 0; column < image->width(); ++column) {
+            const quint32 x = static_cast<quint32>(column);
+            const quint32 qx = 1103515245u * ((x >> 1u) ^ y);
+            const quint32 qy = 1103515245u * ((y >> 1u) ^ x);
+            const quint32 hash = 1103515245u * (qx ^ (qy >> 3u));
+            float value = static_cast<float>(hash) *
+                (1.0f / static_cast<float>(std::numeric_limits<quint32>::max()));
+            value = value * 2.0f - 1.0f;
+            const float noise = std::copysign(1.0f, value) *
+                (1.0f - std::sqrt(1.0f - std::fabs(value)));
+            const float offset = noise * 0.0033f *
+                                 static_cast<float>(intensity);
+            const float alpha = static_cast<float>(channels[column * 4 + 3]) /
+                                65535.0f;
+            for (int channel = 0; channel < 3; ++channel) {
+                const int index = column * 4 + channel;
+                float display = static_cast<float>(channels[index]) /
+                                65535.0f;
+                if (premultipliedAlpha && alpha > 0.0f) {
+                    display /= alpha;
+                }
+                display = std::clamp(display + offset, 0.0f, 1.0f);
+                if (premultipliedAlpha) display *= alpha;
+                channels[index] = static_cast<quint16>(
+                    std::lround(display * 65535.0f));
+            }
+        }
+    }
 }
 
 // Offscreen Workbench-style scene output together with the saved camera pose

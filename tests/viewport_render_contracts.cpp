@@ -70,6 +70,38 @@ int main(int argc, char *argv[])
                             std::numeric_limits<qreal>::quiet_NaN(), 8) == 0.0,
                     "Blender render dither must apply only to finite nonnegative 8-bit byte output");
 
+    QImage cpuDitherInput(1, 1, QImage::Format_RGBA64);
+    cpuDitherInput.setPixelColor(0, 0, QColor::fromRgbF(0.18, 0.18, 0.18,
+                                                       0.37));
+    QImage cpuDithered = cpuDitherInput;
+    applyWorkbenchRenderDither(&cpuDithered, 1.0, 8);
+    const QColor cpuDitherPixel = cpuDithered.convertToFormat(
+        QImage::Format_RGBA8888).pixelColor(0, 0);
+    QImage highDepthDithered = cpuDitherInput;
+    applyWorkbenchRenderDither(&highDepthDithered, 1.0, 16);
+    QImage premultipliedInput(1, 1, QImage::Format_RGBA64);
+    auto *premultipliedChannels = reinterpret_cast<quint16 *>(
+        premultipliedInput.scanLine(0));
+    premultipliedChannels[0] = premultipliedChannels[1] =
+        premultipliedChannels[2] = 5898;
+    premultipliedChannels[3] = 32768;
+    QImage premultipliedDithered = premultipliedInput;
+    applyWorkbenchRenderDither(&premultipliedDithered, 1.0, 8, true);
+    const auto *premultipliedDitheredChannels =
+        reinterpret_cast<const quint16 *>(premultipliedDithered.constScanLine(0));
+    passed &= check(cpuDitherPixel.red() == 45 &&
+                        cpuDitherPixel.green() == 45 &&
+                        cpuDitherPixel.blue() == 45 &&
+                        cpuDitherPixel.alpha() ==
+                            cpuDitherInput.pixelColor(0, 0).alpha() &&
+                        highDepthDithered == cpuDitherInput &&
+                        premultipliedDitheredChannels[0] <
+                            premultipliedChannels[0] &&
+                        premultipliedDitheredChannels[0] > 5700 &&
+                        premultipliedDitheredChannels[3] ==
+                            premultipliedChannels[3],
+                    "CPU export dither must match Blender's bottom-left RGB byte, preserve alpha and premultiplication, and leave 16-bit output unchanged");
+
     const qreal defaultLineWidth = viewportLineWeightPixels(0.0);
     const qreal lightLineWidth = viewportLineWeightPixels(0.13);
     const qreal mediumLineWidth = viewportLineWeightPixels(0.25);

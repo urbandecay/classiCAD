@@ -313,7 +313,11 @@ bool ViewportGpuSurface::renderOffscreen(
                     z, perspective, nearClip, farClip);
             }
         }
-        QImage readback(pixelSize, QImage::Format_RGBA64);
+        const QImage::Format readbackFormat =
+            transparentFilm || transparentBackground
+                ? QImage::Format_RGBA64_Premultiplied
+                : QImage::Format_RGBA64;
+        QImage readback(pixelSize, readbackFormat);
         if (readback.isNull()) {
             drawn = false;
         } else {

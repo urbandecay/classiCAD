@@ -147,6 +147,15 @@ the shared AA stage used for Blender Workbench geometry; dimensions remain
 post-resolve annotations. The C++ build passes; matched curve-edge captures
 across output formats remain open.
 
+**Transparent render-result readback format (2026-10-13):** Offscreen GPU
+readback now tags film-transparent and missing-World-background output as
+`QImage::Format_RGBA64_Premultiplied`, matching the display transform's
+premultiplied framebuffer values. Opaque-background output remains straight
+alpha. QPainter annotation composition and later conversion to straight-alpha
+PNG/TIFF writer formats can therefore interpret the captured pixels
+consistently. The C++ build passes; a semitransparent-pixel annotation capture
+and saved-file comparison remain open.
+
 ### QPainter perspective cavity footprint (2026-10-13)
 
 - The QPainter SSAO sample step now scales per receiver in perspective views by

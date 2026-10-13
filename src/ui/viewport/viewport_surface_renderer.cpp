@@ -673,6 +673,11 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
     frontMergeProgram_.removeAllShaders();
 }
 
+void ViewportSurfaceRenderer::setCavityDiagnosticOutput(bool enabled) noexcept
+{
+    cavityDiagnosticOutput_ = enabled;
+}
+
 bool ViewportSurfaceRenderer::initialize()
 {
     if (initializationAttempted_) {
@@ -874,6 +879,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uUseCavity;
         uniform bool uUseSsao;
         uniform bool uUseCurvature;
+        uniform bool uCavityDiagnosticOutput;
         uniform sampler2D uCavityDepth;
         uniform sampler2D uCavityNormal;
         uniform usampler2D uCavityObjectId;
@@ -1263,11 +1269,12 @@ bool ViewportSurfaceRenderer::initialize()
                                     : vec3(0.0);
                 color = diffuse * baseColor + specular;
             }
+            float cavityAmount = 0.0;
+            float edgeAmount = 0.0;
+            float curvature = 0.0;
             if (uUseCavity) {
                 ivec2 size = textureSize(uCavityNormal, 0);
                 vec2 screenCoordinate = gl_FragCoord.xy / vec2(size);
-                float cavityAmount = 0.0;
-                float edgeAmount = 0.0;
                 if (uUseSsao) {
                     float depth = texture(uCavityDepth,
                                           screenCoordinate).r;
@@ -1283,9 +1290,19 @@ bool ViewportSurfaceRenderer::initialize()
                     cavityAmount = cavity.x;
                     edgeAmount = cavity.y;
                 }
-                float curvature = uUseCurvature
-                                      ? workbenchCurvature(screenCoordinate, size)
-                                      : 0.0;
+                curvature = uUseCurvature
+                                ? workbenchCurvature(screenCoordinate, size)
+                                : 0.0;
+            }
+            if (uCavityDiagnosticOutput) {
+                fragmentColor = vec4(cavityAmount, edgeAmount, curvature,
+                    clamp((1.0 - cavityAmount) * (1.0 + edgeAmount) *
+                              (1.0 + curvature),
+                          0.0, 4.0));
+                transparencyWeight = vec4(0.0);
+                return;
+            }
+            if (uUseCavity) {
                 color *= clamp((1.0 - cavityAmount) * (1.0 + edgeAmount) *
                                    (1.0 + curvature),
                                0.0, 4.0);
@@ -5397,6 +5414,8 @@ bool ViewportSurfaceRenderer::draw(
             (settings.cavityType == ViewportCavityType::Screen ||
              settings.cavityType == ViewportCavityType::Both);
         program_.setUniformValue("uUseCavity", cavityAvailable);
+        program_.setUniformValue("uCavityDiagnosticOutput",
+                                 cavityDiagnosticOutput_);
         program_.setUniformValue("uUseSsao",
                                  cavityAvailable && ssaoEnabled &&
                                      cavityDepthReady);

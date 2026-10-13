@@ -1520,6 +1520,24 @@ depth domain. Visual depth comparison remains open.
   residual mask coverage. On the 24,596-pixel shared changed mask, effect
   delta RGB channel MAE is 0.400/255, p95 1/255, maximum 16/255. No further
   source-backed discrepancy in the tested centered projection was found.
+- An opt-in `CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX` capture now runs the
+  fixed six-quad cube through the production scene-pass coordinator with
+  `Both` cavity effects and writes the pre-composite scalar channels, shared
+  depth, and encoded normal before display resolve. The diagnostic shader
+  writes into the existing RGBA16F color attachment only when explicitly
+  enabled; it does not alter MRT setup or the default render path. The focused
+  `viewport_render_contracts` test passes with capture enabled. The 640×480
+  capture has 111,480 geometry pixels (depth 0.49915–0.50036); R cavity amount
+  ranges 0–0.34790 (mean 0.01234), G edge amount 0–0.46631 (mean 0.03963),
+  and B screen-curvature amount −0.71387–1.0 (mean 0.00979). The shared normal
+  attachment stores the two-channel sphere-map encoding in RG; B is reserved
+  zero, not decoded normal Z. Outside the geometry mask, the color target
+  retains its 0.02478 clear value, so diagnostic scalar analysis must mask by
+  shared depth. Raw depth and encoded XY are available at every geometry
+  pixel. This capture validates the inputs and makes local amount inspection
+  repeatable, but does not by itself identify the remaining Blender output
+  mismatch: Blender's exposed render result does not provide its internal
+  scalar cavity/edge/curvature buffers for direct per-pixel comparison.
 - The first transparent overlap capture isolated a resolve-coordinate bug, not
   a geometry or OIT accumulation bug. The weighted resolve used an oversized
   fullscreen triangle with `gl_Position = p * 2 - 1` but `vUv = p * 0.5`, so

@@ -27,6 +27,11 @@ class ViewportSurfaceRenderer final : protected QOpenGLFunctions_3_3_Core {
 public:
     ~ViewportSurfaceRenderer();
 
+    // Test-only diagnostic output. When enabled, the opaque Workbench color
+    // shader writes cavity/edge/curvature scalars instead of surface color.
+    // Defaults off and is only used by opt-in offscreen captures.
+    void setCavityDiagnosticOutput(bool enabled) noexcept;
+
     bool draw(const QVector<ViewportRenderObject> &objects,
               const ViewportTransform &transform,
               const QSize &viewportSize,
@@ -165,6 +170,7 @@ private:
     GLuint objectIdDepthStencil_ = 0;
     QSize objectIdFramebufferSize_;
     bool objectIdFramebufferAttempted_ = false;
+    bool cavityDiagnosticOutput_ = false;
     GLuint workbenchEffectFramebuffer_ = 0;
     GLuint frontMergeFramebuffer_ = 0;
     GLuint workbenchOutlineIdTexture_ = 0;

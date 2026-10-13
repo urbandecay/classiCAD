@@ -1951,7 +1951,8 @@ int main(int argc, char *argv[])
                         const QByteArray &historyKey, QImage *image,
                         const ViewportRenderObject *renderObject = nullptr,
                         const ViewportTransform *cameraOverride = nullptr,
-                        const ViewportCameraPreferences *dofOptics = nullptr) {
+                        const ViewportCameraPreferences *dofOptics = nullptr,
+                        const QString &cavityDiagnosticPrefix = QString{}) {
                         if (image == nullptr || !framebuffer.bind()) {
                             return false;
                         }
@@ -2003,14 +2004,129 @@ int main(int argc, char *argv[])
                             renderObject == nullptr
                                 ? QVector<ViewportRenderObject>{surfaceObject}
                                 : QVector<ViewportRenderObject>{*renderObject};
+                        gpuSurfaceRenderer.setCavityDiagnosticOutput(
+                            !cavityDiagnosticPrefix.isEmpty());
                         const auto result =
                             ViewportWorkbenchScenePassCoordinator::renderSceneColor(
                                 gpuSurfaceRenderer, renderObjects,
                                 sceneAaRenderer.sampleCamera(), glSize, 1.0,
                                 shading, request);
+                        gpuSurfaceRenderer.setCavityDiagnosticOutput(false);
                         if (result.rendered) {
                             sceneAaRenderer.markCurrentSampleAttachmentsValid(
                                 result.report.populatedAttachments);
+                        }
+                        if (result.rendered &&
+                            !cavityDiagnosticPrefix.isEmpty()) {
+                            const auto writePfm = [&](const QString &path,
+                                                      const QVector<float> &values,
+                                                      int channels) {
+                                QFile file(path);
+                                const QByteArray header =
+                                    (channels == 1 ? QByteArrayLiteral("Pf\n")
+                                                   : QByteArrayLiteral("PF\n")) +
+                                    QByteArray::number(glSize.width()) +
+                                    QByteArrayLiteral(" ") +
+                                    QByteArray::number(glSize.height()) +
+                                    QByteArrayLiteral("\n-1.0\n");
+                                const qsizetype expected =
+                                    qsizetype(glSize.width()) * glSize.height() *
+                                    channels;
+                                return values.size() == expected &&
+                                    file.open(QIODevice::WriteOnly) &&
+                                    file.write(header) == header.size() &&
+                                    file.write(
+                                        reinterpret_cast<const char *>(
+                                            values.constData()),
+                                        expected * qsizetype(sizeof(float))) ==
+                                        expected * qsizetype(sizeof(float));
+                            };
+                            const auto readTextureRgb = [&](GLuint texture,
+                                                            int firstChannel) {
+                                QVector<float> rgba(glSize.width() *
+                                                    glSize.height() * 4);
+                                GLint oldActive = GL_TEXTURE0;
+                                GLint oldBinding = 0;
+                                functions.glGetIntegerv(GL_ACTIVE_TEXTURE,
+                                                        &oldActive);
+                                functions.glActiveTexture(GL_TEXTURE0);
+                                functions.glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                                                        &oldBinding);
+                                functions.glBindTexture(GL_TEXTURE_2D, texture);
+                                functions.glGetTexImage(GL_TEXTURE_2D, 0,
+                                                        GL_RGBA, GL_FLOAT,
+                                                        rgba.data());
+                                functions.glBindTexture(
+                                    GL_TEXTURE_2D,
+                                    static_cast<GLuint>(oldBinding));
+                                functions.glActiveTexture(
+                                    static_cast<GLenum>(oldActive));
+                                QVector<float> rgb(glSize.width() *
+                                                   glSize.height() * 3);
+                                for (int pixel = 0;
+                                     pixel < glSize.width() * glSize.height();
+                                     ++pixel) {
+                                    for (int channel = 0; channel < 3; ++channel) {
+                                        rgb[pixel * 3 + channel] = rgba[
+                                            pixel * 4 + firstChannel + channel];
+                                    }
+                                }
+                                return rgb;
+                            };
+                            const ViewportRenderTargets &targets =
+                                sceneAaRenderer.targets();
+                            const bool amountsSaved = writePfm(
+                                cavityDiagnosticPrefix +
+                                    QStringLiteral("-amounts.pfm"),
+                                readTextureRgb(
+                                    targets.currentSampleColorTexture, 0), 3);
+                            const bool normalsSaved = writePfm(
+                                cavityDiagnosticPrefix +
+                                    QStringLiteral("-normal-encoded.pfm"),
+                                readTextureRgb(targets.viewSpaceNormalTexture,
+                                               0), 3);
+                            GLint oldReadFramebuffer = 0;
+                            GLint oldReadBuffer = GL_NONE;
+                            GLuint depthReadFramebuffer = 0;
+                            functions.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                                                    &oldReadFramebuffer);
+                            functions.glGetIntegerv(GL_READ_BUFFER,
+                                                    &oldReadBuffer);
+                            functions.glGenFramebuffers(1,
+                                                        &depthReadFramebuffer);
+                            functions.glBindFramebuffer(
+                                GL_READ_FRAMEBUFFER, depthReadFramebuffer);
+                            functions.glFramebufferTexture2D(
+                                GL_READ_FRAMEBUFFER,
+                                GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
+                                targets.depthTexture, 0);
+                            QVector<float> rawDepth(glSize.width() *
+                                                    glSize.height());
+                            const bool depthFramebufferReady =
+                                functions.glCheckFramebufferStatus(
+                                    GL_READ_FRAMEBUFFER) ==
+                                GL_FRAMEBUFFER_COMPLETE;
+                            if (depthFramebufferReady) {
+                                functions.glReadBuffer(GL_NONE);
+                                functions.glReadPixels(
+                                    0, 0, glSize.width(), glSize.height(),
+                                    GL_DEPTH_COMPONENT, GL_FLOAT,
+                                    rawDepth.data());
+                            }
+                            functions.glBindFramebuffer(
+                                GL_READ_FRAMEBUFFER,
+                                static_cast<GLuint>(oldReadFramebuffer));
+                            functions.glReadBuffer(
+                                static_cast<GLenum>(oldReadBuffer));
+                            functions.glDeleteFramebuffers(
+                                1, &depthReadFramebuffer);
+                            const bool depthSaved = depthFramebufferReady &&
+                                writePfm(cavityDiagnosticPrefix +
+                                             QStringLiteral("-depth-buffer.pfm"),
+                                         rawDepth, 1);
+                            if (!amountsSaved || !normalsSaved || !depthSaved) {
+                                return false;
+                            }
                         }
                         sceneAaRenderer.finishSceneSample();
                         if (!result.rendered) return false;
@@ -2034,6 +2150,29 @@ int main(int argc, char *argv[])
                         passed &= check(
                             polygonCubeCaptureSucceeded,
                             "matched polygon cube diagnostic capture must render and save");
+                    }
+                    const QString cavityDiagnosticPrefix = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX");
+                    if (!cavityDiagnosticPrefix.isEmpty()) {
+                        ViewportShadingSettings cavityDiagnosticShading =
+                            rawFaceShading;
+                        cavityDiagnosticShading.cavity = true;
+                        cavityDiagnosticShading.cavityType =
+                            ViewportCavityType::Both;
+                        cavityDiagnosticShading.outline = false;
+                        cavityDiagnosticShading.shadows = false;
+                        QImage cavityDiagnosticDisplay;
+                        const bool cavityDiagnosticSaved =
+                            renderCoordinatedScene(
+                                cavityDiagnosticShading,
+                                QByteArrayLiteral(
+                                    "polygon-cube-cavity-diagnostic"),
+                                &cavityDiagnosticDisplay,
+                                &polygonCubeObject, nullptr, nullptr,
+                                cavityDiagnosticPrefix);
+                        passed &= check(
+                            cavityDiagnosticSaved,
+                            "opt-in cavity diagnostic must save pre-composite amounts and shared inputs");
                     }
                     const QString gpuDofCapturePath = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_GPU_DOF_CAPTURE");

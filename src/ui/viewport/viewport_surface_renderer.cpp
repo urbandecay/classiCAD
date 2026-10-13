@@ -1908,7 +1908,11 @@ bool ViewportSurfaceRenderer::initialize()
                 sampleWorkbenchAlphaImage(vUv).a < 0.1) {
                 discard;
             }
-            fragmentViewNormal = vec4(normalize(vNormalView), 1.0);
+            // Blender's Workbench effect prepass flips normals on back-facing
+            // fragments before cavity and curvature sampling so each visible
+            // surface normal points toward the camera.
+            vec3 viewNormal = gl_FrontFacing ? vNormalView : -vNormalView;
+            fragmentViewNormal = vec4(normalize(viewNormal), 1.0);
             fragmentObjectId = uObjectId;
             fragmentOutlineObjectId = uOutlineObjectId;
         }

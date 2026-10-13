@@ -1349,6 +1349,17 @@ depth domain. Visual depth comparison remains open.
   12.18/255, p95 29/255, max 55/255. Matching topology reduces the mask
   mismatch from the NURBS-solid capture but does not explain it away; the
   sampled-depth/normal and cavity-amount diagnostic remains the next step.
+- The subsequent source check found another normal-path difference:
+  Blender's effect prepass flips back-facing fragment normals toward the
+  camera before storing them, while classiCAD stored the interpolated normal
+  unchanged. The classiCAD prepass now applies the same `gl_FrontFacing`
+  orientation rule before cavity/curvature sampling. On the matched cube at
+  RGB threshold 2, classiCAD's changed mask is 27,008 pixels versus Blender's
+  26,048 (XOR 3,848, IoU 0.865); within the shared changed mask, effect-delta
+  RGB error drops to MAE 0.387/255, p95 1/255, max 6/255. This aligns effect
+  intensity but leaves mask coverage less exact, so the cavity comparison is
+  still open. Blender reference:
+  [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L368-L405).
 - The first transparent overlap capture isolated a resolve-coordinate bug, not
   a geometry or OIT accumulation bug. The weighted resolve used an oversized
   fullscreen triangle with `gl_Position = p * 2 - 1` but `vUv = p * 0.5`, so

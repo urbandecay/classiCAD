@@ -408,16 +408,22 @@ private:
         const QSize outputSize = result.outputSize.isEmpty()
                                      ? result.combined.size()
                                      : result.outputSize;
+        const QString combinedFormatError =
+            result.combinedImageFormatError();
         QDialog window(this);
         window.setWindowTitle(QStringLiteral("Last Workbench Render Result — %1 × %2")
                                   .arg(outputSize.width()).arg(outputSize.height()));
         window.resize(1000, 760);
         auto *layout = new QVBoxLayout(&window);
-        const QString combinedDescription = result.combinedPassAvailable
+        const QString combinedDescription = result.combinedPassAvailable &&
+                                                   combinedFormatError.isEmpty()
             ? QStringLiteral("%1 × %2 .%3 (%4, %5-bit output)")
                   .arg(outputSize.width()).arg(outputSize.height())
                   .arg(result.combinedFileExtension()).arg(result.colorMode)
                   .arg(result.writtenColorDepth())
+            : result.combinedPassAvailable
+                  ? QStringLiteral("format unavailable: %1")
+                        .arg(combinedFormatError)
             : QStringLiteral("disabled in Blender view layer");
         auto *info = new QLabel(
             QStringLiteral("Last completed result (not live)   •   Combined: %1   •   Depth: %2")
@@ -440,9 +446,14 @@ private:
         layout->addWidget(preview, 1);
         auto *buttons = new QHBoxLayout;
         auto *saveCombined = new QPushButton(
-            QStringLiteral("Save Combined %1…")
-                .arg(result.combinedFileExtension().toUpper()), &window);
-        saveCombined->setEnabled(result.combinedPassAvailable);
+            combinedFormatError.isEmpty()
+                ? QStringLiteral("Save Combined %1…")
+                      .arg(result.combinedFileExtension().toUpper())
+                : QStringLiteral("Save Combined (Unavailable)…"), &window);
+        saveCombined->setEnabled(result.combinedPassAvailable &&
+                                 combinedFormatError.isEmpty());
+        if (!combinedFormatError.isEmpty())
+            saveCombined->setToolTip(combinedFormatError);
         auto *saveDepth = new QPushButton(QStringLiteral("Save Depth PFM…"), &window);
         saveDepth->setEnabled(result.hasDepthPass());
         auto *close = new QPushButton(QStringLiteral("Close"), &window);
@@ -460,8 +471,15 @@ private:
                 initialPath,
                 QStringLiteral("Image Files (*.%1)").arg(extension));
             if (path.isEmpty()) return;
-            if (QFileInfo(path).suffix().isEmpty())
+            const QFileInfo selectedPath(path);
+            if (selectedPath.suffix().isEmpty()) {
                 path += QStringLiteral(".%1").arg(extension);
+            } else if (selectedPath.suffix().compare(
+                           extension, Qt::CaseInsensitive) != 0) {
+                path = selectedPath.dir().filePath(
+                    selectedPath.completeBaseName() +
+                    QStringLiteral(".%1").arg(extension));
+            }
             QString error;
             if (!result.saveCombinedImage(path, &error))
                 QMessageBox::critical(this, QStringLiteral("Save Failed"), error);

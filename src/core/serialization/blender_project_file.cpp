@@ -1527,32 +1527,8 @@ bool parseBlenderSurfaceItem(
     const classiCAD::DocumentMaterial material = materials.value(materialId);
     if (!material.id.isEmpty()) {
         result.hasWorkbenchMaterial = true;
-        result.workbenchMaterial.baseColorSceneLinear = QVector3D(
-            material.baseColorSceneLinear[0], material.baseColorSceneLinear[1],
-            material.baseColorSceneLinear[2]);
-        result.workbenchMaterial.roughness = material.roughness;
-        result.workbenchMaterial.metallic = material.metallic;
-        result.workbenchMaterial.alpha = material.alpha;
-        for (const classiCAD::DocumentImageTextureReference &image :
-             material.imageTextures) {
-            if (image.tiles.isEmpty()) continue;
-            result.workbenchMaterial.textureImageTiles = image.tiles;
-            result.workbenchMaterial.textureImageSrgb =
-                image.colorSpace.compare(QStringLiteral("sRGB"),
-                                         Qt::CaseInsensitive) == 0;
-            result.workbenchMaterial.textureImageColorTransformId =
-                image.sourceTransformId;
-            result.workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
-                image.sceneLinearFloatDataBase64;
-            result.workbenchMaterial.textureImageSceneLinearFloatWidth =
-                image.sceneLinearFloatWidth;
-            result.workbenchMaterial.textureImageSceneLinearFloatHeight =
-                image.sceneLinearFloatHeight;
-            result.workbenchMaterial.textureImageAlphaMode = image.alphaMode;
-            result.workbenchMaterial.textureImageInterpolation = image.interpolation;
-            result.workbenchMaterial.textureImageExtension = image.extension;
-            break;
-        }
+        result.workbenchMaterial =
+            classiCAD::workbenchMaterialForBlenderImport(material);
     }
     result.geometry.geometryType = classiCAD::GeometryType::NurbsSurface;
     result.geometry.nurbsSurface = std::move(surface);

@@ -431,6 +431,16 @@ if (CLASSICAD_BUILD_TESTS)
         COMMAND classicad_scene_query_contracts_test
     )
 
+    add_executable(classicad_blender_surface_material_resolution_contracts_test
+        tests/blender_surface_material_resolution_contract.cpp
+    )
+    classicad_configure_cpp_target(
+        classicad_blender_surface_material_resolution_contracts_test
+    )
+    add_test(NAME blender_surface_material_resolution_contracts
+        COMMAND classicad_blender_surface_material_resolution_contracts_test
+    )
+
     add_executable(classicad_core_contracts_test
         tests/core_contracts.cpp
         src/ui/panels/preferences_store.cpp
@@ -486,6 +496,32 @@ if (CLASSICAD_BUILD_TESTS)
     set_tests_properties(viewport_render_contracts PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+
+    add_executable(classicad_workbench_render_result_format_contracts_test
+        tests/workbench_render_result_format_contracts.cpp
+        src/ui/viewport/workbench_render_result.cpp
+    )
+    classicad_configure_cpp_target(
+        classicad_workbench_render_result_format_contracts_test)
+    if (TARGET OpenEXR::OpenEXR)
+        target_link_libraries(
+            classicad_workbench_render_result_format_contracts_test
+            PRIVATE OpenEXR::OpenEXR)
+        target_compile_definitions(
+            classicad_workbench_render_result_format_contracts_test
+            PRIVATE CLASSICAD_HAS_OPENEXR=1)
+    elseif (TARGET OpenEXR::IlmImf)
+        target_link_libraries(
+            classicad_workbench_render_result_format_contracts_test
+            PRIVATE OpenEXR::IlmImf)
+        target_compile_definitions(
+            classicad_workbench_render_result_format_contracts_test
+            PRIVATE CLASSICAD_HAS_OPENEXR=1)
+    endif ()
+    add_test(NAME workbench_render_result_format_contracts
+        COMMAND classicad_workbench_render_result_format_contracts_test)
+    set_tests_properties(workbench_render_result_format_contracts PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     add_executable(classicad_workbench_scene_linear_resolve_contracts_test
         tests/workbench_scene_linear_resolve_contracts.cpp

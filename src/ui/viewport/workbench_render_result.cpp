@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QFile>
+#include <QFileInfo>
 #include <QImageWriter>
 #include <QPainter>
 #include <QSysInfo>
@@ -137,7 +138,7 @@ QString qtWriterFormat(const QString &blenderFormat)
         return QStringLiteral("tga");
     if (key == QLatin1String("OPEN_EXR")) return QStringLiteral("exr");
     if (key == QLatin1String("HDR")) return QStringLiteral("hdr");
-    return QStringLiteral("png");
+    return QString();
 }
 
 QString fileExtension(const QString &writerFormat)
@@ -770,36 +771,54 @@ bool WorkbenchRenderResult::saveCombinedOpenExr(
 
 QString WorkbenchRenderResult::combinedFileExtension() const
 {
+    if (!combinedImageFormatError().isEmpty()) return QString();
     if (blenderImageFormat.compare(QLatin1String("TARGA"),
                                    Qt::CaseInsensitive) == 0 ||
         blenderImageFormat.compare(QLatin1String("TARGA_RAW"),
                                    Qt::CaseInsensitive) == 0) {
         return QStringLiteral("tga");
     }
-    if (blenderImageFormat.compare(QLatin1String("OPEN_EXR"),
-                                   Qt::CaseInsensitive) == 0) {
-        return openExrWriterAvailable() ? QStringLiteral("exr")
-                                        : QStringLiteral("png");
-    }
-    if (blenderImageFormat.compare(QLatin1String("HDR"),
-                                   Qt::CaseInsensitive) == 0) {
-        return QStringLiteral("hdr");
-    }
     QString format = qtWriterFormat(blenderImageFormat);
+    return fileExtension(format);
+}
+
+QString WorkbenchRenderResult::combinedImageFormatError() const
+{
+    const QString key = blenderImageFormat.toUpper();
+    if (key == QLatin1String("TARGA") ||
+        key == QLatin1String("TARGA_RAW") ||
+        key == QLatin1String("HDR")) {
+        return QString();
+    }
+    if (key == QLatin1String("OPEN_EXR")) {
+        return openExrWriterAvailable()
+            ? QString()
+            : QStringLiteral("OpenEXR output is unavailable because classiCAD was built without OpenEXR support");
+    }
+    if (key == QLatin1String("OPEN_EXR_MULTILAYER")) {
+        return QStringLiteral("Blender's multilayer OpenEXR format is unsupported by the single-layer Workbench Combined writer");
+    }
+    const QString writerFormat = qtWriterFormat(key);
+    if (writerFormat.isEmpty()) {
+        return QStringLiteral("Blender render image format '%1' is unsupported by classiCAD")
+            .arg(blenderImageFormat);
+    }
+    const QByteArray requested = writerFormat.toLatin1();
     const QList<QByteArray> supported = QImageWriter::supportedImageFormats();
-    const QByteArray requested = format.toLatin1();
     if (std::none_of(supported.cbegin(), supported.cend(),
                      [&requested](const QByteArray &candidate) {
                          return candidate.compare(requested,
                                                   Qt::CaseInsensitive) == 0;
                      })) {
-        format = QStringLiteral("png");
+        return QStringLiteral("The Qt image writer for Blender format '%1' is unavailable in this classiCAD deployment")
+            .arg(blenderImageFormat);
     }
-    return fileExtension(format);
+    return QString();
 }
 
 int WorkbenchRenderResult::writtenColorDepth() const
 {
+    if (!combinedImageFormatError().isEmpty()) return 0;
     const QString extension = combinedFileExtension();
     if (extension == QLatin1String("exr") && openExrWriterAvailable())
         return colorDepth == 16 ? 16 : 32;
@@ -812,6 +831,20 @@ int WorkbenchRenderResult::writtenColorDepth() const
 bool WorkbenchRenderResult::saveCombinedImage(
     const QString &path, QString *errorMessage) const
 {
+    const QString formatError = combinedImageFormatError();
+    if (!formatError.isEmpty()) {
+        if (errorMessage != nullptr) *errorMessage = formatError;
+        return false;
+    }
+    const QString expectedExtension = combinedFileExtension();
+    const QString actualExtension = QFileInfo(path).suffix();
+    if (actualExtension.compare(expectedExtension, Qt::CaseInsensitive) != 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral("The output path must use the .%1 extension for Blender format '%2'")
+                                .arg(expectedExtension, blenderImageFormat);
+        }
+        return false;
+    }
     if (!combinedPassAvailable) {
         if (errorMessage != nullptr)
             *errorMessage = QStringLiteral("The Blender view layer has its Combined pass disabled");
@@ -833,11 +866,6 @@ bool WorkbenchRenderResult::saveCombinedImage(
                                errorMessage);
     }
     QString writerFormat = qtWriterFormat(blenderImageFormat);
-    const QString extension = combinedFileExtension();
-    if (extension == QLatin1String("png") &&
-        writerFormat != QLatin1String("png")) {
-        writerFormat = QStringLiteral("png");
-    }
     const QString mode = colorMode.toUpper();
     const int outputDepth = writtenColorDepth();
     const auto makeOutputImage = [this, &mode, outputDepth]() {

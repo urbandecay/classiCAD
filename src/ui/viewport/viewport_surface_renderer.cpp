@@ -1557,19 +1557,138 @@ bool ViewportSurfaceRenderer::initialize()
             fragmentColor = vec4(displayColor, 1.0 - accumulation.a);
         }
     )glsl";
-    static constexpr const char *flatMaterialResolveFragmentShader = R"glsl(
+    static constexpr const char *materialResolveFragmentShader = R"glsl(
         #version 330 core
         uniform sampler2D uDepth;
         uniform sampler2D uMaterialData;
+        uniform sampler2D uViewNormal;
+        uniform bool uStudioLighting;
+        uniform bool uPerspective;
+        uniform bool uUseSpecular;
+        uniform mat4 uInverseViewProjection;
+        uniform vec3 uCameraPosition;
+        uniform vec3 uViewRight;
+        uniform vec3 uViewUp;
+        uniform vec3 uViewFacing;
+        uniform vec3 uLightDirection[4];
+        uniform vec3 uLightDiffuse[4];
+        uniform vec3 uLightSpecular[4];
+        uniform float uLightWrap[4];
+        uniform vec3 uAmbientColor;
         out vec4 fragmentColor;
+
+        float fastReciprocal(float value)
+        {
+            return intBitsToFloat(0x7eef370b - floatBitsToInt(value));
+        }
+
+        float wrappedLighting(float normalLight, float wrap)
+        {
+            float wrapPlusOne = wrap + 1.0;
+            return clamp((normalLight + wrap) *
+                         fastReciprocal(wrapPlusOne * wrapPlusOne),
+                         0.0, 1.0);
+        }
+
+        vec3 decodeWorkbenchNormal(vec2 encoded)
+        {
+            vec2 fenc = encoded * 4.0 - 2.0;
+            float f = dot(fenc, fenc);
+            float g = sqrt(1.0 - f / 4.0);
+            return vec3(fenc * g, 1.0 - f / 2.0);
+        }
+
+        // Adapts Blender 5.2.2 Workbench's world-light shader; Blender
+        // Authors, GPL-2.0-or-later.
+        vec3 workbenchStudioLighting(vec3 baseColor, float roughness,
+                                     float metallic, vec3 normal,
+                                     vec3 incident)
+        {
+            vec3 diffuseColor;
+            vec3 specularColor;
+            if (uUseSpecular) {
+                diffuseColor = mix(baseColor, vec3(0.0), metallic);
+                specularColor = mix(vec3(0.05), baseColor, metallic);
+            } else {
+                diffuseColor = baseColor;
+                specularColor = vec3(0.0);
+            }
+            vec3 specularLight = uAmbientColor;
+            vec3 diffuseLight = uAmbientColor;
+            vec3 reflectedIncident = -reflect(incident, normal);
+            if (uUseSpecular) {
+                for (int index = 0; index < 4; ++index) {
+                    vec3 light = uLightDirection[index];
+                    vec3 halfDirection = normalize(light + incident);
+                    float wrappedNormalLight = dot(light, reflectedIncident);
+                    float specularAngle = clamp(dot(halfDirection, normal),
+                                                0.0, 1.0);
+                    float specularNormalLight = clamp(dot(light, normal),
+                                                      0.0, 1.0);
+                    float gloss = (1.0 - roughness) *
+                                  (1.0 - uLightWrap[index]);
+                    float shininess = exp2(10.0 * gloss + 1.0);
+                    float specularAmount = pow(specularAngle, shininess) *
+                        specularNormalLight * (shininess * 0.125 + 1.0);
+                    float environmentWrap = mix(uLightWrap[index], 1.0,
+                                                roughness);
+                    float environment = wrappedLighting(wrappedNormalLight,
+                                                        environmentWrap);
+                    specularAmount = mix(specularAmount, environment,
+                                         uLightWrap[index] * uLightWrap[index]);
+                    specularLight += specularAmount * uLightSpecular[index];
+                }
+                float normalView = clamp(dot(normal, incident), 0.0, 1.0);
+                float fresnel = exp2(-8.35 * normalView) * (1.0 - roughness);
+                specularColor = mix(specularColor, vec3(1.0), fresnel);
+            }
+            specularLight *= specularColor;
+            for (int index = 0; index < 4; ++index) {
+                float normalLight = dot(uLightDirection[index], normal);
+                diffuseLight += wrappedLighting(normalLight, uLightWrap[index]) *
+                                uLightDiffuse[index];
+            }
+            if (uUseSpecular) {
+                float specularEnergy = dot(specularColor, vec3(0.33333));
+                diffuseLight *= diffuseColor * (1.0 - specularEnergy);
+            } else {
+                diffuseLight *= diffuseColor;
+            }
+            return diffuseLight + specularLight;
+        }
+
         void main()
         {
             ivec2 pixel = ivec2(gl_FragCoord.xy);
-            if (texelFetch(uDepth, pixel, 0).r >= 1.0) {
+            float depth = texelFetch(uDepth, pixel, 0).r;
+            if (depth >= 1.0) {
                 discard;
             }
             vec4 material = texelFetch(uMaterialData, pixel, 0);
-            fragmentColor = vec4(material.rgb, 1.0);
+            vec3 color = material.rgb;
+            if (uStudioLighting) {
+                vec2 uv = (vec2(pixel) + 0.5) /
+                          vec2(textureSize(uDepth, 0));
+                vec4 worldH = uInverseViewProjection *
+                    vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+                vec3 worldPosition = worldH.xyz / worldH.w;
+                vec3 normal = decodeWorkbenchNormal(
+                    texelFetch(uViewNormal, pixel, 0).xy);
+                vec3 incident = vec3(0.0, 0.0, 1.0);
+                if (uPerspective) {
+                    vec3 incidentWorld = normalize(uCameraPosition -
+                                                   worldPosition);
+                    incident = normalize(vec3(dot(incidentWorld, uViewRight),
+                                              dot(incidentWorld, uViewUp),
+                                              dot(incidentWorld, uViewFacing)));
+                }
+                int packed = int(material.a);
+                float roughness = float(packed & 31) * (1.0 / 31.0);
+                float metallic = float((packed >> 5) & 7) * (1.0 / 7.0);
+                color = workbenchStudioLighting(material.rgb, roughness,
+                                                metallic, normal, incident);
+            }
+            fragmentColor = vec4(color, 1.0);
         }
     )glsl";
 
@@ -2247,7 +2366,7 @@ bool ViewportSurfaceRenderer::initialize()
         !flatMaterialResolveProgram_.addShaderFromSourceCode(
             QOpenGLShader::Vertex, transparencyResolveVertexShader) ||
         !flatMaterialResolveProgram_.addShaderFromSourceCode(
-            QOpenGLShader::Fragment, flatMaterialResolveFragmentShader) ||
+            QOpenGLShader::Fragment, materialResolveFragmentShader) ||
         !flatMaterialResolveProgram_.link()) {
         qWarning().noquote()
             << "Viewport shader setup failed. Surface:" << program_.log()
@@ -3101,12 +3220,15 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
     return complete;
 }
 
-bool ViewportSurfaceRenderer::resolveWorkbenchFlatMaterial(
-    const QSize &pixelSize, const ViewportRenderTargets &targets)
+bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
+    const QSize &pixelSize, const ViewportRenderTargets &targets,
+    const ViewportTransform &transform, const QSize &viewportSize,
+    const ViewportShadingSettings &settings, bool studioLighting)
 {
     if (pixelSize.isEmpty() || targets.currentSampleColorTexture == 0 ||
         targets.depthTexture == 0 || targets.materialDataTexture == 0 ||
-        targets.pixelSize != pixelSize || !outlineVertexArray_.isCreated()) {
+        targets.pixelSize != pixelSize || !outlineVertexArray_.isCreated() ||
+        (studioLighting && targets.viewSpaceNormalTexture == 0)) {
         return false;
     }
 
@@ -3116,6 +3238,7 @@ bool ViewportSurfaceRenderer::resolveWorkbenchFlatMaterial(
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousTexture0 = 0;
     GLint previousTexture1 = 0;
+    GLint previousTexture2 = 0;
     GLint previousProgram = 0;
     GLboolean previousDepthMask = GL_TRUE;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
@@ -3135,6 +3258,8 @@ bool ViewportSurfaceRenderer::resolveWorkbenchFlatMaterial(
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture0);
     glActiveTexture(GL_TEXTURE1);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture1);
+    glActiveTexture(GL_TEXTURE2);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2);
 
     if (flatMaterialResolveFramebuffer_ == 0) {
         glGenFramebuffers(1, &flatMaterialResolveFramebuffer_);
@@ -3158,9 +3283,66 @@ bool ViewportSurfaceRenderer::resolveWorkbenchFlatMaterial(
         glBindTexture(GL_TEXTURE_2D, targets.depthTexture);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, targets.materialDataTexture);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, targets.viewSpaceNormalTexture);
         flatMaterialResolveProgram_.bind();
         flatMaterialResolveProgram_.setUniformValue("uDepth", 0);
         flatMaterialResolveProgram_.setUniformValue("uMaterialData", 1);
+        flatMaterialResolveProgram_.setUniformValue("uViewNormal", 2);
+        flatMaterialResolveProgram_.setUniformValue("uStudioLighting",
+                                                    studioLighting);
+        flatMaterialResolveProgram_.setUniformValue(
+            "uPerspective", transform.isPerspectiveEnabled());
+        flatMaterialResolveProgram_.setUniformValue(
+            "uInverseViewProjection", targets.inverseViewProjection);
+        const Point3D viewDirection =
+            normalized(transform.viewDirection(), {0.0, 0.0, 1.0});
+        const Point3D viewUp = normalized(transform.viewUp(), {0.0, 1.0, 0.0});
+        const Point3D viewRight = normalized(cross(viewUp, viewDirection),
+                                             {1.0, 0.0, 0.0});
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCameraPosition", asVector(transform.cameraPosition(viewportSize)));
+        flatMaterialResolveProgram_.setUniformValue("uViewRight",
+                                                    asVector(viewRight));
+        flatMaterialResolveProgram_.setUniformValue("uViewUp", asVector(viewUp));
+        flatMaterialResolveProgram_.setUniformValue("uViewFacing",
+                                                    asVector(viewDirection));
+        const WorkbenchStudioLighting &lighting =
+            workbenchStudioLightingPreset(settings.studioLightPreset);
+        const WorkbenchStudioLighting viewLighting =
+            workbenchStudioLightingForView(
+                lighting, settings.studioLightRotationDegrees,
+                settings.worldSpaceLighting, asVector(viewRight),
+                asVector(viewUp), asVector(viewDirection));
+        QVector3D lightDirections[4];
+        QVector3D lightDiffuse[4];
+        QVector3D lightSpecular[4];
+        float lightWrap[4];
+        for (int index = 0; index < 4; ++index) {
+            const WorkbenchStudioLight &light = viewLighting.lights[index];
+            lightDirections[index] = light.enabled
+                                         ? light.direction
+                                         : QVector3D(1.0f, 0.0f, 0.0f);
+            lightDiffuse[index] = light.enabled
+                                      ? light.diffuseColor
+                                      : QVector3D();
+            lightSpecular[index] = light.enabled
+                                       ? light.specularColor
+                                       : QVector3D();
+            lightWrap[index] = light.enabled ? light.wrap : 0.0f;
+        }
+        flatMaterialResolveProgram_.setUniformValueArray(
+            "uLightDirection", lightDirections, 4);
+        flatMaterialResolveProgram_.setUniformValueArray(
+            "uLightDiffuse", lightDiffuse, 4);
+        flatMaterialResolveProgram_.setUniformValueArray(
+            "uLightSpecular", lightSpecular, 4);
+        flatMaterialResolveProgram_.setUniformValueArray(
+            "uLightWrap[0]", lightWrap, 4, 1);
+        flatMaterialResolveProgram_.setUniformValue("uAmbientColor",
+                                                    lighting.ambientColor);
+        flatMaterialResolveProgram_.setUniformValue(
+            "uUseSpecular", settings.specularLighting && lighting.useSpecular);
         outlineVertexArray_.bind();
         glDrawArrays(GL_TRIANGLES, 0, 3);
         outlineVertexArray_.release();
@@ -3171,6 +3353,8 @@ bool ViewportSurfaceRenderer::resolveWorkbenchFlatMaterial(
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture0));
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
                       static_cast<GLuint>(previousDrawFramebuffer));
@@ -5556,9 +5740,19 @@ bool ViewportSurfaceRenderer::draw(
         worldSsaoRequested &&
         ensureCavityJitterTexture(cavityTotalSampleCount);
     const bool ssaoEnabled = worldSsaoRequested && ssaoJitterReady;
+    const bool hasSelectedRange = std::any_of(
+        ranges_.cbegin(), ranges_.cend(),
+        [](const DrawRange &range) { return range.selected; });
+    const bool deferredStudioPrepassRequested = sceneLinearOutput &&
+        settings.mode == ViewportShadingMode::Solid &&
+        settings.lightingMode == ViewportLightingMode::Studio &&
+        !previewOverlay && !selectionOverlay && !settings.xrayEnabled() &&
+        !settings.shadows && !settings.cavity && !hasSelectedRange &&
+        sharedTargets != nullptr && sharedTargets->materialDataTexture != 0;
     const bool sharedPrepassRequested = sharedTargets != nullptr &&
         (cavityRequested || (outlineRequested && !settings.xrayEnabled()) ||
-         !frontOpaqueRangeIndices.isEmpty());
+         !frontOpaqueRangeIndices.isEmpty() ||
+         deferredStudioPrepassRequested);
     bool sharedPrepassReady = false;
     bool opaquePrepassDrewGeometry = false;
     bool cavityDepthReady = false;
@@ -6875,24 +7069,26 @@ bool ViewportSurfaceRenderer::draw(
                 }
             }
         };
-        const bool hasSelectedRange = std::any_of(
-            ranges_.cbegin(), ranges_.cend(),
-            [](const DrawRange &range) { return range.selected; });
-        const bool flatDeferredResolveEligible = sceneLinearOutput &&
+        const bool materialDeferredResolveEligible = sceneLinearOutput &&
             settings.mode == ViewportShadingMode::Solid &&
-            settings.lightingMode == ViewportLightingMode::Flat &&
+            (settings.lightingMode == ViewportLightingMode::Flat ||
+             settings.lightingMode == ViewportLightingMode::Studio) &&
             !previewOverlay && !selectionOverlay &&
             !settings.xrayEnabled() && !settings.shadows && !settings.cavity &&
             !hasSelectedRange && sharedTargets != nullptr &&
             sharedTargets->materialDataTexture != 0 &&
             sharedTargets->pixelSize == transparencyPixelSize;
-        const auto resolveFlatMaterial = [&]() {
-            if (!flatDeferredResolveEligible ||
+        const bool studioDeferredResolve =
+            settings.lightingMode == ViewportLightingMode::Studio;
+        const auto resolveOpaqueMaterialGBuffer = [&]() {
+            if (!materialDeferredResolveEligible ||
+                (studioDeferredResolve && !sharedPrepassReady) ||
                 !frontOpaqueMaterialMerged ||
                 (opaqueRangeIndices.isEmpty() &&
                  frontOpaqueRangeIndices.isEmpty()) ||
-                !resolveWorkbenchFlatMaterial(transparencyPixelSize,
-                                              *sharedTargets)) {
+                !resolveWorkbenchMaterial(
+                    transparencyPixelSize, *sharedTargets, transform,
+                    viewportSize, settings, studioDeferredResolve)) {
                 return;
             }
             if (passReport != nullptr) {
@@ -6944,7 +7140,7 @@ bool ViewportSurfaceRenderer::draw(
             glStencilFunc(GL_NOTEQUAL, 0, 0xFFu);
             drawSurfaceRanges(true, false);
             drawFrontOpaqueRanges();
-            resolveFlatMaterial();
+            resolveOpaqueMaterialGBuffer();
             if (hasPartialAlpha) {
                 glDisable(GL_STENCIL_TEST);
                 drawTransparentTriangles();
@@ -6975,7 +7171,7 @@ bool ViewportSurfaceRenderer::draw(
         } else {
             drawSurfaceRanges(false, false);
             drawFrontOpaqueRanges();
-            resolveFlatMaterial();
+            resolveOpaqueMaterialGBuffer();
             if (hasPartialAlpha) drawTransparentTriangles();
         }
         vertexBuffer_.release();

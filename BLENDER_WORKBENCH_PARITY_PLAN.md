@@ -44,6 +44,19 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   and
   [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620).
 
+**Studio G-buffer resolve update (2026-10-13):** The fullscreen material
+resolve now also consumes the shared view-normal attachment and evaluates the
+Blender 5.2.2 Studio diffuse/specular lighting from the packed roughness and
+metallic payload. Perspective views reconstruct world position from depth and
+the inverse view-projection matrix to derive the incident direction;
+orthographic views use Blender's constant view direction. Light directions,
+wrap, ambient, specular toggle, rotation, and world-space mode come from the
+existing Workbench Studio-light adapter. The shared normal prepass is requested
+for eligible scene-linear Studio draws. Studio remains on the forward path when
+shadows, cavity, X-Ray, preview, or selected-range tint is active. The C++ build
+passes; shader runtime and matched Blender image comparison remain open because
+this environment has not provided a working OpenGL comparison context.
+
 ### QPainter perspective cavity footprint (2026-10-13)
 
 - The QPainter SSAO sample step now scales per receiver in perspective views by

@@ -108,8 +108,10 @@ private:
                                         bool mergeColor,
                                         bool mergeNormal = true,
                                         bool mergeMaterial = false);
-    bool resolveWorkbenchFlatMaterial(
-        const QSize &pixelSize, const ViewportRenderTargets &targets);
+    bool resolveWorkbenchMaterial(
+        const QSize &pixelSize, const ViewportRenderTargets &targets,
+        const ViewportTransform &transform, const QSize &viewportSize,
+        const ViewportShadingSettings &settings, bool studioLighting);
     bool ensureTransparencyFramebuffer(const QSize &pixelSize,
                                       GLuint depthStencilTexture,
                                       bool frontDomain = false);

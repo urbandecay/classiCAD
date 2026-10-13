@@ -8,6 +8,7 @@
 #include <QPoint>
 #include <QPointF>
 #include <QSize>
+#include <QTimer>
 
 #include <functional>
 #include <memory>
@@ -98,6 +99,7 @@ private:
     const ViewportNavigationGizmo &gizmo_;
     NavigationControllerCallbacks callbacks_;
     std::unique_ptr<QVariantAnimation> animation_;
+    QTimer wheelNavigationSettleTimer_;
     ViewportCameraState animationStart_;
     ViewportCameraState animationEnd_;
     QPointF hoverPosition_{-1000.0, -1000.0};
@@ -114,6 +116,7 @@ private:
     bool panMoved_ = false;
     bool delayedRightPan_ = false;
     bool panMotionApplied_ = false;
+    bool wheelNavigationActive_ = false;
 };
 
 } // namespace classiCAD

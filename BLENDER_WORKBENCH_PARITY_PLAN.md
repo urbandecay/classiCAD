@@ -2249,6 +2249,17 @@ Status: in progress; the implementation and source reviews found the blockers li
   Blender resets Workbench TAA when shading state changes and clears each
   sample with the current background ([`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L25-L89),
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L145-L149)).
+- **Wheel zoom interactive AA state (2026-10-13):** wheel zoom now enters the
+  same interactive one-sample mode used by other camera navigation while a
+  200 ms single-shot settle timer is active. Each new wheel event restarts the
+  timer; expiry requests a frame after `isNavigating()` returns false so idle
+  temporal accumulation resumes. This matches Blender Workbench's navigation
+  sample clamp and TAA reset path in
+  [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L1303-L1382).
+  A focused viewport interaction contract covers entry, repeated-wheel timer
+  restart, settling, and the redraw that resumes idle accumulation. The settle
+  duration is classiCAD's interaction policy; Blender source establishes the interactive AA behavior,
+  not this timer value.
 - Blender Workbench uses the configured object-outline color for all object
   IDs. The GPU outline pass now uses that color for both selected and
   unselected objects; CAD selection feedback remains in its separate overlay

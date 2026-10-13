@@ -12,6 +12,7 @@ namespace classiCAD {
 namespace {
 
 constexpr qint64 rightPanActivationDelayMs = 110;
+constexpr int wheelNavigationSettleDurationMs = 200;
 constexpr qreal panDragThresholdPixels = 3.0;
 
 qreal directionDot(const Point3D &first, const Point3D &second)
@@ -32,8 +33,19 @@ NavigationController::NavigationController(
       gizmo_(gizmo),
       callbacks_(std::move(callbacks)),
       animation_(std::make_unique<QVariantAnimation>()),
+      wheelNavigationSettleTimer_(),
       panButton_(panButton)
 {
+    wheelNavigationSettleTimer_.setSingleShot(true);
+    wheelNavigationSettleTimer_.setInterval(wheelNavigationSettleDurationMs);
+    QObject::connect(&wheelNavigationSettleTimer_,
+                     &QTimer::timeout,
+                     &wheelNavigationSettleTimer_,
+                     [this]() {
+        wheelNavigationActive_ = false;
+        requestUpdate();
+    });
+
     animation_->setDuration(200);
     animation_->setStartValue(0.0);
     animation_->setEndValue(1.0);
@@ -456,6 +468,8 @@ WheelZoomResult NavigationController::zoomFromWheel(
     transform_.zoomAt(screenPosition,
                       std::exp(std::log(1.2) * wheelSteps),
                       viewportSize);
+    wheelNavigationActive_ = true;
+    wheelNavigationSettleTimer_.start();
     result.worldAfter = transform_.screenToWorld(screenPosition, viewportSize);
     result.changed = true;
     requestUpdate();
@@ -481,6 +495,7 @@ bool NavigationController::isPanning() const
 bool NavigationController::isNavigating() const
 {
     return panning_ || orbiting_ || pressedAction_ != BlenderNavigationAction::None ||
+           wheelNavigationActive_ ||
            (animation_ && animation_->state() == QAbstractAnimation::Running);
 }
 

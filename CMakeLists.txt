@@ -581,6 +581,12 @@ if (CLASSICAD_BUILD_TESTS)
         classicad_viewport_widget_objects
     )
     add_test(NAME viewport_interaction COMMAND classicad_viewport_interaction_test)
+    add_test(NAME viewport_wheel_navigation_aa
+        COMMAND classicad_viewport_interaction_test
+    )
+    set_tests_properties(viewport_wheel_navigation_aa PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_WHEEL_NAVIGATION_AA_ONLY=1"
+    )
     add_test(NAME viewport_surface_boundary COMMAND classicad_viewport_interaction_test)
     set_tests_properties(viewport_surface_boundary PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_SURFACE_BOUNDARY_ONLY=1")

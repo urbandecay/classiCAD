@@ -4,6 +4,7 @@
 #include "ui/viewport/viewport_depth_geometry.h"
 #include "ui/viewport/line_type_style.h"
 #include "ui/viewport/viewport_surface_renderer.h"
+#include "ui/viewport/navigation_controller.h"
 
 #include "core/document/document.h"
 #include "core/geometry/curve_construction.h"
@@ -34,6 +35,7 @@
 #include <QToolButton>
 #include <QSlider>
 #include <QWheelEvent>
+#include <QWidget>
 
 #include <algorithm>
 #include <array>
@@ -1942,9 +1944,44 @@ bool verifyContinuousNearDrag(QApplication &application)
     return allPassed;
 }
 
+bool verifyWheelNavigationAaSettling()
+{
+    QWidget navigationHost;
+    ViewportTransform transform;
+    ViewportNavigationGizmo gizmo(transform);
+    int updateRequests = 0;
+    NavigationController controller(
+        navigationHost,
+        transform,
+        gizmo,
+        {.requestUpdate = [&updateRequests]() { ++updateRequests; }});
+    const QSize viewportSize(640, 480);
+    const QPointF wheelPosition(320.0, 240.0);
+    controller.zoomFromWheel(wheelPosition, 120, 0, viewportSize);
+    bool passed = check(controller.isNavigating(),
+                        "wheel zoom must enter interactive navigation AA state");
+    const auto waitForMs = [](int durationMs) {
+        QEventLoop loop;
+        QTimer::singleShot(durationMs, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    waitForMs(125);
+    controller.zoomFromWheel(wheelPosition, 120, 0, viewportSize);
+    waitForMs(125);
+    passed &= check(controller.isNavigating(),
+                    "repeated wheel zoom must restart the navigation AA settle interval");
+    waitForMs(100);
+    passed &= check(!controller.isNavigating() && updateRequests >= 3,
+                    "wheel zoom must leave interactive navigation AA state and request an idle accumulation frame after settling");
+    return passed;
+}
+
 int main(int argc, char **argv)
 {
     QApplication application(argc, argv);
+    if (qEnvironmentVariableIsSet("CLASSICAD_WHEEL_NAVIGATION_AA_ONLY")) {
+        return verifyWheelNavigationAaSettling() ? 0 : 1;
+    }
     if (qEnvironmentVariableIsSet("CLASSICAD_SURFACE_BOUNDARY_ONLY")) {
         const bool boundary = verifySurfaceBoundarySplineDuplicate(application);
         const bool arcExtrusion = verifyArcToolExtrudeBoundary(application);

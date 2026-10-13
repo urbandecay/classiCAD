@@ -195,7 +195,8 @@ public:
               bool depthTest = false,
               qreal opacity = 1.0,
               bool smoothOverlayWires = true,
-              bool smoothEditModeWires = true);
+              bool smoothEditModeWires = true,
+              bool sceneLinearOutput = false);
     bool drawArcToolOverlay(const ViewportTransform &transform,
                             const QSize &viewportSize,
                             qreal devicePixelRatio,

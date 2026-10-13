@@ -86,7 +86,11 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   mapping for orthographic depth and retains the perspective formula for
   perspective views. Pass order remains per sample: Workbench resolves DOF
   before anti-aliasing, and classiCAD does the same. Matched orthographic-view
-  output comparison remains pending. This change covers the GPU renderer;
+  output comparison remains pending. The GPU resolve now keeps untouched
+  opaque background pixels at the depth-clear value on the original source
+  color, preventing far-plane CoC from darkening the backdrop; the offscreen
+  contract checks four known background corners and verifies that color still
+  changes along the cube's foreground edges. This change covers the GPU renderer;
   QPainter still gates its approximate DOF on perspective projection.
 
 **DOF gate correction (2026-10-12):** This supersedes older summary bullets
@@ -180,9 +184,16 @@ in ordinary free views or orthographic views is superseded by this correction.
   metadata records 16-bit render precision and explicitly identifies it as
   normalized display-referred data.
 - The result now also has a separate top-down interleaved RGBA-float payload
-  captured from the final post-DOF scene-linear texture before display transform
-  or CAD annotations. When OpenEXR is found by CMake, OPEN_EXR writes those
-  channels directly from the float payload without routing through QImage.
+  captured from the final post-DOF scene-linear texture. Committed CAD curve
+  strokes are drawn into each scene-linear AA sample with sRGB-to-linear color
+  conversion and depth writes disabled; transient editor overlays remain in
+  the display-only pass. Committed CAD dimensions are rasterized to a
+  transparent annotation layer and alpha-composited into both display Combined
+  and scene-linear Combined, converting their sRGB annotation colors to linear
+  before blending. The additional stroke draw leaves the depth attachment
+  unchanged. When OpenEXR is found by CMake, OPEN_EXR writes the complete
+  scene-linear Combined channels directly from the float payload without
+  routing through QImage.
   Blender's 16-bit OpenEXR setting now writes HALF channels with finite-range
   clamping; 32-bit writes retain FLOAT channels. Reported output precision
   follows the selected OpenEXR depth. Pinned references are Blender's

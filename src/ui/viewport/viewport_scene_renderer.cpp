@@ -886,7 +886,8 @@ bool ViewportSceneRenderer::draw(
     bool depthTest,
     qreal opacity,
     bool smoothOverlayWires,
-    bool smoothEditModeWires)
+    bool smoothEditModeWires,
+    bool sceneLinearOutput)
 {
     if (strokes.isEmpty()) {
         strokeGeometryKeys_.clear();
@@ -1165,6 +1166,8 @@ bool ViewportSceneRenderer::draw(
             // Antialias coverage has the same color-space meaning for curve
             // wires and surface boundaries as it does for edit wires.
             const bool linearDisplayBlend = linearDisplayBlendAvailable;
+            const bool convertStrokeColorToLinear =
+                linearDisplayBlendAvailable || sceneLinearOutput;
             if (linearDisplayBlend) {
                 glEnable(GL_FRAMEBUFFER_SRGB);
             } else {
@@ -1173,7 +1176,7 @@ bool ViewportSceneRenderer::draw(
             boundProgram->setUniformValue("uSmoothWire", smoothWire ? 1 : 0);
             boundProgram->setUniformValue("uEditModeWire", stroke.editModeWire ? 1 : 0);
             boundProgram->setUniformValue("uLinearDisplayBlend",
-                                          linearDisplayBlend ? 1 : 0);
+                                          convertStrokeColorToLinear ? 1 : 0);
             const ViewportSceneStrokePattern pattern =
                 viewportSceneStrokePattern(stroke, widthPixels);
             int count = range.second;

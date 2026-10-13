@@ -6789,6 +6789,13 @@ public:
                 strokes.append(std::move(stroke));
             }
         }
+        QVector<ViewportSceneStroke> sceneLinearStrokes = strokes;
+        for (ViewportSceneStroke &stroke : sceneLinearStrokes) {
+            // Keep the scene-linear Combined pass from changing the depth
+            // attachment. The display-referred overlay below retains its
+            // existing depth-write behavior.
+            stroke.writeDepth = false;
+        }
         ViewportShadingSettings settings = viewportShadingSettings_;
         result.colorManagementApplied =
             applyImportedRenderColorManagement(document_, &settings);
@@ -6818,13 +6825,16 @@ public:
         gpuSurface_->renderOffscreen(
             outputSize,
             renderCamera,
-            [&renderFrame, &settings, &renderCamera, transparentFilm,
+            [this, &renderFrame, &sceneLinearStrokes, &settings,
+             captureSceneLinearCombined,
+             &renderCamera, transparentFilm,
              combinedUsesPremultipliedAlpha,
              useSceneWorldBackground, noSceneWorldBackground,
              sceneWorldColor](
                 const QSize &pixelSize, ViewportAaRenderer &aa,
                 BlenderGridRenderer &grid,
-                ViewportSceneRenderer &, ViewportSurfaceRenderer &surface) {
+                ViewportSceneRenderer &scene,
+                ViewportSurfaceRenderer &surface) {
                 aa.setDepthOfField(settings.depthOfField &&
                                        !settings.xrayEnabled(),
                                    renderCamera.cameraPreferences(),
@@ -6851,11 +6861,43 @@ public:
                     aa.markCurrentSampleAttachmentsValid(
                         sceneColorPass.report.populatedAttachments);
                 }
-                return sceneColorPass.rendered;
+                if (!sceneColorPass.rendered) return false;
+                if (!captureSceneLinearCombined ||
+                    sceneLinearStrokes.isEmpty()) {
+                    return true;
+                }
+                return scene.draw(sceneLinearStrokes, aa.sampleCamera(),
+                                  pixelSize, 1.0, true, 1.0,
+                                  smoothWiresOverlay_, smoothWiresEditMode_,
+                                  true);
             },
-            [this, &strokes, &renderCamera](
+            [this, &strokes, &renderCamera,
+             captureSceneLinearCombined](
                 const QSize &pixelSize, ViewportSceneRenderer &scene) {
-                return strokes.isEmpty() || scene.draw(
+                if (strokes.isEmpty()) return true;
+                if (captureSceneLinearCombined) {
+                    // The scene-linear sample already contains these stroke
+                    // colors. Replay only their existing depth behavior here
+                    // so the Z pass remains identical without double-drawing
+                    // the visible Combined pixels.
+                    GLboolean previousColorMask[4] = {
+                        GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+                    QOpenGLFunctions *functions =
+                        QOpenGLContext::currentContext()->functions();
+                    functions->glGetBooleanv(GL_COLOR_WRITEMASK,
+                                             previousColorMask);
+                    functions->glColorMask(GL_FALSE, GL_FALSE, GL_FALSE,
+                                           GL_FALSE);
+                    const bool depthDrawn = scene.draw(
+                        strokes, renderCamera, pixelSize, 1.0, true, 1.0,
+                        smoothWiresOverlay_, smoothWiresEditMode_);
+                    functions->glColorMask(previousColorMask[0],
+                                           previousColorMask[1],
+                                           previousColorMask[2],
+                                           previousColorMask[3]);
+                    return depthDrawn;
+                }
+                return scene.draw(
                     strokes, renderCamera, pixelSize, 1.0, true, 1.0,
                     smoothWiresOverlay_, smoothWiresEditMode_);
             },
@@ -6867,10 +6909,13 @@ public:
             // CAD dimensions are committed scene annotations, not transient
             // editor overlays. Include them in the saved result at the chosen
             // output resolution while leaving the grid and tool overlays out.
+            QImage annotationLayer(outputSize,
+                                   QImage::Format_RGBA64_Premultiplied);
+            annotationLayer.fill(Qt::transparent);
             ViewportRenderer annotationRenderer(renderCamera, curveHitTester_);
             annotationRenderer.setArchitecturalDimensionFont(
                 architecturalDimensionFont_);
-            QPainter annotationPainter(&result.combined);
+            QPainter annotationPainter(&annotationLayer);
             annotationPainter.setRenderHint(QPainter::Antialiasing, true);
             annotationPainter.setRenderHint(QPainter::TextAntialiasing, true);
             for (const ViewportRenderObject &object : renderFrame.objects) {
@@ -6882,6 +6927,51 @@ public:
                     object.geometryRevision);
             }
             annotationPainter.end();
+            {
+                QPainter combinedPainter(&result.combined);
+                combinedPainter.setCompositionMode(
+                    QPainter::CompositionMode_SourceOver);
+                combinedPainter.drawImage(0, 0, annotationLayer);
+            }
+            if (result.sceneLinearRgba.size() ==
+                outputSize.width() * outputSize.height() * 4) {
+                const auto srgbToLinear = [](float value) {
+                    return value <= 0.04045f
+                        ? value / 12.92f
+                        : std::pow((value + 0.055f) / 1.055f, 2.4f);
+                };
+                for (int y = 0; y < outputSize.height(); ++y) {
+                    const auto *annotationRow =
+                        reinterpret_cast<const QRgba64 *>(
+                            annotationLayer.constScanLine(y));
+                    for (int x = 0; x < outputSize.width(); ++x) {
+                        const QRgba64 pixel = annotationRow[x];
+                        const float alpha = pixel.alpha() / 65535.0f;
+                        if (alpha <= 0.0f) continue;
+                        const qsizetype base =
+                            (qsizetype(y) * outputSize.width() + x) * 4;
+                        const float inverseAlpha = 1.0f - alpha;
+                        const float redSrgb = std::min(
+                            1.0f, pixel.red() / 65535.0f / alpha);
+                        const float greenSrgb = std::min(
+                            1.0f, pixel.green() / 65535.0f / alpha);
+                        const float blueSrgb = std::min(
+                            1.0f, pixel.blue() / 65535.0f / alpha);
+                        result.sceneLinearRgba[base] =
+                            srgbToLinear(redSrgb) * alpha +
+                            result.sceneLinearRgba[base] * inverseAlpha;
+                        result.sceneLinearRgba[base + 1] =
+                            srgbToLinear(greenSrgb) * alpha +
+                            result.sceneLinearRgba[base + 1] * inverseAlpha;
+                        result.sceneLinearRgba[base + 2] =
+                            srgbToLinear(blueSrgb) * alpha +
+                            result.sceneLinearRgba[base + 2] * inverseAlpha;
+                        result.sceneLinearRgba[base + 3] =
+                            alpha + result.sceneLinearRgba[base + 3] *
+                                       inverseAlpha;
+                    }
+                }
+            }
             applyWorkbenchRenderDither(&result.combined,
                                        renderDitherIntensity,
                                        result.writtenColorDepth(),

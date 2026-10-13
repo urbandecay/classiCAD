@@ -28,6 +28,9 @@
 #include <OpenEXR/ImfRgba.h>
 #include <OpenEXR/OpenEXRConfig.h>
 #endif
+#ifdef CLASSICAD_HAS_TIFF
+#include <tiffio.h>
+#endif
 
 namespace classiCAD {
 
@@ -141,6 +144,17 @@ QString qtWriterFormat(const QString &blenderFormat)
     return QString();
 }
 
+bool supportedTiffCodec(const QString &codec)
+{
+    const QString key = codec.toUpper();
+#ifdef CLASSICAD_HAS_TIFF
+    return key == QLatin1String("NONE") || key == QLatin1String("LZW") ||
+           key == QLatin1String("PACKBITS") || key == QLatin1String("DEFLATE");
+#else
+    return key == QLatin1String("NONE") || key == QLatin1String("LZW");
+#endif
+}
+
 QString fileExtension(const QString &writerFormat)
 {
     if (writerFormat == QLatin1String("jpeg")) return QStringLiteral("jpg");
@@ -175,6 +189,109 @@ void applyImageWriterSettings(QImageWriter *writer,
             writer->setCompression(2);
     }
 }
+
+#ifdef CLASSICAD_HAS_TIFF
+bool saveTiff(const QString &path, const QImage &image,
+              const QString &colorMode, int depth, const QString &codec,
+              qreal aspectX, qreal aspectY, const QString &description,
+              QString *errorMessage)
+{
+    const QString normalizedCodec = codec.toUpper();
+    std::uint16_t compression = COMPRESSION_ADOBE_DEFLATE;
+    if (normalizedCodec == QLatin1String("NONE")) compression = COMPRESSION_NONE;
+    else if (normalizedCodec == QLatin1String("LZW")) compression = COMPRESSION_LZW;
+    else if (normalizedCodec == QLatin1String("PACKBITS")) compression = COMPRESSION_PACKBITS;
+    else if (normalizedCodec != QLatin1String("DEFLATE")) {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Unsupported Blender TIFF codec '%1'").arg(codec);
+        return false;
+    }
+
+    const bool grayscale = colorMode.compare(QLatin1String("BW"), Qt::CaseInsensitive) == 0;
+    const bool rgb = colorMode.compare(QLatin1String("RGB"), Qt::CaseInsensitive) == 0;
+    const bool alpha = !grayscale && !rgb;
+    const int bits = depth == 16 ? 16 : 8;
+    QImage converted = image.convertToFormat(
+        bits == 16 ? (grayscale ? QImage::Format_Grayscale16
+                                : QImage::Format_RGBA64)
+                   : (grayscale ? QImage::Format_Grayscale8
+                                : QImage::Format_RGBA8888));
+    if (converted.isNull()) {
+        if (errorMessage != nullptr) *errorMessage = QStringLiteral("Could not convert image for TIFF output");
+        return false;
+    }
+
+    const QByteArray encodedPath = QFile::encodeName(path);
+    TIFF *tiff = TIFFOpen(encodedPath.constData(), "w");
+    if (tiff == nullptr) {
+        if (errorMessage != nullptr) *errorMessage = QStringLiteral("Could not open TIFF output path");
+        return false;
+    }
+    const std::uint16_t samples = grayscale ? 1 : (alpha ? 4 : 3);
+    const std::uint16_t photometric = grayscale ? PHOTOMETRIC_MINISBLACK : PHOTOMETRIC_RGB;
+    std::uint16_t extraSample = EXTRASAMPLE_UNASSALPHA;
+    bool ok = TIFFSetField(tiff, TIFFTAG_IMAGEWIDTH, std::uint32_t(converted.width())) &&
+        TIFFSetField(tiff, TIFFTAG_IMAGELENGTH, std::uint32_t(converted.height())) &&
+        TIFFSetField(tiff, TIFFTAG_SAMPLESPERPIXEL, samples) &&
+        TIFFSetField(tiff, TIFFTAG_BITSPERSAMPLE, bits) &&
+        TIFFSetField(tiff, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT) &&
+        TIFFSetField(tiff, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG) &&
+        TIFFSetField(tiff, TIFFTAG_PHOTOMETRIC, photometric) &&
+        TIFFSetField(tiff, TIFFTAG_COMPRESSION, compression) &&
+        TIFFSetField(tiff, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT) &&
+        TIFFSetField(tiff, TIFFTAG_ROWSPERSTRIP, TIFFDefaultStripSize(tiff, 0));
+    if (ok && !description.isEmpty())
+        ok = TIFFSetField(tiff, TIFFTAG_IMAGEDESCRIPTION,
+                          description.toUtf8().constData());
+    if (ok && alpha)
+        ok = TIFFSetField(tiff, TIFFTAG_EXTRASAMPLES, 1, &extraSample);
+    if (ok && std::isfinite(aspectX) && std::isfinite(aspectY) && aspectX > 0.0 && aspectY > 0.0) {
+        constexpr qreal referenceDotsPerMeter = 10000.0;
+        const qreal maximumAspect = std::max(aspectX, aspectY);
+        const float resolutionX = float(
+            referenceDotsPerMeter * aspectY / maximumAspect * 0.0254);
+        const float resolutionY = float(
+            referenceDotsPerMeter * aspectX / maximumAspect * 0.0254);
+        ok = TIFFSetField(tiff, TIFFTAG_RESOLUTIONUNIT, RESUNIT_INCH) &&
+             TIFFSetField(tiff, TIFFTAG_XRESOLUTION, resolutionX) &&
+             TIFFSetField(tiff, TIFFTAG_YRESOLUTION, resolutionY);
+    }
+
+    std::vector<std::uint8_t> row8;
+    std::vector<std::uint16_t> row16;
+    if (!grayscale) {
+        const int channels = alpha ? 4 : 3;
+        if (bits == 8) row8.resize(size_t(converted.width()) * channels);
+        else row16.resize(size_t(converted.width()) * channels);
+    }
+    for (int y = 0; ok && y < converted.height(); ++y) {
+        const auto *source = converted.constScanLine(y);
+        const void *scanline = source;
+        if (!grayscale && bits == 8) {
+            const auto *rgba = reinterpret_cast<const std::uint8_t *>(source);
+            for (int x = 0; x < converted.width(); ++x) {
+                for (int c = 0; c < (alpha ? 4 : 3); ++c)
+                    row8[size_t(x) * (alpha ? 4 : 3) + c] = rgba[x * 4 + c];
+            }
+            scanline = row8.data();
+        } else if (!grayscale && bits == 16) {
+            const auto *rgba = reinterpret_cast<const std::uint16_t *>(source);
+            for (int x = 0; x < converted.width(); ++x) {
+                for (int c = 0; c < (alpha ? 4 : 3); ++c)
+                    row16[size_t(x) * (alpha ? 4 : 3) + c] = rgba[x * 4 + c];
+            }
+            scanline = row16.data();
+        }
+        ok = TIFFWriteScanline(tiff, const_cast<void *>(scanline), std::uint32_t(y), 0) >= 0;
+    }
+    TIFFClose(tiff);
+    if (!ok) QFile::remove(path);
+    if (!ok && errorMessage != nullptr)
+        *errorMessage = QStringLiteral("libtiff failed while writing TIFF pixels");
+    else if (errorMessage != nullptr) errorMessage->clear();
+    return ok;
+}
+#endif
 
 bool saveRadianceHdr(const QString &path, const QVector<float> &rgba,
                      const QSize &size, QString *errorMessage)
@@ -803,6 +920,19 @@ QString WorkbenchRenderResult::combinedImageFormatError() const
         return QStringLiteral("Blender render image format '%1' is unsupported by classiCAD")
             .arg(blenderImageFormat);
     }
+    if (writerFormat == QLatin1String("tiff") &&
+        !supportedTiffCodec(tiffCodec)) {
+#ifdef CLASSICAD_HAS_TIFF
+        return QStringLiteral("Unsupported Blender TIFF codec '%1'")
+            .arg(tiffCodec);
+#else
+        return QStringLiteral("TIFF codec '%1' requires libtiff; this build can write only NONE or LZW")
+            .arg(tiffCodec);
+#endif
+    }
+#ifdef CLASSICAD_HAS_TIFF
+    if (writerFormat == QLatin1String("tiff")) return QString();
+#endif
     const QByteArray requested = writerFormat.toLatin1();
     const QList<QByteArray> supported = QImageWriter::supportedImageFormats();
     if (std::none_of(supported.cbegin(), supported.cend(),
@@ -922,12 +1052,7 @@ bool WorkbenchRenderResult::saveCombinedImage(
     cameraJson.insert(QStringLiteral("imageCompression"), imageCompression);
     cameraJson.insert(QStringLiteral("tiffCodec"), tiffCodec);
     if (writerFormat == QLatin1String("tiff")) {
-        const QString requestedTiffCodec = tiffCodec.toUpper();
-        const QString writtenTiffCodec =
-            requestedTiffCodec == QLatin1String("LZW") ||
-                    requestedTiffCodec == QLatin1String("PACKBITS")
-                ? QStringLiteral("LZW")
-                : QStringLiteral("NONE");
+        const QString writtenTiffCodec = tiffCodec.toUpper();
         cameraJson.insert(QStringLiteral("writtenTiffCodec"),
                           writtenTiffCodec);
     }
@@ -999,6 +1124,15 @@ bool WorkbenchRenderResult::saveCombinedImage(
     output.setText(QStringLiteral("classiCAD.Camera"),
                    QString::fromUtf8(QJsonDocument(cameraJson).toJson(
                        QJsonDocument::Compact)));
+
+#ifdef CLASSICAD_HAS_TIFF
+    if (writerFormat == QLatin1String("tiff")) {
+        return saveTiff(path, output, mode, outputDepth, tiffCodec,
+                        pixelAspectX, pixelAspectY,
+                        output.text(QStringLiteral("classiCAD.Camera")),
+                        errorMessage);
+    }
+#endif
 
     QImageWriter writer(path, writerFormat.toLatin1());
     applyImageWriterSettings(&writer, writerFormat, blenderImageFormat, imageQuality,

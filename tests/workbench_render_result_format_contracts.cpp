@@ -9,6 +9,10 @@
 
 #include <algorithm>
 
+#ifdef CLASSICAD_HAS_TIFF
+#include <tiffio.h>
+#endif
+
 using namespace classiCAD;
 
 namespace {
@@ -89,6 +93,7 @@ int main(int argc, char *argv[])
             return format.compare("tiff", Qt::CaseInsensitive) == 0;
         });
     result.blenderImageFormat = QStringLiteral("TIFF");
+    result.tiffCodec = QStringLiteral("NONE");
     if (hasTiffWriter) {
         passed &= check(result.combinedFileExtension() == QStringLiteral("tif"),
                         "available Qt TIFF writer must resolve to a TIFF extension");
@@ -102,6 +107,50 @@ int main(int argc, char *argv[])
                             !QFileInfo::exists(path),
                         "unavailable Qt TIFF writer must report an error and must not substitute PNG");
     }
+
+#ifdef CLASSICAD_HAS_TIFF
+    const QVector<QPair<QString, int>> tiffCodecs{
+        {QStringLiteral("NONE"), COMPRESSION_NONE},
+        {QStringLiteral("LZW"), COMPRESSION_LZW},
+        {QStringLiteral("PACKBITS"), COMPRESSION_PACKBITS},
+        {QStringLiteral("DEFLATE"), COMPRESSION_ADOBE_DEFLATE}};
+    result.pixelAspectX = 1.5;
+    result.pixelAspectY = 1.0;
+    bool exactTiffCodecs = true;
+    for (const auto &codec : tiffCodecs) {
+        result.tiffCodec = codec.first;
+        const QString path = outputDirectory.filePath(codec.first + QStringLiteral(".tif"));
+        QString error;
+        bool codecWritten = result.saveCombinedImage(path, &error);
+        TIFF *tiff = codecWritten
+            ? TIFFOpen(QFile::encodeName(path).constData(), "r") : nullptr;
+        std::uint16_t actualCodec = 0;
+        float resolutionX = 0.0f;
+        float resolutionY = 0.0f;
+        codecWritten = tiff != nullptr &&
+            TIFFGetField(tiff, TIFFTAG_COMPRESSION, &actualCodec) &&
+            TIFFGetField(tiff, TIFFTAG_XRESOLUTION, &resolutionX) &&
+            TIFFGetField(tiff, TIFFTAG_YRESOLUTION, &resolutionY);
+        if (tiff != nullptr) TIFFClose(tiff);
+        exactTiffCodecs &= codecWritten && actualCodec == codec.second &&
+            qAbs(double(resolutionY / resolutionX) - 1.5) < 0.001;
+    }
+    passed &= check(exactTiffCodecs,
+                    "libtiff output must preserve all Blender TIFF codec tags and pixel aspect metadata");
+#else
+    bool unsupportedTiffCodecsRejected = true;
+    for (const QString &codec : {QStringLiteral("DEFLATE"), QStringLiteral("PACKBITS")}) {
+        result.tiffCodec = codec;
+        const QString path = outputDirectory.filePath(codec + QStringLiteral(".tif"));
+        QString error;
+        unsupportedTiffCodecsRejected &=
+            !result.saveCombinedImage(path, &error) &&
+            error.contains(QStringLiteral("requires libtiff")) &&
+            !QFileInfo::exists(path);
+    }
+    passed &= check(unsupportedTiffCodecsRejected,
+                    "Qt-only builds must reject TIFF codecs they cannot represent");
+#endif
 
     result.blenderImageFormat = QStringLiteral("OPEN_EXR");
     if (WorkbenchRenderResult::openExrWriterAvailable()) {

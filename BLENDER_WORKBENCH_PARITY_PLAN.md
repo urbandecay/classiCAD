@@ -2515,3 +2515,22 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   `workbench_render_result_format_contracts` CTest passed, and
   `git diff --check` passed. Blender documents the range in its pinned
   [ImageFormatSettings API](https://docs.blender.org/api/5.2/bpy.types.ImageFormatSettings.html#bpy.types.ImageFormatSettings.quality).
+
+### TIFF render-result compression codecs (2026-10-13)
+
+- Blender's TIFF `NONE`, `LZW`, `PACKBITS`, and `DEFLATE` codecs map to TIFF
+  compression tags 1, 5, 32773, and 8. Qt's image writer exposes only NONE or
+  LZW for TIFF, so an optional libtiff writer now preserves all four codecs,
+  8/16-bit color channels, render metadata, and pixel-aspect resolution tags.
+  Builds without libtiff retain exact NONE/LZW output and reject DEFLATE or
+  PACKBITS with a clear error rather than writing a different codec.
+- The format contract checks the exact TIFF compression tag and pixel-aspect
+  tags with libtiff when available; the Qt-only contract checks that unsupported
+  codecs fail without leaving an output file. The local `cmake --build build
+  -j2` and focused format contract passed with the feature-off path. This
+  environment has the libtiff runtime but lacks development headers, so the
+  feature-on implementation could not be compiled or exercised locally.
+- Blender's mapping is pinned in [`image_format.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_format.cc#L782-L798)
+  and its TIFF tags in [`format_tiff.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/format_tiff.cc#L55-L82).
+  Qt 6.4.2's TIFF writer maps its limited compression option in
+  [`qtiffhandler.cpp`](https://github.com/qt/qtimageformats/blob/v6.4.2/src/plugins/imageformats/tiff/qtiffhandler.cpp#L160-L168).

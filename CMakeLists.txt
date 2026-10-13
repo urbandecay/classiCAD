@@ -15,6 +15,9 @@ find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS OpenGL)
 # OpenEXR is optional. When available, WorkbenchRenderResult can write its
 # unmodified scene-linear float Combined pass as a real multi-channel EXR.
 find_package(OpenEXR QUIET)
+# libtiff is optional. When present, it preserves Blender's complete TIFF
+# compression codec selection instead of Qt's limited NONE/LZW writer.
+find_package(TIFF QUIET)
 
 set(CLASSICAD_QT_OPENGL_LIBRARIES Qt${QT_VERSION_MAJOR}::OpenGL)
 if (QT_VERSION_MAJOR EQUAL 6)
@@ -306,6 +309,10 @@ elseif (TARGET OpenEXR::IlmImf)
     target_link_libraries(classicad_viewport_shared_objects PRIVATE OpenEXR::IlmImf)
     target_compile_definitions(classicad_viewport_shared_objects PRIVATE CLASSICAD_HAS_OPENEXR=1)
 endif ()
+if (TARGET TIFF::TIFF)
+    target_link_libraries(classicad_viewport_shared_objects PRIVATE TIFF::TIFF)
+    target_compile_definitions(classicad_viewport_shared_objects PRIVATE CLASSICAD_HAS_TIFF=1)
+endif ()
 classicad_add_ui_object_module(classicad_viewport_support_objects
     ${CLASSICAD_VIEWPORT_ADAPTER_SUPPORT_SOURCES}
 )
@@ -531,6 +538,14 @@ if (CLASSICAD_BUILD_TESTS)
         target_compile_definitions(
             classicad_workbench_render_result_format_contracts_test
             PRIVATE CLASSICAD_HAS_OPENEXR=1)
+    endif ()
+    if (TARGET TIFF::TIFF)
+        target_link_libraries(
+            classicad_workbench_render_result_format_contracts_test
+            PRIVATE TIFF::TIFF)
+        target_compile_definitions(
+            classicad_workbench_render_result_format_contracts_test
+            PRIVATE CLASSICAD_HAS_TIFF=1)
     endif ()
     add_test(NAME workbench_render_result_format_contracts
         COMMAND classicad_workbench_render_result_format_contracts_test)

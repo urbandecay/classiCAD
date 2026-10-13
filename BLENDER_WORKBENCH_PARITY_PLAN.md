@@ -664,6 +664,14 @@ in ordinary free views or orthographic views is superseded by this correction.
   across classiCAD's frame versus 0.81 for Blender's own DOF/baseline delta.
   This validates spatial blur and background coverage, while exact bokeh
   parity remains open.
+  The remaining zero-CoC boundary mismatch was corrected in both prefilter
+  stages: pinned prepare computes the far sign from `-cocs_near`, so its
+  `step(0, coc)` includes zero for both near and far; pinned downsample does
+  the same for the separately encoded nonnegative near/far channels. The GPU
+  shader now uses `c >= 0` / `c <= 0` in prepare and `channel >= 0` in
+  downsample. The existing focused offscreen capture exercises the focus
+  boundary and still checks edge blur, opacity, and camera-DOF gating; an
+  isolated zero-CoC pixel contract is not exposed by the current fixture.
   Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap full-resolution gather and has no median pass. Its aperture shaping now uses Blender's `blades > 1` condition and polygon/rotation/reciprocal-X-ratio mapping, including the two-blade slit. Image comparison remains open. Pinned gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L30-L75); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
 
 - The matched capture exposed two source-level issues. CoC reconstruction was

@@ -780,8 +780,8 @@ bool ViewportAaRenderer::initialize()
                 vec4 nearW = vec4(0.0);
                 vec4 farW = vec4(0.0);
                 for (int i = 0; i < 4; ++i) {
-                    nearW[i] = c[i] > 0.0 ? clamp(1.0 - abs(nearCoc - c[i]), 0.0, 1.0) : 0.0;
-                    farW[i] = c[i] < 0.0 ? clamp(1.0 - abs(farCoc + c[i]), 0.0, 1.0) : 0.0;
+                    nearW[i] = c[i] >= 0.0 ? clamp(1.0 - abs(nearCoc - c[i]), 0.0, 1.0) : 0.0;
+                    farW[i] = c[i] <= 0.0 ? clamp(1.0 - abs(farCoc + c[i]), 0.0, 1.0) : 0.0;
                 }
                 vec4 weights = dot(farW, vec4(1.0)) > 0.0 ? farW : nearW;
                 outColor = clamp(weightedFour(colors[0], colors[1], colors[2], colors[3], weights), 0.0, 3.0);
@@ -809,8 +809,8 @@ bool ViewportAaRenderer::initialize()
                 for (int i = 0; i < 4; ++i) {
                     float n = cocs[i].r * 100.0;
                     float f = cocs[i].g * 100.0;
-                    nearW[i] = n > 0.0 ? clamp(1.0 - abs(nearCoc * 100.0 - n), 0.0, 1.0) : 0.0;
-                    farW[i] = f > 0.0 ? clamp(1.0 - abs(farCoc * 100.0 - f), 0.0, 1.0) : 0.0;
+                    nearW[i] = n >= 0.0 ? clamp(1.0 - abs(nearCoc * 100.0 - n), 0.0, 1.0) : 0.0;
+                    farW[i] = f >= 0.0 ? clamp(1.0 - abs(farCoc * 100.0 - f), 0.0, 1.0) : 0.0;
                 }
                 vec4 weights = dot(farW, vec4(1.0)) > 0.0 ? farW : nearW;
                 outColor = weightedFour(colors[0], colors[1], colors[2], colors[3], weights);

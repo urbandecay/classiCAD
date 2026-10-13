@@ -21,6 +21,7 @@
 
 #include <QDebug>
 #include <QBuffer>
+#include <QFile>
 #include <QGuiApplication>
 #include <QImage>
 #include <QMatrix4x4>
@@ -1627,6 +1628,69 @@ int main(int argc, char *argv[])
                             ++completedSamples;
                         }
                         const QImage image = framebuffer.toImage();
+                        bool linearCaptureSaved = true;
+                        const QString linearCapturePath =
+                            aaMode == static_cast<int>(
+                                          ViewportAntiAliasingMode::Samples8)
+                                ? qEnvironmentVariable(
+                                      "CLASSICAD_VIEWPORT_AA_SAMPLES8_LINEAR_CAPTURE")
+                                : QString();
+                        if (!linearCapturePath.isEmpty() &&
+                            completedSamples == expectedSamples) {
+                            const ViewportRenderTargets &targets =
+                                aaRenderer.targets();
+                            const GLuint linearTexture =
+                                targets.isValid(ViewportRenderTargets::
+                                                    ResolvedSceneLinearColor)
+                                    ? targets.resolvedSceneLinearColorTexture
+                                    : 0;
+                            QVector<float> rgba(glSize.width() *
+                                                glSize.height() * 4);
+                            GLint previousActiveTexture = GL_TEXTURE0;
+                            GLint previousTexture = 0;
+                            functions.glGetIntegerv(
+                                GL_ACTIVE_TEXTURE, &previousActiveTexture);
+                            functions.glActiveTexture(GL_TEXTURE0);
+                            functions.glGetIntegerv(
+                                GL_TEXTURE_BINDING_2D, &previousTexture);
+                            if (linearTexture != 0) {
+                                functions.glBindTexture(GL_TEXTURE_2D,
+                                                        linearTexture);
+                                functions.glGetTexImage(
+                                    GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT,
+                                    rgba.data());
+                            }
+                            functions.glBindTexture(
+                                GL_TEXTURE_2D,
+                                static_cast<GLuint>(previousTexture));
+                            functions.glActiveTexture(
+                                static_cast<GLenum>(previousActiveTexture));
+
+                            QFile linearFile(linearCapturePath);
+                            const QByteArray header =
+                                QByteArrayLiteral("PF\n") +
+                                QByteArray::number(glSize.width()) +
+                                QByteArrayLiteral(" ") +
+                                QByteArray::number(glSize.height()) +
+                                QByteArrayLiteral("\n-1.0\n");
+                            QVector<float> rgb(glSize.width() *
+                                               glSize.height() * 3);
+                            for (int pixel = 0;
+                                 pixel < glSize.width() * glSize.height();
+                                 ++pixel) {
+                                rgb[pixel * 3] = rgba[pixel * 4];
+                                rgb[pixel * 3 + 1] = rgba[pixel * 4 + 1];
+                                rgb[pixel * 3 + 2] = rgba[pixel * 4 + 2];
+                            }
+                            linearCaptureSaved = linearTexture != 0 &&
+                                linearFile.open(QIODevice::WriteOnly) &&
+                                linearFile.write(header) == header.size() &&
+                                linearFile.write(
+                                    reinterpret_cast<const char *>(
+                                        rgb.constData()),
+                                    qsizetype(rgb.size()) * qsizetype(sizeof(float))) ==
+                                    qsizetype(rgb.size()) * qsizetype(sizeof(float));
+                        }
                         int changedPixels = 0;
                         for (int y = 0; y < image.height(); ++y) {
                             for (int x = 0; x < image.width(); ++x) {
@@ -1637,6 +1701,7 @@ int main(int argc, char *argv[])
                         }
                         return check(
                             captureSucceeded &&
+                                linearCaptureSaved &&
                                 completedSamples == expectedSamples &&
                                 changedPixels > 4000 && image.save(capturePath),
                             label);

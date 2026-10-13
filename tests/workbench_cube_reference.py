@@ -1,6 +1,6 @@
 """Render the controlled Workbench cube reference in Blender 5.2.2.
 
-Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE
+Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr
 AA accepts OFF, FXAA, or 8 (default: FXAA).
 Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
@@ -22,6 +22,10 @@ def arguments():
         "--effect",
         choices=("BASELINE", "SHADOWS", "CAVITY", "OUTLINE"),
         default="BASELINE",
+    )
+    parser.add_argument(
+        "--linear-output",
+        help="also write the final Workbench Combined pass to a scene-linear OpenEXR",
     )
     return parser.parse_args(argv)
 
@@ -71,6 +75,15 @@ def main():
 
     scene.view_settings.view_transform = "AgX"
     bpy.ops.render.render(write_still=True)
+
+    if args.linear_output:
+        # Blender's direct OpenEXR output keeps the Workbench Combined pass
+        # scene-linear; PNG above is the separate AgX/display-referred result.
+        scene.render.image_settings.file_format = "OPEN_EXR"
+        scene.render.image_settings.color_mode = "RGBA"
+        scene.render.image_settings.color_depth = "32"
+        scene.render.filepath = args.linear_output
+        bpy.ops.render.render(write_still=True)
 
 
 if __name__ == "__main__":

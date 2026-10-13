@@ -945,11 +945,13 @@ bool ViewportSurfaceRenderer::initialize()
         uniform float uCavitySampleCountInv;
         uniform bool uTransparencyAccumulation;
         uniform bool uWriteMaterialData;
+        uniform bool uWriteShadowMask;
         uniform bool uFaceAwareNormals;
         uniform bool uExcludeFrontCoverage;
         uniform sampler2D uFrontDepthMask;
         out vec4 fragmentColor;
         layout(location = 1) out vec4 secondaryColor;
+        layout(location = 2) out vec4 tertiaryColor;
 
         float fastReciprocal(float value)
         {
@@ -1279,6 +1281,7 @@ bool ViewportSurfaceRenderer::initialize()
 
         void main()
         {
+            float shadowFactor = 1.0;
             if (uTransparencyAccumulation && uExcludeFrontCoverage &&
                 texelFetch(uFrontDepthMask, ivec2(gl_FragCoord.xy), 0).r < 1.0) {
                 discard;
@@ -1399,6 +1402,7 @@ bool ViewportSurfaceRenderer::initialize()
                 shadowMix *= shadowVisibility *
                              clamp(uShadowIntensity, 0.0, 1.0);
                 shadowMix += 1.0 - clamp(uShadowIntensity, 0.0, 1.0);
+                shadowFactor = shadowMix;
                 color *= shadowMix;
             }
             if (uTransparencyAccumulation) {
@@ -1471,6 +1475,9 @@ bool ViewportSurfaceRenderer::initialize()
                     ? vec4(baseColor, materialPayload)
                     : vec4(0.0);
             }
+            tertiaryColor = uWriteShadowMask && !uTransparencyAccumulation
+                ? vec4(shadowFactor, 0.0, 0.0, 1.0)
+                : vec4(1.0, 0.0, 0.0, 1.0);
         }
     )glsl";
 
@@ -1575,6 +1582,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2D uCavityDepth;
         uniform usampler2D uCavityObjectId;
         uniform sampler2D uCavityJitterTexture;
+        uniform sampler2D uShadowMask;
         uniform bool uStudioLighting;
         uniform bool uMatcapLighting;
         uniform bool uMatcapAvailable;
@@ -1582,6 +1590,7 @@ bool ViewportSurfaceRenderer::initialize()
         uniform bool uUseCavity;
         uniform bool uUseSsao;
         uniform bool uUseCurvature;
+        uniform bool uUseShadowMask;
         uniform vec2 uCavityProjectionScale;
         uniform float uCavityUiScale;
         uniform float uCavityDistance;
@@ -1919,6 +1928,9 @@ bool ViewportSurfaceRenderer::initialize()
                                    (1.0 + curvature),
                                0.0, 4.0);
             }
+            if (uUseShadowMask) {
+                color *= texelFetch(uShadowMask, pixel, 0).r;
+            }
             if (selected) {
                 color = mix(color,
                             srgbToDisplayLinear(uEditSelectionColor),
@@ -2188,15 +2200,18 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2D uFrontDepth;
         uniform sampler2D uFrontNormal;
         uniform sampler2D uFrontMaterialData;
+        uniform sampler2D uFrontShadowMask;
         uniform usampler2D uFrontObjectId;
         uniform usampler2D uFrontOutlineId;
         uniform bool uMergeColor;
         uniform bool uMergeMaterial;
+        uniform bool uMergeShadowMask;
         layout(location = 0) out vec4 mergedColor;
         layout(location = 1) out vec4 mergedNormal;
         layout(location = 2) out uint mergedObjectId;
         layout(location = 3) out uint mergedOutlineId;
         layout(location = 4) out vec4 mergedMaterialData;
+        layout(location = 5) out float mergedShadowMask;
         void main()
         {
             float depth = texture(uFrontDepth, vUv).r;
@@ -2212,6 +2227,9 @@ bool ViewportSurfaceRenderer::initialize()
             mergedOutlineId = texture(uFrontOutlineId, vUv).r;
             if (uMergeMaterial) {
                 mergedMaterialData = texture(uFrontMaterialData, vUv);
+            }
+            if (uMergeShadowMask) {
+                mergedShadowMask = texture(uFrontShadowMask, vUv).r;
             }
         }
     )glsl";
@@ -3334,7 +3352,7 @@ bool ViewportSurfaceRenderer::ensureWorkbenchEffectFramebuffers(
 
 bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
     const ViewportRenderTargets &targets, bool mergeColor, bool mergeNormal,
-    bool mergeMaterial)
+    bool mergeMaterial, bool mergeShadowMask)
 {
     if (targets.frontDepthTexture == 0 ||
         targets.frontMaterialDataTexture == 0 ||
@@ -3342,6 +3360,9 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
         targets.frontObjectIdTexture == 0 ||
         targets.frontOutlineIdTexture == 0 || targets.depthTexture == 0 ||
         targets.viewSpaceNormalTexture == 0 || targets.objectIdTexture == 0 ||
+        (mergeShadowMask &&
+         (targets.frontShadowMaskTexture == 0 ||
+          targets.shadowMaskTexture == 0)) ||
         (mergeColor && targets.currentSampleColorTexture == 0)) {
         return false;
     }
@@ -3349,7 +3370,7 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
     GLint previousViewport[4] = {};
     GLint previousActiveTexture = GL_TEXTURE0;
     GLint previousDepthFunction = GL_LESS;
-    GLint previousTextureBindings[6] = {};
+    GLint previousTextureBindings[7] = {};
     GLboolean previousDepthMask = GL_TRUE;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
     const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
@@ -3363,7 +3384,7 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
     glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
     glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
     glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
-    for (int unit = 0; unit < 6; ++unit) {
+    for (int unit = 0; unit < 7; ++unit) {
         glActiveTexture(GL_TEXTURE0 + unit);
         glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTextureBindings[unit]);
     }
@@ -3382,6 +3403,8 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
                            GL_TEXTURE_2D, workbenchOutlineIdTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT4,
                            GL_TEXTURE_2D, targets.materialDataTexture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT5,
+                           GL_TEXTURE_2D, targets.shadowMaskTexture, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, targets.depthTexture, 0);
     const GLenum drawBuffers[] = {mergeColor
@@ -3394,8 +3417,11 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
                                   mergeMaterial &&
                                           targets.materialDataTexture != 0
                                       ? static_cast<GLenum>(GL_COLOR_ATTACHMENT4)
+                                      : static_cast<GLenum>(GL_NONE),
+                                  mergeShadowMask
+                                      ? static_cast<GLenum>(GL_COLOR_ATTACHMENT5)
                                       : static_cast<GLenum>(GL_NONE)};
-    glDrawBuffers(5, drawBuffers);
+    glDrawBuffers(6, drawBuffers);
     const bool complete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     if (complete) {
@@ -3420,6 +3446,8 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
         glBindTexture(GL_TEXTURE_2D, targets.frontOutlineIdTexture);
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, targets.frontMaterialDataTexture);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D, targets.frontShadowMaskTexture);
         frontMergeProgram_.bind();
         frontMergeProgram_.setUniformValue("uFrontColor", 0);
         frontMergeProgram_.setUniformValue("uFrontDepth", 1);
@@ -3427,14 +3455,17 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
         frontMergeProgram_.setUniformValue("uFrontObjectId", 3);
         frontMergeProgram_.setUniformValue("uFrontOutlineId", 4);
         frontMergeProgram_.setUniformValue("uFrontMaterialData", 5);
+        frontMergeProgram_.setUniformValue("uFrontShadowMask", 6);
         frontMergeProgram_.setUniformValue("uMergeColor", mergeColor);
         frontMergeProgram_.setUniformValue("uMergeMaterial", mergeMaterial);
+        frontMergeProgram_.setUniformValue("uMergeShadowMask",
+                                           mergeShadowMask);
         outlineVertexArray_.bind();
         glDrawArrays(GL_TRIANGLES, 0, 3);
         outlineVertexArray_.release();
         frontMergeProgram_.release();
     }
-    for (int unit = 0; unit < 6; ++unit) {
+    for (int unit = 0; unit < 7; ++unit) {
         glActiveTexture(GL_TEXTURE0 + unit);
         glBindTexture(GL_TEXTURE_2D,
                       static_cast<GLuint>(previousTextureBindings[unit]));
@@ -3468,6 +3499,7 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
         targets.pixelSize != pixelSize || !outlineVertexArray_.isCreated() ||
         ((studioLighting || matcapLighting || cavityRequested) &&
          targets.viewSpaceNormalTexture == 0) ||
+        (settings.shadows && targets.shadowMaskTexture == 0) ||
         (matcapLighting && !ensureMatcapTexture(settings.matcapPreset))) {
         return false;
     }
@@ -3483,6 +3515,7 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     GLint previousTexture4 = 0;
     GLint previousTexture5 = 0;
     GLint previousTexture6 = 0;
+    GLint previousTexture7 = 0;
     GLint previousProgram = 0;
     GLboolean previousDepthMask = GL_TRUE;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
@@ -3512,6 +3545,8 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture5);
     glActiveTexture(GL_TEXTURE6);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture6);
+    glActiveTexture(GL_TEXTURE7);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture7);
 
     if (flatMaterialResolveFramebuffer_ == 0) {
         glGenFramebuffers(1, &flatMaterialResolveFramebuffer_);
@@ -3549,6 +3584,9 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D,
                       cavityRequested && ssaoEnabled ? cavityJitterTexture_ : 0);
+        glActiveTexture(GL_TEXTURE7);
+        glBindTexture(GL_TEXTURE_2D,
+                      settings.shadows ? targets.shadowMaskTexture : 0);
         flatMaterialResolveProgram_.bind();
         flatMaterialResolveProgram_.setUniformValue("uDepth", 0);
         flatMaterialResolveProgram_.setUniformValue("uMaterialData", 1);
@@ -3557,6 +3595,9 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
         flatMaterialResolveProgram_.setUniformValue("uCavityObjectId", 4);
         flatMaterialResolveProgram_.setUniformValue("uCavityDepth", 5);
         flatMaterialResolveProgram_.setUniformValue("uCavityJitterTexture", 6);
+        flatMaterialResolveProgram_.setUniformValue("uShadowMask", 7);
+        flatMaterialResolveProgram_.setUniformValue("uUseShadowMask",
+                                                    settings.shadows);
         flatMaterialResolveProgram_.setUniformValue("uStudioLighting",
                                                     studioLighting);
         flatMaterialResolveProgram_.setUniformValue("uMatcapLighting",
@@ -3717,6 +3758,8 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture5));
     glActiveTexture(GL_TEXTURE6);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture6));
+    glActiveTexture(GL_TEXTURE7);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture7));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
                       static_cast<GLuint>(previousDrawFramebuffer));
@@ -6742,6 +6785,11 @@ bool ViewportSurfaceRenderer::draw(
                                    bool writeMaterialData = false) {
             program_.setUniformValue("uShadowVolumeShadowed",
                                      volumeShadowed);
+            const bool writeShadowMask = !transparencyAccumulation &&
+                settings.shadows && sharedTargets != nullptr &&
+                sharedTargets->shadowMaskTexture != 0 &&
+                sharedTargets->pixelSize == transparencyPixelSize;
+            program_.setUniformValue("uWriteShadowMask", writeShadowMask);
             program_.setUniformValue("uUseShadows",
                                      useShadows && enableShadows);
             program_.setUniformValue("uUseShadowMap",
@@ -7235,10 +7283,16 @@ bool ViewportSurfaceRenderer::draw(
                 sharedTargets != nullptr &&
                 sharedTargets->materialDataTexture != 0 &&
                 sharedTargets->pixelSize == transparencyPixelSize;
-            if (writeMaterialData) {
+            const bool writeShadowMask = !previewOverlay && settings.shadows &&
+                sharedTargets != nullptr &&
+                sharedTargets->shadowMaskTexture != 0 &&
+                sharedTargets->pixelSize == transparencyPixelSize;
+            if (writeMaterialData || writeShadowMask) {
                 const GLenum opaqueDrawAttachments[] = {
-                    GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-                glDrawBuffers(2, opaqueDrawAttachments);
+                    GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1,
+                    writeShadowMask ? static_cast<GLenum>(GL_COLOR_ATTACHMENT2)
+                                    : static_cast<GLenum>(GL_NONE)};
+                glDrawBuffers(3, opaqueDrawAttachments);
             }
             if (hasPartialAlpha) {
                 // Render opaque surfaces first to establish depth, then blend
@@ -7265,6 +7319,10 @@ bool ViewportSurfaceRenderer::draw(
                         passReport->populatedAttachments |=
                             ViewportRenderTargets::MaterialData;
                     }
+                    if (writeShadowMask) {
+                        passReport->populatedAttachments |=
+                            ViewportRenderTargets::ShadowMask;
+                    }
                 }
                 if (includeTransparent) drawTransparentTriangles();
                 return;
@@ -7285,9 +7343,14 @@ bool ViewportSurfaceRenderer::draw(
                     passReport->populatedAttachments |=
                         ViewportRenderTargets::MaterialData;
                 }
+                if (writeShadowMask) {
+                    passReport->populatedAttachments |=
+                        ViewportRenderTargets::ShadowMask;
+                }
             }
         };
         bool frontOpaqueMaterialMerged = frontOpaqueRangeIndices.isEmpty();
+        bool frontOpaqueShadowMaskMerged = frontOpaqueRangeIndices.isEmpty();
         const auto drawFrontOpaqueRanges = [&]() {
             if (frontOpaqueRangeIndices.isEmpty() || sharedTargets == nullptr ||
                 !frontDomainReady) {
@@ -7346,8 +7409,9 @@ bool ViewportSurfaceRenderer::draw(
             glGetIntegerv(GL_VIEWPORT, previousViewport);
             glBindFramebuffer(GL_FRAMEBUFFER, sharedTargets->frontFramebuffer);
             const GLenum frontColorDrawAttachments[] = {
-                GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-            glDrawBuffers(2, frontColorDrawAttachments);
+                GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1,
+                GL_COLOR_ATTACHMENT5};
+            glDrawBuffers(3, frontColorDrawAttachments);
             glViewport(0, 0, sharedTargets->pixelSize.width(),
                        sharedTargets->pixelSize.height());
             glEnable(GL_DEPTH_TEST);
@@ -7412,11 +7476,14 @@ bool ViewportSurfaceRenderer::draw(
                 static_cast<GLenum>(previousStencilBackDepthFail),
                 static_cast<GLenum>(previousStencilBackDepthPass));
             if (!mergeWorkbenchFrontAttachments(*sharedTargets, true, true,
-                                                true)) {
+                                                true, settings.shadows)) {
                 qWarning() << "Workbench front color merge failed";
             } else {
                 frontOpaqueMaterialMerged =
                     sharedTargets->materialDataTexture != 0;
+                frontOpaqueShadowMaskMerged = !settings.shadows ||
+                    (sharedTargets->shadowMaskTexture != 0 &&
+                     sharedTargets->frontShadowMaskTexture != 0);
                 if (passReport != nullptr) {
                     passReport->markPassCompleted(
                         ViewportRenderPass::FrontOpaqueColor);
@@ -7425,6 +7492,10 @@ bool ViewportSurfaceRenderer::draw(
                     if (frontOpaqueMaterialMerged) {
                         passReport->populatedAttachments |=
                             ViewportRenderTargets::MaterialData;
+                    }
+                    if (settings.shadows && frontOpaqueShadowMaskMerged) {
+                        passReport->populatedAttachments |=
+                            ViewportRenderTargets::ShadowMask;
                     }
                 }
             }
@@ -7435,7 +7506,7 @@ bool ViewportSurfaceRenderer::draw(
              settings.lightingMode == ViewportLightingMode::Studio ||
              settings.lightingMode == ViewportLightingMode::MatCap) &&
             !previewOverlay && !selectionOverlay &&
-            !settings.xrayEnabled() && !settings.shadows &&
+            !settings.xrayEnabled() &&
             sharedTargets != nullptr &&
             sharedTargets->materialDataTexture != 0 &&
             sharedTargets->pixelSize == transparencyPixelSize;
@@ -7453,6 +7524,9 @@ bool ViewportSurfaceRenderer::draw(
                   cavityRequested) && !sharedPrepassReady) ||
                 !deferredCavityReady ||
                 !frontOpaqueMaterialMerged ||
+                (settings.shadows &&
+                 (!frontOpaqueShadowMaskMerged ||
+                  sharedTargets->shadowMaskTexture == 0)) ||
                 (opaqueRangeIndices.isEmpty() &&
                  frontOpaqueRangeIndices.isEmpty()) ||
                 !resolveWorkbenchMaterial(

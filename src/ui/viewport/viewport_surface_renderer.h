@@ -107,7 +107,8 @@ private:
     bool mergeWorkbenchFrontAttachments(const ViewportRenderTargets &targets,
                                         bool mergeColor,
                                         bool mergeNormal = true,
-                                        bool mergeMaterial = false);
+                                        bool mergeMaterial = false,
+                                        bool mergeShadowMask = false);
     bool resolveWorkbenchMaterial(
         const QSize &pixelSize, const ViewportRenderTargets &targets,
         const ViewportTransform &transform, const QSize &viewportSize,

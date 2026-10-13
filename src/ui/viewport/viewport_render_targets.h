@@ -91,10 +91,13 @@ struct ViewportRenderTargets {
     GLuint frontViewSpaceNormalTexture = 0;
     GLuint frontObjectIdTexture = 0;
     GLuint frontOutlineIdTexture = 0;
+    // R16F final opaque shadow multiplier for the isolated front domain.
+    GLuint frontShadowMaskTexture = 0;
     GLuint frontFramebuffer = 0;
     // RGBA16F opaque material G-buffer: scene-linear base RGB plus the
     // Blender Workbench mode-dependent payload in alpha.
     GLuint materialDataTexture = 0;
+    // R16F final opaque shadow multiplier; uncovered pixels are 1.
     GLuint shadowMaskTexture = 0;
     QSize pixelSize;
     QMatrix4x4 inverseViewProjection;

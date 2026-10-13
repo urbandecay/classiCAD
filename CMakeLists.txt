@@ -403,7 +403,10 @@ if (CLASSICAD_BUILD_TESTS)
         COMMAND classicad_scene_query_contracts_test
     )
 
-    add_executable(classicad_core_contracts_test tests/core_contracts.cpp)
+    add_executable(classicad_core_contracts_test
+        tests/core_contracts.cpp
+        src/ui/panels/preferences_store.cpp
+    )
     classicad_configure_ui_target(classicad_core_contracts_test)
     classicad_attach_object_modules(classicad_core_contracts_test
         classicad_geometry_objects
@@ -416,6 +419,10 @@ if (CLASSICAD_BUILD_TESTS)
     )
     add_test(NAME core_contracts COMMAND classicad_core_contracts_test)
     set_tests_properties(core_contracts PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_test(NAME workbench_persistence_contracts
+        COMMAND classicad_core_contracts_test --workbench-persistence)
+    set_tests_properties(workbench_persistence_contracts PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_test(NAME connected_line_loops
         COMMAND classicad_core_contracts_test --connected-line-loops)
     set_tests_properties(connected_line_loops PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

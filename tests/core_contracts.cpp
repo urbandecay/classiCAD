@@ -11,6 +11,7 @@
 #include "core/history/history.h"
 #include "core/model.h"
 #include "core/serialization/document_serializer.h"
+#include "ui/panels/preferences_store.h"
 #include "core/tool_id.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/dimensions/dimension_association.h"
@@ -42,6 +43,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPainter>
+#include <QSettings>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <cmath>
@@ -175,6 +178,66 @@ bool connectedLineContracts()
     return passed;
 }
 
+bool persistedWorkbenchSettingsContracts()
+{
+    bool passed = true;
+    Document source;
+    DocumentSettings settings = source.settings();
+    QJsonObject renderOutput;
+    renderOutput.insert(QStringLiteral("render_aa"), QStringLiteral("11"));
+    renderOutput.insert(QStringLiteral("resolution_x"), 1920);
+    renderOutput.insert(QStringLiteral("resolution_y"), 1080);
+    renderOutput.insert(QStringLiteral("file_format"), QStringLiteral("OPEN_EXR"));
+    renderOutput.insert(QStringLiteral("color_mode"), QStringLiteral("RGBA"));
+    renderOutput.insert(QStringLiteral("color_depth"), 16);
+    QJsonObject scene;
+    scene.insert(QStringLiteral("render_output"), renderOutput);
+    settings.importedBlenderScenes = QJsonArray{scene};
+    passed &= check(source.setSettings(settings),
+                    "document must accept imported Blender render settings");
+
+    const QJsonObject serialized = documentToJson(source);
+    Document restored;
+    QString error;
+    const bool roundTripped = documentFromJson(serialized, &restored, &error);
+    passed &= check(roundTripped && error.isEmpty(),
+                    "native document must reopen imported Blender render settings");
+    if (roundTripped && !restored.settings().importedBlenderScenes.isEmpty()) {
+        const QJsonObject restoredOutput = restored.settings()
+            .importedBlenderScenes.first().toObject()
+            .value(QStringLiteral("render_output")).toObject();
+        passed &= check(restoredOutput.value(QStringLiteral("render_aa")).toString() ==
+                            QStringLiteral("11") &&
+                            restoredOutput.value(QStringLiteral("resolution_x")).toInt() == 1920 &&
+                            restoredOutput.value(QStringLiteral("resolution_y")).toInt() == 1080 &&
+                            restoredOutput.value(QStringLiteral("file_format")).toString() ==
+                                QStringLiteral("OPEN_EXR") &&
+                            restoredOutput.value(QStringLiteral("color_mode")).toString() ==
+                                QStringLiteral("RGBA") &&
+                            restoredOutput.value(QStringLiteral("color_depth")).toInt() == 16,
+                        "render AA, output dimensions, and format fields must survive native save/reopen");
+    } else {
+        passed = false;
+    }
+
+    QTemporaryDir settingsDir;
+    passed &= check(settingsDir.isValid(),
+                    "preferences test must create an isolated settings directory");
+    if (settingsDir.isValid()) {
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
+                           settingsDir.path());
+        QCoreApplication::setOrganizationName(QStringLiteral("classiCAD-contract-test"));
+        QCoreApplication::setApplicationName(QStringLiteral("workbench-persistence"));
+        saveSmoothWirePreferences(false, true);
+        const StoredPreferences reloaded = loadStoredPreferences();
+        passed &= check(!reloaded.dialogValues.smoothWiresOverlay &&
+                            reloaded.dialogValues.smoothWiresEditMode,
+                        "both Smooth Wires booleans must reload from QSettings independently");
+    }
+    return passed;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -183,7 +246,11 @@ int main(int argc, char **argv)
     if (application.arguments().contains(QStringLiteral("--connected-line-loops"))) {
         return connectedLineContracts() ? 0 : 1;
     }
+    if (application.arguments().contains(QStringLiteral("--workbench-persistence"))) {
+        return persistedWorkbenchSettingsContracts() ? 0 : 1;
+    }
     bool passed = true;
+    passed &= persistedWorkbenchSettingsContracts();
     passed &= check(!std::is_same_v<ToolId, GeometryType>,
                     "tool and geometry vocabularies must be distinct types");
     passed &= check(geometryTypeForTool(ToolId::Line) == GeometryType::Line,

@@ -6775,6 +6775,7 @@ public:
         result.camera.opticalSensorSizeMillimeters =
             renderPreferences.opticalSensorSizeMillimeters;
         ViewportRenderFrameInput input;
+        input.visibility = ViewportRenderFrameInput::Visibility::Render;
         ViewportRenderFrame renderFrame = buildViewportRenderFrame(
             document_, renderCamera, outputSize, input);
         QVector<ViewportSceneStroke> strokes;

@@ -1146,6 +1146,114 @@ bool Document::isObjectVisible(ObjectId objectId) const
     return true;
 }
 
+bool Document::isObjectRenderable(ObjectId objectId) const
+{
+    const SceneObject *sceneObject = object(objectId);
+    const Layer *objectLayer = sceneObject == nullptr ? nullptr : layer(sceneObject->layerId);
+    if (objectLayer == nullptr || !objectLayer->visible || objectLayer->frozen ||
+        sceneObject->hideRender) {
+        return false;
+    }
+
+    const QString activeViewLayerKey = settings_.activeViewLayerKey.isEmpty()
+        ? sceneObject->defaultViewLayerKey : settings_.activeViewLayerKey;
+    const auto hasRenderableCollectionPath = [&](const auto &self,
+                                                  CollectionId id,
+                                                  QSet<quint64> path) -> bool {
+        if (path.contains(id.value())) return false;
+        path.insert(id.value());
+        const DocumentCollection *entry = collection(id);
+        if (entry == nullptr || entry->hideRender) return false;
+        if (entry->parentIds.isEmpty()) return true;
+        for (CollectionId parent : entry->parentIds) {
+            if (self(self, parent, path)) return true;
+        }
+        return false;
+    };
+
+    if (sceneObject->collectionIds.isEmpty()) return true;
+    if (activeViewLayerKey.isEmpty()) {
+        for (CollectionId id : sceneObject->collectionIds) {
+            if (hasRenderableCollectionPath(hasRenderableCollectionPath, id, {})) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    const auto pathMatches = [](const QJsonArray &stored,
+                                const QStringList &expected) {
+        if (stored.size() != expected.size()) return false;
+        for (int i = 0; i < expected.size(); ++i) {
+            if (!stored[i].isString() || stored[i].toString() != expected[i]) {
+                return false;
+            }
+        }
+        return true;
+    };
+    for (CollectionId membershipId : sceneObject->collectionIds) {
+        const DocumentCollection *membership = collection(membershipId);
+        if (membership == nullptr || membership->hideRender) continue;
+        for (const QJsonValue &stateValue : membership->viewLayerStates) {
+            const QJsonObject membershipState = stateValue.toObject();
+            if (membershipState.value(QStringLiteral("view_layer_key")).toString() !=
+                activeViewLayerKey) {
+                continue;
+            }
+            const QJsonArray pathArray =
+                membershipState.value(QStringLiteral("path")).toArray();
+            QStringList sourcePath;
+            for (const QJsonValue &part : pathArray) {
+                sourcePath.append(part.toString());
+            }
+            if (sourcePath.isEmpty() || sourcePath.last() != membership->sourceId) {
+                continue;
+            }
+
+            bool renderable = true;
+            CollectionId previous = CollectionId::invalid();
+            for (int index = 0; index < sourcePath.size(); ++index) {
+                const QString &sourceId = sourcePath[index];
+                const auto node = std::find_if(
+                    collections_.cbegin(), collections_.cend(),
+                    [&sourceId](const DocumentCollection &candidate) {
+                        return candidate.sourceId == sourceId;
+                    });
+                if (node == collections_.cend() || node->hideRender ||
+                    (previous.isValid() && !node->parentIds.contains(previous))) {
+                    renderable = false;
+                    break;
+                }
+                QJsonObject nodeState;
+                bool foundNodeState = false;
+                for (const QJsonValue &nodeStateValue : node->viewLayerStates) {
+                    const QJsonObject state = nodeStateValue.toObject();
+                    QStringList prefix;
+                    for (int prefixIndex = 0; prefixIndex <= index; ++prefixIndex) {
+                        prefix.append(sourcePath[prefixIndex]);
+                    }
+                    if (state.value(QStringLiteral("view_layer_key")).toString() ==
+                            activeViewLayerKey &&
+                        pathMatches(state.value(QStringLiteral("path")).toArray(),
+                                    prefix)) {
+                        nodeState = state;
+                        foundNodeState = true;
+                        break;
+                    }
+                }
+                if (!foundNodeState ||
+                    nodeState.value(QStringLiteral("exclude")).toBool()) {
+                    renderable = false;
+                    break;
+                }
+                previous = node->id;
+            }
+            if (renderable) return true;
+        }
+    }
+    return false;
+}
+
 bool Document::isObjectEditable(ObjectId objectId) const
 {
     const SceneObject *sceneObject = object(objectId);

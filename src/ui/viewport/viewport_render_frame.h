@@ -46,6 +46,12 @@ struct ViewportRenderTransform {
 };
 
 struct ViewportRenderFrameInput {
+    enum class Visibility {
+        Viewport,
+        Render,
+    };
+
+    Visibility visibility = Visibility::Viewport;
     QVector<ObjectId> selectedObjectIds;
     ObjectId primarySelectedObjectId = ObjectId::invalid();
     QVector<ObjectId> highlightedObjectIds;

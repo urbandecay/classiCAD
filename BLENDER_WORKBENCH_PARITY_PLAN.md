@@ -1364,6 +1364,23 @@ depth domain. Visual depth comparison remains open.
   camera-shift options are diagnostic tooling; ordinary scene rendering is
   unchanged when capture options are unset.
 
+### Render-result visibility (2026-10-13)
+
+- Offscreen Workbench result assembly now uses a render-specific visibility
+  predicate. It honors object and collection `hide_render` plus active
+  view-layer collection membership and exclusion, while ignoring viewport-only
+  object and collection hiding. Interactive viewport frame construction keeps
+  using the existing viewport visibility predicate. This follows Blender
+  5.2.2 Workbench's render sync, which filters with
+  `DRW_object_is_renderable` and `DRW_object_visibility_in_active_context` in
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L153-L162).
+- Focused render-frame coverage checks viewport-hidden/render-visible objects,
+  render-hidden/viewport-visible objects, collection `hide_viewport`, and
+  collection `hide_render` through the selected view-layer membership path.
+  `cmake --build build -j4` completes successfully, and the focused
+  `classicad_viewport_render_contracts_test` passes with Qt's offscreen
+  platform. Matched Blender render-result image comparison remains open.
+
 ### Controlled Workbench effect captures (2026-10-12)
 
 - The Blender fixture now supports a two-quad `TRANSPARENT_OVERLAP` scene and

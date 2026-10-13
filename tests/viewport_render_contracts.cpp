@@ -16,6 +16,7 @@
 #include "core/geometry/nurbs_surface.h"
 #include "core/geometry/nurbs_solid.h"
 #include "core/geometry/scalar_volume.h"
+#include "core/document/document.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/viewport/viewport_transform.h"
 
@@ -25,6 +26,8 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QMatrix4x4>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
@@ -87,6 +90,84 @@ int main(int argc, char *argv[])
                         workbenchRenderDitherIntensity(
                             std::numeric_limits<qreal>::quiet_NaN(), 8) == 0.0,
                     "Blender render dither must apply only to finite nonnegative 8-bit byte output");
+
+    {
+        const auto frameContains = [](const Document &document,
+                                       ObjectId id,
+                                       ViewportRenderFrameInput::Visibility visibility) {
+            ViewportRenderFrameInput input;
+            input.visibility = visibility;
+            return buildViewportRenderFrame(document, ViewportTransform(),
+                                            QSize(64, 64), input).find(id) != nullptr;
+        };
+        const auto insertVisibilityObject = [](Document *document,
+                                                bool hideViewport,
+                                                bool hiddenInViewport,
+                                                bool hideRender) {
+            SceneObject object;
+            object.geometry.geometryType = GeometryType::PolygonMesh;
+            object.hideViewport = hideViewport;
+            object.hiddenInViewport = hiddenInViewport;
+            object.hideRender = hideRender;
+            return document->insertObject(0, object);
+        };
+
+        Document viewportHiddenDocument;
+        const ObjectId viewportHiddenId = insertVisibilityObject(
+            &viewportHiddenDocument, true, true, false);
+        passed &= check(
+            !frameContains(viewportHiddenDocument, viewportHiddenId,
+                           ViewportRenderFrameInput::Visibility::Viewport) &&
+                frameContains(viewportHiddenDocument, viewportHiddenId,
+                              ViewportRenderFrameInput::Visibility::Render),
+            "Workbench render frames must include objects hidden only in the viewport");
+
+        Document renderHiddenDocument;
+        const ObjectId renderHiddenId = insertVisibilityObject(
+            &renderHiddenDocument, false, false, true);
+        passed &= check(
+            frameContains(renderHiddenDocument, renderHiddenId,
+                          ViewportRenderFrameInput::Visibility::Viewport) &&
+                !frameContains(renderHiddenDocument, renderHiddenId,
+                               ViewportRenderFrameInput::Visibility::Render),
+            "Workbench render frames must omit objects hidden only from rendering");
+
+        DocumentCollection collection;
+        collection.name = QStringLiteral("Visibility");
+        collection.sourceId = QStringLiteral("collection-visibility");
+        collection.viewLayerStates.append(QJsonObject{
+            {QStringLiteral("view_layer_key"), QStringLiteral("view-layer")},
+            {QStringLiteral("path"), QJsonArray{QStringLiteral("collection-visibility")}},
+            {QStringLiteral("exclude"), false},
+            {QStringLiteral("hide_viewport"), false}});
+        Document renderViewLayerDocument;
+        DocumentSettings visibilitySettings = renderViewLayerDocument.settings();
+        visibilitySettings.activeViewLayerKey = QStringLiteral("view-layer");
+        renderViewLayerDocument.setSettings(visibilitySettings);
+        const CollectionId visibilityCollection =
+            renderViewLayerDocument.insertCollection(collection);
+        const ObjectId collectionObjectId = insertVisibilityObject(
+            &renderViewLayerDocument, false, false, false);
+        renderViewLayerDocument.setObjectCollections(
+            collectionObjectId, {visibilityCollection});
+        renderViewLayerDocument.setCollectionVisibility(
+            visibilityCollection, true, false);
+        passed &= check(
+            !frameContains(renderViewLayerDocument, collectionObjectId,
+                           ViewportRenderFrameInput::Visibility::Viewport) &&
+                frameContains(renderViewLayerDocument, collectionObjectId,
+                              ViewportRenderFrameInput::Visibility::Render),
+            "render visibility must honor active-layer collection membership while ignoring its viewport hide flag");
+
+        renderViewLayerDocument.setCollectionVisibility(
+            visibilityCollection, false, true);
+        passed &= check(
+            frameContains(renderViewLayerDocument, collectionObjectId,
+                          ViewportRenderFrameInput::Visibility::Viewport) &&
+                !frameContains(renderViewLayerDocument, collectionObjectId,
+                               ViewportRenderFrameInput::Visibility::Render),
+            "Workbench render frames must honor collection hide_render without hiding its viewport object");
+    }
 
     const Point3D dofCameraPosition{2.0, -3.0, 10.0};
     const Point3D dofViewDirection{0.0, 0.0, 1.0};

@@ -115,6 +115,9 @@ public:
     bool isLayerEditable(LayerId id) const;
     bool moveObjectToLayer(ObjectId objectId, LayerId layerId);
     bool isObjectVisible(ObjectId objectId) const;
+    // Render visibility follows Blender's hide_render/excluded collection
+    // state without applying viewport-only hide flags.
+    bool isObjectRenderable(ObjectId objectId) const;
     bool isObjectEditable(ObjectId objectId) const;
 
     Snapshot snapshot() const;

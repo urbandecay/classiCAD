@@ -77,7 +77,11 @@ ViewportRenderFrame buildViewportRenderFrame(
 
     int objectIndex = 0;
     for (const SceneObject &sceneObject : document.objects()) {
-        if (!document.isObjectVisible(sceneObject.id) ||
+        const bool visible = input.visibility ==
+                ViewportRenderFrameInput::Visibility::Render
+            ? document.isObjectRenderable(sceneObject.id)
+            : document.isObjectVisible(sceneObject.id);
+        if (!visible ||
             hiddenPreviewIds.contains(sceneObject.id.value())) {
             ++objectIndex;
             continue;

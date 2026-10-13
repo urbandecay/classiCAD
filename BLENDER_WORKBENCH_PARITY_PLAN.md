@@ -57,6 +57,16 @@ shadows, cavity, X-Ray, preview, or selected-range tint is active. The C++ build
 passes; shader runtime and matched Blender image comparison remain open because
 this environment has not provided a working OpenGL comparison context.
 
+**MatCap G-buffer resolve update (2026-10-13):** The same eligible deferred
+resolve now handles MatCap using the existing Blender-derived MatCap UV
+mapping and two-layer linear half-float texture: diffuse multiplies the
+scene-linear material color, while specular is added when enabled. Horizontal
+flip, perspective incident reconstruction, orthographic view direction, and
+the independent front-object material/normal merge are retained. If the MatCap
+resource cannot be prepared, the existing forward output is left in place.
+This path shares the Studio restrictions above. The C++ build passes; GPU
+shader execution and matched Blender image comparison remain open.
+
 ### QPainter perspective cavity footprint (2026-10-13)
 
 - The QPainter SSAO sample step now scales per receiver in perspective views by

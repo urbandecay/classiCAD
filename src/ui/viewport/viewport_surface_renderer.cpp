@@ -1562,7 +1562,11 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2D uDepth;
         uniform sampler2D uMaterialData;
         uniform sampler2D uViewNormal;
+        uniform sampler2DArray uMatcapTexture;
         uniform bool uStudioLighting;
+        uniform bool uMatcapLighting;
+        uniform bool uMatcapAvailable;
+        uniform bool uMatcapFlipX;
         uniform bool uPerspective;
         uniform bool uUseSpecular;
         uniform mat4 uInverseViewProjection;
@@ -1596,6 +1600,18 @@ bool ViewportSurfaceRenderer::initialize()
             float f = dot(fenc, fenc);
             float g = sqrt(1.0 - f / 4.0);
             return vec3(fenc * g, 1.0 - f / 2.0);
+        }
+
+        vec2 workbenchMatcapUv(vec3 incident, vec3 normal)
+        {
+            float a = 1.0 / (1.0 + incident.z);
+            float b = -incident.x * incident.y * a;
+            vec3 basis1 = vec3(1.0 - incident.x * incident.x * a,
+                               b, -incident.x);
+            vec3 basis2 = vec3(b, 1.0 - incident.y * incident.y * a,
+                               -incident.y);
+            return vec2(dot(basis1, normal), dot(basis2, normal)) * 0.496 +
+                   0.5;
         }
 
         // Adapts Blender 5.2.2 Workbench's world-light shader; Blender
@@ -1687,6 +1703,16 @@ bool ViewportSurfaceRenderer::initialize()
                 float metallic = float((packed >> 5) & 7) * (1.0 / 7.0);
                 color = workbenchStudioLighting(material.rgb, roughness,
                                                 metallic, normal, incident);
+            } else if (uMatcapLighting && uMatcapAvailable) {
+                vec2 uv = workbenchMatcapUv(incident, normal);
+                if (uMatcapFlipX) {
+                    uv.x = 1.0 - uv.x;
+                }
+                vec3 diffuse = texture(uMatcapTexture, vec3(uv, 0.0)).rgb;
+                vec3 specular = uUseSpecular
+                    ? texture(uMatcapTexture, vec3(uv, 1.0)).rgb
+                    : vec3(0.0);
+                color = diffuse * material.rgb + specular;
             }
             fragmentColor = vec4(color, 1.0);
         }
@@ -3223,12 +3249,15 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
 bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     const QSize &pixelSize, const ViewportRenderTargets &targets,
     const ViewportTransform &transform, const QSize &viewportSize,
-    const ViewportShadingSettings &settings, bool studioLighting)
+    const ViewportShadingSettings &settings, bool studioLighting,
+    bool matcapLighting)
 {
     if (pixelSize.isEmpty() || targets.currentSampleColorTexture == 0 ||
         targets.depthTexture == 0 || targets.materialDataTexture == 0 ||
         targets.pixelSize != pixelSize || !outlineVertexArray_.isCreated() ||
-        (studioLighting && targets.viewSpaceNormalTexture == 0)) {
+        ((studioLighting || matcapLighting) &&
+         targets.viewSpaceNormalTexture == 0) ||
+        (matcapLighting && !ensureMatcapTexture(settings.matcapPreset))) {
         return false;
     }
 
@@ -3239,6 +3268,7 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     GLint previousTexture0 = 0;
     GLint previousTexture1 = 0;
     GLint previousTexture2 = 0;
+    GLint previousTextureArray3 = 0;
     GLint previousProgram = 0;
     GLboolean previousDepthMask = GL_TRUE;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
@@ -3260,6 +3290,8 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture1);
     glActiveTexture(GL_TEXTURE2);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2);
+    glActiveTexture(GL_TEXTURE3);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousTextureArray3);
 
     if (flatMaterialResolveFramebuffer_ == 0) {
         glGenFramebuffers(1, &flatMaterialResolveFramebuffer_);
@@ -3285,12 +3317,22 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
         glBindTexture(GL_TEXTURE_2D, targets.materialDataTexture);
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, targets.viewSpaceNormalTexture);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D_ARRAY,
+                      matcapLighting ? matcapTexture_ : 0);
         flatMaterialResolveProgram_.bind();
         flatMaterialResolveProgram_.setUniformValue("uDepth", 0);
         flatMaterialResolveProgram_.setUniformValue("uMaterialData", 1);
         flatMaterialResolveProgram_.setUniformValue("uViewNormal", 2);
+        flatMaterialResolveProgram_.setUniformValue("uMatcapTexture", 3);
         flatMaterialResolveProgram_.setUniformValue("uStudioLighting",
                                                     studioLighting);
+        flatMaterialResolveProgram_.setUniformValue("uMatcapLighting",
+                                                    matcapLighting);
+        flatMaterialResolveProgram_.setUniformValue("uMatcapAvailable",
+                                                    matcapLighting);
+        flatMaterialResolveProgram_.setUniformValue("uMatcapFlipX",
+                                                    settings.matcapFlipX);
         flatMaterialResolveProgram_.setUniformValue(
             "uPerspective", transform.isPerspectiveEnabled());
         flatMaterialResolveProgram_.setUniformValue(
@@ -3342,7 +3384,8 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
         flatMaterialResolveProgram_.setUniformValue("uAmbientColor",
                                                     lighting.ambientColor);
         flatMaterialResolveProgram_.setUniformValue(
-            "uUseSpecular", settings.specularLighting && lighting.useSpecular);
+            "uUseSpecular", settings.specularLighting &&
+                                (!studioLighting || lighting.useSpecular));
         outlineVertexArray_.bind();
         glDrawArrays(GL_TRIANGLES, 0, 3);
         outlineVertexArray_.release();
@@ -3355,6 +3398,9 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture1));
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture2));
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D_ARRAY,
+                  static_cast<GLuint>(previousTextureArray3));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
                       static_cast<GLuint>(previousDrawFramebuffer));
@@ -5743,16 +5789,17 @@ bool ViewportSurfaceRenderer::draw(
     const bool hasSelectedRange = std::any_of(
         ranges_.cbegin(), ranges_.cend(),
         [](const DrawRange &range) { return range.selected; });
-    const bool deferredStudioPrepassRequested = sceneLinearOutput &&
+    const bool deferredNormalPrepassRequested = sceneLinearOutput &&
         settings.mode == ViewportShadingMode::Solid &&
-        settings.lightingMode == ViewportLightingMode::Studio &&
+        (settings.lightingMode == ViewportLightingMode::Studio ||
+         settings.lightingMode == ViewportLightingMode::MatCap) &&
         !previewOverlay && !selectionOverlay && !settings.xrayEnabled() &&
         !settings.shadows && !settings.cavity && !hasSelectedRange &&
         sharedTargets != nullptr && sharedTargets->materialDataTexture != 0;
     const bool sharedPrepassRequested = sharedTargets != nullptr &&
         (cavityRequested || (outlineRequested && !settings.xrayEnabled()) ||
          !frontOpaqueRangeIndices.isEmpty() ||
-         deferredStudioPrepassRequested);
+         deferredNormalPrepassRequested);
     bool sharedPrepassReady = false;
     bool opaquePrepassDrewGeometry = false;
     bool cavityDepthReady = false;
@@ -7072,7 +7119,8 @@ bool ViewportSurfaceRenderer::draw(
         const bool materialDeferredResolveEligible = sceneLinearOutput &&
             settings.mode == ViewportShadingMode::Solid &&
             (settings.lightingMode == ViewportLightingMode::Flat ||
-             settings.lightingMode == ViewportLightingMode::Studio) &&
+             settings.lightingMode == ViewportLightingMode::Studio ||
+             settings.lightingMode == ViewportLightingMode::MatCap) &&
             !previewOverlay && !selectionOverlay &&
             !settings.xrayEnabled() && !settings.shadows && !settings.cavity &&
             !hasSelectedRange && sharedTargets != nullptr &&
@@ -7080,6 +7128,8 @@ bool ViewportSurfaceRenderer::draw(
             sharedTargets->pixelSize == transparencyPixelSize;
         const bool studioDeferredResolve =
             settings.lightingMode == ViewportLightingMode::Studio;
+        const bool matcapDeferredResolve =
+            settings.lightingMode == ViewportLightingMode::MatCap;
         const auto resolveOpaqueMaterialGBuffer = [&]() {
             if (!materialDeferredResolveEligible ||
                 (studioDeferredResolve && !sharedPrepassReady) ||
@@ -7088,7 +7138,8 @@ bool ViewportSurfaceRenderer::draw(
                  frontOpaqueRangeIndices.isEmpty()) ||
                 !resolveWorkbenchMaterial(
                     transparencyPixelSize, *sharedTargets, transform,
-                    viewportSize, settings, studioDeferredResolve)) {
+                    viewportSize, settings, studioDeferredResolve,
+                    matcapDeferredResolve)) {
                 return;
             }
             if (passReport != nullptr) {

@@ -111,7 +111,8 @@ private:
     bool resolveWorkbenchMaterial(
         const QSize &pixelSize, const ViewportRenderTargets &targets,
         const ViewportTransform &transform, const QSize &viewportSize,
-        const ViewportShadingSettings &settings, bool studioLighting);
+        const ViewportShadingSettings &settings, bool studioLighting,
+        bool matcapLighting);
     bool ensureTransparencyFramebuffer(const QSize &pixelSize,
                                       GLuint depthStencilTexture,
                                       bool frontDomain = false);

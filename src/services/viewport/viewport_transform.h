@@ -232,8 +232,9 @@ public:
                 qreal factor,
                 const QSize &viewportSize);
 
-    // Rendering-only subpixel offset used by the viewport's temporal AA.
-    // Input projection and picking continue to use an unjittered transform.
+    // Rendering-only subpixel offset used by temporal AA. Y follows Blender's
+    // projection convention (positive clip-space Y), not Qt's top-down screen
+    // convention. Input projection and picking remain unjittered.
     QPointF renderJitterPixels() const;
     void setRenderJitterPixels(const QPointF &offset);
 

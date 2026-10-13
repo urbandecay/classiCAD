@@ -32,11 +32,10 @@ def write_pfm(path, pixels):
         pixels.tofile(output)
 
 
-def main():
-    args = arguments()
-    image = oiio.ImageInput.open(args.input)
+def convert_exr(input_path, color_output, depth_output):
+    image = oiio.ImageInput.open(input_path)
     if image is None:
-        raise RuntimeError(f"Could not open EXR: {args.input}")
+        raise RuntimeError(f"Could not open EXR: {input_path}")
 
     color_spec = image.spec()
     color_pixels = image.read_image(format=oiio.FLOAT)
@@ -45,7 +44,7 @@ def main():
         next(i for i, name in enumerate(color_channels) if name.endswith("." + channel))
         for channel in ("R", "G", "B")
     ]
-    write_pfm(args.color_output, color_pixels[:, :, color_indices])
+    write_pfm(color_output, color_pixels[:, :, color_indices])
 
     if not image.seek_subimage(1, 0):
         image.close()
@@ -53,8 +52,13 @@ def main():
     depth_pixels = image.read_image(format=oiio.FLOAT)
     if depth_pixels.ndim == 3:
         depth_pixels = depth_pixels[:, :, 0]
-    write_pfm(args.depth_output, depth_pixels)
+    write_pfm(depth_output, depth_pixels)
     image.close()
+
+
+def main():
+    args = arguments()
+    convert_exr(args.input, args.color_output, args.depth_output)
 
 
 if __name__ == "__main__":

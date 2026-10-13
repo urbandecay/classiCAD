@@ -303,8 +303,10 @@ QMatrix4x4 viewportViewProjection(const ViewportTransform &transform,
         QMatrix4x4 jitterTranslation;
         jitterTranslation(0, 3) =
             static_cast<float>(2.0 * jitter.x() / viewportSize.width());
+        // Blender's orthographic window_translate_m4 adds projection Y;
+        // keep that sign here instead of converting it to Qt's screen Y.
         jitterTranslation(1, 3) =
-            static_cast<float>(-2.0 * jitter.y() / viewportSize.height());
+            static_cast<float>(2.0 * jitter.y() / viewportSize.height());
         result = jitterTranslation * result;
     }
     return result;

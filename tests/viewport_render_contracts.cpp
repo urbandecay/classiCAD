@@ -1558,6 +1558,18 @@ int main(int argc, char *argv[])
                             multisampleFirstJitter.isNull() &&
                             !multisampleSecondJitter.isNull(),
                         "AA Off, Single Pass, and first multisample position are centered; later multisample positions are jittered");
+                    ViewportTransform positiveYJitter = gpuTransform;
+                    positiveYJitter.setRenderJitterPixels(QPointF(0.0, 0.5));
+                    const QVector4D centerPoint(0.0f, 0.0f, 0.0f, 1.0f);
+                    const float baseProjectionY =
+                        (viewportViewProjection(gpuTransform, glSize) *
+                         centerPoint).y();
+                    const float jitteredProjectionY =
+                        (viewportViewProjection(positiveYJitter, glSize) *
+                         centerPoint).y();
+                    passed &= check(
+                        jitteredProjectionY > baseProjectionY,
+                        "Positive Workbench sample Y must translate projection Y positively");
                     const auto captureAaMode = [&](const char *environmentVariable,
                                                    int aaMode,
                                                    int expectedSamples,
@@ -1695,6 +1707,9 @@ int main(int argc, char *argv[])
                                     qsizetype(depth.size()) *
                                         qsizetype(sizeof(float));
                         };
+                        QByteArray sampleJitterMetadata;
+                        sampleJitterMetadata += QByteArrayLiteral(
+                            "# sample_index render_jitter_x_pixels render_jitter_y_pixels\n");
                         for (int sample = 0; sample < expectedSamples; ++sample) {
                             const QByteArray historyKey =
                                 QByteArray("viewport-aa-capture-") + label;
@@ -1714,6 +1729,14 @@ int main(int argc, char *argv[])
                                 captureSucceeded = false;
                                 aaRenderer.finishSceneSample();
                                 break;
+                            }
+                            if (!sampleCapturePrefix.isEmpty()) {
+                                sampleJitterMetadata +=
+                                    QByteArray::number(sample) + ' ' +
+                                    QByteArray::number(renderJitter.x(), 'g', 9) +
+                                    ' ' +
+                                    QByteArray::number(renderJitter.y(), 'g', 9) +
+                                    '\n';
                             }
                             const float targetDisplayGray = 34.0f / 255.0f;
                             float low = 0.0f;
@@ -1784,6 +1807,16 @@ int main(int argc, char *argv[])
                                         targets.resolvedSceneLinearColorTexture);
                             }
                             ++completedSamples;
+                        }
+                        bool sampleJitterMetadataSaved = true;
+                        if (!sampleCapturePrefix.isEmpty() &&
+                            completedSamples == expectedSamples) {
+                            QFile jitterFile(sampleCapturePrefix +
+                                             QStringLiteral("-jitter.txt"));
+                            sampleJitterMetadataSaved =
+                                jitterFile.open(QIODevice::WriteOnly) &&
+                                jitterFile.write(sampleJitterMetadata) ==
+                                    sampleJitterMetadata.size();
                         }
                         const QImage image = framebuffer.toImage();
                         bool linearCaptureSaved = true;
@@ -1913,6 +1946,7 @@ int main(int argc, char *argv[])
                             captureSucceeded &&
                                 linearCaptureSaved &&
                                 depthCaptureSaved &&
+                                sampleJitterMetadataSaved &&
                                 completedSamples == expectedSamples &&
                                 changedPixels > 4000 && image.save(capturePath),
                             label);

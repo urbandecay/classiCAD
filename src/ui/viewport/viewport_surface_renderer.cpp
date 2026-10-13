@@ -1722,7 +1722,7 @@ bool ViewportSurfaceRenderer::initialize()
         void main()
         {
             vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
-            vUv = p * 0.5;
+            vUv = p;
             gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
         }
     )glsl";
@@ -1743,7 +1743,11 @@ bool ViewportSurfaceRenderer::initialize()
         {
             float depth = texture(uFrontDepth, vUv).r;
             if (depth >= 1.0) discard;
-            gl_FragDepth = depth;
+            // Workbench merges in-front geometry into the scene depth at the
+            // near plane. Preserve the per-object depth test in the separate
+            // front domain, then make the merged result occlude regular scene
+            // geometry and match the render-result Z pass.
+            gl_FragDepth = 0.0;
             if (uMergeColor) mergedColor = texture(uFrontColor, vUv);
             mergedNormal = texture(uFrontNormal, vUv);
             mergedObjectId = texture(uFrontObjectId, vUv).r;
@@ -2845,7 +2849,8 @@ bool ViewportSurfaceRenderer::mergeWorkbenchFrontAttachments(
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     if (complete) {
         glViewport(0, 0, targets.pixelSize.width(), targets.pixelSize.height());
-        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_ALWAYS);
         glDisable(GL_BLEND);
         glDisable(GL_STENCIL_TEST);
         glDisable(GL_SCISSOR_TEST);
@@ -5802,6 +5807,15 @@ bool ViewportSurfaceRenderer::draw(
         };
         const auto drawTransparentTriangles = [&]() {
             if (!hasPartialAlpha) return;
+            // The in-front merge binds and releases its own shader program.
+            // Rebind the Solid program before drawRange updates its uniforms
+            // and emits the regular OIT accumulation draws.
+            program_.bind();
+            // The front merge also releases its fullscreen VAO, leaving VAO 0
+            // active in the core profile. Restore the surface VAO (and its
+            // vertex buffer) before any range draw.
+            vertexArray_.bind();
+            vertexBuffer_.bind();
             if (!weightedOitAvailable) {
                 if (settings.xrayEnabled()) {
                     glDisable(GL_DEPTH_TEST);

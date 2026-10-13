@@ -20,7 +20,7 @@ def arguments():
     parser.add_argument("output", help="PNG output path")
     parser.add_argument(
         "--scene",
-        choices=("CUBE", "TRANSPARENT_OVERLAP"),
+        choices=("CUBE", "TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"),
         default="CUBE",
         help="controlled scene to render (default: CUBE)",
     )
@@ -110,7 +110,11 @@ def main():
     bpy.ops.object.delete(use_global=False)
 
     target = Vector((0.0, 0.0, 0.0))
-    direction = Vector((4.0, -6.0, 4.0)).normalized()
+    direction = (
+        Vector((0.0, 0.0, 1.0))
+        if args.scene == "TRANSPARENT_IN_FRONT"
+        else Vector((4.0, -6.0, 4.0)).normalized()
+    )
     camera_data = bpy.data.cameras.new("ReferenceCamera")
     camera_data.type = "ORTHO"
     camera_data.ortho_scale = 5.0
@@ -121,7 +125,7 @@ def main():
         ortho_eye_distance = 1000.0
     if ortho_eye_distance is None:
         ortho_eye_distance = (
-            1000.0 if args.scene == "TRANSPARENT_OVERLAP" else 8.0
+            1000.0 if args.scene != "CUBE" else 8.0
         )
     if args.match_classicad_ortho:
         camera_data.clip_start = 0.01
@@ -140,7 +144,7 @@ def main():
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
         cube = bpy.context.object
         cube.name = "ReferenceCube"
-    else:
+    elif args.scene in ("TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"):
         # Two camera-facing quads provide stable, known overlap regions without
         # perspective or surface-lighting changes between captures.
         camera_rotation = camera.rotation_euler.to_quaternion()
@@ -166,18 +170,49 @@ def main():
             obj.data.materials.append(material)
             return obj
 
-        add_transparent_quad(
-            "RearTranslucentSurface",
-            target - direction * 0.35 - camera_right * 0.25,
-            2.4,
-            (0.08, 0.25, 0.95, 0.55),
-        )
-        add_transparent_quad(
-            "FrontTranslucentSurface",
-            target + direction * 0.35 + camera_right * 0.25,
-            2.0,
-            (0.95, 0.12, 0.04, 0.48),
-        )
+        if args.scene == "TRANSPARENT_IN_FRONT":
+            def add_opaque_quad(name, center, size, color, show_in_front=False):
+                obj = add_transparent_quad(name, center, size, color)
+                obj.data.materials[0].diffuse_color = (*color[:3], 1.0)
+                obj.show_in_front = show_in_front
+                return obj
+
+            add_opaque_quad(
+                "RegularOpaque", target, 3.2, (0.12, 0.62, 0.18, 1.0)
+            )
+            add_transparent_quad(
+                "RegularTransparent",
+                target + direction * 0.25 - camera_right * 0.55,
+                2.5,
+                (0.08, 0.25, 0.95, 0.55),
+            )
+            add_opaque_quad(
+                "InFrontOpaque",
+                target - direction * 0.2 + camera_right * 0.35,
+                1.15,
+                (0.95, 0.72, 0.05, 1.0),
+                show_in_front=True,
+            )
+            in_front_transparent = add_transparent_quad(
+                "InFrontTransparent",
+                target + direction * 0.4 + camera_right * 0.55,
+                1.4,
+                (0.95, 0.12, 0.04, 0.48),
+            )
+            in_front_transparent.show_in_front = True
+        else:
+            add_transparent_quad(
+                "RearTranslucentSurface",
+                target - direction * 0.35 - camera_right * 0.25,
+                2.4,
+                (0.08, 0.25, 0.95, 0.55),
+            )
+            add_transparent_quad(
+                "FrontTranslucentSurface",
+                target + direction * 0.35 + camera_right * 0.25,
+                2.0,
+                (0.95, 0.12, 0.04, 0.48),
+            )
     if args.jitter_pixels is not None:
         # Reproduce Blender's projection-space offset with an equivalent camera
         # translation. Positive Y follows Blender's projection-up convention.

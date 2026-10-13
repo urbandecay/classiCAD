@@ -108,7 +108,13 @@ int main(int argc, char **argv)
 
         ViewportTransform camera;
         camera.zoom() = 17.28;
-        camera.setViewDirection({4.0, -6.0, 4.0});
+        const bool inFrontFixture = qEnvironmentVariable(
+            "CLASSICAD_WORKBENCH_PASS_SCENE") == QStringLiteral("TRANSPARENT_IN_FRONT");
+        if (inFrontFixture) {
+            camera.setViewPreset(ViewportViewPreset::Top);
+        } else {
+            camera.setViewDirection({4.0, -6.0, 4.0});
+        }
 
         ViewportRenderObject cube;
         cube.shape.geometryType = GeometryType::PolygonMesh;
@@ -126,6 +132,61 @@ int main(int argc, char **argv)
         cube.meshMaterials = {WorkbenchMaterialData{}};
         cube.preparedDepthGeometry = QSharedPointer<ViewportDepthGeometry>::create(
             buildViewportDepthGeometry(cube.shape));
+        QVector<ViewportRenderObject> sceneObjects{cube};
+        if (inFrontFixture) {
+            sceneObjects.clear();
+            const Point3D towardCamera = camera.viewDirection();
+            const Point3D up = camera.viewUp();
+            Point3D right{up.y * towardCamera.z - up.z * towardCamera.y,
+                          up.z * towardCamera.x - up.x * towardCamera.z,
+                          up.x * towardCamera.y - up.y * towardCamera.x};
+            const qreal rightLength = std::sqrt(right.x * right.x +
+                right.y * right.y + right.z * right.z);
+            right = {right.x / rightLength, right.y / rightLength,
+                     right.z / rightLength};
+            auto addQuad = [&](quint64 id, const Point3D &center, qreal extent,
+                               const QVector3D &color, qreal alpha,
+                               bool showInFront) {
+                ViewportRenderObject object;
+                object.shape.geometryType = GeometryType::PolygonMesh;
+                object.objectId = ObjectId::fromValue(id);
+                object.geometryRevision = 1;
+                auto point = [&](qreal x, qreal y) {
+                    return Point3D{center.x + right.x * x + up.x * y,
+                                   center.y + right.y * x + up.y * y,
+                                   center.z + right.z * x + up.z * y};
+                };
+                const qreal half = extent * 0.5;
+                object.shape.polygonMesh.vertices = {
+                    point(-half, -half), point(half, -half),
+                    point(half, half), point(-half, half)};
+                object.shape.polygonMesh.faces = {{0, 1, 2, 3}};
+                object.shape.polygonMesh.faceMaterialIndices = {0};
+                WorkbenchMaterialData material;
+                material.baseColorSceneLinear = color;
+                material.alpha = alpha;
+                object.meshMaterials = {material};
+                object.showInFront = showInFront;
+                object.preparedDepthGeometry =
+                    QSharedPointer<ViewportDepthGeometry>::create(
+                        buildViewportDepthGeometry(object.shape));
+                sceneObjects.append(std::move(object));
+            };
+            addQuad(2, {right.x * 0.0, right.y * 0.0, right.z * 0.0},
+                    3.2, QVector3D(0.12f, 0.62f, 0.18f), 1.0, false);
+            addQuad(3, {right.x * -0.55 + towardCamera.x * 0.25,
+                        right.y * -0.55 + towardCamera.y * 0.25,
+                        right.z * -0.55 + towardCamera.z * 0.25},
+                    2.5, QVector3D(0.08f, 0.25f, 0.95f), 0.55, false);
+            addQuad(4, {right.x * 0.35 - towardCamera.x * 0.2,
+                        right.y * 0.35 - towardCamera.y * 0.2,
+                        right.z * 0.35 - towardCamera.z * 0.2},
+                    1.15, QVector3D(0.95f, 0.72f, 0.05f), 1.0, true);
+            addQuad(5, {right.x * 0.55 + towardCamera.x * 0.4,
+                        right.y * 0.55 + towardCamera.y * 0.4,
+                        right.z * 0.55 + towardCamera.z * 0.4},
+                    1.4, QVector3D(0.95f, 0.12f, 0.04f), 0.48, true);
+        }
 
         ViewportShadingSettings shading;
         shading.mode = ViewportShadingMode::Solid;
@@ -153,7 +214,7 @@ int main(int argc, char **argv)
             request.sceneLinearOutput = true;
             const ViewportWorkbenchSceneColorPassResult scenePass =
                 ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                    renderer, {cube}, aa.sampleCamera(), size, 1.0, shading,
+                    renderer, sceneObjects, aa.sampleCamera(), size, 1.0, shading,
                     request);
             if (scenePass.rendered) {
                 aa.markCurrentSampleAttachmentsValid(
@@ -162,6 +223,13 @@ int main(int argc, char **argv)
             passed &= check(scenePass.rendered &&
                                 scenePass.completed(ViewportRenderPass::OpaqueColor),
                             "render-pass capture must complete the production opaque-color pass");
+            if (inFrontFixture) {
+                passed &= check(
+                    scenePass.completed(
+                        ViewportRenderPass::TransparentAccumulation) &&
+                        scenePass.completed(ViewportRenderPass::TransparentResolve),
+                    "in-front comparison fixture must execute regular weighted-OIT accumulation and resolve");
+            }
             aa.finishSceneSample();
             passed &= check(gl.glGetError() == GL_NO_ERROR,
                             "render-pass depth blit must not report a GL error");
@@ -201,6 +269,22 @@ int main(int argc, char **argv)
             gl.glReadPixels(0, 0, size.width(), size.height(),
                             GL_DEPTH_COMPONENT, GL_FLOAT,
                             sceneDepthBottomUp.data());
+        }
+        QVector<float> frontDepthBottomUp(depthBottomUp.size(), 1.0f);
+        if (inFrontFixture && targets.frontDepthTexture != 0) {
+            gl.glFramebufferTexture2D(GL_FRAMEBUFFER,
+                                      GL_DEPTH_STENCIL_ATTACHMENT,
+                                      GL_TEXTURE_2D,
+                                      targets.frontDepthTexture, 0);
+            const GLenum frontDepthStatus =
+                gl.glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            if (frontDepthStatus == GL_FRAMEBUFFER_COMPLETE) {
+                gl.glReadPixels(0, 0, size.width(), size.height(),
+                                GL_DEPTH_COMPONENT, GL_FLOAT,
+                                frontDepthBottomUp.data());
+            }
+            passed &= check(frontDepthStatus == GL_FRAMEBUFFER_COMPLETE,
+                            "in-front fixture must expose a readable front-domain depth attachment");
         }
         gl.glDeleteFramebuffers(1, &depthFramebuffer);
         const ViewportProjectionClipRange clip =
@@ -249,6 +333,31 @@ int main(int argc, char **argv)
         passed &= check(viewZBottomUp[0] == 1.0e10f &&
                             viewZBottomUp[size.width() - 1] == 1.0e10f,
                         "render-pass background pixels must use Blender's 1e10 view-Z sentinel");
+        if (inFrontFixture) {
+            const qsizetype regularTransparentPixel =
+                qsizetype(size.height() - 1 - 240) * size.width() + 150;
+            const QVector3D regularTransparentColor(
+                linearBottomUp[regularTransparentPixel * 4],
+                linearBottomUp[regularTransparentPixel * 4 + 1],
+                linearBottomUp[regularTransparentPixel * 4 + 2]);
+            passed &= check(
+                std::abs(regularTransparentColor.x() - 0.0776f) < 0.01f &&
+                    std::abs(regularTransparentColor.y() - 0.2106f) < 0.01f &&
+                    std::abs(regularTransparentColor.z() - 0.2900f) < 0.01f,
+                "regular transparent OIT color must match the isolated Blender scene-linear probe");
+            const qsizetype frontOverlapPixel =
+                qsizetype(size.height() - 1 - 240) * size.width() + 365;
+            const QVector3D frontOverlapColor(
+                linearBottomUp[frontOverlapPixel * 4],
+                linearBottomUp[frontOverlapPixel * 4 + 1],
+                linearBottomUp[frontOverlapPixel * 4 + 2]);
+            passed &= check(frontOverlapColor.x() > 0.35f &&
+                                frontOverlapColor.y() > 0.15f &&
+                                frontOverlapColor.z() < 0.1f &&
+                                std::abs(viewZBottomUp[frontOverlapPixel] -
+                                         clip.nearPlane) < 0.001,
+                            "in-front overlap color and near-plane view-Z must match Blender at the projected probe");
+        }
 
         const QString captureDirectory = qEnvironmentVariable(
             "CLASSICAD_WORKBENCH_PASS_CAPTURE_DIR");
@@ -267,10 +376,13 @@ int main(int argc, char **argv)
             const bool wroteDepth = writePfm(
                 QDir(captureDirectory).filePath(QStringLiteral("classiCAD-z.pfm")),
                 "Pf", size, viewZBottomUp);
+            const bool wroteFrontDepth = !inFrontFixture || writePfm(
+                QDir(captureDirectory).filePath(QStringLiteral("classiCAD-front-depth.pfm")),
+                "Pf", size, frontDepthBottomUp);
             const bool wroteDisplay = outputFramebuffer.toImage().save(
                 QDir(captureDirectory).filePath(QStringLiteral("classiCAD-display.png")));
-            passed &= check(wroteColor && wroteDepth && wroteDisplay,
-                            "opt-in render-pass captures must write scene-linear Combined PFM, view-Z PFM, and display PNG");
+            passed &= check(wroteColor && wroteDepth && wroteFrontDepth && wroteDisplay,
+                            "opt-in render-pass captures must write scene-linear Combined PFM, view-Z PFM, front-domain depth PFM when selected, and display PNG");
         }
         gl.glDeleteTextures(1, &outputDepthStencilTexture);
     }

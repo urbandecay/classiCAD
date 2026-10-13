@@ -1556,6 +1556,57 @@ depth domain. Visual depth comparison remains open.
   no-shared-depth sorted-transparency fallback remains less capable than
   Blender's per-pixel OIT for intersecting ranges.
 
+### Transparent and in-front overlap probes (2026-10-13)
+
+- Added a matched top-orthographic fixture with regular opaque, regular
+  transparent, `show_in_front` opaque, and `show_in_front` transparent quads.
+  The Blender 5.2.2 fixture runs AA Off at 640×480 with the same 1000-unit
+  projection eye and 0.01/2000 clip range as the classiCAD offscreen capture.
+  Isolated regular-transparency and front-domain overlap probes are sampled
+  from scene-linear Combined and view-Z.
+- The first run exposed a shared front-attachment merge bug. Its fullscreen
+  triangle used `vUv = p * 0.5` despite `gl_Position = p * 2 - 1`, stretching
+  the lower-left quarter of the front color/depth/ID attachments over the
+  output. The merge also disabled depth testing while writing `gl_FragDepth`,
+  suppressing the shared-depth update. The merge now samples `vUv = p` and
+  uses `GL_ALWAYS` with depth writes enabled. A focused offscreen contract
+  checks the projected front overlap color and foreground depth.
+- After that correction, scene-linear RGB at the front overlap probe `(365,
+  240)` matches Blender within 0.001 per channel: Blender `[0.4192, 0.2170,
+  0.0574]`, classiCAD `[0.4194, 0.2170, 0.0574]`. At `(450, 240)`, both return
+  `[0.2457, 0.1956, 0.0857]`. The front depth-mask probe is clear (`1.0`) at
+  `(150, 240)` and about `0.4998` over
+  the front patch. The regular transparent range is in classiCAD's OIT draw
+  list with alpha `0.55`, and its depth output is `999.75`, but the regular
+  accumulation and weight attachments remained zero. A focused draw-state
+  diagnosis found that the front merge releases its fullscreen
+  `outlineVertexArray_`, leaving VAO 0 active in the core profile. The regular
+  OIT path then called `glDrawArrays` through the surface draw helper without
+  restoring `vertexArray_`, so its fragments never reached either color
+  attachment. The OIT entry now rebinds the Solid program, surface VAO, and
+  vertex buffer before drawing. The regression capture asserts the isolated
+  Blender probe within 0.01 per scene-linear channel. Before the fix,
+  classiCAD returned `[0.08563, 0.29346, 0.11285]` (opaque base) versus Blender
+  `[0.0776, 0.2106, 0.2900]`; after the fix classiCAD returns
+  `[0.07770, 0.21057, 0.29004]`. The front mask is clear (`1.0`) at this
+  probe. Blender's render-result Z reads the main depth attachment after
+  `TransparentDepthPass` merges front-domain depth into it; for in-front
+  geometry the measured result is the near plane (`0.0100135`), while the
+  classiCAD merge previously preserved physical orthographic distance
+  (`999.6`). The front attachment retains its real depth for resolving overlap
+  within the in-front domain, then the merge writes device depth zero into the
+  main scene depth, matching Blender's near-plane render-result behavior.
+  The offscreen contract checks front overlap Z against the active near clip;
+  regular transparent view-Z at `(150, 240)` remains `999.75` in both apps.
+- Pinned Blender references: [`workbench_mesh_passes.cc` opaque/front
+  routing and depth merge](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L109-L201),
+  [`workbench_mesh_passes.cc` transparent and depth passes](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L232-L371),
+  and [`workbench_merge_depth_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_merge_depth_frag.glsl#L7-L13).
+- Separate QPainter caveat: its retained opaque and transparent layers use
+  ARGB32 display RGB, while Blender applies cavity before transparency on the
+  scene-linear target. The GPU overlap fixture does not validate or change
+  that QPainter color-space ordering.
+
 ### Bounded scalar volume pass (2026-10-12)
 
 - Blender 5.2.2 draws volumes after transparent depth and before outline, depth

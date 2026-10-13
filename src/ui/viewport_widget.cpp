@@ -9125,8 +9125,11 @@ protected:
                     viewportTransform_, renderFrame.viewportSize,
                     committedSceneLayer.devicePixelRatioF(),
                     viewportAaMode_ != 0,
+                    true,
+                    renderShadingSettings,
                     [this](QPainter &surfacePainter,
-                           const ViewportRenderObject &object) {
+                           const ViewportRenderObject &object,
+                           RasterWorkbenchFragmentSink *fragmentSink) {
                         drawShape(surfacePainter, object.shape, false,
                                   object.selected, true, object.layerColor,
                                   object.layerLineType,
@@ -9138,7 +9141,7 @@ protected:
                                   object.workbenchMaterial,
                                   object.displayName, object.libraryPath,
                                   object.meshObjectTransform,
-                                  object.meshMaterials);
+                                  object.meshMaterials, fragmentSink);
                     }, &rasterSurfaceLayers);
             }
         }
@@ -10978,9 +10981,11 @@ protected:
                 fallbackSurfaceBatchRendered = compositeRasterWorkbenchSurfaces(
                     &fallbackSurfaceLayer, fallbackSurfaceObjects,
                     viewportTransform_, renderFrame.viewportSize,
-                    fallbackDpr, viewportAaMode_ != 0,
+                    fallbackDpr, viewportAaMode_ != 0, false,
+                    renderShadingSettings,
                     [this](QPainter &surfacePainter,
-                           const ViewportRenderObject &object) {
+                           const ViewportRenderObject &object,
+                           RasterWorkbenchFragmentSink *fragmentSink) {
                         drawShape(surfacePainter, object.shape, false,
                                   object.selected, true, object.layerColor,
                                   object.layerLineType,
@@ -10992,7 +10997,7 @@ protected:
                                   object.workbenchMaterial,
                                   object.displayName, object.libraryPath,
                                   object.meshObjectTransform,
-                                  object.meshMaterials);
+                                  object.meshMaterials, fragmentSink);
                     });
                 if (fallbackSurfaceBatchRendered) {
                     painter.drawImage(QPoint(0, 0), fallbackSurfaceLayer);
@@ -23475,7 +23480,8 @@ private:
                    const QString &libraryPath = QString(),
                    const MeshObjectTransform &meshTransform =
                        identityMeshObjectTransform,
-                   const QVector<WorkbenchMaterialData> &meshMaterials = {})
+                   const QVector<WorkbenchMaterialData> &meshMaterials = {},
+                   RasterWorkbenchFragmentSink *fragmentSink = nullptr)
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -23496,7 +23502,8 @@ private:
                                     displayName,
                                     libraryPath,
                                     meshTransform,
-                                    meshMaterials);
+                                    meshMaterials,
+                                    fragmentSink);
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 

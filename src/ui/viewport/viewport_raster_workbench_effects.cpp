@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "viewport_raster_workbench_effects.h"
 #include "viewport_workbench_effect_scale.h"
+#include "workbench_lighting.h"
 
 #include "viewport_depth_geometry.h"
 #include "viewport_cavity_blue_noise.h"
@@ -356,7 +357,10 @@ bool compositeRasterWorkbenchSurfaces(
     const QSize &viewportSize,
     qreal devicePixelRatio,
     bool antialias,
-    const std::function<void(QPainter &, const ViewportRenderObject &)> &drawObject,
+    bool useWeightedOit,
+    const ViewportShadingSettings &shadingSettings,
+    const std::function<void(QPainter &, const ViewportRenderObject &,
+                             RasterWorkbenchFragmentSink *)> &drawObject,
     RasterWorkbenchSurfaceLayers *surfaceLayers)
 {
     if (colorImage == nullptr || colorImage->isNull() || objects.isEmpty() ||
@@ -502,13 +506,14 @@ bool compositeRasterWorkbenchSurfaces(
 
     QVector<float> objectDepth(pixelCount, noDepth);
     const auto renderObject = [&](const ViewportRenderObject &object,
+                                  RasterWorkbenchFragmentSink *fragmentSink,
                                   auto &&consume) {
         QImage layer(colorImage->size(), QImage::Format_ARGB32_Premultiplied);
         layer.setDevicePixelRatio(colorImage->devicePixelRatioF());
         layer.fill(Qt::transparent);
         QPainter layerPainter(&layer);
         layerPainter.setRenderHint(QPainter::Antialiasing, antialias);
-        drawObject(layerPainter, object);
+        drawObject(layerPainter, object, fragmentSink);
         layerPainter.end();
         rasterDepth(object, &objectDepth);
         consume(layer);
@@ -516,7 +521,7 @@ bool compositeRasterWorkbenchSurfaces(
 
     // Opaque color/depth is established before any translucent fragment.
     for (const ViewportRenderObject &object : objects) {
-        renderObject(object, [&](const QImage &layer) {
+        renderObject(object, nullptr, [&](const QImage &layer) {
             for (int y = 0; y < height; ++y) {
                 const auto *row = reinterpret_cast<const QRgb *>(layer.constScanLine(y));
                 for (int x = 0; x < width; ++x) {
@@ -533,6 +538,108 @@ bool compositeRasterWorkbenchSurfaces(
         });
     }
 
+    if (useWeightedOit) {
+        std::vector<RasterWorkbenchLinearFragment> fragments;
+        bool fragmentBudgetExceeded = false;
+        for (const ViewportRenderObject &object : objects) {
+            RasterWorkbenchFragmentSink objectFragments;
+            renderObject(object, &objectFragments, [&](const QImage &) {
+                for (const RasterWorkbenchLinearFragment &fragment :
+                     objectFragments) {
+                    if (fragment.alpha <= 0.0f || fragment.alpha >= 0.999f ||
+                        fragment.x < 0 || fragment.x >= width ||
+                        fragment.y < 0 || fragment.y >= height) {
+                        continue;
+                    }
+                    const int index = fragment.y * width + fragment.x;
+                    // Keep the established QPainter opaque-depth visibility
+                    // rule while replacing transparent object sorting with
+                    // per-fragment Workbench weighted OIT.
+                    if (objectDepth[index] == noDepth ||
+                        objectDepth[index] <= opaqueDepth[index]) {
+                        continue;
+                    }
+                    if (fragments.size() >=
+                        static_cast<std::size_t>(kMaximumTransparentFragments)) {
+                        fragmentBudgetExceeded = true;
+                        return;
+                    }
+                    fragments.push_back(fragment);
+                }
+            });
+            if (fragmentBudgetExceeded) return false;
+        }
+
+        std::vector<RasterWorkbenchLinearPixel> resolved;
+        if (!resolveRasterWorkbenchWeightedOitFragments(
+                width, height, {}, fragments, &resolved)) {
+            return false;
+        }
+        for (int y = 0; y < height; ++y) {
+            auto *destination = reinterpret_cast<QRgb *>(colorImage->scanLine(y));
+            auto *opaqueRow = surfaceLayers != nullptr
+                ? reinterpret_cast<QRgb *>(surfaceLayers->opaqueColor.scanLine(y))
+                : nullptr;
+            auto *transparentRow = surfaceLayers != nullptr
+                ? reinterpret_cast<QRgb *>(surfaceLayers->transparentColor.scanLine(y))
+                : nullptr;
+            for (int x = 0; x < width; ++x) {
+                const int index = y * width + x;
+                QRgb surface = opaqueColor[index];
+                if (opaqueRow != nullptr) opaqueRow[x] = surface;
+                const RasterWorkbenchLinearPixel &linear = resolved[index];
+                QRgb transparent = qRgba(0, 0, 0, 0);
+                if (linear.alpha > 0.0f) {
+                    const float inverseAlpha = 1.0f / linear.alpha;
+                    const QVector3D straightLinear(
+                        linear.red * inverseAlpha,
+                        linear.green * inverseAlpha,
+                        linear.blue * inverseAlpha);
+                    const QVector3D display = workbenchSceneLinearToDisplaySrgb(
+                        straightLinear, shadingSettings.colorTransform,
+                        shadingSettings.colorExposure,
+                        shadingSettings.colorGamma,
+                        shadingSettings.colorLutData,
+                        shadingSettings.colorLutMetadata);
+                    const int alpha = std::clamp(
+                        qRound(linear.alpha * 255.0f), 0, 255);
+                    transparent = qPremultiply(qRgba(
+                        std::clamp(qRound(display.x() * 255.0f), 0, 255),
+                        std::clamp(qRound(display.y() * 255.0f), 0, 255),
+                        std::clamp(qRound(display.z() * 255.0f), 0, 255),
+                        alpha));
+                }
+                if (transparentRow != nullptr) transparentRow[x] = transparent;
+                const float transAlpha = qAlpha(transparent) / 255.0f;
+                const float remain = 1.0f - transAlpha;
+                const QRgb combined = qRgba(
+                    std::clamp(qRed(transparent) + qRound(qRed(surface) * remain),
+                               0, 255),
+                    std::clamp(qGreen(transparent) + qRound(qGreen(surface) * remain),
+                               0, 255),
+                    std::clamp(qBlue(transparent) + qRound(qBlue(surface) * remain),
+                               0, 255),
+                    std::clamp(qAlpha(transparent) +
+                                   qRound(qAlpha(surface) * remain),
+                               0, 255));
+                const QRgb old = destination[x];
+                const float combinedAlpha = qAlpha(combined) / 255.0f;
+                const float oldRemain = 1.0f - combinedAlpha;
+                destination[x] = qRgba(
+                    std::clamp(qRed(combined) + qRound(qRed(old) * oldRemain),
+                               0, 255),
+                    std::clamp(qGreen(combined) + qRound(qGreen(old) * oldRemain),
+                               0, 255),
+                    std::clamp(qBlue(combined) + qRound(qBlue(old) * oldRemain),
+                               0, 255),
+                    std::clamp(qAlpha(combined) +
+                                   qRound(qAlpha(old) * oldRemain),
+                               0, 255));
+            }
+        }
+        return true;
+    }
+
     // Keep QPainter's per-object layer shading, then retain that layer's
     // nearest surface depth at each covered pixel. This lets intersecting
     // transparent objects composite in a local far-to-near order rather than
@@ -540,7 +647,7 @@ bool compositeRasterWorkbenchSurfaces(
     bool transparentFragmentBudgetExceeded = false;
     for (int objectOrder = 0; objectOrder < objects.size(); ++objectOrder) {
         const ViewportRenderObject &object = objects[objectOrder];
-        renderObject(object, [&](const QImage &layer) {
+        renderObject(object, nullptr, [&](const QImage &layer) {
             for (int y = 0; y < height; ++y) {
                 const auto *row = reinterpret_cast<const QRgb *>(layer.constScanLine(y));
                 for (int x = 0; x < width; ++x) {

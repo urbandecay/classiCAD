@@ -4,6 +4,7 @@
 
 #include "services/viewport/viewport_transform.h"
 #include "viewport_render_frame.h"
+#include "viewport_raster_workbench_linear.h"
 #include "viewport_shading.h"
 
 #include <QImage>
@@ -65,7 +66,10 @@ bool compositeRasterWorkbenchSurfaces(
     const QSize &viewportSize,
     qreal devicePixelRatio,
     bool antialias,
-    const std::function<void(QPainter &, const ViewportRenderObject &)> &drawObject,
+    bool useWeightedOit,
+    const ViewportShadingSettings &shadingSettings,
+    const std::function<void(QPainter &, const ViewportRenderObject &,
+                             RasterWorkbenchFragmentSink *)> &drawObject,
     RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr);
 
 } // namespace classiCAD

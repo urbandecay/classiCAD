@@ -25,7 +25,8 @@ bool finite(const RasterWorkbenchLinearFragment &fragment)
            std::isfinite(fragment.sceneLinearRgb[1]) &&
            std::isfinite(fragment.sceneLinearRgb[2]) &&
            std::isfinite(fragment.alpha) && fragment.alpha >= 0.0f &&
-           fragment.alpha <= 1.0f;
+           fragment.alpha <= 1.0f && std::isfinite(fragment.oitLinearDepth) &&
+           fragment.oitLinearDepth >= -1.0f;
 }
 
 struct OrderedFragment {
@@ -135,7 +136,10 @@ bool resolveRasterWorkbenchWeightedOitFragments(
         const std::size_t index = static_cast<std::size_t>(fragment.y) * w +
                                   static_cast<std::size_t>(fragment.x);
         const float weightedAlpha = fragment.alpha *
-            rasterWorkbenchTransparentWeight(fragment.cameraDepth);
+            rasterWorkbenchTransparentWeight(
+                fragment.oitLinearDepth >= 0.0f
+                    ? fragment.oitLinearDepth
+                    : fragment.cameraDepth);
         Accumulation &accumulation = accumulations[index];
         accumulation.red += fragment.sceneLinearRgb[0] * weightedAlpha;
         accumulation.green += fragment.sceneLinearRgb[1] * weightedAlpha;

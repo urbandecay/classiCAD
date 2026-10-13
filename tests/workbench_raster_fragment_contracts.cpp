@@ -55,17 +55,20 @@ QImage render(ViewportRenderer &renderer, const Shape &shape,
 
 bool coveredFragments(const RasterWorkbenchFragmentSink &fragments,
                       int width, int height, quint64 sourceId,
-                      float expectedDepth, float expectedAlpha)
+                      float expectedDepth, float expectedOitDepth,
+                      float expectedAlpha)
 {
     if (fragments.size() < 100) return false;
     bool sawHdr = false;
     bool sawDepth = false;
+    bool sawOitDepth = false;
     bool sawAlpha = false;
     for (const auto &fragment : fragments) {
         if (fragment.x < 0 || fragment.x >= width ||
             fragment.y < 0 || fragment.y >= height ||
             fragment.sourceId != sourceId ||
             !std::isfinite(fragment.cameraDepth) ||
+            !std::isfinite(fragment.oitLinearDepth) ||
             !std::isfinite(fragment.sceneLinearRgb[0]) ||
             !std::isfinite(fragment.sceneLinearRgb[1]) ||
             !std::isfinite(fragment.sceneLinearRgb[2])) {
@@ -74,9 +77,11 @@ bool coveredFragments(const RasterWorkbenchFragmentSink &fragments,
         sawHdr = sawHdr || fragment.sceneLinearRgb[2] > 1.0f;
         sawDepth = sawDepth ||
             std::abs(fragment.cameraDepth - expectedDepth) < 1.0e-3f;
+        sawOitDepth = sawOitDepth ||
+            std::abs(fragment.oitLinearDepth - expectedOitDepth) < 1.0e-3f;
         sawAlpha = sawAlpha || std::abs(fragment.alpha - expectedAlpha) < 0.002f;
     }
-    return sawHdr && sawDepth && sawAlpha;
+    return sawHdr && sawDepth && sawOitDepth && sawAlpha;
 }
 
 } // namespace
@@ -134,13 +139,21 @@ int main(int argc, char **argv)
     }();
     const Point3D camera = transform.cameraPosition(size);
     const Point3D view = transform.viewDirection();
+    const ViewportCameraState cameraState = transform.cameraState();
+    const ViewportCameraPreferences cameraPreferences =
+        transform.cameraPreferences();
+    const float oitDepthOffset = static_cast<float>(
+        std::min(cameraPreferences.clipEnd,
+                 std::max<qreal>(1000.0, cameraState.gridViewDistance)) -
+        cameraPreferences.clipStart);
     const float meshDepth = static_cast<float>(
         -((-1.0 - camera.z) * view.z));
     passed &= check(sameImage(meshBaseline, meshObserved),
                     "mesh fragment observation must preserve rendered pixels");
     passed &= check(coveredFragments(meshFragments, size.width(), size.height(),
-                                     meshId, meshDepth, materialAlpha),
-                    "mesh fragments must retain coverage, linear HDR color, material alpha, source ID, and forward depth");
+                                     meshId, meshDepth,
+                                     oitDepthOffset + meshDepth, materialAlpha),
+                    "mesh fragments must retain coverage, linear HDR color, material alpha, source ID, camera depth, and Blender orthographic OIT depth");
 
     Shape surface;
     surface.geometryType = GeometryType::NurbsSurface;
@@ -179,8 +192,10 @@ int main(int argc, char **argv)
     passed &= check(sameImage(surfaceBaseline, surfaceObserved),
                     "NURBS fragment observation must preserve rendered pixels");
     passed &= check(coveredFragments(surfaceFragments, size.width(), size.height(),
-                                     surfaceId, surfaceDepth, materialAlpha),
-                    "NURBS fragments must retain coverage, linear HDR color, material alpha, source ID, and forward depth");
+                                     surfaceId, surfaceDepth,
+                                     oitDepthOffset + surfaceDepth,
+                                     materialAlpha),
+                    "NURBS fragments must retain coverage, linear HDR color, material alpha, source ID, camera depth, and Blender orthographic OIT depth");
     passed &= check(std::abs(meshDepth - surfaceDepth) > 0.5f,
                     "camera depth must vary with surface position");
 

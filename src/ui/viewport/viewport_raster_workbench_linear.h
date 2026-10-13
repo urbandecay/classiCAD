@@ -33,6 +33,10 @@ struct RasterWorkbenchLinearFragment {
     std::array<float, 3> sceneLinearRgb{};
     float alpha = 1.0f;
     std::uint64_t sourceId = 0;
+    // Positive linear z depth used by Blender's OIT weight. A negative value
+    // means the caller has only cameraDepth, which remains useful to depth
+    // sort and is used as the weight-depth fallback by CPU contracts.
+    float oitLinearDepth = -1.0f;
 };
 
 // Optional observation target used by CPU surface rasterization. Collected

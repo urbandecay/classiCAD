@@ -571,24 +571,40 @@ void observeWorkbenchFragment(
     RasterWorkbenchFragmentSink *sink, const QPainter &painter,
     const QPointF &logicalPixelCenter, const Point3D &worldPosition,
     const Point3D &cameraPosition, const Point3D &viewDirection,
-    const QVector3D &sceneLinearRgb, qreal alpha, ObjectId sourceId)
+    const QVector3D &sceneLinearRgb, qreal alpha, ObjectId sourceId,
+    const ViewportTransform &transform)
 {
     if (sink == nullptr) return;
     const QPointF devicePixel = painter.deviceTransform().map(logicalPixelCenter);
     const qreal depth = -((worldPosition.x - cameraPosition.x) * viewDirection.x +
                           (worldPosition.y - cameraPosition.y) * viewDirection.y +
                           (worldPosition.z - cameraPosition.z) * viewDirection.z);
+    qreal oitLinearDepth = std::abs(depth);
+    if (!transform.isPerspectiveEnabled()) {
+        const ViewportCameraState camera = transform.cameraState();
+        const ViewportCameraPreferences preferences =
+            transform.cameraPreferences();
+        const qreal eyeDistance = std::min(
+            preferences.clipEnd,
+            std::max<qreal>(1000.0, camera.gridViewDistance));
+        // `depth` is the negated camera-forward dot stored in the fragment;
+        // the GPU shader uses the opposite signed view-space value and
+        // computes offset - signedViewDepth, so add this value here.
+        oitLinearDepth = std::max(
+            eyeDistance - preferences.clipStart + depth, 0.0);
+    }
     if (!std::isfinite(devicePixel.x()) || !std::isfinite(devicePixel.y()) ||
         !std::isfinite(depth) || !std::isfinite(sceneLinearRgb.x()) ||
         !std::isfinite(sceneLinearRgb.y()) || !std::isfinite(sceneLinearRgb.z()) ||
-        !std::isfinite(alpha)) {
+        !std::isfinite(alpha) || !std::isfinite(oitLinearDepth)) {
         return;
     }
     sink->push_back({qFloor(devicePixel.x()), qFloor(devicePixel.y()),
                      static_cast<float>(depth),
                      {sceneLinearRgb.x(), sceneLinearRgb.y(), sceneLinearRgb.z()},
                      static_cast<float>(std::clamp<qreal>(alpha, 0.0, 1.0)),
-                     sourceId.value()});
+                     sourceId.value(),
+                     static_cast<float>(oitLinearDepth)});
 }
 
 } // namespace
@@ -1949,7 +1965,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             fragmentSink, painter, QPointF(px, py),
                             fragmentPosition, meshCameraPosition,
                             meshViewDirection, shadedLinear, pixelAlpha,
-                            shapeObjectId);
+                            shapeObjectId, transform_);
                     }
                     const QVector3D displayColor =
                         workbenchSceneLinearToDisplaySrgb(
@@ -3168,7 +3184,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             observeWorkbenchFragment(
                                 fragmentSink, painter, QPointF(px, py),
                                 fragmentPosition, cameraPosition, viewDirection,
-                                sampleLinear, sample.alphaF(), objectId);
+                                sampleLinear, sample.alphaF(), objectId,
+                                transform_);
                         }
                         row[x] = qPremultiply(qRgba(sample.red(), sample.green(),
                                                     sample.blue(), sample.alpha()));
@@ -3278,7 +3295,7 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                         observeWorkbenchFragment(
                             fragmentSink, painter, QPointF(px, py),
                             fragmentPosition, cameraPosition, viewDirection,
-                            texturedLinear, alpha, objectId);
+                            texturedLinear, alpha, objectId, transform_);
                     }
                     const int red = textured.red();
                     const int green = textured.green();

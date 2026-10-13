@@ -420,6 +420,7 @@ int main(int argc, char *argv[])
         ViewportShadingSettings shading;
         shading.lightingMode = ViewportLightingMode::Flat;
         shading.colorMode = ViewportColorMode::Material;
+        shading.colorTransform = 1; // Match the Blender Standard reference.
         shading.outline = false;
         shading.shadows = false;
         shading.cavity = false;
@@ -438,7 +439,8 @@ int main(int argc, char *argv[])
         renderer.setShadingSettings(shading);
         const auto drawObject = [&renderer, &size](
                                     QPainter &painter,
-                                    const ViewportRenderObject &object) {
+                                    const ViewportRenderObject &object,
+                                    RasterWorkbenchFragmentSink *fragmentSink) {
             renderer.drawShape(
                 painter, object.shape, size, false, false, true, QColor(),
                 QString(), 0.0, object.objectId, object.geometryRevision,
@@ -446,11 +448,11 @@ int main(int argc, char *argv[])
                 object.preparedGeometryOffset, object.displayColorSceneLinear,
                 object.workbenchMaterial, object.displayName,
                 object.libraryPath, object.meshObjectTransform,
-                object.meshMaterials);
+                object.meshMaterials, fragmentSink);
         };
         RasterWorkbenchSurfaceLayers layers;
         const bool rendered = compositeRasterWorkbenchSurfaces(
-            &image, objects, transform, size, 1.0, false,
+            &image, objects, transform, size, 1.0, false, true, shading,
             drawObject, &layers);
         const QString capturePath = qEnvironmentVariable(
             "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_CAPTURE");
@@ -464,9 +466,11 @@ int main(int argc, char *argv[])
         QImage frontImage(size, QImage::Format_ARGB32_Premultiplied);
         frontImage.fill(background);
         const bool rearRendered = compositeRasterWorkbenchSurfaces(
-            &rearImage, {objects[0]}, transform, size, 1.0, false, drawObject);
+            &rearImage, {objects[0]}, transform, size, 1.0, false, true,
+            shading, drawObject);
         const bool frontRendered = compositeRasterWorkbenchSurfaces(
-            &frontImage, {objects[1]}, transform, size, 1.0, false, drawObject);
+            &frontImage, {objects[1]}, transform, size, 1.0, false, true,
+            shading, drawObject);
         const bool isolatedSaved =
             (rearCapturePath.isEmpty() || rearImage.save(rearCapturePath)) &&
             (frontCapturePath.isEmpty() || frontImage.save(frontCapturePath));
@@ -503,7 +507,7 @@ int main(int argc, char *argv[])
         depthOrderedImage.fill(background);
         const bool depthOrderedRendered = compositeRasterWorkbenchSurfaces(
             &depthOrderedImage, depthOrderedObjects, transform, size, 1.0,
-            false, drawObject);
+            false, true, shading, drawObject);
         const QString depthCapturePath = qEnvironmentVariable(
             "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_DEPTH_CAPTURE");
         const bool depthSaved = depthCapturePath.isEmpty() ||
@@ -512,7 +516,7 @@ int main(int argc, char *argv[])
                             depthOrderedImage.pixelColor(180, 200) == rearOnly &&
                             depthOrderedImage.pixelColor(460, 200) == frontOnly &&
                             depthOrderedImage.pixelColor(320, 240) == overlap,
-                        "QPainter transparency must composite by camera depth when object iteration order is reversed");
+                        "weighted QPainter transparency must preserve pixels when object iteration order is reversed");
     }
 
     ViewportTransform perspectiveDofTransform = orthographicDofTransform;
@@ -1881,9 +1885,11 @@ int main(int argc, char *argv[])
                         const bool composed =
                             compositeRasterWorkbenchSurfaces(
                                 &image, objects, surfaceTransform,
-                                surfaceViewportSize, 1.0, false,
+                                surfaceViewportSize, 1.0, false, true,
+                                settings,
                                 [&](QPainter &painter,
-                                    const ViewportRenderObject &object) {
+                                    const ViewportRenderObject &object,
+                                    RasterWorkbenchFragmentSink *fragmentSink) {
                                     surfaceRenderer.setShadingSettings(settings);
                                     surfaceRenderer.drawShape(
                                         painter, object.shape,
@@ -1901,7 +1907,8 @@ int main(int argc, char *argv[])
                                         object.displayName,
                                         object.libraryPath,
                                         object.meshObjectTransform,
-                                        object.meshMaterials);
+                                        object.meshMaterials,
+                                        fragmentSink);
                                 });
                         if (!composed) return QImage{};
                         applyRasterWorkbenchEffects(

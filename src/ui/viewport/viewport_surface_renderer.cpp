@@ -6,6 +6,7 @@
 #include "viewport_depth_geometry.h"
 #include "blender_grid_renderer.h"
 #include "viewport_line_weight.h"
+#include "viewport_workbench_effect_scale.h"
 #include "workbench_lighting.h"
 #include "core/geometry/polygon_mesh.h"
 
@@ -6694,7 +6695,8 @@ bool ViewportSurfaceRenderer::draw(
                 "uOutlineColor",
                 QVector4D(outlineColor, 1.0f));
             outlineProgram_.setUniformValue(
-                "uUiScale", static_cast<float>(dpr));
+                "uUiScale",
+                static_cast<float>(workbenchEffectUiScale(dpr)));
             outlineVertexArray_.bind();
             glDrawArrays(GL_TRIANGLES, 0, 3);
             outlineVertexArray_.release();

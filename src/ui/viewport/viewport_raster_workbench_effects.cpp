@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 classiCAD contributors
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "viewport_raster_workbench_effects.h"
+#include "viewport_workbench_effect_scale.h"
 
 #include "viewport_depth_geometry.h"
 #include "viewport_cavity_blue_noise.h"
@@ -1066,7 +1067,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         // device-pixel resolution, so this is the equivalent texel distance.
         // Integer ID sampling resolves the fractional scale to the nearest
         // texel, as the GPU texture lookup does.
-        const int outlineSampleOffset = std::max(1, qRound(dpr));
+        const int outlineSampleOffset = workbenchEffectUiScale(dpr);
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
             const int depthY = std::clamp(
@@ -1171,7 +1172,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 // Blender's curvature pass samples four cardinal neighbors
                 // at ui_scale, rejects object-ID outline pixels, and takes
                 // signed differences of view-space normal components.
-                const int curvatureStep = std::max(1, qRound(dpr));
+                const int curvatureStep = workbenchEffectUiScale(dpr);
                 const auto sampleAt = [&](int sx, int sy)
                     -> const RasterSample & {
                     sx = std::clamp(sx, 0, width - 1);

@@ -1698,15 +1698,16 @@ Status: in progress; the implementation and source reviews found the blockers li
   path. An offscreen contract compares selected and unselected silhouette
   pixels against matching outline-free baselines. QPainter outline composition
   and broader effect pixel comparisons remain open.
-- **QPainter outline UI-scale sampling:** the software object-ID resolve now
-  offsets its four cardinal taps by the viewport DPR in its physical-resolution
-  ID buffer. Blender 5.2.2 applies `world_data.ui_scale` to the normalized tap
-  offsets in [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl#L256-L271);
-  the GPU path passes classiCAD's DPR as its UI-scale value. The focused
-  offscreen QPainter contract passed at DPR 1 and DPR 2, checking that a
-  cardinal tap reaches the same logical silhouette position at each scale.
-  Fractional DPR uses nearest object-ID texel sampling; broader QPainter
-  composition and image parity comparisons remain open.
+- **Workbench effect UI-scale sampling:** GPU outline, QPainter outline, and
+  QPainter curvature cardinal taps now share an integer scale adapter
+  (`max(1, qRound(DPR))`), matching Blender's integer `U.pixelsize` footprint
+  for the available Qt scale. Blender assigns `U.pixelsize` to Workbench's
+  `world_data.ui_scale` in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L100-L109)
+  and derives it from DPI and the user line-width adjustment in
+  [`wm_window.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/windowmanager/intern/wm_window.cc#L682-L718).
+  Contracts cover DPR 1, 1.5, and 2, including the QPainter edge footprint at
+  1.5. The custom Blender DPI and line-width adjustments have no classiCAD
+  setting and remain unsupported; broader image comparison also remains open.
 - **QPainter screen curvature:** the software effect now follows Blender's
   four-cardinal object-ID outline rejection, view-space normal-component
   differences, signed ridge/valley response, and soft clamp from

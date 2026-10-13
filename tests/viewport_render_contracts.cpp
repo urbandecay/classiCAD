@@ -7,6 +7,7 @@
 #include "ui/viewport/viewport_scene_renderer.h"
 #include "ui/viewport/viewport_surface_renderer.h"
 #include "ui/viewport/viewport_raster_workbench_effects.h"
+#include "ui/viewport/viewport_workbench_effect_scale.h"
 #include "ui/viewport/viewport_aa_renderer.h"
 #include "ui/viewport/viewport_workbench_scene_pass_coordinator.h"
 #include "ui/viewport/workbench_render_result.h"
@@ -350,9 +351,26 @@ int main(int argc, char *argv[])
         &outlineScaleDpr2, {outlineScaleObject}, orthographicDofTransform,
         orthographicDofSize, 2.0, outlineScaleSettings);
     passed &= check(
+        workbenchEffectUiScale(1.5) == 2 &&
+            workbenchEffectUiScale(1.0) == 1 &&
+            workbenchEffectUiScale(2.0) == 2,
+        "Workbench GPU and QPainter cardinal ID taps must use the nearest integer UI scale (DPR 1.5 maps to 2)");
+
+    QImage outlineScaleDpr15(orthographicDofSize * 3 / 2,
+                             QImage::Format_ARGB32_Premultiplied);
+    outlineScaleDpr15.setDevicePixelRatio(1.5);
+    outlineScaleDpr15.fill(Qt::black);
+    applyRasterWorkbenchEffects(
+        &outlineScaleDpr15, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 1.5, outlineScaleSettings);
+    passed &= check(
+        outlineScaleDpr15.pixelColor(46, 96).red() > 40,
+        "QPainter outline at DPR 1.5 must sample two device pixels from the edge, matching integer Workbench UI scale");
+
+    passed &= check(
         outlineScaleDpr1.pixelColor(31, 64).red() > 40 &&
             outlineScaleDpr2.pixelColor(62, 128).red() > 40,
-        "QPainter outlines must sample cardinal object IDs at the DPR-scaled Blender UI footprint");
+        "QPainter outlines must sample cardinal object IDs at the integer Blender UI footprint");
 
     ViewportTransform perspectiveDofTransform = orthographicDofTransform;
     perspectiveDofTransform.setPerspectiveEnabled(true);

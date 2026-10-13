@@ -1897,6 +1897,9 @@ bool ViewportSurfaceRenderer::initialize()
                                                 metallic, normal, incident);
             } else if (uMatcapLighting && uMatcapAvailable) {
                 selected = abs(material.a) > 1.5;
+                if (material.a < 0.0) {
+                    normal = -normal;
+                }
                 vec2 uv = workbenchMatcapUv(incident, normal);
                 if (uMatcapFlipX) {
                     uv.x = 1.0 - uv.x;

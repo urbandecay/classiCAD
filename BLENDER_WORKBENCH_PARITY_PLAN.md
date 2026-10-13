@@ -69,6 +69,13 @@ resource cannot be prepared, the existing forward output is left in place.
 This path shares the Studio restrictions above. The C++ build passes; GPU
 shader execution and matched Blender image comparison remain open.
 
+**Deferred MatCap back-face orientation (2026-10-13):** The deferred MatCap
+resolve now applies the sign stored in the material payload to the decoded
+normal before computing MatCap UVs. This matches Blender 5.2.2's prepass
+facing payload and composite normal flip, while leaving the payload magnitude
+available for the selected marker. The C++ build passes; a two-sided GPU
+capture and matched Blender image comparison remain open.
+
 **Opaque cavity resolve update (2026-10-13):** Eligible scene-linear opaque
 resolves now apply Workbench cavity and curvature from the shared depth,
 view-normal, object-ID, and blue-noise inputs before transparent accumulation.

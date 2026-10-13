@@ -2075,6 +2075,8 @@ bool importBlenderScene(const QString &path,
             renderOutput.value(QStringLiteral("pixel_aspect_x"));
         const QJsonValue pixelAspectYValue =
             renderOutput.value(QStringLiteral("pixel_aspect_y"));
+        const QJsonValue ditherIntensityValue =
+            renderOutput.value(QStringLiteral("dither_intensity"));
         const QJsonValue colorDepthValue =
             renderOutput.value(QStringLiteral("color_depth"));
         bool colorDepthValid = false;
@@ -2094,6 +2096,14 @@ bool importBlenderScene(const QString &path,
             pixelAspectYValue.toDouble() <= 0.0) {
             setError(errorMessage,
                      QStringLiteral("A Blender scene render-output record is invalid"));
+            return false;
+        }
+        if (!ditherIntensityValue.isUndefined() &&
+            (!ditherIntensityValue.isDouble() ||
+             !std::isfinite(ditherIntensityValue.toDouble()) ||
+             ditherIntensityValue.toDouble() < 0.0)) {
+            setError(errorMessage,
+                     QStringLiteral("A Blender scene render-output dither value is invalid"));
             return false;
         }
         const QString imageColorMode = renderOutput.value(

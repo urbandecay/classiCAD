@@ -510,7 +510,19 @@ bool ViewportAaRenderer::initialize()
         uniform float uDisplayLutShaperScale;
         uniform float uExposure;
         uniform float uGamma;
+        uniform float uDitherIntensity;
+        uniform vec2 uPixelOrigin;
         layout(location = 0) out vec4 fragmentColor;
+        float ditherRandomValue(ivec2 pixel)
+        {
+            uvec2 p = uvec2(pixel);
+            uint qx = 1103515245u * ((p.x >> 1u) ^ p.y);
+            uint qy = 1103515245u * ((p.y >> 1u) ^ p.x);
+            uint n = 1103515245u * (qx ^ (qy >> 3u));
+            float value = float(n) * (1.0 / float(0xffffffffu));
+            value = value * 2.0 - 1.0;
+            return sign(value) * (1.0 - sqrt(1.0 - abs(value)));
+        }
         float cocRadius(vec2 uv)
         {
             float depth = texture(uDepth, uv).r;
@@ -626,6 +638,15 @@ bool ViewportAaRenderer::initialize()
                 outputColor = transformColor(outputColor);
             } else if (uEncodeDisplay) {
                 outputColor = linearToSrgb(outputColor);
+            }
+            // Blender 5.2.2 applies render dither after the display transform
+            // when converting RGBA float pixels to display bytes. gl_FragCoord
+            // and Blender's render pixel coordinates both use a bottom-left
+            // origin, so subtract only the destination viewport origin here.
+            if (uDitherIntensity > 0.0) {
+                ivec2 pixel = ivec2(gl_FragCoord.xy - uPixelOrigin);
+                outputColor += vec3(ditherRandomValue(pixel) *
+                                    0.0033 * uDitherIntensity);
             }
             if (predivide) {
                 outputColor *= source.a;
@@ -2099,6 +2120,13 @@ void ViewportAaRenderer::drawPresentation(GLuint sourceTexture,
                                     static_cast<float>(displaySettings_.colorExposure));
     presentProgram_.setUniformValue("uGamma",
                                     static_cast<float>(displaySettings_.colorGamma));
+    presentProgram_.setUniformValue(
+        "uDitherIntensity",
+        static_cast<float>(std::max<qreal>(displaySettings_.colorDitherIntensity,
+                                           0.0)));
+    presentProgram_.setUniformValue(
+        "uPixelOrigin", QVector2D(float(destinationViewport[0]),
+                                  float(destinationViewport[1])));
     presentProgram_.setUniformValue("uDisplayLut", 3);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_3D,

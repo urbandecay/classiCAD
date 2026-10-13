@@ -112,6 +112,8 @@ struct ViewportShadingSettings {
     ImportedBlenderColorLutMetadata colorLutMetadata;
     qreal colorExposure = 0.0;
     qreal colorGamma = 1.0;
+    // Render-settings display dither; ordinary Workbench Solid uses zero.
+    qreal colorDitherIntensity = 0.0;
 
     bool xrayEnabled() const noexcept
     {

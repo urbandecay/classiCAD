@@ -8,6 +8,7 @@
 #include "ui/viewport/viewport_surface_renderer.h"
 #include "ui/viewport/viewport_aa_renderer.h"
 #include "ui/viewport/viewport_workbench_scene_pass_coordinator.h"
+#include "ui/viewport/workbench_render_result.h"
 #include "ui/viewport/workbench_lighting.h"
 #include "ui/viewport/blender_grid_renderer.h"
 
@@ -34,6 +35,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <utility>
 
@@ -59,6 +61,14 @@ int main(int argc, char *argv[])
     QSurfaceFormat::setDefaultFormat(format);
     QGuiApplication application(argc, argv);
     bool passed = true;
+
+    passed &= check(workbenchRenderDitherIntensity(1.0, 8) == 1.0 &&
+                        workbenchRenderDitherIntensity(1.0, 16) == 0.0 &&
+                        workbenchRenderDitherIntensity(1.0, 32) == 0.0 &&
+                        workbenchRenderDitherIntensity(-1.0, 8) == 0.0 &&
+                        workbenchRenderDitherIntensity(
+                            std::numeric_limits<qreal>::quiet_NaN(), 8) == 0.0,
+                    "Blender render dither must apply only to finite nonnegative 8-bit byte output");
 
     const qreal defaultLineWidth = viewportLineWeightPixels(0.0);
     const qreal lightLineWidth = viewportLineWeightPixels(0.13);
@@ -686,6 +696,124 @@ int main(int argc, char *argv[])
                 passed &= check(framebuffer.isValid(),
                                 "NURBS solid display test must allocate a depth framebuffer");
                 if (framebuffer.isValid()) {
+                    struct DitherCapture {
+                        QImage image;
+                        std::array<uchar, 4> bottomLeftPixel{};
+                    };
+                    const auto renderDitherContractImage = [&](
+                        qreal intensity, const char *historyKey) {
+                        framebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                            glSize.height());
+                        ViewportAaRenderer presenter;
+                        presenter.setMode(static_cast<int>(
+                            ViewportAntiAliasingMode::Off));
+                        ViewportShadingSettings displaySettings;
+                        displaySettings.colorTransform = 1;
+                        displaySettings.colorDitherIntensity = intensity;
+                        presenter.setDisplayTransform(displaySettings, true,
+                                                      true);
+                        if (!presenter.beginSceneSample(
+                                glSize, 1.0, gpuTransform,
+                                QByteArray(historyKey), false)) {
+                            return DitherCapture{};
+                        }
+                        const GLfloat premultipliedColor[4] = {
+                            0.09f, 0.09f, 0.09f, 0.5f};
+                        functions.glClearBufferfv(GL_COLOR, 0,
+                                                  premultipliedColor);
+                        presenter.finishSceneSample();
+                        functions.glFinish();
+                        DitherCapture capture;
+                        capture.image = framebuffer.toImage();
+                        framebuffer.bind();
+                        functions.glReadPixels(0, 0, 1, 1, GL_RGBA,
+                                               GL_UNSIGNED_BYTE,
+                                               capture.bottomLeftPixel.data());
+                        return capture;
+                    };
+                    const DitherCapture noDitherCapture =
+                        renderDitherContractImage(0.0, "dither-zero");
+                    const DitherCapture ditheredCapture =
+                        renderDitherContractImage(1.0, "dither-one");
+                    const DitherCapture repeatedDitheredCapture =
+                        renderDitherContractImage(1.0, "dither-one-repeat");
+                    const QImage &noDitherImage = noDitherCapture.image;
+                    const QImage &ditheredImage = ditheredCapture.image;
+                    int ditherChangedPixels = 0;
+                    bool ditherPreservedAlpha =
+                        !noDitherImage.isNull() &&
+                        noDitherImage.size() == ditheredImage.size() &&
+                        ditheredImage == repeatedDitheredCapture.image;
+                    if (ditherPreservedAlpha) {
+                        for (int y = 0; y < noDitherImage.height(); ++y) {
+                            for (int x = 0; x < noDitherImage.width(); ++x) {
+                                const QColor base =
+                                    noDitherImage.pixelColor(x, y);
+                                const QColor dithered =
+                                    ditheredImage.pixelColor(x, y);
+                                ditherChangedPixels +=
+                                    base.red() != dithered.red() ||
+                                    base.green() != dithered.green() ||
+                                    base.blue() != dithered.blue();
+                                ditherPreservedAlpha &=
+                                    base.alpha() == dithered.alpha();
+                            }
+                        }
+                    }
+                    const auto expectedDitherByte = [](float linear,
+                                                       float noise) {
+                        const float display = linear <= 0.0031308f
+                            ? linear * 12.92f
+                            : 1.055f * std::pow(linear, 1.0f / 2.4f) -
+                                  0.055f;
+                        const float premultiplied =
+                            (display + noise * 0.0033f) * 0.5f;
+                        return int(std::lround(
+                            std::clamp(premultiplied, 0.0f, 1.0f) * 255.0f));
+                    };
+                    const auto blenderDitherNoise = [](
+                        std::uint32_t x, std::uint32_t y) {
+                        const std::uint32_t qx = 1103515245u *
+                            ((x >> 1u) ^ y);
+                        const std::uint32_t qy = 1103515245u *
+                            ((y >> 1u) ^ x);
+                        const std::uint32_t n = 1103515245u *
+                            (qx ^ (qy >> 3u));
+                        float value = static_cast<float>(n) *
+                            (1.0f / static_cast<float>(
+                                std::numeric_limits<std::uint32_t>::max()));
+                        value = value * 2.0f - 1.0f;
+                        return std::copysign(
+                            1.0f, value) *
+                            (1.0f - std::sqrt(1.0f - std::fabs(value)));
+                    };
+                    // Blender's hash at bottom-left pixel (0,0) is zero;
+                    // triangle remapping therefore returns exactly -1.
+                    const float bottomLeftNoise = blenderDitherNoise(0, 0);
+                    const int expectedDitheredRed = expectedDitherByte(
+                        0.18f, bottomLeftNoise);
+                    const int expectedUnditheredRed = expectedDitherByte(
+                        0.18f, 0.0f);
+                    const bool expectedDitherVectorMatches =
+                        bottomLeftNoise == -1.0f &&
+                        expectedDitheredRed == 58 &&
+                        expectedUnditheredRed == 59 &&
+                        ditheredCapture.bottomLeftPixel[0] ==
+                            expectedDitheredRed &&
+                        ditheredCapture.bottomLeftPixel[1] ==
+                            expectedDitheredRed &&
+                        ditheredCapture.bottomLeftPixel[2] ==
+                            expectedDitheredRed &&
+                        noDitherCapture.bottomLeftPixel[0] ==
+                            expectedUnditheredRed &&
+                        ditheredCapture.bottomLeftPixel[3] ==
+                            noDitherCapture.bottomLeftPixel[3];
+                    passed &= check(
+                        ditherPreservedAlpha && ditherChangedPixels > 0 &&
+                            expectedDitherVectorMatches,
+                        "final display dither must match Blender's bottom-left (0,0) triangle-noise pixel, change RGB only, repeat exactly, and be disabled at zero intensity");
+
                     ViewportRenderObject surfaceObject;
                     surfaceObject.shape = cubeShape;
                     surfaceObject.objectId = ObjectId::fromValue(1);

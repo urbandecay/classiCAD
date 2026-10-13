@@ -1036,6 +1036,15 @@ bool applyImportedRenderColorManagement(
         if (!matchesActiveLayer) continue;
         const QJsonObject colorManagement = scene.value(
             QStringLiteral("color_management")).toObject();
+        const QJsonObject renderOutput = scene.value(
+            QStringLiteral("render_output")).toObject();
+        const QJsonValue ditherIntensityValue = renderOutput.value(
+            QStringLiteral("dither_intensity"));
+        const qreal ditherIntensity = ditherIntensityValue.isUndefined()
+            ? 1.0 : ditherIntensityValue.toDouble(1.0);
+        if (std::isfinite(ditherIntensity) && ditherIntensity >= 0.0) {
+            settings->colorDitherIntensity = ditherIntensity;
+        }
         const QString displayDevice = colorManagement.value(
             QStringLiteral("display_device")).toString();
         const QString transform = colorManagement.value(
@@ -6788,6 +6797,8 @@ public:
         ViewportShadingSettings settings = viewportShadingSettings_;
         result.colorManagementApplied =
             applyImportedRenderColorManagement(document_, &settings);
+        settings.colorDitherIntensity = workbenchRenderDitherIntensity(
+            settings.colorDitherIntensity, result.writtenColorDepth());
         const bool captureSceneLinearCombined =
             result.blenderImageFormat.compare(QLatin1String("HDR"),
                                                Qt::CaseInsensitive) == 0 ||

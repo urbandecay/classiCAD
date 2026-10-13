@@ -1415,6 +1415,8 @@ def extract_scene(input_path, mode):
                 "resolution_percentage": int(render.resolution_percentage),
                 "pixel_aspect_x": finite_number(render.pixel_aspect_x),
                 "pixel_aspect_y": finite_number(render.pixel_aspect_y),
+                "dither_intensity": finite_number(
+                    getattr(render, "dither_intensity", 1.0)),
                 # Blender backs RenderSettings.film_transparent with the
                 # R_ALPHAPREMUL render alpha-mode bit used by Workbench.
                 "film_transparent": bool(render.film_transparent),

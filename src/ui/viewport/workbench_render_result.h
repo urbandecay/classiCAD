@@ -11,8 +11,20 @@
 #include <QVector3D>
 
 #include <limits>
+#include <cmath>
 
 namespace classiCAD {
+
+// Blender's render dither is applied while producing an 8-bit byte buffer.
+// Higher-depth PNG/TIFF and linear-float outputs keep their source precision.
+inline qreal workbenchRenderDitherIntensity(qreal intensity,
+                                           int writtenColorDepth) noexcept
+{
+    return writtenColorDepth == 8 && std::isfinite(intensity) &&
+                   intensity > 0.0
+               ? intensity
+               : 0.0;
+}
 
 // Offscreen Workbench-style scene output together with the saved camera pose
 // and optics used to produce it.

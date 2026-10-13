@@ -1987,7 +1987,9 @@ int main(int argc, char *argv[])
                         const ViewportRenderObject *renderObject = nullptr,
                         const ViewportTransform *cameraOverride = nullptr,
                         const ViewportCameraPreferences *dofOptics = nullptr,
-                        const QString &cavityDiagnosticPrefix = QString{}) {
+                        const QString &cavityDiagnosticPrefix = QString{},
+                        QVector<float> *sceneLinearCapture = nullptr,
+                        const QVector3D *backgroundSceneLinear = nullptr) {
                         if (image == nullptr || !framebuffer.bind()) {
                             return false;
                         }
@@ -2025,11 +2027,13 @@ int main(int argc, char *argv[])
                             if (displayGray < targetDisplayGray) low = middle;
                             else high = middle;
                         }
+                        const QVector3D background = backgroundSceneLinear != nullptr
+                            ? *backgroundSceneLinear
+                            : QVector3D((low + high) * 0.5f,
+                                        (low + high) * 0.5f,
+                                        (low + high) * 0.5f);
                         const GLfloat linearBackground[4] = {
-                            (low + high) * 0.5f,
-                            (low + high) * 0.5f,
-                            (low + high) * 0.5f,
-                            1.0f};
+                            background.x(), background.y(), background.z(), 1.0f};
                         functions.glClearBufferfv(GL_COLOR, 0,
                                                   linearBackground);
                         ViewportWorkbenchSceneColorPassRequest request;
@@ -2163,6 +2167,33 @@ int main(int argc, char *argv[])
                                 return false;
                             }
                         }
+                        if (result.rendered && sceneLinearCapture != nullptr) {
+                            const GLuint sourceTexture =
+                                sceneAaRenderer.targets().currentSampleColorTexture;
+                            QVector<float> rgba(glSize.width() * glSize.height() * 4);
+                            GLint previousActive = GL_TEXTURE0;
+                            GLint previousTexture = 0;
+                            functions.glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActive);
+                            functions.glActiveTexture(GL_TEXTURE0);
+                            functions.glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                                                    &previousTexture);
+                            functions.glBindTexture(GL_TEXTURE_2D, sourceTexture);
+                            functions.glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA,
+                                                    GL_FLOAT, rgba.data());
+                            functions.glBindTexture(GL_TEXTURE_2D,
+                                                    static_cast<GLuint>(previousTexture));
+                            functions.glActiveTexture(
+                                static_cast<GLenum>(previousActive));
+                            sceneLinearCapture->resize(glSize.width() *
+                                                       glSize.height() * 3);
+                            for (int pixel = 0; pixel < glSize.width() * glSize.height();
+                                 ++pixel) {
+                                for (int channel = 0; channel < 3; ++channel) {
+                                    (*sceneLinearCapture)[pixel * 3 + channel] =
+                                        rgba[pixel * 4 + channel];
+                                }
+                            }
+                        }
                         sceneAaRenderer.finishSceneSample();
                         if (!result.rendered) return false;
                         functions.glFinish();
@@ -2172,19 +2203,54 @@ int main(int argc, char *argv[])
                     const QString polygonCubeCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_POLYGON_CUBE_CAPTURE");
-                    if (!polygonCubeCapturePath.isEmpty()) {
+                    const QString polygonCubeLinearPath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_POLYGON_CUBE_LINEAR_CAPTURE");
+                    if (!polygonCubeCapturePath.isEmpty() &&
+                        !polygonCubeLinearPath.isEmpty()) {
                         QImage polygonCubeCapture;
-                        const bool polygonCubeCaptureSucceeded =
+                        QVector<float> polygonCubeLinear;
+                        const bool rendered =
                             validatePolygonMesh(
                                 polygonCubeObject.shape.polygonMesh) &&
                             renderCoordinatedScene(
                                 rawFaceShading,
                                 QByteArrayLiteral("polygon-cube-baseline"),
-                                &polygonCubeCapture, &polygonCubeObject) &&
+                                &polygonCubeCapture, &polygonCubeObject,
+                                nullptr, nullptr, QString{}, &polygonCubeLinear);
+                        QFile linearFile(polygonCubeLinearPath);
+                        const QByteArray pfmHeader =
+                            QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                        const bool linearSaved = rendered &&
+                            linearFile.open(QIODevice::WriteOnly) &&
+                            linearFile.write(pfmHeader) == pfmHeader.size() &&
+                            linearFile.write(reinterpret_cast<const char *>(
+                                polygonCubeLinear.constData()),
+                                polygonCubeLinear.size() * qsizetype(sizeof(float))) ==
+                                polygonCubeLinear.size() * qsizetype(sizeof(float));
+                        const bool displaySaved = rendered &&
                             polygonCubeCapture.save(polygonCubeCapturePath);
+                        bool displayNonblank = false;
+                        if (rendered && !polygonCubeCapture.isNull()) {
+                            for (int y = 0; y < polygonCubeCapture.height() &&
+                                            !displayNonblank; ++y) {
+                                for (int x = 0; x < polygonCubeCapture.width(); ++x) {
+                                    if (polygonCubeCapture.pixelColor(x, y) !=
+                                        QColor(0, 0, 0)) {
+                                        displayNonblank = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        const bool linearNonblank = rendered &&
+                            std::any_of(polygonCubeLinear.cbegin(),
+                                        polygonCubeLinear.cend(),
+                                [](float channel) { return channel > 1.0e-6f; });
                         passed &= check(
-                            polygonCubeCaptureSucceeded,
-                            "matched polygon cube diagnostic capture must render and save");
+                            rendered && linearSaved && displaySaved &&
+                                displayNonblank && linearNonblank,
+                            "matched polygon cube capture must produce nonblank scene-linear and final display output");
                     }
                     const QString cavityDiagnosticPrefix = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX");

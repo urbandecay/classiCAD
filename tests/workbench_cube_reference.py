@@ -32,6 +32,7 @@ def arguments():
             "for TRANSPARENT_OVERLAP)"
         ),
     )
+    parser.add_argument("--ortho-scale", type=float, default=5.0)
     parser.add_argument(
         "--match-classicad-ortho",
         action="store_true",
@@ -49,6 +50,10 @@ def arguments():
     parser.add_argument(
         "--linear-output",
         help="also write final scene-linear Combined and Z passes to a multilayer OpenEXR",
+    )
+    parser.add_argument(
+        "--linear-pfm-output",
+        help="convert the scene-linear Combined pass to an RGB PFM capture",
     )
     parser.add_argument(
         "--jitter-pixels",
@@ -117,7 +122,7 @@ def main():
     )
     camera_data = bpy.data.cameras.new("ReferenceCamera")
     camera_data.type = "ORTHO"
-    camera_data.ortho_scale = 5.0
+    camera_data.ortho_scale = args.ortho_scale
     camera = bpy.data.objects.new("ReferenceCamera", camera_data)
     bpy.context.collection.objects.link(camera)
     ortho_eye_distance = args.ortho_eye_distance
@@ -236,7 +241,6 @@ def main():
     scene.render.filepath = args.output
     scene.render.film_transparent = False
     scene.display.render_aa = args.aa
-
     shading = scene.display.shading
     shading.light = "STUDIO"
     shading.studio_light = "Default"
@@ -310,6 +314,13 @@ def main():
     if args.linear_output:
         make_linear_output(scene, args.linear_output)
         bpy.ops.render.render(write_still=False)
+        if args.linear_pfm_output:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from workbench_exr_to_pfm import convert_exr
+
+            depth_output = args.linear_pfm_output + ".depth.pfm"
+            convert_exr(args.linear_output, args.linear_pfm_output, depth_output)
+            os.remove(depth_output)
 
 
 if __name__ == "__main__":

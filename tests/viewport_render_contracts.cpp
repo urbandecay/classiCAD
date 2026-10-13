@@ -315,6 +315,140 @@ int main(int argc, char *argv[])
         orthographicDofImage.pixelColor(32, 64).red();
     const int defocusedOrthographicRed =
         orthographicDofImage.pixelColor(96, 64).red();
+
+    // CPU shadow fallback: an opaque elevated quad casts onto an opaque
+    // receiver. The input image is deliberately uniform so changed pixels
+    // expose only the software shadow pass.
+    const auto makeShadowQuad = [&](quint64 id, qreal left, qreal top,
+                                    qreal right, qreal bottom, qreal height) {
+        ViewportRenderObject object;
+        object.shape.geometryType = GeometryType::NurbsSurface;
+        object.objectId = ObjectId::fromValue(id);
+        auto geometry = QSharedPointer<ViewportDepthGeometry>::create();
+        const auto pointAt = [&](qreal x, qreal y) {
+            QPointF local;
+            orthographicDofTransform.screenToWorkPlaneUnclipped(
+                QPointF(x, y), orthographicDofSize, WorkPlane::XY, 0.0,
+                &local);
+            return QVector3D(float(local.x()), float(local.y()), float(height));
+        };
+        const QVector3D a = pointAt(left, top);
+        const QVector3D b = pointAt(right, top);
+        const QVector3D c = pointAt(right, bottom);
+        const QVector3D d = pointAt(left, bottom);
+        geometry->surfaceVertices = {a, c, b, a, d, c};
+        geometry->surfaceNormals = QVector<QVector3D>(
+            6, QVector3D(0.0f, 0.0f, 1.0f));
+        geometry->surfaceTextureCoordinates = {
+            QPointF(0.0, 0.0), QPointF(1.0, 1.0), QPointF(1.0, 0.0),
+            QPointF(0.0, 0.0), QPointF(0.0, 1.0), QPointF(1.0, 1.0)};
+        object.preparedDepthGeometry = geometry;
+        return object;
+    };
+    const QVector<ViewportRenderObject> shadowObjects{
+        makeShadowQuad(11, 4, 4, 124, 124, 0.0),
+        makeShadowQuad(12, 48, 48, 80, 80, 2.0)};
+    const auto renderCpuShadow = [&](ViewportShadingSettings shading) {
+        QImage image(orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        shading.mode = ViewportShadingMode::Solid;
+        shading.outline = false;
+        shading.cavity = false;
+        shading.depthOfField = false;
+        applyRasterWorkbenchEffects(&image, shadowObjects,
+            orthographicDofTransform, orthographicDofSize, 1.0, shading);
+        return image;
+    };
+    ViewportShadingSettings shadowSettings;
+    shadowSettings.shadows = true;
+    shadowSettings.shadowIntensity = 0.8;
+    const QImage shadowImage = renderCpuShadow(shadowSettings);
+    ViewportShadingSettings noShadowSettings = shadowSettings;
+    noShadowSettings.shadows = false;
+    const QImage noShadowImage = renderCpuShadow(noShadowSettings);
+    int shadowPixels = 0;
+    qreal shadowX = 0.0;
+    for (int y = 0; y < shadowImage.height(); ++y) {
+        for (int x = 0; x < shadowImage.width(); ++x) {
+            if (shadowImage.pixelColor(x, y) != noShadowImage.pixelColor(x, y)) {
+                ++shadowPixels;
+                shadowX += x;
+            }
+        }
+    }
+    passed &= check(shadowPixels > 0,
+        "QPainter Workbench shadow setting must darken receiver pixels for opaque triangulated casters");
+    ViewportShadingSettings zeroShadowSettings = shadowSettings;
+    zeroShadowSettings.shadowIntensity = 0.0;
+    passed &= check(renderCpuShadow(zeroShadowSettings) == noShadowImage,
+        "QPainter Workbench shadow intensity zero must preserve the unshadowed image");
+    ViewportShadingSettings lowShadowSettings = shadowSettings;
+    lowShadowSettings.shadowIntensity = 0.2;
+    const QImage lowIntensityShadowImage = renderCpuShadow(lowShadowSettings);
+    qint64 highIntensityLuminance = 0;
+    qint64 lowIntensityLuminance = 0;
+    for (int y = 0; y < shadowImage.height(); ++y) {
+        for (int x = 0; x < shadowImage.width(); ++x) {
+            highIntensityLuminance += shadowImage.pixelColor(x, y).red();
+            lowIntensityLuminance +=
+                lowIntensityShadowImage.pixelColor(x, y).red();
+        }
+    }
+    passed &= check(highIntensityLuminance < lowIntensityLuminance,
+        "QPainter Workbench shadow darkening must increase monotonically with shadow intensity");
+    ViewportShadingSettings alternateShadowSettings = shadowSettings;
+    alternateShadowSettings.shadowDirection = QVector3D(1.0f, 0.2f, 0.1f);
+    const QImage alternateShadowImage = renderCpuShadow(alternateShadowSettings);
+    qreal alternateShadowX = 0.0;
+    int alternateShadowPixels = 0;
+    for (int y = 0; y < shadowImage.height(); ++y) {
+        for (int x = 0; x < shadowImage.width(); ++x) {
+            if (alternateShadowImage.pixelColor(x, y) !=
+                noShadowImage.pixelColor(x, y)) {
+                ++alternateShadowPixels;
+                alternateShadowX += x;
+            }
+        }
+    }
+    passed &= check(alternateShadowPixels > 0 &&
+                        std::abs(shadowX / std::max(shadowPixels, 1) -
+                                 alternateShadowX /
+                                     std::max(alternateShadowPixels, 1)) > 1.0,
+        "QPainter Workbench shadow direction must move the software shadow mask");
+    QTemporaryDir shadowTextureDirectory;
+    QImage transparentShadowTexture(1, 1, QImage::Format_ARGB32);
+    transparentShadowTexture.fill(Qt::transparent);
+    const QString transparentShadowTexturePath =
+        shadowTextureDirectory.filePath(QStringLiteral("transparent.png"));
+    const bool transparentShadowTextureSaved =
+        transparentShadowTexture.save(transparentShadowTexturePath);
+    QVector<ViewportRenderObject> cutoutShadowObjects{
+        makeShadowQuad(21, 4, 4, 124, 124, 0.0),
+        makeShadowQuad(22, 48, 48, 80, 80, 2.0)};
+    cutoutShadowObjects[1].hasWorkbenchMaterial = true;
+    cutoutShadowObjects[1].workbenchMaterial.textureImagePath =
+        transparentShadowTexturePath;
+    cutoutShadowObjects[1].workbenchMaterial.textureImageAlphaMode =
+        QStringLiteral("STRAIGHT");
+    ViewportShadingSettings cutoutShadowSettings = shadowSettings;
+    cutoutShadowSettings.colorMode = ViewportColorMode::Texture;
+    QImage cutoutShadowImage(orthographicDofSize,
+                             QImage::Format_ARGB32_Premultiplied);
+    cutoutShadowImage.fill(Qt::white);
+    applyRasterWorkbenchEffects(&cutoutShadowImage, cutoutShadowObjects,
+        orthographicDofTransform, orthographicDofSize, 1.0,
+        cutoutShadowSettings);
+    QImage receiverOnlyImage(orthographicDofSize,
+                             QImage::Format_ARGB32_Premultiplied);
+    receiverOnlyImage.fill(Qt::white);
+    const QVector<ViewportRenderObject> receiverOnlyObjects{
+        cutoutShadowObjects[0]};
+    applyRasterWorkbenchEffects(&receiverOnlyImage, receiverOnlyObjects,
+        orthographicDofTransform, orthographicDofSize, 1.0,
+        cutoutShadowSettings);
+    passed &= check(transparentShadowTextureSaved &&
+                        cutoutShadowImage == receiverOnlyImage,
+        "QPainter Workbench alpha-cutout texture pixels must not cast software shadows");
     ViewportTransform translatedOrthographicDofTransform =
         orthographicDofTransform;
     const Point3D translatedDofTarget{

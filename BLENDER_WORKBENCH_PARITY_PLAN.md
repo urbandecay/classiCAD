@@ -554,19 +554,12 @@ in ordinary free views or orthographic views is superseded by this correction.
 
 - This update supersedes earlier parity-matrix and implementation-plan wording
   that said cavity was skipped beneath visible translucent surfaces.
-- The QPainter surface compositor retains its opaque surface color and its
-  resolved transparent contribution for the later cavity pass. When a
-  translucent surface covers an opaque cavity receiver, cavity now changes
-  the opaque contribution first and preserves the transparent contribution,
-  matching Blender's opaque cavity result followed by transparent color
-  compositing. Blender 5.2.2 draws the opaque pass before the transparent pass
-  in [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L496-L499);
-  its cavity effect is part of the opaque resolve and affects opaque surfaces
-  in [`workbench_effect_cavity.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_cavity.cc#L7-L13).
-- Because the QPainter cavity effect runs after scene strokes are drawn, it
-  applies the opaque-layer color delta to the final pixel to keep those strokes
-  intact. Surface/stroke overlap can therefore remain approximate; matched
-  QPainter/Blender image comparison has not been performed.
+- The later 2026-10-13 implementation now folds cavity into retained opaque
+  color before transparency composition. Weighted OIT does this in scene-linear
+  RGB; the bounded sorted fallback does it in its display-RGB opaque layer.
+  This section is retained as history only; current behavior and its remaining
+  display-space limitation are recorded under
+  [QPainter cavity and outline order](#qpainter-cavity-and-outline-order-2026-10-13).
 
 ### QPainter scene-linear surface resolve (2026-10-12)
 
@@ -843,6 +836,7 @@ This is the status after the first implementation pass and the team's code revie
 - **Camera depth of field:** the GPU viewport and offscreen render-result path share the Blender 5.2.2 `DofPass` shape: half-resolution RGBA16F color and RG8 near/far CoC pyramids, full-resolution CoC-aware preparation, quarter/eighth-resolution downsample levels, half-resolution 49-sample gather, 3x3 median cleanup, and a depth-derived CoC resolve before AA accumulation. The shader's sample perimeter and square-to-circle radius match `DofPass::setup_samples`; polygon blade shaping uses the algebraically equivalent sector formula, rotation, and reciprocal X aperture ratio. Its two-blade denominator no longer uses an extra epsilon floor. The aperture path remains unverified against Blender images, especially the visual two-blade slit. The textures and passes are kept separate from final presentation; the existing camera gate and per-temporal-sample placement remain. QPainter uses its separate full-resolution software approximation, with aperture shape controls on a fixed 12-tap gather and a repeating 64x64 blue-noise spatial rotation. Scene-camera optics persist with project, session, and user preferences; imported Blender scene cameras populate the inputs; DOF is gated off for ordinary orbit/orthographic views. Temporal jitter texture remains unsupported.
 - **Additional shadow-map behavior:** unsupported casters and nonmanifold/edited solids use the current GPU 1024-pixel depth-map fallback with 3x3 PCF. Polygon mesh fallback ranges in Texture color mode filter active Image Texture alpha using interpolated UVs. Trimmed and untrimmed `NurbsSurface` ranges use their shared tessellation UVs and regular/UDIM texture data in the same fallback; the shadow fragment shader discards sampled alpha below 0.1, except for NONE, IGNORE, and CHANNEL_PACKED modes. This corrects the earlier claim that the map fallback left trimmed NURBS unmasked. The code path is `prepareGeometry` and the shadow shaders plus `renderShadowMap` in `src/ui/viewport/viewport_surface_renderer.cpp`; `appendNurbsSurfaceDepthMesh` in `src/ui/viewport/viewport_depth_geometry.cpp` supplies trim-aware tessellation UVs. Blender's pinned [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L59) samples the Image/UDIM texture and discards alpha below `image_transparency_cutoff` (0.1). The map still has narrower caster coverage than the stencil path: NURBS solids and ranges without an available texture/UV alpha source do not use this mask. Open NURBS surfaces and imported polygon meshes with manifold interiors and simple closed boundary loops use boundary-edge forced-fail stencil volumes. Polygon meshes with branched boundaries, loose vertices, inconsistent shared-edge winding, or nonmanifold edges remain on the depth-map fallback. In mixed-alpha scenes, opaque surfaces remain shadow receivers, and validated closed transparent solids plus supported open surfaces cast stencil shadow volumes; the depth-map fallback is limited to unsupported casters when volumes are active, and transparent triangles are drawn once without shadow sampling. Blender's handling of branched, nonmanifold casters and additional fallback fidelity remain unported. The QPainter Solid fallback does not render shadows; this CPU shadow gap is an out-of-scope approximation. The GPU and QPainter outline silhouette opacity now uses Blender Workbench's four-cardinal-neighbor resolve. For classiCAD's separate selection-color extension, both renderers use four-cardinal-neighbor adjacency; Blender itself uses one outline color and has no selected-color choice.
 - **NurbsSolid texture-alpha update (2026-10-12):** The existing object-level Image Texture now uses the derived solid-face UV stream in the shared GPU texture path. The same `useTextureColor`/alpha cutoff therefore applies to visible color, object-ID outlines, and the depth-map fallback, with texture metadata included in geometry-cache invalidation. A zero-stencil offscreen contract checks a fully transparent solid texture against the same caster with alpha mode `NONE`; color and outline output remain cut out, while disabling alpha handling changes both visible output and the depth-map shadow. Distinct per-face materials/images remain unsupported because `NurbsExtrusionSolid3D` has no per-face material/image indices and require a separate data-model contract.
+- **NurbsSolid semantic face identity (2026-10-13):** Unmaterialized affine extrusion seeds now persist opaque IDs for the base cap, displaced cap, and each wall associated with a base trim loop (or the single rectangular perimeter wall). Legacy seed JSON without IDs receives IDs during load and writes them on the next save. Materialized `boundaryFaces` remain unsupported for face assignments: their panels do not yet retain lineage to seed faces, so positional panel indices must not be treated as stable face identities. Distinct per-face materials/images and their rendering remain unimplemented.
 
 Relevant classiCAD files include:
 
@@ -2103,6 +2097,21 @@ Use the same machine and display where possible. Match viewport pixel dimensions
 - GPU renderer and QPainter fallback behavior.
 
 The port is complete when every enabled option has matching Blender 5.2.2 behavior, no enabled saved setting is inert, and the comparison checklist passes. Disabled unsupported features must remain clearly documented. Workbench shadows now use validated stencil volumes for closed `NurbsSolid` and imported `PolygonMesh3D` subsets, plus validated open surfaces; full parity still requires comparison and a matching path for the currently disclosed unsupported-geometry and transparency fallbacks.
+
+## QPainter opaque shadow fallback (2026-10-13)
+
+- Added a software light-depth pass to QPainter Workbench effects for opaque
+  triangulated NURBS tessellation and polygon meshes. The pass uses the scene
+  display shadow direction, intensity, and offset. Transparent surfaces are
+  excluded as casters and receivers; texture-cutout pixels use the existing
+  alpha sampler in the light-depth pass. This is a bounded approximation;
+  Blender Workbench uses stencil shadow volumes in its normal GPU path.
+- Contracts cover shadow activation, direction-driven mask movement, zero
+  intensity, monotonic intensity response, and a fully transparent textured
+  caster. The full build passed. The offscreen viewport contract reported no
+  failed assertions through the CPU shadow checks, then exited 1 at its later
+  existing OpenGL-context requirement for the NURBS-solid display case; no
+  GUI/OpenGL validation is claimed.
 
 ## Blender 5.2.2 source references
 

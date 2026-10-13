@@ -88,6 +88,11 @@ struct TextureAlphaTriangle {
     bool cutout = false;
 };
 
+struct ShadowTriangle {
+    QVector3D vertices[3];
+    TextureAlphaTriangle alpha;
+};
+
 TextureAlphaTriangle::FloatImage loadFloatAlphaPayload(const QString &encoded,
                                                         int width, int height)
 {
@@ -1265,7 +1270,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  std::vector<float> *cavityFactors)
 {
     if (colorImage == nullptr || colorImage->isNull() ||
-        (!settings.cavity && !settings.outline && !settings.depthOfField) ||
+        (!settings.cavity && !settings.outline && !settings.depthOfField &&
+         !settings.shadows) ||
         settings.mode != ViewportShadingMode::Solid || settings.xrayEnabled() ||
         viewportSize.isEmpty()) {
         return;
@@ -1277,6 +1283,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const bool cavityEnabled = settings.cavity &&
         !(surfaceLayers != nullptr &&
           surfaceLayers->cavityAppliedBeforeTransparency);
+    const bool shadowEnabled = settings.shadows;
     const ViewportCameraPreferences cameraOptics = transform.cameraPreferences();
     const bool perspective = transform.isPerspectiveEnabled();
     const bool depthOfFieldEnabled = settings.depthOfField &&
@@ -1294,10 +1301,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     QVector<RasterSample> inFrontSamples(width * height);
     QVector<RasterSample> opaqueSamples;
     QVector<RasterSample> inFrontOpaqueSamples;
-    if (cavityEnabled) {
+    if (cavityEnabled || shadowEnabled) {
         opaqueSamples.resize(width * height);
         inFrontOpaqueSamples.resize(width * height);
     }
+    QVector<ShadowTriangle> shadowTriangles;
     const Point3D towardCamera = transform.viewDirection();
     const Point3D viewUp = transform.viewUp();
     const Point3D viewRight{
@@ -1598,6 +1606,16 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 }
             }
             if (!valid) continue;
+            const float triangleSourceAlpha = triangleIndex < triangleAlphas.size()
+                ? triangleAlphas[triangleIndex] : objectAlpha;
+            if (shadowEnabled && triangleSourceAlpha >= 0.999f) {
+                ShadowTriangle caster;
+                for (int corner = 0; corner < 3; ++corner)
+                    caster.vertices[corner] = world[corner];
+                if (textureAlphaTriangle != nullptr)
+                    caster.alpha = *textureAlphaTriangle;
+                shadowTriangles.append(caster);
+            }
             const QPointF p0 = screen[0] * dpr;
             const QPointF p1 = screen[1] * dpr;
             const QPointF p2 = screen[2] * dpr;
@@ -1682,10 +1700,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         target.objectId = id;
                     };
                     writeNearest(sample);
-                    const float sourceAlpha = triangleIndex < triangleAlphas.size()
-                                                  ? triangleAlphas[triangleIndex]
-                                                  : objectAlpha;
-                    if (cavityEnabled && sourceAlpha >= 0.999f) {
+                    const float sourceAlpha = triangleSourceAlpha;
+                    if ((cavityEnabled || shadowEnabled) &&
+                        sourceAlpha >= 0.999f) {
                         QVector<RasterSample> &domainOpaqueSamples =
                             object.showInFront ? inFrontOpaqueSamples
                                                : opaqueSamples;
@@ -1708,6 +1725,92 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         if (cavityEnabled && inFrontOpaqueSamples[index].objectId != 0) {
             opaqueSamples[index] = inFrontOpaqueSamples[index];
         }
+    }
+
+    // The software fallback uses a single orthographic light-depth buffer for
+    // opaque triangulated surfaces. Transparent geometry remains absent from
+    // both caster and receiver buffers, matching the opaque Workbench pass.
+    QVector<float> lightDepth;
+    QVector<QVector2D> receiverLightCoordinates;
+    QVector<float> receiverLightDepth;
+    if (shadowEnabled && !shadowTriangles.isEmpty()) {
+        QVector3D lightDirection(-settings.shadowDirection.x(),
+                                  settings.shadowDirection.z(),
+                                  -settings.shadowDirection.y());
+        if (lightDirection.lengthSquared() < 1.0e-10f)
+            lightDirection = QVector3D(-0.57735026f, 0.57735026f,
+                                       -0.57735026f);
+        lightDirection.normalize();
+        QVector3D helper(0.0f, 1.0f, 0.0f);
+        if (std::abs(QVector3D::dotProduct(helper, lightDirection)) > 0.95f)
+            helper = QVector3D(1.0f, 0.0f, 0.0f);
+        const QVector3D lightRight = normalized(
+            QVector3D::crossProduct(lightDirection, helper));
+        const QVector3D lightUp = normalized(
+            QVector3D::crossProduct(lightRight, lightDirection));
+        float minX = std::numeric_limits<float>::max();
+        float maxX = std::numeric_limits<float>::lowest();
+        float minY = minX, maxY = maxX;
+        for (const ShadowTriangle &triangle : shadowTriangles) {
+            for (const QVector3D &point : triangle.vertices) {
+                const float x = QVector3D::dotProduct(point, lightRight);
+                const float y = QVector3D::dotProduct(point, lightUp);
+                minX = std::min(minX, x); maxX = std::max(maxX, x);
+                minY = std::min(minY, y); maxY = std::max(maxY, y);
+            }
+        }
+        const float extentX = std::max(maxX - minX, 1.0e-4f);
+        const float extentY = std::max(maxY - minY, 1.0e-4f);
+        const float padX = extentX * 0.02f + 1.0e-4f;
+        const float padY = extentY * 0.02f + 1.0e-4f;
+        minX -= padX; maxX += padX; minY -= padY; maxY += padY;
+        lightDepth.fill(std::numeric_limits<float>::infinity(), width * height);
+        const auto lightScreen = [&](const QVector3D &point) {
+            return QPointF((QVector3D::dotProduct(point, lightRight) - minX) /
+                               (maxX - minX) * width,
+                           (maxY - QVector3D::dotProduct(point, lightUp)) /
+                               (maxY - minY) * height);
+        };
+        for (const ShadowTriangle &triangle : shadowTriangles) {
+            const QPointF p[3] = {lightScreen(triangle.vertices[0]),
+                                  lightScreen(triangle.vertices[1]),
+                                  lightScreen(triangle.vertices[2])};
+            const float z[3] = {QVector3D::dotProduct(triangle.vertices[0], lightDirection),
+                                QVector3D::dotProduct(triangle.vertices[1], lightDirection),
+                                QVector3D::dotProduct(triangle.vertices[2], lightDirection)};
+            const qreal area = (p[1].x() - p[0].x()) * (p[2].y() - p[0].y()) -
+                               (p[1].y() - p[0].y()) * (p[2].x() - p[0].x());
+            if (std::abs(area) < 1.0e-10) continue;
+            const int x0 = std::clamp(int(std::floor(std::min({p[0].x(), p[1].x(), p[2].x()}))), 0, width - 1);
+            const int x1 = std::clamp(int(std::ceil(std::max({p[0].x(), p[1].x(), p[2].x()}))), 0, width - 1);
+            const int y0 = std::clamp(int(std::floor(std::min({p[0].y(), p[1].y(), p[2].y()}))), 0, height - 1);
+            const int y1 = std::clamp(int(std::ceil(std::max({p[0].y(), p[1].y(), p[2].y()}))), 0, height - 1);
+            for (int y = y0; y <= y1; ++y) for (int x = x0; x <= x1; ++x) {
+                const qreal px = x + 0.5, py = y + 0.5;
+                const qreal a = ((p[1].x()-px)*(p[2].y()-py)-(p[1].y()-py)*(p[2].x()-px))/area;
+                const qreal b = ((p[2].x()-px)*(p[0].y()-py)-(p[2].y()-py)*(p[0].x()-px))/area;
+                const qreal c = 1.0 - a - b;
+                if (a < -1e-6 || b < -1e-6 || c < -1e-6) continue;
+                if (triangle.alpha.cutout) {
+                    const QPointF uv = triangle.alpha.uvs[0] * a +
+                                       triangle.alpha.uvs[1] * b +
+                                       triangle.alpha.uvs[2] * c;
+                    if (sampleTextureAlpha(triangle.alpha, uv) < 0.1f)
+                        continue;
+                }
+                float &depth = lightDepth[y * width + x];
+                depth = std::min(depth, float(a*z[0] + b*z[1] + c*z[2]));
+            }
+        }
+        receiverLightDepth.resize(width * height);
+        receiverLightCoordinates.resize(width * height);
+        for (int i = 0; i < opaqueSamples.size(); ++i)
+            if (opaqueSamples[i].objectId != 0) {
+                receiverLightDepth[i] = QVector3D::dotProduct(
+                    opaqueSamples[i].position, lightDirection);
+                const QPointF p = lightScreen(opaqueSamples[i].position);
+                receiverLightCoordinates[i] = QVector2D(p.x(), p.y());
+            }
     }
 
     const auto applyOutline = [&]() {
@@ -2024,6 +2127,50 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
     }
     *colorImage = result.convertToFormat(colorImage->format());
+    }
+
+    if (shadowEnabled && !lightDepth.isEmpty() &&
+        settings.shadowIntensity > 0.0) {
+        QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
+        QImage result = source.copy();
+        const float darkening = std::clamp(
+            static_cast<float>(settings.shadowIntensity), 0.0f, 1.0f);
+        for (int y = 0; y < outputHeight; ++y) {
+            QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
+            const int depthY = std::clamp(
+                static_cast<int>(std::floor((y + 0.5) / colorDpr * dpr)),
+                0, height - 1);
+            for (int x = 0; x < outputWidth; ++x) {
+                const int depthX = std::clamp(
+                    static_cast<int>(std::floor((x + 0.5) / colorDpr * dpr)),
+                    0, width - 1);
+                const int index = depthY * width + depthX;
+                const RasterSample &receiver = opaqueSamples[index];
+                const RasterSample &visible = samples[index];
+                if (receiver.objectId == 0 || visible.objectId == 0 ||
+                    std::abs(receiver.depth - visible.depth) >
+                        std::max(1.0e-5f, std::abs(receiver.depth) * 1.0e-6f))
+                    continue;
+                // Depth is compared in the same light-space direction used
+                // when constructing the software caster map.
+                const float receiverDepth = receiverLightDepth[index];
+                const QVector2D lightPixel = receiverLightCoordinates[index];
+                const int lightX = std::clamp(qFloor(lightPixel.x()), 0, width - 1);
+                const int lightY = std::clamp(qFloor(lightPixel.y()), 0, height - 1);
+                const float casterDepth = lightDepth[lightY * width + lightX];
+                const float bias = std::max(0.001f,
+                    static_cast<float>(settings.shadowOffset) * 0.001f);
+                if (!std::isfinite(casterDepth) ||
+                    casterDepth >= receiverDepth - bias)
+                    continue;
+                const QRgb pixel = source.pixel(x, y);
+                const float factor = 1.0f - darkening;
+                out[x] = qRgba(qRound(qRed(pixel) * factor),
+                               qRound(qGreen(pixel) * factor),
+                               qRound(qBlue(pixel) * factor), qAlpha(pixel));
+            }
+        }
+        *colorImage = result.convertToFormat(colorImage->format());
     }
 
     applyOutline();

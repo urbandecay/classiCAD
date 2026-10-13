@@ -18,6 +18,12 @@ def arguments():
     argv = argv[argv.index("--") + 1 :] if "--" in argv else []
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", help="PNG output path")
+    parser.add_argument(
+        "--scene",
+        choices=("CUBE", "TRANSPARENT_OVERLAP"),
+        default="CUBE",
+        help="controlled scene to render (default: CUBE)",
+    )
     parser.add_argument("--aa", choices=("OFF", "FXAA", "8"), default="FXAA")
     parser.add_argument(
         "--effect",
@@ -87,10 +93,6 @@ def main():
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
 
-    bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
-    cube = bpy.context.object
-    cube.name = "ReferenceCube"
-
     target = Vector((0.0, 0.0, 0.0))
     direction = Vector((4.0, -6.0, 4.0)).normalized()
     camera_data = bpy.data.cameras.new("ReferenceCamera")
@@ -100,6 +102,48 @@ def main():
     bpy.context.collection.objects.link(camera)
     camera.location = target + direction * 8.0
     camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+    if args.scene == "CUBE":
+        bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
+        cube = bpy.context.object
+        cube.name = "ReferenceCube"
+    else:
+        # Two camera-facing quads provide stable, known overlap regions without
+        # perspective or surface-lighting changes between captures.
+        camera_rotation = camera.rotation_euler.to_quaternion()
+        camera_right = camera_rotation @ Vector((1.0, 0.0, 0.0))
+        camera_up = camera_rotation @ Vector((0.0, 1.0, 0.0))
+
+        def add_transparent_quad(name, center, size, color):
+            half = size * 0.5
+            vertices = [
+                center - camera_right * half - camera_up * half,
+                center + camera_right * half - camera_up * half,
+                center + camera_right * half + camera_up * half,
+                center - camera_right * half + camera_up * half,
+            ]
+            mesh = bpy.data.meshes.new(name + "Mesh")
+            mesh.from_pydata(vertices, [], [(0, 1, 2, 3)])
+            mesh.update()
+            obj = bpy.data.objects.new(name, mesh)
+            bpy.context.collection.objects.link(obj)
+            material = bpy.data.materials.new(name + "Material")
+            material.diffuse_color = color
+            material.blend_method = "BLEND"
+            obj.data.materials.append(material)
+            return obj
+
+        add_transparent_quad(
+            "RearTranslucentSurface",
+            target - direction * 0.35 - camera_right * 0.25,
+            2.4,
+            (0.08, 0.25, 0.95, 0.55),
+        )
+        add_transparent_quad(
+            "FrontTranslucentSurface",
+            target + direction * 0.35 + camera_right * 0.25,
+            2.0,
+            (0.95, 0.12, 0.04, 0.48),
+        )
     if args.jitter_pixels is not None:
         # Reproduce Blender's projection-space offset with an equivalent camera
         # translation. Positive Y follows Blender's projection-up convention.
@@ -131,6 +175,8 @@ def main():
     shading.show_shadows = args.effect == "SHADOWS"
     shading.shadow_intensity = 0.5
     shading.show_cavity = args.effect == "CAVITY"
+    if args.effect == "CAVITY":
+        shading.cavity_type = "WORLD"
     shading.cavity_ridge_factor = 1.0
     shading.cavity_valley_factor = 1.0
     shading.show_object_outline = args.effect == "OUTLINE"

@@ -1241,6 +1241,37 @@ depth domain. Visual depth comparison remains open.
   camera-shift options are diagnostic tooling; ordinary scene rendering is
   unchanged when capture options are unset.
 
+### Controlled Workbench effect captures (2026-10-12)
+
+- The Blender fixture now supports a two-quad `TRANSPARENT_OVERLAP` scene and
+  explicitly selects World cavity for cavity captures. The offscreen GPU
+  contract has opt-in captures for shadow, cavity, outline, and transparency
+  scenes. `tests/workbench_pfm_compare.py` compares RGB PFM outputs by channel
+  error and foreground-mask XOR/IoU.
+- At 640×480 with the same cube scene, AA-off references, and an RGB change
+  threshold of 2, shadow masks match exactly: 111,480 changed pixels on each
+  renderer, XOR 0, IoU 1.0. The per-pixel effect-delta MAE over the union of
+  those masks is 0.522/255, with maximum delta error 8/255. Outline masks also
+  match exactly at 2,316 pixels each, XOR 0, IoU 1.0; effect-delta MAE is
+  10.48/255 and maximum error 35/255. This confirms effect coverage, while
+  outline intensity/edge values still differ.
+- World cavity is not pixel-matched: classiCAD changes 20,503 pixels and
+  Blender 26,048; mask XOR is 9,919, IoU 0.649, and effect-delta MAE over the
+  mask union is 1.32/255 (maximum 14/255). Source review confirms
+  `cavityViewPosition` uses negative forward view depth, the same sign as
+  Blender. The earlier proposed background-offset sign change was therefore
+  incorrect and was reverted; no cavity shader change is justified by that
+  hypothesis. The sampling and edge-mask difference remains open.
+- A transparent overlap capture currently does not provide a valid matched
+  comparison: classiCAD's colored-region bounds are `(268,0)`–`(639,307)`,
+  while Blender's are `(134,86)`–`(479,393)`. The shared target dimensions and
+  final presentation path were checked; the discrepancy remains in the
+  fixture-to-render path. Do not treat this capture as evidence of an OIT
+  renderer mismatch. Correct the fixture projection and rerun the comparison
+  before changing the shared weighted-OIT implementation. The no-shared-depth
+  sorted-transparency fallback remains less capable than Blender's per-pixel
+  OIT for intersecting ranges.
+
 ### Bounded scalar volume pass (2026-10-12)
 
 - Blender 5.2.2 draws volumes after transparent depth and before outline, depth

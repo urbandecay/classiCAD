@@ -1406,13 +1406,26 @@ int main(int argc, char *argv[])
                     surfaceObject.outlineHandledBySceneStroke = false;
 
                     surfaceObject.selected = false;
+                    functions.glClearColor(34.0f / 255.0f,
+                                           34.0f / 255.0f,
+                                           34.0f / 255.0f,
+                                           1.0f);
                     functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                     gpuSurfaceRenderer.draw({surfaceObject}, gpuTransform,
                                             glSize, 1.0, gpuSolidShading);
                     functions.glFinish();
                     gpuUnselectedOutlineImage = framebuffer.toImage();
+                    const QString outlineCapturePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_OUTLINE_CAPTURE");
+                    if (!outlineCapturePath.isEmpty()) {
+                        gpuUnselectedOutlineImage.save(outlineCapturePath);
+                    }
                     ViewportShadingSettings rawFaceShading = gpuSolidShading;
                     rawFaceShading.outline = false;
+                    functions.glClearColor(34.0f / 255.0f,
+                                           34.0f / 255.0f,
+                                           34.0f / 255.0f,
+                                           1.0f);
                     functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                     gpuUnselectedBaselineDrawSucceeded =
                         gpuSurfaceRenderer.draw(
@@ -1420,15 +1433,31 @@ int main(int argc, char *argv[])
                             rawFaceShading);
                     functions.glFinish();
                     gpuUnselectedNoOutlineImage = framebuffer.toImage();
+                    const QString outlineBaselineCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_OUTLINE_BASELINE_CAPTURE");
+                    if (!outlineBaselineCapturePath.isEmpty()) {
+                        gpuUnselectedNoOutlineImage.save(
+                            outlineBaselineCapturePath);
+                    }
 
                     ViewportShadingSettings shadowShading = rawFaceShading;
                     shadowShading.shadows = true;
+                    functions.glClearColor(34.0f / 255.0f,
+                                           34.0f / 255.0f,
+                                           34.0f / 255.0f,
+                                           1.0f);
                     functions.glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                     gpuShadowDrawSucceeded = gpuSurfaceRenderer.draw(
                         {surfaceObject}, gpuTransform, glSize, 1.0,
                         shadowShading);
                     functions.glFinish();
                     gpuShadowImage = framebuffer.toImage();
+                    const QString shadowCapturePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_SHADOW_CAPTURE");
+                    if (!shadowCapturePath.isEmpty()) {
+                        gpuShadowImage.save(shadowCapturePath);
+                    }
 
                     const auto renderCoordinatedCavity = [&](
                         const ViewportShadingSettings &shading,
@@ -1487,6 +1516,164 @@ int main(int argc, char *argv[])
                     gpuCavityDrawSucceeded = renderCoordinatedCavity(
                         cavityShading, QByteArrayLiteral("cavity-enabled"),
                         &gpuCavityImage) && gpuCavityDrawSucceeded;
+                    const QString cavityBaselineCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_CAVITY_BASELINE_CAPTURE");
+                    if (!cavityBaselineCapturePath.isEmpty()) {
+                        gpuCavityBaselineImage.save(
+                            cavityBaselineCapturePath);
+                    }
+                    const QString cavityCapturePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_CAVITY_CAPTURE");
+                    if (!cavityCapturePath.isEmpty()) {
+                        gpuCavityImage.save(cavityCapturePath);
+                    }
+                    const QString transparencyCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_TRANSPARENCY_CAPTURE");
+                    if (!transparencyCapturePath.isEmpty()) {
+                        const QMatrix4x4 transparencyViewProjection =
+                            viewportViewProjection(gpuTransform, glSize);
+                        bool inverseValid = false;
+                        const QMatrix4x4 inverseViewProjection =
+                            transparencyViewProjection.inverted(&inverseValid);
+                        const auto worldAtClip = [&](float x, float y,
+                                                      float z) {
+                            const QVector4D homogeneous = inverseViewProjection *
+                                QVector4D(x, y, z, 1.0f);
+                            return homogeneous.toVector3DAffine();
+                        };
+                        const auto worldPoint = [](const QVector3D &point) {
+                            return Point3D{point.x(), point.y(), point.z()};
+                        };
+                        const auto makeTransparentQuad = [&] (
+                            const QString &name, float centerX,
+                            float halfWidth, float halfHeight, float depth,
+                            const QVector3D &color, qreal alpha,
+                            quint64 objectValue) {
+                            ViewportRenderObject object;
+                            object.shape.geometryType = GeometryType::PolygonMesh;
+                            object.shape.polygonMesh.vertices = {
+                                worldPoint(worldAtClip(
+                                    centerX - halfWidth, -halfHeight, depth)),
+                                worldPoint(worldAtClip(
+                                    centerX + halfWidth, -halfHeight, depth)),
+                                worldPoint(worldAtClip(
+                                    centerX + halfWidth, halfHeight, depth)),
+                                worldPoint(worldAtClip(
+                                    centerX - halfWidth, halfHeight, depth))};
+                            object.shape.polygonMesh.faces = {{0, 1, 2, 3}};
+                            object.shape.polygonMesh.faceMaterialIndices = {0};
+                            object.objectId = ObjectId::fromValue(objectValue);
+                            object.displayName = name;
+                            object.geometryRevision = 1;
+                            object.hasWorkbenchMaterial = true;
+                            object.workbenchMaterial.baseColorSceneLinear = color;
+                            object.workbenchMaterial.alpha = alpha;
+                            object.meshMaterials = {object.workbenchMaterial};
+                            return object;
+                        };
+                        const Point3D cameraTargetPoint =
+                            gpuTransform.viewTarget();
+                        const QVector3D target(
+                            float(cameraTargetPoint.x),
+                            float(cameraTargetPoint.y),
+                            float(cameraTargetPoint.z));
+                        const Point3D cameraDirectionPoint =
+                            gpuTransform.viewDirection();
+                        const QVector3D cameraDirection(
+                            float(cameraDirectionPoint.x),
+                            float(cameraDirectionPoint.y),
+                            float(cameraDirectionPoint.z));
+                        const auto projectedDepth =
+                            [&](const QVector3D &worldPoint) {
+                                const QVector4D clip =
+                                    transparencyViewProjection *
+                                    QVector4D(worldPoint, 1.0f);
+                                return clip.z() / clip.w();
+                            };
+                        const float rearDepth = projectedDepth(
+                            target - cameraDirection * 0.35f);
+                        const float frontDepth = projectedDepth(
+                            target + cameraDirection * 0.35f);
+                        const QVector<ViewportRenderObject> transparentObjects{
+                            makeTransparentQuad(
+                                QStringLiteral("RearTranslucentSurface"),
+                                -0.1f, 0.48f, 0.64f, rearDepth,
+                                QVector3D(0.08f, 0.25f, 0.95f), 0.55, 9101),
+                            makeTransparentQuad(
+                                QStringLiteral("FrontTranslucentSurface"),
+                                0.1f, 0.4f, 0.53333336f, frontDepth,
+                                QVector3D(0.95f, 0.12f, 0.04f), 0.48, 9102)};
+                        ViewportShadingSettings transparencyShading;
+                        transparencyShading.outline = false;
+                        transparencyShading.shadows = false;
+                        transparencyShading.cavity = false;
+                        ViewportAaRenderer transparencyAaRenderer;
+                        transparencyAaRenderer.setMode(static_cast<int>(
+                            ViewportAntiAliasingMode::SinglePass));
+                        transparencyAaRenderer.setDisplayTransform(
+                            transparencyShading, true);
+                        const bool destinationFramebufferReady =
+                            framebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                            glSize.height());
+                        const GLboolean previousScissorEnabled =
+                            functions.glIsEnabled(GL_SCISSOR_TEST);
+                        GLint previousScissorBox[4] = {};
+                        functions.glGetIntegerv(GL_SCISSOR_BOX,
+                                                previousScissorBox);
+                        functions.glDisable(GL_SCISSOR_TEST);
+                        functions.glScissor(0, 0, glSize.width(),
+                                            glSize.height());
+                        const bool transparencyAaReady =
+                            destinationFramebufferReady &&
+                            transparencyAaRenderer.beginSceneSample(
+                                glSize, 1.0, gpuTransform,
+                                QByteArrayLiteral("transparent-overlap"),
+                                false, true);
+                        ViewportWorkbenchSceneColorPassResult transparencyResult;
+                        if (transparencyAaReady) {
+                            const GLfloat background[4] = {
+                                0.0232f, 0.0232f, 0.0232f, 1.0f};
+                            functions.glClearBufferfv(GL_COLOR, 0, background);
+                            ViewportWorkbenchSceneColorPassRequest request;
+                            request.sharedTargets =
+                                &transparencyAaRenderer.targets();
+                            request.sceneLinearOutput = true;
+                            transparencyResult =
+                                ViewportWorkbenchScenePassCoordinator::renderSceneColor(
+                                    gpuSurfaceRenderer, transparentObjects,
+                                    transparencyAaRenderer.sampleCamera(),
+                                    glSize, 1.0, transparencyShading, request);
+                            if (transparencyResult.rendered) {
+                                transparencyAaRenderer
+                                    .markCurrentSampleAttachmentsValid(
+                                        transparencyResult.report
+                                            .populatedAttachments);
+                            }
+                            transparencyAaRenderer.finishSceneSample();
+                        }
+                        functions.glFinish();
+                        const QImage transparencyImage = framebuffer.toImage();
+                        functions.glScissor(previousScissorBox[0],
+                                            previousScissorBox[1],
+                                            previousScissorBox[2],
+                                            previousScissorBox[3]);
+                        if (previousScissorEnabled) {
+                            functions.glEnable(GL_SCISSOR_TEST);
+                        } else {
+                            functions.glDisable(GL_SCISSOR_TEST);
+                        }
+                        passed &= check(
+                            inverseValid && destinationFramebufferReady &&
+                                transparencyAaReady &&
+                                transparencyResult.rendered &&
+                                transparencyImage.size() == glSize &&
+                                transparencyImage.save(
+                                    transparencyCapturePath),
+                            "shared Workbench scene pass must capture overlapping translucent quads");
+                    }
                     const QString unselectedCapturePath = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_UNSELECTED_CAPTURE");
                     if (!unselectedCapturePath.isEmpty()) {

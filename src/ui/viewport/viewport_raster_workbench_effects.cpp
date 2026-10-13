@@ -603,6 +603,10 @@ bool compositeRasterWorkbenchSurfaces(
                 }
             }
         });
+        if (useWeightedOit && objectFragments.size() >
+                static_cast<std::size_t>(kMaximumTransparentFragments)) {
+            return false;
+        }
     }
 
     if (useWeightedOit) {
@@ -610,30 +614,44 @@ bool compositeRasterWorkbenchSurfaces(
         bool fragmentBudgetExceeded = false;
         for (const ViewportRenderObject &object : objects) {
             RasterWorkbenchFragmentSink objectFragments;
-            QVector<int> nearestFragment(pixelCount, -1);
             renderObject(object, &objectFragments, [&](const QImage &) {
-                for (int fragmentIndex = 0;
-                     fragmentIndex < static_cast<int>(objectFragments.size());
-                     ++fragmentIndex) {
-                    const RasterWorkbenchLinearFragment &fragment =
-                        objectFragments[static_cast<std::size_t>(fragmentIndex)];
-                    if (fragment.alpha <= 0.0f || fragment.alpha >= 0.999f ||
-                        fragment.x < 0 || fragment.x >= width ||
-                        fragment.y < 0 || fragment.y >= height) continue;
-                    const int index = fragment.y * width + fragment.x;
-                    const int previous = nearestFragment[index];
-                    if (previous < 0 || fragment.cameraDepth >
-                            objectFragments[static_cast<std::size_t>(previous)]
-                                .cameraDepth) {
-                        nearestFragment[index] = fragmentIndex;
-                    }
-                }
             });
-            for (int index = 0; index < pixelCount; ++index) {
-                const int fragmentIndex = nearestFragment[index];
-                if (fragmentIndex < 0) continue;
-                const RasterWorkbenchLinearFragment &fragment =
-                    objectFragments[static_cast<std::size_t>(fragmentIndex)];
+            if (objectFragments.size() >
+                    static_cast<std::size_t>(kMaximumTransparentFragments)) {
+                return false;
+            }
+            // A shared triangle edge can be rasterized by both adjacent
+            // triangles. Sort the object's samples so those duplicate
+            // coplanar edge samples can be collapsed while retaining every
+            // depth-separated surface belonging to the same object.
+            std::sort(objectFragments.begin(), objectFragments.end(),
+                      [width](const auto &left, const auto &right) {
+                          const int leftPixel = left.y * width + left.x;
+                          const int rightPixel = right.y * width + right.x;
+                          if (leftPixel != rightPixel) return leftPixel < rightPixel;
+                          return left.cameraDepth < right.cameraDepth;
+                      });
+            int previousPixel = -1;
+            float previousDepth = 0.0f;
+            std::array<float, 3> previousColor{};
+            float previousAlpha = 0.0f;
+            bool havePrevious = false;
+            for (const RasterWorkbenchLinearFragment &fragment : objectFragments) {
+                if (fragment.alpha <= 0.0f || fragment.alpha >= 0.999f ||
+                    fragment.x < 0 || fragment.x >= width ||
+                    fragment.y < 0 || fragment.y >= height) continue;
+                const int index = fragment.y * width + fragment.x;
+                if (havePrevious && index == previousPixel &&
+                    std::abs(fragment.cameraDepth - previousDepth) <= 1.0e-5f &&
+                    fragment.sceneLinearRgb == previousColor &&
+                    std::abs(fragment.alpha - previousAlpha) <= 1.0e-6f) {
+                    continue;
+                }
+                previousPixel = index;
+                previousDepth = fragment.cameraDepth;
+                previousColor = fragment.sceneLinearRgb;
+                previousAlpha = fragment.alpha;
+                havePrevious = true;
                 // Test the visible fragment against the nearest opaque
                 // fragment from every object before adding it to OIT.
                 if (fragment.cameraDepth <= opaqueSceneDepth[index]) continue;

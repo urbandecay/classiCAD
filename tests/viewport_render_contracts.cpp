@@ -645,6 +645,49 @@ int main(int argc, char *argv[])
                             halfAlphaImage.pixelColor(300, 220) ==
                                 xrayImage.pixelColor(300, 220),
                         "QPainter mesh X-Ray alpha must multiply source alpha before weighted transparency resolve");
+
+        // Blender's transparent pass accumulates every depth-visible surface
+        // with depth writes disabled. Keep both separated sheets of one scene
+        // object, while the shared diagonal in each quad contributes only one
+        // sample per pixel.
+        ViewportRenderObject twoSheetObject = objects[0];
+        twoSheetObject.workbenchMaterial.alpha = 0.5f;
+        twoSheetObject.meshMaterials = {twoSheetObject.workbenchMaterial};
+        const QVector<Point3D> firstSheetVertices =
+            twoSheetObject.shape.polygonMesh.vertices;
+        const int secondFaceFirstVertex =
+            firstSheetVertices.size();
+        for (Point3D point : firstSheetVertices) {
+            point.z += 0.35;
+            twoSheetObject.shape.polygonMesh.vertices.append(point);
+        }
+        twoSheetObject.shape.polygonMesh.faces.append(
+            {secondFaceFirstVertex, secondFaceFirstVertex + 1,
+             secondFaceFirstVertex + 2, secondFaceFirstVertex + 3});
+        twoSheetObject.shape.polygonMesh.faceMaterialIndices.append(0);
+        auto twoSheetGeometry = QSharedPointer<ViewportDepthGeometry>::create(
+            *twoSheetObject.preparedDepthGeometry);
+        const QVector<QVector3D> firstSheet = twoSheetGeometry->surfaceVertices;
+        for (QVector3D vertex : firstSheet) {
+            vertex.setZ(vertex.z() + 0.35f);
+            twoSheetGeometry->surfaceVertices.append(vertex);
+        }
+        twoSheetObject.preparedDepthGeometry = twoSheetGeometry;
+        QImage twoSheetImage(size, QImage::Format_ARGB32_Premultiplied);
+        twoSheetImage.fill(Qt::transparent);
+        QImage oneSheetImage(size, QImage::Format_ARGB32_Premultiplied);
+        oneSheetImage.fill(Qt::transparent);
+        renderer.setShadingSettings(shading);
+        const bool twoSheetRendered = compositeRasterWorkbenchSurfaces(
+            &twoSheetImage, {twoSheetObject}, transform, size, 1.0, false,
+            true, shading, backgroundLinear, drawObject);
+        const bool oneSheetRendered = compositeRasterWorkbenchSurfaces(
+            &oneSheetImage, {halfAlphaObject}, transform, size, 1.0, false,
+            true, shading, backgroundLinear, drawObject);
+        passed &= check(twoSheetRendered && oneSheetRendered &&
+                            twoSheetImage.pixelColor(300, 220) !=
+                                oneSheetImage.pixelColor(300, 220),
+                        "weighted QPainter OIT must accumulate both depth-separated transparent surfaces of one object");
         renderer.setShadingSettings(shading);
 
         ViewportRenderObject cavityReceiver = objects[0];

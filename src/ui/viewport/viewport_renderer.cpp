@@ -575,6 +575,11 @@ void observeWorkbenchFragment(
     const ViewportTransform &transform)
 {
     if (sink == nullptr) return;
+    // Keep per-object fragment capture bounded too. One extra sample is an
+    // overflow sentinel consumed by the compositor, which can then select its
+    // existing fallback path instead of treating a truncated sink as whole.
+    constexpr std::size_t kMaximumCapturedFragments = 4'000'000;
+    if (sink->size() > kMaximumCapturedFragments) return;
     const QPointF devicePixel = painter.deviceTransform().map(logicalPixelCenter);
     const qreal depth = -((worldPosition.x - cameraPosition.x) * viewDirection.x +
                           (worldPosition.y - cameraPosition.y) * viewDirection.y +

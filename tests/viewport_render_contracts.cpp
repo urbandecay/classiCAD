@@ -23,6 +23,7 @@
 #include <QBuffer>
 #include <QGuiApplication>
 #include <QImage>
+#include <QMatrix4x4>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
@@ -33,6 +34,7 @@
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QVector>
+#include <QVector4D>
 
 #include <algorithm>
 #include <cstddef>
@@ -922,6 +924,22 @@ int main(int argc, char *argv[])
             ViewportTransform gpuTransform;
             gpuTransform.zoom() = 17.28;
             gpuTransform.setViewDirection({4.0, -6.0, 4.0});
+            const QMatrix4x4 baselineViewProjection =
+                viewportViewProjection(gpuTransform, glSize);
+            const QVector4D projectedRightCorner =
+                baselineViewProjection * QVector4D(1.0f, 1.0f, 1.0f, 1.0f);
+            const QVector4D projectedLeftCorner =
+                baselineViewProjection * QVector4D(-1.0f, -1.0f, -1.0f, 1.0f);
+            const qreal rightCornerX =
+                (projectedRightCorner.x() / projectedRightCorner.w() + 1.0) *
+                glSize.width() * 0.5;
+            const qreal leftCornerX =
+                (projectedLeftCorner.x() / projectedLeftCorner.w() + 1.0) *
+                glSize.width() * 0.5;
+            passed &= check(
+                std::abs(rightCornerX - 497.50404) < 0.001 &&
+                    std::abs(leftCornerX - 142.49594) < 0.001,
+                "orthographic cube corners must retain Blender's 640x480 projection with a distant depth eye");
             {
                 QOpenGLFramebufferObjectFormat framebufferFormat;
                 framebufferFormat.setAttachment(

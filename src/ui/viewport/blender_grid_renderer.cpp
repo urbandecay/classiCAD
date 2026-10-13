@@ -48,9 +48,34 @@ QMatrix4x4 cameraViewMatrix(const ViewportTransform &transform,
     // subtracting two large, float-rounded world positions.
     view.lookAt(asVector(outward), QVector3D(0.0f, 0.0f, 0.0f),
                 asVector(transform.viewUp()));
-    view.translate(asVector({outward.x - eye.x,
-                             outward.y - eye.y,
-                             outward.z - eye.z}));
+    if (!transform.cameraState().perspective &&
+        !transform.hasRenderCameraProjection()) {
+        // The orthographic eye is kept far from the target for stable depth
+        // range. Multiplying that large world-space translation through the
+        // float view basis can leave a small lateral residual when the basis
+        // vectors are not exactly orthogonal after conversion to float. Keep
+        // the view target as the lateral origin and apply only the eye depth
+        // separately; orthographic projection does not depend on that depth.
+        const Point3D target = transform.viewTarget();
+        const auto rowDot = [&](int row, const Point3D &point) {
+            return qreal(view(row, 0)) * point.x +
+                   qreal(view(row, 1)) * point.y +
+                   qreal(view(row, 2)) * point.z;
+        };
+        const Point3D eyeOffset{eye.x - target.x,
+                                eye.y - target.y,
+                                eye.z - target.z};
+        const qreal eyeDistance = eyeOffset.x * outward.x +
+                                  eyeOffset.y * outward.y +
+                                  eyeOffset.z * outward.z;
+        view(0, 3) = static_cast<float>(-rowDot(0, target));
+        view(1, 3) = static_cast<float>(-rowDot(1, target));
+        view(2, 3) = static_cast<float>(-rowDot(2, target) - eyeDistance);
+    } else {
+        view.translate(asVector({outward.x - eye.x,
+                                 outward.y - eye.y,
+                                 outward.z - eye.z}));
+    }
     return view;
 }
 

@@ -1841,6 +1841,35 @@ int main(int argc, char *argv[])
                     if (!cavityCapturePath.isEmpty()) {
                         gpuCavityImage.save(cavityCapturePath);
                     }
+                    const QString polygonCubeCavityCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_POLYGON_CUBE_CAVITY_CAPTURE");
+                    if (!polygonCubeCavityCapturePath.isEmpty()) {
+                        const QString polygonCubeCavityBaselinePath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_POLYGON_CUBE_CAVITY_BASELINE_CAPTURE");
+                        QImage polygonCubeCavityImage;
+                        QImage polygonCubeCavityBaselineImage;
+                        const bool cavityCaptured =
+                            renderCoordinatedScene(
+                                cavityShading,
+                                QByteArrayLiteral("polygon-cube-cavity"),
+                                &polygonCubeCavityImage, &polygonCubeObject) &&
+                            polygonCubeCavityImage.save(
+                                polygonCubeCavityCapturePath);
+                        const bool baselineCaptured =
+                            polygonCubeCavityBaselinePath.isEmpty() ||
+                            (renderCoordinatedScene(
+                                 rawFaceShading,
+                                 QByteArrayLiteral("polygon-cube-cavity-baseline"),
+                                 &polygonCubeCavityBaselineImage,
+                                 &polygonCubeObject) &&
+                             polygonCubeCavityBaselineImage.save(
+                                 polygonCubeCavityBaselinePath));
+                        passed &= check(
+                            cavityCaptured && baselineCaptured,
+                            "matched polygon cube cavity captures must render and save");
+                    }
                     const QString transparencyCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_TRANSPARENCY_CAPTURE");

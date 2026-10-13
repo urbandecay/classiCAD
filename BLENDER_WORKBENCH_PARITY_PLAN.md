@@ -1338,6 +1338,12 @@ depth domain. Visual depth comparison remains open.
   diagnostic is to compare cavity and edge amounts plus each sampled
   depth/normal at mismatch pixels, separating prepass alignment from numerical
   threshold differences.
+- Repeating the cavity comparison with the matched six-quad `PolygonMesh3D`
+  cube leaves a changed-mask XOR of 3,055 pixels (25,813 classiCAD versus
+  26,048 Blender, IoU 0.889). Shared changed-pixel effect-delta RGB MAE is
+  12.18/255, p95 29/255, max 55/255. Matching topology reduces the mask
+  mismatch from the NURBS-solid capture but does not explain it away; the
+  sampled-depth/normal and cavity-amount diagnostic remains the next step.
 - The first transparent overlap capture isolated a resolve-coordinate bug, not
   a geometry or OIT accumulation bug. The weighted resolve used an oversized
   fullscreen triangle with `gl_Position = p * 2 - 1` but `vUv = p * 0.5`, so

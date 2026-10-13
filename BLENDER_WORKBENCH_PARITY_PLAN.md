@@ -281,11 +281,25 @@ in ordinary free views or orthographic views is superseded by this correction.
   `background_type` is `WORLD`. The active imported scene is resolved through
   its selected view-layer key; when a World is absent or old metadata lacks its
   color, the existing neutral gray fallback remains. GPU rendering receives
-  the scene-linear RGB directly, while the QPainter fallback converts linear
-  sRGB channels for its display-referred fill. `THEME`, `VIEWPORT`, and Custom
+  the scene-linear RGB directly, while the QPainter fallback applies the
+  configured Workbench display transform before its display-referred fill.
+  `THEME`, `VIEWPORT`, and Custom
   backgrounds keep their prior paths. Blender's pinned state selection above
-  provides the World-versus-viewport behavior; the implementation still lacks
-  full view-transform handling for HDR World colors in the QPainter fallback.
+  provides the World-versus-viewport behavior.
+- **QPainter HDR conversion update:** World RGB now passes through the shared
+  Workbench exposure, view-transform LUT, and gamma conversion before it is
+  placed in `QColor`, so QColor's bounded channels no longer discard HDR range
+  before view transformation. A focused contract checks Standard transform
+  plus exposure on an HDR input. Matched GPU/QPainter images and custom LUT
+  comparison remain open.
+- **Remaining offscreen validation:** add a no-geometry background contract
+  matrix using distinct RGB values. With opaque film, `THEME` and `WORLD` must
+  clear to the imported scene World color, while `VIEWPORT` must use the
+  imported shading background color. With no World assigned, `THEME` and
+  `WORLD` leave the target alpha transparent; with transparent film, every
+  mode leaves the background transparent. Check scene-linear Combined values
+  and alpha, then display-referred output to cover premultiplication and
+  compositing. These cases are not yet claimed as validated by matched output.
 
 ### Transparent-film Combined alpha (2026-10-12)
 
@@ -454,6 +468,43 @@ in ordinary free views or orthographic views is superseded by this correction.
   applies the opaque-layer color delta to the final pixel to keep those strokes
   intact. Surface/stroke overlap can therefore remain approximate; matched
   QPainter/Blender image comparison has not been performed.
+
+### QPainter scene-linear surface resolve (2026-10-12)
+
+- **Blocker:** the QPainter Workbench path does not retain scene-linear
+  surface color through cross-object composition. `ViewportRenderer` applies
+  `workbenchSceneLinearToDisplaySrgb` while rasterizing mesh triangles and
+  writes 8-bit display color; NURBS fills pass through `QColor`; then
+  `compositeRasterWorkbenchSurfaces` resolves per-object `ARGB32` layers.
+  That path loses HDR values before the resolve and cannot reproduce Blender's
+  transform-after-composition ordering. Merely changing the intermediate
+  `QImage` format to RGBA64 or RGBA32F is insufficient: it does not make the
+  existing QColor path preserve values above 1, guarantee QPainter blending in
+  scene-linear space, or convert the byte-oriented cavity/outline effects.
+- **Next implementation contract:** add a production float fragment interface
+  shared by mesh and NURBS surface rasterization. Emit shaded scene-linear RGB,
+  alpha, and depth without passing surface colors through QColor or QPainter.
+  Resolve visible opaque and transparent fragments into a premultiplied float
+  buffer using depth-tested source-over, preserving RGB above 1. Apply the
+  supported QPainter cavity/outline operations to this buffer in float space,
+  then apply the selected display transform exactly once to the completed
+  scene layer. Include the scene-linear background in that resolve when the
+  output is opaque; keep grid, selection, annotation, and other display UI
+  overlays after the transform. For transparent film, retain linear Combined
+  RGB and alpha independently from the display preview so later background
+  composition does not blend already transformed translucent colors.
+- **Required offscreen regression:** exercise the production float resolver
+  with a known opaque background and two overlapping translucent surface
+  fragments. For far fragment `(C1, a1)` and near fragment `(C2, a2)`, assert
+  the resolved linear RGB equals
+  `a2*C2 + (1-a2)*(a1*C1 + (1-a1)*B)` and alpha remains one. Include at least
+  one channel above 1 before display conversion; assert that it survives the
+  resolve and that output equals one transform of the expected composite.
+  Also assert the result differs from transforming each surface before
+  blending. Keep the ordinary interactive Solid viewport at zero render
+  dither. The current compositor has no float fragment API to test, so this
+  regression belongs with that resolver when the implementation is introduced;
+  the present QPainter output is explicitly not claimed to pass it.
 
 ### Transparent depth and Blender Object In Front (2026-10-12)
 
@@ -636,7 +687,8 @@ This is the status after the first implementation pass and the team's code revie
 - **QPainter transparent sorting update (2026-10-12):** The bounded surface compositor now records transparent object-layer color and nearest tessellated depth per pixel, sorts those records far-to-near independently at each pixel, then source-over composites them above the nearest opaque result. Its maximum of four million records bounds the temporary memory; missing prepared geometry, a target over one million pixels, or a full fragment budget uses the existing sorted painter fallback. QPainter still precomposites triangles within each object's color layer, so self-intersecting surfaces do not receive per-triangle transparent ordering. A review also corrected premultiplied channel unassociation to use floating-point division rather than integer division. This improves inter-object QPainter fallback ordering; Blender continues to use weighted blended OIT in the GPU path.
 - **Display transform:** imported scene display device, view transform, look, exposure, and gamma are retained for Workbench render results. The interactive Solid/Wireframe viewport keeps the default AgX settings; applying imported scene settings unconditionally there differed from Blender, where ordinary Workbench Solid uses the default view transform and only Rendered mode or View3D Scene Lights/Scene World selects scene render settings. classiCAD does not yet expose those View3D modes. Existing built-in sRGB AgX, Standard, Khronos PBR Neutral, and Filmic with the `None` look stay on their established transform paths. Other sRGB view/look combinations are baked to scene-specific 65³ RGB float LUTs by Blender's bundled PyOpenColorIO and applied in CPU/GPU rendering, with exposure before the table and gamma after it. This is an import-time snapshot of the machine's active OCIO configuration, not a runtime OCIO dependency; custom external config assets must be available to Blender during import. New LUTs sample a [0, 16] domain using an analytic `log2_1p` shaper (scale 64); older native documents preserve their linear [0, 2] metadata. Inputs outside a LUT's domain clamp to its endpoint. The document stores at most eight unique tables and 32 MiB decoded LUT data. The wider domain improves HDR coverage but the fixed 65³ table trades away some uniform low-range sample density; precision and output still need matched comparison. Other display devices remain unsupported. Blender 5.2.2 selects the color-management context in [`draw_color_management.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_color_management.cc#L44-L57) and applies its default transform versus scene settings in [`viewport_settings_apply()`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/intern/draw_color_management.cc#L112-L140). Its display processor composes an explicit look before the DisplayViewTransform and applies exposure in scene-linear space and gamma afterward ([pinned source](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/opencolorio/intern/libocio/libocio_display_processor.cc)).
 - **Camera depth of field:** the GPU viewport and offscreen render-result path share the Blender 5.2.2 `DofPass` shape: half-resolution RGBA16F color and RG8 near/far CoC pyramids, full-resolution CoC-aware preparation, quarter/eighth-resolution downsample levels, half-resolution 49-sample gather, 3x3 median cleanup, and a depth-derived CoC resolve before AA accumulation. The shader's sample perimeter and square-to-circle radius match `DofPass::setup_samples`; polygon blade shaping uses the algebraically equivalent sector formula, rotation, and reciprocal X aperture ratio. Its two-blade denominator no longer uses an extra epsilon floor. The aperture path remains unverified against Blender images, especially the visual two-blade slit. The textures and passes are kept separate from final presentation; the existing camera gate and per-temporal-sample placement remain. QPainter uses its separate full-resolution software approximation, with aperture shape controls on a fixed 12-tap gather and a repeating 64x64 blue-noise spatial rotation. Scene-camera optics persist with project, session, and user preferences; imported Blender scene cameras populate the inputs; DOF is gated off for ordinary orbit/orthographic views. Temporal jitter texture remains unsupported.
-- **Additional shadow-map behavior:** unsupported casters and nonmanifold/edited solids use the current GPU 1024-pixel depth-map fallback with 3x3 PCF. Polygon mesh fallback ranges in Texture color mode filter active Image Texture alpha using interpolated UVs and the supported Blender alpha cutoff. The GPU map fallback still leaves material-only and trimmed or untextured NURBS ranges unmasked; untrimmed textured NURBS use generated UVs and the supported cutoff. Separately, the GPU shadow-alpha path supports trimmed and untrimmed NURBS through tessellation UVs. Open NURBS surfaces with valid tessellated topology use boundary-edge forced-fail stencil volumes. In mixed-alpha scenes, opaque surfaces remain shadow receivers, and validated closed transparent solids plus supported open surfaces cast stencil shadow volumes; the depth-map fallback is limited to unsupported casters when volumes are active, and transparent triangles are drawn once without shadow sampling. Blender's handling of branched, nonmanifold casters and additional fallback fidelity remain unported. The QPainter Solid fallback does not render shadows; this CPU shadow gap is an out-of-scope approximation. The GPU and QPainter outline silhouette opacity now uses Blender Workbench's four-cardinal-neighbor resolve. For classiCAD's separate selection-color extension, both renderers use four-cardinal-neighbor adjacency; Blender itself uses one outline color and has no selected-color choice.
+- **Additional shadow-map behavior:** unsupported casters and nonmanifold/edited solids use the current GPU 1024-pixel depth-map fallback with 3x3 PCF. Polygon mesh fallback ranges in Texture color mode filter active Image Texture alpha using interpolated UVs. Trimmed and untrimmed `NurbsSurface` ranges use their shared tessellation UVs and regular/UDIM texture data in the same fallback; the shadow fragment shader discards sampled alpha below 0.1, except for NONE, IGNORE, and CHANNEL_PACKED modes. This corrects the earlier claim that the map fallback left trimmed NURBS unmasked. The code path is `prepareGeometry` and the shadow shaders plus `renderShadowMap` in `src/ui/viewport/viewport_surface_renderer.cpp`; `appendNurbsSurfaceDepthMesh` in `src/ui/viewport/viewport_depth_geometry.cpp` supplies trim-aware tessellation UVs. Blender's pinned [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L34-L59) samples the Image/UDIM texture and discards alpha below `image_transparency_cutoff` (0.1). The map still has narrower caster coverage than the stencil path: NURBS solids and ranges without an available texture/UV alpha source do not use this mask. Open NURBS surfaces with valid tessellated topology use boundary-edge forced-fail stencil volumes. In mixed-alpha scenes, opaque surfaces remain shadow receivers, and validated closed transparent solids plus supported open surfaces cast stencil shadow volumes; the depth-map fallback is limited to unsupported casters when volumes are active, and transparent triangles are drawn once without shadow sampling. Blender's handling of branched, nonmanifold casters and additional fallback fidelity remain unported. The QPainter Solid fallback does not render shadows; this CPU shadow gap is an out-of-scope approximation. The GPU and QPainter outline silhouette opacity now uses Blender Workbench's four-cardinal-neighbor resolve. For classiCAD's separate selection-color extension, both renderers use four-cardinal-neighbor adjacency; Blender itself uses one outline color and has no selected-color choice.
+- **NurbsSolid texture-alpha boundary:** `NurbsExtrusionSolid3D` stores its base surface, displacement, and optional derived boundary faces, but no per-face material/image indices. The prepared geometry does contain UVs from the derived face tessellations; `ViewportSurfaceRenderer::prepareGeometry` currently flattens them into one solid `DrawRange` and only enables texture color/alpha for `GeometryType::NurbsSurface`. Extending only the shadow-map alpha mask would create image-shaped shadows for a solid whose color pass remains untextured. A consistent next slice must preserve per-face ranges and UV spans and apply the existing object-level material texture across GPU color, object-ID/effect-alpha, and depth-map passes. Distinct per-face materials/images require a separate data-model contract.
 
 Relevant classiCAD files include:
 
@@ -720,6 +772,44 @@ This checklist preserves the specific differences reported in the initial compar
   otherwise drawing reaches the theme background-type switch. Returning an
   invalid color delegates to classiCAD's existing Theme rendering path. See
   the pinned [overlay background source](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_background.hh#L50-L77).
+- **Theme background preference implemented:** classiCAD now has an app-level
+  Viewport preference for Single Color, Linear Gradient, or Radial Gradient,
+  with high and low colors. The values persist in QSettings and flow through
+  the viewport API to the GPU shader and QPainter fallback. Single Color uses
+  the low color; Linear runs high at the top to low at the bottom; Radial runs
+  high at the center to low at the edge. An offscreen contract checks known
+  pixels for all three styles in both GPU and QPainter paths. This preference
+  is deliberately not part of document shading state, and imported offscreen
+  Workbench render results continue to use Blender's scene `background_type`,
+  World color, and film transparency behavior.
+- **Theme colors are host preferences, not `.blend` scene data:** Blender 5.2.2
+  exposes the active background theme to headless Python at
+  `bpy.context.preferences.themes[0].view_3d.space.gradients`, including
+  `background_type`, `high_gradient`, and `gradient`. A headless Blender 5.2.2
+  check confirmed these properties are available without a GUI. They describe
+  the Blender process user's loaded theme preferences; the scene's saved
+  `background_type = THEME` selects that host theme but does not carry the
+  high/low theme colors inside the `.blend`. Importing those values into
+  per-project classiCAD scene metadata would therefore bake the importing
+  machine's preference into another user's project view. Keep this outside
+  file-specific import parity. The classiCAD application preference described
+  above makes style and high/low colors configurable across GPU and QPainter
+  paths. Non-default Blender themes are not automatically imported; users can
+  reproduce their Theme background by setting matching local colors. Blender
+  theme matching remains a deliberate user-level setting or explicit import
+  override, not implicit `.blend` project data. Blender's pinned
+  [`rna_userdef.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/makesrna/intern/rna_userdef.cc#L1955-L1975)
+  defines these as theme preference properties.
+- Focused validation passed: `cmake --build build --target
+  classicad_viewport_render_contracts_test classiCAD -j2` and
+  `QT_QPA_PLATFORM=offscreen ./build/classicad_viewport_render_contracts_test`.
+- Blender studio-light background opacity and blur are captured as
+  `studiolight_background_alpha` and `studiolight_background_blur` and reported
+  unsupported when non-default (`blender_scene_extract.py`). classiCAD has no
+  corresponding background-image/opacity/blur rendering path. The flat
+  Theme/Viewport/World color paths above do not cover these studio-light
+  background settings; keep them explicitly unsupported pending a separate
+  background-image path.
 - **Object-alpha gate correction (2026-10-12):** Blender Workbench carries
   `ob.color.a` into the transparent pass for Object and Random color modes.
   Material, Attribute, and Texture modes instead take alpha from their
@@ -826,7 +916,7 @@ Status: partially implemented. GPU cavity/curvature and several existing effects
 - For closed `NurbsSolid` casters, derive indexed geometry from the cached base/trim tessellation and extrusion walls, or from validated planar materialized quads. Require every indexed edge to have exactly two oppositely directed uses and reject zero-volume or degenerate meshes. For open `NurbsSurface` casters, accept only tessellations with consistently wound two-manifold interiors and closed, unbranched boundary loops; add forced-fail side quads along boundary edges. Use depth-pass stencil counting for closed opaque solids only when every source and extruded volume vertex lies safely beyond the camera near plane; retain the capped depth-fail path for open, translucent, near-plane-risk, and otherwise uncertain volumes. Extrude vertices to the current view's far plane with Blender's signed-distance/light-plane-dot formula and `1e-3` inward epsilon; use the `1e5` distance when the light direction does not intersect that plane. Tessellation remains display data derived from the persisted NURBS geometry.
 - Pass audit against Blender 5.2.2 `workbench_shadow.cc`: Blender submits manifold geometry to a depth-pass `PASS`, while `FAIL` and `FORCED_FAIL` use depth-fail counting; translucent casters and selected non-manifold cases skip `PASS` and use `FORCED_FAIL`. classiCAD now uses Blender-style depth-pass stencil updates for the conservative closed opaque `NurbsSolid` and validated `PolygonMesh3D` subsets when all volume vertices are in the camera-visible half-space with a safety margin. It draws silhouette sides only for this route; capped depth-fail volumes remain the fallback for open surfaces, transparent casters, and any near-plane or geometry uncertainty. Compare near-plane crossings, camera-inside views, and perspective/orthographic projections against Blender before widening eligibility.
 - The GPU stencil-volume path now also accepts imported `PolygonMesh3D` objects only when their transformed triangulated surface is finite, nondegenerate, closed, consistently oriented (each indexed edge has exactly two oppositely directed uses), has one connected cycle in each vertex link, and every connected component has positive nonzero signed volume. Every face material range for that object must be opaque under the active Workbench alpha source. Loose vertices, open boundaries, duplicate/overused edges, pinched/disconnected vertex links, inconsistent winding, degenerate or inward/zero-volume components, mixed-alpha objects, and failed near-plane safety checks stay on the existing depth-map or depth-fail fallback. The volume topology is stored once on the first per-face draw range while every face range is marked as belonging to that caster, preventing fallback-map double drawing after a successful volume pass. This extends Blender's evaluated-mesh topology dispatch without making tessellation authoritative; runtime comparison remains open.
-- Keep the GPU depth-map fallback for unsupported/nonmanifold topology, nonplanar materialized solid faces, missing stencil buffers, and ranges that cannot use the volume path. The fallback rasterizes selected triangle ranges into a fixed 1024×1024 light-depth map. In Texture mode, polygon mesh casters with active UVs and per-face images filter alpha using the supported Blender cutoff; material fallback ranges and trimmed or untextured NURBS remain unmasked; untrimmed textured NURBS use generated UVs and the same cutoff. This restriction describes only the GPU depth-map fallback: the GPU stencil shadow-alpha path supports trimmed NURBS using tessellation UVs. The QPainter Solid fallback does not render shadows; implementing CPU shadows remains out of scope for that fallback. Hard shadowing, map resolution, and remaining caster cases differ from Blender's ray-traced shadow option. In mixed-alpha scenes, opaque surfaces remain receivers and validated closed solids/open surfaces can cast volumes; transparent triangles draw afterward without shadow sampling. Branched/nonmanifold caster dispatch and Blender's ray-traced shadow option remain unsupported.
+- Keep the GPU depth-map fallback for unsupported/nonmanifold topology, nonplanar materialized solid faces, missing stencil buffers, and ranges that cannot use the volume path. The fallback rasterizes selected triangle ranges into a fixed 1024×1024 light-depth map. In Texture mode, polygon mesh casters with active UVs and per-face images, plus trimmed and untrimmed `NurbsSurface` ranges with tessellation UVs and texture data, filter alpha at Blender's 0.1 cutoff; NONE, IGNORE, and CHANNEL_PACKED modes bypass that mask. NURBS solids and ranges without a usable texture/UV alpha source remain unmasked. This describes the GPU depth-map fallback; the GPU stencil shadow path does not sample texture alpha. The QPainter Solid fallback does not render shadows; implementing CPU shadows remains out of scope for that fallback. Hard shadowing, map resolution, and remaining caster cases differ from Blender's ray-traced shadow option. In mixed-alpha scenes, opaque surfaces remain receivers and validated closed solids/open surfaces can cast volumes; transparent triangles draw afterward without shadow sampling. Branched/nonmanifold caster dispatch and Blender's ray-traced shadow option remain unsupported.
 - Map the stored scene light direction through Blender's Y/Z swap and X/Z sign change. Clamp Shift to Blender's `[0,1]` range and compute `focus = clamp(shadow_focus, 0.0001, 0.99999)`, `shadow_focus_edge = 1 - focus * (1 - shadow_shift)`, then apply `smoothstep(shadow_shift, shadow_focus_edge, -dot(N, light_direction_view))`; shadow intensity mixes the result with the unshadowed contribution. Keep the fallback depth bias fixed so Shift no longer changes map bias.
 - Keep GPU depth of field camera-gated by an active scene camera with DOF enabled, regardless of view projection. The QPainter approximation remains perspective-gated. Validate GPU and QPainter aperture blade/rotation/ratio shaping against Blender; investigate Blender's temporal jitter only if a temporal sample lifecycle is added.
 - Keep GPU cavity/curvature behavior aligned with Blender's composition; its parameter controls, sample scheduling, and blue-noise-derived jitter texture are wired. In mixed-alpha scenes the effect prepass and shader apply cavity only to opaque ranges. The QPainter fallback uses separate visible and opaque-only samples: transparent surfaces do not occlude cavity samples or receive cavity shading, and post-composite cavity is skipped where a translucent surface is visible above an opaque receiver. Its cavity pass on NURBS and imported polygon meshes remains approximate and needs visual comparison.
@@ -1036,8 +1126,32 @@ depth domain. Visual depth comparison remains open.
   `src/ui/viewport/blender_grid_renderer.cpp`.
 - The comparison uses the native classiCAD GPU pass and does not launch its
   GUI. QPainter, navigation-history reset, intermediate scene-linear captures,
-  volume/effects/transparency scenes, and a detailed edge-profile comparison
-  remain outstanding validation work.
+  and volume/effects/transparency scenes remain outstanding validation work.
+- A numerical edge-profile pass over the six stored 640×480 captures used
+  masks thresholded by RGB distance >8 from each image's own dominant
+  background, so the one-code background offset does not set coverage. Off
+  gives 111,257 classiCAD foreground pixels and 111,480 Blender pixels, with
+  225 XOR pixels and IoU 0.99798. Single Pass versus Blender's FXAA-labeled
+  Workbench value gives 111,646 vs. 111,869 pixels, 225 XOR pixels, and IoU
+  0.99799. In both pairs the difference is a one-pixel shift at the right
+  silhouette edge (224 Blender-only pixels there); the other contours align.
+  The dominant background values are (34,34,34) and (35,35,35), and overall
+  RGB channel MAE is about 0.99 with p95 2, so most whole-image error is a
+  small background/display quantization offset.
+- For 8 samples, both silhouettes have the same bounds. At the same >8
+  threshold, they have 469 XOR pixels and IoU 0.99583; differences are
+  distributed around the contour rather than concentrated on the right edge.
+  In a 2-pixel boundary ring, mean coverage difference is 0.068 and p90 is
+  0.102; partial coverage occurs at about 1.9% of classiCAD ring pixels and
+  4.7% of Blender ring pixels. Interior RGB MAE is 0.44 versus 4.73 in that
+  edge ring. This records an 8-sample edge-coverage/profile difference despite
+  matching bounds, not a measured face-shading mismatch.
+- Source review confirms classiCAD's seeded jitter generator and sample
+  ordering match Blender 5.2.2's Workbench sequence. The remaining edge deltas
+  are consistent with sample rasterization/projection or resolve behavior;
+  these captures do not isolate which path is responsible, so there is no
+  confident source-level fix to apply yet. Keep the AA and overall parity
+  status open pending further isolation and matched validation.
 
 ### Bounded scalar volume pass (2026-10-12)
 
@@ -1070,7 +1184,7 @@ depth domain. Visual depth comparison remains open.
 1. **Establish a comparable baseline.** Use the same hard-edged cube, viewport pixel dimensions, projection and camera pose, clipping range, color transform, and selection/overlay state in Blender 5.2.2 and classiCAD. Capture classiCAD's native GPU path separately from QPainter. Compare AA Off, Single Pass, and 8 samples, both idle and while navigating. Save pre-AA, post-AA scene-linear, and final display-transformed outputs so edge softness can be attributed to a specific stage. Do not call the AA port complete until the edge profiles and remaining differences are recorded.
 2. **Make pass boundaries explicit.** Build a classiCAD render packet from `ViewportRenderFrame` and its derived geometry/material ranges, then move pass sequencing out of `viewport_widget.cpp` into a renderer coordinator. Give color, depth, normal, object-ID, and transparency attachments explicit owners and lifetimes. Use the same GPU scene-pass sequence for the interactive viewport and Workbench render result; keep CAD editing overlays and the grid in their existing post-resolve layer.
 3. **Port source-level pass behavior in bounded groups.** Compare opaque/material and depth state first; then transparent accumulation/depth; then object-ID outline and cavity/curvature; then camera-gated DOF and final resolve/presentation. For each group, adapt Blender 5.2.2 source/shaders where they are separable, preserve Blender attribution/license headers, and record any input or backend adaptation. Keep the existing TAA/SMAA implementation unless the controlled comparison identifies a concrete mismatch.
-4. **Use the existing Workbench material adapter seam.** The future material/shader evaluator should resolve only Workbench-supported material inputs: scene-linear base color, roughness, metallic, alpha, and the supported image-texture result plus its sampling/color-space/alpha settings. Blender 5.2.2's active image source includes Image Texture and Environment Texture nodes; classiCAD retains the active node's image record, using Extend when Environment Texture has no extension property and Repeat for the Image Texture fallback. This does not evaluate arbitrary shader-node graphs. Feed those values through `WorkbenchMaterialData` in `src/core/document/scene_object.h` and the per-slot conversion in `src/ui/viewport/viewport_render_frame.cpp`. Per-face material slot indices, active UVs, and color attributes stay in `PolygonMesh3D` (`src/core/geometry/polygon_mesh.h`) and travel through `ViewportRenderObject` (`src/ui/viewport/viewport_render_frame.h`) into `DrawRange` (`src/ui/viewport/viewport_surface_renderer.h`). Geometry normals remain sourced from evaluated/display geometry; they are not material-evaluator outputs. Blender UDIM tile numbers, external paths, and packed tile bytes survive import/native save. GPU color, effect-alpha, object-ID-alpha, and shadow-map-alpha paths sample the tiles; stencil shadow-volume casters do not sample texture alpha. QPainter color and cavity/outline effect-alpha sampling support meshes and trimmed/untrimmed NURBS. The GPU depth-map fallback's alpha sampling remains narrower than its GPU stencil-shadow alpha path; the QPainter Solid fallback does not render shadows at all. GPU per-tile Repeat, Extend, Clip, and Mirror modes are implemented. Filtering across neighboring tile seams is not part of Blender 5.2.2 behavior. The GPU object-ID pass uses shared tessellation UV data for trimmed and untrimmed NURBS ranges, so UDIM alpha masking is supported there.
+4. **Use the existing Workbench material adapter seam.** The future material/shader evaluator should resolve only Workbench-supported material inputs: scene-linear base color, roughness, metallic, alpha, and the supported image-texture result plus its sampling/color-space/alpha settings. Blender 5.2.2's active image source includes Image Texture and Environment Texture nodes; classiCAD retains the active node's image record, using Extend when Environment Texture has no extension property and Repeat for the Image Texture fallback. This does not evaluate arbitrary shader-node graphs. Feed those values through `WorkbenchMaterialData` in `src/core/document/scene_object.h` and the per-slot conversion in `src/ui/viewport/viewport_render_frame.cpp`. Per-face material slot indices, active UVs, and color attributes stay in `PolygonMesh3D` (`src/core/geometry/polygon_mesh.h`) and travel through `ViewportRenderObject` (`src/ui/viewport/viewport_render_frame.h`) into `DrawRange` (`src/ui/viewport/viewport_surface_renderer.h`). Geometry normals remain sourced from evaluated/display geometry; they are not material-evaluator outputs. Blender UDIM tile numbers, external paths, and packed tile bytes survive import/native save. GPU color, effect-alpha, object-ID-alpha, and shadow-map-alpha paths sample the tiles; stencil shadow-volume casters do not sample texture alpha. QPainter color and cavity/outline effect-alpha sampling support meshes and trimmed/untrimmed NURBS. The depth-map fallback samples texture alpha for textured meshes and trimmed/untrimmed `NurbsSurface` using active or tessellation UVs; its caster/topology coverage remains narrower than the stencil path. The QPainter Solid fallback does not render shadows at all. GPU per-tile Repeat, Extend, Clip, and Mirror modes are implemented. Filtering across neighboring tile seams is not part of Blender 5.2.2 behavior. The GPU object-ID pass uses shared tessellation UV data for trimmed and untrimmed NURBS ranges, so UDIM alpha masking is supported there.
 5. **Keep fallback scope honest.** Preserve the QPainter path for fallback, but compare and document it separately; do not claim that supersampling is equivalent to Blender's GPU pass graph. If CPU visual parity becomes a requirement, make it a separate rendering backend project after the GPU path is stable.
 
 ### Phase Two acceptance
@@ -1079,7 +1193,7 @@ depth domain. Visual depth comparison remains open.
 - Intermediate outputs identify whether any edge/color difference appears in geometry shading, effect composition, AA resolve, or display conversion.
 - Viewport and Workbench render-result GPU paths share the same named scene passes and attachment contract.
 - Each newly ported pass has a pinned Blender 5.2.2 source reference, preserved attribution, and a comparison result; existing NURBS/surface contracts remain unchanged.
-- The future shader system can provide Workbench's supported material values through `WorkbenchMaterialData` and existing mesh/draw-range data without changing the render-pass API or creating a second material model; arbitrary node graphs are out of scope. Imported UDIM metadata and packed tile bytes survive native save/reopen; GPU and QPainter mesh/trimmed-NURBS/untrimmed-NURBS color and effect-alpha paths consume tiles. The GPU depth-map shadow-alpha fallback remains limited to its supported mesh and untrimmed-NURBS inputs; GPU shadow-map and object-ID alpha masking support trimmed surfaces using tessellation UVs, while stencil shadow-volume casters do not sample texture alpha. The QPainter Solid fallback has no shadow pass; CPU shadow rendering is out of scope. GPU per-tile extension modes are implemented. Cross-tile filter continuity is not part of Blender 5.2.2 behavior.
+- The future shader system can provide Workbench's supported material values through `WorkbenchMaterialData` and existing mesh/draw-range data without changing the render-pass API or creating a second material model; arbitrary node graphs are out of scope. Imported UDIM metadata and packed tile bytes survive native save/reopen; GPU and QPainter mesh/trimmed-NURBS/untrimmed-NURBS color and effect-alpha paths consume tiles. GPU depth-map shadow alpha also uses texture data and UVs for meshes and trimmed/untrimmed `NurbsSurface` ranges; NURBS solids and ranges without an available image/UV alpha source remain unmasked, while stencil shadow-volume casters do not sample texture alpha. The QPainter Solid fallback has no shadow pass; CPU shadow rendering is out of scope. GPU per-tile extension modes are implemented. Cross-tile filter continuity is not part of Blender 5.2.2 behavior.
 - A bounded single-channel Blender `VOLUME` grid imports, survives native save/reopen, and renders through the GPU Volume pass after transparent depth; sampling, density scale, slice controls, and Blender's pass order are source-aligned. Multiple/vector grids, animation, oversized dense bounds, and the QPainter fallback remain explicit limits.
 - QPainter differences remain separately described until that backend is explicitly brought into scope.
 

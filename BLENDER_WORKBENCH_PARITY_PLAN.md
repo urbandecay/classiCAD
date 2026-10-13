@@ -1654,6 +1654,18 @@ depth domain. Visual depth comparison remains open.
   [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2554-L2595),
   and [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L315-L367).
 
+### QPainter float-texture alpha cutoff (2026-10-13)
+
+- Polygon-mesh float texture sampling now carries the material alpha mode into
+  its per-triangle data and applies Blender's `0.1` image cutoff only when
+  alpha is not ignored or channel-packed. This closes a CPU-only mismatch
+  where low float alpha incorrectly removed geometry in `IGNORE`,
+  `CHANNEL_PACKED`, and legacy `NONE` modes. The contract covers STRAIGHT,
+  IGNORE, and CHANNEL_PACKED float textures; its CPU assertions passed before
+  the test reached the later OpenGL-only NURBS-solid check. Blender references:
+  [`workbench_materials.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_materials.cc#L536-L553)
+  and [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L416-L433).
+
 ### Render-result visibility (2026-10-13)
 
 - Offscreen Workbench result assembly now uses a render-specific visibility

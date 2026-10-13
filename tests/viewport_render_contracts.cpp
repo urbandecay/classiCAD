@@ -2005,6 +2005,31 @@ int main(int argc, char *argv[])
                         std::abs(sampledFloatTexture.alpha() - 179) <= 2,
                     "QPainter Texture mode must sample signed/HDR float RGB and preserve alpha independently");
 
+    const std::array<float, 8> lowAlphaFloatTexels{
+        0.7f, 0.2f, 0.1f, 0.05f,
+        0.2f, 0.7f, 0.1f, 0.05f};
+    const QByteArray lowAlphaFloatBytes(
+        reinterpret_cast<const char *>(lowAlphaFloatTexels.data()),
+        static_cast<qsizetype>(sizeof(lowAlphaFloatTexels)));
+    WorkbenchMaterialData lowAlphaFloatMaterial = floatTextureMaterial;
+    lowAlphaFloatMaterial.textureImageSceneLinearFloatDataBase64 =
+        QString::fromLatin1(lowAlphaFloatBytes.toBase64());
+    lowAlphaFloatMaterial.textureImageAlphaMode = QStringLiteral("STRAIGHT");
+    const QImage lowAlphaFloatCutout = renderColorMesh(
+        textureSettings, {lowAlphaFloatMaterial});
+    lowAlphaFloatMaterial.textureImageAlphaMode = QStringLiteral("IGNORE");
+    const QImage lowAlphaFloatIgnored = renderColorMesh(
+        textureSettings, {lowAlphaFloatMaterial});
+    lowAlphaFloatMaterial.textureImageAlphaMode =
+        QStringLiteral("CHANNEL_PACKED");
+    const QImage lowAlphaFloatChannelPacked = renderColorMesh(
+        textureSettings, {lowAlphaFloatMaterial});
+    passed &= check(
+        lowAlphaFloatCutout.pixelColor(80, 80).alpha() == 0 &&
+            lowAlphaFloatIgnored.pixelColor(80, 80).alpha() > 0 &&
+            lowAlphaFloatChannelPacked.pixelColor(80, 80).alpha() > 0,
+        "QPainter float-texture cutoff must be bypassed for Ignore and Channel Packed alpha modes");
+
     const QSize annotationSize(128, 128);
     ViewportTransform annotationTransform;
     annotationTransform.zoom() = 32.0;

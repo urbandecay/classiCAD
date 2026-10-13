@@ -1351,6 +1351,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             QHash<int, WorkbenchFloatTextureData> floatTextureTiles;
             bool tiledTexture = false;
             bool texturePremultiplied = false;
+            bool textureAlphaCutoff = true;
             bool textureSrgb = true;
             QString textureInterpolation = QStringLiteral("Linear");
             QString textureExtension = QStringLiteral("REPEAT");
@@ -1781,6 +1782,17 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                 meshMaterials[materialIndex].textureImageAlphaMode
                                     .compare(QStringLiteral("PREMUL"),
                                              Qt::CaseInsensitive) == 0;
+                            const QString alphaMode =
+                                meshMaterials[materialIndex]
+                                    .textureImageAlphaMode;
+                            triangle.textureAlphaCutoff =
+                                alphaMode.compare(QStringLiteral("NONE"),
+                                                  Qt::CaseInsensitive) != 0 &&
+                                alphaMode.compare(QStringLiteral("IGNORE"),
+                                                  Qt::CaseInsensitive) != 0 &&
+                                alphaMode.compare(
+                                    QStringLiteral("CHANNEL_PACKED"),
+                                    Qt::CaseInsensitive) != 0;
                             triangle.textureSrgb =
                                 meshMaterials[materialIndex].textureImageSrgb;
                             triangle.textureInterpolation =
@@ -2053,7 +2065,10 @@ void ViewportRenderer::drawShape(QPainter &painter,
                         }
                         const float textureAlpha = hasFloatTexture
                             ? floatRgba[3] : rgba[3] / 255.0f;
-                        if (textureAlpha < 0.1f) continue; // Blender's filtered alpha cutoff.
+                        if (triangle.textureAlphaCutoff &&
+                            textureAlpha < 0.1f) {
+                            continue; // Blender's filtered alpha cutoff.
+                        }
                         float unassociatedRgb[3]{};
                         for (int component = 0; component < 3; ++component) {
                             unassociatedRgb[component] = hasFloatTexture

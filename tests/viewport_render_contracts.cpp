@@ -1378,10 +1378,64 @@ int main(int argc, char *argv[])
                     }
                     return count;
                 };
+                int matchingOutlinePixels = 0;
+                bool selectedAndUnselectedOutlineMatch =
+                    gpuImage.size() == gpuWithoutOutlineImage.size() &&
+                    gpuImage.size() == gpuUnselectedOutlineImage.size() &&
+                    gpuImage.size() == gpuUnselectedNoOutlineImage.size();
+                const QColor configuredOutline = solidShading.outlineColor;
+                if (selectedAndUnselectedOutlineMatch) {
+                    for (int y = 0; y < gpuImage.height(); ++y) {
+                        for (int x = 0; x < gpuImage.width(); ++x) {
+                            const QColor selectedOutline =
+                                gpuImage.pixelColor(x, y);
+                            const QColor selectedBaseline =
+                                gpuWithoutOutlineImage.pixelColor(x, y);
+                            const QColor unselectedOutline =
+                                gpuUnselectedOutlineImage.pixelColor(x, y);
+                            const QColor unselectedBaseline =
+                                gpuUnselectedNoOutlineImage.pixelColor(x, y);
+                            if (selectedOutline == selectedBaseline ||
+                                unselectedOutline == unselectedBaseline) {
+                                continue;
+                            }
+                            ++matchingOutlinePixels;
+                            const auto channelRatio = [](int outlined,
+                                                         int baseline) {
+                                return baseline > 0
+                                           ? static_cast<double>(outlined) /
+                                                 baseline
+                                           : 1.0;
+                            };
+                            constexpr double outlineRatioTolerance = 0.025;
+                            selectedAndUnselectedOutlineMatch &=
+                                selectedOutline.alpha() ==
+                                    unselectedOutline.alpha() &&
+                                configuredOutline == QColor(Qt::black) &&
+                                std::abs(channelRatio(selectedOutline.red(),
+                                                     selectedBaseline.red()) -
+                                         channelRatio(unselectedOutline.red(),
+                                                     unselectedBaseline.red())) <
+                                    outlineRatioTolerance &&
+                                std::abs(channelRatio(selectedOutline.green(),
+                                                     selectedBaseline.green()) -
+                                         channelRatio(unselectedOutline.green(),
+                                                     unselectedBaseline.green())) <
+                                    outlineRatioTolerance &&
+                                std::abs(channelRatio(selectedOutline.blue(),
+                                                     selectedBaseline.blue()) -
+                                         channelRatio(unselectedOutline.blue(),
+                                                     unselectedBaseline.blue())) <
+                                    outlineRatioTolerance;
+                        }
+                    }
+                }
                 gpuOutlineRendered =
                     countChangedPixels(gpuImage, gpuWithoutOutlineImage) > 100 &&
                     countChangedPixels(gpuUnselectedOutlineImage,
-                                       gpuWithoutOutlineImage) > 100;
+                                       gpuUnselectedNoOutlineImage) > 100 &&
+                    matchingOutlinePixels > 20 &&
+                    selectedAndUnselectedOutlineMatch;
                 gpuSceneStrokeSuppressesPostOutline =
                     countChangedPixels(gpuSceneStrokeManagedOutlineImage,
                                        gpuWithoutOutlineImage) == 0;

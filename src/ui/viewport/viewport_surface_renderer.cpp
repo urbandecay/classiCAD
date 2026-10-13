@@ -1920,7 +1920,6 @@ bool ViewportSurfaceRenderer::initialize()
         #version 330 core
         uniform usampler2D uObjectIdBuffer;
         uniform vec4 uOutlineColor;
-        uniform vec4 uSelectionColor;
         uniform float uUiScale;
         layout(location = 0) out vec4 fragmentColor;
         void main()
@@ -1938,21 +1937,15 @@ bool ViewportSurfaceRenderer::initialize()
                 texture(uObjectIdBuffer, uv + dy).r,
                 texture(uObjectIdBuffer, uv - dy).r);
             // Blender Workbench derives silhouette coverage from the center
-            // ID and its four cardinal neighbors. Apply selection color over
-            // that same neighborhood so diagonal-only contact does not color
-            // this pixel as selected.
+            // ID and its four cardinal neighbors, then uses one configured
+            // outline color regardless of object selection.
             float opacity = 1.0 -
                 dot(vec4(equal(uvec4(centerId), cardinalIds)), vec4(0.25));
             if (opacity <= 0.0) {
                 discard;
             }
-            const uint selectedBit = 0x80000000u;
-            bool selected = (centerId & selectedBit) != 0u;
-            for (int index = 0; index < 4; ++index) {
-                selected = selected || ((cardinalIds[index] & selectedBit) != 0u);
-            }
-            vec4 color = selected ? uSelectionColor : uOutlineColor;
-            fragmentColor = vec4(color.rgb, color.a * opacity);
+            fragmentColor = vec4(uOutlineColor.rgb,
+                                 uOutlineColor.a * opacity);
         }
     )glsl";
     static constexpr const char *shadowVertexShader = R"glsl(
@@ -6617,11 +6610,6 @@ bool ViewportSurfaceRenderer::draw(
                 QVector4D(settings.outlineColor.redF(),
                           settings.outlineColor.greenF(),
                           settings.outlineColor.blueF(), 1.0f));
-            const QColor selectionColor = viewportSelectionColor();
-            outlineProgram_.setUniformValue(
-                "uSelectionColor",
-                QVector4D(selectionColor.redF(), selectionColor.greenF(),
-                          selectionColor.blueF(), 1.0f));
             outlineProgram_.setUniformValue(
                 "uUiScale", static_cast<float>(dpr));
             outlineVertexArray_.bind();

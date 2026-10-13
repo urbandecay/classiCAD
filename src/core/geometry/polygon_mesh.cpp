@@ -133,11 +133,22 @@ bool validatePolygonMesh(const PolygonMesh3D &mesh, QString *error)
         for (const MeshUvMap &uvMap : mesh.uvMaps) found |= uvMap.name == mesh.activeUvMapName;
         if (!found) return fail(error, QStringLiteral("active mesh UV map is missing"));
     }
+    if (!mesh.defaultUvMapName.isEmpty()) {
+        bool found = false;
+        for (const MeshUvMap &uvMap : mesh.uvMaps) found |= uvMap.name == mesh.defaultUvMapName;
+        if (!found) return fail(error, QStringLiteral("default mesh UV map is missing"));
+    }
     if (!mesh.activeColorAttributeName.isEmpty()) {
         bool found = false;
         for (const MeshColorAttribute &attribute : mesh.colorAttributes)
             found |= attribute.name == mesh.activeColorAttributeName;
         if (!found) return fail(error, QStringLiteral("active mesh color attribute is missing"));
+    }
+    if (!mesh.defaultColorAttributeName.isEmpty()) {
+        bool found = false;
+        for (const MeshColorAttribute &attribute : mesh.colorAttributes)
+            found |= attribute.name == mesh.defaultColorAttributeName;
+        if (!found) return fail(error, QStringLiteral("default mesh color attribute is missing"));
     }
     return true;
 }

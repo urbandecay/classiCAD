@@ -2227,9 +2227,10 @@ void ViewportSurfaceRenderer::prepareGeometry(
             for (const Point3D &normal : mesh.cornerNormals)
                 keyStream << double(normal.x) << double(normal.y) << double(normal.z);
             keyStream << mesh.activeColorAttributeName;
-            keyStream << mesh.activeUvMapName;
+            keyStream << mesh.defaultColorAttributeName;
+            keyStream << workbenchUvMapName(mesh);
             for (const MeshUvMap &uvMap : mesh.uvMaps) {
-                if (uvMap.name != mesh.activeUvMapName) continue;
+                if (uvMap.name != workbenchUvMapName(mesh)) continue;
                 for (const QPointF &uv : uvMap.cornerValues)
                     keyStream << double(uv.x()) << double(uv.y());
             }
@@ -2248,7 +2249,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 }
             }
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
-                if (attribute.name != mesh.activeColorAttributeName) continue;
+                if (attribute.name != mesh.activeColorAttributeName &&
+                    attribute.name != mesh.defaultColorAttributeName) continue;
                 keyStream << attribute.name << qint32(attribute.domain)
                           << attribute.dataType << attribute.colorSpace
                           << qint32(attribute.componentCount)
@@ -2307,6 +2309,14 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     break;
                 }
             }
+            if (activeAttribute == nullptr) {
+                for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
+                    if (attribute.name == mesh.defaultColorAttributeName) {
+                        activeAttribute = &attribute;
+                        break;
+                    }
+                }
+            }
             int firstCorner = 0;
             const auto &matrix = object.meshObjectTransform;
             const qreal linearDeterminant =
@@ -2317,7 +2327,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                    linearDeterminant < 0.0;
             const MeshUvMap *activeUvMap = nullptr;
             for (const MeshUvMap &uvMap : mesh.uvMaps) {
-                if (uvMap.name == mesh.activeUvMapName) {
+                if (uvMap.name == workbenchUvMapName(mesh)) {
                     activeUvMap = &uvMap;
                     break;
                 }

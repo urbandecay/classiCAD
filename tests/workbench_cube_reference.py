@@ -76,6 +76,26 @@ def arguments():
         help="Studio Light Z rotation in degrees (default: 0)",
     )
     parser.add_argument(
+        "--color-source",
+        choices=("MATERIAL", "OBJECT", "RANDOM"),
+        default="MATERIAL",
+        help="Workbench object color source (default: MATERIAL)",
+    )
+    parser.add_argument(
+        "--material-color",
+        nargs=3,
+        type=float,
+        metavar=("R", "G", "B"),
+        help="set the cube material display RGB in Blender scene-linear values",
+    )
+    parser.add_argument(
+        "--object-color",
+        nargs=3,
+        type=float,
+        metavar=("R", "G", "B"),
+        help="set the cube object display RGB in Blender scene-linear values",
+    )
+    parser.add_argument(
         "--linear-output",
         help="also write final scene-linear Combined and Z passes to a multilayer OpenEXR",
     )
@@ -177,6 +197,12 @@ def main():
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
         cube = bpy.context.object
         cube.name = "ReferenceCube"
+        if args.material_color is not None:
+            material = bpy.data.materials.new("ReferenceCubeMaterial")
+            material.diffuse_color = (*args.material_color, 1.0)
+            cube.data.materials.append(material)
+        if args.object_color is not None:
+            cube.color = (*args.object_color, 1.0)
     elif args.scene in ("TRANSPARENT_OVERLAP", "TRANSPARENT_IN_FRONT"):
         # Two camera-facing quads provide stable, known overlap regions without
         # perspective or surface-lighting changes between captures.
@@ -281,7 +307,7 @@ def main():
     shading.studio_light = light_preset
     shading.use_world_space_lighting = args.world_space_lighting
     shading.studiolight_rotate_z = math.radians(args.rotation_degrees)
-    shading.color_type = "MATERIAL"
+    shading.color_type = args.color_source
     shading.show_shadows = args.effect == "SHADOWS"
     shading.shadow_intensity = 0.5
     shading.show_cavity = args.effect == "CAVITY"

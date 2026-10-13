@@ -1044,6 +1044,24 @@ int main(int argc, char *argv[])
                         nearGreenAttribute.alpha() > 240,
                     "QPainter Attribute mode must smoothly interpolate corner RGB while retaining material alpha");
 
+    MeshColorAttribute defaultCornerColors = cornerColors;
+    defaultCornerColors.name = QStringLiteral("RenderColor");
+    defaultCornerColors.values = {0.05f, 0.85f, 0.05f, 1.0f,
+                                  0.05f, 0.85f, 0.05f, 1.0f,
+                                  0.05f, 0.85f, 0.05f, 1.0f};
+    colorSourceMesh.polygonMesh.colorAttributes.append(defaultCornerColors);
+    colorSourceMesh.polygonMesh.activeColorAttributeName.clear();
+    colorSourceMesh.polygonMesh.defaultColorAttributeName =
+        defaultCornerColors.name;
+    const QImage defaultAttributeImage = renderColorMesh(attributeSettings, {});
+    const QColor defaultAttributePixel = defaultAttributeImage.pixelColor(
+        qRound(nearRedCorner.x()), qRound(nearRedCorner.y()));
+    passed &= check(defaultAttributePixel.green() >
+                        defaultAttributePixel.red() + 30 &&
+                        defaultAttributePixel.green() >
+                        defaultAttributePixel.blue() + 30,
+                    "QPainter Attribute mode must use Blender's default color attribute when no active attribute is set");
+
     QTemporaryDir colorTextureDirectory;
     QImage sourceTexture(1, 1, QImage::Format_RGBA8888);
     sourceTexture.fill(QColor(220, 30, 20, 255));
@@ -1051,9 +1069,12 @@ int main(int argc, char *argv[])
         colorTextureDirectory.filePath(QStringLiteral("source.png"));
     const bool savedColorTexture = sourceTexture.save(colorTexturePath);
     colorSourceMesh.polygonMesh.uvMaps = {
-        {QStringLiteral("UVMap"), {QPointF(0.5, 0.5), QPointF(0.5, 0.5),
-                                   QPointF(0.5, 0.5)}}};
-    colorSourceMesh.polygonMesh.activeUvMapName = QStringLiteral("UVMap");
+        {QStringLiteral("OtherUV"), {QPointF(0.0, 0.0), QPointF(0.0, 0.0),
+                                     QPointF(0.0, 0.0)}},
+        {QStringLiteral("RenderUV"), {QPointF(0.5, 0.5), QPointF(0.5, 0.5),
+                                      QPointF(0.5, 0.5)}}};
+    colorSourceMesh.polygonMesh.activeUvMapName.clear();
+    colorSourceMesh.polygonMesh.defaultUvMapName = QStringLiteral("RenderUV");
     WorkbenchMaterialData greenTextureTint;
     greenTextureTint.baseColorSceneLinear = QVector3D(0.02f, 0.9f, 0.02f);
     greenTextureTint.alpha = 0.7;
@@ -2330,9 +2351,65 @@ int main(int argc, char *argv[])
                             lightingCapturesSucceeded &= linearSaved &&
                                                          displaySaved;
                         }
+                        struct ColorSourceCaptureCase {
+                            const char *name;
+                            ViewportColorMode colorMode;
+                        };
+                        const ColorSourceCaptureCase colorSourceCases[] = {
+                            {"color_material", ViewportColorMode::Material},
+                            {"color_object", ViewportColorMode::Object},
+                            {"color_random", ViewportColorMode::Random}};
+                        for (const ColorSourceCaptureCase &captureCase :
+                             colorSourceCases) {
+                            ViewportRenderObject colorSourceObject =
+                                polygonCubeObject;
+                            colorSourceObject.displayName =
+                                QStringLiteral("ReferenceCube");
+                            colorSourceObject.displayColorSceneLinear =
+                                QVector4D(0.12f, 0.62f, 0.18f, 1.0f);
+                            colorSourceObject.meshMaterials[0].baseColorSceneLinear =
+                                QVector3D(0.23f, 0.47f, 0.71f);
+                            ViewportShadingSettings colorShading = rawFaceShading;
+                            colorShading.lightingMode = ViewportLightingMode::Flat;
+                            colorShading.colorMode = captureCase.colorMode;
+                            const QString stem = QString::fromLatin1(
+                                captureCase.name);
+                            QImage display;
+                            QVector<float> sceneLinear;
+                            const bool rendered = renderCoordinatedScene(
+                                colorShading,
+                                QByteArrayLiteral("color-source-match-") +
+                                    stem.toUtf8(),
+                                &display, &colorSourceObject, nullptr, nullptr,
+                                QString{}, &sceneLinear);
+                            const QString displayPath = QDir(
+                                lightingCaptureDirectory).filePath(
+                                    stem + QStringLiteral(".png"));
+                            const QString linearPath = QDir(
+                                lightingCaptureDirectory).filePath(
+                                    stem + QStringLiteral(".pfm"));
+                            QFile linearFile(linearPath);
+                            const QByteArray pfmHeader =
+                                QByteArrayLiteral("PF\n640 480\n-1.0\n");
+                            const qsizetype expectedValues = 640 * 480 * 3;
+                            const bool linearSaved = rendered &&
+                                sceneLinear.size() == expectedValues &&
+                                linearFile.open(QIODevice::WriteOnly) &&
+                                linearFile.write(pfmHeader) == pfmHeader.size() &&
+                                linearFile.write(reinterpret_cast<const char *>(
+                                    sceneLinear.constData()),
+                                    sceneLinear.size() *
+                                        qsizetype(sizeof(float))) ==
+                                    sceneLinear.size() * qsizetype(sizeof(float));
+                            const bool displaySaved = rendered &&
+                                display.size() == QSize(640, 480) &&
+                                display.save(displayPath);
+                            lightingCapturesSucceeded &= linearSaved &&
+                                                         displaySaved;
+                        }
                         passed &= check(
                             lightingCapturesSucceeded,
-                            "matched cube Studio, MatCap, and Flat captures must write scene-linear PFM and display PNG outputs");
+                            "matched cube lighting and color-source captures must write scene-linear PFM and display PNG outputs");
                     }
                     const QString cavityDiagnosticPrefix = qEnvironmentVariable(
                         "CLASSICAD_VIEWPORT_CAVITY_DIAGNOSTIC_PREFIX");

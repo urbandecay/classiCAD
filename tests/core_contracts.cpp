@@ -11,6 +11,7 @@
 #include "core/history/history.h"
 #include "core/model.h"
 #include "core/serialization/document_serializer.h"
+#include "core/serialization/shape_json_codec.h"
 #include "ui/panels/preferences_store.h"
 #include "core/tool_id.h"
 #include "services/hit_testing/curve_hit_tester.h"
@@ -690,6 +691,40 @@ int main(int argc, char **argv)
                         restoredPolygon.geometryType == GeometryType::Polygon &&
                         restoredPolygon.points == centerCornerPolygon,
                     "polygon geometry must use its canonical persisted type and survive session serialization");
+
+    PolygonMesh3D colorAttributeMesh;
+    colorAttributeMesh.vertices = {{0.0, 0.0, 0.0},
+                                   {1.0, 0.0, 0.0},
+                                   {0.0, 1.0, 0.0}};
+    colorAttributeMesh.faces = {{0, 1, 2}};
+    colorAttributeMesh.faceMaterialIndices = {0};
+    MeshColorAttribute defaultColorAttribute;
+    defaultColorAttribute.name = QStringLiteral("RenderColor");
+    defaultColorAttribute.domain = MeshAttributeDomain::Point;
+    defaultColorAttribute.componentCount = 4;
+    defaultColorAttribute.values = {1.0f, 0.0f, 0.0f, 1.0f,
+                                    0.0f, 1.0f, 0.0f, 1.0f,
+                                    0.0f, 0.0f, 1.0f, 1.0f};
+    colorAttributeMesh.colorAttributes = {defaultColorAttribute};
+    colorAttributeMesh.defaultColorAttributeName = defaultColorAttribute.name;
+    colorAttributeMesh.uvMaps = {
+        {QStringLiteral("ActiveUV"),
+         {QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(0.0, 1.0)}},
+        {QStringLiteral("RenderUV"),
+         {QPointF(0.25, 0.25), QPointF(0.75, 0.25), QPointF(0.25, 0.75)}}};
+    colorAttributeMesh.activeUvMapName = QStringLiteral("ActiveUV");
+    colorAttributeMesh.defaultUvMapName = QStringLiteral("RenderUV");
+    PolygonMesh3D restoredColorAttributeMesh;
+    passed &= check(polygonMeshFromJson(polygonMeshToJson(colorAttributeMesh),
+                                        &restoredColorAttributeMesh) &&
+                        restoredColorAttributeMesh.activeColorAttributeName.isEmpty() &&
+                        restoredColorAttributeMesh.defaultColorAttributeName ==
+                            defaultColorAttribute.name &&
+                        restoredColorAttributeMesh.activeUvMapName ==
+                            QStringLiteral("ActiveUV") &&
+                        restoredColorAttributeMesh.defaultUvMapName ==
+                            QStringLiteral("RenderUV"),
+                    "polygon-mesh serialization must preserve active/default UV and color attributes");
 
     Shape picture;
     picture.geometryType = GeometryType::Picture;

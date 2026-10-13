@@ -753,7 +753,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             const MeshUvMap *activeUvMap = nullptr;
             if (settings.colorMode == ViewportColorMode::Texture) {
                 for (const MeshUvMap &uvMap : mesh.uvMaps) {
-                    if (uvMap.name == mesh.activeUvMapName) {
+                    if (uvMap.name == workbenchUvMapName(mesh)) {
                         activeUvMap = &uvMap;
                         break;
                     }

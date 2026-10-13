@@ -1024,6 +1024,7 @@ bool parseBlenderMeshItem(const QJsonObject &item,
     }
 
     const QString activeUvName = item.value(QStringLiteral("active_uv_layer")).toString();
+    const QString defaultUvName = item.value(QStringLiteral("default_uv_layer")).toString();
     if (!activeUvName.isEmpty()) {
         const bool found = std::any_of(
             mesh.uvMaps.cbegin(), mesh.uvMaps.cend(),
@@ -1035,6 +1036,19 @@ bool parseBlenderMeshItem(const QJsonObject &item,
         } else if (warnings != nullptr) {
             warnings->append(QStringLiteral("%1: active UV map %2 was not retained")
                                  .arg(blenderItemLabel(item), activeUvName));
+        }
+    }
+    if (!defaultUvName.isEmpty()) {
+        const bool found = std::any_of(
+            mesh.uvMaps.cbegin(), mesh.uvMaps.cend(),
+            [&defaultUvName](const classiCAD::MeshUvMap &uvMap) {
+                return uvMap.name == defaultUvName;
+            });
+        if (found) {
+            mesh.defaultUvMapName = defaultUvName;
+        } else if (warnings != nullptr) {
+            warnings->append(QStringLiteral("%1: default UV map %2 was not retained")
+                                 .arg(blenderItemLabel(item), defaultUvName));
         }
     }
     const QString activeColorName =
@@ -1050,6 +1064,21 @@ bool parseBlenderMeshItem(const QJsonObject &item,
         } else if (warnings != nullptr) {
             warnings->append(QStringLiteral("%1: active color attribute %2 was not retained")
                                  .arg(blenderItemLabel(item), activeColorName));
+        }
+    }
+    const QString defaultColorName =
+        item.value(QStringLiteral("default_color_attribute")).toString();
+    if (!defaultColorName.isEmpty()) {
+        const bool found = std::any_of(
+            mesh.colorAttributes.cbegin(), mesh.colorAttributes.cend(),
+            [&defaultColorName](const classiCAD::MeshColorAttribute &attribute) {
+                return attribute.name == defaultColorName;
+            });
+        if (found) {
+            mesh.defaultColorAttributeName = defaultColorName;
+        } else if (warnings != nullptr) {
+            warnings->append(QStringLiteral("%1: default color attribute %2 was not retained")
+                                 .arg(blenderItemLabel(item), defaultColorName));
         }
     }
 

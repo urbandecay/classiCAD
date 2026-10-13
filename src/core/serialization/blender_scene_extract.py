@@ -234,10 +234,11 @@ def image_references(material):
     tree = getattr(material, "node_tree", None)
     if tree is None:
         return references
-    # Workbench's Texture color source uses the active image-bearing texture
-    # node. Blender 5.2.2 supports Image Texture and Environment Texture here;
-    # do not guess from node-tree order or evaluate a node graph.
-    active_node = getattr(tree.nodes, "active", None)
+    # Blender stores the Workbench-active texture node independently from the
+    # regular active node (RNA exposes NODE_ACTIVE_TEXTURE as show_texture).
+    # Do not guess from node-tree order or evaluate a node graph.
+    active_node = next((node for node in tree.nodes
+                        if getattr(node, "show_texture", False)), None)
     for node in ([active_node] if active_node is not None else []):
         node_type = getattr(node, "type", "")
         if node_type not in {"TEX_IMAGE", "TEX_ENVIRONMENT"}:
@@ -785,11 +786,18 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
         item["active_uv_layer"] = (
             mesh.uv_layers.active.name if mesh.uv_layers.active else ""
         )
+        item["default_uv_layer"] = (
+            mesh.uv_layers.active_render.name if mesh.uv_layers.active_render else ""
+        )
         item["color_attributes"] = extract_attributes(mesh, item_id, unsupported)
         active_color = getattr(mesh, "color_attributes", None)
         item["active_color_attribute"] = (
             active_color.active_color.name
             if active_color is not None and active_color.active_color else ""
+        )
+        default_color = getattr(active_color, "default_color", None)
+        item["default_color_attribute"] = (
+            default_color.name if default_color is not None else ""
         )
         item["custom_split_normals_present"] = bool(
             getattr(mesh, "has_custom_normals", False)

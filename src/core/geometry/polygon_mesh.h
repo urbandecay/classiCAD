@@ -62,8 +62,18 @@ struct PolygonMesh3D {
     QVector<MeshUvMap> uvMaps;
     QVector<MeshColorAttribute> colorAttributes;
     QString activeUvMapName;
+    QString defaultUvMapName;
     QString activeColorAttributeName;
+    QString defaultColorAttributeName;
 };
+
+// Blender Workbench uses the active UV layer, falling back to the default
+// (render) UV layer when no active layer is set.
+inline const QString &workbenchUvMapName(const PolygonMesh3D &mesh)
+{
+    return mesh.activeUvMapName.isEmpty() ? mesh.defaultUvMapName
+                                          : mesh.activeUvMapName;
+}
 
 bool validatePolygonMesh(const PolygonMesh3D &mesh, QString *error = nullptr);
 QVector<std::array<int, 3>> triangulatePolygonLoop(

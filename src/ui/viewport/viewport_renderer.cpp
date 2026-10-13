@@ -1230,7 +1230,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
             meshTransformDeterminant < 0.0;
         const MeshUvMap *activeUvMap = nullptr;
         for (const MeshUvMap &uvMap : mesh.uvMaps) {
-            if (uvMap.name == mesh.activeUvMapName) {
+            if (uvMap.name == workbenchUvMapName(mesh)) {
                 activeUvMap = &uvMap;
                 break;
             }
@@ -1248,6 +1248,14 @@ void ViewportRenderer::drawShape(QPainter &painter,
                 if (attribute.name == mesh.activeColorAttributeName) {
                     activeAttribute = &attribute;
                     break;
+                }
+            }
+            if (activeAttribute == nullptr) {
+                for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
+                    if (attribute.name == mesh.defaultColorAttributeName) {
+                        activeAttribute = &attribute;
+                        break;
+                    }
                 }
             }
         }

@@ -571,8 +571,11 @@ QJsonObject polygonMeshToJson(const PolygonMesh3D &mesh)
     }
     object.insert(QStringLiteral("colorAttributes"), attributes);
     object.insert(QStringLiteral("activeUvMapName"), mesh.activeUvMapName);
+    object.insert(QStringLiteral("defaultUvMapName"), mesh.defaultUvMapName);
     object.insert(QStringLiteral("activeColorAttributeName"),
                   mesh.activeColorAttributeName);
+    object.insert(QStringLiteral("defaultColorAttributeName"),
+                  mesh.defaultColorAttributeName);
     return object;
 }
 
@@ -698,13 +701,21 @@ bool polygonMeshFromJson(const QJsonValue &value, PolygonMesh3D *mesh)
         result.colorAttributes.append(std::move(attribute));
     }
     const QJsonValue activeUvMapName = object.value(QStringLiteral("activeUvMapName"));
+    const QJsonValue defaultUvMapName = object.value(QStringLiteral("defaultUvMapName"));
     const QJsonValue activeColorAttributeName =
         object.value(QStringLiteral("activeColorAttributeName"));
+    const QJsonValue defaultColorAttributeName =
+        object.value(QStringLiteral("defaultColorAttributeName"));
     if ((!activeUvMapName.isUndefined() && !activeUvMapName.isString()) ||
+        (!defaultUvMapName.isUndefined() && !defaultUvMapName.isString()) ||
         (!activeColorAttributeName.isUndefined() &&
-         !activeColorAttributeName.isString())) return false;
+         !activeColorAttributeName.isString()) ||
+        (!defaultColorAttributeName.isUndefined() &&
+         !defaultColorAttributeName.isString())) return false;
     result.activeUvMapName = activeUvMapName.toString();
+    result.defaultUvMapName = defaultUvMapName.toString();
     result.activeColorAttributeName = activeColorAttributeName.toString();
+    result.defaultColorAttributeName = defaultColorAttributeName.toString();
     if (!validatePolygonMesh(result)) return false;
     *mesh = std::move(result);
     return true;

@@ -1414,7 +1414,13 @@ depth domain. Visual depth comparison remains open.
   capture changed effect-delta MAE/RMSE only from 0.131194/0.388267 to
   0.131150/0.388183; threshold-2 mask IoU moved from 0.864322 to 0.864119.
   This confirms the source-aligned path runs but shows no material coverage
-  improvement. Blender reference:
+  improvement. A threshold sweep found that the residual XOR is concentrated
+  at the 2-versus-3 LSB boundary: at threshold 3, 2,400 of 2,418 classiCAD-only
+  pixels have effect deltas of 3 versus Blender's 2, while 1,448 of 1,450
+  Blender-only pixels have the reverse. The mask XOR falls from 3,868 pixels
+  at threshold 3 to 541 at threshold 8; shared-mask effect-delta MAE is
+  0.399/255, p95 1/255. This indicates a near-threshold output difference
+  rather than broad missing cavity coverage. Blender reference:
   [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L368-L405).
 - A further source comparison found that Blender's opaque G-buffer state uses
   `DRW_STATE_DEPTH_LESS_EQUAL` in

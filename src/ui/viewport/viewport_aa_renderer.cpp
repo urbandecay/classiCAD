@@ -10,7 +10,9 @@
 #include "viewport_cavity_blue_noise.h"
 
 #include <QDataStream>
+#include <QCryptographicHash>
 #include <QFile>
+#include <QFileInfo>
 #include <QIODevice>
 #include <QJsonDocument>
 #include <QOpenGLContext>
@@ -2421,7 +2423,8 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
                                 const ViewportShadingSettings &shading,
                                 int aaMode,
                                 qreal devicePixelRatio,
-                                const QByteArray &sceneContentStateKey)
+                                const QByteArray &sceneContentStateKey,
+                                std::optional<QVector3D> worldColorSceneLinear)
 {
     QByteArray key;
     QDataStream stream(&key, QIODevice::WriteOnly);
@@ -2434,7 +2437,10 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
            << optics.sensorWidthMillimeters
            << optics.opticalSensorSizeMillimeters
            << optics.focalLengthMillimeters << optics.clipStart << optics.clipEnd;
-    stream << sceneContentStateKey;
+    stream << sceneContentStateKey << worldColorSceneLinear.has_value();
+    if (worldColorSceneLinear) {
+        stream << *worldColorSceneLinear;
+    }
     const QMatrix4x4 viewProjection =
         viewportViewProjection(frame.camera, frame.viewportSize);
     for (int i = 0; i < 16; ++i) {
@@ -2460,43 +2466,76 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
            << shading.shadowOffset << shading.shadowFocus;
     stream << shading.colorTransform << shading.colorLutId
            << shading.colorExposure << shading.colorGamma;
-    // Only filled Workbench surfaces reach this pre-resolve scene image.
-    // Curve/point/dimension wires and selection/tool overlays are drawn after
-    // resolve; committed pictures are keyed separately by the caller.
+    // Only filled Workbench surfaces and polygon meshes reach this pre-resolve
+    // scene image. Curve/point/dimension wires and selection/tool overlays are
+    // drawn after resolve; committed pictures are keyed by the caller.
     const auto contributesToSceneResolve = [&shading](
         const ViewportRenderObject &object) {
         return shading.mode == ViewportShadingMode::Solid &&
                (object.shape.geometryType == GeometryType::NurbsSurface ||
-                object.shape.geometryType == GeometryType::NurbsSolid);
+                object.shape.geometryType == GeometryType::NurbsSolid ||
+                object.shape.geometryType == GeometryType::PolygonMesh);
     };
-    int sceneSurfaceCount = 0;
+    int sceneObjectCount = 0;
     for (const ViewportRenderObject &object : frame.objects) {
         if (contributesToSceneResolve(object)) {
-            ++sceneSurfaceCount;
+            ++sceneObjectCount;
         }
     }
-    stream << qint32(sceneSurfaceCount);
+    stream << qint32(sceneObjectCount);
+    const auto writeMaterial = [&stream](const WorkbenchMaterialData &material) {
+        const QFileInfo imageInfo(material.textureImagePath);
+        stream << material.baseColorSceneLinear << material.roughness
+               << material.metallic << material.alpha
+               << material.textureImagePath << material.textureImageSrgb
+               << imageInfo.exists() << imageInfo.size()
+               << imageInfo.lastModified().toMSecsSinceEpoch()
+               << material.textureImageAlphaMode
+               << material.textureImageInterpolation
+               << material.textureImageExtension
+               << QCryptographicHash::hash(
+                      material.textureImagePackedDataBase64.toLatin1(),
+                      QCryptographicHash::Sha256)
+               << qint32(material.textureImageTiles.size());
+        for (const DocumentImageTextureTile &tile :
+             material.textureImageTiles) {
+            const QFileInfo tileInfo(tile.filepath);
+            stream << qint32(tile.number) << tile.filepath
+                   << tile.sourceFileExists << tileInfo.exists()
+                   << tileInfo.size()
+                   << tileInfo.lastModified().toMSecsSinceEpoch()
+                   << QCryptographicHash::hash(
+                          tile.packedDataBase64.toLatin1(),
+                          QCryptographicHash::Sha256);
+        }
+    };
     for (const ViewportRenderObject &object : frame.objects) {
         if (!contributesToSceneResolve(object)) {
             continue;
         }
         stream << quint64(object.objectId.value())
+               << static_cast<quint8>(object.shape.geometryType)
                << quint64(object.geometryRevision)
                << object.selected << object.scalePreview << object.rotatePreview
-               << object.showInFront
+               << object.showInFront << object.outlineHandledBySceneStroke
+               << object.displayName << object.libraryPath << object.layerColor
                << object.placementTranslation.x
                << object.placementTranslation.y
                << object.placementTranslation.z
                << object.preparedGeometryOffset.x
                << object.preparedGeometryOffset.y
                << object.preparedGeometryOffset.z
+               << quint64(object.preparedGeometryRevision)
                << object.displayColorSceneLinear
-               << object.workbenchMaterial.baseColorSceneLinear
                << object.hasWorkbenchMaterial
-               << object.workbenchMaterial.roughness
-               << object.workbenchMaterial.metallic
-               << object.workbenchMaterial.alpha
-               << object.preparedGeometryRevision;
+               << qint32(object.meshMaterials.size());
+        for (const WorkbenchMaterialData &material : object.meshMaterials) {
+            writeMaterial(material);
+        }
+        writeMaterial(object.workbenchMaterial);
+        for (const double component : object.meshObjectTransform) {
+            stream << component;
+        }
         if (object.scalePreview || object.rotatePreview) {
             stream << QJsonDocument(shapeToJson(object.shape))
                           .toJson(QJsonDocument::Compact);

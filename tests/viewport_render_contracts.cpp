@@ -361,6 +361,80 @@ int main(int argc, char *argv[])
     passed &= check(!shading.xrayEnabled(),
                     "returning to wireframe must restore its X-Ray state");
 
+    ViewportRenderFrame aaHistoryFrame;
+    aaHistoryFrame.camera = ViewportTransform{};
+    aaHistoryFrame.viewportSize = QSize(160, 160);
+    ViewportRenderObject aaMeshObject;
+    aaMeshObject.objectId = ObjectId::fromValue(101);
+    aaMeshObject.shape.geometryType = GeometryType::PolygonMesh;
+    aaMeshObject.geometryRevision = 1;
+    aaMeshObject.meshMaterials.append(WorkbenchMaterialData{});
+    aaHistoryFrame.objects.append(aaMeshObject);
+    ViewportShadingSettings aaHistoryShading;
+    aaHistoryShading.mode = ViewportShadingMode::Solid;
+    aaHistoryShading.colorMode = ViewportColorMode::Texture;
+    const auto aaKey = [](const ViewportRenderFrame &frame,
+                          const ViewportShadingSettings &settings,
+                          std::optional<QVector3D> worldColor = std::nullopt) {
+        return viewportAaHistoryKey(frame, settings, 8, 1.0, {}, worldColor);
+    };
+    const QByteArray aaBaselineKey = aaKey(aaHistoryFrame, aaHistoryShading);
+    ViewportRenderFrame changedMeshHistoryFrame = aaHistoryFrame;
+    changedMeshHistoryFrame.objects[0].geometryRevision++;
+    const bool meshGeometryInvalidatesAa =
+        aaKey(changedMeshHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    changedMeshHistoryFrame = aaHistoryFrame;
+    changedMeshHistoryFrame.objects[0].selected = true;
+    const bool meshSelectionInvalidatesAa =
+        aaKey(changedMeshHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    changedMeshHistoryFrame = aaHistoryFrame;
+    changedMeshHistoryFrame.objects[0].showInFront = true;
+    const bool meshDepthModeInvalidatesAa =
+        aaKey(changedMeshHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    changedMeshHistoryFrame = aaHistoryFrame;
+    changedMeshHistoryFrame.objects[0].meshMaterials[0]
+        .baseColorSceneLinear = QVector3D(0.1f, 0.2f, 0.3f);
+    const bool meshMaterialInvalidatesAa =
+        aaKey(changedMeshHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    changedMeshHistoryFrame = aaHistoryFrame;
+    changedMeshHistoryFrame.objects[0].displayColorSceneLinear =
+        QVector4D(0.3f, 0.2f, 0.1f, 1.0f);
+    const bool meshColorInvalidatesAa =
+        aaKey(changedMeshHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    changedMeshHistoryFrame = aaHistoryFrame;
+    changedMeshHistoryFrame.objects[0].meshMaterials[0]
+        .textureImagePackedDataBase64 = QStringLiteral("changed packed image");
+    const bool meshTextureInvalidatesAa =
+        aaKey(changedMeshHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    changedMeshHistoryFrame = aaHistoryFrame;
+    changedMeshHistoryFrame.objects.append(aaMeshObject);
+    const bool meshAddRemoveInvalidatesAa =
+        aaKey(changedMeshHistoryFrame, aaHistoryShading) != aaBaselineKey;
+    ViewportRenderFrame aaSurfaceHistoryFrame = aaHistoryFrame;
+    aaSurfaceHistoryFrame.objects[0].shape.geometryType =
+        GeometryType::NurbsSurface;
+    aaSurfaceHistoryFrame.objects[0].workbenchMaterial
+        .textureImagePath = QStringLiteral("texture-a.png");
+    const QByteArray aaSurfaceTextureKey =
+        aaKey(aaSurfaceHistoryFrame, aaHistoryShading);
+    aaSurfaceHistoryFrame.objects[0].workbenchMaterial
+        .textureImagePath = QStringLiteral("texture-b.png");
+    const bool nurbsTextureInvalidatesAa =
+        aaKey(aaSurfaceHistoryFrame, aaHistoryShading) != aaSurfaceTextureKey;
+    const bool worldBackgroundInvalidatesAa =
+        aaKey(aaHistoryFrame, aaHistoryShading, QVector3D(0.1f, 0.2f, 0.3f)) !=
+        aaBaselineKey;
+    passed &= check(meshGeometryInvalidatesAa &&
+                        meshSelectionInvalidatesAa &&
+                        meshDepthModeInvalidatesAa &&
+                        meshMaterialInvalidatesAa &&
+                        meshColorInvalidatesAa &&
+                        meshTextureInvalidatesAa &&
+                        meshAddRemoveInvalidatesAa &&
+                        nurbsTextureInvalidatesAa &&
+                        worldBackgroundInvalidatesAa,
+                    "temporal AA history keys must change for mesh edits, selection, visibility mode, materials, textures, scene membership, and world color");
+
     NurbsSurface3D fillSurface;
     fillSurface.degreeU = 1;
     fillSurface.degreeV = 1;
@@ -625,6 +699,43 @@ int main(int argc, char *argv[])
                     ViewportSurfaceRenderer gpuSurfaceRenderer;
                     framebuffer.bind();
                     functions.glViewport(0, 0, glSize.width(), glSize.height());
+                    ViewportAaRenderer historyResetRenderer;
+                    historyResetRenderer.setMode(static_cast<int>(
+                        ViewportAntiAliasingMode::Samples5));
+                    historyResetRenderer.setDisplayTransform(gpuSolidShading,
+                                                             true);
+                    bool aaHistoryResetContract =
+                        historyResetRenderer.beginSceneSample(
+                            glSize, 1.0, gpuTransform, aaBaselineKey,
+                            false, true) &&
+                        historyResetRenderer.targets().sampleIndex == 0;
+                    const quint64 firstAaHistoryEpoch =
+                        historyResetRenderer.targets().historyEpoch;
+                    if (aaHistoryResetContract) {
+                        historyResetRenderer.finishSceneSample();
+                        aaHistoryResetContract =
+                            historyResetRenderer.beginSceneSample(
+                                glSize, 1.0, gpuTransform, aaBaselineKey,
+                                false, true) &&
+                            historyResetRenderer.targets().sampleIndex == 1;
+                    }
+                    if (aaHistoryResetContract) {
+                        historyResetRenderer.finishSceneSample();
+                        aaHistoryResetContract =
+                            historyResetRenderer.beginSceneSample(
+                                glSize, 1.0, gpuTransform,
+                                aaKey(changedMeshHistoryFrame,
+                                      aaHistoryShading),
+                                false, true) &&
+                            historyResetRenderer.targets().sampleIndex == 0 &&
+                            historyResetRenderer.targets().historyEpoch >
+                                firstAaHistoryEpoch;
+                        if (historyResetRenderer.sceneSampleActive()) {
+                            historyResetRenderer.finishSceneSample();
+                        }
+                    }
+                    passed &= check(aaHistoryResetContract,
+                                    "changing a visible mesh input must restart temporal AA accumulation at sample zero");
                     functions.glClearColor(34.0f / 255.0f,
                                            34.0f / 255.0f,
                                            34.0f / 255.0f,

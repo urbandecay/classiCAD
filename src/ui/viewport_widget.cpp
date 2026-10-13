@@ -11011,10 +11011,25 @@ protected:
                                      << QJsonDocument(shapeToJson(preview.frame))
                                             .toJson(QJsonDocument::Compact);
                 }
+                int componentTintSuppressionCount = 0;
+                for (const ViewportRenderObject &object : renderFrame.objects) {
+                    if (object.selected &&
+                        !componentSelectionForObject(object.objectId).isEmpty()) {
+                        ++componentTintSuppressionCount;
+                    }
+                }
+                sceneStateStream << qint32(componentTintSuppressionCount);
+                for (const ViewportRenderObject &object : renderFrame.objects) {
+                    if (object.selected &&
+                        !componentSelectionForObject(object.objectId).isEmpty()) {
+                        sceneStateStream << quint64(object.objectId.value());
+                    }
+                }
 
                 const QByteArray historyKey = viewportAaHistoryKey(
                     renderFrame, renderShadingSettings, viewportAaMode_,
-                    devicePixelRatioF(), sceneContentStateKey);
+                    devicePixelRatioF(), sceneContentStateKey,
+                    viewportWorldColorSceneLinear);
                 aaRenderer->setDepthOfField(
                     viewportShadingSettings_.depthOfField &&
                         !viewportShadingSettings_.xrayEnabled(),

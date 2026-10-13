@@ -16,6 +16,7 @@
 #include <QString>
 
 #include <array>
+#include <optional>
 
 namespace classiCAD {
 
@@ -147,6 +148,8 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
                                 const ViewportShadingSettings &shading,
                                 int aaMode,
                                 qreal devicePixelRatio,
-                                const QByteArray &sceneContentStateKey = {});
+                                const QByteArray &sceneContentStateKey = {},
+                                std::optional<QVector3D> worldColorSceneLinear =
+                                    std::nullopt);
 
 } // namespace classiCAD

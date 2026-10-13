@@ -839,11 +839,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
         const QVector<QVector3D> &vertices = geometry->surfaceVertices;
         const QVector<QVector3D> &normals = geometry->surfaceNormals;
-        // Surface tessellation carries normalized parameter UVs for the
-        // trimmed triangles as well, so alpha cutouts must participate in
-        // the CPU cavity/outline coverage on trimmed and untrimmed faces.
+        // Surface tessellation carries normalized parameter UVs for trimmed
+        // triangles and every derived NurbsSolid face, so alpha cutouts must
+        // participate in CPU cavity/outline coverage for both geometry types.
         if (settings.colorMode == ViewportColorMode::Texture &&
-            object.shape.geometryType == GeometryType::NurbsSurface &&
+            (object.shape.geometryType == GeometryType::NurbsSurface ||
+             object.shape.geometryType == GeometryType::NurbsSolid) &&
             geometry->surfaceTextureCoordinates.size() == vertices.size() &&
             (!object.workbenchMaterial.textureImageTiles.isEmpty() ||
              !object.workbenchMaterial.textureImagePath.isEmpty() ||

@@ -1138,7 +1138,7 @@ int main(int argc, char *argv[])
                     // color, outline-ID alpha, and the no-stencil map path.
                     QImage transparentTexture(2, 2,
                                               QImage::Format_RGBA8888);
-                    transparentTexture.fill(QColor(255, 255, 255, 0));
+                    transparentTexture.fill(QColor(255, 20, 10, 0));
                     QByteArray packedTextureBytes;
                     QBuffer packedTextureBuffer(&packedTextureBytes);
                     const bool packedTextureReady =
@@ -1183,6 +1183,64 @@ int main(int argc, char *argv[])
                     ViewportRenderObject ignoredAlphaCaster = alphaCaster;
                     ignoredAlphaCaster.workbenchMaterial.textureImageAlphaMode =
                         QStringLiteral("NONE");
+
+                    const auto renderCpuSolidAlphaScene = [&] (
+                        const QVector<ViewportRenderObject> &objects) {
+                        QImage image(surfaceViewportSize,
+                                     QImage::Format_ARGB32_Premultiplied);
+                        image.fill(Qt::transparent);
+                        ViewportShadingSettings settings;
+                        settings.mode = ViewportShadingMode::Solid;
+                        settings.lightingMode = ViewportLightingMode::Flat;
+                        settings.colorMode = ViewportColorMode::Texture;
+                        settings.outline = true;
+                        settings.specularLighting = false;
+                        const bool composed =
+                            compositeRasterWorkbenchSurfaces(
+                                &image, objects, surfaceTransform,
+                                surfaceViewportSize, 1.0, false,
+                                [&](QPainter &painter,
+                                    const ViewportRenderObject &object) {
+                                    surfaceRenderer.setShadingSettings(settings);
+                                    surfaceRenderer.drawShape(
+                                        painter, object.shape,
+                                        surfaceViewportSize, false,
+                                        object.selected, true,
+                                        object.layerColor,
+                                        object.layerLineType,
+                                        object.layerLineWeightMm,
+                                        object.objectId,
+                                        object.geometryRevision,
+                                        object.preparedDepthGeometry.data(),
+                                        object.preparedGeometryOffset,
+                                        object.displayColorSceneLinear,
+                                        object.workbenchMaterial,
+                                        object.displayName,
+                                        object.libraryPath,
+                                        object.meshObjectTransform,
+                                        object.meshMaterials);
+                                });
+                        if (!composed) return QImage{};
+                        applyRasterWorkbenchEffects(
+                            &image, objects, surfaceTransform,
+                            surfaceViewportSize, 1.0, settings);
+                        return image;
+                    };
+                    const QImage cpuSolidAlphaReceiverOnly =
+                        renderCpuSolidAlphaScene({alphaReceiver});
+                    const QImage cpuSolidAlphaCutout =
+                        renderCpuSolidAlphaScene({alphaReceiver, alphaCaster});
+                    const QImage cpuSolidAlphaIgnored =
+                        renderCpuSolidAlphaScene(
+                            {alphaReceiver, ignoredAlphaCaster});
+                    passed &= check(!cpuSolidAlphaReceiverOnly.isNull(),
+                                    "QPainter NurbsSolid alpha baseline must render");
+                    passed &= check(
+                        cpuSolidAlphaCutout == cpuSolidAlphaReceiverOnly,
+                        "QPainter NurbsSolid alpha cutout must match receiver-only color and outline");
+                    passed &= check(
+                        cpuSolidAlphaIgnored != cpuSolidAlphaReceiverOnly,
+                        "QPainter NurbsSolid NONE alpha mode must bypass the cutout");
 
                     QOpenGLFramebufferObjectFormat depthOnlyFormat;
                     depthOnlyFormat.setAttachment(

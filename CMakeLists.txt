@@ -366,6 +366,7 @@ if (CLASSICAD_BUILD_TESTS)
                        tests/viewport_event_precedence.cpp
                        tests/viewport_render_contracts.cpp
                        tests/workbench_render_pass_capture.cpp
+                       tests/workbench_raster_fragment_contracts.cpp
                        tests/viewport_interaction.cpp
                        tests/vignola_file.cpp)
     source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -494,6 +495,27 @@ if (CLASSICAD_BUILD_TESTS)
         classicad_workbench_scene_linear_resolve_contracts_test)
     add_test(NAME workbench_scene_linear_resolve_contracts
         COMMAND classicad_workbench_scene_linear_resolve_contracts_test)
+
+    add_executable(classicad_workbench_raster_fragment_contracts_test
+        tests/workbench_raster_fragment_contracts.cpp
+    )
+    classicad_configure_ui_target(
+        classicad_workbench_raster_fragment_contracts_test)
+    classicad_attach_object_modules(
+        classicad_workbench_raster_fragment_contracts_test
+        classicad_geometry_objects
+        classicad_document_objects
+        classicad_command_objects
+        classicad_serialization_objects
+        classicad_service_objects
+        classicad_tool_objects
+        classicad_viewport_shared_objects
+        classicad_viewport_support_objects
+    )
+    add_test(NAME workbench_raster_fragment_contracts
+        COMMAND classicad_workbench_raster_fragment_contracts_test)
+    set_tests_properties(workbench_raster_fragment_contracts PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
     add_executable(classicad_workbench_render_pass_capture_test
         tests/workbench_render_pass_capture.cpp

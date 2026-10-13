@@ -176,9 +176,9 @@ src/ui/viewport/shaders/blender_grid.* adapted Blender grid vertex/fragment shad
 src/ui/viewport/shaders/scene_depth.*     depth-only scene geometry shader pair
 src/ui/viewport/shaders/scene_stroke.*    antialiased GPU scene stroke shader set
 src/ui/viewport/shaders/scene_point.*     antialiased GPU point marker shader pair
-src/ui/viewport/viewport_renderer.* committed-geometry projection, CPU grid fallback, axes, control-point, and subdivision drawing
+src/ui/viewport/viewport_renderer.* committed-geometry projection, CPU grid fallback, axes, control-point, subdivision drawing, and optional observational scene-linear surface-fragment collection
 src/ui/viewport/viewport_raster_workbench_effects.* CPU fallback depth, surface composition, outline, cavity, and depth-of-field effects
-src/ui/viewport/viewport_raster_workbench_linear.* premultiplied float scene-linear pixels and depth-ordered source-over fragment resolve for the QPainter Workbench path
+src/ui/viewport/viewport_raster_workbench_linear.* scene-linear RGBA pixels/fragments, observational CPU surface raster sink, and depth-ordered source-over fragment resolve for the QPainter Workbench path
 src/ui/viewport/viewport_overlay.*  snap-marker/tool-preview coordination, generic selection box, and control-point/subdivision delegation
 src/ui/main_window.*               menus, panel composition, setting application, and window wiring
 cmake/ClassicadTargets.cmake       shared target configuration, unused Qt codegen exclusion, and object-module assembly
@@ -188,6 +188,7 @@ tests/trim_seam.cpp                geometry, query, tool, command, selection-box
 tests/core_contracts.cpp            vocabulary, ID, NURBS, session, camera, and orbit-math compatibility coverage
 tests/solid_extrusion_contracts.cpp exact cap/wall boundaries, transforms, face caches, rendering, persistence, mixed Extrude and Undo
 tests/viewport_render_contracts.cpp layer-line patterns and committed GPU stroke-style contract coverage
+tests/workbench_raster_fragment_contracts.cpp observational CPU PolygonMesh/NURBS scene-linear fragment capture and unchanged-QPainter-output contracts
 tests/viewport_interaction.cpp      viewport mouse/wheel and GPU/fallback interaction coverage
 ```
 

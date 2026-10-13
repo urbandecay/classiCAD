@@ -8,6 +8,7 @@
 #include "services/viewport/viewport_transform.h"
 #include "blender_grid_appearance.h"
 #include "viewport_shading.h"
+#include "viewport_raster_workbench_linear.h"
 
 #include <QPainter>
 #include <QColor>
@@ -51,7 +52,8 @@ public:
                    const QString &libraryPath = QString(),
                    const MeshObjectTransform &meshTransform =
                        identityMeshObjectTransform,
-                   const QVector<WorkbenchMaterialData> &meshMaterials = {}) const;
+                   const QVector<WorkbenchMaterialData> &meshMaterials = {},
+                   RasterWorkbenchFragmentSink *fragmentSink = nullptr) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,
@@ -76,7 +78,8 @@ public:
                           std::optional<WorkbenchMaterialData> workbenchMaterial =
                               std::nullopt,
                           const QString &displayName = QString(),
-                          const QString &libraryPath = QString()) const;
+                          const QString &libraryPath = QString(),
+                          RasterWorkbenchFragmentSink *fragmentSink = nullptr) const;
     void drawControlPoints(QPainter &painter,
                            const Shape &shape,
                            const QSize &viewportSize,

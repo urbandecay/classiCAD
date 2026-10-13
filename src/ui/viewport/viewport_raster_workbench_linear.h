@@ -3,6 +3,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <vector>
 
 namespace classiCAD {
@@ -23,12 +24,21 @@ struct RasterWorkbenchLinearPixel {
 // farther from the camera; fragments at a pixel resolve far-to-near. Equal
 // depths retain their input order.
 struct RasterWorkbenchLinearFragment {
+    // Physical target-pixel coordinates (not logical Qt coordinates).
     int x = 0;
     int y = 0;
+    // Signed camera-forward depth: -dot(worldPosition - cameraPosition,
+    // viewDirection), matching rasterWorkbenchCameraDepth; larger is nearer.
     float cameraDepth = 0.0f;
     std::array<float, 3> sceneLinearRgb{};
     float alpha = 1.0f;
+    std::uint64_t sourceId = 0;
 };
+
+// Optional observation target used by CPU surface rasterization. Collected
+// fragments are diagnostic inputs only; the QPainter display path is unchanged.
+using RasterWorkbenchFragmentSink =
+    std::vector<RasterWorkbenchLinearFragment>;
 
 // Resolve depth-sorted fragments over a premultiplied scene-linear base.
 // Invalid dimensions, pixels, alpha values, or non-finite inputs fail without

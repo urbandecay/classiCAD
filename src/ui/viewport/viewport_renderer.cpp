@@ -565,6 +565,34 @@ void appendOrthographicGridLine(const ViewportTransform &transform,
 
 } // namespace
 
+namespace {
+
+void observeWorkbenchFragment(
+    RasterWorkbenchFragmentSink *sink, const QPainter &painter,
+    const QPointF &logicalPixelCenter, const Point3D &worldPosition,
+    const Point3D &cameraPosition, const Point3D &viewDirection,
+    const QVector3D &sceneLinearRgb, qreal alpha, ObjectId sourceId)
+{
+    if (sink == nullptr) return;
+    const QPointF devicePixel = painter.deviceTransform().map(logicalPixelCenter);
+    const qreal depth = -((worldPosition.x - cameraPosition.x) * viewDirection.x +
+                          (worldPosition.y - cameraPosition.y) * viewDirection.y +
+                          (worldPosition.z - cameraPosition.z) * viewDirection.z);
+    if (!std::isfinite(devicePixel.x()) || !std::isfinite(devicePixel.y()) ||
+        !std::isfinite(depth) || !std::isfinite(sceneLinearRgb.x()) ||
+        !std::isfinite(sceneLinearRgb.y()) || !std::isfinite(sceneLinearRgb.z()) ||
+        !std::isfinite(alpha)) {
+        return;
+    }
+    sink->push_back({qFloor(devicePixel.x()), qFloor(devicePixel.y()),
+                     static_cast<float>(depth),
+                     {sceneLinearRgb.x(), sceneLinearRgb.y(), sceneLinearRgb.z()},
+                     static_cast<float>(std::clamp<qreal>(alpha, 0.0, 1.0)),
+                     sourceId.value()});
+}
+
+} // namespace
+
 ViewportRenderer::ViewportRenderer(const ViewportTransform &transform,
                                    const CurveHitTester &curveHitTester,
                                    const SurfaceTessellationCache *surfaceTessellationCache)
@@ -1130,7 +1158,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  const QString &displayName,
                                  const QString &libraryPath,
                                  const MeshObjectTransform &meshTransform,
-                                 const QVector<WorkbenchMaterialData> &meshMaterials) const
+                                 const QVector<WorkbenchMaterialData> &meshMaterials,
+                                 RasterWorkbenchFragmentSink *fragmentSink) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -1905,6 +1934,23 @@ void ViewportRenderer::drawShape(QPainter &painter,
                             normalView, incidentView,
                             shadingSettings_.specularLighting);
                     }
+                    if (fragmentSink != nullptr) {
+                        const Point3D &point0 = triangle.worldPoints[0];
+                        const Point3D &point1 = triangle.worldPoints[1];
+                        const Point3D &point2 = triangle.worldPoints[2];
+                        const Point3D fragmentPosition{
+                            (point0.x * p0 + point1.x * p1 + point2.x * p2) /
+                                denominator,
+                            (point0.y * p0 + point1.y * p1 + point2.y * p2) /
+                                denominator,
+                            (point0.z * p0 + point1.z * p1 + point2.z * p2) /
+                                denominator};
+                        observeWorkbenchFragment(
+                            fragmentSink, painter, QPointF(px, py),
+                            fragmentPosition, meshCameraPosition,
+                            meshViewDirection, shadedLinear, pixelAlpha,
+                            shapeObjectId);
+                    }
                     const QVector3D displayColor =
                         workbenchSceneLinearToDisplaySrgb(
                             shadedLinear, shadingSettings_.colorTransform,
@@ -2064,7 +2110,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                              shapeObjectId, geometryRevision, preparedGeometry,
                              preparedOffset, preview, selected, false,
                              layerColor, displayColorSceneLinear,
-                             workbenchMaterial, displayName, libraryPath);
+                             workbenchMaterial, displayName, libraryPath,
+                             fragmentSink);
         } else {
             for (int index = 0; index < faces.size(); ++index)
                 drawNurbsSurface(painter, faces[index], viewportSize,
@@ -2073,7 +2120,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  nurbsSolidFaceReversed(shape.nurbsSolid,
                                                         index),
                                  layerColor, displayColorSceneLinear,
-                                 workbenchMaterial, displayName, libraryPath);
+                                 workbenchMaterial, displayName, libraryPath,
+                                 fragmentSink);
         }
         return;
     }
@@ -2085,7 +2133,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                          preview ? 0 : geometryRevision,
                          preparedGeometry, preparedOffset, preview, selected,
                          false, layerColor, displayColorSceneLinear,
-                         workbenchMaterial, displayName, libraryPath);
+                         workbenchMaterial, displayName, libraryPath,
+                         fragmentSink);
         return;
     }
 
@@ -2654,7 +2703,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                         std::optional<WorkbenchMaterialData>
                                             workbenchMaterial,
                                         const QString &displayName,
-                                        const QString &libraryPath) const
+                                        const QString &libraryPath,
+                                        RasterWorkbenchFragmentSink *fragmentSink) const
 {
     Q_UNUSED(selected);
     if (shadingSettings_.mode == ViewportShadingMode::Solid) {
@@ -2910,7 +2960,8 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
         const auto shade = [&](const QVector3D &sourceNormal,
                                const Point3D &sourcePosition,
                                const QVector3D &surfaceBaseColor,
-                               bool frontFacing) {
+                               bool frontFacing,
+                               QVector3D *resolvedSceneLinear = nullptr) {
             QVector3D normalWorld = workbenchNormalize(
                 reverseOrientation && preparedGeometry == nullptr
                     ? -sourceNormal
@@ -2961,6 +3012,9 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                     shadingSettings_.matcapPreset, surfaceBaseColor,
                     normalView, incidentView,
                     shadingSettings_.specularLighting);
+            }
+            if (resolvedSceneLinear != nullptr) {
+                *resolvedSceneLinear = shadedLinear;
             }
             const QVector3D shaded = workbenchSceneLinearToDisplaySrgb(
                 shadedLinear, shadingSettings_.colorTransform,
@@ -3094,10 +3148,28 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                                 (points[0].y * cw0 + points[1].y * cw1 + points[2].y * cw2) / denominator,
                                 (points[0].z * cw0 + points[1].z * cw1 + points[2].z * cw2) / denominator};
                         }
+                        QVector3D sampleLinear;
                         const QColor sample = shade(triangle.normal,
                                                     shadingPosition,
                                                     baseColorVector,
-                                                    frontFacing);
+                                                    frontFacing,
+                                                    &sampleLinear);
+                        if (fragmentSink != nullptr) {
+                            const Point3D fragmentPosition{
+                                (points[0].x * cw0 + points[1].x * cw1 +
+                                 points[2].x * cw2) / denominator +
+                                    preparedOffset.x,
+                                (points[0].y * cw0 + points[1].y * cw1 +
+                                 points[2].y * cw2) / denominator +
+                                    preparedOffset.y,
+                                (points[0].z * cw0 + points[1].z * cw1 +
+                                 points[2].z * cw2) / denominator +
+                                    preparedOffset.z};
+                            observeWorkbenchFragment(
+                                fragmentSink, painter, QPointF(px, py),
+                                fragmentPosition, cameraPosition, viewDirection,
+                                sampleLinear, sample.alphaF(), objectId);
+                        }
                         row[x] = qPremultiply(qRgba(sample.red(), sample.green(),
                                                     sample.blue(), sample.alpha()));
                     }
@@ -3186,10 +3258,28 @@ void ViewportRenderer::drawNurbsSurface(QPainter &painter,
                             (points[0].z * cw0 + points[1].z * cw1 +
                              points[2].z * cw2) / denominator};
                     }
+                    QVector3D texturedLinear;
                     const QColor textured = shade(triangle.normal,
                                                   shadingPosition,
                                                   textureColor,
-                                                  frontFacing);
+                                                  frontFacing,
+                                                  &texturedLinear);
+                    if (fragmentSink != nullptr) {
+                        const Point3D fragmentPosition{
+                            (points[0].x * cw0 + points[1].x * cw1 +
+                             points[2].x * cw2) / denominator +
+                                preparedOffset.x,
+                            (points[0].y * cw0 + points[1].y * cw1 +
+                             points[2].y * cw2) / denominator +
+                                preparedOffset.y,
+                            (points[0].z * cw0 + points[1].z * cw1 +
+                             points[2].z * cw2) / denominator +
+                                preparedOffset.z};
+                        observeWorkbenchFragment(
+                            fragmentSink, painter, QPointF(px, py),
+                            fragmentPosition, cameraPosition, viewDirection,
+                            texturedLinear, alpha, objectId);
+                    }
                     const int red = textured.red();
                     const int green = textured.green();
                     const int blue = textured.blue();

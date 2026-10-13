@@ -841,6 +841,41 @@ Relevant classiCAD files include:
 
 QPainter Texture raster pixels now decode sRGB images into scene-linear RGB, multiply by the material base color, apply Studio or MatCap shading, then apply exposure and the configured display transform. Existing alpha-mode handling, premultiplication correction, and texture cutout thresholds are unchanged. For perspective polygon meshes, the fallback computes the incident view direction and normal per raster pixel using perspective-correct interpolation. Orthographic samples use barycentric normal interpolation with a constant incident direction. Imported corner normals are transformed by the world inverse transpose; the triangle's flat geometric normal remains the fallback when corner data is absent or invalid. Textured NURBS samples retain per-pixel material lighting; untextured tessellation triangles now also shade per pixel, using the flat triangle normal and perspective-correct sample position. Orthographic incident direction remains constant. Large untextured triangles retain the prior center-shaded polygon fallback above the 4M-pixel raster cap.
 
+### QPainter in-front transparency composition (2026-10-13)
+
+- The QPainter surface compositor keeps regular and `showInFront` geometry in
+  independent opaque depth/color buffers and transparent fragment lists.
+  Weighted transparency resolves regular scene content first, then in-front
+  opaque color and a separate in-front transparent resolve. Composition stays
+  scene-linear through both domains and applies the display transform once.
+- The sorted CPU fallback composes in the same order: regular opaque, regular
+  transparent, in-front opaque, then in-front transparent. Each domain tests
+  its transparent fragments against its own opaque depth. Retained cavity
+  layers contain the composed opaque receiver and ordered transparent overlay.
+- The QPainter cavity/outline sample raster also resolves separate regular
+  and in-front samples, choosing nearest depth within each domain before
+  allowing in-front coverage to replace the regular sample. This keeps effect
+  IDs and cavity receivers aligned with the final in-front color composition.
+- Weighted QPainter composition computes separate cavity factor maps from
+  regular opaque and in-front opaque samples, then applies each map only to
+  its matching scene-linear opaque buffer. Outline and DOF continue to use the
+  single composed visible sample view.
+- Contracts cover an in-front opaque quad overriding a regular opaque quad,
+  in-front transparency over regular opaque and transparent surfaces, and the
+  sorted fallback ordering where regular transparency lies geometrically in
+  front of the regular opaque surface but behind an in-front opaque surface.
+  A nested-surface outline contract verifies that effect sample selection
+  exposes the in-front object's boundary despite its farther world depth.
+- Blender 5.2.2 Workbench draws its in-front G-buffer before the regular
+  G-buffer in [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1114-L1239).
+  Its transparent pass resolves regular OIT against `depth_tx`, then performs
+  another OIT resolve against `depth_in_front_tx` into the same scene color
+  target ([pass setup and draw](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1311-L1414)).
+- Limitation: QPainter still approximates transparency in software and uses
+  tessellated depth coverage. The domain ordering and cavity factor ownership
+  match Workbench, while rasterization and per-fragment OIT weights are not
+  pixel-identical to the GPU path.
+
 ## Blender behavior to reproduce
 
 ### Findings from the original Solid viewport comparison

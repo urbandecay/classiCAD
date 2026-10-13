@@ -394,6 +394,45 @@ int main(int argc, char *argv[])
             outlineScaleDpr2.pixelColor(62, 128).red() > 40,
         "QPainter outlines must sample cardinal object IDs at the integer Blender UI footprint");
 
+    ViewportRenderObject inFrontOutlineObject = makeOutlineScaleObject();
+    inFrontOutlineObject.objectId = ObjectId::fromValue(72);
+    inFrontOutlineObject.showInFront = true;
+    auto inFrontOutlineGeometry =
+        QSharedPointer<ViewportDepthGeometry>::create();
+    const auto outlineWorldAt = [&](qreal x, qreal y) {
+        QPointF local;
+        orthographicDofTransform.screenToWorkPlaneUnclipped(
+            QPointF(x, y), orthographicDofSize, WorkPlane::XY, 0.0, &local);
+        return QVector3D(float(local.x()), float(local.y()),
+                         float(orthographicDofTarget.z - 0.5));
+    };
+    const QVector3D inFrontA = outlineWorldAt(48.0, 48.0);
+    const QVector3D inFrontB = outlineWorldAt(80.0, 48.0);
+    const QVector3D inFrontC = outlineWorldAt(80.0, 80.0);
+    const QVector3D inFrontD = outlineWorldAt(48.0, 80.0);
+    inFrontOutlineGeometry->surfaceVertices = {
+        inFrontA, inFrontC, inFrontB, inFrontA, inFrontD, inFrontC};
+    inFrontOutlineGeometry->surfaceNormals =
+        QVector<QVector3D>(6, QVector3D(0.0f, 0.0f, 1.0f));
+    inFrontOutlineObject.preparedDepthGeometry = inFrontOutlineGeometry;
+    QImage regularOutlineImage(orthographicDofSize,
+                               QImage::Format_ARGB32_Premultiplied);
+    regularOutlineImage.fill(Qt::black);
+    applyRasterWorkbenchEffects(
+        &regularOutlineImage, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, outlineScaleSettings);
+    QImage inFrontOutlineImage(orthographicDofSize,
+                               QImage::Format_ARGB32_Premultiplied);
+    inFrontOutlineImage.fill(Qt::black);
+    applyRasterWorkbenchEffects(
+        &inFrontOutlineImage, {outlineScaleObject, inFrontOutlineObject},
+        orthographicDofTransform, orthographicDofSize, 1.0,
+        outlineScaleSettings);
+    passed &= check(
+        regularOutlineImage.pixelColor(47, 64) == QColor(Qt::black) &&
+            inFrontOutlineImage.pixelColor(47, 64).red() > 20,
+        "QPainter effect ID selection must let an in-front surface define the outline boundary even when regular geometry is geometrically nearer");
+
     ViewportShadingSettings cavityOnlySettings = outlineScaleSettings;
     cavityOnlySettings.outline = false;
     cavityOnlySettings.cavity = true;
@@ -427,6 +466,42 @@ int main(int argc, char *argv[])
     }
     passed &= check(cavityChanged && outlineVisibleOverCavity,
         "QPainter applies cavity before the object outline so the outline remains visible over cavity-shaded surfaces");
+
+    std::vector<float> regularDomainCavityFactors;
+    std::vector<float> inFrontDomainCavityFactors;
+    QImage regularFactorProbe(orthographicDofSize,
+                              QImage::Format_ARGB32_Premultiplied);
+    regularFactorProbe.fill(Qt::white);
+    QImage inFrontFactorProbe(orthographicDofSize,
+                              QImage::Format_ARGB32_Premultiplied);
+    inFrontFactorProbe.fill(Qt::white);
+    applyRasterWorkbenchEffects(
+        &regularFactorProbe, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, cavityOnlySettings, nullptr,
+        &regularDomainCavityFactors);
+    applyRasterWorkbenchEffects(
+        &inFrontFactorProbe, {inFrontOutlineObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, cavityOnlySettings, nullptr,
+        &inFrontDomainCavityFactors);
+    bool distinctDomainFactors = false;
+    if (regularDomainCavityFactors.size() ==
+            inFrontDomainCavityFactors.size()) {
+        for (std::size_t index = 0;
+             index < regularDomainCavityFactors.size(); ++index) {
+            if (std::abs(regularDomainCavityFactors[index] -
+                         inFrontDomainCavityFactors[index]) > 1.0e-5f) {
+                distinctDomainFactors = true;
+                break;
+            }
+        }
+    }
+    passed &= check(
+        regularDomainCavityFactors.size() ==
+                static_cast<std::size_t>(orthographicDofSize.width() *
+                                         orthographicDofSize.height()) &&
+            inFrontDomainCavityFactors.size() ==
+                regularDomainCavityFactors.size() && distinctDomainFactors,
+        "QPainter regular and in-front opaque geometry must produce independent cavity factor maps");
 
     // Keep the transparency fixture independent of an OpenGL context so it
     // can be captured and compared in the offscreen contract run.
@@ -637,6 +712,99 @@ int main(int argc, char *argv[])
                             depthOrderedImage.pixelColor(460, 200) == frontOnly &&
                             depthOrderedImage.pixelColor(320, 240) == overlap,
                         "weighted QPainter transparency must preserve pixels when object iteration order is reversed");
+
+        ViewportRenderObject regularOpaque = objects[0];
+        regularOpaque.workbenchMaterial.alpha = 1.0f;
+        regularOpaque.meshMaterials = {regularOpaque.workbenchMaterial};
+        ViewportRenderObject inFrontOpaque = objects[1];
+        inFrontOpaque.workbenchMaterial.alpha = 1.0f;
+        inFrontOpaque.meshMaterials = {inFrontOpaque.workbenchMaterial};
+        inFrontOpaque.showInFront = true;
+        inFrontOpaque.preparedGeometryOffset.z = -0.35;
+        QImage opaqueDomainImage(size, QImage::Format_ARGB32_Premultiplied);
+        opaqueDomainImage.fill(Qt::transparent);
+        QImage isolatedInFrontOpaqueImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        isolatedInFrontOpaqueImage.fill(Qt::transparent);
+        const bool opaqueDomainRendered = compositeRasterWorkbenchSurfaces(
+            &opaqueDomainImage, {regularOpaque, inFrontOpaque}, transform,
+            size, 1.0, false, true, shading, backgroundLinear, drawObject);
+        const bool isolatedInFrontOpaqueRendered =
+            compositeRasterWorkbenchSurfaces(
+                &isolatedInFrontOpaqueImage, {inFrontOpaque}, transform,
+                size, 1.0, false, true, shading, backgroundLinear, drawObject);
+
+        ViewportRenderObject regularTransparent = objects[1];
+        regularTransparent.preparedGeometryOffset.z = 0.35;
+        ViewportRenderObject inFrontTransparent = objects[0];
+        inFrontTransparent.showInFront = true;
+        inFrontTransparent.preparedGeometryOffset.z = -0.35;
+        inFrontTransparent.workbenchMaterial.alpha = 0.5f;
+        inFrontTransparent.workbenchMaterial.baseColorSceneLinear =
+            QVector3D(0.1f, 0.9f, 0.2f);
+        inFrontTransparent.meshMaterials = {inFrontTransparent.workbenchMaterial};
+        QImage regularOnlyTransparencyImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        regularOnlyTransparencyImage.fill(Qt::transparent);
+        QImage inFrontTransparencyImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        inFrontTransparencyImage.fill(Qt::transparent);
+        const bool regularOnlyTransparencyRendered =
+            compositeRasterWorkbenchSurfaces(
+                &regularOnlyTransparencyImage,
+                {regularOpaque, regularTransparent}, transform, size, 1.0,
+                false, true, shading, backgroundLinear, drawObject);
+        const bool inFrontTransparencyRendered =
+            compositeRasterWorkbenchSurfaces(
+                &inFrontTransparencyImage,
+                {regularOpaque, regularTransparent, inFrontTransparent},
+                transform, size, 1.0, false, true, shading, backgroundLinear,
+                drawObject);
+        QImage sortedDomainImage(size, QImage::Format_ARGB32_Premultiplied);
+        sortedDomainImage.fill(Qt::transparent);
+        QImage sortedFrontOpaqueImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        sortedFrontOpaqueImage.fill(Qt::transparent);
+        QImage sortedFrontTransparencyImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        sortedFrontTransparencyImage.fill(Qt::transparent);
+        const bool sortedDomainRendered = compositeRasterWorkbenchSurfaces(
+            &sortedDomainImage,
+            {regularOpaque, regularTransparent, inFrontOpaque}, transform,
+            size, 1.0, false, false, shading, backgroundLinear, drawObject);
+        const bool sortedFrontOpaqueRendered =
+            compositeRasterWorkbenchSurfaces(
+                &sortedFrontOpaqueImage, {inFrontOpaque}, transform, size,
+                1.0, false, false, shading, backgroundLinear, drawObject);
+        inFrontTransparent.preparedGeometryOffset.z = 0.0;
+        const bool sortedFrontTransparencyRendered =
+            compositeRasterWorkbenchSurfaces(
+                &sortedFrontTransparencyImage,
+                {regularOpaque, regularTransparent, inFrontOpaque,
+                 inFrontTransparent},
+                transform, size, 1.0, false, false, shading,
+                backgroundLinear, drawObject);
+        passed &= check(
+            opaqueDomainRendered && isolatedInFrontOpaqueRendered &&
+                regularOnlyTransparencyRendered &&
+                inFrontTransparencyRendered &&
+                opaqueDomainImage.pixelColor(320, 240) ==
+                    isolatedInFrontOpaqueImage.pixelColor(320, 240) &&
+                inFrontTransparencyImage.pixelColor(320, 240) !=
+                    regularOnlyTransparencyImage.pixelColor(320, 240) &&
+                inFrontTransparencyImage.pixelColor(320, 240).green() >
+                    inFrontTransparencyImage.pixelColor(320, 240).red() &&
+                inFrontTransparencyImage.pixelColor(320, 240).alpha() > 0 &&
+                sortedDomainRendered && sortedFrontOpaqueRendered &&
+                sortedFrontTransparencyRendered &&
+                sortedDomainImage.pixelColor(320, 240) ==
+                    sortedFrontOpaqueImage.pixelColor(320, 240) &&
+                sortedFrontTransparencyImage.pixelColor(320, 240) !=
+                    sortedFrontOpaqueImage.pixelColor(320, 240) &&
+                sortedFrontTransparencyImage.pixelColor(320, 240).green() >
+                    sortedFrontTransparencyImage.pixelColor(320, 240).red() &&
+                sortedFrontTransparencyImage.pixelColor(320, 240).alpha() > 0,
+            "QPainter showInFront must use separate depth domains and compose regular transparent, front opaque, then front transparent in both resolvers");
 
         ViewportRenderObject halfAlphaObject = objects[0];
         halfAlphaObject.workbenchMaterial.alpha = 0.5f;

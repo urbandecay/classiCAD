@@ -1301,6 +1301,12 @@ depth domain. Visual depth comparison remains open.
   face tessellation/ownership as the source of most of that discrepancy. The
   test fixture keeps the NURBS solid contracts unchanged; it adds only an
   opt-in matched-topology diagnostic capture.
+- The same matched polygon cube can capture outline-on and outline-off frames
+  through the production scene-linear resolve. Blender and classiCAD change
+  the same 2,316 pixels (XOR 0, IoU 1.0); comparing each renderer's outline
+  effect against its own baseline gives RGB delta MAE 1.74/255, p95 4/255,
+  maximum 8/255. This validates the outline pass on Blender's default mesh
+  topology as well as the earlier NURBS-solid fixture.
 - World cavity's first measured mask mismatch was caused in part by the depth
   sampler: classiCAD set its copied `cavityDepthTexture_` to linear filtering,
   while Blender binds its Workbench depth texture with the default sampler,

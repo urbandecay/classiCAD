@@ -1770,6 +1770,35 @@ int main(int argc, char *argv[])
                         gpuWorkbenchOutlineBaselineImage.save(
                             outlineBaselineCapturePath);
                     }
+                    const QString polygonCubeOutlineCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_POLYGON_CUBE_OUTLINE_CAPTURE");
+                    if (!polygonCubeOutlineCapturePath.isEmpty()) {
+                        const QString polygonCubeOutlineBaselinePath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_POLYGON_CUBE_OUTLINE_BASELINE_CAPTURE");
+                        QImage polygonCubeOutlineImage;
+                        QImage polygonCubeOutlineBaselineImage;
+                        const bool outlineCaptured =
+                            renderCoordinatedScene(
+                                outlinedSceneShading,
+                                QByteArrayLiteral("polygon-cube-outline"),
+                                &polygonCubeOutlineImage, &polygonCubeObject) &&
+                            polygonCubeOutlineImage.save(
+                                polygonCubeOutlineCapturePath);
+                        const bool baselineCaptured =
+                            polygonCubeOutlineBaselinePath.isEmpty() ||
+                            (renderCoordinatedScene(
+                                 rawFaceShading,
+                                 QByteArrayLiteral("polygon-cube-outline-baseline"),
+                                 &polygonCubeOutlineBaselineImage,
+                                 &polygonCubeObject) &&
+                             polygonCubeOutlineBaselineImage.save(
+                                 polygonCubeOutlineBaselinePath));
+                        passed &= check(
+                            outlineCaptured && baselineCaptured,
+                            "matched polygon cube outline captures must render and save");
+                    }
                     const bool gpuWorkbenchShadowDrawSucceeded =
                         renderCoordinatedScene(
                             shadowShading,

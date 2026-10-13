@@ -414,7 +414,7 @@ int main(int argc, char *argv[])
             return object;
         };
         QVector<ViewportRenderObject> objects{
-            makeQuad(9101, 134, 86, 441, 393, 0.0,
+            makeQuad(9101, 134.4, 86.4, 441.6, 393.6, 0.0,
                     QVector3D(0.08f, 0.25f, 0.95f), 0.55),
             makeQuad(9102, 224, 112, 480, 368, 0.0,
                     QVector3D(0.95f, 0.12f, 0.04f), 0.48)};
@@ -482,7 +482,11 @@ int main(int argc, char *argv[])
                             isolatedSaved &&
                             image.size() == size && rearOnly != background &&
                             frontOnly != background && overlap != rearOnly &&
-                            overlap != frontOnly,
+                            overlap != frontOnly &&
+                            rearImage.pixelColor(441, 200) != background &&
+                            rearImage.pixelColor(200, 393) != background &&
+                            rearImage.pixel(442, 200) == background.rgb() &&
+                            rearImage.pixel(200, 394) == background.rgb(),
                         "headless QPainter TRANSPARENT_OVERLAP must render rear-only, front-only, and distinct overlap pixels");
 
         // This variant deliberately reverses object order while supplying

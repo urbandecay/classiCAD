@@ -182,6 +182,39 @@ int main(int argc, char **argv)
     solid.geometryType = GeometryType::NurbsSolid;
     solid.workPlaneFrame = frame;
     passed &= check(makeNurbsExtrusionSolid(face, {1,2,5}, &solid.nurbsSolid), "oblique solid extrusion");
+    const QString initialBaseCapId = solid.nurbsSolid.baseCapFaceId;
+    const QString initialTopCapId = solid.nurbsSolid.displacedCapFaceId;
+    const QString initialWallId = solid.nurbsSolid.wallFaceIds.value(0);
+    Shape seedRoundtrip;
+    passed &= check(!initialBaseCapId.isEmpty() && !initialTopCapId.isEmpty() &&
+                        !initialWallId.isEmpty() &&
+                        initialBaseCapId != initialTopCapId &&
+                        initialBaseCapId != initialWallId &&
+                        initialTopCapId != initialWallId &&
+                        shapeFromJson(shapeToJson(solid), &seedRoundtrip) &&
+                        seedRoundtrip.nurbsSolid.baseCapFaceId == initialBaseCapId &&
+                        seedRoundtrip.nurbsSolid.displacedCapFaceId == initialTopCapId &&
+                        seedRoundtrip.nurbsSolid.wallFaceIds == solid.nurbsSolid.wallFaceIds,
+                    "seed semantic face IDs must be unique and survive native JSON roundtrip");
+    QJsonObject invalidFaceIds = shapeToJson(solid);
+    QJsonObject invalidSolid = invalidFaceIds.value(QStringLiteral("nurbsSolid")).toObject();
+    invalidSolid.insert(QStringLiteral("displacedCapFaceId"), initialBaseCapId);
+    invalidFaceIds.insert(QStringLiteral("nurbsSolid"), invalidSolid);
+    Shape rejectedFaceIds;
+    passed &= check(!shapeFromJson(invalidFaceIds, &rejectedFaceIds),
+                    "duplicate semantic seed face IDs must be rejected");
+    QJsonObject legacySeed = shapeToJson(solid);
+    QJsonObject legacySolid = legacySeed.value(QStringLiteral("nurbsSolid")).toObject();
+    legacySolid.remove(QStringLiteral("baseCapFaceId"));
+    legacySolid.remove(QStringLiteral("displacedCapFaceId"));
+    legacySolid.remove(QStringLiteral("wallFaceIds"));
+    legacySeed.insert(QStringLiteral("nurbsSolid"), legacySolid);
+    Shape migratedSeed;
+    passed &= check(shapeFromJson(legacySeed, &migratedSeed) &&
+                        validateNurbsSolid(migratedSeed.nurbsSolid) &&
+                        !migratedSeed.nurbsSolid.baseCapFaceId.isEmpty() &&
+                        !migratedSeed.nurbsSolid.wallFaceIds.isEmpty(),
+                    "legacy seed JSON must receive valid semantic IDs on load");
     const auto faces = shapeSurfaceFaces(solid);
     passed &= check(faces.size() == 3 && faces[2].rational &&
                         faces[2].degreeU == 2 && faces[2].knotsU == circle.knots &&
@@ -257,6 +290,7 @@ int main(int argc, char **argv)
     NurbsExtrusionSolid3D holedSolid;
     passed &= check(makeNurbsExtrusionSolid(holedFace,{0,0,3},&holedSolid) &&
                         nurbsSolidFaces(holedSolid).size()==4 &&
+                        holedSolid.wallFaceIds.size() == 2 &&
                         nurbsSolidFaceReversed(holedSolid,3),
                     "hole boundaries need matching cap holes and inward-facing ruled walls");
     auto orientedFrame = makeWorkPlaneFrameFromNormal({7,-2,9},{1,2,3},{1,0,0});

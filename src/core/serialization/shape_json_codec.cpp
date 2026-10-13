@@ -748,6 +748,16 @@ QJsonObject shapeToJson(const Shape &shape)
         solid.insert(QStringLiteral("displacement"), QJsonArray{
             shape.nurbsSolid.displacement.x, shape.nurbsSolid.displacement.y,
             shape.nurbsSolid.displacement.z});
+        if (shape.nurbsSolid.boundaryFaces.isEmpty()) {
+            solid.insert(QStringLiteral("baseCapFaceId"),
+                         shape.nurbsSolid.baseCapFaceId);
+            solid.insert(QStringLiteral("displacedCapFaceId"),
+                         shape.nurbsSolid.displacedCapFaceId);
+            QJsonArray wallFaceIds;
+            for (const QString &faceId : shape.nurbsSolid.wallFaceIds)
+                wallFaceIds.append(faceId);
+            solid.insert(QStringLiteral("wallFaceIds"), wallFaceIds);
+        }
         if (!shape.nurbsSolid.boundaryFaces.isEmpty()) {
             QJsonArray faces;
             QJsonArray reversed;
@@ -945,6 +955,27 @@ bool shapeFromJson(const QJsonValue &value, Shape *shape)
             for (const QJsonValue &value : solid.value(QStringLiteral("boundaryFaceReversed")).toArray()) {
                 if (!value.isBool()) return false;
                 nurbsSolid.boundaryFaceReversed.append(value.toBool());
+            }
+        }
+        if (nurbsSolid.boundaryFaces.isEmpty()) {
+            const bool hasAnyFaceIds = solid.contains(QStringLiteral("baseCapFaceId")) ||
+                solid.contains(QStringLiteral("displacedCapFaceId")) ||
+                solid.contains(QStringLiteral("wallFaceIds"));
+            if (hasAnyFaceIds) {
+                if (!solid.value(QStringLiteral("baseCapFaceId")).isString() ||
+                    !solid.value(QStringLiteral("displacedCapFaceId")).isString() ||
+                    !solid.value(QStringLiteral("wallFaceIds")).isArray()) return false;
+                nurbsSolid.baseCapFaceId =
+                    solid.value(QStringLiteral("baseCapFaceId")).toString();
+                nurbsSolid.displacedCapFaceId =
+                    solid.value(QStringLiteral("displacedCapFaceId")).toString();
+                for (const QJsonValue &value :
+                     solid.value(QStringLiteral("wallFaceIds")).toArray()) {
+                    if (!value.isString()) return false;
+                    nurbsSolid.wallFaceIds.append(value.toString());
+                }
+            } else if (!initializeNurbsSolidSeedFaceIds(&nurbsSolid)) {
+                return false;
             }
         }
         if (!validateNurbsSolid(nurbsSolid)) return false;

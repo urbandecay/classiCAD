@@ -6,6 +6,7 @@
 #include <cmath>
 #include <QLineF>
 #include <QSet>
+#include <QUuid>
 
 namespace classiCAD {
 namespace {
@@ -81,6 +82,18 @@ bool validateNurbsSolid(const NurbsExtrusionSolid3D &solid)
         for (const Edge &edge : edges) if (edge.count != 2) return false;
         return !edges.isEmpty();
     }
+    const int wallCount = solid.baseSurface.trimLoops.isEmpty()
+                              ? 1 : solid.baseSurface.trimLoops.size();
+    if (solid.baseCapFaceId.isEmpty() || solid.displacedCapFaceId.isEmpty() ||
+        solid.wallFaceIds.size() != wallCount) {
+        return false;
+    }
+    QSet<QString> faceIds{solid.baseCapFaceId, solid.displacedCapFaceId};
+    if (faceIds.size() != 2) return false;
+    for (const QString &faceId : solid.wallFaceIds) {
+        if (faceId.isEmpty() || faceIds.contains(faceId)) return false;
+        faceIds.insert(faceId);
+    }
     WorkPlaneFrame frame;
     if (!nurbsSolidBaseFrame(solid.baseSurface, &frame) ||
         !std::isfinite(solid.displacement.x) ||
@@ -97,13 +110,31 @@ bool validateNurbsSolid(const NurbsExtrusionSolid3D &solid)
            std::max(scale, length(solid.displacement)) * 1.0e-10;
 }
 
+bool initializeNurbsSolidSeedFaceIds(NurbsExtrusionSolid3D *solid)
+{
+    if (solid == nullptr || !solid->boundaryFaces.isEmpty()) return false;
+    const int wallCount = solid->baseSurface.trimLoops.isEmpty()
+                              ? 1 : solid->baseSurface.trimLoops.size();
+    solid->baseCapFaceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    solid->displacedCapFaceId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    solid->wallFaceIds.clear();
+    solid->wallFaceIds.reserve(wallCount);
+    for (int i = 0; i < wallCount; ++i)
+        solid->wallFaceIds.append(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    return true;
+}
+
 bool makeNurbsExtrusionSolid(const NurbsSurface3D &surface,
                              const Point3D &displacement,
                              NurbsExtrusionSolid3D *solid)
 {
-    const NurbsExtrusionSolid3D result{surface, displacement, {}, {}};
-    if (solid == nullptr || !validateNurbsSolid(result)) return false;
-    *solid = result;
+    if (solid == nullptr) return false;
+    NurbsExtrusionSolid3D result;
+    result.baseSurface = surface;
+    result.displacement = displacement;
+    if (!initializeNurbsSolidSeedFaceIds(&result) || !validateNurbsSolid(result))
+        return false;
+    *solid = std::move(result);
     return true;
 }
 

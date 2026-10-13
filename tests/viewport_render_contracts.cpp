@@ -20,6 +20,7 @@
 #include "services/viewport/viewport_transform.h"
 
 #include <QDebug>
+#include <QBuffer>
 #include <QGuiApplication>
 #include <QImage>
 #include <QOffscreenSurface>
@@ -989,6 +990,131 @@ int main(int argc, char *argv[])
                     ViewportShadingSettings gpuSolidShading;
                     gpuSolidShading.mode = ViewportShadingMode::Solid;
                     ViewportSurfaceRenderer gpuSurfaceRenderer;
+
+                    // NurbsSolid owns one object-level Workbench material.
+                    // Exercise its derived-face UV stream through visible
+                    // color, outline-ID alpha, and the no-stencil map path.
+                    QImage transparentTexture(2, 2,
+                                              QImage::Format_RGBA8888);
+                    transparentTexture.fill(QColor(255, 255, 255, 0));
+                    QByteArray packedTextureBytes;
+                    QBuffer packedTextureBuffer(&packedTextureBytes);
+                    const bool packedTextureReady =
+                        packedTextureBuffer.open(QIODevice::WriteOnly) &&
+                        transparentTexture.save(&packedTextureBuffer,
+                                                "PNG");
+                    ViewportRenderObject alphaReceiver = surfaceObject;
+                    alphaReceiver.objectId = ObjectId::fromValue(801);
+                    alphaReceiver.selected = false;
+                    alphaReceiver.hasWorkbenchMaterial = false;
+                    alphaReceiver.preparedDepthGeometry =
+                        QSharedPointer<ViewportDepthGeometry>::create(
+                            buildViewportDepthGeometry(alphaReceiver.shape));
+
+                    NurbsSurface3D raisedCasterBase = cubeBaseSurface;
+                    for (Point3D &point : raisedCasterBase.controlPoints) {
+                        point.x *= 0.4;
+                        point.y *= 0.4;
+                        point.z = 1.2;
+                    }
+                    Shape raisedCasterShape;
+                    raisedCasterShape.geometryType = GeometryType::NurbsSolid;
+                    const bool raisedCasterValid = makeNurbsExtrusionSolid(
+                        raisedCasterBase, {0.0, 0.0, 0.8},
+                        &raisedCasterShape.nurbsSolid);
+                    ViewportRenderObject alphaCaster;
+                    alphaCaster.shape = raisedCasterShape;
+                    alphaCaster.objectId = ObjectId::fromValue(802);
+                    alphaCaster.geometryRevision = 1;
+                    alphaCaster.hasWorkbenchMaterial = true;
+                    alphaCaster.workbenchMaterial.textureImagePackedDataBase64 =
+                        QString::fromLatin1(
+                            packedTextureBytes.toBase64());
+                    alphaCaster.workbenchMaterial.textureImageSrgb = false;
+                    alphaCaster.workbenchMaterial.textureImageAlphaMode =
+                        QStringLiteral("STRAIGHT");
+                    alphaCaster.workbenchMaterial.textureImageInterpolation =
+                        QStringLiteral("Closest");
+                    alphaCaster.preparedDepthGeometry =
+                        QSharedPointer<ViewportDepthGeometry>::create(
+                            buildViewportDepthGeometry(alphaCaster.shape));
+                    ViewportRenderObject ignoredAlphaCaster = alphaCaster;
+                    ignoredAlphaCaster.workbenchMaterial.textureImageAlphaMode =
+                        QStringLiteral("NONE");
+
+                    QOpenGLFramebufferObjectFormat depthOnlyFormat;
+                    depthOnlyFormat.setAttachment(
+                        QOpenGLFramebufferObject::Depth);
+                    QOpenGLFramebufferObject depthOnlyFramebuffer(
+                        glSize, depthOnlyFormat);
+                    GLint depthOnlyStencilBits = -1;
+                    if (depthOnlyFramebuffer.isValid()) {
+                        depthOnlyFramebuffer.bind();
+                        functions.glGetIntegerv(GL_STENCIL_BITS,
+                                                &depthOnlyStencilBits);
+                    }
+                    const auto renderSolidAlphaScene = [&] (
+                        const QVector<ViewportRenderObject> &objects,
+                        bool shadows, bool outline) {
+                        if (!depthOnlyFramebuffer.isValid()) return QImage{};
+                        depthOnlyFramebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        functions.glClearColor(0.02f, 0.02f, 0.02f, 0.0f);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        ViewportShadingSettings settings;
+                        settings.mode = ViewportShadingMode::Solid;
+                        settings.lightingMode = ViewportLightingMode::Flat;
+                        settings.colorMode = ViewportColorMode::Texture;
+                        settings.outline = outline;
+                        settings.specularLighting = false;
+                        settings.shadows = shadows;
+                        settings.shadowIntensity = 0.8;
+                        settings.colorDitherIntensity = 0.0;
+                        if (!gpuSurfaceRenderer.draw(objects, gpuTransform,
+                                                     glSize, 1.0, settings)) {
+                            return QImage{};
+                        }
+                        functions.glFinish();
+                        return depthOnlyFramebuffer.toImage();
+                    };
+                    const QImage solidAlphaReceiverOnly =
+                        renderSolidAlphaScene({alphaReceiver}, false, false);
+                    const QImage solidAlphaCutoutColor =
+                        renderSolidAlphaScene({alphaReceiver, alphaCaster},
+                                              false, false);
+                    const QImage solidAlphaCutoutId =
+                        renderSolidAlphaScene({alphaReceiver, alphaCaster},
+                                              false, true);
+                    const QImage solidAlphaReceiverOutline =
+                        renderSolidAlphaScene({alphaReceiver}, false, true);
+                    const QImage solidAlphaCutoutShadow =
+                        renderSolidAlphaScene({alphaReceiver, alphaCaster},
+                                              true, false);
+                    const QImage solidAlphaReceiverShadow =
+                        renderSolidAlphaScene({alphaReceiver}, true, false);
+                    const QImage solidAlphaIgnoredTexture =
+                        renderSolidAlphaScene(
+                            {alphaReceiver, ignoredAlphaCaster}, false, false);
+                    const QImage solidAlphaIgnoredShadow =
+                        renderSolidAlphaScene(
+                            {alphaReceiver, ignoredAlphaCaster}, true, false);
+                    passed &= check(
+                        packedTextureReady && raisedCasterValid &&
+                            depthOnlyFramebuffer.isValid() &&
+                            depthOnlyStencilBits == 0 &&
+                            !solidAlphaReceiverOnly.isNull() &&
+                            solidAlphaCutoutColor == solidAlphaReceiverOnly &&
+                            solidAlphaCutoutId == solidAlphaReceiverOutline &&
+                            solidAlphaCutoutShadow !=
+                                solidAlphaIgnoredShadow &&
+                            solidAlphaIgnoredTexture !=
+                                solidAlphaReceiverOnly &&
+                            solidAlphaIgnoredShadow !=
+                                solidAlphaReceiverShadow,
+                        "NurbsSolid texture alpha must mask color, object-ID outlines, and depth-map shadows consistently, while NONE bypasses the cutoff");
+
                     framebuffer.bind();
                     functions.glViewport(0, 0, glSize.width(), glSize.height());
                     ViewportAaRenderer historyResetRenderer;

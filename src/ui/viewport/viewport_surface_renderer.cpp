@@ -2143,7 +2143,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
                   << qint32(geometry != nullptr
                                 ? geometry->surfaceVertices.size()
                                 : 0);
-        if (object.shape.geometryType == GeometryType::NurbsSurface) {
+        if (object.shape.geometryType == GeometryType::NurbsSurface ||
+            object.shape.geometryType == GeometryType::NurbsSolid) {
             keyStream << object.workbenchMaterial.textureImagePath
                       << QCryptographicHash::hash(
                              object.workbenchMaterial.textureImagePackedDataBase64.toLatin1(),
@@ -2458,7 +2459,8 @@ void ViewportSurfaceRenderer::prepareGeometry(
             }
             DrawRange range = makeRange(first, count);
             const bool hasSurfaceUv =
-                object.shape.geometryType == GeometryType::NurbsSurface &&
+                (object.shape.geometryType == GeometryType::NurbsSurface ||
+                 object.shape.geometryType == GeometryType::NurbsSolid) &&
                 geometry != nullptr &&
                 geometry->surfaceTextureCoordinates.size() == count;
             const bool hasSurfaceTexture =

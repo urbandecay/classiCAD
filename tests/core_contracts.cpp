@@ -26,6 +26,7 @@
 #include "ui/viewport/blender_grid_appearance.h"
 #include "ui/viewport/blender_grid_scale.h"
 #include "ui/viewport/viewport_depth_geometry.h"
+#include "ui/viewport/workbench_render_result.h"
 #include "ui/viewport/viewport_renderer.h"
 #include "ui/viewport/navigation_gizmo.h"
 #include "tools/circle_tool.h"
@@ -191,6 +192,8 @@ bool persistedWorkbenchSettingsContracts()
     renderOutput.insert(QStringLiteral("resolution_x"), 1920);
     renderOutput.insert(QStringLiteral("resolution_y"), 1080);
     renderOutput.insert(QStringLiteral("file_format"), QStringLiteral("OPEN_EXR"));
+    renderOutput.insert(QStringLiteral("filepath"),
+                        QStringLiteral("/tmp/classicad-output/frame_"));
     renderOutput.insert(QStringLiteral("color_mode"), QStringLiteral("RGBA"));
     renderOutput.insert(QStringLiteral("color_depth"), 16);
     QJsonObject scene;
@@ -215,6 +218,8 @@ bool persistedWorkbenchSettingsContracts()
                             restoredOutput.value(QStringLiteral("resolution_y")).toInt() == 1080 &&
                             restoredOutput.value(QStringLiteral("file_format")).toString() ==
                                 QStringLiteral("OPEN_EXR") &&
+                            restoredOutput.value(QStringLiteral("filepath")).toString() ==
+                                QStringLiteral("/tmp/classicad-output/frame_") &&
                             restoredOutput.value(QStringLiteral("color_mode")).toString() ==
                                 QStringLiteral("RGBA") &&
                             restoredOutput.value(QStringLiteral("color_depth")).toInt() == 16,
@@ -222,6 +227,18 @@ bool persistedWorkbenchSettingsContracts()
     } else {
         passed = false;
     }
+    passed &= check(workbenchCombinedInitialSavePath(
+                        QStringLiteral("/tmp/renders/frame_"),
+                        QStringLiteral("png")) ==
+                        QStringLiteral("/tmp/renders/frame_") &&
+                        workbenchCombinedInitialSavePath(
+                            QStringLiteral("/tmp/renders/frame.exr"),
+                            QStringLiteral("exr")) ==
+                            QStringLiteral("/tmp/renders/frame.exr") &&
+                        workbenchCombinedInitialSavePath(
+                            QString(), QStringLiteral("png")) ==
+                            QStringLiteral("WorkbenchRender.png"),
+                    "Combined save path must use Blender filepath verbatim and fall back generically");
 
     Document textureDocument;
     Shape textureShape;

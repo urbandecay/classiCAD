@@ -2317,6 +2317,8 @@ bool importBlenderScene(const QString &path,
             QStringLiteral("world_color_scene_linear"));
         const QJsonValue renderBackgroundTypeValue = renderOutput.value(
             QStringLiteral("background_type"));
+        const QJsonValue renderFilepathValue = renderOutput.value(
+            QStringLiteral("filepath"));
         QVector<double> worldColorSceneLinear;
         bool worldColorValid = worldColorValue.isUndefined() ||
                                worldColorValue.isNull();
@@ -2325,6 +2327,8 @@ bool importBlenderScene(const QString &path,
                                               &worldColorSceneLinear);
         }
         if (!renderOutput.value(QStringLiteral("file_format")).isString() ||
+            (!renderFilepathValue.isUndefined() &&
+             !renderFilepathValue.isString()) ||
             !exrCodecValid ||
             (!filmTransparentValue.isUndefined() &&
              !filmTransparentValue.isBool()) ||

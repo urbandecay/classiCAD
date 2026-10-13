@@ -453,9 +453,11 @@ private:
         layout->addLayout(buttons);
         connect(saveCombined, &QPushButton::clicked, &window, [this, &result]() {
             const QString extension = result.combinedFileExtension();
+            const QString initialPath = workbenchCombinedInitialSavePath(
+                result.blenderRenderFilepath, extension);
             QString path = QFileDialog::getSaveFileName(
                 this, QStringLiteral("Save Combined Render"),
-                QStringLiteral("WorkbenchRender.%1").arg(extension),
+                initialPath,
                 QStringLiteral("Image Files (*.%1)").arg(extension));
             if (path.isEmpty()) return;
             if (QFileInfo(path).suffix().isEmpty())

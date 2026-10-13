@@ -16,6 +16,14 @@
 
 namespace classiCAD {
 
+inline QString workbenchCombinedInitialSavePath(const QString &renderFilepath,
+                                                const QString &extension)
+{
+    return renderFilepath.isEmpty()
+               ? QStringLiteral("WorkbenchRender.%1").arg(extension)
+               : renderFilepath;
+}
+
 // Convert the OpenGL depth-buffer value used by the Workbench render target
 // into Blender's view-space Z pass convention.
 inline float workbenchDepthToViewZ(float depth,
@@ -123,6 +131,7 @@ struct WorkbenchRenderResult {
     ProjectViewportCameraSettings camera;
     QString outputFormat = QStringLiteral("PNG + PFM depth");
     QString blenderImageFormat = QStringLiteral("PNG");
+    QString blenderRenderFilepath;
     QString exrCodec = QStringLiteral("ZIP");
     QString colorMode = QStringLiteral("RGBA");
     int colorDepth = 8;

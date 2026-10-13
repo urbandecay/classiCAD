@@ -576,6 +576,11 @@ def extract_attributes(mesh, item_id, unsupported):
     return result
 
 
+def resolved_render_filepath(render):
+    """Return Blender's absolute render path without expanding frame tokens."""
+    return bpy.path.abspath(render.filepath) if render.filepath else ""
+
+
 def visibility_metadata(obj):
     try:
         hidden_in_viewport = bool(obj.hide_get())
@@ -1606,6 +1611,9 @@ def extract_scene(input_path, mode):
                 scene, output["color_luts"], lut_bytes_by_id,
                 output["unsupported_features"]),
             "render_output": {
+                # Resolve Blender's project-relative `//` path at import time.
+                # Keep frame tokens intact; classiCAD does not expand them.
+                "filepath": resolved_render_filepath(render),
                 "resolution_x": int(render.resolution_x),
                 "resolution_y": int(render.resolution_y),
                 "resolution_percentage": int(render.resolution_percentage),

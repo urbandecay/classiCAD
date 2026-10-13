@@ -571,6 +571,20 @@ int main(int argc, char *argv[])
             outlineScaleDpr2.pixelColor(62, 128).red() > 40,
         "QPainter outlines must sample cardinal object IDs at the integer Blender UI footprint");
 
+    ViewportShadingSettings xrayOutlineSettings = outlineScaleSettings;
+    xrayOutlineSettings.xray = true;
+    xrayOutlineSettings.xrayAlpha = 0.5;
+    QImage xrayOutlineImage(orthographicDofSize,
+                            QImage::Format_ARGB32_Premultiplied);
+    xrayOutlineImage.fill(Qt::black);
+    applyRasterWorkbenchEffects(
+        &xrayOutlineImage, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, xrayOutlineSettings);
+    passed &= check(
+        xrayOutlineSettings.xrayEnabled() &&
+            xrayOutlineImage.pixelColor(31, 64).red() > 40,
+        "QPainter X-Ray must retain Workbench object outlines");
+
     ViewportRenderObject inFrontOutlineObject = makeOutlineScaleObject();
     inFrontOutlineObject.objectId = ObjectId::fromValue(72);
     inFrontOutlineObject.showInFront = true;

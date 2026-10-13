@@ -652,7 +652,7 @@ bool compositeRasterWorkbenchSurfaces(
     // applies it to its retained opaque layer before transparency composition.
     std::vector<float> regularCavityFactors;
     std::vector<float> inFrontCavityFactors;
-    if (shadingSettings.cavity &&
+    if (shadingSettings.cavity && !shadingSettings.xrayEnabled() &&
         (useWeightedOit || surfaceLayers != nullptr)) {
         ViewportShadingSettings cavityOnly = shadingSettings;
         cavityOnly.outline = false;
@@ -1269,10 +1269,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const RasterWorkbenchSurfaceLayers *surfaceLayers,
                                  std::vector<float> *cavityFactors)
 {
+    const bool xrayEnabled = settings.xrayEnabled();
     if (colorImage == nullptr || colorImage->isNull() ||
         (!settings.cavity && !settings.outline && !settings.depthOfField &&
          !settings.shadows) ||
-        settings.mode != ViewportShadingMode::Solid || settings.xrayEnabled() ||
+        settings.mode != ViewportShadingMode::Solid ||
+        (xrayEnabled && !settings.outline) ||
         viewportSize.isEmpty()) {
         return;
     }
@@ -1280,13 +1282,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // Outlines use all visible geometry. Cavity uses a separate opaque-only
     // depth/normal buffer so transparent surfaces neither occlude its samples
     // nor receive its shading.
-    const bool cavityEnabled = settings.cavity &&
+    const bool cavityEnabled = settings.cavity && !xrayEnabled &&
         !(surfaceLayers != nullptr &&
           surfaceLayers->cavityAppliedBeforeTransparency);
-    const bool shadowEnabled = settings.shadows;
+    const bool shadowEnabled = settings.shadows && !xrayEnabled;
     const ViewportCameraPreferences cameraOptics = transform.cameraPreferences();
     const bool perspective = transform.isPerspectiveEnabled();
-    const bool depthOfFieldEnabled = settings.depthOfField &&
+    const bool depthOfFieldEnabled = settings.depthOfField && !xrayEnabled &&
                                      cameraOptics.sceneCameraEnabled;
 
     const int outputWidth = colorImage->width();

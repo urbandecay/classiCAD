@@ -1868,23 +1868,26 @@ bool ViewportSurfaceRenderer::initialize()
             }
             vec4 material = texelFetch(uMaterialData, pixel, 0);
             vec3 color = material.rgb;
-            if (uStudioLighting) {
+            vec3 normal = vec3(0.0, 0.0, 1.0);
+            vec3 incident = vec3(0.0, 0.0, 1.0);
+            bool selected = false;
+            if (uStudioLighting || uMatcapLighting || uUseCavity) {
+                normal = decodeWorkbenchNormal(
+                    texelFetch(uViewNormal, pixel, 0).xy);
+            }
+            if (uPerspective && (uStudioLighting || uMatcapLighting)) {
                 vec2 uv = (vec2(pixel) + 0.5) /
                           vec2(textureSize(uDepth, 0));
                 vec4 worldH = uInverseViewProjection *
                     vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
                 vec3 worldPosition = worldH.xyz / worldH.w;
-                vec3 normal = decodeWorkbenchNormal(
-                    texelFetch(uViewNormal, pixel, 0).xy);
-            bool selected = false;
-                vec3 incident = vec3(0.0, 0.0, 1.0);
-                if (uPerspective) {
-                    vec3 incidentWorld = normalize(uCameraPosition -
-                                                   worldPosition);
-                    incident = normalize(vec3(dot(incidentWorld, uViewRight),
-                                              dot(incidentWorld, uViewUp),
-                                              dot(incidentWorld, uViewFacing)));
-                }
+                vec3 incidentWorld = normalize(uCameraPosition -
+                                                worldPosition);
+                incident = normalize(vec3(dot(incidentWorld, uViewRight),
+                                          dot(incidentWorld, uViewUp),
+                                          dot(incidentWorld, uViewFacing)));
+            }
+            if (uStudioLighting) {
                 int packed = int(material.a);
                 selected = (packed & 256) != 0;
                 packed &= 255;

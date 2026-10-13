@@ -118,6 +118,14 @@ in ordinary free views or orthographic views is superseded by this correction.
   matched image parity with Blender. QPainter still uses its 12-tap software
   gather, lacks temporal jitter and a depth-aware resolve, and composites
   transparent colors before the gather.
+- Polygon aperture taps now derive their blade sector from the unrotated sample
+  angle, then apply aperture rotation once when mapping the shaped radius to
+  screen offsets. A focused contract checks the expected rotated four-blade
+  tap. This follows Blender 5.2.2's `DofPass::setup_samples`, which shapes
+  radius before adding `rotation_` ([`workbench_effect_dof.cc:71-79`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L71-L79)).
+  The QPainter path remains a fixed 12-tap approximation rather than Blender's
+  multi-pass half-resolution gather; temporal jitter, depth-aware resolve, and
+  matched visual comparison remain open.
 
 ### Workbench Image Texture interpolation (2026-10-12)
 

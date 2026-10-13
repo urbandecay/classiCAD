@@ -20,6 +20,12 @@ float rasterWorkbenchCameraDepth(const QVector3D &position,
                                  const Point3D &cameraPosition,
                                  const Point3D &viewDirection) noexcept;
 
+// Map a normalized circular sample through Workbench's polygon aperture,
+// rotation, and X-axis aperture-ratio scale.
+QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
+                                  qreal apertureRotationRadians,
+                                  qreal apertureRatio) noexcept;
+
 // Retained surface layers let the QPainter cavity approximation shade the
 // opaque receiver before applying the already resolved transparent surface
 // contribution, as Blender does with its opaque and transparent passes.

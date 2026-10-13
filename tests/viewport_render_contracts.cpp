@@ -106,6 +106,13 @@ int main(int argc, char *argv[])
                      8.0f) < 1.0e-6f,
         "QPainter Workbench DOF depth must stay camera-relative when the camera and scene translate together");
 
+    const QPointF rotatedFourBladeTap = rasterWorkbenchApertureTap(
+        QPointF(1.0, 0.0), 4, 0.7853981633974483, 1.0);
+    passed &= check(
+        std::abs(rotatedFourBladeTap.x() - 0.5) < 1.0e-9 &&
+            std::abs(rotatedFourBladeTap.y() - 0.5) < 1.0e-9,
+        "QPainter Workbench polygon aperture must shape from the unrotated sector, then rotate the tap once");
+
     ViewportTransform orthographicDofTransform;
     orthographicDofTransform.setViewPreset(ViewportViewPreset::Top);
     orthographicDofTransform.setPerspectiveEnabled(false);

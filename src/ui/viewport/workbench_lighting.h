@@ -291,6 +291,23 @@ inline QVector3D workbenchSceneLinearToAgxSrgb(
                                               customLutMetadata);
 }
 
+// Convert scene World RGB for display-referred fallback painters. Keep this
+// conversion on the same view-transform path as Workbench surface shading so
+// HDR World values are transformed before QColor's bounded channel storage.
+inline QColor workbenchWorldBackgroundDisplayColor(
+    const QVector3D &worldColorSceneLinear,
+    int colorTransform = 0,
+    qreal exposure = 0.0,
+    qreal gamma = 1.0,
+    const QByteArray &customLutBytes = {},
+    const ImportedBlenderColorLutMetadata &customLutMetadata = {})
+{
+    const QVector3D display = workbenchSceneLinearToDisplaySrgb(
+        worldColorSceneLinear, colorTransform, exposure, gamma,
+        customLutBytes, customLutMetadata);
+    return QColor::fromRgbF(display.x(), display.y(), display.z());
+}
+
 inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()
 {
     // Blender's BKE_material_default_empty() keeps the DNA Material defaults:

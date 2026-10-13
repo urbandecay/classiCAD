@@ -180,6 +180,13 @@ int main(int argc, char *argv[])
         QVector3D(0.0f, 0.0f, 1.0f));
     const QVector3D roundTripColor = workbenchSceneLinearToSrgb(
         workbenchSrgbToSceneLinear(QVector3D(0.2f, 0.5f, 0.8f)));
+    const QColor hdrWorldFallback = workbenchWorldBackgroundDisplayColor(
+        QVector3D(1.0f, 0.25f, 0.04f), 1, 2.0, 1.0);
+    passed &= check(hdrWorldFallback.red() == 255 &&
+                        hdrWorldFallback.green() == 255 &&
+                        hdrWorldFallback.blue() >= 110 &&
+                        hdrWorldFallback.blue() <= 112,
+                    "QPainter World background conversion must apply exposure and Standard view transform before QColor clamps HDR channels");
     const QVector3D defaultCubeFace = workbenchStudioShade(
         defaultMaterialColor, QVector3D(0.0f, 0.0f, 1.0f),
         QVector3D(0.0f, 0.0f, 1.0f));

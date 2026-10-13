@@ -79,6 +79,7 @@
 #include "viewport/viewport_render_frame.h"
 #include "viewport/viewport_geometry_cache.h"
 #include "viewport/viewport_wire_color.h"
+#include "viewport/workbench_lighting.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -170,15 +171,10 @@ QColor viewportShadingBackgroundColor(
     }
     if (settings.backgroundMode == ViewportBackgroundMode::World) {
         if (worldColorSceneLinear.has_value()) {
-            const auto linearToSrgb = [](float value) {
-                return value <= 0.0031308f
-                           ? 12.92f * value
-                           : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
-            };
-            return QColor::fromRgbF(
-                linearToSrgb(worldColorSceneLinear->x()),
-                linearToSrgb(worldColorSceneLinear->y()),
-                linearToSrgb(worldColorSceneLinear->z()));
+            return workbenchWorldBackgroundDisplayColor(
+                *worldColorSceneLinear, settings.colorTransform,
+                settings.colorExposure, settings.colorGamma,
+                settings.colorLutData, settings.colorLutMetadata);
         }
         // Blender's Solid viewport falls back to its theme background when
         // the selected World background has no scene World assigned.

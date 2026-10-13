@@ -1364,6 +1364,130 @@ int main(int argc, char *argv[])
                                         std::abs(int(objectWireRawPixel[0]) -
                                                  int(wireRawPixel[0])) <= 1,
                                     "curve and surface-outline antialias pixels must match edit-wire linear blending");
+
+                    const auto captureSmoothWireCategory = [&](
+                        ViewportSmoothWireCategory category,
+                        bool editModeStyle,
+                        bool smoothOverlay,
+                        bool smoothEditMode,
+                        bool *drawSucceeded) {
+                        wireFramebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                        functions.glClearColor(128.0f / 255.0f,
+                                               128.0f / 255.0f,
+                                               128.0f / 255.0f, 1.0f);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        ViewportSceneStroke stroke;
+                        stroke.color = Qt::black;
+                        stroke.width = 1.0f;
+                        stroke.editModeWire = editModeStyle;
+                        stroke.smoothWireCategory = category;
+                        stroke.preparedDepthGeometry =
+                            editWire.preparedDepthGeometry;
+                        *drawSucceeded = linePointsValid &&
+                            wireRenderer.draw(
+                                {stroke}, wireTransform, glSize, 1.0,
+                                false, 1.0, smoothOverlay, smoothEditMode);
+                        functions.glFinish();
+                        return wireFramebuffer.toImage();
+                    };
+                    std::array<QImage, 4> overlayPreferenceImages;
+                    std::array<QImage, 4> editModePreferenceImages;
+                    std::array<bool, 4> overlayDrawSucceeded{};
+                    std::array<bool, 4> editModeDrawSucceeded{};
+                    for (int overlay = 0; overlay < 2; ++overlay) {
+                        for (int edit = 0; edit < 2; ++edit) {
+                            const int index = overlay * 2 + edit;
+                            overlayPreferenceImages[index] =
+                                captureSmoothWireCategory(
+                                    ViewportSmoothWireCategory::Overlay,
+                                    false, overlay != 0, edit != 0,
+                                    &overlayDrawSucceeded[index]);
+                            editModePreferenceImages[index] =
+                                captureSmoothWireCategory(
+                                    ViewportSmoothWireCategory::EditMode,
+                                    true, overlay != 0, edit != 0,
+                                    &editModeDrawSucceeded[index]);
+                        }
+                    }
+                    const auto imageDifferenceCount = [](const QImage &first,
+                                                         const QImage &second) {
+                        if (first.isNull() || second.isNull() ||
+                            first.size() != second.size()) {
+                            return -1;
+                        }
+                        int changed = 0;
+                        for (int y = 0; y < first.height(); ++y) {
+                            for (int x = 0; x < first.width(); ++x) {
+                                changed += first.pixel(x, y) !=
+                                           second.pixel(x, y);
+                            }
+                        }
+                        return changed;
+                    };
+                    const bool overlayPreferenceIsolated =
+                        overlayDrawSucceeded[0] && overlayDrawSucceeded[1] &&
+                        overlayDrawSucceeded[2] && overlayDrawSucceeded[3] &&
+                        imageDifferenceCount(overlayPreferenceImages[0],
+                                             overlayPreferenceImages[1]) == 0 &&
+                        imageDifferenceCount(overlayPreferenceImages[2],
+                                             overlayPreferenceImages[3]) == 0 &&
+                        imageDifferenceCount(overlayPreferenceImages[0],
+                                             overlayPreferenceImages[2]) > 0 &&
+                        imageDifferenceCount(overlayPreferenceImages[1],
+                                             overlayPreferenceImages[3]) > 0;
+                    const bool editModePreferenceIsolated =
+                        editModeDrawSucceeded[0] && editModeDrawSucceeded[1] &&
+                        editModeDrawSucceeded[2] && editModeDrawSucceeded[3] &&
+                        imageDifferenceCount(editModePreferenceImages[0],
+                                             editModePreferenceImages[2]) == 0 &&
+                        imageDifferenceCount(editModePreferenceImages[1],
+                                             editModePreferenceImages[3]) == 0 &&
+                        imageDifferenceCount(editModePreferenceImages[0],
+                                             editModePreferenceImages[1]) > 0 &&
+                        imageDifferenceCount(editModePreferenceImages[2],
+                                             editModePreferenceImages[3]) > 0;
+                    passed &= check(overlayPreferenceIsolated &&
+                                        editModePreferenceIsolated,
+                                    "the four Smooth Wires combinations must affect only their matching Overlay or Edit Mode stroke category");
+
+                    wireFramebuffer.bind();
+                    functions.glViewport(0, 0, glSize.width(),
+                                         glSize.height());
+                    functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                    functions.glClearColor(128.0f / 255.0f,
+                                           128.0f / 255.0f,
+                                           128.0f / 255.0f, 1.0f);
+                    functions.glClear(GL_COLOR_BUFFER_BIT |
+                                      GL_DEPTH_BUFFER_BIT);
+                    BlenderGridRenderer smoothWireGridRenderer;
+                    const bool gridDrawSucceeded =
+                        smoothWireGridRenderer.renderToCurrentFramebuffer(
+                            wireTransform, glSize, 1.0, {}, 1.0,
+                            BlenderGridAppearance{});
+                    functions.glFinish();
+                    const QImage gridImage = wireFramebuffer.toImage();
+                    int partiallyCoveredGridPixels = 0;
+                    if (!gridImage.isNull()) {
+                        for (int y = 0; y < gridImage.height(); ++y) {
+                            for (int x = 0; x < gridImage.width(); ++x) {
+                                const QColor pixel = gridImage.pixelColor(x, y);
+                                if (pixel.red() == pixel.green() &&
+                                    pixel.green() == pixel.blue() &&
+                                    pixel.red() > 105 &&
+                                    pixel.red() < 128) {
+                                    ++partiallyCoveredGridPixels;
+                                }
+                            }
+                        }
+                    }
+                    passed &= check(gridDrawSucceeded &&
+                                        partiallyCoveredGridPixels > 0,
+                                    "grid lines must retain multisample edge coverage independently from Smooth Wires preferences");
+
                     wireFramebuffer.release();
                 }
             }

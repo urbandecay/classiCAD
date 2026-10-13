@@ -336,9 +336,16 @@ int ViewportAaRenderer::mode() const noexcept
 void ViewportAaRenderer::setDepthOfField(
     bool enabled,
     const ViewportCameraPreferences &optics,
-    bool perspectiveView)
+    bool perspectiveView,
+    qreal projectionClipStart,
+    qreal projectionClipEnd)
 {
     depthOfFieldOptics_ = optics;
+    // Depth-buffer values are encoded with the projection clip range. Use
+    // that same range when reconstructing view depth for CoC, even when a
+    // free perspective viewport has tightened its far plane for precision.
+    depthOfFieldOptics_.clipStart = projectionClipStart;
+    depthOfFieldOptics_.clipEnd = projectionClipEnd;
     depthOfFieldEnabled_ = enabled && optics.sceneCameraEnabled;
     depthOfFieldPerspective_ = perspectiveView;
 }
@@ -1291,6 +1298,7 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 2);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -1304,6 +1312,7 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     }
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 2);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 

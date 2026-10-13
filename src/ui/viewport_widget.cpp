@@ -6835,10 +6835,14 @@ public:
                 BlenderGridRenderer &grid,
                 ViewportSceneRenderer &scene,
                 ViewportSurfaceRenderer &surface) {
+                const ViewportProjectionClipRange projectionClipRange =
+                    viewportProjectionClipRange(renderCamera, pixelSize);
                 aa.setDepthOfField(settings.depthOfField &&
                                        !settings.xrayEnabled(),
                                    renderCamera.cameraPreferences(),
-                                   renderCamera.isPerspectiveEnabled());
+                                   renderCamera.isPerspectiveEnabled(),
+                                   projectionClipRange.nearPlane,
+                                   projectionClipRange.farPlane);
                 aa.setDisplayTransform(settings, true,
                                        combinedUsesPremultipliedAlpha);
                 if (!transparentFilm && !noSceneWorldBackground) {
@@ -11081,11 +11085,21 @@ protected:
                     renderFrame, renderShadingSettings, viewportAaMode_,
                     devicePixelRatioF(), sceneContentStateKey,
                     viewportWorldColorSceneLinear);
+                const QSize dofPixelSize(
+                    qRound(renderFrame.viewportSize.width() *
+                           devicePixelRatioF()),
+                    qRound(renderFrame.viewportSize.height() *
+                           devicePixelRatioF()));
+                const ViewportProjectionClipRange projectionClipRange =
+                    viewportProjectionClipRange(renderFrame.camera,
+                                                dofPixelSize);
                 aaRenderer->setDepthOfField(
                     viewportShadingSettings_.depthOfField &&
                         !viewportShadingSettings_.xrayEnabled(),
-                    viewportTransform_.cameraPreferences(),
-                    viewportTransform_.isPerspectiveEnabled());
+                    renderFrame.camera.cameraPreferences(),
+                    renderFrame.camera.isPerspectiveEnabled(),
+                    projectionClipRange.nearPlane,
+                    projectionClipRange.farPlane);
                 aaRenderer->setDisplayTransform(renderShadingSettings, true);
                 aaSceneSampleActive = aaRenderer->beginSceneSample(
                     renderFrame.viewportSize, devicePixelRatioF(),

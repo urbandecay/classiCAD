@@ -653,8 +653,31 @@ in ordinary free views or orthographic views is superseded by this correction.
   Blender's setup; the former shader subtracted rotation in the sector angle
   and then added it again for sample coordinates. Its denominator no longer
   has an epsilon floor, preserving Blender's two-blade edge equation.
-  Aperture and overall output still need visual comparison.
+  A matched 640x480 Blender 5.2.2 capture found that both camera DOF gates
+  must be enabled (`scene.display.shading.use_dof` and
+  `camera.data.dof.use_dof`) for Workbench's render path to run. With the same
+  25 mm lens, 36 mm horizontal sensor, focus distance, clip range, f/0.1,
+  six-blade aperture, and cube scene, classiCAD and Blender both preserve the
+  opaque gray background and soften 521/524 versus 522/524 qualifying high
+  contrast adjacent edge pairs. The baseline silhouette masks match exactly
+  (IoU 1.0); the DOF output differs by mean absolute RGB channel delta 0.78
+  across classiCAD's frame versus 0.81 for Blender's own DOF/baseline delta.
+  This validates spatial blur and background coverage, while exact bokeh
+  parity remains open.
   Pinned source: [`workbench_effect_dof_blur1_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_dof_blur1_frag.glsl#L20-L31), with the texture populated in [`workbench_resources.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_resources.cc#L84-L100). The QPainter fallback remains a fixed 12-tap full-resolution gather and has no median pass. Its aperture shaping now uses Blender's `blades > 1` condition and polygon/rotation/reciprocal-X-ratio mapping, including the two-blade slit. Image comparison remains open. Pinned gather setup: [`workbench_effect_dof.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_dof.cc#L30-L75); the GPU stages are defined by the adjacent pinned Workbench DOF shaders.
+
+- The matched capture exposed two source-level issues. CoC reconstruction was
+  using the stored clip end even when classiCAD had tightened the actual
+  perspective projection range; `setDepthOfField` now receives that exact
+  projection range from `viewportProjectionClipRange`, keeping the depth
+  buffer decode aligned with the scene matrix. The half-resolution color and
+  CoC textures allocate three mip levels, so their GL mipmapped samplers now
+  set `GL_TEXTURE_MAX_LEVEL` to 2. Without that limit OpenGL treated the
+  textures as incomplete and stage-one `texelFetch` returned zero colors and
+  CoCs, creating the black wedges and background. Blender's pinned
+  `DofPass::init` creates these textures with exactly three levels and
+  `DofPass::sync` samples their mip views. The focused offscreen contract and
+  matched capture pass with both corrections.
 
 ### GPU and QPainter DOF optical sensor fit (2026-10-12)
 

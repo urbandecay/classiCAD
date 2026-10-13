@@ -28,7 +28,9 @@ public:
     int mode() const noexcept;
     void setDepthOfField(bool enabled,
                          const ViewportCameraPreferences &optics,
-                         bool perspectiveView);
+                         bool perspectiveView,
+                         qreal projectionClipStart,
+                         qreal projectionClipEnd);
     void setDisplayTransform(const ViewportShadingSettings &settings,
                              bool sourceIsSceneLinear,
                              bool sourceHasPremultipliedAlpha = false);

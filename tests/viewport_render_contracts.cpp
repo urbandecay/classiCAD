@@ -1790,7 +1790,11 @@ int main(int argc, char *argv[])
                         if (dofOptics != nullptr) {
                             sceneAaRenderer.setDepthOfField(
                                 true, *dofOptics,
-                                renderCamera.isPerspectiveEnabled());
+                                renderCamera.isPerspectiveEnabled(),
+                                viewportProjectionClipRange(
+                                    renderCamera, glSize).nearPlane,
+                                viewportProjectionClipRange(
+                                    renderCamera, glSize).farPlane);
                         }
                         if (!sceneAaRenderer.beginSceneSample(
                                 glSize, 1.0, renderCamera, historyKey,
@@ -1862,11 +1866,17 @@ int main(int argc, char *argv[])
                         ViewportCameraPreferences dofOptics =
                             dofCamera.cameraPreferences();
                         dofOptics.sceneCameraEnabled = true;
+                        // The viewport projection's 2x camera zoom makes its
+                        // 50 mm preference equivalent to a 25 mm Blender
+                        // camera lens for this matched 36 mm horizontal fit.
+                        dofOptics.focalLengthMillimeters = 25.0;
                         dofOptics.focusDistance = std::sqrt(
                             std::pow(dofCamera.cameraPosition(glSize).x, 2.0) +
                             std::pow(dofCamera.cameraPosition(glSize).y, 2.0) +
                             std::pow(dofCamera.cameraPosition(glSize).z, 2.0));
-                        dofOptics.fStop = 2.8;
+                        // Use a deliberately large aperture so this compact
+                        // cube produces measurable CoC at the matched view.
+                        dofOptics.fStop = 0.1;
                         dofOptics.apertureBlades = 6;
                         dofOptics.apertureRotationRadians = 0.2;
                         dofOptics.apertureRatio = 1.2;

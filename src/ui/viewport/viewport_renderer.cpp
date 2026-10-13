@@ -1268,7 +1268,8 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  const QString &libraryPath,
                                  const MeshObjectTransform &meshTransform,
                                  const QVector<WorkbenchMaterialData> &meshMaterials,
-                                 RasterWorkbenchFragmentSink *fragmentSink) const
+                                 RasterWorkbenchFragmentSink *fragmentSink,
+                                 const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials) const
 {
     if (shape.points.isEmpty() && !isValidNurbsCurve(shape.nurbs) &&
         shape.components.isEmpty() &&
@@ -2300,13 +2301,50 @@ void ViewportRenderer::drawShape(QPainter &painter,
 
     if (shape.geometryType == GeometryType::NurbsSolid) {
         const auto faces = shapeSurfaceFaces(shape);
+        QVector<QString> faceIds;
+        if (shape.nurbsSolid.boundaryFaces.isEmpty()) {
+            faceIds = {shape.nurbsSolid.baseCapFaceId,
+                       shape.nurbsSolid.displacedCapFaceId};
+            for (const QString &id : shape.nurbsSolid.wallFaceIds)
+                faceIds.append(id);
+        }
+        const auto materialForFace = [&](int index) {
+            if (index < faceIds.size()) {
+                const auto found = nurbsSolidFaceMaterials.constFind(faceIds[index]);
+                if (found != nurbsSolidFaceMaterials.cend())
+                    return std::optional<WorkbenchMaterialData>(found.value());
+            }
+            return std::optional<WorkbenchMaterialData>(workbenchMaterial);
+        };
         if (preparedGeometry != nullptr && !faces.isEmpty()) {
-            drawNurbsSurface(painter, faces.first(), viewportSize,
-                             shapeObjectId, geometryRevision, preparedGeometry,
-                             preparedOffset, preview, selected, false,
-                             layerColor, displayColorSceneLinear,
-                             workbenchMaterial, displayName, libraryPath,
-                             fragmentSink);
+            for (int index = 0; index < faces.size(); ++index) {
+                ViewportDepthGeometry faceGeometry;
+                const auto range = index < preparedGeometry->surfaceFaceRanges.size()
+                    ? preparedGeometry->surfaceFaceRanges[index]
+                    : ViewportDepthGeometry::SurfaceFaceRange{};
+                if (range.vertexCount > 0) {
+                    for (int vertex = range.firstVertex;
+                         vertex < range.firstVertex + range.vertexCount; ++vertex) {
+                        faceGeometry.surfaceVertices.append(
+                            preparedGeometry->surfaceVertices[vertex]);
+                        if (vertex < preparedGeometry->surfaceNormals.size())
+                            faceGeometry.surfaceNormals.append(
+                                preparedGeometry->surfaceNormals[vertex]);
+                        if (vertex < preparedGeometry->surfaceTextureCoordinates.size())
+                            faceGeometry.surfaceTextureCoordinates.append(
+                                preparedGeometry->surfaceTextureCoordinates[vertex]);
+                    }
+                }
+                drawNurbsSurface(painter, faces[index], viewportSize,
+                                 shapeObjectId, geometryRevision,
+                                 faceGeometry.surfaceVertices.isEmpty()
+                                     ? preparedGeometry : &faceGeometry,
+                                 preparedOffset, preview, selected,
+                                 nurbsSolidFaceReversed(shape.nurbsSolid, index),
+                                 layerColor, displayColorSceneLinear,
+                                 materialForFace(index), displayName, libraryPath,
+                                 fragmentSink);
+            }
         } else {
             for (int index = 0; index < faces.size(); ++index)
                 drawNurbsSurface(painter, faces[index], viewportSize,
@@ -2315,7 +2353,7 @@ void ViewportRenderer::drawShape(QPainter &painter,
                                  nurbsSolidFaceReversed(shape.nurbsSolid,
                                                         index),
                                  layerColor, displayColorSceneLinear,
-                                 workbenchMaterial, displayName, libraryPath,
+                                 materialForFace(index), displayName, libraryPath,
                                  fragmentSink);
         }
         return;

@@ -282,7 +282,7 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
 QJsonObject documentToJson(const Document &document)
 {
     QJsonObject serialized;
-    serialized.insert(QStringLiteral("version"), 20);
+    serialized.insert(QStringLiteral("version"), 21);
     QJsonObject settings;
     settings.insert(QStringLiteral("lengthUnit"),
                     documentLengthUnitKey(document.settings().lengthUnit));
@@ -441,6 +441,15 @@ QJsonObject documentToJson(const Document &document)
         serializedObject.insert(QStringLiteral("blenderMeshImportMode"),
                                 sceneObject.blenderMeshImportMode);
         serializedObject.insert(QStringLiteral("geometry"), shapeToJson(sceneObject.geometry));
+        QJsonObject solidFaceMaterials;
+        QStringList solidFaceIds = sceneObject.nurbsSolidFaceMaterialIds.keys();
+        std::sort(solidFaceIds.begin(), solidFaceIds.end());
+        for (const QString &faceId : solidFaceIds) {
+            solidFaceMaterials.insert(faceId,
+                                      sceneObject.nurbsSolidFaceMaterialIds.value(faceId));
+        }
+        serializedObject.insert(QStringLiteral("nurbsSolidFaceMaterialIds"),
+                                solidFaceMaterials);
         QJsonObject placement;
         placement.insert(QStringLiteral("x"), sceneObject.placementTranslation.x);
         placement.insert(QStringLiteral("y"), sceneObject.placementTranslation.y);
@@ -518,7 +527,7 @@ bool documentFromJson(const QJsonValue &value,
 
     const QJsonObject serialized = value.toObject();
     const int version = serialized.value(QStringLiteral("version")).toInt(-1);
-    if (version < 1 || version > 20) {
+    if (version < 1 || version > 21) {
         setError(errorMessage, QStringLiteral("unsupported document version"));
         return false;
     }
@@ -1320,6 +1329,40 @@ bool documentFromJson(const QJsonValue &value,
             }
         }
         sceneObject.geometry = std::move(shape);
+        if (version >= 21) {
+            const QJsonValue faceMaterialsValue =
+                serializedObject.value(QStringLiteral("nurbsSolidFaceMaterialIds"));
+            if (!faceMaterialsValue.isObject()) {
+                setError(errorMessage,
+                         QStringLiteral("invalid solid face material references"));
+                return false;
+            }
+            const QJsonObject faceMaterials = faceMaterialsValue.toObject();
+            if (!faceMaterials.isEmpty() &&
+                (sceneObject.geometry.geometryType != GeometryType::NurbsSolid ||
+                 !sceneObject.geometry.nurbsSolid.boundaryFaces.isEmpty())) {
+                setError(errorMessage,
+                         QStringLiteral("face materials require a NurbsSolid"));
+                return false;
+            }
+            QSet<QString> validFaceIds{
+                sceneObject.geometry.nurbsSolid.baseCapFaceId,
+                sceneObject.geometry.nurbsSolid.displacedCapFaceId};
+            for (const QString &faceId :
+                 sceneObject.geometry.nurbsSolid.wallFaceIds) {
+                validFaceIds.insert(faceId);
+            }
+            for (auto it = faceMaterials.begin(); it != faceMaterials.end(); ++it) {
+                if (!it.value().isString() || !validFaceIds.contains(it.key()) ||
+                    !materialIds.contains(it.value().toString())) {
+                    setError(errorMessage,
+                             QStringLiteral("invalid solid face material reference"));
+                    return false;
+                }
+                sceneObject.nurbsSolidFaceMaterialIds.insert(
+                    it.key(), it.value().toString());
+            }
+        }
         sceneObject.placementTranslation = placementTranslation;
         sceneObject.displayColorSceneLinear = displayColorSceneLinear;
         sceneObject.workbenchMaterial = workbenchMaterial;

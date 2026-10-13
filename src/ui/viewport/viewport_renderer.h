@@ -53,7 +53,8 @@ public:
                    const MeshObjectTransform &meshTransform =
                        identityMeshObjectTransform,
                    const QVector<WorkbenchMaterialData> &meshMaterials = {},
-                   RasterWorkbenchFragmentSink *fragmentSink = nullptr) const;
+                   RasterWorkbenchFragmentSink *fragmentSink = nullptr,
+                   const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials = {}) const;
     void setSmoothCurveDisplay(bool enabled);
     void drawNurbsCurve(QPainter &painter,
                         const Shape::NurbsCurve2D &curve,

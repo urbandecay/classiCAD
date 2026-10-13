@@ -520,7 +520,167 @@ def add_nurbs_surface_mesh(layer_collection, object_name, surface_data, display_
     return obj
 
 
-def add_scene_object(layer_collections, record, surface_display_mesh=None):
+def classiCAD_materials(document):
+    """Create/find the Blender datablocks used by stable document material IDs."""
+    result = {}
+    for record in document.get("materials", []):
+        material_id = str(record.get("id", ""))
+        if not material_id:
+            continue
+        material = next(
+            (candidate for candidate in bpy.data.materials
+             if candidate.get("classiCAD_material_id") == material_id),
+            None,
+        )
+        if material is None:
+            material = bpy.data.materials.new(
+                "classiCAD.Material." + str(record.get("name", material_id))
+            )
+            material["classiCAD_material_id"] = material_id
+            color = record.get("baseColorSceneLinear", [0.8, 0.8, 0.8, 1.0])
+            material.diffuse_color = tuple(float(value) for value in color[:4])
+        result[material_id] = material
+    return result
+
+
+def attach_solid_face_metadata(mesh, polygon_face_refs, document):
+    """Tag each proxy polygon with its source object and semantic seed-face ID."""
+    if len(polygon_face_refs) != len(mesh.polygons):
+        raise ValueError("solid proxy face identity count does not match polygons")
+    references = []
+    reference_indices = {}
+    tokens = []
+    for reference in polygon_face_refs:
+        if not reference or not reference[1]:
+            tokens.append(-1)
+            continue
+        key = (str(reference[0]), str(reference[1]))
+        token = reference_indices.get(key)
+        if token is None:
+            token = len(references)
+            reference_indices[key] = token
+            references.append([key[0], key[1]])
+        tokens.append(token)
+    attribute = mesh.attributes.get("classiCAD_solid_face_token")
+    if attribute is not None:
+        mesh.attributes.remove(attribute)
+    attribute = mesh.attributes.new(
+        "classiCAD_solid_face_token", "INT", "FACE"
+    )
+    attribute.data.foreach_set("value", tokens)
+    mesh["classiCAD_solid_face_refs"] = json.dumps(
+        references, ensure_ascii=False, separators=(",", ":")
+    )
+    materials = classiCAD_materials(document)
+    for material_id, material in materials.items():
+        mesh.materials.append(material)
+    slots = {material_id: index for index, material_id in enumerate(materials)}
+    unassigned = next(
+        (material for material in bpy.data.materials
+         if material.get("classiCAD_unassigned_material_slot")),
+        None,
+    )
+    if unassigned is None:
+        unassigned = bpy.data.materials.new("classiCAD.Unassigned")
+        unassigned.diffuse_color = (0.8, 0.8, 0.8, 1.0)
+    unassigned["classiCAD_material_id"] = ""
+    unassigned["classiCAD_unassigned_material_slot"] = True
+    unassigned_slot = len(mesh.materials)
+    mesh.materials.append(unassigned)
+    records = {str(record.get("id")): record
+               for record in document.get("objects", [])}
+    existing = {object_id: record.get("nurbsSolidFaceMaterialIds", {})
+                for object_id, record in records.items()
+                if int(record.get("geometry", {}).get("geometryType", -1)) == 15}
+    for polygon, reference in zip(mesh.polygons, polygon_face_refs):
+        if not reference or not reference[1]:
+            continue
+        polygon.material_index = unassigned_slot
+        material_id = existing.get(str(reference[0]), {}).get(str(reference[1]))
+        if material_id in slots:
+            polygon.material_index = slots[material_id]
+
+
+def merge_solid_proxy_materials(document):
+    """Merge unambiguous proxy assignments into exact, unmaterialized seeds."""
+    object_records = {str(record.get("id")): record
+                      for record in document.get("objects", [])}
+    material_ids = {str(record.get("id", ""))
+                    for record in document.get("materials", [])}
+    assignments = {}
+    for obj in bpy.data.objects:
+        if obj.get("classiCAD_proxy_geometry") != "NurbsSurface and NurbsSolid":
+            continue
+        mesh = obj.data if obj.type == "MESH" else None
+        if mesh is None:
+            continue
+        attribute = mesh.attributes.get("classiCAD_solid_face_token")
+        raw_references = mesh.get("classiCAD_solid_face_refs", "")
+        if attribute is None or not raw_references:
+            continue
+        try:
+            references = json.loads(raw_references)
+        except (TypeError, ValueError):
+            continue
+        if len(attribute.data) != len(mesh.polygons):
+            continue
+        by_face = {}
+        for polygon, item in zip(mesh.polygons, attribute.data):
+            token = int(item.value)
+            if token < 0 or token >= len(references):
+                continue
+            reference = references[token]
+            if not isinstance(reference, list) or len(reference) != 2:
+                continue
+            object_id, face_id = str(reference[0]), str(reference[1])
+            record = object_records.get(object_id)
+            if record is None or not face_id:
+                continue
+            geometry = record.get("geometry", {})
+            if int(geometry.get("geometryType", -1)) != 15:
+                continue
+            solid = geometry.get("nurbsSolid", {})
+            if solid.get("boundaryFaces"):
+                continue
+            semantic_ids = {
+                str(solid.get("baseCapFaceId", "")),
+                str(solid.get("displacedCapFaceId", "")),
+                *(str(value) for value in solid.get("wallFaceIds", [])),
+            }
+            if face_id not in semantic_ids:
+                continue
+            slot_index = int(polygon.material_index)
+            material = (obj.material_slots[slot_index].material
+                        if 0 <= slot_index < len(obj.material_slots) else None)
+            if material is None:
+                material_id = None
+            elif material.get("classiCAD_unassigned_material_slot"):
+                material_id = ""
+            else:
+                material_id = str(material.get("classiCAD_material_id", ""))
+                if material_id not in material_ids:
+                    material_id = None
+            by_face.setdefault((object_id, face_id), set()).add(material_id)
+        for key, values in by_face.items():
+            # A seed face is one semantic surface. If a user assigns several
+            # proxy materials across its tessellation, retain its prior value.
+            if len(values) == 1:
+                value = next(iter(values))
+                assignments[key] = value
+    for (object_id, face_id), material_id in assignments.items():
+        face_materials = object_records[object_id].setdefault(
+            "nurbsSolidFaceMaterialIds", {}
+        )
+        if material_id is None:
+            continue
+        if material_id:
+            face_materials[face_id] = material_id
+        else:
+            face_materials.pop(face_id, None)
+
+
+def add_scene_object(layer_collections, record, surface_display_mesh=None,
+                     document=None):
     object_id = str(record["id"])
     layer_id = str(record["layerId"])
     shape = record["geometry"]
@@ -544,7 +704,16 @@ def add_scene_object(layer_collections, record, surface_display_mesh=None):
         obj["classiCAD_layer_id"] = layer_id
         obj["classiCAD_geometry_type"] = geometry_type
         obj["classiCAD_data_block"] = DOCUMENT_TEXT_NAME
+        obj["classiCAD_proxy_geometry"] = "NurbsSurface and NurbsSolid"
         obj.show_in_front = bool(record.get("showInFront", False))
+        if geometry_type == 15 and surface_display_mesh is not None:
+            face_ids = surface_display_mesh.get("solidFaceIds", [])
+            attach_solid_face_metadata(
+                obj.data,
+                [(object_id, str(face_id)) if face_id else None
+                 for face_id in face_ids],
+                document or {},
+            )
         return
     curve_data = bpy.data.curves.new(object_name, "CURVE")
     curve_data.dimensions = "3D"
@@ -635,7 +804,8 @@ def add_curve_record_to_group(curve_data, record):
     return has_curve
 
 
-def create_grouped_scene_objects(layer_collections, records, surface_display_meshes):
+def create_grouped_scene_objects(layer_collections, records, surface_display_meshes,
+                                 document):
     # Large projects use grouped Blender display proxies. Per-object identity,
     # exact NURBS data, and layer membership remain in the authoritative text.
     mesh_batches = {}
@@ -658,7 +828,7 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
             if not source_vertices or not source_faces:
                 raise ValueError("derived NURBS surface display mesh is empty")
             batch = mesh_batches.setdefault(
-                layer_id, {"vertices": [], "faces": [], "count": 0}
+                layer_id, {"vertices": [], "faces": [], "face_refs": [], "count": 0}
             )
             vertex_offset = len(batch["vertices"])
             batch["vertices"].extend(
@@ -668,6 +838,13 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
             batch["faces"].extend(
                 tuple(vertex_offset + int(index) for index in face)
                 for face in source_faces
+            )
+            semantic_ids = display_mesh.get("solidFaceIds", [])
+            if len(semantic_ids) != len(source_faces):
+                semantic_ids = [""] * len(source_faces)
+            batch["face_refs"].extend(
+                [(object_id, str(face_id)) if geometry_type == 15 and face_id else None
+                 for face_id in semantic_ids]
             )
             batch["count"] += 1
             continue
@@ -695,6 +872,7 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
         mesh.from_pydata(batch["vertices"], [], batch["faces"])
         mesh.update()
         obj = bpy.data.objects.new("classiCAD.surface-proxy." + layer_id, mesh)
+        attach_solid_face_metadata(mesh, batch["face_refs"], document)
         obj["classiCAD_layer_id"] = layer_id
         obj["classiCAD_proxy_geometry"] = "NurbsSurface and NurbsSolid"
         obj["classiCAD_proxy_object_count"] = batch["count"]
@@ -719,6 +897,7 @@ def create_grouped_scene_objects(layer_collections, records, surface_display_mes
             layer_collections,
             record,
             surface_display_meshes.get(str(record["id"])),
+            document,
         )
 
 
@@ -792,7 +971,7 @@ def create_project(document, destination_path):
     object_records = document.get("objects", [])
     if len(object_records) >= 1000:
         create_grouped_scene_objects(
-            layer_collections, object_records, surface_display_meshes
+            layer_collections, object_records, surface_display_meshes, document
         )
     else:
         for record in object_records:
@@ -800,6 +979,7 @@ def create_project(document, destination_path):
                 layer_collections,
                 record,
                 surface_display_meshes.get(str(record["id"])),
+                document,
             )
 
     result = bpy.ops.wm.save_as_mainfile(
@@ -837,6 +1017,7 @@ def load_project(source_path, output_json_path):
     if document_text is None:
         raise RuntimeError("The classiCAD document data is missing from this Blender file")
     document = json.loads(document_text.as_string())
+    merge_solid_proxy_materials(document)
     with open(output_json_path, "w", encoding="utf-8") as output_file:
         json.dump(document, output_file, ensure_ascii=False, separators=(",", ":"))
 

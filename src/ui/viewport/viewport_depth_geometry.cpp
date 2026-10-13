@@ -270,6 +270,7 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
     if (geometry == nullptr) {
         return;
     }
+    const int faceVertexStart = geometry->surfaceVertices.size();
     ViewportDepthGeometry::SurfaceBuildTiming timing;
     timing.faceIndex = faceIndex;
     timing.degreeU = surface.degreeU;
@@ -473,6 +474,9 @@ void appendNurbsSurfaceDepthMesh(const Shape::NurbsSurface3D &surface,
             triangleExpansionTimer.nsecsElapsed() / 1000;
         geometry->surfaceBuildTimings.append(timing);
     }
+    geometry->surfaceFaceRanges.append(
+        {faceIndex, faceVertexStart,
+         int(geometry->surfaceVertices.size()) - faceVertexStart});
 }
 
 void writeCurve(QDataStream &stream, const Shape::NurbsCurve2D &curve)

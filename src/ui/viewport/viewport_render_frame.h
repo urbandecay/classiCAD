@@ -72,6 +72,7 @@ struct ViewportRenderObject {
     Point3D placementTranslation;
     MeshObjectTransform meshObjectTransform = identityMeshObjectTransform;
     QVector<WorkbenchMaterialData> meshMaterials;
+    QHash<QString, WorkbenchMaterialData> nurbsSolidFaceMaterials;
     QSharedPointer<const ViewportDepthGeometry> preparedDepthGeometry;
     // The immutable mesh may stay at its original position after translation.
     quint64 preparedGeometryRevision = 0;

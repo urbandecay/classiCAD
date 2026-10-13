@@ -134,6 +134,7 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
         }
         QJsonArray vertices;
         QJsonArray faces;
+        QJsonArray solidFaceIds;
         int surfaceIndex = 0;
         for (const auto &surface : classiCAD::shapeSurfaceFaces(sceneObject.geometry)) {
             classiCAD::PreparedNurbsSurfaceTessellation tessellation;
@@ -160,12 +161,29 @@ bool addSurfaceDisplayMeshes(const classiCAD::Document &document,
                 face.append(vertexOffset + triangle[reversed ? 2 : 1]);
                 face.append(vertexOffset + triangle[reversed ? 1 : 2]);
                 faces.append(face);
+                if (sceneObject.geometry.geometryType == classiCAD::GeometryType::NurbsSolid) {
+                    const auto &solid = sceneObject.geometry.nurbsSolid;
+                    QString semanticFaceId;
+                    if (!solid.boundaryFaces.isEmpty()) {
+                        semanticFaceId.clear();
+                    } else if (surfaceIndex == 0) {
+                        semanticFaceId = solid.baseCapFaceId;
+                    } else if (surfaceIndex == 1) {
+                        semanticFaceId = solid.displacedCapFaceId;
+                    } else {
+                        semanticFaceId = solid.wallFaceIds.value(surfaceIndex - 2);
+                    }
+                    solidFaceIds.append(semanticFaceId);
+                } else {
+                    solidFaceIds.append(QString());
+                }
             }
             ++surfaceIndex;
         }
         QJsonObject mesh;
         mesh.insert(QStringLiteral("vertices"), vertices);
         mesh.insert(QStringLiteral("faces"), faces);
+        mesh.insert(QStringLiteral("solidFaceIds"), solidFaceIds);
         displayMeshes.insert(QString::number(sceneObject.id.value()), mesh);
     }
     serializedDocument->insert(QStringLiteral("_surfaceDisplayMeshes"),

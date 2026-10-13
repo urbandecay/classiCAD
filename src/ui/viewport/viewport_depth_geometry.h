@@ -17,6 +17,11 @@
 namespace classiCAD {
 
 struct ViewportDepthGeometry {
+    struct SurfaceFaceRange {
+        int faceIndex = -1;
+        int firstVertex = 0;
+        int vertexCount = 0;
+    };
     // Vertex arrays are already expanded for GL_LINES/GL_POINTS/GL_TRIANGLES.
     QVector<QVector3D> lineVertices;
     // Preserve double-precision world samples for the CPU painter fallback.
@@ -32,6 +37,8 @@ struct ViewportDepthGeometry {
     QVector<QPointF> surfaceTextureCoordinates;
     // One smooth normal per expanded GL_TRIANGLES vertex.
     QVector<QVector3D> surfaceNormals;
+    // Expanded vertex spans per semantic surface face, in face-array order.
+    QVector<SurfaceFaceRange> surfaceFaceRanges;
     // An indexed display mesh for shadow volumes. NurbsSolids require a
     // validated closed mesh; open NurbsSurfaces retain their boundary loops
     // so the renderer can build forced-fail shadow-volume sides.

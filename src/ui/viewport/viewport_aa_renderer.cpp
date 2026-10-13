@@ -2660,6 +2660,12 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
                << material.textureImageAlphaMode
                << material.textureImageInterpolation
                << material.textureImageExtension
+               << material.textureImageColorTransformId
+               << material.textureImageSceneLinearFloatWidth
+               << material.textureImageSceneLinearFloatHeight
+               << QCryptographicHash::hash(
+                      material.textureImageSceneLinearFloatDataBase64.toLatin1(),
+                      QCryptographicHash::Sha256)
                << QCryptographicHash::hash(
                       material.textureImagePackedDataBase64.toLatin1(),
                       QCryptographicHash::Sha256)
@@ -2673,6 +2679,11 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
                    << tileInfo.lastModified().toMSecsSinceEpoch()
                    << QCryptographicHash::hash(
                           tile.packedDataBase64.toLatin1(),
+                          QCryptographicHash::Sha256)
+                   << tile.sceneLinearFloatWidth
+                   << tile.sceneLinearFloatHeight
+                   << QCryptographicHash::hash(
+                          tile.sceneLinearFloatDataBase64.toLatin1(),
                           QCryptographicHash::Sha256);
         }
     };
@@ -2700,6 +2711,13 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
             writeMaterial(material);
         }
         writeMaterial(object.workbenchMaterial);
+        QStringList faceMaterialIds = object.nurbsSolidFaceMaterials.keys();
+        std::sort(faceMaterialIds.begin(), faceMaterialIds.end());
+        stream << qint32(faceMaterialIds.size());
+        for (const QString &faceId : faceMaterialIds) {
+            stream << faceId;
+            writeMaterial(object.nurbsSolidFaceMaterials.value(faceId));
+        }
         for (const double component : object.meshObjectTransform) {
             stream << component;
         }

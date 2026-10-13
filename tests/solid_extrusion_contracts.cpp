@@ -6,6 +6,7 @@
 #include "core/geometry/nurbs_surface_factory.h"
 #include "core/history/document_transaction.h"
 #include "core/serialization/shape_json_codec.h"
+#include "core/serialization/document_serializer.h"
 #include "services/hit_testing/curve_hit_tester.h"
 #include "services/sampling/curve_sampler.h"
 #include "services/snapping/snap_engine.h"
@@ -22,6 +23,8 @@
 #include <QApplication>
 #include <QDebug>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QPainter>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
@@ -196,6 +199,85 @@ int main(int argc, char **argv)
                         seedRoundtrip.nurbsSolid.displacedCapFaceId == initialTopCapId &&
                         seedRoundtrip.nurbsSolid.wallFaceIds == solid.nurbsSolid.wallFaceIds,
                     "seed semantic face IDs must be unique and survive native JSON roundtrip");
+    Document faceMaterialDocument;
+    DocumentMaterial capMaterial;
+    capMaterial.id = QStringLiteral("cap-material");
+    capMaterial.name = QStringLiteral("Cap");
+    capMaterial.baseColorSceneLinear = {0.9f, 0.1f, 0.1f, 1.0f};
+    DocumentMaterial wallMaterial;
+    wallMaterial.id = QStringLiteral("wall-material");
+    wallMaterial.name = QStringLiteral("Wall");
+    wallMaterial.baseColorSceneLinear = {0.1f, 0.1f, 0.9f, 1.0f};
+    Document::Snapshot faceMaterialSnapshot = faceMaterialDocument.snapshot();
+    faceMaterialSnapshot.materials.append(capMaterial);
+    faceMaterialSnapshot.materials.append(wallMaterial);
+    faceMaterialDocument.restoreSnapshot(faceMaterialSnapshot);
+    SceneObject materialSolidObject;
+    materialSolidObject.layerId = faceMaterialDocument.activeLayerId();
+    materialSolidObject.geometry = solid;
+    materialSolidObject.nurbsSolidFaceMaterialIds.insert(
+        initialBaseCapId, capMaterial.id);
+    materialSolidObject.nurbsSolidFaceMaterialIds.insert(
+        initialWallId, wallMaterial.id);
+    const ObjectId materialSolidId =
+        faceMaterialDocument.insertObject(0, materialSolidObject);
+    Document faceMaterialRoundtrip;
+    QString faceMaterialError;
+    const bool faceMaterialSerialized = documentFromJson(
+        documentToJson(faceMaterialDocument), &faceMaterialRoundtrip,
+        &faceMaterialError);
+    const SceneObject *restoredMaterialSolid =
+        faceMaterialRoundtrip.object(materialSolidId);
+    passed &= check(faceMaterialSerialized && restoredMaterialSolid != nullptr &&
+                        restoredMaterialSolid->nurbsSolidFaceMaterialIds ==
+                            materialSolidObject.nurbsSolidFaceMaterialIds,
+                    "solid face material references must survive native document roundtrip");
+    ViewportRenderFrameInput faceMaterialFrameInput;
+    const ViewportRenderFrame faceMaterialFrame = buildViewportRenderFrame(
+        faceMaterialDocument, ViewportTransform(), QSize(640, 480),
+        faceMaterialFrameInput);
+    const ViewportRenderObject *resolvedSolid =
+        faceMaterialFrame.find(materialSolidId);
+    passed &= check(resolvedSolid != nullptr &&
+                        resolvedSolid->nurbsSolidFaceMaterials.value(
+                            initialBaseCapId).baseColorSceneLinear.x() > 0.8f &&
+                        resolvedSolid->nurbsSolidFaceMaterials.value(
+                            initialWallId).baseColorSceneLinear.z() > 0.8f,
+                    "render frame resolves stable solid face IDs to shared materials");
+    const ViewportDepthGeometry solidDepthGeometry =
+        buildViewportDepthGeometry(solid);
+    int faceRangeVertices = 0;
+    bool faceRangesContiguous =
+        solidDepthGeometry.surfaceFaceRanges.size() ==
+        nurbsSolidFaces(solid.nurbsSolid).size();
+    for (int faceIndex = 0;
+         faceIndex < solidDepthGeometry.surfaceFaceRanges.size(); ++faceIndex) {
+        const auto &range = solidDepthGeometry.surfaceFaceRanges[faceIndex];
+        faceRangesContiguous &= range.faceIndex == faceIndex &&
+            range.vertexCount > 0 && range.firstVertex == faceRangeVertices;
+        faceRangeVertices += range.vertexCount;
+    }
+    passed &= check(faceRangesContiguous &&
+                        faceRangeVertices ==
+                            solidDepthGeometry.surfaceVertices.size(),
+                    "solid viewport tessellation retains contiguous per-face GPU/QPainter ranges");
+    QJsonObject invalidFaceMaterialDocument = documentToJson(faceMaterialDocument);
+    QJsonArray invalidObjects = invalidFaceMaterialDocument.value(
+        QStringLiteral("objects")).toArray();
+    QJsonObject invalidObject = invalidObjects.first().toObject();
+    QJsonObject invalidFaceMaterialMap = invalidObject.value(
+        QStringLiteral("nurbsSolidFaceMaterialIds")).toObject();
+    invalidFaceMaterialMap.insert(initialBaseCapId,
+                                  QStringLiteral("missing-material"));
+    invalidObject.insert(QStringLiteral("nurbsSolidFaceMaterialIds"),
+                         invalidFaceMaterialMap);
+    invalidObjects[0] = invalidObject;
+    invalidFaceMaterialDocument.insert(QStringLiteral("objects"), invalidObjects);
+    Document rejectedFaceMaterialDocument;
+    passed &= check(!documentFromJson(invalidFaceMaterialDocument,
+                                      &rejectedFaceMaterialDocument,
+                                      &faceMaterialError),
+                    "native documents must reject solid face refs to missing materials");
     QJsonObject invalidFaceIds = shapeToJson(solid);
     QJsonObject invalidSolid = invalidFaceIds.value(QStringLiteral("nurbsSolid")).toObject();
     invalidSolid.insert(QStringLiteral("displacedCapFaceId"), initialBaseCapId);
@@ -246,6 +328,26 @@ int main(int argc, char **argv)
     passed &= check(makeNurbsExtrusionSolid(rectangleFace,{0,0,3},&rectangularSolid) &&
                         nurbsSolidFaces(rectangularSolid).size()==3,
                     "untrimmed rectangular plane must close with a perimeter wall");
+    Shape materializedSeed;
+    materializedSeed.geometryType = GeometryType::NurbsSolid;
+    materializedSeed.nurbsSolid = rectangularSolid;
+    passed &= check(materializeNurbsSolidBoundary(&materializedSeed.nurbsSolid),
+                    "solid face-material fallback fixture materializes boundary patches");
+    SceneObject materializedObject;
+    materializedObject.layerId = faceMaterialDocument.activeLayerId();
+    materializedObject.geometry = materializedSeed;
+    materializedObject.nurbsSolidFaceMaterialIds.insert(
+        rectangularSolid.baseCapFaceId, capMaterial.id);
+    const ObjectId materializedId = faceMaterialDocument.insertObject(
+        faceMaterialDocument.size(), materializedObject);
+    const ViewportRenderFrame materializedFrame = buildViewportRenderFrame(
+        faceMaterialDocument, ViewportTransform(), QSize(640, 480),
+        faceMaterialFrameInput);
+    const ViewportRenderObject *materializedRenderObject =
+        materializedFrame.find(materializedId);
+    passed &= check(materializedRenderObject != nullptr &&
+                        materializedRenderObject->nurbsSolidFaceMaterials.isEmpty(),
+                    "materialized boundary faces ignore seed-face material assignments without lineage");
     auto holedFace = face;
     {
         Shape edited;

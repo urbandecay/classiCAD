@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include <QVector4D>
 #include <QString>
+#include <QHash>
 #include <array>
 
 namespace classiCAD {
@@ -131,6 +132,9 @@ struct SceneObject {
     // True when imported or explicitly assigned Workbench material values
     // override the object's display color in Material color mode.
     bool hasWorkbenchMaterial = false;
+    // NurbsSolid seed-face identity to shared document material identity.
+    // Materialized boundary faces have no seed-face lineage and ignore this.
+    QHash<QString, QString> nurbsSolidFaceMaterialIds;
     MeshObjectTransform meshObjectTransform = identityMeshObjectTransform;
     QString blenderSourceVersion;
     QString blenderMeshImportMode;

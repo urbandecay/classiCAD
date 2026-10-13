@@ -11,6 +11,47 @@
 
 namespace classiCAD {
 
+namespace {
+
+WorkbenchMaterialData workbenchMaterialForDocumentMaterial(
+    const DocumentMaterial &material)
+{
+    WorkbenchMaterialData result;
+    if (material.baseColorSceneLinear.size() >= 3) {
+        result.baseColorSceneLinear = QVector3D(
+            material.baseColorSceneLinear[0], material.baseColorSceneLinear[1],
+            material.baseColorSceneLinear[2]);
+    }
+    result.roughness = material.roughness;
+    result.metallic = material.metallic;
+    result.alpha = material.alpha;
+    for (const DocumentImageTextureReference &image : material.imageTextures) {
+        result.textureImageTiles = image.tiles;
+        result.textureImageSrgb = image.colorSpace.compare(
+            QStringLiteral("sRGB"), Qt::CaseInsensitive) == 0;
+        result.textureImageColorTransformId = image.sourceTransformId;
+        result.textureImageSceneLinearFloatDataBase64 =
+            image.sceneLinearFloatDataBase64;
+        result.textureImageSceneLinearFloatWidth = image.sceneLinearFloatWidth;
+        result.textureImageSceneLinearFloatHeight = image.sceneLinearFloatHeight;
+        result.textureImageAlphaMode = image.alphaMode;
+        result.textureImageInterpolation = image.interpolation;
+        result.textureImageExtension = image.extension;
+        if (!image.tiles.isEmpty()) break;
+        if (image.packed && !image.packedDataBase64.isEmpty()) {
+            result.textureImagePackedDataBase64 = image.packedDataBase64;
+            break;
+        }
+        if (image.sourceFileExists && !image.filepath.isEmpty()) {
+            result.textureImagePath = image.filepath;
+            break;
+        }
+    }
+    return result;
+}
+
+} // namespace
+
 const ViewportRenderObject *ViewportRenderFrame::find(
     ObjectId objectId) const noexcept
 {
@@ -132,6 +173,22 @@ ViewportRenderFrame buildViewportRenderFrame(
         entry.displayColorSceneLinear = sceneObject.displayColorSceneLinear;
         entry.workbenchMaterial = sceneObject.workbenchMaterial;
         entry.hasWorkbenchMaterial = sceneObject.hasWorkbenchMaterial;
+        if (sceneObject.geometry.geometryType == GeometryType::NurbsSolid &&
+            sceneObject.geometry.nurbsSolid.boundaryFaces.isEmpty()) {
+            for (auto faceIt = sceneObject.nurbsSolidFaceMaterialIds.cbegin();
+                 faceIt != sceneObject.nurbsSolidFaceMaterialIds.cend(); ++faceIt) {
+                const auto materialIt = std::find_if(
+                    document.materials().cbegin(), document.materials().cend(),
+                    [&faceIt](const DocumentMaterial &material) {
+                        return material.id == faceIt.value();
+                    });
+                if (materialIt != document.materials().cend()) {
+                    entry.nurbsSolidFaceMaterials.insert(
+                        faceIt.key(),
+                        workbenchMaterialForDocumentMaterial(*materialIt));
+                }
+            }
+        }
         if (sceneObject.geometry.geometryType == GeometryType::PolygonMesh) {
             const PolygonMesh3D &mesh = sceneObject.geometry.polygonMesh;
             if (!mesh.materialSlotIds.isEmpty()) {

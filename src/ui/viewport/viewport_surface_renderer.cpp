@@ -2274,6 +2274,35 @@ void ViewportSurfaceRenderer::prepareGeometry(
                 keyStream << qint32(tile.number) << tile.filepath
                           << tile.sourceFileExists;
             }
+            QStringList faceMaterialIds =
+                object.nurbsSolidFaceMaterials.keys();
+            std::sort(faceMaterialIds.begin(), faceMaterialIds.end());
+            for (const QString &faceId : faceMaterialIds) {
+                const WorkbenchMaterialData &material =
+                    object.nurbsSolidFaceMaterials[faceId];
+                keyStream << faceId << material.baseColorSceneLinear
+                          << double(material.roughness) << double(material.metallic)
+                          << double(material.alpha) << material.textureImagePath
+                          << QCryptographicHash::hash(
+                                 material.textureImagePackedDataBase64.toLatin1(),
+                                 QCryptographicHash::Sha256)
+                          << material.textureImageSrgb
+                          << material.textureImageColorTransformId
+                          << material.textureImageAlphaMode
+                          << material.textureImageInterpolation
+                          << material.textureImageExtension
+                          << material.textureImageSceneLinearFloatDataBase64
+                          << material.textureImageSceneLinearFloatWidth
+                          << material.textureImageSceneLinearFloatHeight;
+                for (const DocumentImageTextureTile &tile :
+                     material.textureImageTiles) {
+                    keyStream << qint32(tile.number) << tile.filepath
+                              << tile.sourceFileExists << tile.packedDataBase64
+                              << tile.sceneLinearFloatDataBase64
+                              << tile.sceneLinearFloatWidth
+                              << tile.sceneLinearFloatHeight;
+                }
+            }
         }
         if (hasMesh) {
             const PolygonMesh3D &mesh = object.shape.polygonMesh;
@@ -2567,12 +2596,12 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     std::move(meshShadowTriangles);
             }
         } else {
-            const int first = changed ? vertices_.size() :
-                (ranges_.isEmpty() ? 0 : ranges_.last().first + ranges_.last().count);
             const int count = geometry != nullptr
                                   ? static_cast<int>(std::min(
                                         geometry->surfaceVertices.size(),
                                         geometry->surfaceNormals.size())) : 0;
+            const int first = changed ? vertices_.size() :
+                (ranges_.isEmpty() ? 0 : ranges_.last().first + ranges_.last().count);
             if (changed) {
                 for (int index = 0; index < count; ++index) {
                     const QVector3D &position = geometry->surfaceVertices[index];
@@ -2586,38 +2615,71 @@ void ViewportSurfaceRenderer::prepareGeometry(
                                       static_cast<float>(uv.y())});
                 }
             }
-            DrawRange range = makeRange(first, count);
-            const bool hasSurfaceUv =
-                (object.shape.geometryType == GeometryType::NurbsSurface ||
-                 object.shape.geometryType == GeometryType::NurbsSolid) &&
-                geometry != nullptr &&
-                geometry->surfaceTextureCoordinates.size() == count;
-            const bool hasSurfaceTexture =
-                !object.workbenchMaterial.textureImagePath.isEmpty() ||
-                !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty() ||
-                !object.workbenchMaterial.textureImageTiles.isEmpty();
-            range.useTextureColor = hasSurfaceUv && hasSurfaceTexture;
-            // Tessellation carries active-domain UVs for each rendered vertex,
-            // including vertices on trimmed regions, so the GPU color, object-ID,
-            // and depth-map alpha masks use the same texture placement.
-            range.shadowTextureAlphaMask = range.useTextureColor;
-            range.textureImagePath = range.useTextureColor
-                ? object.workbenchMaterial.textureImagePath : QString{};
-            range.textureImageTiles = range.useTextureColor
-                ? object.workbenchMaterial.textureImageTiles
-                : QVector<DocumentImageTextureTile>{};
-            range.textureImageColorTransformId = range.workbenchMaterial.textureImageColorTransformId;
-            range.textureImageSrgb = object.workbenchMaterial.textureImageSrgb;
-            if ((object.shape.geometryType == GeometryType::NurbsSolid ||
-                 object.shape.geometryType == GeometryType::NurbsSurface) &&
-                geometry != nullptr && geometry->shadowCasterMesh.valid) {
-                range.shadowVolumeSupported = true;
-                range.shadowVolumeClosed =
-                    object.shape.geometryType == GeometryType::NurbsSolid;
-                range.shadowVertices = geometry->shadowCasterMesh.vertices;
-                range.shadowTriangles = geometry->shadowCasterMesh.triangles;
+            QVector<QString> semanticFaceIds;
+            if (object.shape.geometryType == GeometryType::NurbsSolid &&
+                object.shape.nurbsSolid.boundaryFaces.isEmpty()) {
+                semanticFaceIds = {object.shape.nurbsSolid.baseCapFaceId,
+                                   object.shape.nurbsSolid.displacedCapFaceId};
+                for (const QString &id : object.shape.nurbsSolid.wallFaceIds)
+                    semanticFaceIds.append(id);
             }
-            ranges_.append(std::move(range));
+            const auto appendSurfaceRange = [&](int faceFirst, int localFaceFirst,
+                                                int faceCount,
+                                                const QString &faceId,
+                                                bool attachShadowMesh) {
+                DrawRange range = makeRange(faceFirst, faceCount);
+                const auto faceMaterial =
+                    object.nurbsSolidFaceMaterials.constFind(faceId);
+                if (!faceId.isEmpty() &&
+                    faceMaterial != object.nurbsSolidFaceMaterials.cend()) {
+                    range.workbenchMaterial = faceMaterial.value();
+                    range.hasWorkbenchMaterial = true;
+                }
+                const bool hasSurfaceUv = geometry != nullptr &&
+                    localFaceFirst >= 0 &&
+                    geometry->surfaceTextureCoordinates.size() >=
+                        localFaceFirst + faceCount;
+                const WorkbenchMaterialData &material = range.workbenchMaterial;
+                const bool hasSurfaceTexture =
+                    !material.textureImagePath.isEmpty() ||
+                    !material.textureImagePackedDataBase64.isEmpty() ||
+                    !material.textureImageTiles.isEmpty() ||
+                    !material.textureImageSceneLinearFloatDataBase64.isEmpty();
+                range.useTextureColor = hasSurfaceUv && hasSurfaceTexture;
+                range.shadowTextureAlphaMask = range.useTextureColor;
+                range.textureImagePath = range.useTextureColor
+                    ? material.textureImagePath : QString{};
+                range.textureImageTiles = range.useTextureColor
+                    ? material.textureImageTiles
+                    : QVector<DocumentImageTextureTile>{};
+                range.textureImageColorTransformId =
+                    material.textureImageColorTransformId;
+                range.textureImageSrgb = material.textureImageSrgb;
+                if (attachShadowMesh && geometry != nullptr &&
+                    geometry->shadowCasterMesh.valid) {
+                    range.shadowVolumeSupported = true;
+                    range.shadowVolumeClosed =
+                        object.shape.geometryType == GeometryType::NurbsSolid;
+                    range.shadowVertices = geometry->shadowCasterMesh.vertices;
+                    range.shadowTriangles = geometry->shadowCasterMesh.triangles;
+                }
+                ranges_.append(std::move(range));
+            };
+            if (object.shape.geometryType == GeometryType::NurbsSolid &&
+                geometry != nullptr && !geometry->surfaceFaceRanges.isEmpty()) {
+                for (int faceIndex = 0;
+                     faceIndex < geometry->surfaceFaceRanges.size(); ++faceIndex) {
+                    const auto &faceRange = geometry->surfaceFaceRanges[faceIndex];
+                    const QString faceId = faceIndex < semanticFaceIds.size()
+                        ? semanticFaceIds[faceIndex] : QString{};
+                    appendSurfaceRange(first + faceRange.firstVertex,
+                                       faceRange.firstVertex,
+                                       faceRange.vertexCount, faceId,
+                                       faceIndex == 0);
+                }
+            } else {
+                appendSurfaceRange(first, 0, count, {}, true);
+            }
         }
     }
 }

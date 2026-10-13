@@ -1331,7 +1331,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             continue;
         }
         const bool perFaceMaterialAlpha =
-            object.shape.geometryType == GeometryType::PolygonMesh &&
+            (object.shape.geometryType == GeometryType::PolygonMesh ||
+             object.shape.geometryType == GeometryType::NurbsSolid) &&
             (settings.colorMode == ViewportColorMode::Material ||
              settings.colorMode == ViewportColorMode::Attribute ||
              settings.colorMode == ViewportColorMode::Texture);
@@ -1513,16 +1514,30 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         // Surface tessellation carries normalized parameter UVs for trimmed
         // triangles and every derived NurbsSolid face, so alpha cutouts must
         // participate in CPU cavity/outline coverage for both geometry types.
+        const bool hasFaceTexture = std::any_of(
+            object.nurbsSolidFaceMaterials.cbegin(),
+            object.nurbsSolidFaceMaterials.cend(),
+            [](const WorkbenchMaterialData &material) {
+                return !material.textureImageTiles.isEmpty() ||
+                       !material.textureImagePath.isEmpty() ||
+                       !material.textureImagePackedDataBase64.isEmpty() ||
+                       !material.textureImageSceneLinearFloatDataBase64.isEmpty();
+            });
+        if (hasFaceTexture) {
+            textureAlphaTriangles.resize(vertices.size() / 3);
+        }
         if (settings.colorMode == ViewportColorMode::Texture &&
             (object.shape.geometryType == GeometryType::NurbsSurface ||
              object.shape.geometryType == GeometryType::NurbsSolid) &&
             geometry->surfaceTextureCoordinates.size() == vertices.size() &&
-            (!object.workbenchMaterial.textureImageTiles.isEmpty() ||
+            ((!object.workbenchMaterial.textureImageTiles.isEmpty() ||
              !object.workbenchMaterial.textureImagePath.isEmpty() ||
              !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty() ||
-             !object.workbenchMaterial.textureImageSceneLinearFloatDataBase64.isEmpty()) &&
-            !ignoresTextureAlpha(
-                object.workbenchMaterial.textureImageAlphaMode)) {
+             !object.workbenchMaterial.textureImageSceneLinearFloatDataBase64.isEmpty() ||
+             hasFaceTexture) &&
+            (!ignoresTextureAlpha(
+                 object.workbenchMaterial.textureImageAlphaMode) ||
+             hasFaceTexture))) {
             const bool hasUdim =
                 !object.workbenchMaterial.textureImageTiles.isEmpty();
             const QHash<int, QImage> udimImages = hasUdim
@@ -1571,6 +1586,80 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
         if (object.shape.geometryType != GeometryType::PolygonMesh) {
             triangleAlphas.fill(objectAlpha, vertices.size() / 3);
+        }
+        if (object.shape.geometryType == GeometryType::NurbsSolid &&
+            geometry->surfaceFaceRanges.size() > 0 &&
+            (settings.colorMode == ViewportColorMode::Material ||
+             settings.colorMode == ViewportColorMode::Attribute ||
+             settings.colorMode == ViewportColorMode::Texture)) {
+            QVector<QString> faceIds;
+            if (object.shape.nurbsSolid.boundaryFaces.isEmpty()) {
+                faceIds = {object.shape.nurbsSolid.baseCapFaceId,
+                           object.shape.nurbsSolid.displacedCapFaceId};
+                for (const QString &id : object.shape.nurbsSolid.wallFaceIds)
+                    faceIds.append(id);
+            }
+            for (int faceIndex = 0;
+                 faceIndex < geometry->surfaceFaceRanges.size(); ++faceIndex) {
+                const auto faceIt = faceIndex < faceIds.size()
+                    ? object.nurbsSolidFaceMaterials.constFind(faceIds[faceIndex])
+                    : object.nurbsSolidFaceMaterials.cend();
+                if (faceIt == object.nurbsSolidFaceMaterials.cend()) continue;
+                const auto &faceRange = geometry->surfaceFaceRanges[faceIndex];
+                const float alpha = saturate(float(faceIt->alpha));
+                for (int triangle = faceRange.firstVertex / 3;
+                     triangle < (faceRange.firstVertex + faceRange.vertexCount) / 3 &&
+                     triangle < triangleAlphas.size(); ++triangle) {
+                    triangleAlphas[triangle] = alpha;
+                }
+                for (int triangle = faceRange.firstVertex / 3;
+                     triangle < (faceRange.firstVertex + faceRange.vertexCount) / 3 &&
+                     triangle < textureAlphaTriangles.size(); ++triangle) {
+                    textureAlphaTriangles[triangle] = TextureAlphaTriangle{};
+                }
+                if (settings.colorMode != ViewportColorMode::Texture ||
+                    ignoresTextureAlpha(faceIt->textureImageAlphaMode)) {
+                    continue;
+                }
+                const WorkbenchMaterialData &material = faceIt.value();
+                const bool hasUdim = !material.textureImageTiles.isEmpty();
+                const QHash<int, QImage> udimImages = hasUdim
+                    ? loadTextureAlphaTiles(material) : QHash<int, QImage>{};
+                const QImage alphaImage = hasUdim ? QImage{}
+                    : loadTextureAlphaImage(material);
+                const auto floatAlphaImage = hasUdim
+                    ? TextureAlphaTriangle::FloatImage{}
+                    : loadFloatAlphaPayload(
+                        material.textureImageSceneLinearFloatDataBase64,
+                        material.textureImageSceneLinearFloatWidth,
+                        material.textureImageSceneLinearFloatHeight);
+                const auto floatAlphaUdimImages = hasUdim
+                    ? loadFloatTextureAlphaTiles(material)
+                    : QHash<int, TextureAlphaTriangle::FloatImage>{};
+                if ((hasUdim && udimImages.isEmpty() &&
+                     floatAlphaUdimImages.isEmpty()) && alphaImage.isNull() &&
+                    floatAlphaImage.width <= 0) continue;
+                for (int triangle = faceRange.firstVertex / 3;
+                     triangle < (faceRange.firstVertex + faceRange.vertexCount) / 3 &&
+                     triangle < textureAlphaTriangles.size(); ++triangle) {
+                    TextureAlphaTriangle &alphaTriangle =
+                        textureAlphaTriangles[triangle];
+                    alphaTriangle.udim = hasUdim;
+                    alphaTriangle.udimImages = udimImages;
+                    alphaTriangle.floatUdimImages = floatAlphaUdimImages;
+                    alphaTriangle.image = alphaImage;
+                    alphaTriangle.floatImage = floatAlphaImage;
+                    alphaTriangle.interpolation = material.textureImageInterpolation;
+                    alphaTriangle.extension = material.textureImageExtension;
+                    alphaTriangle.cutout = true;
+                    for (int corner = 0; corner < 3; ++corner) {
+                        const QPointF uv = geometry->surfaceTextureCoordinates[
+                            triangle * 3 + corner];
+                        alphaTriangle.uvs[corner] = hasUdim
+                            ? uv : QPointF(uv.x(), 1.0 - uv.y());
+                    }
+                }
+            }
         }
         for (int triangle = 0; triangle + 2 < vertices.size(); triangle += 3) {
             const int triangleIndex = triangle / 3;

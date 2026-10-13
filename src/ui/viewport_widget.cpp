@@ -9200,7 +9200,8 @@ protected:
                                   object.workbenchMaterial,
                                   object.displayName, object.libraryPath,
                                   object.meshObjectTransform,
-                                  object.meshMaterials, fragmentSink);
+                                  object.meshMaterials, fragmentSink,
+                                  object.nurbsSolidFaceMaterials);
                     }, &rasterSurfaceLayers, rasterThemeBackgroundPixels);
             }
         }
@@ -11074,7 +11075,8 @@ protected:
                                   object.workbenchMaterial,
                                   object.displayName, object.libraryPath,
                                   object.meshObjectTransform,
-                                  object.meshMaterials, fragmentSink);
+                                  object.meshMaterials, fragmentSink,
+                                  object.nurbsSolidFaceMaterials);
                     }, nullptr, fallbackThemeBackgroundPixels);
                 if (fallbackSurfaceBatchRendered) {
                     painter.drawImage(QPoint(0, 0), fallbackSurfaceLayer);
@@ -11110,7 +11112,8 @@ protected:
                                   renderObject.displayName,
                                   renderObject.libraryPath,
                                   renderObject.meshObjectTransform,
-                                  renderObject.meshMaterials);
+                                  renderObject.meshMaterials, nullptr,
+                                  renderObject.nurbsSolidFaceMaterials);
                     }
                 }
             }
@@ -23558,7 +23561,8 @@ private:
                    const MeshObjectTransform &meshTransform =
                        identityMeshObjectTransform,
                    const QVector<WorkbenchMaterialData> &meshMaterials = {},
-                   RasterWorkbenchFragmentSink *fragmentSink = nullptr)
+                   RasterWorkbenchFragmentSink *fragmentSink = nullptr,
+                   const QHash<QString, WorkbenchMaterialData> &nurbsSolidFaceMaterials = {})
     {
         const WorkPlaneFrame previousFrame = viewportTransform_.workPlaneFrame();
         viewportTransform_.setWorkPlaneFrame(shapeWorkPlaneFrame(shape));
@@ -23580,7 +23584,8 @@ private:
                                     libraryPath,
                                     meshTransform,
                                     meshMaterials,
-                                    fragmentSink);
+                                    fragmentSink,
+                                    nurbsSolidFaceMaterials); // stable solid-face material lookup
         viewportTransform_.setWorkPlaneFrame(previousFrame);
     }
 

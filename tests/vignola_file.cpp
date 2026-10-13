@@ -127,7 +127,27 @@ int main(int argc, char **argv)
     passed &= check(makeNurbsPlanarFillSurface(circle.nurbs, shapeWorkPlaneFrame(circle), &cap) &&
                         makeNurbsExtrusionSolid(cap, {0,0,7}, &solid.nurbsSolid),
                     "solid save fixture must have exact caps and walls");
-    source.append(solid);
+    DocumentMaterial capMaterial;
+    capMaterial.id = QStringLiteral("blend-cap-material");
+    capMaterial.name = QStringLiteral("Blend Cap");
+    DocumentMaterial wallMaterial;
+    wallMaterial.id = QStringLiteral("blend-wall-material");
+    wallMaterial.name = QStringLiteral("Blend Wall");
+    Document::Snapshot materialSnapshot = source.snapshot();
+    materialSnapshot.materials.append(capMaterial);
+    materialSnapshot.materials.append(wallMaterial);
+    source.restoreSnapshot(materialSnapshot);
+    SceneObject solidObject;
+    solidObject.layerId = source.activeLayerId();
+    solidObject.geometry = solid;
+    solidObject.nurbsSolidFaceMaterialIds.insert(
+        solid.nurbsSolid.baseCapFaceId, capMaterial.id);
+    solidObject.nurbsSolidFaceMaterialIds.insert(
+        solid.nurbsSolid.displacedCapFaceId, capMaterial.id);
+    for (const QString &wallFaceId : solid.nurbsSolid.wallFaceIds)
+        solidObject.nurbsSolidFaceMaterialIds.insert(wallFaceId, wallMaterial.id);
+    const ObjectId solidObjectId = source.insertObject(
+        static_cast<int>(source.objects().size()), solidObject);
 
     QTemporaryDir temporaryDirectory;
     passed &= check(temporaryDirectory.isValid(), "temporary directory must be available");
@@ -150,6 +170,11 @@ int main(int argc, char **argv)
     }
     passed &= check(equivalentJson(documentToJson(source), documentToJson(restored)),
                     "Vignola save/load must preserve document geometry, IDs, layers, and dimension anchors");
+    const SceneObject *restoredSolidObject = restored.object(solidObjectId);
+    passed &= check(restoredSolidObject != nullptr &&
+                        restoredSolidObject->nurbsSolidFaceMaterialIds ==
+                            solidObject.nurbsSolidFaceMaterialIds,
+                    "Blender project proxies must preserve cap and wall assignments by semantic face ID");
 
     ONX_Model rhinoModel;
     rhinoModel.m_settings.m_ModelUnitsAndTolerances.m_unit_system =

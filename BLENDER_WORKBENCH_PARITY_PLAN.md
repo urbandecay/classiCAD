@@ -1259,7 +1259,16 @@ depth domain. Visual depth comparison remains open.
   those masks is 0.522/255, with maximum delta error 8/255. Outline masks also
   match exactly at 2,316 pixels each, XOR 0, IoU 1.0; effect-delta MAE is
   10.48/255 and maximum error 35/255. This confirms effect coverage, while
-  outline intensity/edge values still differ.
+  black-outline intensity/edge values still differ. A separate source audit
+  found that custom outline colors also needed a color-space correction:
+  Blender's outline setting is scene-linear, while classiCAD stores the UI
+  color as sRGB. The GPU pass now converts the outline color to scene-linear
+  when drawing into the shared Workbench target, then blends it before the
+  final display transform. An offscreen contract checks a 50%-gray outline
+  against a black baseline at a quarter-covered silhouette pixel (14/255 in
+  the RGBA8 scene-linear test target). The ordinary display-space fallback
+  still receives the encoded sRGB value. This fixes custom-color handling;
+  the measured black-outline intensity difference is unchanged.
 - World cavity's first measured mask mismatch was caused in part by the depth
   sampler: classiCAD set its copied `cavityDepthTexture_` to linear filtering,
   while Blender binds its Workbench depth texture with the default sampler,

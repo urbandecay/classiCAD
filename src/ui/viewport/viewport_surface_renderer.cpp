@@ -6622,11 +6622,15 @@ bool ViewportSurfaceRenderer::draw(
 
             outlineProgram_.bind();
             outlineProgram_.setUniformValue("uObjectIdBuffer", 0);
+            QVector3D outlineColor(settings.outlineColor.redF(),
+                                   settings.outlineColor.greenF(),
+                                   settings.outlineColor.blueF());
+            if (sceneLinearOutput) {
+                outlineColor = workbenchSrgbToSceneLinear(outlineColor);
+            }
             outlineProgram_.setUniformValue(
                 "uOutlineColor",
-                QVector4D(settings.outlineColor.redF(),
-                          settings.outlineColor.greenF(),
-                          settings.outlineColor.blueF(), 1.0f));
+                QVector4D(outlineColor, 1.0f));
             outlineProgram_.setUniformValue(
                 "uUiScale", static_cast<float>(dpr));
             outlineVertexArray_.bind();

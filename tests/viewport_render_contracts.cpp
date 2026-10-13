@@ -908,6 +908,7 @@ int main(int argc, char *argv[])
             int gpuShadowDarkenedPixels = 0;
             QImage gpuMatcapImage;
             bool gpuDrawSucceeded = false;
+            bool gpuSceneLinearOutlineColorPreserved = false;
             bool gpuUnselectedCaptureNonblank = true;
             bool gpuMatcapDrawSucceeded = false;
             bool gpuBottomDrawSucceeded = false;
@@ -1439,6 +1440,66 @@ int main(int argc, char *argv[])
                     if (!outlineBaselineCapturePath.isEmpty()) {
                         gpuUnselectedNoOutlineImage.save(
                             outlineBaselineCapturePath);
+                    }
+
+                    ViewportShadingSettings sceneLinearOutlineShading =
+                        rawFaceShading;
+                    sceneLinearOutlineShading.outlineColor =
+                        QColor(128, 128, 128);
+                    functions.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                    functions.glClear(GL_COLOR_BUFFER_BIT |
+                                      GL_DEPTH_BUFFER_BIT);
+                    const bool sceneLinearOutlineBaselineDrawSucceeded =
+                        gpuSurfaceRenderer.draw(
+                            {surfaceObject}, gpuTransform, glSize, 1.0,
+                            sceneLinearOutlineShading, false, true, false,
+                            nullptr, nullptr, true);
+                    const QImage sceneLinearOutlineBaseline =
+                        framebuffer.toImage();
+                    sceneLinearOutlineShading.outline = true;
+                    functions.glClear(GL_COLOR_BUFFER_BIT |
+                                      GL_DEPTH_BUFFER_BIT);
+                    const bool sceneLinearOutlineDrawSucceeded =
+                        gpuSurfaceRenderer.draw(
+                            {surfaceObject}, gpuTransform, glSize, 1.0,
+                            sceneLinearOutlineShading, false, true, false,
+                            nullptr, nullptr, true);
+                    const QImage sceneLinearOutline = framebuffer.toImage();
+                    const QString sceneLinearOutlinePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_SCENE_LINEAR_OUTLINE_CAPTURE");
+                    if (!sceneLinearOutlinePath.isEmpty()) {
+                        sceneLinearOutline.save(sceneLinearOutlinePath);
+                    }
+                    const QString sceneLinearOutlineBaselinePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_SCENE_LINEAR_OUTLINE_BASELINE_CAPTURE");
+                    if (!sceneLinearOutlineBaselinePath.isEmpty()) {
+                        sceneLinearOutlineBaseline.save(
+                            sceneLinearOutlineBaselinePath);
+                    }
+                    if (sceneLinearOutlineBaselineDrawSucceeded &&
+                        sceneLinearOutlineDrawSucceeded &&
+                        sceneLinearOutlineBaseline.size() == glSize &&
+                        sceneLinearOutline.size() == glSize) {
+                        for (int y = 0; y < glSize.height() &&
+                                        !gpuSceneLinearOutlineColorPreserved;
+                             ++y) {
+                            for (int x = 0; x < glSize.width(); ++x) {
+                                const QColor baseline =
+                                    sceneLinearOutlineBaseline.pixelColor(x, y);
+                                const QColor outlined =
+                                    sceneLinearOutline.pixelColor(x, y);
+                                if (baseline.red() <= 1 &&
+                                    baseline.green() <= 1 &&
+                                    baseline.blue() <= 1 &&
+                                    std::abs(outlined.red() - 14) <= 2 &&
+                                    std::abs(outlined.green() - 14) <= 2 &&
+                                    std::abs(outlined.blue() - 14) <= 2) {
+                                    gpuSceneLinearOutlineColorPreserved = true;
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     ViewportShadingSettings shadowShading = rawFaceShading;
@@ -2944,6 +3005,8 @@ int main(int argc, char *argv[])
                                 gpuUnselectedBaselineDrawSucceeded &&
                                 gpuShadowDarkenedPixels > 0,
                             "OpenGL NURBS cubes must match Blender face colors, show outlines, retain outward bottom faces under culling, and render the Shadow option");
+            passed &= check(gpuSceneLinearOutlineColorPreserved,
+                            "scene-linear Workbench output must convert the outline color from sRGB before blending");
             passed &= check(gpuCavityDrawSucceeded &&
                                 gpuCavityImage.size() == glSize &&
                                 gpuCavityBaselineImage.size() == glSize &&

@@ -52,7 +52,8 @@ the inverse view-projection matrix to derive the incident direction;
 orthographic views use Blender's constant view direction. Light directions,
 wrap, ambient, specular toggle, rotation, and world-space mode come from the
 existing Workbench Studio-light adapter. The shared normal prepass is requested
-for eligible scene-linear Studio draws. Studio remains on the forward path when
+for eligible scene-linear Studio draws, including draws with shadows using the
+shared per-sample shadow factor. Studio remains on the forward path when
 X-Ray, preview, or cavity diagnostic output is active. The C++ build passes;
 shader runtime and matched Blender image
 comparison remain open because this environment has not provided a working

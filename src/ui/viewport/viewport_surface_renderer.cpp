@@ -6150,7 +6150,7 @@ bool ViewportSurfaceRenderer::draw(
         (settings.lightingMode == ViewportLightingMode::Studio ||
          settings.lightingMode == ViewportLightingMode::MatCap) &&
         !previewOverlay && !selectionOverlay && !settings.xrayEnabled() &&
-        !settings.shadows && !settings.cavity &&
+        !settings.cavity &&
         sharedTargets != nullptr && sharedTargets->materialDataTexture != 0;
     const bool sharedPrepassRequested = sharedTargets != nullptr &&
         (cavityRequested || (outlineRequested && !settings.xrayEnabled()) ||

@@ -5708,8 +5708,12 @@ bool ViewportSurfaceRenderer::draw(
             const WorkbenchPackedMaterialData packed =
                 workbenchPackMaterialData(metallic, roughness,
                                           static_cast<float>(sourceAlpha));
-            roughness = packed.roughness;
-            metallic = packed.metallic;
+            const WorkbenchPackedMaterialData lightingPacked =
+                transparencyAccumulation
+                    ? packed
+                    : workbenchQuantizeMaterialLighting(packed);
+            roughness = lightingPacked.roughness;
+            metallic = lightingPacked.metallic;
             if (!previewOverlay) {
                 sourceAlpha = packed.alpha;
             }

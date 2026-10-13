@@ -348,6 +348,21 @@ inline WorkbenchPackedMaterialData workbenchPackMaterialData(float metallic,
     };
 }
 
+inline WorkbenchPackedMaterialData workbenchQuantizeMaterialLighting(
+    WorkbenchPackedMaterialData packed)
+{
+    // Blender quantizes these packed UNorm8 values a second time in
+    // float_pair_encode before storing the opaque G-buffer: roughness uses
+    // five bits and metallic uses three. The shader truncates each bucket.
+    packed.roughness =
+        std::floor(std::clamp(packed.roughness, 0.0f, 1.0f) * 31.0f) /
+        31.0f;
+    packed.metallic =
+        std::floor(std::clamp(packed.metallic, 0.0f, 1.0f) * 7.0f) /
+        7.0f;
+    return packed;
+}
+
 inline WorkbenchStudioLighting workbenchStudioLightingPreset(
     const QString &presetName)
 {

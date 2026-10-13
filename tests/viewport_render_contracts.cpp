@@ -1674,6 +1674,94 @@ int main(int argc, char *argv[])
                     functions.glFinish();
                     gpuMatcapImage = framebuffer.toImage();
 
+                    const WorkbenchPackedMaterialData materialBucketA =
+                        workbenchQuantizeMaterialLighting(
+                            workbenchPackMaterialData(0.0f, 0.25f, 1.0f));
+                    const WorkbenchPackedMaterialData materialBucketSame =
+                        workbenchQuantizeMaterialLighting(
+                            workbenchPackMaterialData(0.0f, 0.255f, 1.0f));
+                    const WorkbenchPackedMaterialData materialBucketNext =
+                        workbenchQuantizeMaterialLighting(
+                            workbenchPackMaterialData(0.0f, 0.27f, 1.0f));
+                    const WorkbenchPackedMaterialData metallicBucketA =
+                        workbenchQuantizeMaterialLighting(
+                            workbenchPackMaterialData(0.10f, 0.25f, 1.0f));
+                    const WorkbenchPackedMaterialData metallicBucketSame =
+                        workbenchQuantizeMaterialLighting(
+                            workbenchPackMaterialData(0.14f, 0.25f, 1.0f));
+                    const WorkbenchPackedMaterialData metallicBucketNext =
+                        workbenchQuantizeMaterialLighting(
+                            workbenchPackMaterialData(0.15f, 0.25f, 1.0f));
+                    passed &= check(
+                        materialBucketA.roughness ==
+                                materialBucketSame.roughness &&
+                            materialBucketA.roughness !=
+                                materialBucketNext.roughness &&
+                            metallicBucketA.metallic ==
+                                metallicBucketSame.metallic &&
+                            metallicBucketA.metallic !=
+                                metallicBucketNext.metallic,
+                        "Workbench material roughness and metallic must share their quantized buckets and change at the next boundary");
+                    const auto renderMaterialBucket = [&](float roughness) {
+                        ViewportRenderObject materialObject = surfaceObject;
+                        materialObject.selected = false;
+                        materialObject.outlineHandledBySceneStroke = false;
+                        materialObject.hasWorkbenchMaterial = true;
+                        materialObject.workbenchMaterial.baseColorSceneLinear =
+                            QVector3D(0.42f, 0.42f, 0.42f);
+                        materialObject.workbenchMaterial.roughness =
+                            roughness;
+                        materialObject.workbenchMaterial.metallic = 0.0;
+                        ViewportShadingSettings materialShading =
+                            gpuSolidShading;
+                        materialShading.colorMode =
+                            ViewportColorMode::Material;
+                        materialShading.lightingMode =
+                            ViewportLightingMode::Studio;
+                        materialShading.outline = false;
+                        materialShading.shadows = false;
+                        materialShading.cavity = false;
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        const bool drawn = gpuSurfaceRenderer.draw(
+                            {materialObject}, gpuTransform, glSize, 1.0,
+                            materialShading);
+                        functions.glFinish();
+                        return qMakePair(drawn, framebuffer.toImage());
+                    };
+                    const auto roughnessBucketA = renderMaterialBucket(0.25f);
+                    const auto roughnessBucketSame =
+                        renderMaterialBucket(0.255f);
+                    const auto roughnessBucketNext =
+                        renderMaterialBucket(0.27f);
+                    int roughnessBoundaryPixels = 0;
+                    bool sameBucketImage =
+                        roughnessBucketA.second.size() ==
+                        roughnessBucketSame.second.size();
+                    for (int y = 0; sameBucketImage &&
+                                    y < roughnessBucketA.second.height(); ++y) {
+                        for (int x = 0; x < roughnessBucketA.second.width();
+                             ++x) {
+                            sameBucketImage &= roughnessBucketA.second.pixel(
+                                                   x, y) ==
+                                               roughnessBucketSame.second.pixel(
+                                                   x, y);
+                        }
+                    }
+                    for (int y = 0; y < roughnessBucketA.second.height(); ++y) {
+                        for (int x = 0; x < roughnessBucketA.second.width();
+                             ++x) {
+                            roughnessBoundaryPixels +=
+                                roughnessBucketA.second.pixel(x, y) !=
+                                roughnessBucketNext.second.pixel(x, y);
+                        }
+                    }
+                    passed &= check(
+                        roughnessBucketA.first && roughnessBucketSame.first &&
+                            roughnessBucketNext.first && sameBucketImage &&
+                            roughnessBoundaryPixels > 0,
+                        "GPU Workbench material lighting must be identical within a 5-bit roughness bucket and change across its boundary");
+
                     QVector<float> clearSceneDepth(glSize.width() *
                                                        glSize.height(),
                                                    1.0f);

@@ -902,6 +902,8 @@ int main(int argc, char *argv[])
             QImage gpuCavityBaselineImage;
             QImage gpuSceneStrokeManagedOutlineImage;
             QImage gpuUnselectedOutlineImage;
+            QImage gpuWorkbenchOutlineImage;
+            QImage gpuWorkbenchOutlineBaselineImage;
             QImage gpuBottomImage;
             QImage gpuShadowImage;
             int gpuCavityChangedPixels = 0;
@@ -909,6 +911,7 @@ int main(int argc, char *argv[])
             QImage gpuMatcapImage;
             bool gpuDrawSucceeded = false;
             bool gpuSceneLinearOutlineColorPreserved = false;
+            bool gpuWorkbenchOutlineCaptureSucceeded = false;
             bool gpuUnselectedCaptureNonblank = true;
             bool gpuMatcapDrawSucceeded = false;
             bool gpuBottomDrawSucceeded = false;
@@ -1416,11 +1419,6 @@ int main(int argc, char *argv[])
                                             glSize, 1.0, gpuSolidShading);
                     functions.glFinish();
                     gpuUnselectedOutlineImage = framebuffer.toImage();
-                    const QString outlineCapturePath = qEnvironmentVariable(
-                        "CLASSICAD_VIEWPORT_OUTLINE_CAPTURE");
-                    if (!outlineCapturePath.isEmpty()) {
-                        gpuUnselectedOutlineImage.save(outlineCapturePath);
-                    }
                     ViewportShadingSettings rawFaceShading = gpuSolidShading;
                     rawFaceShading.outline = false;
                     functions.glClearColor(34.0f / 255.0f,
@@ -1434,13 +1432,6 @@ int main(int argc, char *argv[])
                             rawFaceShading);
                     functions.glFinish();
                     gpuUnselectedNoOutlineImage = framebuffer.toImage();
-                    const QString outlineBaselineCapturePath =
-                        qEnvironmentVariable(
-                            "CLASSICAD_VIEWPORT_OUTLINE_BASELINE_CAPTURE");
-                    if (!outlineBaselineCapturePath.isEmpty()) {
-                        gpuUnselectedNoOutlineImage.save(
-                            outlineBaselineCapturePath);
-                    }
 
                     ViewportShadingSettings sceneLinearOutlineShading =
                         rawFaceShading;
@@ -1520,14 +1511,19 @@ int main(int argc, char *argv[])
                         gpuShadowImage.save(shadowCapturePath);
                     }
 
-                    const auto renderCoordinatedCavity = [&](
+                    const auto renderCoordinatedScene = [&](
                         const ViewportShadingSettings &shading,
                         const QByteArray &historyKey, QImage *image) {
-                        ViewportAaRenderer cavityAaRenderer;
-                        cavityAaRenderer.setMode(static_cast<int>(
+                        if (image == nullptr || !framebuffer.bind()) {
+                            return false;
+                        }
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        ViewportAaRenderer sceneAaRenderer;
+                        sceneAaRenderer.setMode(static_cast<int>(
                             ViewportAntiAliasingMode::Off));
-                        cavityAaRenderer.setDisplayTransform(shading, true);
-                        if (!cavityAaRenderer.beginSceneSample(
+                        sceneAaRenderer.setDisplayTransform(shading, true);
+                        if (!sceneAaRenderer.beginSceneSample(
                                 glSize, 1.0, gpuTransform, historyKey,
                                 false, true)) {
                             return false;
@@ -1551,30 +1547,58 @@ int main(int argc, char *argv[])
                         functions.glClearBufferfv(GL_COLOR, 0,
                                                   linearBackground);
                         ViewportWorkbenchSceneColorPassRequest request;
-                        request.sharedTargets = &cavityAaRenderer.targets();
+                        request.sharedTargets = &sceneAaRenderer.targets();
                         request.sceneLinearOutput = true;
                         const auto result =
                             ViewportWorkbenchScenePassCoordinator::renderSceneColor(
                                 gpuSurfaceRenderer, {surfaceObject},
-                                cavityAaRenderer.sampleCamera(), glSize, 1.0,
+                                sceneAaRenderer.sampleCamera(), glSize, 1.0,
                                 shading, request);
                         if (result.rendered) {
-                            cavityAaRenderer.markCurrentSampleAttachmentsValid(
+                            sceneAaRenderer.markCurrentSampleAttachmentsValid(
                                 result.report.populatedAttachments);
                         }
-                        cavityAaRenderer.finishSceneSample();
+                        sceneAaRenderer.finishSceneSample();
                         if (!result.rendered) return false;
                         functions.glFinish();
                         *image = framebuffer.toImage();
                         return !image->isNull();
                     };
-                    gpuCavityDrawSucceeded = renderCoordinatedCavity(
+                    ViewportShadingSettings outlinedSceneShading =
+                        rawFaceShading;
+                    outlinedSceneShading.outline = true;
+                    const bool gpuWorkbenchOutlineDrawSucceeded =
+                        renderCoordinatedScene(
+                            outlinedSceneShading,
+                            QByteArrayLiteral("outline-enabled"),
+                            &gpuWorkbenchOutlineImage);
+                    const bool gpuWorkbenchOutlineBaselineDrawSucceeded =
+                        renderCoordinatedScene(
+                            rawFaceShading,
+                            QByteArrayLiteral("outline-baseline"),
+                            &gpuWorkbenchOutlineBaselineImage);
+                    gpuWorkbenchOutlineCaptureSucceeded =
+                        gpuWorkbenchOutlineDrawSucceeded &&
+                        gpuWorkbenchOutlineBaselineDrawSucceeded;
+                    const QString outlineCapturePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_OUTLINE_CAPTURE");
+                    if (!outlineCapturePath.isEmpty()) {
+                        gpuWorkbenchOutlineImage.save(outlineCapturePath);
+                    }
+                    const QString outlineBaselineCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_OUTLINE_BASELINE_CAPTURE");
+                    if (!outlineBaselineCapturePath.isEmpty()) {
+                        gpuWorkbenchOutlineBaselineImage.save(
+                            outlineBaselineCapturePath);
+                    }
+                    gpuCavityDrawSucceeded = renderCoordinatedScene(
                         rawFaceShading, QByteArrayLiteral("cavity-baseline"),
                         &gpuCavityBaselineImage);
                     ViewportShadingSettings cavityShading = rawFaceShading;
                     cavityShading.cavity = true;
                     cavityShading.cavityType = ViewportCavityType::World;
-                    gpuCavityDrawSucceeded = renderCoordinatedCavity(
+                    gpuCavityDrawSucceeded = renderCoordinatedScene(
                         cavityShading, QByteArrayLiteral("cavity-enabled"),
                         &gpuCavityImage) && gpuCavityDrawSucceeded;
                     const QString cavityBaselineCapturePath =
@@ -2996,6 +3020,7 @@ int main(int argc, char *argv[])
                                 gpuMatcapDrawSucceeded &&
                                 !gpuMatcapImage.isNull() &&
                                 gpuMatcapMatchesWorkbench &&
+                                gpuWorkbenchOutlineCaptureSucceeded &&
                                 gpuOutlineRendered &&
                                 gpuSceneStrokeSuppressesPostOutline &&
                                 gpuBottomDrawSucceeded &&

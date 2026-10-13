@@ -1472,9 +1472,17 @@ depth domain. Visual depth comparison remains open.
   one-million-pixel limit; oversized targets keep the prior fallback.
 - The headless viewport contract feeds a top-to-bottom linear gradient through
   the production surface compositor and checks an uncovered pixel after the
-  configured display transform. The focused viewport, scene-linear resolver,
-  and fragment contracts pass. Matched GPU/QPainter captures for the three
-  Theme styles remain open.
+  configured display transform. It also renders full 640×480 Single, Linear,
+  and Radial Theme backgrounds through production QPainter and GPU paths and
+  checks their display pixels with a two-code-value allowance for GPU Bayer
+  dither. Maximum RGB error is 1/255 for all three styles. Matching the radial
+  shader exposed that QPainter's circular radius did not match Blender's
+  normalized screen-space radial factor, so the CPU path now samples that same
+  factor per physical pixel, including high-DPI targets. A 2×-DPR radial
+  comparison also passes at the same tolerance. This closes the classiCAD-only
+  formula check. Matched
+  Blender live Workbench captures remain open; they are unavailable in the
+  headless run.
 - Reference: [Blender 5.2.2 Workbench background shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/viewport_background.frag).
 
 ### Native-renderer failure fallback composition (2026-10-13)

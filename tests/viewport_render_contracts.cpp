@@ -1740,7 +1740,8 @@ int main(int argc, char *argv[])
                 if (framebuffer.isValid()) {
                     BlenderGridRenderer themeBackgroundRenderer;
                     const auto renderThemeBackground = [&] (
-                        ViewportThemeBackgroundStyle style) {
+                        ViewportThemeBackgroundStyle style,
+                        qreal devicePixelRatio) {
                         ViewportThemeBackground background = pixelThemeBackground;
                         background.style = style;
                         framebuffer.bind();
@@ -1752,9 +1753,12 @@ int main(int argc, char *argv[])
                         const bool rendered =
                             themeBackgroundRenderer
                                 .renderBackgroundToCurrentFramebuffer(
-                                    glSize, 1.0, background, false);
+                                    QSize(qRound(glSize.width() / devicePixelRatio),
+                                          qRound(glSize.height() / devicePixelRatio)),
+                                    devicePixelRatio, background, false);
                         functions.glFinish();
                         struct Pixels {
+                            QImage image;
                             std::array<uchar, 4> bottomLeft{};
                             std::array<uchar, 4> topLeft{};
                             std::array<uchar, 4> center{};
@@ -1762,6 +1766,7 @@ int main(int argc, char *argv[])
                             bool valid = false;
                         } pixels;
                         pixels.valid = rendered;
+                        if (rendered) pixels.image = framebuffer.toImage();
                         const auto readPixel = [&](int x, int y,
                                                    std::array<uchar, 4> *out) {
                             functions.glReadPixels(x, y, 1, 1, GL_RGBA,
@@ -1777,11 +1782,11 @@ int main(int argc, char *argv[])
                         return pixels;
                     };
                     const auto singleGpuBackground = renderThemeBackground(
-                        ViewportThemeBackgroundStyle::SingleColor);
+                        ViewportThemeBackgroundStyle::SingleColor, 1.0);
                     const auto linearGpuBackground = renderThemeBackground(
-                        ViewportThemeBackgroundStyle::Linear);
+                        ViewportThemeBackgroundStyle::Linear, 1.0);
                     const auto radialGpuBackground = renderThemeBackground(
-                        ViewportThemeBackgroundStyle::Radial);
+                        ViewportThemeBackgroundStyle::Radial, 1.0);
                     const auto nearColor = [](const std::array<uchar, 4> &pixel,
                                               const QColor &color,
                                               int tolerance) {
@@ -1809,6 +1814,73 @@ int main(int argc, char *argv[])
                                                   pixelThemeBackground.lowColor,
                                                   2),
                                     "GPU Theme background shader must render known Single, top-to-bottom Linear, and center-to-edge Radial pixels");
+
+                    const auto paintThemeBackgroundAtSize = [&] (
+                        ViewportThemeBackgroundStyle style,
+                        qreal devicePixelRatio) {
+                        QImage image(glSize, QImage::Format_RGB32);
+                        image.setDevicePixelRatio(devicePixelRatio);
+                        image.fill(Qt::black);
+                        ViewportThemeBackground background = pixelThemeBackground;
+                        background.style = style;
+                        QPainter painter(&image);
+                        const QRect logicalBounds(
+                            0, 0,
+                            qRound(glSize.width() / devicePixelRatio),
+                            qRound(glSize.height() / devicePixelRatio));
+                        paintViewportThemeBackground(painter, logicalBounds,
+                                                     background);
+                        painter.end();
+                        return image;
+                    };
+                    const auto compareThemeImages = [&] (
+                        const QImage &cpu, const QImage &gpu) {
+                        struct Difference { int maximum = 0; double mean = 0.0; } result;
+                        if (cpu.size() != gpu.size() || cpu.isNull() || gpu.isNull()) {
+                            result.maximum = 256;
+                            result.mean = 256.0;
+                            return result;
+                        }
+                        qint64 total = 0;
+                        for (int y = 0; y < cpu.height(); ++y) {
+                            for (int x = 0; x < cpu.width(); ++x) {
+                                const QRgb a = cpu.pixel(x, y);
+                                const QRgb b = gpu.pixel(x, y);
+                                for (int channel = 0; channel < 3; ++channel) {
+                                    const int av = channel == 0 ? qRed(a) : channel == 1 ? qGreen(a) : qBlue(a);
+                                    const int bv = channel == 0 ? qRed(b) : channel == 1 ? qGreen(b) : qBlue(b);
+                                    const int difference = std::abs(av - bv);
+                                    result.maximum = std::max(result.maximum, difference);
+                                    total += difference;
+                                }
+                            }
+                        }
+                        result.mean = static_cast<double>(total) /
+                            (cpu.width() * cpu.height() * 3);
+                        return result;
+                    };
+                    const auto singleThemeDifference = compareThemeImages(
+                        paintThemeBackgroundAtSize(ViewportThemeBackgroundStyle::SingleColor, 1.0),
+                        singleGpuBackground.image);
+                    const auto linearThemeDifference = compareThemeImages(
+                        paintThemeBackgroundAtSize(ViewportThemeBackgroundStyle::Linear, 1.0),
+                        linearGpuBackground.image);
+                    const auto radialThemeDifference = compareThemeImages(
+                        paintThemeBackgroundAtSize(ViewportThemeBackgroundStyle::Radial, 1.0),
+                        radialGpuBackground.image);
+                    const auto radialGpuBackgroundAt2x = renderThemeBackground(
+                        ViewportThemeBackgroundStyle::Radial, 2.0);
+                    const auto radialThemeDifferenceAt2x = compareThemeImages(
+                        paintThemeBackgroundAtSize(ViewportThemeBackgroundStyle::Radial, 2.0),
+                        radialGpuBackgroundAt2x.image);
+                    // The direct-to-display shader adds a sub-LSB Bayer dither;
+                    // allow two code values for that plus raster/interpolation rounding.
+                    constexpr int themeImageTolerance = 2;
+                    passed &= check(singleThemeDifference.maximum <= themeImageTolerance &&
+                                        linearThemeDifference.maximum <= themeImageTolerance &&
+                                        radialThemeDifference.maximum <= themeImageTolerance &&
+                                        radialThemeDifferenceAt2x.maximum <= themeImageTolerance,
+                                    "QPainter and GPU Theme backgrounds must match across full Single, Linear, and Radial images within two display code values");
 
                     const auto renderPresentedBackground = [&] (
                         bool worldBackground, bool drawBackground,

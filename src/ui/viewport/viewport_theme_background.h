@@ -3,9 +3,9 @@
 #pragma once
 
 #include <QColor>
+#include <QImage>
 #include <QLinearGradient>
 #include <QPainter>
-#include <QRadialGradient>
 #include <QRect>
 
 #include <algorithm>
@@ -75,12 +75,42 @@ inline void paintViewportThemeBackground(
         gradient.setStops(stops);
         painter.fillRect(bounds, gradient);
     } else {
-        const QPointF center(bounds.x() + bounds.width() * 0.5,
-                             bounds.y() + bounds.height() * 0.5);
-        const qreal radius = 0.5 * std::hypot(bounds.width(), bounds.height());
-        QRadialGradient gradient(center, std::max<qreal>(radius, 1.0), center);
-        gradient.setStops(stops);
-        painter.fillRect(bounds, gradient);
+        const qreal devicePixelRatio = painter.device()
+            ? std::max<qreal>(painter.device()->devicePixelRatioF(), 1.0)
+            : 1.0;
+        const QSize physicalSize(
+            qRound(bounds.width() * devicePixelRatio),
+            qRound(bounds.height() * devicePixelRatio));
+        QImage radial(physicalSize, QImage::Format_RGB32);
+        radial.setDevicePixelRatio(devicePixelRatio);
+        const qreal width = std::max(1, physicalSize.width());
+        const qreal height = std::max(1, physicalSize.height());
+        for (int y = 0; y < radial.height(); ++y) {
+            auto *line = reinterpret_cast<QRgb *>(radial.scanLine(y));
+            const qreal centeredY =
+                (static_cast<qreal>(y) + 0.5) / height - 0.5;
+            for (int x = 0; x < radial.width(); ++x) {
+                const qreal centeredX =
+                    (static_cast<qreal>(x) + 0.5) / width - 0.5;
+                const qreal factor = std::clamp(
+                    std::hypot(centeredX, centeredY) * std::sqrt(2.0),
+                    0.0, 1.0);
+                const auto blendChannel = [factor](int highChannel,
+                                                   int lowChannel) {
+                    constexpr qreal gamma = 2.2;
+                    const qreal highValue = highChannel / 255.0;
+                    const qreal lowValue = lowChannel / 255.0;
+                    return qRound(std::pow(
+                        std::pow(highValue, 1.0 / gamma) * (1.0 - factor) +
+                            std::pow(lowValue, 1.0 / gamma) * factor,
+                        gamma) * 255.0);
+                };
+                line[x] = qRgb(blendChannel(high.red(), low.red()),
+                               blendChannel(high.green(), low.green()),
+                               blendChannel(high.blue(), low.blue()));
+            }
+        }
+        painter.drawImage(bounds.topLeft(), radial);
     }
 }
 

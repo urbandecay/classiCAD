@@ -1082,6 +1082,10 @@ void ViewportAaRenderer::destroyTargets()
         glDeleteTextures(1, &viewSpaceNormalTexture_);
         viewSpaceNormalTexture_ = 0;
     }
+    if (materialDataTexture_ != 0) {
+        glDeleteTextures(1, &materialDataTexture_);
+        materialDataTexture_ = 0;
+    }
     if (objectIdTexture_ != 0) {
         glDeleteTextures(1, &objectIdTexture_);
         objectIdTexture_ = 0;
@@ -1091,10 +1095,12 @@ void ViewportAaRenderer::destroyTargets()
         frontFramebuffer_ = 0;
     }
     const GLuint frontTextures[] = {frontColorTexture_, frontDepthTexture_,
+                                    frontMaterialDataTexture_,
                                     frontViewSpaceNormalTexture_, frontObjectIdTexture_,
                                     frontOutlineIdTexture_};
-    glDeleteTextures(5, frontTextures);
+    glDeleteTextures(6, frontTextures);
     frontColorTexture_ = frontDepthTexture_ = 0;
+    frontMaterialDataTexture_ = 0;
     frontViewSpaceNormalTexture_ = frontObjectIdTexture_ = 0;
     frontOutlineIdTexture_ = 0;
     if (historyColorTexture_ != 0) {
@@ -1170,6 +1176,14 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glGenTextures(1, &frontMaterialDataTexture_);
+    glBindTexture(GL_TEXTURE_2D, frontMaterialDataTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, pixelSize.width(),
+                 pixelSize.height(), 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glGenTextures(1, &frontDepthTexture_);
     glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8,
@@ -1195,23 +1209,36 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, frontColorTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
-                           GL_TEXTURE_2D, frontViewSpaceNormalTexture_, 0);
+                           GL_TEXTURE_2D, frontMaterialDataTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
-                           GL_TEXTURE_2D, frontObjectIdTexture_, 0);
+                           GL_TEXTURE_2D, frontViewSpaceNormalTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3,
+                           GL_TEXTURE_2D, frontObjectIdTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT4,
                            GL_TEXTURE_2D, frontOutlineIdTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, frontDepthTexture_, 0);
     const GLenum frontDrawBuffers[] = {GL_COLOR_ATTACHMENT0,
                                        GL_COLOR_ATTACHMENT1,
                                        GL_COLOR_ATTACHMENT2,
-                                       GL_COLOR_ATTACHMENT3};
-    glDrawBuffers(4, frontDrawBuffers);
+                                       GL_COLOR_ATTACHMENT3,
+                                       GL_COLOR_ATTACHMENT4};
+    glDrawBuffers(5, frontDrawBuffers);
     const bool frontComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
     glGenTextures(1, &viewSpaceNormalTexture_);
     glBindTexture(GL_TEXTURE_2D, viewSpaceNormalTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+                 pixelSize.width(), pixelSize.height(), 0,
+                 GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenTextures(1, &materialDataTexture_);
+    glBindTexture(GL_TEXTURE_2D, materialDataTexture_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
                  pixelSize.width(), pixelSize.height(), 0,
                  GL_RGBA, GL_HALF_FLOAT, nullptr);
@@ -1247,10 +1274,14 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                            GL_TEXTURE_2D, sceneColorTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+                           GL_TEXTURE_2D, materialDataTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                            GL_TEXTURE_2D, depthTexture_, 0);
+    const GLenum sceneDrawAttachments[] = {
+        GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+    glDrawBuffers(2, sceneDrawAttachments);
     const GLenum drawAttachment = GL_COLOR_ATTACHMENT0;
-    glDrawBuffers(1, &drawAttachment);
     const bool sceneComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
@@ -1269,11 +1300,13 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
                            GL_TEXTURE_2D, viewSpaceNormalTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
                            GL_TEXTURE_2D, objectIdTexture_, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
+                           GL_TEXTURE_2D, materialDataTexture_, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
                            GL_TEXTURE_2D, depthTexture_, 0);
     const GLenum attachmentDrawBuffers[] = {
-        GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
-    glDrawBuffers(2, attachmentDrawBuffers);
+        GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
+    glDrawBuffers(3, attachmentDrawBuffers);
     const bool attachmentsComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
@@ -1608,6 +1641,7 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
                                           bool sceneRender)
 {
     sceneSampleActive_ = false;
+    targets_.materialDataTexture = 0;
     sceneRender_ = sceneRender;
     if (!initialize()) {
         return false;
@@ -1682,9 +1716,11 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     glViewport(0, 0, requestedPixelSize.width(), requestedPixelSize.height());
     const GLfloat clearNormal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const GLuint clearObjectId[4] = {0u, 0u, 0u, 0u};
+    const GLfloat clearMaterialData[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const GLfloat clearDepth[1] = {1.0f};
     glClearBufferfv(GL_COLOR, 0, clearNormal);
     glClearBufferuiv(GL_COLOR, 1, clearObjectId);
+    glClearBufferfv(GL_COLOR, 2, clearMaterialData);
     glClearBufferfv(GL_DEPTH, 0, clearDepth);
     glBindFramebuffer(GL_FRAMEBUFFER, sceneFramebuffer_);
     glViewport(0, 0, requestedPixelSize.width(), requestedPixelSize.height());
@@ -1715,11 +1751,12 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     targets_.objectIdTexture = objectIdTexture_;
     targets_.frontColorTexture = frontColorTexture_;
     targets_.frontDepthTexture = frontDepthTexture_;
+    targets_.frontMaterialDataTexture = frontMaterialDataTexture_;
     targets_.frontViewSpaceNormalTexture = frontViewSpaceNormalTexture_;
     targets_.frontObjectIdTexture = frontObjectIdTexture_;
     targets_.frontOutlineIdTexture = frontOutlineIdTexture_;
     targets_.frontFramebuffer = frontFramebuffer_;
-    targets_.materialDataTexture = 0;
+    targets_.materialDataTexture = materialDataTexture_;
     targets_.shadowMaskTexture = 0;
     targets_.historyColorIsSceneLinear = sourceIsSceneLinear_;
     targets_.resolvedSceneLinearColorTexture = 0;
@@ -1728,16 +1765,19 @@ bool ViewportAaRenderer::beginSceneSample(const QSize &logicalSize,
     const GLenum frontDrawBuffers[] = {GL_COLOR_ATTACHMENT0,
                                        GL_COLOR_ATTACHMENT1,
                                        GL_COLOR_ATTACHMENT2,
-                                       GL_COLOR_ATTACHMENT3};
-    glDrawBuffers(4, frontDrawBuffers);
+                                       GL_COLOR_ATTACHMENT3,
+                                       GL_COLOR_ATTACHMENT4};
+    glDrawBuffers(5, frontDrawBuffers);
     const GLfloat frontClearColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    const GLfloat frontClearMaterial[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const GLfloat frontClearNormal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     const GLuint frontClearId[4] = {0u, 0u, 0u, 0u};
     const GLfloat frontClearDepth[1] = {1.0f};
     glClearBufferfv(GL_COLOR, 0, frontClearColor);
-    glClearBufferfv(GL_COLOR, 1, frontClearNormal);
-    glClearBufferuiv(GL_COLOR, 2, frontClearId);
+    glClearBufferfv(GL_COLOR, 1, frontClearMaterial);
+    glClearBufferfv(GL_COLOR, 2, frontClearNormal);
     glClearBufferuiv(GL_COLOR, 3, frontClearId);
+    glClearBufferuiv(GL_COLOR, 4, frontClearId);
     glClearBufferfv(GL_DEPTH, 0, frontClearDepth);
     const GLint frontClearStencil = 0;
     glClearBufferiv(GL_STENCIL, 0, &frontClearStencil);

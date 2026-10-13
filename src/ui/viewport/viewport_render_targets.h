@@ -21,6 +21,7 @@ enum class ViewportRenderPass : quint32 {
     FrontTransparentDepth = 1u << 7,
     FrontTransparentMerge = 1u << 8,
     FrontOpaqueColor = 1u << 9,
+    OpaqueDeferredResolve = 1u << 18,
     Volume = 1u << 10,
     OpaqueDepthPrepass = 1u << 11,
     OpaqueViewNormalPrepass = 1u << 12,
@@ -86,10 +87,13 @@ struct ViewportRenderTargets {
     // into the ordinary per-sample attachments before effects and AA resolve.
     GLuint frontColorTexture = 0;
     GLuint frontDepthTexture = 0;
+    GLuint frontMaterialDataTexture = 0;
     GLuint frontViewSpaceNormalTexture = 0;
     GLuint frontObjectIdTexture = 0;
     GLuint frontOutlineIdTexture = 0;
     GLuint frontFramebuffer = 0;
+    // RGBA16F opaque material G-buffer: scene-linear base RGB plus the
+    // Blender Workbench mode-dependent payload in alpha.
     GLuint materialDataTexture = 0;
     GLuint shadowMaskTexture = 0;
     QSize pixelSize;

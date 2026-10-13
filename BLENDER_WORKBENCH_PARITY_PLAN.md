@@ -20,6 +20,30 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 
 ## Current classiCAD status
 
+### GPU opaque material G-buffer and initial deferred resolve (2026-10-13)
+
+- The shared GPU sample now writes opaque Workbench base color and Blender's
+  mode-dependent material payload into an `RGBA16F` material attachment during
+  the same depth-tested draw as opaque color. Studio stores Blender's
+  roughness/metallic bit-pair payload; MatCap stores face orientation. The
+  in-front opaque domain has its own material attachment and merges it with
+  the main sample alongside color, depth, normals, and IDs.
+- A fullscreen resolve now reads depth and material data to produce Flat
+  lighting from the G-buffer before transparency accumulation. It is enabled
+  only for scene-linear Flat renders with shadows, cavity, X-Ray, preview, and
+  selection tint inactive. Other settings retain the existing forward shader
+  until their deferred resolve inputs and effects are ported.
+- This is the first working material G-buffer writer and resolve path. Studio
+  and MatCap deferred lighting, shared normals in scenes that do not request
+  effects, G-buffer based cavity/shadow integration, and matched runtime image
+  comparisons remain open. Blender's reference opaque pass uses the material
+  and normal attachments in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L98-L198);
+  its mode-dependent material payload and resolve are in
+  [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L368-L456)
+  and
+  [`workbench_composite.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_composite.bsl.hh#L558-L620).
+
 ### QPainter perspective cavity footprint (2026-10-13)
 
 - The QPainter SSAO sample step now scales per receiver in perspective views by

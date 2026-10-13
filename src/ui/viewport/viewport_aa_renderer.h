@@ -96,9 +96,11 @@ private:
     GLuint sampleZeroDepthTexture_ = 0;
     GLuint sampleZeroFrontDepthTexture_ = 0;
     GLuint viewSpaceNormalTexture_ = 0;
+    GLuint materialDataTexture_ = 0;
     GLuint objectIdTexture_ = 0;
     GLuint frontColorTexture_ = 0;
     GLuint frontDepthTexture_ = 0;
+    GLuint frontMaterialDataTexture_ = 0;
     GLuint frontViewSpaceNormalTexture_ = 0;
     GLuint frontObjectIdTexture_ = 0;
     GLuint frontOutlineIdTexture_ = 0;

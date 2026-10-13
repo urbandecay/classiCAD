@@ -106,7 +106,10 @@ private:
         const ViewportRenderTargets &targets);
     bool mergeWorkbenchFrontAttachments(const ViewportRenderTargets &targets,
                                         bool mergeColor,
-                                        bool mergeNormal = true);
+                                        bool mergeNormal = true,
+                                        bool mergeMaterial = false);
+    bool resolveWorkbenchFlatMaterial(
+        const QSize &pixelSize, const ViewportRenderTargets &targets);
     bool ensureTransparencyFramebuffer(const QSize &pixelSize,
                                       GLuint depthStencilTexture,
                                       bool frontDomain = false);
@@ -165,6 +168,7 @@ private:
     QOpenGLShaderProgram scalarVolumeProgram_;
     QOpenGLShaderProgram transparencyResolveProgram_;
     QOpenGLShaderProgram frontMergeProgram_;
+    QOpenGLShaderProgram flatMaterialResolveProgram_;
     QOpenGLVertexArrayObject vertexArray_;
     QOpenGLVertexArrayObject outlineVertexArray_;
     QOpenGLVertexArrayObject shadowVolumeVertexArray_;
@@ -178,6 +182,7 @@ private:
     bool cavityDiagnosticOutput_ = false;
     GLuint workbenchEffectFramebuffer_ = 0;
     GLuint frontMergeFramebuffer_ = 0;
+    GLuint flatMaterialResolveFramebuffer_ = 0;
     GLuint workbenchOutlineIdTexture_ = 0;
     GLuint cavityDepthFramebuffer_ = 0;
     GLuint cavityDepthTexture_ = 0;

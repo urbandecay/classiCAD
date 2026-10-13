@@ -1457,8 +1457,8 @@ depth domain. Visual depth comparison remains open.
   the fixture to `(134.4,86.4)–(441.6,393.6)` removed those mismatches: the
   updated full-frame MAE is `0.071/255`, maximum `1/255`, with zero pixels
   above 2. Edge probes now confirm matching covered/uncovered pixel centers.
-  QPainter cavity/effect ordering, Theme-gradient integration, and
-  native-fallback composition remain open.
+  QPainter cavity under transparency and native-fallback composition remain
+  open.
 
 ### QPainter Theme background integration (2026-10-13)
 
@@ -1476,6 +1476,17 @@ depth domain. Visual depth comparison remains open.
   and fragment contracts pass. Matched GPU/QPainter captures for the three
   Theme styles and native-renderer failure fallback remain open.
 - Reference: [Blender 5.2.2 Workbench background shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/viewport_background.frag).
+
+### QPainter cavity and outline order (2026-10-13)
+
+- The CPU effects path now applies cavity before the object outline, matching
+  Blender's opaque cavity resolve followed by transparency resolve and the
+  later outline pass. A headless integration contract confirms cavity changes
+  the surface image and the outline remains visible over it. The focused
+  `viewport_render_contracts` test passes.
+- The cavity pixels themselves still use the QPainter fallback's display-space
+  approximation. Applying cavity to the retained scene-linear opaque base
+  before weighted OIT remains a separate parity step.
 - The offscreen AA-off presentation contract now exercises the final scene
   resolve with a scene-linear World color, an sRGB viewport background, a
   missing World background, and transparent film. It checks the AgX display

@@ -1286,7 +1286,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         }
     }
 
-    if (settings.outline) {
+    const auto applyOutline = [&]() {
+        if (!settings.outline) return;
         QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage result = source.copy();
         constexpr quint64 selectedIdMask = 0x80000000ull;
@@ -1351,7 +1352,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             }
         }
         *colorImage = result.convertToFormat(colorImage->format());
-    }
+    };
 
     if (cavityEnabled) {
 
@@ -1598,6 +1599,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     }
     *colorImage = result.convertToFormat(colorImage->format());
     }
+
+    applyOutline();
 
     // QPainter fallback approximation: use the software-resolved visible
     // surface depth to estimate a physical circle of confusion, then gather

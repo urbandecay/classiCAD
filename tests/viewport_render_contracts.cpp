@@ -375,6 +375,40 @@ int main(int argc, char *argv[])
             outlineScaleDpr2.pixelColor(62, 128).red() > 40,
         "QPainter outlines must sample cardinal object IDs at the integer Blender UI footprint");
 
+    ViewportShadingSettings cavityOnlySettings = outlineScaleSettings;
+    cavityOnlySettings.outline = false;
+    cavityOnlySettings.cavity = true;
+    cavityOnlySettings.cavityType = ViewportCavityType::World;
+    cavityOnlySettings.cavityDistance = 0.5;
+    cavityOnlySettings.cavitySamples = 32;
+    QImage cavityOnlyImage(orthographicDofSize,
+                           QImage::Format_ARGB32_Premultiplied);
+    cavityOnlyImage.fill(QColor(120, 120, 120));
+    applyRasterWorkbenchEffects(
+        &cavityOnlyImage, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, cavityOnlySettings);
+    ViewportShadingSettings cavityOutlineSettings = cavityOnlySettings;
+    cavityOutlineSettings.outline = true;
+    QImage cavityOutlineImage(orthographicDofSize,
+                              QImage::Format_ARGB32_Premultiplied);
+    cavityOutlineImage.fill(QColor(120, 120, 120));
+    applyRasterWorkbenchEffects(
+        &cavityOutlineImage, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, cavityOutlineSettings);
+    bool cavityChanged = false;
+    bool outlineVisibleOverCavity = false;
+    for (int y = 0; y < orthographicDofSize.height(); ++y) {
+        for (int x = 0; x < orthographicDofSize.width(); ++x) {
+            const QColor cavityPixel = cavityOnlyImage.pixelColor(x, y);
+            cavityChanged = cavityChanged ||
+                            cavityPixel != QColor(120, 120, 120);
+            outlineVisibleOverCavity = outlineVisibleOverCavity ||
+                cavityOutlineImage.pixelColor(x, y).red() > cavityPixel.red();
+        }
+    }
+    passed &= check(cavityChanged && outlineVisibleOverCavity,
+        "QPainter applies cavity before the object outline so the outline remains visible over cavity-shaded surfaces");
+
     // Keep the transparency fixture independent of an OpenGL context so it
     // can be captured and compared in the offscreen contract run.
     {

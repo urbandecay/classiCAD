@@ -83,12 +83,154 @@ int main(int argc, char *argv[])
     passed &= check(
         std::abs(rasterWorkbenchCameraDepth(
                      dofFocusedPoint, dofCameraPosition,
-                     dofViewDirection, true) - 8.0f) < 1.0e-6f &&
+                     dofViewDirection) - 8.0f) < 1.0e-6f &&
             std::abs(rasterWorkbenchCameraDepth(
                          dofFocusedPoint + dofWorldShift,
-                         shiftedDofCameraPosition, dofViewDirection, true) -
+                         shiftedDofCameraPosition, dofViewDirection) -
                      8.0f) < 1.0e-6f,
         "QPainter Workbench DOF depth must stay camera-relative when the camera and scene translate together");
+
+    ViewportTransform orthographicDofTransform;
+    orthographicDofTransform.setViewPreset(ViewportViewPreset::Top);
+    orthographicDofTransform.setPerspectiveEnabled(false);
+    ViewportCameraPreferences orthographicDofOptics;
+    orthographicDofOptics.sceneCameraEnabled = true;
+    orthographicDofOptics.focusDistance = 8.0;
+    orthographicDofOptics.fStop = 0.1;
+    orthographicDofOptics.clipEnd = 80.0;
+    orthographicDofOptics.opticalSensorSizeMillimeters = 36.0;
+    passed &= check(orthographicDofTransform.setCameraPreferences(
+                        orthographicDofOptics),
+                    "orthographic DOF contract optics must be valid");
+    const QSize orthographicDofSize(128, 128);
+    const Point3D orthographicDofTarget =
+        orthographicDofTransform.viewTarget();
+    const Point3D orthographicDofOutward =
+        orthographicDofTransform.viewDirection();
+    const auto makeOrthographicDofObject = [&](quint64 id, qreal depth,
+                                                qreal left, qreal right) {
+        ViewportRenderObject object;
+        object.shape.geometryType = GeometryType::NurbsSurface;
+        object.objectId = ObjectId::fromValue(id);
+        auto geometry = QSharedPointer<ViewportDepthGeometry>::create();
+        const auto worldAt = [&](qreal x, qreal y) {
+            QPointF local;
+            orthographicDofTransform.screenToWorkPlaneUnclipped(
+                QPointF(x, y), orthographicDofSize, WorkPlane::XY, 0.0,
+                &local);
+            return QVector3D(
+                float(local.x() - orthographicDofOutward.x * depth),
+                float(local.y() - orthographicDofOutward.y * depth),
+                float(orthographicDofTarget.z -
+                      orthographicDofOutward.z * depth));
+        };
+        const QVector3D a = worldAt(left, 8.0);
+        const QVector3D b = worldAt(right, 8.0);
+        const QVector3D c = worldAt(right, 120.0);
+        const QVector3D d = worldAt(left, 120.0);
+        geometry->surfaceVertices = {a, b, c, a, c, d};
+        geometry->surfaceNormals =
+            QVector<QVector3D>(6, QVector3D(0.0f, 0.0f, 1.0f));
+        object.preparedDepthGeometry = geometry;
+        return object;
+    };
+    const QVector<ViewportRenderObject> orthographicDofObjects{
+        makeOrthographicDofObject(1, 8.0, 8.0, 56.0),
+        makeOrthographicDofObject(2, 16.0, 72.0, 120.0)};
+    QImage orthographicDofImage(orthographicDofSize,
+                                QImage::Format_ARGB32_Premultiplied);
+    orthographicDofImage.fill(Qt::black);
+    orthographicDofImage.setPixelColor(32, 64, Qt::red);
+    orthographicDofImage.setPixelColor(96, 64, Qt::red);
+    ViewportShadingSettings orthographicDofSettings;
+    orthographicDofSettings.mode = ViewportShadingMode::Solid;
+    orthographicDofSettings.outline = false;
+    orthographicDofSettings.depthOfField = true;
+    applyRasterWorkbenchEffects(
+        &orthographicDofImage, orthographicDofObjects,
+        orthographicDofTransform, orthographicDofSize, 1.0,
+        orthographicDofSettings);
+    const int focusedOrthographicRed =
+        orthographicDofImage.pixelColor(32, 64).red();
+    const int defocusedOrthographicRed =
+        orthographicDofImage.pixelColor(96, 64).red();
+    ViewportTransform translatedOrthographicDofTransform =
+        orthographicDofTransform;
+    const Point3D translatedDofTarget{
+        orthographicDofTarget.x, orthographicDofTarget.y,
+        orthographicDofTarget.z - 20.0};
+    translatedOrthographicDofTransform.setOrbitPivotPreservingView(
+        translatedDofTarget);
+    QVector<ViewportRenderObject> translatedOrthographicDofObjects =
+        orthographicDofObjects;
+    for (ViewportRenderObject &object : translatedOrthographicDofObjects) {
+        auto translatedGeometry = QSharedPointer<ViewportDepthGeometry>::create(
+            *object.preparedDepthGeometry);
+        for (QVector3D &point : translatedGeometry->surfaceVertices) {
+            point.setZ(point.z() - 20.0f);
+        }
+        object.preparedDepthGeometry = translatedGeometry;
+    }
+    QImage translatedOrthographicDofImage(
+        orthographicDofSize, QImage::Format_ARGB32_Premultiplied);
+    translatedOrthographicDofImage.fill(Qt::black);
+    translatedOrthographicDofImage.setPixelColor(32, 64, Qt::red);
+    translatedOrthographicDofImage.setPixelColor(96, 64, Qt::red);
+    applyRasterWorkbenchEffects(
+        &translatedOrthographicDofImage,
+        translatedOrthographicDofObjects,
+        translatedOrthographicDofTransform, orthographicDofSize, 1.0,
+        orthographicDofSettings);
+    passed &= check(
+        focusedOrthographicRed == 255 && defocusedOrthographicRed > 0 &&
+            defocusedOrthographicRed < 240 &&
+            translatedOrthographicDofImage == orthographicDofImage,
+        "orthographic scene-camera DOF must preserve an in-focus impulse, gather a defocused surface, and remain invariant when the view target and scene translate together");
+
+    ViewportTransform perspectiveDofTransform = orthographicDofTransform;
+    perspectiveDofTransform.setPerspectiveEnabled(true);
+    const Point3D perspectiveDofEye =
+        perspectiveDofTransform.cameraPosition(orthographicDofSize);
+    const auto makePerspectiveDofObject = [&](quint64 id, qreal depth,
+                                               qreal left, qreal right) {
+        ViewportRenderObject object;
+        object.shape.geometryType = GeometryType::NurbsSurface;
+        object.objectId = ObjectId::fromValue(id);
+        auto geometry = QSharedPointer<ViewportDepthGeometry>::create();
+        const auto worldAt = [&](qreal x, qreal y) {
+            QPointF local;
+            perspectiveDofTransform.screenToWorkPlaneUnclipped(
+                QPointF(x, y), orthographicDofSize, WorkPlane::XY,
+                perspectiveDofEye.z - depth, &local);
+            return QVector3D(float(local.x()), float(local.y()),
+                             float(perspectiveDofEye.z - depth));
+        };
+        const QVector3D a = worldAt(left, 8.0);
+        const QVector3D b = worldAt(right, 8.0);
+        const QVector3D c = worldAt(right, 120.0);
+        const QVector3D d = worldAt(left, 120.0);
+        geometry->surfaceVertices = {a, b, c, a, c, d};
+        geometry->surfaceNormals =
+            QVector<QVector3D>(6, QVector3D(0.0f, 0.0f, 1.0f));
+        object.preparedDepthGeometry = geometry;
+        return object;
+    };
+    const QVector<ViewportRenderObject> perspectiveDofObjects{
+        makePerspectiveDofObject(3, 8.0, 8.0, 56.0),
+        makePerspectiveDofObject(4, 16.0, 72.0, 120.0)};
+    QImage perspectiveDofImage(orthographicDofSize,
+                                QImage::Format_ARGB32_Premultiplied);
+    perspectiveDofImage.fill(Qt::black);
+    perspectiveDofImage.setPixelColor(32, 64, Qt::red);
+    perspectiveDofImage.setPixelColor(96, 64, Qt::red);
+    applyRasterWorkbenchEffects(
+        &perspectiveDofImage, perspectiveDofObjects, perspectiveDofTransform,
+        orthographicDofSize, 1.0, orthographicDofSettings);
+    passed &= check(
+        perspectiveDofImage.pixelColor(32, 64).red() == 255 &&
+            perspectiveDofImage.pixelColor(96, 64).red() > 0 &&
+            perspectiveDofImage.pixelColor(96, 64).red() < 240,
+        "perspective scene-camera DOF CoC must retain the Blender aperture-radius factor while preserving focus");
 
     QImage cpuDitherInput(1, 1, QImage::Format_RGBA64);
     cpuDitherInput.setPixelColor(0, 0, QColor::fromRgbF(0.18, 0.18, 0.18,

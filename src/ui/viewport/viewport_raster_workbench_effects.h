@@ -14,13 +14,11 @@
 
 namespace classiCAD {
 
-// Camera-space depth used by the QPainter Workbench effects. Perspective
-// callers provide the eye position and use positive distance along the view;
-// orthographic callers retain the established world-projection depth.
+// Positive camera-space depth used by the QPainter Workbench effects. The
+// origin is the perspective eye or the orthographic view target.
 float rasterWorkbenchCameraDepth(const QVector3D &position,
                                  const Point3D &cameraPosition,
-                                 const Point3D &viewDirection,
-                                 bool perspective) noexcept;
+                                 const Point3D &viewDirection) noexcept;
 
 // Retained surface layers let the QPainter cavity approximation shade the
 // opaque receiver before applying the already resolved transparent surface

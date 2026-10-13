@@ -319,14 +319,12 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
 
 float rasterWorkbenchCameraDepth(const QVector3D &position,
                                  const Point3D &cameraPosition,
-                                 const Point3D &viewDirection,
-                                 bool perspective) noexcept
+                                 const Point3D &viewDirection) noexcept
 {
-    const float projectedDepth = static_cast<float>(
+    return -static_cast<float>(
         (position.x() - cameraPosition.x) * viewDirection.x +
         (position.y() - cameraPosition.y) * viewDirection.y +
         (position.z() - cameraPosition.z) * viewDirection.z);
-    return perspective ? -projectedDepth : projectedDepth;
 }
 
 bool compositeRasterWorkbenchSurfaces(
@@ -657,7 +655,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const bool cavityEnabled = settings.cavity;
     const ViewportCameraPreferences cameraOptics = transform.cameraPreferences();
     const bool perspective = transform.isPerspectiveEnabled();
-    const bool depthOfFieldEnabled = settings.depthOfField && perspective &&
+    const bool depthOfFieldEnabled = settings.depthOfField &&
                                      cameraOptics.sceneCameraEnabled;
 
     const int outputWidth = colorImage->width();
@@ -674,7 +672,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     const Point3D towardCamera = transform.viewDirection();
     const Point3D camera = perspective
                                ? transform.cameraPosition(viewportSize)
-                               : Point3D{};
+                               : transform.viewTarget();
 
     for (const ViewportRenderObject &object : objects) {
         if (object.shape.geometryType != GeometryType::NurbsSurface &&
@@ -989,7 +987,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         world[1] * static_cast<float>(positionWeight1) +
                         world[2] * static_cast<float>(positionWeight2);
                     const float z = rasterWorkbenchCameraDepth(
-                        interpolatedPosition, camera, towardCamera, perspective);
+                        interpolatedPosition, camera, towardCamera);
                     const QVector3D interpolatedNormal = normalized(
                         normal[0] * static_cast<float>(positionWeight0) +
                         normal[1] * static_cast<float>(positionWeight1) +
@@ -1308,7 +1306,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // QPainter fallback approximation: use the software-resolved visible
     // surface depth to estimate a physical circle of confusion, then gather
     // a small disk of same-or-behind-depth colors. This is intentionally
-    // camera-gated and runs only for perspective scene-camera optics.
+    // camera-gated and uses camera-relative depth for either projection.
     if (depthOfFieldEnabled) {
         const QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);
         QImage dofResult = source.copy();
@@ -1359,8 +1357,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     const RasterSample &center = samples[depthY * width + depthX];
                     if (center.objectId == 0 || center.depth <= 0.0f) continue;
                     const qreal z = center.depth;
-                    const qreal cocMm = std::abs(
-                        (focal * focal / (fStop * std::abs(focus - focal))) *
+                    // Blender's aperture radius is 0.5 * focal / f-stop;
+                    // multiplying by focal / focus-distance produces this
+                    // factor for both perspective and orthographic view depth.
+                    const qreal cocMm = 0.5 * std::abs(
+                        (focal * focal /
+                         (fStop * std::abs(focus - focal))) *
                         ((z - focus) / std::max<qreal>(z, 1.0e-6)));
                     const qreal radius = std::clamp(
                         cocMm * outputWidth / sensorWidth, 0.0, 12.0) * colorDpr;

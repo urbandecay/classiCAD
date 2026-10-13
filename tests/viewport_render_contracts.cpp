@@ -67,6 +67,18 @@ int main(int argc, char *argv[])
     QGuiApplication application(argc, argv);
     bool passed = true;
 
+    passed &= check(
+        blenderRenderAntiAliasingMode(QStringLiteral("OFF")) == 0 &&
+            blenderRenderAntiAliasingMode(QStringLiteral("FXAA")) == 1 &&
+            blenderRenderAntiAliasingMode(QStringLiteral("5")) == 5 &&
+            blenderRenderAntiAliasingMode(QStringLiteral("8")) == 8 &&
+            blenderRenderAntiAliasingMode(QStringLiteral("11")) == 11 &&
+            blenderRenderAntiAliasingMode(QStringLiteral("16")) == 16 &&
+            blenderRenderAntiAliasingMode(QStringLiteral("32")) == 32 &&
+            blenderRenderAntiAliasingMode(QStringLiteral("")) == -1 &&
+            blenderRenderAntiAliasingMode(QStringLiteral("UNKNOWN")) == -1,
+        "Blender render AA enum must override viewport AA only for supported values");
+
     passed &= check(workbenchRenderDitherIntensity(1.0, 8) == 1.0 &&
                         workbenchRenderDitherIntensity(1.0, 16) == 0.0 &&
                         workbenchRenderDitherIntensity(1.0, 32) == 0.0 &&

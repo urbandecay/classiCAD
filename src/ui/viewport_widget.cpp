@@ -6699,15 +6699,8 @@ public:
                  !result.sceneWorldColorAvailable);
             const QString renderAa = renderOutput.value(
                 QStringLiteral("render_aa")).toString();
-            if (renderAa == QLatin1String("OFF")) renderAntiAliasingMode = 0;
-            else if (renderAa == QLatin1String("FXAA")) renderAntiAliasingMode = 1;
-            else if (renderAa == QLatin1String("5") ||
-                     renderAa == QLatin1String("8") ||
-                     renderAa == QLatin1String("11") ||
-                     renderAa == QLatin1String("16") ||
-                     renderAa == QLatin1String("32")) {
-                renderAntiAliasingMode = renderAa.toInt();
-            }
+            renderAntiAliasingMode =
+                blenderRenderAntiAliasingMode(renderAa);
             const QJsonObject colorManagement = scene.value(
                 QStringLiteral("color_management")).toObject();
             result.colorDisplayDevice = colorManagement.value(

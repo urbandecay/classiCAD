@@ -1040,6 +1040,15 @@ Source: [Workbench AA depth preservation](https://github.com/blender/blender/blo
 The depth routing is source-aligned; an image comparison against Blender's
 Combined and Z outputs remains to verify the result visually.
 
+The render AA enum conversion is centralized in
+`blenderRenderAntiAliasingMode` and covered for `OFF`, `FXAA`, all five
+multisample counts, and missing/unknown values. Supported imported values
+override the viewport AA preference; missing or unknown identifiers retain
+the existing viewport preference. The GPU AA contract separately checks the
+sample counts and output for Off, Single Pass, and 8 samples. A full
+File → Render Workbench Result comparison against Blender Combined and Z is
+still open.
+
 **Depth precision update:** Blender 5.2.2 allocates scene depth and in-front
 depth as `SFLOAT_32_DEPTH_UINT_8` in its Workbench render-target setup
 ([`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L555-L582)).

@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #pragma once
 
+#include <QString>
+
 namespace classiCAD {
 
 // Stored values intentionally match Blender 5.2.2's preference values. Its
@@ -35,6 +37,27 @@ constexpr int normalizedViewportAntiAliasingMode(int value) noexcept
     return isViewportAntiAliasingMode(value)
                ? value
                : static_cast<int>(ViewportAntiAliasingMode::Samples8);
+}
+
+// Blender stores render AA as enum identifiers rather than sample counts.
+// Return -1 for an absent or unknown identifier so imported scenes without a
+// supported render override continue to use the viewport preference.
+inline int blenderRenderAntiAliasingMode(const QString &identifier) noexcept
+{
+    if (identifier == QLatin1String("OFF")) {
+        return static_cast<int>(ViewportAntiAliasingMode::Off);
+    }
+    if (identifier == QLatin1String("FXAA")) {
+        return static_cast<int>(ViewportAntiAliasingMode::SinglePass);
+    }
+    if (identifier == QLatin1String("5") ||
+        identifier == QLatin1String("8") ||
+        identifier == QLatin1String("11") ||
+        identifier == QLatin1String("16") ||
+        identifier == QLatin1String("32")) {
+        return identifier.toInt();
+    }
+    return -1;
 }
 
 } // namespace classiCAD

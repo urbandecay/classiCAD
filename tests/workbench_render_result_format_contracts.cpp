@@ -132,6 +132,16 @@ int main(int argc, char *argv[])
                         !QFileInfo::exists(wrongSuffixPath),
                     "Combined writer must reject a filename suffix that disagrees with the selected Blender format");
 
+    result.useFileExtension = false;
+    const QString extensionlessPngPath = outputDirectory.filePath(
+        QStringLiteral("render_without_extension"));
+    QString extensionlessPngError;
+    passed &= check(result.saveCombinedImage(extensionlessPngPath,
+                                              &extensionlessPngError) &&
+                        QFileInfo(extensionlessPngPath).size() > 0,
+                    "Blender's disabled file-extension setting must still write the selected image format without adding a suffix");
+    result.useFileExtension = true;
+
     result.blenderImageFormat = QStringLiteral("HDR");
     const QString hdrPath = outputDirectory.filePath(QStringLiteral("linear.hdr"));
     QString hdrError;

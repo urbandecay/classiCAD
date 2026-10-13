@@ -6790,6 +6790,8 @@ public:
                 QStringLiteral("file_format")).toString(QStringLiteral("PNG"));
             result.blenderRenderFilepath = renderOutput.value(
                 QStringLiteral("filepath")).toString();
+            result.useFileExtension = renderOutput.value(
+                QStringLiteral("use_file_extension")).toBool(true);
             result.exrCodec = renderOutput.value(
                 QStringLiteral("exr_codec")).toString(QStringLiteral("ZIP"));
             result.colorMode = renderOutput.value(

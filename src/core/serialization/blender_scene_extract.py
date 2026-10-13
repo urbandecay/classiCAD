@@ -1614,6 +1614,7 @@ def extract_scene(input_path, mode):
                 # Resolve Blender's project-relative `//` path at import time.
                 # Keep frame tokens intact; classiCAD does not expand them.
                 "filepath": resolved_render_filepath(render),
+                "use_file_extension": bool(render.use_file_extension),
                 "resolution_x": int(render.resolution_x),
                 "resolution_y": int(render.resolution_y),
                 "resolution_percentage": int(render.resolution_percentage),

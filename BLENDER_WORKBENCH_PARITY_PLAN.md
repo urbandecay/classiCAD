@@ -2434,6 +2434,21 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - [Workbench lighting](https://docs.blender.org/manual/en/5.2/render/workbench/lighting.html)
 - [Workbench options](https://docs.blender.org/manual/en/5.2/render/workbench/options.html)
 
+### Render output extension preference (2026-10-13)
+
+- Blender scene extraction now records `RenderSettings.use_file_extension`;
+  native scene metadata retains it, and validation rejects a non-boolean value.
+  Workbench Combined export uses the imported preference: enabled appends or
+  normalizes to the format extension, while disabled preserves the exact path
+  chosen in the save dialog and writes the selected format without adding a
+  suffix. Empty paths use `WorkbenchRender` when extensions are disabled.
+- Contracts cover native scene metadata round-trip, both path policies, and an
+  actual extensionless PNG write. `cmake --build build -j4` and the focused
+  `workbench_persistence_contracts` and
+  `workbench_render_result_format_contracts` CTests pass. The Blender
+  extraction fixture itself was not run in this environment.
+- Blender documents the behavior in the pinned [RenderSettings API](https://docs.blender.org/api/5.2/bpy.types.RenderSettings.html#bpy.types.RenderSettings.use_file_extension).
+
 ### Update-session color management persistence (2026-10-13)
 
 - Update-session snapshots now retain the viewport color transform, imported LUT

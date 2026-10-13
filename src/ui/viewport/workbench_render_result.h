@@ -4,6 +4,8 @@
 
 #include "core/serialization/blender_project_file.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QImage>
 #include <QSize>
 #include <QString>
@@ -17,11 +19,29 @@
 namespace classiCAD {
 
 inline QString workbenchCombinedInitialSavePath(const QString &renderFilepath,
-                                                const QString &extension)
+                                                const QString &extension,
+                                                bool useFileExtension = true)
 {
-    return renderFilepath.isEmpty()
-               ? QStringLiteral("WorkbenchRender.%1").arg(extension)
-               : renderFilepath;
+    if (!renderFilepath.isEmpty()) return renderFilepath;
+    return useFileExtension
+        ? QStringLiteral("WorkbenchRender.%1").arg(extension)
+        : QStringLiteral("WorkbenchRender");
+}
+
+inline QString workbenchCombinedSavePath(const QString &selectedPath,
+                                         const QString &extension,
+                                         bool useFileExtension)
+{
+    if (!useFileExtension || selectedPath.isEmpty()) return selectedPath;
+    const QFileInfo selected(selectedPath);
+    if (selected.suffix().isEmpty()) {
+        return selectedPath + QStringLiteral(".") + extension;
+    }
+    if (selected.suffix().compare(extension, Qt::CaseInsensitive) == 0) {
+        return selectedPath;
+    }
+    return selected.dir().filePath(
+        selected.completeBaseName() + QStringLiteral(".") + extension);
 }
 
 // Convert the OpenGL depth-buffer value used by the Workbench render target
@@ -132,6 +152,7 @@ struct WorkbenchRenderResult {
     QString outputFormat = QStringLiteral("PNG + PFM depth");
     QString blenderImageFormat = QStringLiteral("PNG");
     QString blenderRenderFilepath;
+    bool useFileExtension = true;
     QString exrCodec = QStringLiteral("ZIP");
     QString colorMode = QStringLiteral("RGBA");
     int colorDepth = 8;

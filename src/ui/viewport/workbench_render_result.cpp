@@ -838,7 +838,8 @@ bool WorkbenchRenderResult::saveCombinedImage(
     }
     const QString expectedExtension = combinedFileExtension();
     const QString actualExtension = QFileInfo(path).suffix();
-    if (actualExtension.compare(expectedExtension, Qt::CaseInsensitive) != 0) {
+    if (useFileExtension &&
+        actualExtension.compare(expectedExtension, Qt::CaseInsensitive) != 0) {
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("The output path must use the .%1 extension for Blender format '%2'")
                                 .arg(expectedExtension, blenderImageFormat);
@@ -942,6 +943,7 @@ bool WorkbenchRenderResult::saveCombinedImage(
                       colorManagementApplied);
     cameraJson.insert(QStringLiteral("outputFormat"), outputFormat);
     cameraJson.insert(QStringLiteral("blenderImageFormat"), blenderImageFormat);
+    cameraJson.insert(QStringLiteral("useFileExtension"), useFileExtension);
     cameraJson.insert(QStringLiteral("writtenImageFormat"), writerFormat);
     cameraJson.insert(QStringLiteral("colorMode"), mode);
     cameraJson.insert(QStringLiteral("sourceColorDepth"), colorDepth);

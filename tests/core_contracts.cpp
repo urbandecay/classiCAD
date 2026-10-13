@@ -202,6 +202,7 @@ bool persistedWorkbenchSettingsContracts()
     renderOutput.insert(QStringLiteral("file_format"), QStringLiteral("OPEN_EXR"));
     renderOutput.insert(QStringLiteral("filepath"),
                         QStringLiteral("/tmp/classicad-output/frame_"));
+    renderOutput.insert(QStringLiteral("use_file_extension"), false);
     renderOutput.insert(QStringLiteral("color_mode"), QStringLiteral("RGBA"));
     renderOutput.insert(QStringLiteral("color_depth"), 16);
     renderOutput.insert(QStringLiteral("dither_intensity"), 1.0);
@@ -229,6 +230,7 @@ bool persistedWorkbenchSettingsContracts()
                                 QStringLiteral("OPEN_EXR") &&
                             restoredOutput.value(QStringLiteral("filepath")).toString() ==
                                 QStringLiteral("/tmp/classicad-output/frame_") &&
+                            !restoredOutput.value(QStringLiteral("use_file_extension")).toBool(true) &&
                             restoredOutput.value(QStringLiteral("color_mode")).toString() ==
                                 QStringLiteral("RGBA") &&
                             restoredOutput.value(QStringLiteral("color_depth")).toInt() == 16,
@@ -255,6 +257,26 @@ bool persistedWorkbenchSettingsContracts()
                             QString(), QStringLiteral("png")) ==
                             QStringLiteral("WorkbenchRender.png"),
                     "Combined save path must use Blender filepath verbatim and fall back generically");
+    passed &= check(workbenchCombinedInitialSavePath(
+                        QString(), QStringLiteral("png"), false) ==
+                        QStringLiteral("WorkbenchRender") &&
+                        workbenchCombinedSavePath(
+                            QStringLiteral("/tmp/renders/frame_"),
+                            QStringLiteral("png"), false) ==
+                            QStringLiteral("/tmp/renders/frame_") &&
+                        workbenchCombinedSavePath(
+                            QStringLiteral("/tmp/renders/frame.custom"),
+                            QStringLiteral("png"), false) ==
+                            QStringLiteral("/tmp/renders/frame.custom") &&
+                        workbenchCombinedSavePath(
+                            QStringLiteral("/tmp/renders/frame"),
+                            QStringLiteral("png"), true) ==
+                            QStringLiteral("/tmp/renders/frame.png") &&
+                        workbenchCombinedSavePath(
+                            QStringLiteral("/tmp/renders/frame.jpg"),
+                            QStringLiteral("png"), true) ==
+                            QStringLiteral("/tmp/renders/frame.png"),
+                    "Combined path handling must honor Blender's extension toggle");
 
     Document textureDocument;
     Shape textureShape;

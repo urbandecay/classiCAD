@@ -465,21 +465,17 @@ private:
         connect(saveCombined, &QPushButton::clicked, &window, [this, &result]() {
             const QString extension = result.combinedFileExtension();
             const QString initialPath = workbenchCombinedInitialSavePath(
-                result.blenderRenderFilepath, extension);
+                result.blenderRenderFilepath, extension,
+                result.useFileExtension);
             QString path = QFileDialog::getSaveFileName(
                 this, QStringLiteral("Save Combined Render"),
                 initialPath,
-                QStringLiteral("Image Files (*.%1)").arg(extension));
+                result.useFileExtension
+                    ? QStringLiteral("Image Files (*.%1)").arg(extension)
+                    : QStringLiteral("All Files (*)"));
             if (path.isEmpty()) return;
-            const QFileInfo selectedPath(path);
-            if (selectedPath.suffix().isEmpty()) {
-                path += QStringLiteral(".%1").arg(extension);
-            } else if (selectedPath.suffix().compare(
-                           extension, Qt::CaseInsensitive) != 0) {
-                path = selectedPath.dir().filePath(
-                    selectedPath.completeBaseName() +
-                    QStringLiteral(".%1").arg(extension));
-            }
+            path = workbenchCombinedSavePath(path, extension,
+                                             result.useFileExtension);
             QString error;
             if (!result.saveCombinedImage(path, &error))
                 QMessageBox::critical(this, QStringLiteral("Save Failed"), error);

@@ -75,6 +75,19 @@ int main(int argc, char *argv[])
     QGuiApplication application(argc, argv);
     bool passed = true;
 
+    const QVector3D frontPrepassNormal = rasterWorkbenchPrepassNormal(
+        QVector3D(0.2f, -0.3f, 0.9327379f), true,
+        QVector3D(1.0f, 0.0f, 0.0f), QVector3D(0.0f, 1.0f, 0.0f),
+        QVector3D(0.0f, 0.0f, 1.0f));
+    const QVector3D backPrepassNormal = rasterWorkbenchPrepassNormal(
+        QVector3D(-0.2f, 0.3f, -0.9327379f), false,
+        QVector3D(1.0f, 0.0f, 0.0f), QVector3D(0.0f, 1.0f, 0.0f),
+        QVector3D(0.0f, 0.0f, 1.0f));
+    passed &= check((frontPrepassNormal - backPrepassNormal).length() < 1.0e-5f &&
+                        frontPrepassNormal.z() > 0.9f &&
+                        std::abs(frontPrepassNormal.length() - 1.0f) < 0.01f,
+                    "QPainter Workbench effect normals must apply Blender facing orientation and RG16F encode/decode");
+
     const float ridgeResponse = rasterWorkbenchCurvatureResponse(
         1, 1, 1, 1, 0.5f, 0.0f, 0.25f, 0.0f, 1.0f, 1.0f);
     const float valleyResponse = rasterWorkbenchCurvatureResponse(
@@ -253,7 +266,10 @@ int main(int argc, char *argv[])
         const QVector3D b = worldAt(right, 8.0);
         const QVector3D c = worldAt(right, 120.0);
         const QVector3D d = worldAt(left, 120.0);
-        geometry->surfaceVertices = {a, b, c, a, c, d};
+        // screenToWorkPlane maps screen-down to decreasing world Y. Keep the
+        // triangles counter-clockwise from Top so their +Z normals are front
+        // facing, matching Blender's gl_FrontFacing prepass semantics.
+        geometry->surfaceVertices = {a, c, b, a, d, c};
         geometry->surfaceNormals =
             QVector<QVector3D>(6, QVector3D(0.0f, 0.0f, 1.0f));
         object.preparedDepthGeometry = geometry;
@@ -329,7 +345,10 @@ int main(int argc, char *argv[])
         const QVector3D b = worldAt(96.0, 32.0);
         const QVector3D c = worldAt(96.0, 96.0);
         const QVector3D d = worldAt(32.0, 96.0);
-        geometry->surfaceVertices = {a, b, c, a, c, d};
+        // screenToWorkPlane maps screen-down to decreasing world Y. Keep the
+        // triangles counter-clockwise from Top so their +Z normals are front
+        // facing, matching Blender's gl_FrontFacing prepass semantics.
+        geometry->surfaceVertices = {a, c, b, a, d, c};
         geometry->surfaceNormals =
             QVector<QVector3D>(6, QVector3D(0.0f, 0.0f, 1.0f));
         object.preparedDepthGeometry = geometry;

@@ -16,6 +16,7 @@
 #include <QImageReader>
 #include <QSet>
 #include <QVector3D>
+#include <QtCore/qfloat16.h>
 
 #include <algorithm>
 #include <array>
@@ -328,6 +329,34 @@ float rasterWorkbenchCameraDepth(const QVector3D &position,
         (position.x() - cameraPosition.x) * viewDirection.x +
         (position.y() - cameraPosition.y) * viewDirection.y +
         (position.z() - cameraPosition.z) * viewDirection.z);
+}
+
+QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,
+                                       bool frontFacing,
+                                       const QVector3D &viewRight,
+                                       const QVector3D &viewUp,
+                                       const QVector3D &viewFacing) noexcept
+{
+    QVector3D viewNormal(QVector3D::dotProduct(worldNormal, viewRight),
+                         QVector3D::dotProduct(worldNormal, viewUp),
+                         QVector3D::dotProduct(worldNormal, viewFacing));
+    if (viewNormal.lengthSquared() <= 1.0e-20f) return {};
+    viewNormal.normalize();
+    if (!frontFacing) viewNormal = -viewNormal;
+
+    // workbench_common.bsl.hh normal_encode(), with RG16F render-target
+    // precision applied before the matching normal_decode().
+    const float p = std::sqrt(std::max(0.0f, viewNormal.z() * 8.0f + 8.0f));
+    if (p <= 1.0e-10f) return {};
+    const float encodedX = float(qfloat16(viewNormal.x() / p + 0.5f));
+    const float encodedY = float(qfloat16(viewNormal.y() / p + 0.5f));
+    const float fx = encodedX * 4.0f - 2.0f;
+    const float fy = encodedY * 4.0f - 2.0f;
+    const float f = fx * fx + fy * fy;
+    const float g = std::sqrt(std::max(0.0f, 1.0f - f / 4.0f));
+    const QVector3D decodedView(fx * g, fy * g, 1.0f - f / 2.0f);
+    return viewRight * decodedView.x() + viewUp * decodedView.y() +
+           viewFacing * decodedView.z();
 }
 
 QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
@@ -1007,6 +1036,18 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     QVector<RasterSample> opaqueSamples;
     if (cavityEnabled) opaqueSamples.resize(width * height);
     const Point3D towardCamera = transform.viewDirection();
+    const Point3D viewUp = transform.viewUp();
+    const Point3D viewRight{
+        viewUp.y * towardCamera.z - viewUp.z * towardCamera.y,
+        viewUp.z * towardCamera.x - viewUp.x * towardCamera.z,
+        viewUp.x * towardCamera.y - viewUp.y * towardCamera.x};
+    const QVector3D viewUpVector(float(viewUp.x), float(viewUp.y),
+                                 float(viewUp.z));
+    const QVector3D viewRightVector(float(viewRight.x), float(viewRight.y),
+                                    float(viewRight.z));
+    const QVector3D viewFacingVector(float(towardCamera.x),
+                                     float(towardCamera.y),
+                                     float(towardCamera.z));
     const Point3D camera = perspective
                                ? transform.cameraPosition(viewportSize)
                                : transform.viewTarget();
@@ -1326,10 +1367,13 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                         world[2] * static_cast<float>(positionWeight2);
                     const float z = rasterWorkbenchCameraDepth(
                         interpolatedPosition, camera, towardCamera);
-                    const QVector3D interpolatedNormal = normalized(
+                    const QVector3D interpolatedNormal = rasterWorkbenchPrepassNormal(
+                        normalized(
                         normal[0] * static_cast<float>(positionWeight0) +
                         normal[1] * static_cast<float>(positionWeight1) +
-                        normal[2] * static_cast<float>(positionWeight2));
+                        normal[2] * static_cast<float>(positionWeight2)),
+                        area < 0.0, viewRightVector, viewUpVector,
+                        viewFacingVector);
                     const auto writeNearest = [&](RasterSample &target) {
                         if (target.objectId != 0 && z <= target.depth) return;
                         target.depth = z;
@@ -1439,15 +1483,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         static_cast<float>(settings.curvatureRidgeFactor));
     const float curvatureValley = std::max(0.0f,
         static_cast<float>(settings.curvatureValleyFactor));
-    const Point3D viewUp = transform.viewUp();
-    const Point3D viewRight{
-        viewUp.y * towardCamera.z - viewUp.z * towardCamera.y,
-        viewUp.z * towardCamera.x - viewUp.x * towardCamera.z,
-        viewUp.x * towardCamera.y - viewUp.y * towardCamera.x};
-    const QVector3D viewUpVector(float(viewUp.x), float(viewUp.y),
-                                 float(viewUp.z));
-    const QVector3D viewRightVector(float(viewRight.x), float(viewRight.y),
-                                    float(viewRight.z));
     const float cavityDistance = std::max(
         0.0f, static_cast<float>(settings.cavityDistance));
 

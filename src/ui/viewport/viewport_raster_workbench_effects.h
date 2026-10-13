@@ -23,6 +23,14 @@ float rasterWorkbenchCameraDepth(const QVector3D &position,
                                  const Point3D &cameraPosition,
                                  const Point3D &viewDirection) noexcept;
 
+// Blender's opaque Workbench prepass stores the facing-adjusted view normal
+// with normal_encode in an RG16F target, then effects decode that value.
+QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,
+                                       bool frontFacing,
+                                       const QVector3D &viewRight,
+                                       const QVector3D &viewUp,
+                                       const QVector3D &viewFacing) noexcept;
+
 // Map a normalized circular sample through Workbench's polygon aperture,
 // rotation, and X-axis aperture-ratio scale.
 QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,

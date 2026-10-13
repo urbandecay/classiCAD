@@ -1969,6 +1969,14 @@ Status: in progress; the implementation and source reviews found the blockers li
   rounds Qt DPR, which can differ from Blender's DPI-derived `ui_scale`; the
   retained QPainter surface layers also remain display RGB, so cavity/effect
   composition does not match Blender's scene-linear ordering.
+  Opaque effect normals now also pass through the Blender prepass facing
+  adjustment and sphere-map encode/decode at half-float precision before the
+  QPainter cavity/curvature consumers use them. This closes the prior CPU-only
+  difference where interpolated full-precision normals bypassed the GPU's
+  RG16F normal buffer. The contract checks equivalent front- and back-facing
+  normal inputs. See Blender 5.2.2
+  [`workbench_prepass.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_prepass.bsl.hh)
+  and [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L368-L407).
 
 - Run the comparison matrix below against Blender 5.2.2.
 - Record remaining visual differences with a source or implementation explanation; capture images only when both applications show the same nonblank scene and matched view.

@@ -1571,6 +1571,130 @@ int main(int argc, char *argv[])
                         aaRenderer.setDisplayTransform(gpuSolidShading, true);
                         int completedSamples = 0;
                         bool captureSucceeded = true;
+                        const QString sampleCapturePrefix =
+                            aaMode == static_cast<int>(
+                                          ViewportAntiAliasingMode::Samples8)
+                                ? qEnvironmentVariable(
+                                      "CLASSICAD_VIEWPORT_AA_SAMPLES8_SAMPLE_CAPTURE_PREFIX")
+                                : QString();
+                        const auto writeRgbTexturePfm = [&](const QString &path,
+                                                             GLuint texture) {
+                            if (path.isEmpty()) return true;
+                            if (texture == 0) return false;
+                            QVector<float> rgba(glSize.width() *
+                                                glSize.height() * 4);
+                            GLint previousActiveTexture = GL_TEXTURE0;
+                            GLint previousTexture = 0;
+                            functions.glGetIntegerv(
+                                GL_ACTIVE_TEXTURE, &previousActiveTexture);
+                            functions.glActiveTexture(GL_TEXTURE0);
+                            functions.glGetIntegerv(
+                                GL_TEXTURE_BINDING_2D, &previousTexture);
+                            functions.glBindTexture(GL_TEXTURE_2D, texture);
+                            functions.glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA,
+                                                    GL_FLOAT, rgba.data());
+                            functions.glBindTexture(
+                                GL_TEXTURE_2D,
+                                static_cast<GLuint>(previousTexture));
+                            functions.glActiveTexture(
+                                static_cast<GLenum>(previousActiveTexture));
+                            QVector<float> rgb(glSize.width() *
+                                               glSize.height() * 3);
+                            for (int pixel = 0;
+                                 pixel < glSize.width() * glSize.height();
+                                 ++pixel) {
+                                rgb[pixel * 3] = rgba[pixel * 4];
+                                rgb[pixel * 3 + 1] = rgba[pixel * 4 + 1];
+                                rgb[pixel * 3 + 2] = rgba[pixel * 4 + 2];
+                            }
+                            QFile file(path);
+                            const QByteArray header =
+                                QByteArrayLiteral("PF\n") +
+                                QByteArray::number(glSize.width()) +
+                                QByteArrayLiteral(" ") +
+                                QByteArray::number(glSize.height()) +
+                                QByteArrayLiteral("\n-1.0\n");
+                            return file.open(QIODevice::WriteOnly) &&
+                                file.write(header) == header.size() &&
+                                file.write(reinterpret_cast<const char *>(
+                                               rgb.constData()),
+                                           qsizetype(rgb.size()) *
+                                               qsizetype(sizeof(float))) ==
+                                    qsizetype(rgb.size()) *
+                                        qsizetype(sizeof(float));
+                        };
+                        const auto writeDepthTexturePfm = [&](const QString &path,
+                                                               GLuint texture) {
+                            if (path.isEmpty()) return true;
+                            if (texture == 0) return false;
+                            GLint previousReadFramebuffer = 0;
+                            GLint previousReadBuffer = GL_BACK;
+                            functions.glGetIntegerv(
+                                GL_READ_FRAMEBUFFER_BINDING,
+                                &previousReadFramebuffer);
+                            functions.glGetIntegerv(GL_READ_BUFFER,
+                                                    &previousReadBuffer);
+                            GLuint readFramebuffer = 0;
+                            functions.glGenFramebuffers(1, &readFramebuffer);
+                            functions.glBindFramebuffer(
+                                GL_READ_FRAMEBUFFER, readFramebuffer);
+                            functions.glFramebufferTexture2D(
+                                GL_READ_FRAMEBUFFER,
+                                GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
+                                texture, 0);
+                            const bool framebufferValid =
+                                functions.glCheckFramebufferStatus(
+                                    GL_READ_FRAMEBUFFER) ==
+                                GL_FRAMEBUFFER_COMPLETE;
+                            QVector<float> depth(glSize.width() *
+                                                 glSize.height());
+                            if (framebufferValid) {
+                                functions.glReadBuffer(GL_NONE);
+                                functions.glReadPixels(
+                                    0, 0, glSize.width(), glSize.height(),
+                                    GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
+                                const ViewportProjectionClipRange clipRange =
+                                    viewportProjectionClipRange(gpuTransform,
+                                                                glSize);
+                                const float nearClip =
+                                    static_cast<float>(clipRange.nearPlane);
+                                const float farClip =
+                                    static_cast<float>(clipRange.farPlane);
+                                const float cameraDepthOffset =
+                                    8.0f - farClip * 0.5f;
+                                for (float &value : depth) {
+                                    value = !std::isfinite(value) || value >= 1.0f
+                                        ? 1.0e10f
+                                        : nearClip +
+                                              std::clamp(value, 0.0f, 1.0f) *
+                                                  (farClip - nearClip) +
+                                              cameraDepthOffset;
+                                }
+                            }
+                            functions.glBindFramebuffer(
+                                GL_READ_FRAMEBUFFER,
+                                static_cast<GLuint>(previousReadFramebuffer));
+                            functions.glReadBuffer(
+                                static_cast<GLenum>(previousReadBuffer));
+                            functions.glDeleteFramebuffers(1,
+                                                           &readFramebuffer);
+                            if (!framebufferValid) return false;
+                            QFile file(path);
+                            const QByteArray header =
+                                QByteArrayLiteral("Pf\n") +
+                                QByteArray::number(glSize.width()) +
+                                QByteArrayLiteral(" ") +
+                                QByteArray::number(glSize.height()) +
+                                QByteArrayLiteral("\n-1.0\n");
+                            return file.open(QIODevice::WriteOnly) &&
+                                file.write(header) == header.size() &&
+                                file.write(reinterpret_cast<const char *>(
+                                               depth.constData()),
+                                           qsizetype(depth.size()) *
+                                               qsizetype(sizeof(float))) ==
+                                    qsizetype(depth.size()) *
+                                        qsizetype(sizeof(float));
+                        };
                         for (int sample = 0; sample < expectedSamples; ++sample) {
                             const QByteArray historyKey =
                                 QByteArray("viewport-aa-capture-") + label;
@@ -1624,7 +1748,41 @@ int main(int argc, char *argv[])
                             }
                             aaRenderer.markCurrentSampleAttachmentsValid(
                                 result.report.populatedAttachments);
+                            if (!sampleCapturePrefix.isEmpty()) {
+                                const ViewportRenderTargets &targets =
+                                    aaRenderer.targets();
+                                const QString sampleStem =
+                                    sampleCapturePrefix +
+                                    QStringLiteral("-sample-") +
+                                    QString::number(sample);
+                                captureSucceeded =
+                                    writeRgbTexturePfm(
+                                        sampleStem +
+                                            QStringLiteral("-color.pfm"),
+                                        targets.currentSampleColorTexture) &&
+                                    writeDepthTexturePfm(
+                                        sampleStem +
+                                            QStringLiteral("-depth.pfm"),
+                                        targets.depthTexture);
+                            }
                             aaRenderer.finishSceneSample();
+                            if (captureSucceeded &&
+                                !sampleCapturePrefix.isEmpty()) {
+                                const ViewportRenderTargets &targets =
+                                    aaRenderer.targets();
+                                const QString sampleStem =
+                                    sampleCapturePrefix +
+                                    QStringLiteral("-sample-") +
+                                    QString::number(sample);
+                                captureSucceeded = writeRgbTexturePfm(
+                                    sampleStem +
+                                        QStringLiteral("-history-log2-weighted.pfm"),
+                                    targets.historyColorTexture) &&
+                                    writeRgbTexturePfm(
+                                        sampleStem +
+                                            QStringLiteral("-resolved.pfm"),
+                                        targets.resolvedSceneLinearColorTexture);
+                            }
                             ++completedSamples;
                         }
                         const QImage image = framebuffer.toImage();

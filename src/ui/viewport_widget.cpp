@@ -6880,22 +6880,9 @@ public:
                     // colors. Replay only their existing depth behavior here
                     // so the Z pass remains identical without double-drawing
                     // the visible Combined pixels.
-                    GLboolean previousColorMask[4] = {
-                        GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
-                    QOpenGLFunctions *functions =
-                        QOpenGLContext::currentContext()->functions();
-                    functions->glGetBooleanv(GL_COLOR_WRITEMASK,
-                                             previousColorMask);
-                    functions->glColorMask(GL_FALSE, GL_FALSE, GL_FALSE,
-                                           GL_FALSE);
-                    const bool depthDrawn = scene.draw(
-                        strokes, renderCamera, pixelSize, 1.0, true, 1.0,
+                    return scene.drawDepthOnly(
+                        strokes, renderCamera, pixelSize, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_);
-                    functions->glColorMask(previousColorMask[0],
-                                           previousColorMask[1],
-                                           previousColorMask[2],
-                                           previousColorMask[3]);
-                    return depthDrawn;
                 }
                 return scene.draw(
                     strokes, renderCamera, pixelSize, 1.0, true, 1.0,
@@ -6927,50 +6914,12 @@ public:
                     object.geometryRevision);
             }
             annotationPainter.end();
-            {
-                QPainter combinedPainter(&result.combined);
-                combinedPainter.setCompositionMode(
-                    QPainter::CompositionMode_SourceOver);
-                combinedPainter.drawImage(0, 0, annotationLayer);
-            }
-            if (result.sceneLinearRgba.size() ==
-                outputSize.width() * outputSize.height() * 4) {
-                const auto srgbToLinear = [](float value) {
-                    return value <= 0.04045f
-                        ? value / 12.92f
-                        : std::pow((value + 0.055f) / 1.055f, 2.4f);
-                };
-                for (int y = 0; y < outputSize.height(); ++y) {
-                    const auto *annotationRow =
-                        reinterpret_cast<const QRgba64 *>(
-                            annotationLayer.constScanLine(y));
-                    for (int x = 0; x < outputSize.width(); ++x) {
-                        const QRgba64 pixel = annotationRow[x];
-                        const float alpha = pixel.alpha() / 65535.0f;
-                        if (alpha <= 0.0f) continue;
-                        const qsizetype base =
-                            (qsizetype(y) * outputSize.width() + x) * 4;
-                        const float inverseAlpha = 1.0f - alpha;
-                        const float redSrgb = std::min(
-                            1.0f, pixel.red() / 65535.0f / alpha);
-                        const float greenSrgb = std::min(
-                            1.0f, pixel.green() / 65535.0f / alpha);
-                        const float blueSrgb = std::min(
-                            1.0f, pixel.blue() / 65535.0f / alpha);
-                        result.sceneLinearRgba[base] =
-                            srgbToLinear(redSrgb) * alpha +
-                            result.sceneLinearRgba[base] * inverseAlpha;
-                        result.sceneLinearRgba[base + 1] =
-                            srgbToLinear(greenSrgb) * alpha +
-                            result.sceneLinearRgba[base + 1] * inverseAlpha;
-                        result.sceneLinearRgba[base + 2] =
-                            srgbToLinear(blueSrgb) * alpha +
-                            result.sceneLinearRgba[base + 2] * inverseAlpha;
-                        result.sceneLinearRgba[base + 3] =
-                            alpha + result.sceneLinearRgba[base + 3] *
-                                       inverseAlpha;
-                    }
-                }
+            if (!compositeWorkbenchRenderAnnotations(
+                    &result.combined, annotationLayer,
+                    result.sceneLinearRgba.isEmpty()
+                        ? nullptr : &result.sceneLinearRgba,
+                    result.sceneLinearSize)) {
+                qWarning() << "Could not composite CAD dimensions into the render result";
             }
             applyWorkbenchRenderDither(&result.combined,
                                        renderDitherIntensity,

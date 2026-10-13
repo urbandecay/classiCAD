@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QImageWriter>
+#include <QPainter>
 #include <QSysInfo>
 
 #include <algorithm>
@@ -378,6 +379,72 @@ bool saveTarga(const QString &path, const QImage &source, const QString &colorMo
 }
 
 } // namespace
+
+bool compositeWorkbenchRenderAnnotations(
+    QImage *displayCombined,
+    const QImage &annotationLayer,
+    QVector<float> *sceneLinearRgba,
+    const QSize &sceneLinearSize)
+{
+    if (displayCombined == nullptr || displayCombined->isNull() ||
+        annotationLayer.isNull() ||
+        displayCombined->size() != annotationLayer.size()) {
+        return false;
+    }
+    const bool hasSceneLinear = sceneLinearRgba != nullptr;
+    if (hasSceneLinear &&
+        (sceneLinearSize != annotationLayer.size() ||
+         sceneLinearRgba->size() !=
+             qsizetype(sceneLinearSize.width()) * sceneLinearSize.height() * 4)) {
+        return false;
+    }
+    QPainter combinedPainter(displayCombined);
+    if (!combinedPainter.isActive()) return false;
+    combinedPainter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    combinedPainter.drawImage(0, 0, annotationLayer);
+    combinedPainter.end();
+
+    if (!hasSceneLinear) return true;
+    QImage premultipliedAnnotations = annotationLayer;
+    if (premultipliedAnnotations.format() !=
+        QImage::Format_RGBA64_Premultiplied) {
+        premultipliedAnnotations = premultipliedAnnotations.convertToFormat(
+            QImage::Format_RGBA64_Premultiplied);
+        if (premultipliedAnnotations.isNull()) return false;
+    }
+    const auto srgbToLinear = [](float value) {
+        return value <= 0.04045f
+                   ? value / 12.92f
+                   : std::pow((value + 0.055f) / 1.055f, 2.4f);
+    };
+    for (int y = 0; y < sceneLinearSize.height(); ++y) {
+        const auto *annotationRow = reinterpret_cast<const QRgba64 *>(
+            premultipliedAnnotations.constScanLine(y));
+        for (int x = 0; x < sceneLinearSize.width(); ++x) {
+            const QRgba64 pixel = annotationRow[x];
+            const float alpha = pixel.alpha() / 65535.0f;
+            if (alpha <= 0.0f) continue;
+            const qsizetype base =
+                (qsizetype(y) * sceneLinearSize.width() + x) * 4;
+            const float inverseAlpha = 1.0f - alpha;
+            const float redSrgb =
+                std::min(1.0f, pixel.red() / 65535.0f / alpha);
+            const float greenSrgb =
+                std::min(1.0f, pixel.green() / 65535.0f / alpha);
+            const float blueSrgb =
+                std::min(1.0f, pixel.blue() / 65535.0f / alpha);
+            (*sceneLinearRgba)[base] = srgbToLinear(redSrgb) * alpha +
+                (*sceneLinearRgba)[base] * inverseAlpha;
+            (*sceneLinearRgba)[base + 1] = srgbToLinear(greenSrgb) * alpha +
+                (*sceneLinearRgba)[base + 1] * inverseAlpha;
+            (*sceneLinearRgba)[base + 2] = srgbToLinear(blueSrgb) * alpha +
+                (*sceneLinearRgba)[base + 2] * inverseAlpha;
+            (*sceneLinearRgba)[base + 3] = alpha +
+                (*sceneLinearRgba)[base + 3] * inverseAlpha;
+        }
+    }
+    return true;
+}
 
 bool WorkbenchRenderResult::openExrWriterAvailable() noexcept
 {

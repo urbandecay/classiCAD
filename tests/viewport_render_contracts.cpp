@@ -22,6 +22,7 @@
 #include <QDebug>
 #include <QBuffer>
 #include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
 #include <QMatrix4x4>
@@ -890,6 +891,107 @@ int main(int argc, char *argv[])
                         sampledTexture.red() > sampledTexture.green() + 35 &&
                         std::abs(sampledTexture.alpha() - 179) <= 2,
                     "QPainter Texture mode must replace material RGB with the image sample and retain material alpha");
+
+    const QSize annotationSize(128, 128);
+    ViewportTransform annotationTransform;
+    annotationTransform.zoom() = 32.0;
+    annotationTransform.setViewPreset(ViewportViewPreset::Top);
+    CurveHitTester annotationHitTester;
+    ViewportRenderer annotationRenderer(annotationTransform,
+                                         annotationHitTester);
+    Shape renderDimension;
+    renderDimension.geometryType = GeometryType::LinearDimension;
+    renderDimension.points = {QPointF(-0.75, 0.0), QPointF(0.75, 0.0),
+                              QPointF(0.0, 0.35)};
+    QImage annotationLayer(annotationSize,
+                           QImage::Format_RGBA64_Premultiplied);
+    annotationLayer.fill(Qt::transparent);
+    {
+        QPainter painter(&annotationLayer);
+        annotationRenderer.drawShape(
+            painter, renderDimension, annotationSize, false, false, false,
+            QColor(220, 40, 25), QString(), 0.0);
+    }
+    QImage annotationDisplay(annotationSize, QImage::Format_RGBA64);
+    annotationDisplay.fill(QColor(64, 64, 64, 255));
+    QVector<float> annotationSceneLinear(annotationSize.width() *
+                                         annotationSize.height() * 4);
+    for (qsizetype index = 0; index < annotationSceneLinear.size();
+         index += 4) {
+        annotationSceneLinear[index] = 0.1f;
+        annotationSceneLinear[index + 1] = 0.1f;
+        annotationSceneLinear[index + 2] = 0.1f;
+        annotationSceneLinear[index + 3] = 1.0f;
+    }
+    QPoint annotationSample(-1, -1);
+    for (int y = 0; y < annotationSize.height() &&
+                    annotationSample.x() < 0; ++y) {
+        const auto *row = reinterpret_cast<const QRgba64 *>(
+            annotationLayer.constScanLine(y));
+        for (int x = 0; x < annotationSize.width(); ++x) {
+            if (row[x].alpha() > 0 && row[x].red() > row[x].green() * 2 &&
+                row[x].red() > row[x].blue() * 2) {
+                annotationSample = QPoint(x, y);
+                break;
+            }
+        }
+    }
+    const bool annotationCompositeSucceeded =
+        compositeWorkbenchRenderAnnotations(
+            &annotationDisplay, annotationLayer, &annotationSceneLinear,
+            annotationSize);
+    bool annotationSceneLinearMatches = false;
+    if (annotationSample.x() >= 0) {
+        const auto *row = reinterpret_cast<const QRgba64 *>(
+            annotationLayer.constScanLine(annotationSample.y()));
+        const QRgba64 pixel = row[annotationSample.x()];
+        const float alpha = pixel.alpha() / 65535.0f;
+        const float redSrgb = std::min(
+            1.0f, pixel.red() / 65535.0f / std::max(alpha, 1.0e-6f));
+        const float expectedRed =
+            (redSrgb <= 0.04045f
+                 ? redSrgb / 12.92f
+                 : std::pow((redSrgb + 0.055f) / 1.055f, 2.4f)) * alpha +
+            0.1f * (1.0f - alpha);
+        const qsizetype pixelBase =
+            (qsizetype(annotationSample.y()) * annotationSize.width() +
+             annotationSample.x()) * 4;
+        annotationSceneLinearMatches =
+            std::abs(annotationSceneLinear[pixelBase] - expectedRed) < 1.0e-4f &&
+            std::abs(annotationSceneLinear[pixelBase] - 0.1f) > 1.0e-3f;
+    }
+    passed &= check(annotationCompositeSucceeded &&
+                        annotationSample.x() >= 0 &&
+                        annotationSceneLinearMatches &&
+                        annotationDisplay.pixelColor(annotationSample).red() >
+                            annotationDisplay.pixelColor(annotationSample).green(),
+                    "committed dimension annotations must composite into both display and scene-linear Combined with sRGB-to-linear conversion");
+    WorkbenchRenderResult annotationHdrResult;
+    annotationHdrResult.combined = annotationDisplay;
+    annotationHdrResult.sceneLinearRgba = annotationSceneLinear;
+    annotationHdrResult.sceneLinearSize = annotationSize;
+    annotationHdrResult.blenderImageFormat = QStringLiteral("HDR");
+    QTemporaryDir annotationOutputDirectory;
+    const QString annotationHdrPath = annotationOutputDirectory.filePath(
+        QStringLiteral("dimension-combined.hdr"));
+    QString annotationHdrError;
+    const bool annotationHdrSaved =
+        annotationHdrResult.saveCombinedImage(annotationHdrPath,
+                                              &annotationHdrError);
+    passed &= check(annotationOutputDirectory.isValid() &&
+                        annotationHdrSaved &&
+                        QFileInfo(annotationHdrPath).size() > 32,
+                    "HDR Combined writer must accept the scene-linear buffer containing committed dimension annotations");
+    if (WorkbenchRenderResult::openExrWriterAvailable()) {
+        annotationHdrResult.blenderImageFormat = QStringLiteral("OPEN_EXR");
+        const QString annotationExrPath = annotationOutputDirectory.filePath(
+            QStringLiteral("dimension-combined.exr"));
+        QString annotationExrError;
+        passed &= check(annotationHdrResult.saveCombinedImage(
+                            annotationExrPath, &annotationExrError) &&
+                            QFileInfo(annotationExrPath).size() > 32,
+                        "EXR Combined writer must accept the scene-linear buffer containing committed dimension annotations");
+    }
 
     QOpenGLContext context;
     context.setFormat(format);
@@ -3027,6 +3129,120 @@ int main(int argc, char *argv[])
                                         std::abs(int(objectWireRawPixel[0]) -
                                                  int(wireRawPixel[0])) <= 1,
                                     "curve and surface-outline antialias pixels must match edit-wire linear blending");
+
+                    QOpenGLFramebufferObjectFormat sceneLinearStrokeFormat;
+                    sceneLinearStrokeFormat.setAttachment(
+                        QOpenGLFramebufferObject::CombinedDepthStencil);
+                    sceneLinearStrokeFormat.setInternalTextureFormat(
+                        GL_RGBA16F);
+                    QOpenGLFramebufferObject sceneLinearStrokeFramebuffer(
+                        glSize, sceneLinearStrokeFormat);
+                    ViewportSceneStroke committedCurveStroke = editWire;
+                    committedCurveStroke.color = QColor(220, 30, 10, 128);
+                    committedCurveStroke.width = 5.0f;
+                    committedCurveStroke.editModeWire = false;
+                    committedCurveStroke.writeDepth = false;
+                    bool sceneLinearStrokeRendered = false;
+                    bool depthReplayPreservedColor = false;
+                    bool depthReplayMatchesLegacy = false;
+                    if (sceneLinearStrokeFramebuffer.isValid()) {
+                        sceneLinearStrokeFramebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                        functions.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                        functions.glClearDepth(1.0);
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT);
+                        sceneLinearStrokeRendered = linePointsValid &&
+                            wireRenderer.draw(
+                                {committedCurveStroke}, wireTransform, glSize,
+                                1.0, true, 1.0, true, true, true);
+                        std::array<float, 4> sceneLinearStrokePixel{};
+                        float sceneDepthBeforeReplay = 0.0f;
+                        functions.glReadPixels(
+                            300, 239, 1, 1, GL_RGBA, GL_FLOAT,
+                            sceneLinearStrokePixel.data());
+                        functions.glReadPixels(300, 239, 1, 1,
+                                               GL_DEPTH_COMPONENT, GL_FLOAT,
+                                               &sceneDepthBeforeReplay);
+                        const bool sceneLinearStrokeColorValid =
+                            sceneLinearStrokePixel[0] > 0.25f &&
+                            sceneLinearStrokePixel[0] < 0.5f &&
+                            sceneLinearStrokePixel[1] < 0.02f &&
+                            sceneLinearStrokePixel[3] > 0.45f &&
+                            sceneLinearStrokePixel[3] < 0.55f;
+                        const bool depthUnchangedByLinearColor =
+                            sceneDepthBeforeReplay > 0.999f;
+
+                        ViewportSceneStroke depthStroke =
+                            committedCurveStroke;
+                        depthStroke.writeDepth = true;
+                        const bool depthReplayRendered = wireRenderer.drawDepthOnly(
+                            {depthStroke}, wireTransform, glSize, 1.0,
+                            true, true);
+                        std::array<float, 4> pixelAfterDepthReplay{};
+                        float sceneDepthAfterReplay = 1.0f;
+                        functions.glReadPixels(
+                            300, 239, 1, 1, GL_RGBA, GL_FLOAT,
+                            pixelAfterDepthReplay.data());
+                        functions.glReadPixels(300, 239, 1, 1,
+                                               GL_DEPTH_COMPONENT, GL_FLOAT,
+                                               &sceneDepthAfterReplay);
+                        depthReplayPreservedColor = depthReplayRendered &&
+                            std::abs(pixelAfterDepthReplay[0] -
+                                     sceneLinearStrokePixel[0]) < 1.0e-4f &&
+                            std::abs(pixelAfterDepthReplay[1] -
+                                     sceneLinearStrokePixel[1]) < 1.0e-4f &&
+                            std::abs(pixelAfterDepthReplay[3] -
+                                     sceneLinearStrokePixel[3]) < 1.0e-4f;
+                        depthReplayMatchesLegacy =
+                            sceneDepthAfterReplay < 0.999f &&
+                            sceneDepthBeforeReplay > 0.999f;
+                        passed &= check(sceneLinearStrokeRendered &&
+                                            sceneLinearStrokeColorValid &&
+                                            depthUnchangedByLinearColor &&
+                                            depthReplayPreservedColor &&
+                                            depthReplayMatchesLegacy,
+                                        "committed curve strokes must enter scene-linear Combined once, leave sample depth untouched, and preserve legacy depth with a color-masked replay");
+                    } else {
+                        passed &= check(false,
+                                        "scene-linear stroke contract must allocate an RGBA16F depth framebuffer");
+                    }
+
+                    ViewportSceneStroke displayResultStroke =
+                        committedCurveStroke;
+                    displayResultStroke.writeDepth = true;
+                    wireFramebuffer.bind();
+                    functions.glViewport(0, 0, glSize.width(), glSize.height());
+                    functions.glDisable(GL_FRAMEBUFFER_SRGB);
+                    functions.glClearColor(128.0f / 255.0f,
+                                           128.0f / 255.0f,
+                                           128.0f / 255.0f, 1.0f);
+                    functions.glClearDepth(1.0);
+                    functions.glClear(GL_COLOR_BUFFER_BIT |
+                                      GL_DEPTH_BUFFER_BIT);
+                    const bool displayStrokeRenderedOnce = wireRenderer.draw(
+                        {displayResultStroke}, wireTransform, glSize, 1.0,
+                        true, 1.0, true, true);
+                    unsigned char displayStrokeOnce[4] = {};
+                    functions.glReadPixels(300, 239, 1, 1, GL_RGBA,
+                                           GL_UNSIGNED_BYTE,
+                                           displayStrokeOnce);
+                    const bool displayStrokeRenderedTwice = wireRenderer.draw(
+                        {displayResultStroke}, wireTransform, glSize, 1.0,
+                        true, 1.0, true, true);
+                    unsigned char displayStrokeTwice[4] = {};
+                    functions.glReadPixels(300, 239, 1, 1, GL_RGBA,
+                                           GL_UNSIGNED_BYTE,
+                                           displayStrokeTwice);
+                    passed &= check(displayStrokeRenderedOnce &&
+                                        displayStrokeRenderedTwice &&
+                                        displayStrokeOnce[0] >
+                                            displayStrokeOnce[1] + 40 &&
+                                        displayStrokeTwice[0] >
+                                            displayStrokeOnce[0] + 4,
+                                    "the display Combined stroke path must produce one translucent curve overlay rather than a double draw");
 
                     const auto captureSmoothWireCategory = [&](
                         ViewportSmoothWireCategory category,

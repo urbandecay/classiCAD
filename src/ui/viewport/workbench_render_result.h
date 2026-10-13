@@ -16,6 +16,14 @@
 
 namespace classiCAD {
 
+// Composite a committed annotation layer over display Combined and, when
+// supplied, over the top-down scene-linear RGBA Combined buffer.
+bool compositeWorkbenchRenderAnnotations(
+    QImage *displayCombined,
+    const QImage &annotationLayer,
+    QVector<float> *sceneLinearRgba,
+    const QSize &sceneLinearSize);
+
 // Blender's render dither is applied while producing an 8-bit byte buffer.
 // Higher-depth PNG/TIFF and linear-float outputs keep their source precision.
 inline qreal workbenchRenderDitherIntensity(qreal intensity,

@@ -196,6 +196,18 @@ in ordinary free views or orthographic views is superseded by this correction.
   unchanged. When OpenEXR is found by CMake, OPEN_EXR writes the complete
   scene-linear Combined channels directly from the float payload without
   routing through QImage.
+- The offscreen render contract now renders a real linear dimension into a
+  transparent QPainter annotation layer, composites it through the production
+  helper into both display and scene-linear Combined, and saves the resulting
+  scene-linear buffer through the HDR Combined writer. The OpenEXR writer check
+  runs when the optional OpenEXR library is available. GPU checks draw a
+  committed curve stroke into an RGBA16F target using the production
+  scene-linear stroke shader, verify that color drawing does not write depth,
+  then use the production color-masked depth replay and verify the depth value
+  changes while the color remains unchanged. A display-target check contrasts
+  one translucent curve draw with two draws to detect duplicate composition.
+  The focused viewport_render_contracts check passes without opening the
+  application window; matched Blender image comparison remains pending.
   Blender's 16-bit OpenEXR setting now writes HALF channels with finite-range
   clamping; 32-bit writes retain FLOAT channels. Reported output precision
   follows the selected OpenEXR depth. Pinned references are Blender's
@@ -1037,10 +1049,9 @@ it no longer interprets them as normalized depth and converts them a second
 time.
 Committed CAD dimensions are classiCAD-only post-render, screen-space
 annotations; Blender Workbench has no CAD dimension counterpart. They are
-composited into display-referred PNG/TIFF Combined output, but the scene-linear
-HDR/EXR Combined payload is captured before those annotations and omits them.
-Their fixed-pixel labels/arrows have no corresponding Z samples. This is a
-format behavior distinction, not a Blender parity requirement.
+composited into display-referred and scene-linear Combined output. Their
+fixed-pixel labels/arrows have no corresponding Z samples. This is a classiCAD
+render-result behavior, not a Blender parity requirement.
 Offscreen rendering accumulates the imported Blender `scene.display.render_aa`
 mode before capturing Combined and depth. For multi-sample TAA, classiCAD now
 saves sample-zero main and in-front depth. It restores both depth domains on

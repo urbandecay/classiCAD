@@ -197,6 +197,12 @@ public:
               bool smoothOverlayWires = true,
               bool smoothEditModeWires = true,
               bool sceneLinearOutput = false);
+    bool drawDepthOnly(const QVector<ViewportSceneStroke> &strokes,
+                       const ViewportTransform &transform,
+                       const QSize &viewportSize,
+                       qreal devicePixelRatio,
+                       bool smoothOverlayWires = true,
+                       bool smoothEditModeWires = true);
     bool drawArcToolOverlay(const ViewportTransform &transform,
                             const QSize &viewportSize,
                             qreal devicePixelRatio,

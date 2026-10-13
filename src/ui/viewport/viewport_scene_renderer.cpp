@@ -1247,6 +1247,26 @@ bool ViewportSceneRenderer::draw(
     return true;
 }
 
+bool ViewportSceneRenderer::drawDepthOnly(
+    const QVector<ViewportSceneStroke> &strokes,
+    const ViewportTransform &transform,
+    const QSize &viewportSize,
+    qreal devicePixelRatio,
+    bool smoothOverlayWires,
+    bool smoothEditModeWires)
+{
+    GLboolean previousColorMask[4] = {
+        GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    const bool drawn = draw(strokes, transform, viewportSize,
+                            devicePixelRatio, true, 1.0,
+                            smoothOverlayWires, smoothEditModeWires);
+    glColorMask(previousColorMask[0], previousColorMask[1],
+                previousColorMask[2], previousColorMask[3]);
+    return drawn;
+}
+
 bool ViewportSceneRenderer::drawArcToolOverlay(
     const ViewportTransform &transform,
     const QSize &viewportSize,

@@ -6715,6 +6715,7 @@ bool ViewportSurfaceRenderer::draw(
         QVector<int> transparentRangeIndices;
         QVector<int> frontTransparentRangeIndices;
         QVector<TransparentRange> fallbackTransparentRanges;
+        QVector<TransparentRange> fallbackFrontTransparentRanges;
         for (int index = 0; index < ranges_.size(); ++index) {
             const DrawRange &range = ranges_[index];
             if (range.count <= 0) {
@@ -6726,12 +6727,7 @@ bool ViewportSurfaceRenderer::draw(
             }
             if (range.showInFront) {
                 hasFrontTransparentRanges = true;
-                if (sharedTargets != nullptr &&
-                    sharedTargets->frontDepthTexture != 0) {
-                    frontTransparentRangeIndices.append(index);
-                } else {
-                    transparentRangeIndices.append(index);
-                }
+                frontTransparentRangeIndices.append(index);
             } else {
                 transparentRangeIndices.append(index);
             }
@@ -6752,20 +6748,28 @@ bool ViewportSurfaceRenderer::draw(
             const qreal depth = std::abs(clip.w()) > 1.0e-8f
                 ? static_cast<qreal>(clip.z() / clip.w())
                 : static_cast<qreal>(clip.z());
-            fallbackTransparentRanges.append(
-                {index, std::isfinite(depth) ? depth : 0.0});
+            TransparentRange fallbackRange{
+                index, std::isfinite(depth) ? depth : 0.0};
+            if (range.showInFront) {
+                fallbackFrontTransparentRanges.append(fallbackRange);
+            } else {
+                fallbackTransparentRanges.append(fallbackRange);
+            }
         }
-        std::stable_sort(fallbackTransparentRanges.begin(),
-                         fallbackTransparentRanges.end(),
-                         [](const TransparentRange &left,
-                            const TransparentRange &right) {
-                             if (left.projectedDepth !=
-                                 right.projectedDepth) {
-                                 return left.projectedDepth >
-                                        right.projectedDepth;
-                             }
-                             return left.rangeIndex < right.rangeIndex;
-                         });
+        const auto sortTransparentRanges =
+            [](QVector<TransparentRange> &ranges) {
+                std::stable_sort(ranges.begin(), ranges.end(),
+                    [](const TransparentRange &left,
+                       const TransparentRange &right) {
+                        if (left.projectedDepth != right.projectedDepth) {
+                            return left.projectedDepth >
+                                   right.projectedDepth;
+                        }
+                        return left.rangeIndex < right.rangeIndex;
+                    });
+            };
+        sortTransparentRanges(fallbackTransparentRanges);
+        sortTransparentRanges(fallbackFrontTransparentRanges);
         const QSize transparencyPixelSize(
             qRound(viewportSize.width() * dpr),
             qRound(viewportSize.height() * dpr));
@@ -6777,16 +6781,11 @@ bool ViewportSurfaceRenderer::draw(
         const bool frontWeightedOitAvailable = weightedOitAvailable &&
             hasPartialAlpha &&
             !frontTransparentRangeIndices.isEmpty() && sharedTargets != nullptr &&
+            sharedTargets->frontDepthTexture != 0 &&
             sharedTargets->pixelSize == transparencyPixelSize &&
             ensureTransparencyFramebuffer(transparencyPixelSize,
                                           sharedTargets->frontDepthTexture,
                                           true);
-        if (!frontWeightedOitAvailable) {
-            // Preserve the established regular OIT/sorted fallback if a
-            // separate front-domain accumulation target cannot be created.
-            transparentRangeIndices += frontTransparentRangeIndices;
-            frontTransparentRangeIndices.clear();
-        }
 
         const auto drawRange = [&](const DrawRange &range,
                                    bool volumeShadowed,
@@ -6971,6 +6970,14 @@ bool ViewportSurfaceRenderer::draw(
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                                     GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
                 for (const TransparentRange &range : fallbackTransparentRanges) {
+                    const DrawRange &draw = ranges_[range.rangeIndex];
+                    drawRange(draw, false, false, draw.first, draw.count);
+                }
+                // Preserve Blender's domain ordering if the separate
+                // showInFront accumulation target could not be allocated.
+                glDisable(GL_DEPTH_TEST);
+                for (const TransparentRange &range :
+                     fallbackFrontTransparentRanges) {
                     const DrawRange &draw = ranges_[range.rangeIndex];
                     drawRange(draw, false, false, draw.first, draw.count);
                 }
@@ -7249,6 +7256,28 @@ bool ViewportSurfaceRenderer::draw(
                         ViewportRenderPass::FrontTransparentResolve);
                     passReport->populatedAttachments |=
                         ViewportRenderTargets::CurrentSampleColor;
+                }
+            } else if (!fallbackFrontTransparentRanges.isEmpty()) {
+                // The regular scene transparency is already resolved. Blend
+                // the in-front fallback over it in its own back-to-front
+                // ordering, as Blender does with the second front-domain
+                // resolve. This fallback cannot reproduce front-domain
+                // per-pixel depth ordering when OIT allocation fails.
+                glDisable(GL_DEPTH_TEST);
+                glDepthMask(GL_FALSE);
+                glDisable(GL_STENCIL_TEST);
+                glEnable(GL_BLEND);
+                glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+                program_.bind();
+                program_.setUniformValue("uTransparencyAccumulation", false);
+                vertexArray_.bind();
+                vertexBuffer_.bind();
+                for (const TransparentRange &range :
+                     fallbackFrontTransparentRanges) {
+                    const DrawRange &draw = ranges_[range.rangeIndex];
+                    drawRange(draw, false, false, draw.first, draw.count);
                 }
             }
             if (passReport != nullptr) {

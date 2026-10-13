@@ -115,6 +115,18 @@ not hide the preview. The C++ build passes; a runtime preview comparison
 remains open. Tool previews are editor feedback and are not Blender Workbench
 scene passes.
 
+**In-front transparency fallback ordering (2026-10-13):** In-front transparent
+ranges now remain separate if the dedicated front weighted-OIT framebuffer
+cannot be created. Regular transparent geometry resolves first; the fallback
+then blends in-front ranges back-to-front over that result. This preserves
+Blender's regular-then-in-front domain order, while explicitly retaining the
+fallback limitation that sorted blending cannot reproduce per-pixel depth
+ordering among overlapping in-front surfaces. Blender 5.2.2 routes
+`showInFront` through a separate transparent accumulation/depth pass and
+resolves it after regular transparency (`workbench_engine.cc` and
+`workbench_mesh_passes.cc`). The C++ build passes; allocation-failure runtime
+behavior and matched image comparison remain open.
+
 ### QPainter perspective cavity footprint (2026-10-13)
 
 - The QPainter SSAO sample step now scales per receiver in perspective views by

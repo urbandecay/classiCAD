@@ -904,6 +904,7 @@ int main(int argc, char *argv[])
             QImage gpuUnselectedOutlineImage;
             QImage gpuWorkbenchOutlineImage;
             QImage gpuWorkbenchOutlineBaselineImage;
+            QImage gpuWorkbenchShadowImage;
             QImage gpuBottomImage;
             QImage gpuShadowImage;
             int gpuCavityChangedPixels = 0;
@@ -912,6 +913,7 @@ int main(int argc, char *argv[])
             bool gpuDrawSucceeded = false;
             bool gpuSceneLinearOutlineColorPreserved = false;
             bool gpuWorkbenchOutlineCaptureSucceeded = false;
+            bool gpuWorkbenchShadowCaptureSucceeded = false;
             bool gpuUnselectedCaptureNonblank = true;
             bool gpuMatcapDrawSucceeded = false;
             bool gpuBottomDrawSucceeded = false;
@@ -1632,11 +1634,6 @@ int main(int argc, char *argv[])
                         shadowShading);
                     functions.glFinish();
                     gpuShadowImage = framebuffer.toImage();
-                    const QString shadowCapturePath = qEnvironmentVariable(
-                        "CLASSICAD_VIEWPORT_SHADOW_CAPTURE");
-                    if (!shadowCapturePath.isEmpty()) {
-                        gpuShadowImage.save(shadowCapturePath);
-                    }
 
                     const auto renderCoordinatedScene = [&](
                         const ViewportShadingSettings &shading,
@@ -1718,6 +1715,27 @@ int main(int argc, char *argv[])
                     if (!outlineBaselineCapturePath.isEmpty()) {
                         gpuWorkbenchOutlineBaselineImage.save(
                             outlineBaselineCapturePath);
+                    }
+                    const bool gpuWorkbenchShadowDrawSucceeded =
+                        renderCoordinatedScene(
+                            shadowShading,
+                            QByteArrayLiteral("shadow-enabled"),
+                            &gpuWorkbenchShadowImage);
+                    gpuWorkbenchShadowCaptureSucceeded =
+                        gpuWorkbenchShadowDrawSucceeded;
+                    const QString workbenchShadowCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_SHADOW_CAPTURE");
+                    if (!workbenchShadowCapturePath.isEmpty()) {
+                        gpuWorkbenchShadowImage.save(
+                            workbenchShadowCapturePath);
+                    }
+                    const QString workbenchShadowBaselineCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_SHADOW_BASELINE_CAPTURE");
+                    if (!workbenchShadowBaselineCapturePath.isEmpty()) {
+                        gpuWorkbenchOutlineBaselineImage.save(
+                            workbenchShadowBaselineCapturePath);
                     }
                     gpuCavityDrawSucceeded = renderCoordinatedScene(
                         rawFaceShading, QByteArrayLiteral("cavity-baseline"),
@@ -3148,6 +3166,7 @@ int main(int argc, char *argv[])
                                 !gpuMatcapImage.isNull() &&
                                 gpuMatcapMatchesWorkbench &&
                                 gpuWorkbenchOutlineCaptureSucceeded &&
+                                gpuWorkbenchShadowCaptureSucceeded &&
                                 gpuOutlineRendered &&
                                 gpuSceneStrokeSuppressesPostOutline &&
                                 gpuBottomDrawSucceeded &&

@@ -1263,8 +1263,10 @@ depth domain. Visual depth comparison remains open.
   boundary without opening the application window.
 - At 640×480 with the same cube scene, AA-off references, and an RGB change
   threshold of 2, shadow masks match exactly: 111,480 changed pixels on each
-  renderer, XOR 0, IoU 1.0. The per-pixel effect-delta MAE over the union of
-  those masks is 0.522/255, with maximum delta error 8/255. The first outline
+  renderer, XOR 0, IoU 1.0. After routing classiCAD's shadow capture through
+  the production scene-linear pass and display transform, effect-delta MAE
+  over the mask union is 0.388/255, p95 is 1/255, and maximum error is 8/255.
+  The first outline
   comparison also had identical masks (2,316 pixels, XOR 0, IoU 1.0), but its
   reported 10.48/255 effect-delta MAE came from a test capture that applied
   classiCAD's display transform before the outline. The outline capture now

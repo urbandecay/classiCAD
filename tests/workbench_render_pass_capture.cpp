@@ -209,13 +209,12 @@ int main(int argc, char **argv)
         if (sampleStarted) {
             const GLfloat background[4] = {0.0232f, 0.0232f, 0.0232f, 1.0f};
             gl.glClearBufferfv(GL_COLOR, 0, background);
-            ViewportWorkbenchSceneColorPassRequest request;
-            request.sharedTargets = &aa.targets();
-            request.sceneLinearOutput = true;
             const ViewportWorkbenchSceneColorPassResult scenePass =
                 ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                    renderer, sceneObjects, aa.sampleCamera(), size, 1.0, shading,
-                    request);
+                    renderer,
+                    ViewportWorkbenchScenePassPacket::fromScene(
+                        sceneObjects, aa.sampleCamera(), size, 1.0, shading,
+                        &aa.targets(), true));
             if (scenePass.rendered) {
                 aa.markCurrentSampleAttachmentsValid(
                     scenePass.report.populatedAttachments);

@@ -75,6 +75,29 @@ int main(int argc, char *argv[])
     QGuiApplication application(argc, argv);
     bool passed = true;
 
+    ViewportRenderFrame packetFrame;
+    packetFrame.viewportSize = QSize(64, 48);
+    packetFrame.camera = ViewportTransform();
+    const QVector<ViewportRenderObject> packetObjects;
+    const ViewportShadingSettings packetSettings;
+    const auto packet = ViewportWorkbenchScenePassPacket::fromFrame(
+        packetFrame, packetObjects, packetFrame.camera, 1.0,
+        packetSettings, nullptr, true);
+    const auto invalidPacket = ViewportWorkbenchScenePassPacket::fromScene(
+        packetObjects, packetFrame.camera, QSize(), 1.0,
+        packetSettings, nullptr, true);
+    ViewportRenderTargets mismatchedPacketTargets;
+    mismatchedPacketTargets.pixelSize = QSize(32, 24);
+    const auto mismatchedTargetPacket =
+        ViewportWorkbenchScenePassPacket::fromFrame(
+            packetFrame, packetObjects, packetFrame.camera, 1.0,
+            packetSettings, &mismatchedPacketTargets, true);
+    passed &= check(packet.isValid() && packet.viewportSize == QSize(64, 48) &&
+                        packet.objects.isEmpty() &&
+                        !invalidPacket.isValid() &&
+                        !mismatchedTargetPacket.isValid(),
+                    "shared Workbench scene-pass packets must carry render-frame dimensions and reject empty or size-mismatched AA targets");
+
     const Point3D cavityCamera{0.0, 0.0, 10.0};
     const Point3D cavityTarget{0.0, 0.0, 0.0};
     const Point3D cavityViewDirection{0.0, 0.0, 1.0};
@@ -3059,9 +3082,6 @@ int main(int argc, char *argv[])
                             sceneAaRenderer.finishSceneSample();
                             return false;
                         }
-                        ViewportWorkbenchSceneColorPassRequest request;
-                        request.sharedTargets = &sceneAaRenderer.targets();
-                        request.sceneLinearOutput = true;
                         const QVector<ViewportRenderObject> renderObjects =
                             renderObject == nullptr
                                 ? QVector<ViewportRenderObject>{surfaceObject}
@@ -3070,9 +3090,11 @@ int main(int argc, char *argv[])
                             !cavityDiagnosticPrefix.isEmpty());
                         const auto result =
                             ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                                gpuSurfaceRenderer, renderObjects,
-                                sceneAaRenderer.sampleCamera(), glSize, 1.0,
-                                shading, request);
+                                gpuSurfaceRenderer,
+                                ViewportWorkbenchScenePassPacket::fromScene(
+                                    renderObjects,
+                                    sceneAaRenderer.sampleCamera(), glSize, 1.0,
+                                    shading, &sceneAaRenderer.targets(), true));
                         gpuSurfaceRenderer.setCavityDiagnosticOutput(false);
                         if (result.rendered) {
                             sceneAaRenderer.markCurrentSampleAttachmentsValid(
@@ -3983,15 +4005,14 @@ int main(int argc, char *argv[])
                             const GLfloat background[4] = {
                                 0.0232f, 0.0232f, 0.0232f, 1.0f};
                             functions.glClearBufferfv(GL_COLOR, 0, background);
-                            ViewportWorkbenchSceneColorPassRequest request;
-                            request.sharedTargets =
-                                &transparencyAaRenderer.targets();
-                            request.sceneLinearOutput = true;
                             transparencyResult =
                                 ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                                    gpuSurfaceRenderer, transparentObjects,
-                                    transparencyAaRenderer.sampleCamera(),
-                                    glSize, 1.0, transparencyShading, request);
+                                    gpuSurfaceRenderer,
+                                    ViewportWorkbenchScenePassPacket::fromScene(
+                                        transparentObjects,
+                                        transparencyAaRenderer.sampleCamera(),
+                                        glSize, 1.0, transparencyShading,
+                                        &transparencyAaRenderer.targets(), true));
                             if (transparencyResult.rendered) {
                                 transparencyAaRenderer
                                     .markCurrentSampleAttachmentsValid(
@@ -4327,14 +4348,13 @@ int main(int argc, char *argv[])
                                 1.0f};
                             functions.glClearBufferfv(GL_COLOR, 0,
                                                       linearBackground);
-                            ViewportWorkbenchSceneColorPassRequest request;
-                            request.sharedTargets = &aaRenderer.targets();
-                            request.sceneLinearOutput = true;
                             const ViewportWorkbenchSceneColorPassResult result =
                                 ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                                    gpuSurfaceRenderer, {surfaceObject},
-                                    aaRenderer.sampleCamera(), glSize, 1.0,
-                                    rawFaceShading, request);
+                                    gpuSurfaceRenderer,
+                                    ViewportWorkbenchScenePassPacket::fromScene(
+                                        {surfaceObject}, aaRenderer.sampleCamera(),
+                                        glSize, 1.0, rawFaceShading,
+                                        &aaRenderer.targets(), true));
                             if (!result.rendered) {
                                 captureSucceeded = false;
                                 aaRenderer.finishSceneSample();

@@ -6916,13 +6916,13 @@ public:
                               viewportShadingBackgroundColor(settings), true);
                     if (!backgroundDrawn) return false;
                 }
-                ViewportWorkbenchSceneColorPassRequest passRequest;
-                passRequest.sharedTargets = &aa.targets();
-                passRequest.sceneLinearOutput = true;
+                const ViewportWorkbenchScenePassPacket passPacket =
+                    ViewportWorkbenchScenePassPacket::fromFrame(
+                        renderFrame, renderFrame.objects, aa.sampleCamera(),
+                        1.0, settings, &aa.targets(), true);
                 const ViewportWorkbenchSceneColorPassResult sceneColorPass =
                     ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                        surface, renderFrame.objects, aa.sampleCamera(),
-                        pixelSize, 1.0, settings, passRequest);
+                        surface, passPacket);
                 if (sceneColorPass.rendered) {
                     aa.markCurrentSampleAttachmentsValid(
                         sceneColorPass.report.populatedAttachments);
@@ -11265,16 +11265,16 @@ protected:
                 }
                 ViewportWorkbenchSceneColorPassResult sceneColorPass;
                 if (surfaceRenderer != nullptr) {
-                    ViewportWorkbenchSceneColorPassRequest passRequest;
-                    passRequest.sharedTargets =
-                        aaRenderer != nullptr ? &aaRenderer->targets()
-                                              : nullptr;
-                    passRequest.sceneLinearOutput = aaSceneSampleActive;
+                    const ViewportWorkbenchScenePassPacket passPacket =
+                        ViewportWorkbenchScenePassPacket::fromFrame(
+                            renderFrame, surfaceDrawObjects, sceneCamera,
+                            devicePixelRatioF(), renderShadingSettings,
+                            aaRenderer != nullptr ? &aaRenderer->targets()
+                                                  : nullptr,
+                            aaSceneSampleActive);
                     sceneColorPass =
                         ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                            *surfaceRenderer, surfaceDrawObjects, sceneCamera,
-                            renderFrame.viewportSize, devicePixelRatioF(),
-                            renderShadingSettings, passRequest);
+                            *surfaceRenderer, passPacket);
                 }
                 surfacesDrawn = sceneColorPass.rendered;
                 if (aaRenderer != nullptr && surfacesDrawn) {

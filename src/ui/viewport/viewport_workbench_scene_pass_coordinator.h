@@ -8,12 +8,38 @@
 
 namespace classiCAD {
 
-// A scene-color request shared by the interactive viewport and offscreen
-// render result. Background/grid drawing, AA sample lifecycle, and CAD
-// overlays remain with their callers; the surface renderer owns GL details.
-struct ViewportWorkbenchSceneColorPassRequest {
+// Immutable scene-color inputs for one synchronous GPU sample. The object
+// vector is an implicitly-shared snapshot copied from the render frame (or
+// its presentation-adjusted draw list). The targets are borrowed from the AA
+// renderer and are valid only while that sample is active.
+struct ViewportWorkbenchScenePassPacket {
+    QVector<ViewportRenderObject> objects;
+    ViewportTransform camera;
+    QSize viewportSize;
+    qreal devicePixelRatio = 1.0;
+    ViewportShadingSettings settings;
     const ViewportRenderTargets *sharedTargets = nullptr;
     bool sceneLinearOutput = false;
+
+    static ViewportWorkbenchScenePassPacket fromFrame(
+        const ViewportRenderFrame &frame,
+        const QVector<ViewportRenderObject> &drawObjects,
+        const ViewportTransform &sampleCamera,
+        qreal devicePixelRatio,
+        const ViewportShadingSettings &settings,
+        const ViewportRenderTargets *sharedTargets,
+        bool sceneLinearOutput);
+
+    static ViewportWorkbenchScenePassPacket fromScene(
+        const QVector<ViewportRenderObject> &objects,
+        const ViewportTransform &camera,
+        const QSize &viewportSize,
+        qreal devicePixelRatio,
+        const ViewportShadingSettings &settings,
+        const ViewportRenderTargets *sharedTargets,
+        bool sceneLinearOutput);
+
+    bool isValid() const noexcept;
 };
 
 struct ViewportWorkbenchSceneColorPassResult {
@@ -30,12 +56,7 @@ class ViewportWorkbenchScenePassCoordinator final {
 public:
     static ViewportWorkbenchSceneColorPassResult renderSceneColor(
         ViewportSurfaceRenderer &surfaceRenderer,
-        const QVector<ViewportRenderObject> &objects,
-        const ViewportTransform &camera,
-        const QSize &viewportSize,
-        qreal devicePixelRatio,
-        const ViewportShadingSettings &settings,
-        const ViewportWorkbenchSceneColorPassRequest &request);
+        const ViewportWorkbenchScenePassPacket &packet);
 };
 
 } // namespace classiCAD

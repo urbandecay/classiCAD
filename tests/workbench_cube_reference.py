@@ -335,6 +335,10 @@ def main():
         shading.cavity_type = "WORLD"
     shading.cavity_ridge_factor = 1.0
     shading.cavity_valley_factor = 1.0
+    scene.display.matcap_ssao_samples = 16
+    scene.display.matcap_ssao_distance = 0.2
+    scene.display.matcap_ssao_attenuation = 1.0
+    shading.object_outline_color = (0.0, 0.0, 0.0)
     shading.show_object_outline = args.effect == "OUTLINE"
     shading.background_type = args.background_source
     scene.world.color = args.world_color

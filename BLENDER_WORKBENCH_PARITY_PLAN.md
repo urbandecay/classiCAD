@@ -1282,6 +1282,16 @@ depth domain. Visual depth comparison remains open.
   against a black baseline at a quarter-covered silhouette pixel (14/255 in
   the RGBA8 scene-linear test target). The ordinary display-space fallback
   still receives the encoded sRGB value.
+- To isolate the earlier cube edge-color discrepancy, the offscreen contract
+  can capture a classiCAD `PolygonMesh3D` cube with the same eight vertices and
+  six quad faces as Blender's default cube (`CLASSICAD_VIEWPORT_POLYGON_CUBE_CAPTURE`).
+  At 640×480 with AA off and matching AgX scene-linear resolve, the polygon
+  captures have identical foreground masks (111,480 pixels each, XOR 0, IoU
+  1.0). Shared-pixel RGB error is 0.60/255 MAE and 2/255 at p95. This is far
+  closer than the earlier comparison using a NURBS extrusion solid, supporting
+  face tessellation/ownership as the source of most of that discrepancy. The
+  test fixture keeps the NURBS solid contracts unchanged; it adds only an
+  opt-in matched-topology diagnostic capture.
 - World cavity's first measured mask mismatch was caused in part by the depth
   sampler: classiCAD set its copied `cavityDepthTexture_` to linear filtering,
   while Blender binds its Workbench depth texture with the default sampler,

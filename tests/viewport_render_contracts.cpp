@@ -1281,6 +1281,26 @@ int main(int argc, char *argv[])
                     surfaceObject.preparedDepthGeometry =
                         QSharedPointer<ViewportDepthGeometry>::create(
                             buildViewportDepthGeometry(surfaceObject.shape));
+                    ViewportRenderObject polygonCubeObject = surfaceObject;
+                    polygonCubeObject.selected = false;
+                    polygonCubeObject.shape = Shape{};
+                    polygonCubeObject.shape.geometryType =
+                        GeometryType::PolygonMesh;
+                    polygonCubeObject.shape.polygonMesh.vertices = {
+                        {-1.0, -1.0, -1.0}, {-1.0, -1.0, 1.0},
+                        {-1.0, 1.0, -1.0},  {-1.0, 1.0, 1.0},
+                        {1.0, -1.0, -1.0},  {1.0, -1.0, 1.0},
+                        {1.0, 1.0, -1.0},   {1.0, 1.0, 1.0}};
+                    polygonCubeObject.shape.polygonMesh.faces = {
+                        {0, 4, 6, 2}, {1, 3, 7, 5}, {0, 1, 5, 4},
+                        {4, 5, 7, 6}, {1, 0, 2, 3}, {2, 6, 7, 3}};
+                    polygonCubeObject.shape.polygonMesh.faceMaterialIndices =
+                        {0, 0, 0, 0, 0, 0};
+                    polygonCubeObject.meshMaterials = {WorkbenchMaterialData{}};
+                    polygonCubeObject.preparedDepthGeometry =
+                        QSharedPointer<ViewportDepthGeometry>::create(
+                            buildViewportDepthGeometry(
+                                polygonCubeObject.shape));
                     ViewportShadingSettings gpuSolidShading;
                     gpuSolidShading.mode = ViewportShadingMode::Solid;
                     ViewportSurfaceRenderer gpuSurfaceRenderer;
@@ -1637,7 +1657,8 @@ int main(int argc, char *argv[])
 
                     const auto renderCoordinatedScene = [&](
                         const ViewportShadingSettings &shading,
-                        const QByteArray &historyKey, QImage *image) {
+                        const QByteArray &historyKey, QImage *image,
+                        const ViewportRenderObject *renderObject = nullptr) {
                         if (image == nullptr || !framebuffer.bind()) {
                             return false;
                         }
@@ -1673,9 +1694,13 @@ int main(int argc, char *argv[])
                         ViewportWorkbenchSceneColorPassRequest request;
                         request.sharedTargets = &sceneAaRenderer.targets();
                         request.sceneLinearOutput = true;
+                        const QVector<ViewportRenderObject> renderObjects =
+                            renderObject == nullptr
+                                ? QVector<ViewportRenderObject>{surfaceObject}
+                                : QVector<ViewportRenderObject>{*renderObject};
                         const auto result =
                             ViewportWorkbenchScenePassCoordinator::renderSceneColor(
-                                gpuSurfaceRenderer, {surfaceObject},
+                                gpuSurfaceRenderer, renderObjects,
                                 sceneAaRenderer.sampleCamera(), glSize, 1.0,
                                 shading, request);
                         if (result.rendered) {
@@ -1688,6 +1713,23 @@ int main(int argc, char *argv[])
                         *image = framebuffer.toImage();
                         return !image->isNull();
                     };
+                    const QString polygonCubeCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_POLYGON_CUBE_CAPTURE");
+                    if (!polygonCubeCapturePath.isEmpty()) {
+                        QImage polygonCubeCapture;
+                        const bool polygonCubeCaptureSucceeded =
+                            validatePolygonMesh(
+                                polygonCubeObject.shape.polygonMesh) &&
+                            renderCoordinatedScene(
+                                rawFaceShading,
+                                QByteArrayLiteral("polygon-cube-baseline"),
+                                &polygonCubeCapture, &polygonCubeObject) &&
+                            polygonCubeCapture.save(polygonCubeCapturePath);
+                        passed &= check(
+                            polygonCubeCaptureSucceeded,
+                            "matched polygon cube diagnostic capture must render and save");
+                    }
                     ViewportShadingSettings outlinedSceneShading =
                         rawFaceShading;
                     outlinedSceneShading.outline = true;

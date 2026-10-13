@@ -586,6 +586,60 @@ int main(int argc, char *argv[])
                         "QPainter mesh X-Ray alpha must multiply source alpha before weighted transparency resolve");
         renderer.setShadingSettings(shading);
 
+        ViewportRenderObject cavityReceiver = objects[0];
+        cavityReceiver.workbenchMaterial.alpha = 1.0f;
+        cavityReceiver.meshMaterials = {cavityReceiver.workbenchMaterial};
+        ViewportRenderObject cavityTransparent = objects[1];
+        cavityTransparent.preparedGeometryOffset.z = 0.35;
+        QVector<ViewportRenderObject> cavityObjects{
+            cavityReceiver, cavityTransparent};
+        QImage cavityOffImage(size, QImage::Format_ARGB32_Premultiplied);
+        cavityOffImage.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers cavityOffLayers;
+        renderer.setShadingSettings(shading);
+        const bool cavityOffRendered = compositeRasterWorkbenchSurfaces(
+            &cavityOffImage, cavityObjects, transform, size, 1.0, false, true,
+            shading, backgroundLinear, drawObject, &cavityOffLayers);
+        ViewportShadingSettings linearCavitySettings = shading;
+        linearCavitySettings.cavity = true;
+        linearCavitySettings.cavityType = ViewportCavityType::World;
+        linearCavitySettings.cavityDistance = 0.35;
+        linearCavitySettings.cavitySamples = 16;
+        QImage cavityOnImage(size, QImage::Format_ARGB32_Premultiplied);
+        cavityOnImage.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers cavityOnLayers;
+        renderer.setShadingSettings(linearCavitySettings);
+        const bool cavityOnRendered = compositeRasterWorkbenchSurfaces(
+            &cavityOnImage, cavityObjects, transform, size, 1.0, false, true,
+            linearCavitySettings, backgroundLinear, drawObject,
+            &cavityOnLayers);
+        QImage cavityPostEffectImage = cavityOnImage;
+        applyRasterWorkbenchEffects(
+            &cavityPostEffectImage, cavityObjects, transform, size, 1.0,
+            linearCavitySettings, &cavityOnLayers);
+        bool opaqueCavityChanged = false;
+        if (cavityOffLayers.opaqueColor.size() == size &&
+            cavityOnLayers.opaqueColor.size() == size) {
+            for (int y = 0; y < size.height() && !opaqueCavityChanged; ++y) {
+                for (int x = 0; x < size.width(); ++x) {
+                    if (cavityOffLayers.opaqueColor.pixel(x, y) !=
+                        cavityOnLayers.opaqueColor.pixel(x, y)) {
+                        opaqueCavityChanged = true;
+                        break;
+                    }
+                }
+            }
+        }
+        passed &= check(cavityOffRendered && cavityOnRendered &&
+                            cavityOnLayers.cavityAppliedBeforeWeightedOit &&
+                            opaqueCavityChanged &&
+                            cavityOffLayers.transparentColor ==
+                                cavityOnLayers.transparentColor &&
+                            cavityOffImage != cavityOnImage &&
+                            cavityPostEffectImage == cavityOnImage,
+                        "QPainter cavity must shade the scene-linear opaque contribution before weighted transparency resolve");
+        renderer.setShadingSettings(shading);
+
         const QVector3D themeHighSrgb(61.0f / 255.0f,
                                       61.0f / 255.0f,
                                       61.0f / 255.0f);

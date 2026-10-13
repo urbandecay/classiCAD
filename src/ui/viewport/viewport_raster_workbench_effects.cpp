@@ -386,6 +386,7 @@ bool compositeRasterWorkbenchSurfaces(
     }
     const int pixelCount = static_cast<int>(pixelCount64);
     if (surfaceLayers != nullptr) {
+        surfaceLayers->cavityAppliedBeforeWeightedOit = false;
         surfaceLayers->opaqueColor = QImage(
             colorImage->size(), QImage::Format_ARGB32_Premultiplied);
         surfaceLayers->opaqueColor.setDevicePixelRatio(
@@ -526,6 +527,23 @@ bool compositeRasterWorkbenchSurfaces(
         consume(layer);
     };
 
+    // Compute the existing QPainter cavity mask while the opaque depth and
+    // normals are available, then apply it to the scene-linear base before
+    // transparent fragments enter weighted OIT. The normal post effect pass
+    // is told to skip cavity for this layer below.
+    std::vector<float> preOitCavityFactors;
+    if (useWeightedOit && shadingSettings.cavity) {
+        QImage cavityProbe(colorImage->size(), QImage::Format_ARGB32_Premultiplied);
+        cavityProbe.setDevicePixelRatio(colorImage->devicePixelRatioF());
+        cavityProbe.fill(Qt::white);
+        ViewportShadingSettings cavityOnly = shadingSettings;
+        cavityOnly.outline = false;
+        cavityOnly.depthOfField = false;
+        (void)applyRasterWorkbenchEffects(
+            &cavityProbe, objects, transform, viewportSize, devicePixelRatio,
+            cavityOnly, nullptr, &preOitCavityFactors);
+    }
+
     // Opaque color/depth is established before any translucent fragment.
     for (int objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {
         const ViewportRenderObject &object = objects[objectIndex];
@@ -653,6 +671,29 @@ bool compositeRasterWorkbenchSurfaces(
             base.blue = opaque.blue + base.blue * remain;
             base.alpha = opaque.alpha + base.alpha * remain;
             basePixels[static_cast<std::size_t>(index)] = base;
+        }
+        if (preOitCavityFactors.size() == static_cast<std::size_t>(pixelCount)) {
+            for (int index = 0; index < pixelCount; ++index) {
+                const float factor = preOitCavityFactors[static_cast<std::size_t>(index)];
+                RasterWorkbenchLinearPixel &opaque =
+                    opaqueScenePixels[static_cast<std::size_t>(index)];
+                opaque.red *= factor;
+                opaque.green *= factor;
+                opaque.blue *= factor;
+                RasterWorkbenchLinearPixel &base = basePixels[static_cast<std::size_t>(index)];
+                const float remain = 1.0f - opaque.alpha;
+                const QVector3D pixelBackground = hasPixelBackground
+                    ? sceneLinearBackgroundPixels[static_cast<std::size_t>(index)]
+                    : background;
+                const float backgroundAlpha = hasPixelBackground ||
+                    sceneLinearBackground.has_value() ? 1.0f : 0.0f;
+                base.red = opaque.red + pixelBackground.x() * backgroundAlpha * remain;
+                base.green = opaque.green + pixelBackground.y() * backgroundAlpha * remain;
+                base.blue = opaque.blue + pixelBackground.z() * backgroundAlpha * remain;
+            }
+            if (surfaceLayers != nullptr) {
+                surfaceLayers->cavityAppliedBeforeWeightedOit = true;
+            }
         }
         std::vector<RasterWorkbenchLinearPixel> resolved;
         if (!resolveRasterWorkbenchWeightedOitFragments(
@@ -915,7 +956,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QSize &viewportSize,
                                  qreal devicePixelRatio,
                                  const ViewportShadingSettings &settings,
-                                 const RasterWorkbenchSurfaceLayers *surfaceLayers)
+                                 const RasterWorkbenchSurfaceLayers *surfaceLayers,
+                                 std::vector<float> *cavityFactors)
 {
     if (colorImage == nullptr || colorImage->isNull() ||
         (!settings.cavity && !settings.outline && !settings.depthOfField) ||
@@ -927,7 +969,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // Outlines use all visible geometry. Cavity uses a separate opaque-only
     // depth/normal buffer so transparent surfaces neither occlude its samples
     // nor receive its shading.
-    const bool cavityEnabled = settings.cavity;
+    const bool cavityEnabled = settings.cavity &&
+        !(surfaceLayers != nullptr &&
+          surfaceLayers->cavityAppliedBeforeWeightedOit);
     const ViewportCameraPreferences cameraOptics = transform.cameraPreferences();
     const bool perspective = transform.isPerspectiveEnabled();
     const bool depthOfFieldEnabled = settings.depthOfField &&
@@ -1534,6 +1578,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     (1.0f + ridgeResponse - valleyResponse),
                 0.0f, 4.0f);
         }
+    }
+
+    if (cavityFactors != nullptr) {
+        *cavityFactors = cavityEnabled
+            ? std::vector<float>(factors.begin(), factors.end())
+            : std::vector<float>{};
     }
 
     QImage source = colorImage->convertToFormat(QImage::Format_ARGB32);

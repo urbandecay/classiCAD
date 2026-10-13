@@ -44,6 +44,9 @@ float rasterWorkbenchCurvatureResponse(quint64 objectUp, quint64 objectDown,
 struct RasterWorkbenchSurfaceLayers {
     QImage opaqueColor;
     QImage transparentColor;
+    // True when cavity was folded into the scene-linear opaque layer before
+    // weighted OIT. The later scene effect pass must then skip cavity.
+    bool cavityAppliedBeforeWeightedOit = false;
 };
 
 // Software Workbench screen-space effects for the QPainter fallback. The color
@@ -55,7 +58,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QSize &viewportSize,
                                  qreal devicePixelRatio,
                                  const ViewportShadingSettings &settings,
-                                 const RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr);
+                                 const RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr,
+                                 std::vector<float> *cavityFactors = nullptr);
 
 // Render surface objects into temporary color layers, use their display
 // tessellation to depth-test opaque coverage, then accumulate visible partial

@@ -1484,9 +1484,14 @@ depth domain. Visual depth comparison remains open.
   later outline pass. A headless integration contract confirms cavity changes
   the surface image and the outline remains visible over it. The focused
   `viewport_render_contracts` test passes.
-- The cavity pixels themselves still use the QPainter fallback's display-space
-  approximation. Applying cavity to the retained scene-linear opaque base
-  before weighted OIT remains a separate parity step.
+- The ordinary QPainter surface path now applies its opaque-only cavity factor
+  to scene-linear opaque RGB before weighted OIT, leaves the scene-linear
+  background and transparent fragments unchanged, and then applies the display
+  transform once. The later effects stage skips cavity for that resolved layer,
+  preventing a second application. A focused contract checks that the opaque
+  retained layer changes while the transparent contribution stays the same.
+  This corrects pass placement; cavity sampling remains the QPainter software
+  approximation and still needs a matched Blender image comparison.
 - The offscreen AA-off presentation contract now exercises the final scene
   resolve with a scene-linear World color, an sRGB viewport background, a
   missing World background, and transparent film. It checks the AgX display

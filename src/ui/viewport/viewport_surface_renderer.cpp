@@ -1068,6 +1068,17 @@ bool ViewportSurfaceRenderer::initialize()
                         dot(relative, uViewFacing));
         }
 
+        // Blender Workbench stores view normals as two half-float
+        // sphere-map coordinates in its G-buffer, then decodes those same
+        // quantized values in the cavity and curvature resolve.
+        vec3 workbenchNormalDecode(vec4 encodedNormal)
+        {
+            vec2 fenc = encodedNormal.xy * 4.0 - 2.0;
+            float f = dot(fenc, fenc);
+            float g = sqrt(1.0 - f / 4.0);
+            return vec3(fenc * g, 1.0 - f / 2.0);
+        }
+
         vec2 workbenchCavity(vec2 screenCoordinate,
                              float depth,
                              vec3 position,
@@ -1167,10 +1178,14 @@ bool ViewportSurfaceRenderer::initialize()
                 (objectUp == 0u && objectRight == 0u)) {
                 return 0.0;
             }
-            float normalUp = texture(uCavityNormal, upCoordinate).g;
-            float normalDown = texture(uCavityNormal, downCoordinate).g;
-            float normalRight = texture(uCavityNormal, rightCoordinate).r;
-            float normalLeft = texture(uCavityNormal, leftCoordinate).r;
+            float normalUp = workbenchNormalDecode(
+                texture(uCavityNormal, upCoordinate)).g;
+            float normalDown = workbenchNormalDecode(
+                texture(uCavityNormal, downCoordinate)).g;
+            float normalRight = workbenchNormalDecode(
+                texture(uCavityNormal, rightCoordinate)).r;
+            float normalLeft = workbenchNormalDecode(
+                texture(uCavityNormal, leftCoordinate)).r;
             float normalDifference = (normalUp - normalDown) +
                                      (normalRight - normalLeft);
             if (normalDifference < 0.0) {
@@ -1259,8 +1274,8 @@ bool ViewportSurfaceRenderer::initialize()
                     // Workbench cavity reads its per-pixel G-buffer normal;
                     // use the shared prepass normal instead of the forward
                     // color pass's interpolant.
-                    vec3 cavityNormal = normalize(texture(
-                        uCavityNormal, screenCoordinate).xyz);
+                    vec3 cavityNormal = workbenchNormalDecode(texture(
+                        uCavityNormal, screenCoordinate));
                     vec2 cavity = workbenchCavity(
                         screenCoordinate, depth,
                         cavityViewPosition(screenCoordinate, depth),
@@ -1898,6 +1913,12 @@ bool ViewportSurfaceRenderer::initialize()
             }
             return result;
         }
+        vec2 workbenchNormalEncode(bool frontFacing, vec3 normal)
+        {
+            normal = normalize(frontFacing ? normal : -normal);
+            float p = sqrt(normal.z * 8.0 + 8.0);
+            return clamp(normal.xy / p + 0.5, 0.0, 1.0);
+        }
         void main()
         {
             if (uExcludeFrontCoverage &&
@@ -1908,11 +1929,12 @@ bool ViewportSurfaceRenderer::initialize()
                 sampleWorkbenchAlphaImage(vUv).a < 0.1) {
                 discard;
             }
-            // Blender's Workbench effect prepass flips normals on back-facing
-            // fragments before cavity and curvature sampling so each visible
-            // surface normal points toward the camera.
-            vec3 viewNormal = gl_FrontFacing ? vNormalView : -vNormalView;
-            fragmentViewNormal = vec4(normalize(viewNormal), 1.0);
+            // Blender stores the camera-facing view normal in compact
+            // two-channel sphere-map form; RGBA16F quantizes the same values
+            // as Blender's RG16F normal target.
+            vec2 encodedNormal = workbenchNormalEncode(gl_FrontFacing,
+                                                       vNormalView);
+            fragmentViewNormal = vec4(encodedNormal, 0.0, 1.0);
             fragmentObjectId = uObjectId;
             fragmentOutlineObjectId = uOutlineObjectId;
         }

@@ -1335,9 +1335,10 @@ depth domain. Visual depth comparison remains open.
   depth binding and [`GPU_texture.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/gpu/GPU_texture.hh#L2660-L2678)
   default filtering definition. Blender's cavity function also reads a
   per-pixel normal from the normal G-buffer; classiCAD now supplies its shared
-  prepass normal texture rather than the forward color pass interpolant. The
-  direct XYZ normal storage is the classiCAD equivalent of Blender's encoded
-  G-buffer normal followed by `normal_decode`, pinned in
+  prepass normal texture rather than the forward color pass interpolant. A
+  later precision audit found that direct XYZ storage only matches Blender's
+  encoded G-buffer normal before quantization, not after storage and decode;
+  classiCAD now follows the two-channel encoding described in
   [`workbench_cavity.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_cavity.bsl.hh#L463-L480)
   and [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L368-L405).
 - At 640×480 with an RGB effect-delta threshold of 2, the classiCAD changed
@@ -1362,17 +1363,39 @@ depth domain. Visual depth comparison remains open.
   12.18/255, p95 29/255, max 55/255. Matching topology reduces the mask
   mismatch from the NURBS-solid capture but does not explain it away; the
   sampled-depth/normal and cavity-amount diagnostic remains the next step.
-- The subsequent source check found another normal-path difference:
-  Blender's effect prepass flips back-facing fragment normals toward the
-  camera before storing them, while classiCAD stored the interpolated normal
-  unchanged. The classiCAD prepass now applies the same `gl_FrontFacing`
-  orientation rule before cavity/curvature sampling. On the matched cube at
+- The subsequent source check found a normal-path difference: Blender's
+  effect prepass flips back-facing fragment normals toward the camera and
+  stores them using the two-channel sphere-map encoding, while classiCAD had
+  stored direct XYZ normals. The classiCAD prepass now applies Blender's
+  `normal_encode(front_facing, normal)` formula in the existing RGBA16F
+  attachment; cavity and curvature resolve decode the quantized XY channels
+  with Blender's `normal_decode` formula. The attachment allocation remains
+  unchanged. On the matched cube at
   RGB threshold 2, classiCAD's changed mask is 27,008 pixels versus Blender's
   26,048 (XOR 3,848, IoU 0.865); within the shared changed mask, effect-delta
   RGB error drops to MAE 0.387/255, p95 1/255, max 6/255. This aligns effect
   intensity but leaves mask coverage less exact, so the cavity comparison is
-  still open. Blender reference:
+  still open. A subsequent focused offscreen contract passed after verifying
+  the encoder was compiled into the effect-prepass shader. The encoded-normal
+  capture changed effect-delta MAE/RMSE only from 0.131194/0.388267 to
+  0.131150/0.388183; threshold-2 mask IoU moved from 0.864322 to 0.864119.
+  This confirms the source-aligned path runs but shows no material coverage
+  improvement. Blender reference:
   [`workbench_common.bsl.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_common.bsl.hh#L368-L405).
+- A further source comparison found that Blender's opaque G-buffer state uses
+  `DRW_STATE_DEPTH_LESS_EQUAL` in
+  [`workbench_mesh_passes.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L1160-L1172),
+  while classiCAD's effect prepass used `GL_LESS`. The prepass now uses
+  `GL_LEQUAL` so equal-depth fragments at shared mesh edges select normals
+  consistently with Blender. This is a source-backed rasterization mismatch;
+  a fresh matched-cube capture changed 83 cavity-render pixels and no baseline
+  pixels. At the RGB max-channel threshold of 3, the classiCAD effect mask is
+  27,005 pixels versus Blender's 26,048; mask XOR is 3,861 and IoU is 0.864.
+  Relative to the capture before this state change, XOR moved from 3,848 to
+  3,861, so the depth comparison difference is real but does not explain the
+  residual mask coverage. On the 24,596-pixel shared changed mask, effect
+  delta RGB channel MAE is 0.400/255, p95 1/255, maximum 16/255. No further
+  source-backed discrepancy in the tested centered projection was found.
 - The first transparent overlap capture isolated a resolve-coordinate bug, not
   a geometry or OIT accumulation bug. The weighted resolve used an oversized
   fullscreen triangle with `gl_Position = p * 2 - 1` but `vUv = p * 0.5`, so

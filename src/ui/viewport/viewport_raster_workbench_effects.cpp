@@ -1017,6 +1017,12 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         constexpr quint64 selectedIdMask = 0x80000000ull;
         const QColor outline = settings.outlineColor;
         const QColor selectionOutline = viewportSelectionColor();
+        // Blender offsets its four object-ID taps by UI scale in normalized
+        // viewport coordinates. The QPainter ID buffer is allocated at the
+        // device-pixel resolution, so this is the equivalent texel distance.
+        // Integer ID sampling resolves the fractional scale to the nearest
+        // texel, as the GPU texture lookup does.
+        const int outlineSampleOffset = std::max(1, qRound(dpr));
         for (int y = 0; y < outputHeight; ++y) {
             QRgb *out = reinterpret_cast<QRgb *>(result.scanLine(y));
             const int depthY = std::clamp(
@@ -1029,8 +1035,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 const quint64 objectId = samples[depthY * width + depthX].objectId;
                 int differentNeighbors = 0;
                 bool selectedEdge = (objectId & selectedIdMask) != 0;
-                constexpr std::array<QPoint, 4> cardinalNeighbors = {
-                    QPoint(1, 0), QPoint(-1, 0), QPoint(0, 1), QPoint(0, -1),
+                const std::array<QPoint, 4> cardinalNeighbors = {
+                    QPoint(outlineSampleOffset, 0),
+                    QPoint(-outlineSampleOffset, 0),
+                    QPoint(0, outlineSampleOffset),
+                    QPoint(0, -outlineSampleOffset),
                 };
                 for (const QPoint &offset : cardinalNeighbors) {
                     const int sx = std::clamp(depthX + offset.x(), 0, width - 1);

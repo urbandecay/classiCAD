@@ -203,6 +203,52 @@ int main(int argc, char *argv[])
             translatedOrthographicDofImage == orthographicDofImage,
         "orthographic scene-camera DOF must preserve an in-focus impulse, gather a defocused surface, and remain invariant when the view target and scene translate together");
 
+    const auto makeOutlineScaleObject = [&]() {
+        ViewportRenderObject object;
+        object.shape.geometryType = GeometryType::NurbsSurface;
+        object.objectId = ObjectId::fromValue(71);
+        auto geometry = QSharedPointer<ViewportDepthGeometry>::create();
+        const auto worldAt = [&](qreal x, qreal y) {
+            QPointF local;
+            orthographicDofTransform.screenToWorkPlaneUnclipped(
+                QPointF(x, y), orthographicDofSize, WorkPlane::XY, 0.0,
+                &local);
+            return QVector3D(float(local.x()), float(local.y()),
+                             float(orthographicDofTarget.z));
+        };
+        const QVector3D a = worldAt(32.0, 32.0);
+        const QVector3D b = worldAt(96.0, 32.0);
+        const QVector3D c = worldAt(96.0, 96.0);
+        const QVector3D d = worldAt(32.0, 96.0);
+        geometry->surfaceVertices = {a, b, c, a, c, d};
+        geometry->surfaceNormals =
+            QVector<QVector3D>(6, QVector3D(0.0f, 0.0f, 1.0f));
+        object.preparedDepthGeometry = geometry;
+        return object;
+    };
+    ViewportShadingSettings outlineScaleSettings;
+    outlineScaleSettings.mode = ViewportShadingMode::Solid;
+    outlineScaleSettings.outline = true;
+    outlineScaleSettings.outlineColor = QColor(255, 0, 0);
+    const ViewportRenderObject outlineScaleObject = makeOutlineScaleObject();
+    QImage outlineScaleDpr1(orthographicDofSize,
+                            QImage::Format_ARGB32_Premultiplied);
+    outlineScaleDpr1.fill(Qt::black);
+    applyRasterWorkbenchEffects(
+        &outlineScaleDpr1, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 1.0, outlineScaleSettings);
+    QImage outlineScaleDpr2(orthographicDofSize * 2,
+                            QImage::Format_ARGB32_Premultiplied);
+    outlineScaleDpr2.setDevicePixelRatio(2.0);
+    outlineScaleDpr2.fill(Qt::black);
+    applyRasterWorkbenchEffects(
+        &outlineScaleDpr2, {outlineScaleObject}, orthographicDofTransform,
+        orthographicDofSize, 2.0, outlineScaleSettings);
+    passed &= check(
+        outlineScaleDpr1.pixelColor(31, 64).red() > 40 &&
+            outlineScaleDpr2.pixelColor(62, 128).red() > 40,
+        "QPainter outlines must sample cardinal object IDs at the DPR-scaled Blender UI footprint");
+
     ViewportTransform perspectiveDofTransform = orthographicDofTransform;
     perspectiveDofTransform.setPerspectiveEnabled(true);
     const Point3D perspectiveDofEye =

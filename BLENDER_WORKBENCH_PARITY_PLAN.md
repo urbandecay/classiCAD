@@ -1604,6 +1604,15 @@ Status: in progress; the implementation and source reviews found the blockers li
   path. An offscreen contract compares selected and unselected silhouette
   pixels against matching outline-free baselines. QPainter outline composition
   and broader effect pixel comparisons remain open.
+- **QPainter outline UI-scale sampling:** the software object-ID resolve now
+  offsets its four cardinal taps by the viewport DPR in its physical-resolution
+  ID buffer. Blender 5.2.2 applies `world_data.ui_scale` to the normalized tap
+  offsets in [`workbench_effect_outline_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_effect_outline_frag.glsl#L256-L271);
+  the GPU path passes classiCAD's DPR as its UI-scale value. The focused
+  offscreen QPainter contract passed at DPR 1 and DPR 2, checking that a
+  cardinal tap reaches the same logical silhouette position at each scale.
+  Fractional DPR uses nearest object-ID texel sampling; broader QPainter
+  composition and image parity comparisons remain open.
 
 - Run the comparison matrix below against Blender 5.2.2.
 - Record remaining visual differences with a source or implementation explanation; capture images only when both applications show the same nonblank scene and matched view.

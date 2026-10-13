@@ -73,8 +73,9 @@ shader execution and matched Blender image comparison remain open.
 resolve now applies the sign stored in the material payload to the decoded
 normal before computing MatCap UVs. This matches Blender 5.2.2's prepass
 facing payload and composite normal flip, while leaving the payload magnitude
-available for the selected marker. The C++ build passes; a two-sided GPU
-capture and matched Blender image comparison remain open.
+available for the selected marker. Cavity keeps the unflipped prepass normal,
+matching Blender's independent cavity normal input. The C++ build passes; a
+two-sided GPU capture and matched Blender image comparison remain open.
 
 **Opaque cavity resolve update (2026-10-13):** Eligible scene-linear opaque
 resolves now apply Workbench cavity and curvature from the shared depth,

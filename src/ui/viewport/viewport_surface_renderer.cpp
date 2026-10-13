@@ -1873,11 +1873,13 @@ bool ViewportSurfaceRenderer::initialize()
             vec4 material = texelFetch(uMaterialData, pixel, 0);
             vec3 color = material.rgb;
             vec3 normal = vec3(0.0, 0.0, 1.0);
+            vec3 cavityNormal = normal;
             vec3 incident = vec3(0.0, 0.0, 1.0);
             bool selected = false;
             if (uStudioLighting || uMatcapLighting || uUseCavity) {
                 normal = decodeWorkbenchNormal(
                     texelFetch(uViewNormal, pixel, 0).xy);
+                cavityNormal = normal;
             }
             if (uPerspective && (uStudioLighting || uMatcapLighting)) {
                 vec2 uv = (vec2(pixel) + 0.5) /
@@ -1926,7 +1928,7 @@ bool ViewportSurfaceRenderer::initialize()
                     vec3 viewPosition = cavityViewPosition(screenCoordinate,
                                                           depth);
                     vec2 cavity = workbenchCavity(
-                        screenCoordinate, depth, viewPosition, normal);
+                        screenCoordinate, depth, viewPosition, cavityNormal);
                     cavityAmount = cavity.x;
                     edgeAmount = cavity.y;
                 }

@@ -2724,9 +2724,10 @@ QByteArray viewportAaHistoryKey(const ViewportRenderFrame &frame,
     }
     stream << shading.colorTransform << shading.colorLutId
            << shading.colorExposure << shading.colorGamma;
-    // Only filled Workbench surfaces and polygon meshes reach this pre-resolve
-    // scene image. Curve/point/dimension wires and selection/tool overlays are
-    // drawn after resolve; committed pictures are keyed by the caller.
+    // Filled Workbench surfaces, polygon meshes, and committed CAD curve
+    // strokes reach this pre-resolve scene image. Point/dimension wires and
+    // selection/tool overlays stay after resolve; committed pictures and CAD
+    // curve stroke identity are keyed by the caller.
     const auto contributesToSceneResolve = [&shading](
         const ViewportRenderObject &object) {
         return shading.mode == ViewportShadingMode::Solid &&

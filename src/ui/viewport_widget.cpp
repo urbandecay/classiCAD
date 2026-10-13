@@ -9139,6 +9139,9 @@ protected:
                                      ? rasterScenePainter
                                      : painter;
         QVector<ViewportSceneStroke> gpuStrokes;
+        // Committed CAD curves are scene color. Keep edit guides and selection
+        // treatment in gpuStrokes so those overlays remain outside AA/DOF.
+        QVector<ViewportSceneStroke> gpuCommittedSceneStrokes;
         QVector<ViewportSceneStroke> gpuDepthTestedPreviewStrokes;
         QSet<quint64> surfaceOutlineStrokeObjectIds;
         QVector<ViewportRenderObject> gpuVertexSelectedFaces;
@@ -10263,10 +10266,48 @@ protected:
                         ViewportShadingMode::Solid &&
                     !scalePreview && !rotatePreview &&
                     sceneStroke.pointDiameter <= 0.0f;
+                const bool committedSceneCurve =
+                    isViewportCurveStrokeType(visibleShape.geometryType) &&
+                    !scalePreview && !rotatePreview &&
+                    sceneStroke.pointDiameter <= 0.0f;
+                if (committedSceneCurve) {
+                    // Selection color and component colors are editor state.
+                    // Regenerate the underlying object wire without selection
+                    // so the committed curve participates in the sampled
+                    // scene while its edit treatment remains an overlay.
+                    ViewportRenderObject sceneColorObject = renderObject;
+                    sceneColorObject.selected = false;
+                    ViewportSceneStroke sceneColorStroke;
+                    if (makeViewportSceneStrokes(sceneColorObject, true,
+                                                 &sceneColorStroke, nullptr)) {
+                        if (viewportShadingSettings_.mode ==
+                            ViewportShadingMode::Solid) {
+                            sceneColorStroke.color =
+                                viewportShadingSettings_.themeEditWireColor;
+                        } else if (
+                            viewportShadingSettings_.mode ==
+                                ViewportShadingMode::Wireframe &&
+                            viewportShadingSettings_.wireColorMode ==
+                                ViewportWireColorMode::Theme) {
+                            sceneColorStroke.color =
+                                viewportShadingSettings_.themeWireColor;
+                        }
+                        // Match the offscreen scene-color path: strokes test
+                        // against surface depth but do not replace it.
+                        sceneColorStroke.writeDepth = false;
+                        gpuCommittedSceneStrokes.append(
+                            std::move(sceneColorStroke));
+                    }
+                }
                 if (controlPointsVisible_ && controlGuide.shape != nullptr) {
                     gpuStrokes.append(std::move(controlGuide));
                 }
-                gpuStrokes.append(sceneStroke);
+                const bool hasStrokeEditorTreatment =
+                    selected || scalePreview || rotatePreview ||
+                    selectedCurveComponents || selectedCurveVertexOverlay;
+                if (!committedSceneCurve || hasStrokeEditorTreatment) {
+                    gpuStrokes.append(sceneStroke);
+                }
                 if (selectedCurveComponents) {
                     const QVector<Shape::NurbsCurve2D> curves =
                         curveSampler_.curvesForShape(visibleShape);
@@ -11221,6 +11262,32 @@ protected:
                         sceneStateStream << quint64(object.objectId.value());
                     }
                 }
+                // Curve wires now contribute before AA/DOF resolve. Include
+                // their effective scene geometry and appearance in history
+                // identity so cached samples cannot omit or retain stale wires.
+                sceneStateStream << qint32(gpuCommittedSceneStrokes.size());
+                for (const ViewportSceneStroke &stroke :
+                     gpuCommittedSceneStrokes) {
+                    sceneStateStream
+                        << quint64(stroke.objectId.value())
+                        << stroke.geometryRevision << stroke.color
+                        << stroke.width << quint8(stroke.lineStyle)
+                        << stroke.linePatternScale
+                        << stroke.linePatternSegmentCount
+                        << stroke.worldOffset.x << stroke.worldOffset.y
+                        << stroke.worldOffset.z;
+                    for (int segment = 0;
+                         segment < stroke.linePatternSegmentCount; ++segment) {
+                        sceneStateStream
+                            << stroke.linePatternSegmentsWidthUnits[
+                                   static_cast<std::size_t>(segment)];
+                    }
+                    sceneStateStream
+                        << (stroke.shape != nullptr
+                                ? QJsonDocument(shapeToJson(*stroke.shape))
+                                      .toJson(QJsonDocument::Compact)
+                                : QByteArray{});
+                }
 
                 const QByteArray historyKey = viewportAaHistoryKey(
                     renderFrame, renderShadingSettings, viewportAaMode_,
@@ -11313,6 +11380,31 @@ protected:
             }
             const bool nativeSurfacePassFailed = !surfacesDrawn;
 
+            bool committedStrokesDrawnInSample = false;
+            if (aaSceneSampleActive && !nativeSurfacePassFailed &&
+                sceneRenderer != nullptr &&
+                !gpuCommittedSceneStrokes.isEmpty()) {
+                const bool xrayEnabled =
+                    viewportShadingSettings_.xrayEnabled();
+                if (xrayEnabled) {
+                    const bool backWiresDrawn = sceneRenderer->draw(
+                        gpuCommittedSceneStrokes, sceneCamera,
+                        renderFrame.viewportSize, devicePixelRatioF(), false,
+                        0.5, smoothWiresOverlay_, smoothWiresEditMode_, true);
+                    const bool frontWiresDrawn = sceneRenderer->draw(
+                        gpuCommittedSceneStrokes, sceneCamera,
+                        renderFrame.viewportSize, devicePixelRatioF(), true,
+                        1.0, smoothWiresOverlay_, smoothWiresEditMode_, true);
+                    committedStrokesDrawnInSample =
+                        backWiresDrawn && frontWiresDrawn;
+                } else {
+                    committedStrokesDrawnInSample = sceneRenderer->draw(
+                        gpuCommittedSceneStrokes, sceneCamera,
+                        renderFrame.viewportSize, devicePixelRatioF(), true,
+                        1.0, smoothWiresOverlay_, smoothWiresEditMode_, true);
+                }
+            }
+
             if (aaSceneSampleActive) {
                 aaNeedsAnotherSample = aaRenderer->finishSceneSample();
                 if (aaNeedsAnotherSample) {
@@ -11349,27 +11441,31 @@ protected:
                                       true);
             }
             // Scene strokes are overlay-like: draw them after the scene resolve
-            // with the unjittered camera, including when the color image came
-            // from cached AA history. They depth-test against the regenerated
-            // unjittered surface depth but never write into it.
+            // with the unjittered camera when they are editor treatments or
+            // when no fresh scene sample accepted committed stroke color.
+            // Cached AA history already contains the committed scene strokes.
             if (sceneRenderer != nullptr) {
+                QVector<ViewportSceneStroke> postResolveStrokes = gpuStrokes;
+                if (!committedStrokesDrawnInSample && !cachedScenePresented) {
+                    postResolveStrokes += gpuCommittedSceneStrokes;
+                }
                 const bool xrayEnabled = viewportShadingSettings_.xrayEnabled();
                 if (xrayEnabled) {
                     // Preserve Blender's X-Ray wire behavior: show hidden
                     // portions at half opacity, then visible portions at full
                     // opacity against the scene depth buffer.
                     const bool backWiresDrawn = sceneRenderer->draw(
-                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
+                        postResolveStrokes, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), false, 0.5,
                         smoothWiresOverlay_, smoothWiresEditMode_);
                     const bool frontWiresDrawn = sceneRenderer->draw(
-                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
+                        postResolveStrokes, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), true, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_);
                     sceneDrawn = backWiresDrawn && frontWiresDrawn;
                 } else {
                     sceneDrawn = sceneRenderer->draw(
-                        gpuStrokes, overlayCamera, renderFrame.viewportSize,
+                        postResolveStrokes, overlayCamera, renderFrame.viewportSize,
                         devicePixelRatioF(), true, 1.0,
                         smoothWiresOverlay_, smoothWiresEditMode_);
                 }

@@ -2534,3 +2534,30 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   and its TIFF tags in [`format_tiff.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/imbuf/intern/format_tiff.cc#L55-L82).
   Qt 6.4.2's TIFF writer maps its limited compression option in
   [`qtiffhandler.cpp`](https://github.com/qt/qtimageformats/blob/v6.4.2/src/plugins/imageformats/tiff/qtiffhandler.cpp#L160-L168).
+
+### Live viewport committed curve strokes in AA/DOF scene samples (2026-10-13)
+
+- The live viewport now routes committed CAD curve stroke color into the active
+  AA sample before `finishSceneSample()`, using that sample's jittered camera
+  and scene-linear output. This matches the offscreen render-result stroke
+  ordering. Selection tint, selected component wires, control guides, and
+  transform previews remain post-resolve editor overlays. The sampled base
+  stroke depth-tests against opaque surfaces and does not replace their depth;
+  X-Ray retains the hidden-half-opacity then visible-full-opacity sequence.
+- The AA history key now includes each committed stroke's geometry, color,
+  width, line pattern, and world offset. A cached sample therefore cannot omit
+  the curve pass or retain its previous appearance. On a failed native surface
+  pass, fresh committed strokes fall back to the established post-resolve path;
+  a cached sample already includes its keyed committed strokes and is not drawn
+  a second time.
+- Source authority: Blender 5.2.2 registers curve batches in the Workbench
+  scene passes (`curves_sync`/`draw_to_mesh_pass`) and runs the scene passes
+  before DOF and AA in the pinned
+  [Workbench engine sequence](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2370-L2645).
+  This implementation applies that scene ordering to CAD curve strokes; Blender
+  overlay controls and edit wires continue to use their separate overlay pass.
+- Existing `viewport_render_contracts` GPU coverage checks scene-linear stroke
+  color writes, unchanged depth, color-masked depth replay, and once-only color
+  behavior. The live-widget routing itself still needs a runtime GPU/visual
+  check; this environment's GPU contracts cannot create their required GL
+  context, so no live AA/DOF image result is claimed here.

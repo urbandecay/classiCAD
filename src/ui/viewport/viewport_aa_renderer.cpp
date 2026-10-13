@@ -316,6 +316,7 @@ ViewportAaRenderer::~ViewportAaRenderer()
     accumulateProgram_.removeAllShaders();
     presentProgram_.removeAllShaders();
     depthOfFieldProgram_.removeAllShaders();
+    overlayDepthProgram_.removeAllShaders();
 }
 
 void ViewportAaRenderer::setMode(int mode)
@@ -490,6 +491,20 @@ bool ViewportAaRenderer::initialize()
                 }
             }
             fragmentColor = result;
+        }
+    )glsl";
+    // Blender applies this overlay-only depth override after Workbench's
+    // opaque, transparent, volume, outline, and DOF passes. Keep the physical
+    // in-front depth through those scene passes, then place front-owned pixels
+    // at the near plane so later editor overlays stay behind them.
+    static constexpr const char *overlayDepthFragmentShader = R"glsl(
+        #version 330 core
+        uniform sampler2D uFrontDepth;
+        void main()
+        {
+            ivec2 pixel = ivec2(gl_FragCoord.xy);
+            if (texelFetch(uFrontDepth, pixel, 0).r >= 1.0) discard;
+            gl_FragDepth = 0.0;
         }
     )glsl";
     static constexpr const char *presentFragmentShader = R"glsl(
@@ -961,6 +976,11 @@ bool ViewportAaRenderer::initialize()
         !depthOfFieldProgram_.addShaderFromSourceCode(
             QOpenGLShader::Fragment, depthOfFieldFragmentShader) ||
         !depthOfFieldProgram_.link() || !smaaProgramsReady ||
+        !overlayDepthProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Vertex, fullscreenVertexShader) ||
+        !overlayDepthProgram_.addShaderFromSourceCode(
+            QOpenGLShader::Fragment, overlayDepthFragmentShader) ||
+        !overlayDepthProgram_.link() ||
         !vertexArray_.create()) {
         qWarning().noquote() << "Viewport AA shader setup failed:"
                              << accumulateProgram_.log()
@@ -1018,6 +1038,10 @@ void ViewportAaRenderer::destroyTargets()
     if (sceneFramebuffer_ != 0) {
         glDeleteFramebuffers(1, &sceneFramebuffer_);
         sceneFramebuffer_ = 0;
+    }
+    if (overlayDepthFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &overlayDepthFramebuffer_);
+        overlayDepthFramebuffer_ = 0;
     }
     if (attachmentClearFramebuffer_ != 0) {
         glDeleteFramebuffers(1, &attachmentClearFramebuffer_);
@@ -1228,6 +1252,15 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
     const GLenum drawAttachment = GL_COLOR_ATTACHMENT0;
     glDrawBuffers(1, &drawAttachment);
     const bool sceneComplete =
+        glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+
+    glGenFramebuffers(1, &overlayDepthFramebuffer_);
+    glBindFramebuffer(GL_FRAMEBUFFER, overlayDepthFramebuffer_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                           GL_TEXTURE_2D, depthTexture_, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    const bool overlayDepthComplete =
         glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
 
     glGenFramebuffers(1, &attachmentClearFramebuffer_);
@@ -1446,13 +1479,15 @@ bool ViewportAaRenderer::ensureTargets(const QSize &pixelSize)
                        static_cast<GLuint>(previousRenderbuffer));
     glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
-    if (!sceneComplete || !frontComplete || !attachmentsComplete ||
+    if (!sceneComplete || !overlayDepthComplete || !frontComplete ||
+        !attachmentsComplete ||
         !historyComplete ||
         !resolveComplete || !depthOfFieldComplete || !dofPrepareComplete ||
         !dofBlurComplete || !dofMipComplete || !edgeComplete || !weightComplete ||
         !textureDataValid) {
         qWarning() << "Viewport AA target allocation failed"
                    << "scene=" << sceneComplete
+                   << "overlay depth=" << overlayDepthComplete
                    << "front=" << frontComplete
                    << "attachments=" << attachmentsComplete
                    << "history=" << historyComplete
@@ -1928,6 +1963,83 @@ bool ViewportAaRenderer::sceneSampleActive() const noexcept
     return sceneSampleActive_;
 }
 
+void ViewportAaRenderer::applyInFrontOverlayDepth()
+{
+    if (frontDepthTexture_ == 0 || depthTexture_ == 0 ||
+        overlayDepthFramebuffer_ == 0 ||
+        !overlayDepthProgram_.isLinked()) {
+        return;
+    }
+
+    GLint previousDrawFramebuffer = 0;
+    GLint previousReadFramebuffer = 0;
+    GLint previousViewport[4] = {};
+    GLint previousProgram = 0;
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTexture = 0;
+    GLint previousDepthFunction = GL_LESS;
+    GLboolean previousDepthMask = GL_TRUE;
+    GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+    const GLboolean previousStencil = glIsEnabled(GL_STENCIL_TEST);
+    const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
+    const GLboolean previousCull = glIsEnabled(GL_CULL_FACE);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDrawFramebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    glGetIntegerv(GL_VIEWPORT, previousViewport);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+    glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, overlayDepthFramebuffer_);
+    glViewport(0, 0, targetSize_.width(), targetSize_.height());
+    glDisable(GL_BLEND);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_ALWAYS);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, frontDepthTexture_);
+    overlayDepthProgram_.bind();
+    overlayDepthProgram_.setUniformValue("uFrontDepth", 0);
+    {
+        QOpenGLVertexArrayObject::Binder binder(&vertexArray_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+    glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                      static_cast<GLuint>(previousReadFramebuffer));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                      static_cast<GLuint>(previousDrawFramebuffer));
+    glViewport(previousViewport[0], previousViewport[1],
+               previousViewport[2], previousViewport[3]);
+    glUseProgram(static_cast<GLuint>(previousProgram));
+    glDepthMask(previousDepthMask);
+    glColorMask(previousColorMask[0], previousColorMask[1],
+                previousColorMask[2], previousColorMask[3]);
+    glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+    if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+    else glDisable(GL_DEPTH_TEST);
+    if (previousBlend) glEnable(GL_BLEND);
+    else glDisable(GL_BLEND);
+    if (previousStencil) glEnable(GL_STENCIL_TEST);
+    else glDisable(GL_STENCIL_TEST);
+    if (previousScissor) glEnable(GL_SCISSOR_TEST);
+    else glDisable(GL_SCISSOR_TEST);
+    if (previousCull) glEnable(GL_CULL_FACE);
+    else glDisable(GL_CULL_FACE);
+}
+
 void ViewportAaRenderer::drawSmaaResolve(float mixFactor)
 {
     if (!initialized_ || historyColorTexture_ == 0 ||
@@ -2231,6 +2343,11 @@ bool ViewportAaRenderer::finishSceneSample()
             sampleColorTexture = depthOfFieldColorTexture_;
         }
     }
+    // Blender applies this overlay-only override after scene effects and
+    // immediately before AA. Keep physical front depth for transparency,
+    // volume, outline, and DOF, then mask later editor overlays at the near
+    // plane using the dedicated front-depth attachment.
+    applyInFrontOverlayDepth();
     GLuint presentTexture = sampleColorTexture;
     if (accumulate) {
         const bool singlePassSample =

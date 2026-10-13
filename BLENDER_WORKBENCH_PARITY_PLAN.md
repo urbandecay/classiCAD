@@ -628,11 +628,13 @@ in ordinary free views or orthographic views is superseded by this correction.
   Collection membership and CAD layer visibility remain independent.
 - GPU opaque-surface support now uses per-sample in-front color, depth, normal,
   object-ID, and outline-ID attachments. The surface prepass renders opaque
-  show-in-front ranges in their own depth domain, merges their metadata into the
-  shared scene attachments, and merges color/depth before DOF, TAA, and SMAA
-  resolve. The unjittered viewport depth path also has a dedicated in-front
-  depth target for scene occlusion and picking. C++ build passes; GPU image
-  comparison remains pending.
+  show-in-front ranges in their own depth domain and merges their actual device
+  depth and metadata into shared scene attachments. The AA coordinator applies
+  Blender's separate near-plane override only after scene effects, immediately
+  before AA/presentation. The unjittered viewport depth path also has a
+  dedicated in-front depth target for scene occlusion and picking. This keeps
+  physical depth available to transparency, volume, outline, and DOF while
+  preserving final near-plane depth for editor overlays and render-result Z.
 - In-front opaque color now has a packed depth-stencil target. The renderer
   counts shadow volumes against the in-front prepass depth and shades the front
   ranges through the zero/nonzero stencil split, matching Blender's shared
@@ -643,13 +645,16 @@ in ordinary free views or orthographic views is superseded by this correction.
   into independent weighted-OIT accumulation/weight targets against the
   front depth domain. Ordinary transparent accumulation excludes opaque
   front-owned coverage. The front result resolves over regular OIT color, then writes their
-  depth/object/outline IDs into the front attachments and merges those into the
-  shared depth/ID targets before regular transparent depth. The regular depth
-  pass discards front-owned coverage. This follows Blender's regular OIT,
-  front OIT, front transparent-depth merge, then regular transparent-depth
-  order. Front transparent depth deliberately preserves the normal attachment;
-  Blender's transparent-depth pass does not write normals, and front opaque
-  geometry owns its normal/material attachments.
+  depth/object/outline IDs into the front attachments and merges sampled front
+  depth into the shared depth/ID targets before regular transparent depth. The
+  regular depth pass discards front-owned coverage. Blender then applies its
+  overlay-only near-plane depth override after scene effects, immediately
+  before AA, so this early merge retains physical depth. This follows
+  Blender's regular OIT, front OIT, front transparent-depth merge, regular
+  transparent-depth, volume, outline, DOF, overlay-depth, then AA order. Front
+  transparent depth deliberately preserves the normal attachment; Blender's
+  transparent-depth pass does not write normals, and front opaque geometry
+  owns its normal/material attachments.
 - In no-shared-target or target-allocation fallback cases, transparent ranges
   retain the existing sorted/regular OIT behavior. The QPainter fallback has
   no separate in-front surface domain. GPU pixel comparison remains pending;
@@ -1130,7 +1135,7 @@ Acceptance: each checkbox affects its matching wire category only, while other v
 | Renderer ownership | `workbench_engine.cc` owns named opaque, transparent, transparent-depth, volume, outline, depth-of-field, and anti-aliasing passes. It draws those passes in a defined order using Blender's evaluated scene, draw manager, and GPU APIs. | `ViewportSurfaceRenderer` owns surface drawing and several effect passes; `ViewportAaRenderer` owns DOF, TAA/SMAA, and presentation; `viewport_widget.cpp` coordinates surfaces, regenerated depth, strokes, overlays, and grid. | Extract a classiCAD-owned pass coordinator and explicit render-target contract. Mirror Blender's responsibilities/order where applicable, while retaining Qt/OpenGL and the authoritative NURBS model. Do not try to link Blender's engine classes directly. |
 | Volume data and rendering | Workbench reads the active evaluated scalar grid, uses Blender's volume texture transforms and display density, draws after transparent depth, and ray-marches with per-axis five samples per voxel, Bayer/Halton jitter, and closest/linear/cubic sampling. The pinned Workbench volume shader leaves shadow sampling as a TODO. | Blender import transfers one bounded single-channel `FLOAT` grid through evaluated Geometry Nodes mesh attributes; native JSON stores sparse voxel/tile records and display controls. `ViewportSurfaceRenderer` reconstructs a bounded dense texture and draws a volume pass in the matching pass slot. The QPainter fallback has no volume renderer. | Preserve this first bounded scalar path and keep its caps visible. Multi/vector grids, animation, oversized dense bounds, and QPainter volume rendering remain separate follow-up work. |
 | TAA/SMAA resolve | Blender uses a centered jitter sequence, a 3x3 Blackman-Harris filter in log color, accumulated weights, and an SMAA resolve that fades as temporal samples accumulate. | The GPU implementation follows those algorithms closely. The QPainter fallback instead supersamples and downsamples; it does not run the GPU TAA/SMAA sequence. | Controlled GPU renders match at AA Off and Single Pass. A source-derived AA-off camera-shift fixture now compares all eight raw samples; their silhouettes differ by at most two pixels per sample. The resolved scene-linear 8-sample silhouette masks now match exactly. Blender's background API still exposes only the final render, so per-sample comparison uses validated camera-shift renders rather than direct internal-buffer reads. Treat QPainter as a separate approximation. |
-| Transparency/depth | Blender has separate transparent accumulation and transparent-depth passes following opaque drawing. `OBJECT_IN_FRONT` uses a second depth domain and merges into scene depth before regular transparent depth excludes its pixels. | The primary GPU shared-target path uses independent regular/front weighted-OIT targets, resolves front color after regular OIT, then merges front transparent depth and IDs before regular transparent depth. The no-shared-target fallback retains sorted/regular behavior. QPainter has no separate in-front domain. | A matched 640×480 GPU fixture now verifies regular alpha color, overlapping in-front color, and near-plane Z for in-front geometry. Fallback and QPainter paths remain different; broader scenes and combinations still need comparison. |
+| Transparency/depth | Blender has separate transparent accumulation and transparent-depth passes following opaque drawing. `OBJECT_IN_FRONT` uses a second depth domain and merges sampled physical depth into scene depth before regular transparent depth excludes its pixels. After scene effects, the overlay-depth pass writes device depth zero at in-front pixels before AA, giving final render-result Z its near-plane value. | The primary GPU shared-target path uses independent regular/front weighted-OIT targets and merges front depth/IDs before regular transparent depth. It keeps physical front depth through volume, outline, and DOF, then applies a late overlay-only near-plane override before AA. The no-shared-target fallback retains sorted/regular behavior. QPainter has no separate in-front domain. | A matched 640×480 GPU fixture verifies mid-pass merged physical front depth, front overlap color, and final near-plane Z. Fallback and QPainter paths remain different; broader scenes and combinations still need comparison. |
 | Outline and effects | Blender runs outline from its object-ID buffer, then DOF, then AA. Cavity/curvature uses Workbench-specific sample buffers and effect composition. | classiCAD generates normal/depth/object-ID inputs in its own prepass and uses custom outline/effect shaders. QPainter has separate software approximations. | Port and attribute the standalone shader/effect logic where inputs match. Preserve CAD-specific selection and NURBS tessellation handling. Validate each effect independently before combining them. |
 | Geometry and materials | Workbench consumes Blender evaluated object batches and Workbench material records; its render engine is integrated with Blender scene, dependency-graph, draw-manager, GPU, and render systems. | classiCAD sends derived tessellation of exact NURBS surfaces/solids to its GPU renderer. The surface renderer has its own material packing and draw ranges. | Keep NURBS authoritative and pass only derived display data to the renderer. A future shader system should provide evaluated Workbench inputs; do not create a second Blender-shaped scene/geometry model. |
 
@@ -1862,19 +1867,27 @@ above is from scene-linear captures and remains the preferred color metric.
   classiCAD returned `[0.08563, 0.29346, 0.11285]` (opaque base) versus Blender
   `[0.0776, 0.2106, 0.2900]`; after the fix classiCAD returns
   `[0.07770, 0.21057, 0.29004]`. The front mask is clear (`1.0`) at this
-  probe. Blender's render-result Z reads the main depth attachment after
-  `TransparentDepthPass` merges front-domain depth into it; for in-front
-  geometry the measured result is the near plane (`0.0100135`), while the
-  classiCAD merge previously preserved physical orthographic distance
-  (`999.6`). The front attachment retains its real depth for resolving overlap
-  within the in-front domain, then the merge writes device depth zero into the
-  main scene depth, matching Blender's near-plane render-result behavior.
-  The offscreen contract checks front overlap Z against the active near clip;
-  regular transparent view-Z at `(150, 240)` remains `999.75` in both apps.
+  probe. Blender's render-result Z reads the main depth attachment after the
+  late overlay-depth pass; for in-front geometry the measured result is the
+  near plane (`0.0100135`). Blender first merges actual front-domain depth into
+  scene depth for later scene passes: `workbench_merge_depth_frag.glsl` copies
+  the sampled front depth. `AntiAliasingPass::draw` then submits
+  `overlay_depth_ps_` after Workbench's volume, outline, and DOF passes, and
+  `workbench_overlay_depth_frag.glsl` sets in-front pixels to device depth zero
+  so the Overlay engine stays behind them. classiCAD now follows that split:
+  the front merge preserves sampled depth, and `finishSceneSample` applies the
+  near-plane override immediately before AA. The offscreen contract checks
+  merged scene depth against the isolated physical front depth before the
+  override, and still checks final front overlap Z against the active near
+  clip. Regular transparent view-Z at `(150, 240)` remains `999.75` in both
+  apps.
 - Pinned Blender references: [`workbench_mesh_passes.cc` opaque/front
   routing and depth merge](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L109-L201),
   [`workbench_mesh_passes.cc` transparent and depth passes](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_mesh_passes.cc#L232-L371),
-  and [`workbench_merge_depth_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_merge_depth_frag.glsl#L7-L13).
+  [`workbench_merge_depth_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_merge_depth_frag.glsl#L7-L13),
+  [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L133-L140) and its late invocation at [lines 243-253](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L243-L253),
+  [`workbench_overlay_depth_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_overlay_depth_frag.glsl#L7-L13),
+  and [`workbench_engine.cc` pass order](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L496-L504).
 - Separate QPainter caveat: its retained opaque and transparent layers use
   ARGB32 display RGB, while Blender applies cavity before transparency on the
   scene-linear target. The GPU overlap fixture does not validate or change

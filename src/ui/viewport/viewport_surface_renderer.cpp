@@ -1805,11 +1805,11 @@ bool ViewportSurfaceRenderer::initialize()
         {
             float depth = texture(uFrontDepth, vUv).r;
             if (depth >= 1.0) discard;
-            // Workbench merges in-front geometry into the scene depth at the
-            // near plane. Preserve the per-object depth test in the separate
-            // front domain, then make the merged result occlude regular scene
-            // geometry and match the render-result Z pass.
-            gl_FragDepth = 0.0;
+            // Workbench first merges the actual front-domain depth so later
+            // transparent, volume, outline, and DOF passes see scene depth.
+            // Its separate overlay-depth pass applies the near-plane override
+            // only after those scene effects have completed.
+            gl_FragDepth = depth;
             if (uMergeColor) mergedColor = texture(uFrontColor, vUv);
             mergedNormal = texture(uFrontNormal, vUv);
             mergedObjectId = texture(uFrontObjectId, vUv).r;

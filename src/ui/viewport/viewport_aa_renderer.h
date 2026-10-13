@@ -62,6 +62,7 @@ private:
     bool ensureSampleZeroDepthTarget();
     bool ensureDisplayTransformTexture();
     bool runDepthOfField(GLuint sourceTexture);
+    void applyInFrontOverlayDepth();
     void destroyTargets();
     void drawSmaaResolve(float mixFactor);
     void drawPresentation(GLuint sourceTexture,
@@ -80,9 +81,11 @@ private:
     QOpenGLShaderProgram accumulateProgram_;
     QOpenGLShaderProgram presentProgram_;
     QOpenGLShaderProgram depthOfFieldProgram_;
+    QOpenGLShaderProgram overlayDepthProgram_;
     std::array<QOpenGLShaderProgram, 3> smaaPrograms_;
     QOpenGLVertexArrayObject vertexArray_;
     GLuint sceneFramebuffer_ = 0;
+    GLuint overlayDepthFramebuffer_ = 0;
     GLuint attachmentClearFramebuffer_ = 0;
     GLuint sampleZeroDepthFramebuffer_ = 0;
     GLuint sampleZeroFrontDepthFramebuffer_ = 0;

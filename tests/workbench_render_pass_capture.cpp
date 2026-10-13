@@ -229,6 +229,49 @@ int main(int argc, char **argv)
                         ViewportRenderPass::TransparentAccumulation) &&
                         scenePass.completed(ViewportRenderPass::TransparentResolve),
                     "in-front comparison fixture must execute regular weighted-OIT accumulation and resolve");
+
+                const auto readDepthTexturePixel = [&](GLuint texture,
+                                                       int x, int y,
+                                                       float *value) {
+                    if (texture == 0 || value == nullptr) return false;
+                    GLint previousReadFramebuffer = 0;
+                    GLint previousReadBuffer = GL_NONE;
+                    GLuint readFramebuffer = 0;
+                    gl.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                                     &previousReadFramebuffer);
+                    gl.glGetIntegerv(GL_READ_BUFFER, &previousReadBuffer);
+                    gl.glGenFramebuffers(1, &readFramebuffer);
+                    gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
+                    gl.glFramebufferTexture2D(
+                        GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                        GL_TEXTURE_2D, texture, 0);
+                    const bool complete = gl.glCheckFramebufferStatus(
+                        GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+                    if (complete) {
+                        gl.glReadBuffer(GL_NONE);
+                        gl.glReadPixels(x, size.height() - 1 - y, 1, 1,
+                                        GL_DEPTH_COMPONENT, GL_FLOAT, value);
+                    }
+                    gl.glBindFramebuffer(
+                        GL_READ_FRAMEBUFFER,
+                        static_cast<GLuint>(previousReadFramebuffer));
+                    gl.glReadBuffer(static_cast<GLenum>(previousReadBuffer));
+                    gl.glDeleteFramebuffers(1, &readFramebuffer);
+                    return complete;
+                };
+                float mergedFrontDepth = 1.0f;
+                float isolatedFrontDepth = 1.0f;
+                const bool depthReadsReady =
+                    readDepthTexturePixel(aa.targets().depthTexture,
+                                          365, 240, &mergedFrontDepth) &&
+                    readDepthTexturePixel(aa.targets().frontDepthTexture,
+                                          365, 240, &isolatedFrontDepth);
+                passed &= check(
+                    depthReadsReady && isolatedFrontDepth > 0.0f &&
+                        isolatedFrontDepth < 1.0f &&
+                        std::abs(mergedFrontDepth - isolatedFrontDepth) <
+                            1.0e-6f,
+                    "scene-depth merge must preserve the physical front-domain depth before the late overlay-depth override");
             }
             aa.finishSceneSample();
             passed &= check(gl.glGetError() == GL_NO_ERROR,

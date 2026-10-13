@@ -11037,12 +11037,29 @@ protected:
                     QImage::Format_ARGB32_Premultiplied);
                 fallbackSurfaceLayer.setDevicePixelRatio(fallbackDpr);
                 fallbackSurfaceLayer.fill(Qt::transparent);
+                std::optional<QVector3D> fallbackSceneLinearBackground;
+                if (viewportShadingSettings_.backgroundMode ==
+                    ViewportBackgroundMode::World) {
+                    fallbackSceneLinearBackground =
+                        viewportWorldColorSceneLinear;
+                } else if (viewportShadingSettings_.backgroundMode ==
+                           ViewportBackgroundMode::Custom) {
+                    const QColor color =
+                        viewportShadingSettings_.customBackgroundColor;
+                    fallbackSceneLinearBackground = workbenchSrgbToSceneLinear(
+                        QVector3D(color.redF(), color.greenF(), color.blueF()));
+                }
+                const std::vector<QVector3D> fallbackThemeBackgroundPixels =
+                    fallbackSceneLinearBackground.has_value()
+                        ? std::vector<QVector3D>{}
+                        : viewportThemeBackgroundSceneLinearPixels(
+                              themeBackground_, fallbackSurfaceLayer.size());
                 fallbackSurfaceBatchRendered = compositeRasterWorkbenchSurfaces(
                     &fallbackSurfaceLayer, fallbackSurfaceObjects,
                     viewportTransform_, renderFrame.viewportSize,
-                    fallbackDpr, viewportAaMode_ != 0, false,
+                    fallbackDpr, viewportAaMode_ != 0, true,
                     renderShadingSettings,
-                    std::nullopt,
+                    fallbackSceneLinearBackground,
                     [this](QPainter &surfacePainter,
                            const ViewportRenderObject &object,
                            RasterWorkbenchFragmentSink *fragmentSink) {
@@ -11058,7 +11075,7 @@ protected:
                                   object.displayName, object.libraryPath,
                                   object.meshObjectTransform,
                                   object.meshMaterials, fragmentSink);
-                    });
+                    }, nullptr, fallbackThemeBackgroundPixels);
                 if (fallbackSurfaceBatchRendered) {
                     painter.drawImage(QPoint(0, 0), fallbackSurfaceLayer);
                 }

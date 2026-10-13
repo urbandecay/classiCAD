@@ -1474,8 +1474,23 @@ depth domain. Visual depth comparison remains open.
   the production surface compositor and checks an uncovered pixel after the
   configured display transform. The focused viewport, scene-linear resolver,
   and fragment contracts pass. Matched GPU/QPainter captures for the three
-  Theme styles and native-renderer failure fallback remain open.
+  Theme styles remain open.
 - Reference: [Blender 5.2.2 Workbench background shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/viewport_background.frag).
+
+### Native-renderer failure fallback composition (2026-10-13)
+
+- The native-renderer failure path now uses the same bounded scene-linear
+  weighted transparency compositor as the ordinary QPainter path. It supplies
+  scene-linear World and Custom colors or per-pixel Theme gradient samples,
+  including the World-without-imported-color Theme fallback. Native painting
+  still ends before the QPainter surface pass and resumes before the regular
+  overlays; unjittered scene depth is rebuilt afterward.
+- A headless contract covers the failure-fallback compositor inputs with a
+  nonuniform Theme base, checking a display-transformed uncovered pixel and a
+  translucent overlap against the legacy display-space path. An opt-in capture
+  is available through
+  `CLASSICAD_VIEWPORT_QPAINTER_FAILURE_FALLBACK_CAPTURE`. A forced live GPU
+  failure capture remains open.
 
 ### QPainter cavity and outline order (2026-10-13)
 

@@ -490,6 +490,67 @@ int main(int argc, char *argv[])
         const bool rendered = compositeRasterWorkbenchSurfaces(
             &image, objects, transform, size, 1.0, false, true, shading,
             backgroundLinear, drawObject, &layers);
+        std::vector<QVector3D> failureThemeBackground;
+        failureThemeBackground.reserve(
+            static_cast<std::size_t>(size.width()) * size.height());
+        const QVector3D failureThemeHigh = workbenchSrgbToSceneLinear(
+            QVector3D(0.34f, 0.48f, 0.66f));
+        const QVector3D failureThemeLow = workbenchSrgbToSceneLinear(
+            QVector3D(0.12f, 0.16f, 0.22f));
+        for (int y = 0; y < size.height(); ++y) {
+            const float factor = size.height() > 1
+                ? static_cast<float>(y) / (size.height() - 1)
+                : 0.0f;
+            const QVector3D rowColor = failureThemeHigh * (1.0f - factor) +
+                                       failureThemeLow * factor;
+            for (int x = 0; x < size.width(); ++x) {
+                Q_UNUSED(x);
+                failureThemeBackground.push_back(rowColor);
+            }
+        }
+        QImage nativeFailureFallbackImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        nativeFailureFallbackImage.fill(Qt::transparent);
+        const bool nativeFailureFallbackRendered =
+            compositeRasterWorkbenchSurfaces(
+                &nativeFailureFallbackImage, objects, transform, size, 1.0,
+                false, true, shading, std::nullopt, drawObject, nullptr,
+                failureThemeBackground);
+        QImage legacyFailureFallbackImage(
+            size, QImage::Format_ARGB32_Premultiplied);
+        legacyFailureFallbackImage.fill(Qt::transparent);
+        const bool legacyFailureFallbackRendered =
+            compositeRasterWorkbenchSurfaces(
+                &legacyFailureFallbackImage, objects, transform, size, 1.0,
+                false, false, shading, std::nullopt, drawObject);
+        const QPoint themeProbe(size.width() / 2, size.height() / 2);
+        const QPoint uncoveredThemeProbe(8, size.height() / 2);
+        const QVector3D expectedThemeDisplay = workbenchSceneLinearToDisplaySrgb(
+            failureThemeBackground[static_cast<std::size_t>(
+                uncoveredThemeProbe.y()) * size.width() +
+                uncoveredThemeProbe.x()],
+            shading.colorTransform, shading.colorExposure,
+            shading.colorGamma, shading.colorLutData,
+            shading.colorLutMetadata);
+        const QColor actualThemeBackground =
+            nativeFailureFallbackImage.pixelColor(uncoveredThemeProbe);
+        const QString fallbackCapturePath = qEnvironmentVariable(
+            "CLASSICAD_VIEWPORT_QPAINTER_FAILURE_FALLBACK_CAPTURE");
+        const bool fallbackCaptureSaved = fallbackCapturePath.isEmpty() ||
+            nativeFailureFallbackImage.save(fallbackCapturePath);
+        passed &= check(nativeFailureFallbackRendered &&
+                            legacyFailureFallbackRendered &&
+                            fallbackCaptureSaved &&
+                            actualThemeBackground.alpha() == 255 &&
+                            std::abs(actualThemeBackground.redF() -
+                                     expectedThemeDisplay.x()) < 0.01f &&
+                            std::abs(actualThemeBackground.greenF() -
+                                     expectedThemeDisplay.y()) < 0.01f &&
+                            std::abs(actualThemeBackground.blueF() -
+                                     expectedThemeDisplay.z()) < 0.01f &&
+                            nativeFailureFallbackImage.pixelColor(themeProbe) !=
+                                legacyFailureFallbackImage.pixelColor(themeProbe),
+                        "native-renderer fallback composition must use the scene-linear Theme base, preserve its gradient outside geometry, and differ from the legacy display-space resolve");
         const QString capturePath = qEnvironmentVariable(
             "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_CAPTURE");
         const bool saved = capturePath.isEmpty() || image.save(capturePath);

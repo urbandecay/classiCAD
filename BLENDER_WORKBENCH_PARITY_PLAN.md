@@ -146,6 +146,37 @@ in ordinary free views or orthographic views is superseded by this correction.
   `workbench_materials.cc` image-filter setup above; visual comparison remains
   pending.
 
+### Workbench Image Texture source color spaces (2026-10-13)
+
+- Remaining mismatch: the GPU and QPainter paths currently reduce an image's
+  declared color space to an sRGB-versus-linear flag. That covers the common
+  sRGB, Linear, and Non-Color inputs, but not arbitrary OCIO color spaces such
+  as Display P3 or Adobe RGB. Blender 5.2.2's
+  [`image_gpu.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/blenkernel/intern/image_gpu.cc#L821-L844)
+  converts byte images from their declared color space through
+  `IMB_colormanagement_imbuf_to_byte_texture` or
+  `IMB_colormanagement_imbuf_to_float_texture`. classiCAD's Blender import and
+  native document serializer preserve the color-space name, but
+  `viewport_render_frame.cpp` and the surface adapter reduce it to
+  `textureImageSrgb`; the GPU upload then chooses `GL_SRGB8_ALPHA8` or
+  `GL_RGBA8`, and QPainter either applies the sRGB transfer curve or treats
+  input bytes as scene-linear. The source-space name is therefore lost before
+  either renderer can convert non-sRGB primaries/transfers.
+- A bounded conversion is not available in the current dependency set:
+  CMake links no OpenColorIO library, while the Blender extractor's Python
+  OCIO use is limited to baking display transforms, not converting image
+  samples. Qt's optional `QColorSpace` conversion would not guarantee the
+  same OCIO config, named spaces, or transfer behavior as Blender and would
+  also require a new conversion path shared by packed/external UDIM and regular
+  images, GPU uploads, and QPainter sampling. Alpha remains the original
+  channel used by Workbench cutout rules; RGB conversion must preserve the
+  image's alpha association for PREMUL images. Preserve the original name and
+  bytes for now. Correct support should be handled as a separate OCIO-backed
+  feature that transports a validated source-to-scene transform through both
+  color renderers, with offscreen contracts for regular and tiled images.
+  Existing sRGB, Linear, and Non-Color behavior remains supported; other
+  declared spaces are unsupported and can render with incorrect color.
+
 ### QPainter Image Texture alpha coverage (2026-10-12)
 
 - QPainter mesh and NURBS color paths now use sampled image alpha only for

@@ -1180,10 +1180,22 @@ depth domain. Visual depth comparison remains open.
   about 0.0039 pixel, enough to alter the 8-bit subpixel raster position. The
   view matrix now derives lateral translation from the view target and keeps
   eye depth separate; an offscreen contract checks the controlled Blender
-  corner coordinates to 0.001 pixel. A fresh post-fix Blender image comparison
-  is still required before claiming the Off/SinglePass edge shift is resolved.
-  The 8-sample contour coverage mismatch remains open; further isolation must
-  separate per-sample raster coverage from temporal resolve behavior.
+  corner coordinates to 0.001 pixel. Fresh official-hook captures after this
+  fix confirm that Off and Single Pass now have identical silhouette masks to
+  Blender (XOR 0, IoU 1.0; shared bounds `(142,42)` to `(497,437)`). The
+  repaired capture contract treats the centered first sample correctly for
+  Single Pass and 8-sample AA, while requiring later temporal samples to carry
+  jitter.
+- The 8-sample post-fix capture still differs: classiCAD covers 112,370 pixels
+  and Blender 111,933 at the >8 foreground threshold, with 469 XOR pixels
+  (453 classiCAD-only, 16 Blender-only) and IoU 0.99583. Bounds match. The
+  existing final images cannot identify whether this comes from per-sample
+  raster coverage or a later resolve/display step. Source review finds the
+  jitter ordering, 3x3 Blackman-Harris weights, temporal accumulation, and
+  SMAA path aligned with Blender 5.2.2, so changing those algorithms is not
+  justified by this evidence. The next comparison must capture matching
+  per-sample scene-linear color/depth and the resolved scene-linear image
+  before display conversion.
 
 ### Bounded scalar volume pass (2026-10-12)
 
@@ -1236,7 +1248,7 @@ Status: in progress; the implementation and source reviews found the blockers li
 - The user clarified that classiCAD's current viewport should be treated as Edit Mode; its separate Object Mode is planned for later. Do not use the missing Object Mode as an explanation for base surface, background, or grid differences. The supplied screenshots still are not a controlled render comparison: classiCAD reports `Ortho`, Blender reports `User Perspective`, and the visible scene geometry differs. Blender's mesh edit edges and curve edit wires are separate Overlay-engine geometry; classiCAD's Solid-mode CAD curve strokes and `NurbsSolid` face boundaries use the configurable edit-wire theme setting, while control geometry and selection behavior remain a distinct implementation. Compare base rendering separately from mode-specific overlays, with matching camera and geometry.
 - This is an adaptation of selected Blender shading equations and passes into classiCAD's renderer, not a verbatim port of Blender's complete Workbench and Overlay engines. The table above and stage notes remain the parity record.
 - Review execution confirmed the installed Blender runtime is 5.2.2 LTS and the classiCAD C++ build passes. Background extraction smoke checks now pass for original and evaluated mesh modes, POLY/BEZIER/NURBS curves, NURBS surface patches, nested collection parents and visibility records, and reporting omitted loose mesh geometry. An offscreen classiCAD startup reached viewport construction, but Qt could not create an OpenGL context; this does not validate the GPU renderer. A direct native-GPU offscreen cube render is now compared against Blender's background Workbench render at 640×480 for AA Off, Single Pass, and 8 samples. The Blender fixture can now independently render baseline, shadows, cavity, and outline modes. Blender 5.2.2 reference runs changed 111,858 pixels for shadows, 45,995 for cavity, and 2,410 for outline at an RGB threshold of 2. classiCAD's offscreen GPU contracts now require shadows to darken a pixel and World cavity to change a pixel against matching unselected, outline-free captures; cavity uses the shared-target scene-pass coordinator. These assert effect activation, not pixel parity. Scene-camera GPU projection now consumes Blender's sensor fit and dimensions, pixel aspect, camera shifts, orthographic scale, and exact clip range; depth readback uses that same range. A transform contract checks framing center, shift direction/magnitude, pixel-aspect scaling, and clip values. Matched Blender camera renders, annotation alignment with non-square pixels, the remaining comparison matrix, intermediate scene-linear captures, QPainter, and navigation cases remain open. Full parity is not signed off.
-- The AA capture comparison has a numerical edge-profile follow-up recorded in the [controlled cube baseline](#controlled-workbench-cube-baseline-2026-10-12). Orthographic matrix precision is corrected and its projected-corner contract passes; a fresh capture must confirm whether that resolves the Off/SinglePass right-edge shift. The 8-sample captures have matching bounds but differing edge coverage. AA equivalence and overall parity remain open.
+- The AA capture comparison has a numerical edge-profile follow-up recorded in the [controlled cube baseline](#controlled-workbench-cube-baseline-2026-10-12). Orthographic matrix precision is corrected and fresh captures confirm exact Off/SinglePass silhouette masks. The 8-sample captures have matching bounds but differing edge coverage; per-sample and pre-display captures are the next diagnostic step. AA equivalence and overall parity remain open.
 
 ### Final display dither (2026-10-12)
 

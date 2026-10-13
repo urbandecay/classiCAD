@@ -1691,6 +1691,58 @@ int main(int argc, char *argv[])
                                     qsizetype(rgb.size()) * qsizetype(sizeof(float))) ==
                                     qsizetype(rgb.size()) * qsizetype(sizeof(float));
                         }
+                        bool depthCaptureSaved = true;
+                        const QString depthCapturePath =
+                            aaMode == static_cast<int>(
+                                          ViewportAntiAliasingMode::Samples8)
+                                ? qEnvironmentVariable(
+                                      "CLASSICAD_VIEWPORT_AA_SAMPLES8_DEPTH_CAPTURE")
+                                : QString();
+                        if (!depthCapturePath.isEmpty() &&
+                            completedSamples == expectedSamples) {
+                            QVector<float> normalizedDepth(
+                                glSize.width() * glSize.height());
+                            functions.glReadPixels(
+                                0, 0, glSize.width(), glSize.height(),
+                                GL_DEPTH_COMPONENT, GL_FLOAT,
+                                normalizedDepth.data());
+                            const ViewportProjectionClipRange clipRange =
+                                viewportProjectionClipRange(gpuTransform,
+                                                            glSize);
+                            const float nearClip =
+                                static_cast<float>(clipRange.nearPlane);
+                            const float farClip =
+                                static_cast<float>(clipRange.farPlane);
+                            // The orthographic viewport's depth matrix uses
+                            // an eye distance of far/2; the Blender fixture's
+                            // render camera is eight units from its target.
+                            const float cameraDepthOffset =
+                                8.0f - farClip * 0.5f;
+                            for (float &depth : normalizedDepth) {
+                                depth = !std::isfinite(depth) || depth >= 1.0f
+                                    ? 1.0e10f
+                                    : nearClip + std::clamp(depth, 0.0f, 1.0f) *
+                                          (farClip - nearClip) +
+                                          cameraDepthOffset;
+                            }
+                            QFile depthFile(depthCapturePath);
+                            const QByteArray header =
+                                QByteArrayLiteral("Pf\n") +
+                                QByteArray::number(glSize.width()) +
+                                QByteArrayLiteral(" ") +
+                                QByteArray::number(glSize.height()) +
+                                QByteArrayLiteral("\n-1.0\n");
+                            depthCaptureSaved =
+                                depthFile.open(QIODevice::WriteOnly) &&
+                                depthFile.write(header) == header.size() &&
+                                depthFile.write(
+                                    reinterpret_cast<const char *>(
+                                        normalizedDepth.constData()),
+                                    qsizetype(normalizedDepth.size()) *
+                                        qsizetype(sizeof(float))) ==
+                                    qsizetype(normalizedDepth.size()) *
+                                        qsizetype(sizeof(float));
+                        }
                         int changedPixels = 0;
                         for (int y = 0; y < image.height(); ++y) {
                             for (int x = 0; x < image.width(); ++x) {
@@ -1702,6 +1754,7 @@ int main(int argc, char *argv[])
                         return check(
                             captureSucceeded &&
                                 linearCaptureSaved &&
+                                depthCaptureSaved &&
                                 completedSamples == expectedSamples &&
                                 changedPixels > 4000 && image.save(capturePath),
                             label);

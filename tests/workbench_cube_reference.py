@@ -6,6 +6,7 @@ Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
 
 import argparse
+import os
 import sys
 
 import bpy
@@ -25,7 +26,7 @@ def arguments():
     )
     parser.add_argument(
         "--linear-output",
-        help="also write the final Workbench Combined pass to a scene-linear OpenEXR",
+        help="also write final scene-linear Combined and Z passes to a multilayer OpenEXR",
     )
     return parser.parse_args(argv)
 
@@ -77,13 +78,42 @@ def main():
     bpy.ops.render.render(write_still=True)
 
     if args.linear_output:
-        # Blender's direct OpenEXR output keeps the Workbench Combined pass
-        # scene-linear; PNG above is the separate AgX/display-referred result.
-        scene.render.image_settings.file_format = "OPEN_EXR"
-        scene.render.image_settings.color_mode = "RGBA"
-        scene.render.image_settings.color_depth = "32"
-        scene.render.filepath = args.linear_output
-        bpy.ops.render.render(write_still=True)
+        # The background Workbench render result is not exposed as a populated
+        # bpy.data.images datablock, so route the post-AA render passes through
+        # a 32-bit multilayer EXR File Output node instead.
+        scene.view_layers[0].use_pass_z = True
+        composite = bpy.data.node_groups.new(
+            "Workbench Linear Capture", "CompositorNodeTree"
+        )
+        composite.interface.new_socket(
+            name="Image", in_out="OUTPUT", socket_type="NodeSocketColor"
+        )
+        render_layers = composite.nodes.new("CompositorNodeRLayers")
+        group_output = composite.nodes.new("NodeGroupOutput")
+        file_output = composite.nodes.new("CompositorNodeOutputFile")
+        output_directory, output_name = os.path.split(
+            os.path.abspath(args.linear_output)
+        )
+        output_stem, _ = os.path.splitext(output_name)
+        file_output.directory = output_directory
+        file_output.file_name = output_stem
+        file_output.format.file_format = "OPEN_EXR_MULTILAYER"
+        file_output.format.color_depth = "32"
+        file_output.save_as_render = False
+        file_output.file_output_items.new("RGBA", "Combined")
+        file_output.file_output_items.new("FLOAT", "Depth")
+        composite.links.new(
+            render_layers.outputs["Image"], group_output.inputs["Image"]
+        )
+        composite.links.new(
+            render_layers.outputs["Image"], file_output.inputs["Combined"]
+        )
+        composite.links.new(
+            render_layers.outputs["Depth"], file_output.inputs["Depth"]
+        )
+        scene.compositing_node_group = composite
+        scene.render.use_compositing = True
+        bpy.ops.render.render(write_still=False)
 
 
 if __name__ == "__main__":

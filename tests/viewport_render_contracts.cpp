@@ -518,6 +518,41 @@ int main(int argc, char *argv[])
     passed &= check(transparentShadowTextureSaved &&
                         cutoutShadowImage == receiverOnlyImage,
         "QPainter Workbench alpha-cutout texture pixels must not cast software shadows");
+    const auto alphaPayload = [](float alpha) {
+        const std::array<float, 4> texel{0.5f, 0.5f, 0.5f, alpha};
+        return QString::fromLatin1(QByteArray(
+            reinterpret_cast<const char *>(texel.data()),
+            static_cast<qsizetype>(sizeof(texel))).toBase64());
+    };
+    QVector<ViewportRenderObject> thresholdShadowObjects{
+        makeShadowQuad(23, 4, 4, 124, 124, 0.0),
+        makeShadowQuad(24, 48, 48, 80, 80, 2.0)};
+    thresholdShadowObjects[1].hasWorkbenchMaterial = true;
+    thresholdShadowObjects[1].workbenchMaterial.textureImageAlphaMode =
+        QStringLiteral("STRAIGHT");
+    thresholdShadowObjects[1].workbenchMaterial.textureImageInterpolation =
+        QStringLiteral("Closest");
+    thresholdShadowObjects[1].workbenchMaterial.textureImageSceneLinearFloatWidth = 1;
+    thresholdShadowObjects[1].workbenchMaterial.textureImageSceneLinearFloatHeight = 1;
+    thresholdShadowObjects[1].workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
+        alphaPayload(0.1f);
+    QImage thresholdShadowImage(orthographicDofSize,
+                                QImage::Format_ARGB32_Premultiplied);
+    thresholdShadowImage.fill(Qt::white);
+    applyRasterWorkbenchEffects(&thresholdShadowImage, thresholdShadowObjects,
+        orthographicDofTransform, orthographicDofSize, 1.0,
+        cutoutShadowSettings);
+    thresholdShadowObjects[1].workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
+        alphaPayload(std::nextafter(0.1f, 0.0f));
+    QImage belowThresholdShadowImage(orthographicDofSize,
+                                     QImage::Format_ARGB32_Premultiplied);
+    belowThresholdShadowImage.fill(Qt::white);
+    applyRasterWorkbenchEffects(&belowThresholdShadowImage,
+        thresholdShadowObjects, orthographicDofTransform,
+        orthographicDofSize, 1.0, cutoutShadowSettings);
+    passed &= check(thresholdShadowImage != receiverOnlyImage &&
+                        belowThresholdShadowImage == receiverOnlyImage,
+        "QPainter shadow alpha must retain a sample exactly at 0.1 and discard the next float below it");
     ViewportTransform translatedOrthographicDofTransform =
         orthographicDofTransform;
     const Point3D translatedDofTarget{
@@ -2100,6 +2135,35 @@ int main(int argc, char *argv[])
             lowAlphaFloatIgnored.pixelColor(80, 80).alpha() > 0 &&
             lowAlphaFloatChannelPacked.pixelColor(80, 80).alpha() > 0,
         "QPainter float-texture cutoff must be bypassed for Ignore and Channel Packed alpha modes");
+
+    lowAlphaFloatMaterial.textureImageAlphaMode = QStringLiteral("STRAIGHT");
+    const std::array<float, 8> exactThresholdTexels{
+        0.7f, 0.2f, 0.1f, 0.1f,
+        0.2f, 0.7f, 0.1f, 0.1f};
+    const QByteArray exactThresholdBytes(
+        reinterpret_cast<const char *>(exactThresholdTexels.data()),
+        static_cast<qsizetype>(sizeof(exactThresholdTexels)));
+    lowAlphaFloatMaterial.textureImageSceneLinearFloatDataBase64 =
+        QString::fromLatin1(exactThresholdBytes.toBase64());
+    const QImage exactThresholdColor = renderColorMesh(
+        textureSettings, {lowAlphaFloatMaterial});
+    const std::array<float, 8> belowThresholdTexels{
+        0.7f, 0.2f, 0.1f, std::nextafter(0.1f, 0.0f),
+        0.2f, 0.7f, 0.1f, std::nextafter(0.1f, 0.0f)};
+    const QByteArray belowThresholdBytes(
+        reinterpret_cast<const char *>(belowThresholdTexels.data()),
+        static_cast<qsizetype>(sizeof(belowThresholdTexels)));
+    lowAlphaFloatMaterial.textureImageSceneLinearFloatDataBase64 =
+        QString::fromLatin1(belowThresholdBytes.toBase64());
+    const QImage belowThresholdColor = renderColorMesh(
+        textureSettings, {lowAlphaFloatMaterial});
+    passed &= check(exactThresholdColor.pixelColor(80, 80).alpha() > 0 &&
+                        belowThresholdColor.pixelColor(80, 80).alpha() == 0,
+        "QPainter color alpha must retain a sample exactly at 0.1 and discard the next float below it");
+    if (application.arguments().contains(
+            QStringLiteral("--texture-alpha-cutoff-only"))) {
+        return passed ? 0 : 1;
+    }
 
     const QSize annotationSize(128, 128);
     ViewportTransform annotationTransform;

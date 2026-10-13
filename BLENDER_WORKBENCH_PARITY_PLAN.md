@@ -1304,7 +1304,13 @@ depth domain. Visual depth comparison remains open.
   explains most of the mismatch; residual mask coverage remains open. The
   earlier proposed background-offset sign change remains reverted: source
   review confirms `cavityViewPosition` has Blender's negative-forward depth
-  sign.
+  sign. A follow-up comparison of the remaining 3,847-pixel mask XOR against
+  Blender's cavity shader, sample generation, and 64×64 jitter construction
+  found no further semantic mismatch for the tested projection. Do not alter
+  the cavity equation based on the mask metric alone; the next useful
+  diagnostic is to compare cavity and edge amounts plus each sampled
+  depth/normal at mismatch pixels, separating prepass alignment from numerical
+  threshold differences.
 - The first transparent overlap capture isolated a resolve-coordinate bug, not
   a geometry or OIT accumulation bug. The weighted resolve used an oversized
   fullscreen triangle with `gl_Position = p * 2 - 1` but `vUv = p * 0.5`, so

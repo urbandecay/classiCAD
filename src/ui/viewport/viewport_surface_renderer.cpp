@@ -7059,6 +7059,10 @@ bool ViewportSurfaceRenderer::draw(
                 const DrawRange &draw = ranges_[range.rangeIndex];
                 drawRange(draw, false, false, draw.first, draw.count);
             }
+            if (passReport != nullptr) {
+                passReport->populatedAttachments |=
+                    ViewportRenderTargets::CurrentSampleColor;
+            }
 
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
                               static_cast<GLuint>(previousDrawFramebuffer));
@@ -7124,6 +7128,10 @@ bool ViewportSurfaceRenderer::draw(
                 if (passReport != nullptr) {
                     passReport->markPassCompleted(
                         ViewportRenderPass::TransparentColor);
+                    if (!fallbackTransparentRanges.isEmpty()) {
+                        passReport->populatedAttachments |=
+                            ViewportRenderTargets::CurrentSampleColor;
+                    }
                 }
                 return;
             }
@@ -7293,6 +7301,8 @@ bool ViewportSurfaceRenderer::draw(
                 // may complete later in the same color stage.
                 passReport->markPassCompleted(
                     ViewportRenderPass::TransparentResolve);
+                passReport->populatedAttachments |=
+                    ViewportRenderTargets::CurrentSampleColor;
             }
             if (frontWeightedOitAvailable) {
                 // Blender resolves regular transparency first, then performs

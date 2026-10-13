@@ -1631,14 +1631,28 @@ depth domain. Visual depth comparison remains open.
 ### Shared render-pass color attachment reporting (2026-10-13)
 
 - The shared named pass report now marks `CurrentSampleColor` when opaque
-  ranges draw, when in-front color merges into the current sample, and when the
-  deferred opaque resolve succeeds. The isolated in-front color buffer is
-  reported as `FrontColor`. This makes the attachment contract describe the
-  actual color outputs consumed by the live and offscreen AA paths. Focused
-  capture assertions cover opaque, deferred, and in-front color reporting.
+  ranges draw, when regular or in-front transparency resolves into the current
+  sample (including sorted fallbacks), when in-front opaque color merges, and
+  when the deferred opaque resolve succeeds. The isolated in-front color
+  buffer is reported as `FrontColor`. This makes the attachment contract
+  describe the actual color outputs consumed by the live and offscreen AA
+  paths. Focused capture assertions cover opaque, deferred, transparent, and
+  in-front color reporting.
   The C++ build succeeds, but running the capture executable with Qt's
   offscreen platform cannot create the required OpenGL 3.3 context, so those
   runtime assertions remain unverified here.
+
+### QPainter X-Ray outline behavior (2026-10-13)
+
+- The QPainter effects path no longer exits for X-Ray. It preserves the object
+  outline while suppressing cavity, shadow, and depth-of-field work, matching
+  Blender 5.2.2's X-Ray state setup and later outline pass. A focused CPU
+  contract checks that an X-Ray surface still produces its configured outline;
+  that assertion passed in the offscreen contract run. The test later exited
+  at its existing OpenGL context requirement for the NURBS-solid display case.
+  Blender references: [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc#L1240-L1258),
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L2554-L2595),
+  and [`workbench_effect_outline.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_outline.cc#L315-L367).
 
 ### Render-result visibility (2026-10-13)
 

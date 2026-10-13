@@ -233,6 +233,12 @@ int main(int argc, char **argv)
                      ViewportRenderTargets::CurrentSampleColor) != 0,
                     "deferred material resolve must report the current sample color attachment");
             }
+            if (scenePass.completed(ViewportRenderPass::TransparentResolve)) {
+                passed &= check(
+                    (scenePass.report.populatedAttachments &
+                     ViewportRenderTargets::CurrentSampleColor) != 0,
+                    "transparent resolve must report the current sample color attachment");
+            }
             if (inFrontFixture) {
                 passed &= check(
                     (scenePass.report.populatedAttachments &

@@ -1253,6 +1253,14 @@ depth domain. Visual depth comparison remains open.
   8-unit camera produced an invalid OIT color comparison despite matching
   screen-space bounds. This controlled scene-camera comparison isolates OIT
   depth weighting; it does not capture a live Blender `RegionView3D` viewport.
+- The offscreen AA-off presentation contract now exercises the final scene
+  resolve with a scene-linear World color, an sRGB viewport background, a
+  missing World background, and transparent film. It checks the AgX display
+  values for opaque World/viewport backgrounds and transparent black for the
+  two alpha-preserving cases. A float premultiplied sample also checks that
+  AgX presentation unpremultiplies before the nonlinear transform and returns
+  the display result to premultiplied RGBA. These cases validate the resolve
+  boundary without opening the application window.
 - At 640×480 with the same cube scene, AA-off references, and an RGB change
   threshold of 2, shadow masks match exactly: 111,480 changed pixels on each
   renderer, XOR 0, IoU 1.0. The per-pixel effect-delta MAE over the union of

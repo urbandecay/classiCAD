@@ -1026,6 +1026,133 @@ int main(int argc, char *argv[])
                                                   2),
                                     "GPU Theme background shader must render known Single, top-to-bottom Linear, and center-to-edge Radial pixels");
 
+                    const auto renderPresentedBackground = [&] (
+                        bool worldBackground, bool drawBackground,
+                        bool premultipliedAlpha, const char *historyKey) {
+                        if (!framebuffer.bind()) return QColor();
+                        functions.glViewport(0, 0, glSize.width(),
+                                             glSize.height());
+                        ViewportAaRenderer presenter;
+                        presenter.setMode(static_cast<int>(
+                            ViewportAntiAliasingMode::Off));
+                        ViewportShadingSettings displaySettings;
+                        presenter.setDisplayTransform(displaySettings, true,
+                                                      premultipliedAlpha);
+                        if (!presenter.beginSceneSample(
+                                glSize, 1.0, gpuTransform,
+                                QByteArray(historyKey), false, true)) {
+                            return QColor();
+                        }
+                        bool backgroundRendered = true;
+                        if (drawBackground) {
+                            backgroundRendered = worldBackground
+                                ? themeBackgroundRenderer
+                                      .renderBackgroundToCurrentFramebuffer(
+                                          glSize, 1.0,
+                                          QVector3D(0.17f, 0.09f, 0.035f))
+                                : themeBackgroundRenderer
+                                      .renderBackgroundToCurrentFramebuffer(
+                                          glSize, 1.0,
+                                          QColor(75, 115, 165), true);
+                        }
+                        if (!backgroundRendered) return QColor();
+                        presenter.finishSceneSample();
+                        functions.glFinish();
+                        return framebuffer.toImage().pixelColor(
+                            glSize.width() / 2, glSize.height() / 2);
+                    };
+                    const QColor resolvedWorldBackground =
+                        renderPresentedBackground(
+                            true, true, false, "world-background-resolve");
+                    const QColor resolvedViewportBackground =
+                        renderPresentedBackground(
+                            false, true, false,
+                            "viewport-background-resolve");
+                    const QColor resolvedMissingWorldBackground =
+                        renderPresentedBackground(
+                            true, false, true,
+                            "missing-world-background-resolve");
+                    const QColor resolvedTransparentFilm =
+                        renderPresentedBackground(
+                            false, false, true,
+                            "transparent-film-background-resolve");
+                    framebuffer.bind();
+                    functions.glViewport(0, 0, glSize.width(),
+                                         glSize.height());
+                    ViewportAaRenderer premultipliedPresenter;
+                    premultipliedPresenter.setMode(static_cast<int>(
+                        ViewportAntiAliasingMode::Off));
+                    ViewportShadingSettings agxResolveSettings;
+                    premultipliedPresenter.setDisplayTransform(
+                        agxResolveSettings, true, true);
+                    std::array<uchar, 4> resolvedPremultipliedAgx{};
+                    bool premultipliedAgxCaptureValid = false;
+                    if (premultipliedPresenter.beginSceneSample(
+                            glSize, 1.0, gpuTransform,
+                            QByteArrayLiteral("premultiplied-agx-resolve"),
+                            false, true)) {
+                        const GLfloat premultipliedColor[4] = {
+                            0.09f, 0.045f, 0.0225f, 0.5f};
+                        functions.glClearBufferfv(GL_COLOR, 0,
+                                                  premultipliedColor);
+                        premultipliedPresenter.finishSceneSample();
+                        functions.glFinish();
+                        premultipliedAgxCaptureValid = framebuffer.bind();
+                        functions.glReadPixels(
+                            glSize.width() / 2, glSize.height() / 2, 1, 1,
+                            GL_RGBA, GL_UNSIGNED_BYTE,
+                            resolvedPremultipliedAgx.data());
+                    }
+                    const QVector3D expectedWorldDisplay =
+                        workbenchSceneLinearToAgxSrgb(
+                            QVector3D(0.17f, 0.09f, 0.035f));
+                    const QVector3D viewportEncoded(75.0f / 255.0f,
+                                                    115.0f / 255.0f,
+                                                    165.0f / 255.0f);
+                    const QVector3D expectedViewportDisplay =
+                        workbenchSceneLinearToAgxSrgb(
+                            workbenchSrgbToSceneLinear(viewportEncoded));
+                    const auto matchesDisplayColor = [](
+                        const QColor &actual, const QVector3D &expected) {
+                        return actual.isValid() &&
+                               std::abs(actual.red() -
+                                        qRound(expected.x() * 255.0f)) <= 2 &&
+                               std::abs(actual.green() -
+                                        qRound(expected.y() * 255.0f)) <= 2 &&
+                               std::abs(actual.blue() -
+                                        qRound(expected.z() * 255.0f)) <= 2 &&
+                               actual.alpha() == 255;
+                    };
+                    const auto isTransparentBlack = [](const QColor &pixel) {
+                        return pixel.isValid() && pixel.red() <= 1 &&
+                               pixel.green() <= 1 && pixel.blue() <= 1 &&
+                               pixel.alpha() == 0;
+                    };
+                    const QVector3D expectedPremultipliedAgx =
+                        workbenchSceneLinearToAgxSrgb(
+                            QVector3D(0.18f, 0.09f, 0.045f)) * 0.5f;
+                    passed &= check(
+                        matchesDisplayColor(resolvedWorldBackground,
+                                            expectedWorldDisplay) &&
+                            matchesDisplayColor(resolvedViewportBackground,
+                                                expectedViewportDisplay) &&
+                            isTransparentBlack(resolvedMissingWorldBackground) &&
+                            isTransparentBlack(resolvedTransparentFilm),
+                        "AA-off Workbench presentation must resolve scene-linear World and sRGB viewport backgrounds, while missing-World and transparent-film outputs retain transparent alpha");
+                    passed &= check(
+                            premultipliedAgxCaptureValid &&
+                            std::abs(int(resolvedPremultipliedAgx[0]) -
+                                     qRound(expectedPremultipliedAgx.x() *
+                                            255.0f)) <= 2 &&
+                            std::abs(int(resolvedPremultipliedAgx[1]) -
+                                     qRound(expectedPremultipliedAgx.y() *
+                                            255.0f)) <= 2 &&
+                            std::abs(int(resolvedPremultipliedAgx[2]) -
+                                     qRound(expectedPremultipliedAgx.z() *
+                                            255.0f)) <= 2 &&
+                            resolvedPremultipliedAgx[3] == 127,
+                        "AgX presentation must unpremultiply scene-linear transparent color before the transform and restore its alpha afterward");
+
                     struct DitherCapture {
                         QImage image;
                         std::array<uchar, 4> bottomLeftPixel{};

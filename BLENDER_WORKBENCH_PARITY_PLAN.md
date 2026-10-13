@@ -1628,6 +1628,18 @@ depth domain. Visual depth comparison remains open.
   camera-shift options are diagnostic tooling; ordinary scene rendering is
   unchanged when capture options are unset.
 
+### Shared render-pass color attachment reporting (2026-10-13)
+
+- The shared named pass report now marks `CurrentSampleColor` when opaque
+  ranges draw, when in-front color merges into the current sample, and when the
+  deferred opaque resolve succeeds. The isolated in-front color buffer is
+  reported as `FrontColor`. This makes the attachment contract describe the
+  actual color outputs consumed by the live and offscreen AA paths. Focused
+  capture assertions cover opaque, deferred, and in-front color reporting.
+  The C++ build succeeds, but running the capture executable with Qt's
+  offscreen platform cannot create the required OpenGL 3.3 context, so those
+  runtime assertions remain unverified here.
+
 ### Render-result visibility (2026-10-13)
 
 - Offscreen Workbench result assembly now uses a render-specific visibility

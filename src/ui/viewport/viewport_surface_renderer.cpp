@@ -7474,6 +7474,8 @@ bool ViewportSurfaceRenderer::draw(
                 if (passReport != nullptr && !opaqueRangeIndices.isEmpty()) {
                     passReport->markPassCompleted(
                         ViewportRenderPass::OpaqueColor);
+                    passReport->populatedAttachments |=
+                        ViewportRenderTargets::CurrentSampleColor;
                     if (writeMaterialData &&
                         frontOpaqueRangeIndices.isEmpty()) {
                         passReport->populatedAttachments |=
@@ -7498,6 +7500,8 @@ bool ViewportSurfaceRenderer::draw(
             if (passReport != nullptr && !opaqueRangeIndices.isEmpty()) {
                 passReport->markPassCompleted(
                     ViewportRenderPass::OpaqueColor);
+                passReport->populatedAttachments |=
+                    ViewportRenderTargets::CurrentSampleColor;
                 if (writeMaterialData &&
                     frontOpaqueRangeIndices.isEmpty()) {
                     passReport->populatedAttachments |=
@@ -7648,7 +7652,8 @@ bool ViewportSurfaceRenderer::draw(
                     passReport->markPassCompleted(
                         ViewportRenderPass::FrontOpaqueColor);
                     passReport->populatedAttachments |=
-                        ViewportRenderTargets::FrontColor;
+                        ViewportRenderTargets::FrontColor |
+                        ViewportRenderTargets::CurrentSampleColor;
                     if (frontOpaqueMaterialMerged) {
                         passReport->populatedAttachments |=
                             ViewportRenderTargets::MaterialData;
@@ -7699,6 +7704,8 @@ bool ViewportSurfaceRenderer::draw(
             if (passReport != nullptr) {
                 passReport->markPassCompleted(
                     ViewportRenderPass::OpaqueDeferredResolve);
+                passReport->populatedAttachments |=
+                    ViewportRenderTargets::CurrentSampleColor;
             }
         };
         if (shadowVolumesAvailable) {

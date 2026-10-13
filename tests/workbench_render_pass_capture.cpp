@@ -222,7 +222,22 @@ int main(int argc, char **argv)
             passed &= check(scenePass.rendered &&
                                 scenePass.completed(ViewportRenderPass::OpaqueColor),
                             "render-pass capture must complete the production opaque-color pass");
+            passed &= check(
+                (scenePass.report.populatedAttachments &
+                 ViewportRenderTargets::CurrentSampleColor) != 0,
+                "opaque rendering must report the current sample color attachment");
+            if (scenePass.completed(
+                    ViewportRenderPass::OpaqueDeferredResolve)) {
+                passed &= check(
+                    (scenePass.report.populatedAttachments &
+                     ViewportRenderTargets::CurrentSampleColor) != 0,
+                    "deferred material resolve must report the current sample color attachment");
+            }
             if (inFrontFixture) {
+                passed &= check(
+                    (scenePass.report.populatedAttachments &
+                     ViewportRenderTargets::FrontColor) != 0,
+                    "in-front rendering must report its front color attachment");
                 passed &= check(
                     scenePass.completed(
                         ViewportRenderPass::TransparentAccumulation) &&

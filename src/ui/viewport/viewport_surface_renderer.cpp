@@ -1458,6 +1458,15 @@ bool ViewportSurfaceRenderer::initialize()
                 } else if (uLightingMode == 1) {
                     materialPayload = gl_FrontFacing ? 1.0 : -1.0;
                 }
+                if (uEditModeSelected) {
+                    if (uLightingMode == 0) {
+                        materialPayload += 256.0;
+                    } else if (uLightingMode == 1) {
+                        materialPayload *= 3.0;
+                    } else {
+                        materialPayload = 1.0;
+                    }
+                }
                 secondaryColor = uWriteMaterialData
                     ? vec4(baseColor, materialPayload)
                     : vec4(0.0);
@@ -1585,6 +1594,8 @@ bool ViewportSurfaceRenderer::initialize()
         uniform int uCavitySampleEnd;
         uniform int uCavitySamplesPerIteration;
         uniform float uCavitySampleCountInv;
+        uniform vec3 uEditSelectionColor;
+        uniform float uEditSelectionMix;
         uniform bool uPerspective;
         uniform bool uUseSpecular;
         uniform mat4 uInverseViewProjection;
@@ -1618,6 +1629,14 @@ bool ViewportSurfaceRenderer::initialize()
             float f = dot(fenc, fenc);
             float g = sqrt(1.0 - f / 4.0);
             return vec3(fenc * g, 1.0 - f / 2.0);
+        }
+
+        vec3 srgbToDisplayLinear(vec3 color)
+        {
+            color = max(color, vec3(0.0));
+            vec3 low = color / 12.92;
+            vec3 high = pow((color + 0.055) / 1.055, vec3(2.4));
+            return mix(high, low, lessThanEqual(color, vec3(0.04045)));
         }
 
         vec2 workbenchMatcapUv(vec3 incident, vec3 normal)
@@ -1848,6 +1867,7 @@ bool ViewportSurfaceRenderer::initialize()
                 vec3 worldPosition = worldH.xyz / worldH.w;
                 vec3 normal = decodeWorkbenchNormal(
                     texelFetch(uViewNormal, pixel, 0).xy);
+            bool selected = false;
                 vec3 incident = vec3(0.0, 0.0, 1.0);
                 if (uPerspective) {
                     vec3 incidentWorld = normalize(uCameraPosition -
@@ -1857,11 +1877,14 @@ bool ViewportSurfaceRenderer::initialize()
                                               dot(incidentWorld, uViewFacing)));
                 }
                 int packed = int(material.a);
+                selected = (packed & 256) != 0;
+                packed &= 255;
                 float roughness = float(packed & 31) * (1.0 / 31.0);
                 float metallic = float((packed >> 5) & 7) * (1.0 / 7.0);
                 color = workbenchStudioLighting(material.rgb, roughness,
                                                 metallic, normal, incident);
             } else if (uMatcapLighting && uMatcapAvailable) {
+                selected = abs(material.a) > 1.5;
                 vec2 uv = workbenchMatcapUv(incident, normal);
                 if (uMatcapFlipX) {
                     uv.x = 1.0 - uv.x;
@@ -1871,6 +1894,8 @@ bool ViewportSurfaceRenderer::initialize()
                     ? texture(uMatcapTexture, vec3(uv, 1.0)).rgb
                     : vec3(0.0);
                 color = diffuse * material.rgb + specular;
+            } else if (!uStudioLighting && !uMatcapLighting) {
+                selected = material.a > 0.5;
             }
             if (uUseCavity) {
                 vec2 screenCoordinate = (vec2(pixel) + 0.5) /
@@ -1893,6 +1918,11 @@ bool ViewportSurfaceRenderer::initialize()
                 color *= clamp((1.0 - cavityAmount) * (1.0 + edgeAmount) *
                                    (1.0 + curvature),
                                0.0, 4.0);
+            }
+            if (selected) {
+                color = mix(color,
+                            srgbToDisplayLinear(uEditSelectionColor),
+                            uEditSelectionMix);
             }
             fragmentColor = vec4(color, 1.0);
         }
@@ -3535,6 +3565,14 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
                                                     matcapLighting);
         flatMaterialResolveProgram_.setUniformValue("uMatcapFlipX",
                                                     settings.matcapFlipX);
+        const QColor editSelectionColor(QStringLiteral("#ffa300"));
+        flatMaterialResolveProgram_.setUniformValue(
+            "uEditSelectionColor",
+            workbenchSrgbToSceneLinear(QVector3D(
+                editSelectionColor.redF(), editSelectionColor.greenF(),
+                editSelectionColor.blueF())));
+        flatMaterialResolveProgram_.setUniformValue("uEditSelectionMix",
+                                                    51.0f / 255.0f);
         const bool useSsao = cavityRequested && ssaoEnabled &&
                              cavityDepthReady;
         const bool useScreenCurvature = cavityRequested &&
@@ -6064,15 +6102,12 @@ bool ViewportSurfaceRenderer::draw(
         worldSsaoRequested &&
         ensureCavityJitterTexture(cavityTotalSampleCount);
     const bool ssaoEnabled = worldSsaoRequested && ssaoJitterReady;
-    const bool hasSelectedRange = std::any_of(
-        ranges_.cbegin(), ranges_.cend(),
-        [](const DrawRange &range) { return range.selected; });
     const bool deferredNormalPrepassRequested = sceneLinearOutput &&
         settings.mode == ViewportShadingMode::Solid &&
         (settings.lightingMode == ViewportLightingMode::Studio ||
          settings.lightingMode == ViewportLightingMode::MatCap) &&
         !previewOverlay && !selectionOverlay && !settings.xrayEnabled() &&
-        !settings.shadows && !settings.cavity && !hasSelectedRange &&
+        !settings.shadows && !settings.cavity &&
         sharedTargets != nullptr && sharedTargets->materialDataTexture != 0;
     const bool sharedPrepassRequested = sharedTargets != nullptr &&
         (cavityRequested || (outlineRequested && !settings.xrayEnabled()) ||
@@ -7401,7 +7436,7 @@ bool ViewportSurfaceRenderer::draw(
              settings.lightingMode == ViewportLightingMode::MatCap) &&
             !previewOverlay && !selectionOverlay &&
             !settings.xrayEnabled() && !settings.shadows &&
-            !hasSelectedRange && sharedTargets != nullptr &&
+            sharedTargets != nullptr &&
             sharedTargets->materialDataTexture != 0 &&
             sharedTargets->pixelSize == transparencyPixelSize;
         const bool studioDeferredResolve =

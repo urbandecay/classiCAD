@@ -10,6 +10,7 @@
 #include "core/tool_id.h"
 #include "services/viewport/viewport_transform.h"
 #include "viewport/blender_grid_appearance.h"
+#include "viewport/viewport_theme_background.h"
 #include "viewport/workbench_render_result.h"
 
 #include <QString>
@@ -110,6 +111,9 @@ public:
     virtual bool setDocumentSettings(const DocumentSettings &settings) = 0;
     virtual BlenderGridAppearance gridAppearance() const = 0;
     virtual void setGridAppearance(const BlenderGridAppearance &appearance) = 0;
+    virtual ViewportThemeBackground themeBackground() const = 0;
+    virtual void setThemeBackground(
+        const ViewportThemeBackground &background) = 0;
     virtual ViewportCameraPreferences cameraPreferences() const = 0;
     virtual bool setCameraPreferences(const ViewportCameraPreferences &preferences) = 0;
     virtual ViewportNavigationPreferences navigationPreferences() const = 0;

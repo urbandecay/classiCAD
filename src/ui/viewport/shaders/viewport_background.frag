@@ -7,6 +7,7 @@ uniform vec3 uHighGradient;
 uniform vec3 uGradient;
 uniform int uSceneLinearOutput;
 uniform int uColorsSceneLinear;
+uniform int uGradientStyle;
 
 out vec4 fragmentColor;
 
@@ -26,9 +27,11 @@ void main()
 {
     vec2 screenUv = gl_FragCoord.xy / max(uViewportSize, vec2(1.0));
     vec2 centeredUv = screenUv - 0.5;
-    float gradientFactor = clamp(length(centeredUv) * 1.41421356237,
-                                 0.0,
-                                 1.0);
+    float gradientFactor = uGradientStyle == 0
+        ? 0.0
+        : uGradientStyle == 1
+            ? clamp(1.0 - screenUv.y, 0.0, 1.0)
+            : clamp(length(centeredUv) * 1.41421356237, 0.0, 1.0);
 
     if (uSceneLinearOutput != 0) {
         vec3 highLinear = uHighGradient;

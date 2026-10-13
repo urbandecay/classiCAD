@@ -99,6 +99,28 @@ StoredPreferences loadStoredPreferences()
     }
     dialog.gridAppearance = gridAppearance;
 
+    ViewportThemeBackground themeBackground;
+    const int themeBackgroundStyle = settings.value(
+        QStringLiteral("viewport/themeBackground/style"),
+        static_cast<int>(themeBackground.style)).toInt();
+    if (themeBackgroundStyle >= static_cast<int>(
+            ViewportThemeBackgroundStyle::SingleColor) &&
+        themeBackgroundStyle <= static_cast<int>(
+            ViewportThemeBackgroundStyle::Radial)) {
+        themeBackground.style = static_cast<ViewportThemeBackgroundStyle>(
+            themeBackgroundStyle);
+    }
+    themeBackground.highColor = readGridColor(
+        settings, QStringLiteral("viewport/themeBackground/highColor"),
+        themeBackground.highColor);
+    themeBackground.lowColor = readGridColor(
+        settings, QStringLiteral("viewport/themeBackground/lowColor"),
+        themeBackground.lowColor);
+    if (!isValidViewportThemeBackground(themeBackground)) {
+        themeBackground = ViewportThemeBackground{};
+    }
+    dialog.themeBackground = themeBackground;
+
     ViewportCameraPreferences camera;
     camera.focalLengthMillimeters = settings.value(
         QStringLiteral("viewport/focalLengthMillimeters"),
@@ -268,6 +290,20 @@ void saveGridAppearancePreference(const BlenderGridAppearance &appearance)
         settings.setValue(QStringLiteral("viewport/gridOpacity"), appearance.opacity);
         settings.setValue(QStringLiteral("viewport/gridStipple"),
                           appearance.lowAlphaStipple);
+    });
+}
+
+void saveThemeBackgroundPreference(
+    const ViewportThemeBackground &background)
+{
+    if (!isValidViewportThemeBackground(background)) return;
+    writeSettings([&background](QSettings &settings) {
+        settings.setValue(QStringLiteral("viewport/themeBackground/style"),
+                          static_cast<int>(background.style));
+        settings.setValue(QStringLiteral("viewport/themeBackground/highColor"),
+                          background.highColor.name(QColor::HexRgb));
+        settings.setValue(QStringLiteral("viewport/themeBackground/lowColor"),
+                          background.lowColor.name(QColor::HexRgb));
     });
 }
 

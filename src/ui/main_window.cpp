@@ -2486,6 +2486,7 @@ private:
         viewport_->setSnapLabelsVisible(preferences.snapLabelsVisible);
         viewport_->setSmoothCurveDisplay(preferences.smoothCurveDisplay);
         viewport_->setGridAppearance(preferences.gridAppearance);
+        viewport_->setThemeBackground(preferences.themeBackground);
         if (!viewport_->setCameraPreferences(preferences.cameraPreferences)) {
             viewport_->setCameraPreferences(ViewportCameraPreferences{});
         }
@@ -2533,6 +2534,7 @@ private:
         PreferencesDialogValues initialValues = stored.dialogValues;
         initialValues.panButton = viewport_->panButton();
         initialValues.gridAppearance = viewport_->gridAppearance();
+        initialValues.themeBackground = viewport_->themeBackground();
         initialValues.cameraPreferences = viewport_->cameraPreferences();
         initialValues.navigationPreferences = viewport_->navigationPreferences();
         initialValues.rotateToolPreferences = viewport_->rotateToolPreferences();
@@ -2568,6 +2570,7 @@ private:
         applySmoothCurveDisplay(selectedValues.smoothCurveDisplay, true);
         applyArchitecturalDimensionFont(selectedValues.architecturalDimensionFont, true);
         applyGridAppearance(selectedValues.gridAppearance, true);
+        applyThemeBackground(selectedValues.themeBackground, true);
         applyCameraPreferences(selectedValues.cameraPreferences, true);
         applyNavigationPreferences(selectedValues.navigationPreferences, true);
         applyRotateToolPreferences(selectedValues.rotateToolPreferences, true);
@@ -2632,6 +2635,17 @@ private:
         if (save) {
             saveGridAppearancePreference(appearance);
         }
+    }
+
+    void applyThemeBackground(const ViewportThemeBackground &background,
+                              bool save)
+    {
+        if (viewport_ == nullptr ||
+            !isValidViewportThemeBackground(background)) {
+            return;
+        }
+        viewport_->setThemeBackground(background);
+        if (save) saveThemeBackgroundPreference(background);
     }
 
     void applyCameraPreferences(const ViewportCameraPreferences &preferences, bool save)

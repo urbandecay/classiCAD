@@ -29,6 +29,8 @@ void saveSnapLabelsPreference(bool visible);
 void saveSmoothCurveDisplayPreference(bool enabled);
 void saveArchitecturalDimensionFontPreference(bool enabled);
 void saveGridAppearancePreference(const BlenderGridAppearance &appearance);
+void saveThemeBackgroundPreference(
+    const ViewportThemeBackground &background);
 void saveCameraPreferences(const ViewportCameraPreferences &preferences);
 void saveNavigationPreferences(const ViewportNavigationPreferences &preferences);
 void saveRotateToolPreferences(const RotateToolPreferences &preferences);

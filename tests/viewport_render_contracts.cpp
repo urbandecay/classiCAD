@@ -212,6 +212,40 @@ int main(int argc, char *argv[])
         QVector3D(0.0f, 0.0f, 1.0f));
     const QVector3D roundTripColor = workbenchSceneLinearToSrgb(
         workbenchSrgbToSceneLinear(QVector3D(0.2f, 0.5f, 0.8f)));
+    const ViewportThemeBackground pixelThemeBackground{
+        ViewportThemeBackgroundStyle::Radial,
+        QColor(200, 100, 50), QColor(20, 40, 60)};
+    const auto paintThemeCapture = [&](ViewportThemeBackgroundStyle style) {
+        QImage image(101, 101, QImage::Format_RGB32);
+        image.fill(Qt::black);
+        ViewportThemeBackground background = pixelThemeBackground;
+        background.style = style;
+        QPainter painter(&image);
+        paintViewportThemeBackground(painter, image.rect(), background);
+        painter.end();
+        return image;
+    };
+    const QImage singleThemeImage = paintThemeCapture(
+        ViewportThemeBackgroundStyle::SingleColor);
+    const QImage linearThemeImage = paintThemeCapture(
+        ViewportThemeBackgroundStyle::Linear);
+    const QImage radialThemeImage = paintThemeCapture(
+        ViewportThemeBackgroundStyle::Radial);
+    const QColor singleThemePixel = singleThemeImage.pixelColor(50, 50);
+    const QColor linearThemeTopPixel = linearThemeImage.pixelColor(50, 0);
+    const QColor linearThemeBottomPixel = linearThemeImage.pixelColor(50, 100);
+    const QColor radialThemeCenterPixel = radialThemeImage.pixelColor(50, 50);
+    const QColor radialThemeCornerPixel = radialThemeImage.pixelColor(0, 0);
+    passed &= check(singleThemePixel == pixelThemeBackground.lowColor &&
+                        std::abs(linearThemeTopPixel.red() - 200) <= 2 &&
+                        std::abs(linearThemeTopPixel.green() - 100) <= 2 &&
+                        std::abs(linearThemeBottomPixel.red() - 20) <= 2 &&
+                        std::abs(linearThemeBottomPixel.blue() - 60) <= 2 &&
+                        std::abs(radialThemeCenterPixel.red() - 200) <= 2 &&
+                        std::abs(radialThemeCenterPixel.blue() - 50) <= 2 &&
+                        radialThemeCornerPixel.red() < 30 &&
+                        radialThemeCornerPixel.blue() > 55,
+                    "QPainter Theme backgrounds must render known Single, top-to-bottom Linear, and center-to-edge Radial pixels");
     const QColor hdrWorldFallback = workbenchWorldBackgroundDisplayColor(
         QVector3D(1.0f, 0.25f, 0.04f), 1, 2.0, 1.0);
     passed &= check(hdrWorldFallback.red() == 255 &&
@@ -735,6 +769,78 @@ int main(int argc, char *argv[])
                 passed &= check(framebuffer.isValid(),
                                 "NURBS solid display test must allocate a depth framebuffer");
                 if (framebuffer.isValid()) {
+                    BlenderGridRenderer themeBackgroundRenderer;
+                    const auto renderThemeBackground = [&] (
+                        ViewportThemeBackgroundStyle style) {
+                        ViewportThemeBackground background = pixelThemeBackground;
+                        background.style = style;
+                        framebuffer.bind();
+                        functions.glViewport(0, 0, glSize.width(),
+                                            glSize.height());
+                        functions.glClear(GL_COLOR_BUFFER_BIT |
+                                          GL_DEPTH_BUFFER_BIT |
+                                          GL_STENCIL_BUFFER_BIT);
+                        const bool rendered =
+                            themeBackgroundRenderer
+                                .renderBackgroundToCurrentFramebuffer(
+                                    glSize, 1.0, background, false);
+                        functions.glFinish();
+                        struct Pixels {
+                            std::array<uchar, 4> bottomLeft{};
+                            std::array<uchar, 4> topLeft{};
+                            std::array<uchar, 4> center{};
+                            std::array<uchar, 4> bottomRight{};
+                            bool valid = false;
+                        } pixels;
+                        pixels.valid = rendered;
+                        const auto readPixel = [&](int x, int y,
+                                                   std::array<uchar, 4> *out) {
+                            functions.glReadPixels(x, y, 1, 1, GL_RGBA,
+                                                   GL_UNSIGNED_BYTE,
+                                                   out->data());
+                        };
+                        readPixel(0, 0, &pixels.bottomLeft);
+                        readPixel(0, glSize.height() - 1, &pixels.topLeft);
+                        readPixel(glSize.width() / 2, glSize.height() / 2,
+                                  &pixels.center);
+                        readPixel(glSize.width() - 1, 0,
+                                  &pixels.bottomRight);
+                        return pixels;
+                    };
+                    const auto singleGpuBackground = renderThemeBackground(
+                        ViewportThemeBackgroundStyle::SingleColor);
+                    const auto linearGpuBackground = renderThemeBackground(
+                        ViewportThemeBackgroundStyle::Linear);
+                    const auto radialGpuBackground = renderThemeBackground(
+                        ViewportThemeBackgroundStyle::Radial);
+                    const auto nearColor = [](const std::array<uchar, 4> &pixel,
+                                              const QColor &color,
+                                              int tolerance) {
+                        return std::abs(int(pixel[0]) - color.red()) <= tolerance &&
+                               std::abs(int(pixel[1]) - color.green()) <= tolerance &&
+                               std::abs(int(pixel[2]) - color.blue()) <= tolerance &&
+                               pixel[3] == 255;
+                    };
+                    passed &= check(singleGpuBackground.valid &&
+                                        linearGpuBackground.valid &&
+                                        radialGpuBackground.valid &&
+                                        nearColor(singleGpuBackground.center,
+                                                  pixelThemeBackground.lowColor,
+                                                  2) &&
+                                        nearColor(linearGpuBackground.topLeft,
+                                                  pixelThemeBackground.highColor,
+                                                  2) &&
+                                        nearColor(linearGpuBackground.bottomLeft,
+                                                  pixelThemeBackground.lowColor,
+                                                  2) &&
+                                        nearColor(radialGpuBackground.center,
+                                                  pixelThemeBackground.highColor,
+                                                  2) &&
+                                        nearColor(radialGpuBackground.bottomRight,
+                                                  pixelThemeBackground.lowColor,
+                                                  2),
+                                    "GPU Theme background shader must render known Single, top-to-bottom Linear, and center-to-edge Radial pixels");
+
                     struct DitherCapture {
                         QImage image;
                         std::array<uchar, 4> bottomLeftPixel{};

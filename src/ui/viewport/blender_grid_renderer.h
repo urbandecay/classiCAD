@@ -5,6 +5,7 @@
 #pragma once
 
 #include "blender_grid_appearance.h"
+#include "viewport_theme_background.h"
 #include "services/sampling/surface_tessellation_cache.h"
 #include "services/viewport/viewport_transform.h"
 #include "viewport_depth_geometry.h"
@@ -71,6 +72,10 @@ public:
                                               const QColor &solidColor = QColor(),
                                               bool sceneLinearOutput = false);
     bool renderBackgroundToCurrentFramebuffer(
+        const QSize &viewportSize, qreal devicePixelRatio,
+        const ViewportThemeBackground &themeBackground,
+        bool sceneLinearOutput = false);
+    bool renderBackgroundToCurrentFramebuffer(
         const QSize &viewportSize,
         qreal devicePixelRatio,
         const QVector3D &solidColorSceneLinear);
@@ -124,7 +129,8 @@ private:
                                     const QVector3D &highColor,
                                     const QVector3D &lowColor,
                                     bool colorsSceneLinear,
-                                    bool sceneLinearOutput);
+                                    bool sceneLinearOutput,
+                                    int gradientStyle = 2);
     bool ensureFramebuffer(const QSize &pixelSize);
     bool ensureFrontDepthFramebuffer(const QSize &pixelSize);
     void mergeFrontDepthToCurrentFramebuffer(const QSize &pixelSize);

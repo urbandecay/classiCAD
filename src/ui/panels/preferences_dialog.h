@@ -14,6 +14,7 @@ struct PreferencesDialogValues {
     bool smoothCurveDisplay = true;
     bool architecturalDimensionFont = false;
     BlenderGridAppearance gridAppearance;
+    ViewportThemeBackground themeBackground;
     ViewportCameraPreferences cameraPreferences;
     ViewportNavigationPreferences navigationPreferences;
     RotateToolPreferences rotateToolPreferences;

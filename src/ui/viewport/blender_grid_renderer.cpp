@@ -864,13 +864,31 @@ bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
         solidColorSceneLinear, true, true);
 }
 
+bool BlenderGridRenderer::renderBackgroundToCurrentFramebuffer(
+    const QSize &viewportSize, qreal devicePixelRatio,
+    const ViewportThemeBackground &themeBackground,
+    bool sceneLinearOutput)
+{
+    if (!isValidViewportThemeBackground(themeBackground)) return false;
+    const QColor high = themeBackground.style ==
+            ViewportThemeBackgroundStyle::SingleColor
+        ? themeBackground.lowColor : themeBackground.highColor;
+    const QColor low = themeBackground.lowColor;
+    return renderBackgroundWithColors(
+        viewportSize, devicePixelRatio,
+        QVector3D(high.redF(), high.greenF(), high.blueF()),
+        QVector3D(low.redF(), low.greenF(), low.blueF()), false,
+        sceneLinearOutput, static_cast<int>(themeBackground.style));
+}
+
 bool BlenderGridRenderer::renderBackgroundWithColors(
     const QSize &viewportSize,
     qreal devicePixelRatio,
     const QVector3D &highColor,
     const QVector3D &lowColor,
     bool colorsSceneLinear,
-    bool sceneLinearOutput)
+    bool sceneLinearOutput,
+    int gradientStyle)
 {
     if (viewportSize.isEmpty() || QOpenGLContext::currentContext() == nullptr) {
         return false;
@@ -919,6 +937,7 @@ bool BlenderGridRenderer::renderBackgroundWithColors(
                                            sceneLinearOutput ? 1 : 0);
         backgroundProgram_.setUniformValue("uColorsSceneLinear",
                                            colorsSceneLinear ? 1 : 0);
+        backgroundProgram_.setUniformValue("uGradientStyle", gradientStyle);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
     backgroundProgram_.release();

@@ -35,6 +35,7 @@ public:
                                bool smoothCurveDisplay,
                                bool architecturalDimensionFont,
                                const BlenderGridAppearance &gridAppearance,
+                               const ViewportThemeBackground &themeBackground,
                                const ViewportCameraPreferences &cameraPreferences,
                                const ViewportNavigationPreferences &navigationPreferences,
                                const RotateToolPreferences &rotateToolPreferences,
@@ -89,6 +90,7 @@ public:
                 pages_->addWidget(createViewportPage(snapLabelsVisible,
                                                      smoothCurveDisplay,
                                                      gridAppearance,
+                                                     themeBackground,
                                                      cameraPreferences,
                                                      rotateToolPreferences,
                                                      viewportAaMode,
@@ -139,6 +141,11 @@ public:
         appearance.opacity = gridOpacitySpinBox_->value();
         appearance.lowAlphaStipple = gridStippleCheckBox_->isChecked();
         return appearance;
+    }
+
+    ViewportThemeBackground themeBackground() const
+    {
+        return themeBackground_;
     }
 
     bool architecturalDimensionFont() const
@@ -359,6 +366,7 @@ private:
     QWidget *createViewportPage(bool snapLabelsVisible,
                                 bool smoothCurveDisplay,
                                 const BlenderGridAppearance &gridAppearance,
+                                const ViewportThemeBackground &themeBackground,
                                 const ViewportCameraPreferences &cameraPreferences,
                                 const RotateToolPreferences &rotateToolPreferences,
                                 int viewportAaMode,
@@ -366,6 +374,7 @@ private:
                                 bool smoothWiresEditMode)
     {
         gridAppearance_ = gridAppearance;
+        themeBackground_ = themeBackground;
         rotateToolPreferences_ = rotateToolPreferences;
         auto *scrollArea = new QScrollArea;
         scrollArea->setWidgetResizable(true);
@@ -541,6 +550,55 @@ private:
         gridStippleCheckBox_->setObjectName(QStringLiteral("gridStipplePreference"));
         gridLayout->addRow(QString(), gridStippleCheckBox_);
         layout->addWidget(gridBox);
+
+        auto *themeBackgroundBox = new QGroupBox(
+            QStringLiteral("Theme Background"));
+        auto *themeBackgroundLayout = new QFormLayout(themeBackgroundBox);
+        auto *themeStyleCombo = new QComboBox;
+        themeStyleCombo->setObjectName(QStringLiteral("themeBackgroundStylePreference"));
+        themeStyleCombo->addItem(QStringLiteral("Single Color"),
+            static_cast<int>(ViewportThemeBackgroundStyle::SingleColor));
+        themeStyleCombo->addItem(QStringLiteral("Linear Gradient"),
+            static_cast<int>(ViewportThemeBackgroundStyle::Linear));
+        themeStyleCombo->addItem(QStringLiteral("Radial Gradient"),
+            static_cast<int>(ViewportThemeBackgroundStyle::Radial));
+        themeStyleCombo->setCurrentIndex(themeStyleCombo->findData(
+            static_cast<int>(themeBackground_.style)));
+        connect(themeStyleCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+                this, [this, themeStyleCombo](int index) {
+                    themeBackground_.style = static_cast<ViewportThemeBackgroundStyle>(
+                        themeStyleCombo->itemData(index).toInt());
+                });
+        themeBackgroundLayout->addRow(QStringLiteral("Style"), themeStyleCombo);
+        const auto addThemeColorButton = [this, themeBackgroundLayout](
+            const QString &label, QColor ViewportThemeBackground::*member,
+            const QString &objectName) {
+            auto *button = new QPushButton;
+            button->setObjectName(objectName);
+            const auto updateButton = [button](const QColor &color) {
+                button->setText(color.name(QColor::HexRgb).toUpper());
+                button->setStyleSheet(QStringLiteral("background-color: %1;")
+                                          .arg(color.name(QColor::HexRgb)));
+            };
+            updateButton(themeBackground_.*member);
+            connect(button, &QPushButton::clicked, this,
+                    [this, button, member, label, updateButton] {
+                        const QColor selected = QColorDialog::getColor(
+                            themeBackground_.*member, this, label);
+                        if (selected.isValid()) {
+                            themeBackground_.*member = selected;
+                            updateButton(selected);
+                        }
+                    });
+            themeBackgroundLayout->addRow(label, button);
+        };
+        addThemeColorButton(QStringLiteral("High Color"),
+                            &ViewportThemeBackground::highColor,
+                            QStringLiteral("themeBackgroundHighColorPreference"));
+        addThemeColorButton(QStringLiteral("Low / Single Color"),
+                            &ViewportThemeBackground::lowColor,
+                            QStringLiteral("themeBackgroundLowColorPreference"));
+        layout->addWidget(themeBackgroundBox);
 
         auto *cameraBox = new QGroupBox(QStringLiteral("View Camera"));
         auto *cameraLayout = new QFormLayout(cameraBox);
@@ -861,6 +919,7 @@ private:
     QCheckBox *rotateAngleInputRadiansCheckBox_ = nullptr;
     RotateToolPreferences rotateToolPreferences_;
     BlenderGridAppearance gridAppearance_;
+    ViewportThemeBackground themeBackground_;
     QDoubleSpinBox *gridOpacitySpinBox_ = nullptr;
     QCheckBox *gridStippleCheckBox_ = nullptr;
     QDoubleSpinBox *focalLengthSpinBox_ = nullptr;
@@ -907,6 +966,7 @@ bool showPreferencesDialog(QWidget *parent,
                              initialValues.smoothCurveDisplay,
                              initialValues.architecturalDimensionFont,
                              initialValues.gridAppearance,
+                             initialValues.themeBackground,
                              initialValues.cameraPreferences,
                              initialValues.navigationPreferences,
                              initialValues.rotateToolPreferences,
@@ -925,6 +985,7 @@ bool showPreferencesDialog(QWidget *parent,
     selectedValues->smoothCurveDisplay = dialog.smoothCurveDisplay();
     selectedValues->architecturalDimensionFont = dialog.architecturalDimensionFont();
     selectedValues->gridAppearance = dialog.gridAppearance();
+    selectedValues->themeBackground = dialog.themeBackground();
     selectedValues->cameraPreferences = dialog.cameraPreferences();
     selectedValues->navigationPreferences = dialog.navigationPreferences();
     selectedValues->rotateToolPreferences = dialog.rotateToolPreferences();

@@ -219,12 +219,19 @@ bool renderViewportBackground(
     BlenderGridRenderer &renderer, const QSize &size, qreal devicePixelRatio,
     const ViewportShadingSettings &settings,
     const std::optional<QVector3D> &worldColorSceneLinear,
+    const ViewportThemeBackground &themeBackground,
     bool sceneLinearOutput = false)
 {
     if (settings.backgroundMode == ViewportBackgroundMode::World &&
         worldColorSceneLinear.has_value()) {
         return renderer.renderBackgroundToCurrentFramebuffer(
             size, devicePixelRatio, *worldColorSceneLinear);
+    }
+    if (settings.backgroundMode == ViewportBackgroundMode::Theme ||
+        (settings.backgroundMode == ViewportBackgroundMode::World &&
+         !worldColorSceneLinear.has_value())) {
+        return renderer.renderBackgroundToCurrentFramebuffer(
+            size, devicePixelRatio, themeBackground, sceneLinearOutput);
     }
     return renderer.renderBackgroundToCurrentFramebuffer(
         size, devicePixelRatio,
@@ -233,35 +240,20 @@ bool renderViewportBackground(
 
 void fillViewportBackground(QPainter &painter,
                             const QRect &bounds,
-                            const QColor &solidColor = QColor())
+                            const ViewportShadingSettings &settings,
+                            const std::optional<QVector3D> &worldColorSceneLinear,
+                            const ViewportThemeBackground &themeBackground)
 {
     if (bounds.isEmpty()) {
         return;
     }
+    const QColor solidColor = viewportShadingBackgroundColor(
+        settings, worldColorSceneLinear);
     if (solidColor.isValid()) {
         painter.fillRect(bounds, solidColor);
         return;
     }
-    const QPointF center(bounds.x() + bounds.width() * 0.5,
-                         bounds.y() + bounds.height() * 0.5);
-    const qreal radius = 0.5 * std::hypot(bounds.width(), bounds.height());
-    QRadialGradient gradient(center, std::max<qreal>(radius, 1.0), center);
-    constexpr qreal gamma = 2.2;
-    constexpr qreal high = 61.0 / 255.0;
-    constexpr qreal low = 48.0 / 255.0;
-    constexpr int stopCount = 32;
-    for (int stopIndex = 0; stopIndex <= stopCount; ++stopIndex) {
-        const qreal factor = static_cast<qreal>(stopIndex) / stopCount;
-        const qreal gammaColor = std::pow(
-            std::pow(high, 1.0 / gamma) * (1.0 - factor) +
-                std::pow(low, 1.0 / gamma) * factor,
-            gamma);
-        const QColor color = QColor::fromRgbF(gammaColor,
-                                              gammaColor,
-                                              gammaColor);
-        gradient.setColorAt(factor, color);
-    }
-    painter.fillRect(bounds, gradient);
+    paintViewportThemeBackground(painter, bounds, themeBackground);
 }
 
 Shape pictureFrameOutline(const Shape &picture)
@@ -2281,6 +2273,19 @@ public:
         }
         gridAppearance_ = appearance;
         viewportRenderer_.setGridAppearance(appearance);
+        update();
+    }
+
+    ViewportThemeBackground themeBackground() const override
+    {
+        return themeBackground_;
+    }
+
+    void setThemeBackground(
+        const ViewportThemeBackground &background) override
+    {
+        if (!isValidViewportThemeBackground(background)) return;
+        themeBackground_ = background;
         update();
     }
 
@@ -8988,14 +8993,13 @@ protected:
             painter.beginNativePainting();
             const bool backgroundDrawn = renderViewportBackground(
                 *nativeRenderer, renderFrame.viewportSize, devicePixelRatioF(),
-                viewportShadingSettings_, viewportWorldColorSceneLinear);
+                viewportShadingSettings_, viewportWorldColorSceneLinear,
+                themeBackground_);
             painter.endNativePainting();
             if (!backgroundDrawn) {
                 fillViewportBackground(
-                    painter, rect(),
-                    viewportShadingBackgroundColor(
-                        viewportShadingSettings_,
-                        viewportWorldColorSceneLinear));
+                    painter, rect(), viewportShadingSettings_,
+                    viewportWorldColorSceneLinear, themeBackground_);
             }
         }
         QPainter &scenePainter = nativeRenderer == nullptr
@@ -11061,7 +11065,7 @@ protected:
                     renderViewportBackground(
                         *nativeRenderer, renderFrame.viewportSize,
                         devicePixelRatioF(), viewportShadingSettings_,
-                        viewportWorldColorSceneLinear, true);
+                        viewportWorldColorSceneLinear, themeBackground_, true);
                 } else if (aaRenderer->hasCachedHistory()) {
                     aaRenderer->presentCachedHistory();
                     cachedScenePresented = true;
@@ -11069,7 +11073,7 @@ protected:
                     renderViewportBackground(
                         *nativeRenderer, renderFrame.viewportSize,
                         devicePixelRatioF(), viewportShadingSettings_,
-                        viewportWorldColorSceneLinear);
+                        viewportWorldColorSceneLinear, themeBackground_);
                 }
             }
 
@@ -11519,9 +11523,8 @@ protected:
                 renderShadingSettings,
                 rasterSurfaceBatchRendered ? &rasterSurfaceLayers : nullptr);
             fillViewportBackground(
-                painter, rect(),
-                viewportShadingBackgroundColor(
-                    viewportShadingSettings_, viewportWorldColorSceneLinear));
+                painter, rect(), viewportShadingSettings_,
+                viewportWorldColorSceneLinear, themeBackground_);
             if (gpuViewportBackground.isNull()) {
                 drawGrid(painter);
                 drawOrigin(painter);
@@ -23682,6 +23685,7 @@ private:
     bool duplicateHasOriginalComponentSelection_ = false;
     QString duplicateNumericInput_;
     BlenderGridAppearance gridAppearance_;
+    ViewportThemeBackground themeBackground_;
     ToolContext toolContext_;
     ToolRegistry &toolRegistry_;
     ArcTool &arcTool_;

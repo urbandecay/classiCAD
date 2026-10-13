@@ -1104,6 +1104,57 @@ sample counts and output for Off, Single Pass, and 8 samples. A full
 File → Render Workbench Result comparison against Blender Combined and Z is
 still open.
 
+**Direct Combined/Z pass capture contract:** `workbench_render_pass_capture`
+uses a direct `QOpenGLContext` plus `QOffscreenSurface`, the production
+`ViewportSurfaceRenderer`, `ViewportAaRenderer`, and
+`ViewportWorkbenchScenePassCoordinator` to capture the controlled 640×480
+polygon cube. It checks the resolved scene-linear RGBA dimensions, a projected
+top-face sample using top-down image coordinates, finite positive foreground
+view-Z, and Blender's `1e10` background depth sentinel. Set
+`CLASSICAD_WORKBENCH_PASS_CAPTURE_DIR=/path/to/output` to write
+`classiCAD-combined.pfm`, `classiCAD-z.pfm`, and `classiCAD-display.png`.
+These captures exercise the production GPU scene pass, AA resolve, and shared
+depth conversion helper. The capture test creates its own result FBO and
+D32F/S8 attachment; it does not call `ViewportGpuSurface::renderOffscreen()`
+or verify that method's allocation/readback path. It also does not invoke
+`ViewportWidget::renderWorkbenchResult()` or test its format selection,
+metadata, CAD annotations, or overlay ordering.
+The Blender reference remains available through
+`tests/workbench_cube_reference.py -- /path/to/reference.png --aa OFF
+--linear-output /path/to/reference.exr`; convert its Combined and Depth EXR
+subimages with Blender's bundled OpenImageIO via
+`blender --background --python tests/workbench_exr_to_pfm.py -- input.exr
+color.pfm depth.pfm` before using the RGB comparator. The new opt-in
+`--match-classicad-ortho` option sets the reference camera eye distance to
+1000 and clipping to 0.01/2000 without changing the fixture defaults. A fresh
+640x480 AA-off cube reference with this option, the existing 5.0 orthographic
+scale and direction `(4,-6,4)`, matches classiCAD's projection eye and clip
+range. Comparing its Depth PFM to the unchanged classiCAD capture gives
+111256 common finite foreground pixels, 195720 common background pixels at
+the exact `1e10` sentinel, and 224 foreground-mask XOR pixels. On common
+foreground pixels the unadjusted absolute view-Z error is MAE `0.00006355`,
+p95 `0.00018311`, maximum `0.00018311`; signed mean (classiCAD minus Blender)
+is `0.00003050`. This removes the prior 992-unit camera-origin offset. The
+original RGB comparison against the fixture's default 8-unit camera is
+retained unchanged. With the matched-camera reference, scene-linear RGB MAE
+is `0.000438` per channel and foreground-mask IoU is `0.99382` (493 XOR
+pixels); this separate color result does not replace the retained RGB capture.
+The focused target built and passed under the offscreen platform. Its initial
+depth assertion exposed a real presentation-target issue: Qt's default
+CombinedDepthStencil target used D24/S8, so the production AA renderer's
+D32F/S8 depth blit raised `GL_INVALID_OPERATION` and left result Z entirely at
+the background sentinel. `ViewportGpuSurface::renderOffscreen()` now attaches a
+matching D32F/S8 texture. The direct capture contract independently verifies
+that this matching format produces no GL error and preserves per-pixel scene
+depth within `1e-6`; it does not exercise the production method's attachment
+code. A capture compared to the
+existing Blender 640×480 OFF fixture has scene-linear RGB MAE about `0.000126`
+per channel, foreground-mask IoU `0.99898`, and 81 XOR pixels. That initial
+8-unit-camera depth comparison had a 992-unit camera-origin offset; the
+explicit matched-camera reference and unadjusted depth metrics above supersede
+the earlier offset-adjusted measurement. This remains a production GPU
+pass/result-target capture, not a full File command comparison.
+
 **Depth precision update:** Blender 5.2.2 allocates scene depth and in-front
 depth as `SFLOAT_32_DEPTH_UINT_8` in its Workbench render-target setup
 ([`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L555-L582)).

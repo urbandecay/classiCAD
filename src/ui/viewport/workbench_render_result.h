@@ -16,6 +16,25 @@
 
 namespace classiCAD {
 
+// Convert the OpenGL depth-buffer value used by the Workbench render target
+// into Blender's view-space Z pass convention.
+inline float workbenchDepthToViewZ(float depth,
+                                   bool perspective,
+                                   float nearClip,
+                                   float farClip) noexcept
+{
+    if (!std::isfinite(depth) || depth >= 1.0f || nearClip <= 0.0f ||
+        farClip <= nearClip) {
+        return 1.0e10f;
+    }
+    const float normalizedDepth = std::clamp(depth, 0.0f, 1.0f);
+    return perspective
+        ? (2.0f * nearClip * farClip) /
+              (farClip + nearClip -
+               (2.0f * normalizedDepth - 1.0f) * (farClip - nearClip))
+        : nearClip + normalizedDepth * (farClip - nearClip);
+}
+
 // Composite a committed annotation layer over display Combined and, when
 // supplied, over the top-down scene-linear RGBA Combined buffer.
 bool compositeWorkbenchRenderAnnotations(

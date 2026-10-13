@@ -1,6 +1,6 @@
 """Render the controlled Workbench cube reference in Blender 5.2.2.
 
-Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr
+Usage: blender --background --python tests/workbench_cube_reference.py -- output.png --aa FXAA --effect BASELINE --linear-output output.exr [--match-classicad-ortho]
 AA accepts OFF, FXAA, or 8 (default: FXAA).
 Effect accepts BASELINE, SHADOWS, CAVITY, or OUTLINE (default: BASELINE).
 """
@@ -30,6 +30,14 @@ def arguments():
         help=(
             "orthographic camera distance (defaults to 8 for CUBE and 1000 "
             "for TRANSPARENT_OVERLAP)"
+        ),
+    )
+    parser.add_argument(
+        "--match-classicad-ortho",
+        action="store_true",
+        help=(
+            "use classiCAD's free orthographic render camera: 1000-unit eye "
+            "distance and 0.01/2000 clip range"
         ),
     )
     parser.add_argument("--aa", choices=("OFF", "FXAA", "8"), default="FXAA")
@@ -109,11 +117,16 @@ def main():
     camera = bpy.data.objects.new("ReferenceCamera", camera_data)
     bpy.context.collection.objects.link(camera)
     ortho_eye_distance = args.ortho_eye_distance
+    if args.match_classicad_ortho:
+        ortho_eye_distance = 1000.0
     if ortho_eye_distance is None:
         ortho_eye_distance = (
             1000.0 if args.scene == "TRANSPARENT_OVERLAP" else 8.0
         )
-    if args.scene == "TRANSPARENT_OVERLAP":
+    if args.match_classicad_ortho:
+        camera_data.clip_start = 0.01
+        camera_data.clip_end = 2000.0
+    elif args.scene == "TRANSPARENT_OVERLAP":
         # classiCAD's free orthographic viewport uses near/far planes at
         # 0.01/2000 for its 1000-unit projection eye. Match the Blender
         # camera's linear depth so weighted-OIT colors compare fairly too.

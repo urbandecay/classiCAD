@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 classiCAD contributors
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "viewport_gpu_surface.h"
+#include "workbench_render_result.h"
 
 #include <QColorSpace>
 #include <QGuiApplication>
@@ -166,16 +167,53 @@ bool ViewportGpuSurface::renderOffscreen(
     GLint previousFramebuffer = 0;
     functions.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previousFramebuffer);
     QOpenGLFramebufferObjectFormat format;
-    format.setAttachment(QOpenGLFramebufferObject::CombinedDepthStencil);
+    // Match the Workbench scene target's D32F/S8 attachment. Qt's combined
+    // depth-stencil FBO defaults to D24/S8, which cannot receive the AA scene
+    // target's depth blit on core OpenGL.
+    format.setAttachment(QOpenGLFramebufferObject::NoAttachment);
     // The presentation pass is display-referred, but retain its normalized
     // channel values at 16-bit precision for high-depth image writers.
     format.setInternalTextureFormat(GL_RGBA16);
     format.setSamples(0);
     QOpenGLFramebufferObject target(pixelSize, format);
+    GLuint targetDepthStencilTexture = 0;
     if (!target.isValid() || !target.bind()) {
         doneCurrent();
         if (errorMessage != nullptr) {
             *errorMessage = QStringLiteral("Could not allocate the render target");
+        }
+        return false;
+    }
+    GLint previousActiveTexture = GL_TEXTURE0;
+    GLint previousTextureBinding = 0;
+    functions.glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+    functions.glActiveTexture(GL_TEXTURE0);
+    functions.glGetIntegerv(GL_TEXTURE_BINDING_2D,
+                            &previousTextureBinding);
+    functions.glGenTextures(1, &targetDepthStencilTexture);
+    functions.glBindTexture(GL_TEXTURE_2D, targetDepthStencilTexture);
+    functions.glTexImage2D(
+        GL_TEXTURE_2D, 0, GL_DEPTH32F_STENCIL8, pixelSize.width(),
+        pixelSize.height(), 0, GL_DEPTH_STENCIL,
+        GL_FLOAT_32_UNSIGNED_INT_24_8_REV, nullptr);
+    functions.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    functions.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    functions.glFramebufferTexture2D(
+        GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
+        targetDepthStencilTexture, 0);
+    functions.glBindTexture(GL_TEXTURE_2D,
+                            static_cast<GLuint>(previousTextureBinding));
+    functions.glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+    if (targetDepthStencilTexture == 0 ||
+        functions.glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
+            GL_FRAMEBUFFER_COMPLETE) {
+        functions.glDeleteTextures(1, &targetDepthStencilTexture);
+        functions.glBindFramebuffer(
+            GL_FRAMEBUFFER, static_cast<GLuint>(previousFramebuffer));
+        doneCurrent();
+        if (errorMessage != nullptr) {
+            *errorMessage = QStringLiteral(
+                "Could not allocate the matching D32F/S8 render depth target");
         }
         return false;
     }
@@ -271,20 +309,8 @@ bool ViewportGpuSurface::renderOffscreen(
             float *destination = depth->data() + row * rowLength;
             for (qsizetype column = 0; column < rowLength; ++column) {
                 const float z = source[column];
-                if (!std::isfinite(z) || z >= 1.0f || nearClip <= 0.0f ||
-                    farClip <= nearClip) {
-                    // Blender Workbench's Z pass uses 1e10 for background
-                    // pixels (and pixels without a valid depth sample).
-                    destination[column] = 1.0e10f;
-                    continue;
-                }
-                const float normalizedDepth = std::clamp(z, 0.0f, 1.0f);
-                destination[column] = perspective
-                    ? (2.0f * nearClip * farClip) /
-                          (farClip + nearClip -
-                           (2.0f * normalizedDepth - 1.0f) *
-                               (farClip - nearClip))
-                    : nearClip + normalizedDepth * (farClip - nearClip);
+                destination[column] = workbenchDepthToViewZ(
+                    z, perspective, nearClip, farClip);
             }
         }
         QImage readback(pixelSize, QImage::Format_RGBA64);
@@ -310,6 +336,7 @@ bool ViewportGpuSurface::renderOffscreen(
     }
     functions.glBindFramebuffer(GL_FRAMEBUFFER,
                                 static_cast<GLuint>(previousFramebuffer));
+    functions.glDeleteTextures(1, &targetDepthStencilTexture);
     doneCurrent();
     if (!drawn && errorMessage != nullptr) {
         *errorMessage = QStringLiteral("The offscreen scene renderer failed");

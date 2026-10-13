@@ -338,6 +338,7 @@ if (CLASSICAD_BUILD_TESTS)
                        tests/core_contracts.cpp
                        tests/viewport_event_precedence.cpp
                        tests/viewport_render_contracts.cpp
+                       tests/workbench_render_pass_capture.cpp
                        tests/viewport_interaction.cpp
                        tests/vignola_file.cpp)
     source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -449,6 +450,26 @@ if (CLASSICAD_BUILD_TESTS)
     add_test(NAME viewport_render_contracts COMMAND classicad_viewport_render_contracts_test)
     set_tests_properties(viewport_render_contracts PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+
+    add_executable(classicad_workbench_render_pass_capture_test
+        tests/workbench_render_pass_capture.cpp
+    )
+    classicad_configure_ui_target(classicad_workbench_render_pass_capture_test)
+    classicad_attach_object_modules(classicad_workbench_render_pass_capture_test
+        classicad_geometry_objects
+        classicad_document_objects
+        classicad_command_objects
+        classicad_serialization_objects
+        classicad_service_objects
+        classicad_tool_objects
+        classicad_viewport_shared_objects
+        classicad_viewport_support_objects
+    )
+    add_test(NAME workbench_render_pass_capture
+             COMMAND classicad_workbench_render_pass_capture_test)
+    set_tests_properties(workbench_render_pass_capture PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LIBGL_ALWAYS_SOFTWARE=1"
     )
 
     add_executable(classicad_viewport_event_precedence_test

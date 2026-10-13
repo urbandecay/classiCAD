@@ -1627,6 +1627,22 @@ depth domain. Visual depth comparison remains open.
   scene-linear RGB MAE on shared foreground is 0.00155. The jitter capture and
   camera-shift options are diagnostic tooling; ordinary scene rendering is
   unchanged when capture options are unset.
+- **Edge-coverage residual metric (2026-10-13):**
+  `tests/workbench_pfm_compare.py` now reports a separate approximate coverage
+  error in the union of the two-pixel silhouette bands. It estimates each
+  image's corner background, finds locally nearest stable foreground and
+  background samples, and projects edge RGB between those colors using a
+  separate 0.01 scene-linear RGB-distance threshold. The 8-neighbor distance
+  defines a Chebyshev pixel band. The report includes coverage MAE, p90, signed
+  bias, and partial-coverage fractions;
+  existing foreground-mask and full RGB metrics remain separate. Six
+  synthetic Python contracts cover identical hard edges, an AA ramp with the
+  same mask, a one-pixel shift, background offsets, face-color changes, and
+  uniform-background rejection. These synthetic checks pass. The PFM data has
+  no object-ID or depth attachment, so this estimate assumes locally stable
+  face/background colors; no stored Blender/classiCAD capture was available in
+  this worktree to produce a new measured coverage residual. This improves
+  comparison diagnostics and does not close the AA visual-parity item.
 
 ### Shared render-pass color attachment reporting (2026-10-13)
 
@@ -2329,6 +2345,47 @@ The port is complete when every enabled option has matching Blender 5.2.2 behavi
   failed assertions through the CPU shadow checks, then exited 1 at its later
   existing OpenGL-context requirement for the NURBS-solid display case; no
   GUI/OpenGL validation is claimed.
+
+## Phase Two: imported scene materials and result contracts (2026-10-13)
+
+- **Render-result shading source:** an imported Blender scene's saved
+  `Scene.display.shading` settings now drive its Workbench render result.
+  Interactive `View3D` shading remains the render setting fallback for native
+  classiCAD documents. Scene render anti-aliasing/output values remain sourced
+  from their render settings. The shading-source selection contract is covered
+  in `viewport_render_contracts`; the test's later GPU case cannot initialize
+  an OpenGL context here, so this change has no rendered image comparison yet.
+  Blender's render engine and Workbench state initialization are in pinned
+  [`workbench_engine.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc)
+  and [`workbench_state.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_state.cc).
+- **NURBS Surface image materials:** imported surface objects now resolve the
+  referenced Workbench material, including its scene-linear color and scalar
+  values plus the first usable active image record. Resolution preserves UDIM
+  tiles first, then packed regular image bytes, then an existing external
+  image path. A standalone C++ contract covers those choices and image
+  metadata; the Blender-side fixture covers extraction only. Blender's active
+  image sampling and UDIM lookup are documented by pinned
+  [`workbench_image_lib.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_image_lib.glsl#L348-L433).
+- **Native object-image persistence:** object-level Workbench regular image
+  paths, packed bytes, and alpha mode now survive native save/reopen. Legacy
+  records receive empty path/packed data and `STRAIGHT` alpha; malformed or
+  oversized base64 payloads are rejected. The focused persistence contract
+  passes. Existing UDIM tile persistence remains covered in the same contract.
+- **Combined output format honesty:** Workbench Combined output no longer
+  silently changes unsupported Blender formats to PNG. It reports unavailable
+  Qt/OpenEXR writers, rejects multilayer EXR in the single-layer writer,
+  requires a suffix matching the selected format, and normalizes a mismatched
+  suffix in the save dialog. The isolated format contract passes for supported
+  and unsupported formats, suffix checking, and HDR output. This addresses
+  format reporting and encoding, not Blender image-codec parity for every
+  compression/depth option.
+- Validation for this batch: `cmake --build build -j4` succeeds.
+  `blender_surface_material_resolution_contracts`,
+  `workbench_persistence_contracts`,
+  `workbench_render_result_format_contracts`, and
+  `viewport_wheel_navigation_aa` pass. `viewport_render_contracts` reaches its
+  existing OpenGL-only NURBS-solid check and exits because this environment
+  cannot create the required context; no GPU visual validation is claimed.
 
 ## Blender 5.2.2 source references
 

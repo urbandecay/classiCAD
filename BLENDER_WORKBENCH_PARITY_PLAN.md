@@ -127,6 +127,14 @@ resolves it after regular transparency (`workbench_engine.cc` and
 `workbench_mesh_passes.cc`). The C++ build passes; allocation-failure runtime
 behavior and matched image comparison remain open.
 
+**Render-result stroke sample timing (2026-10-13):** Committed CAD scene strokes
+now render inside every Workbench scene sample for PNG/TIFF as well as HDR and
+EXR. The post-resolve callback is depth-only for every format, preventing
+double color drawing while preserving the exported depth pass. This matches
+the shared AA stage used for Blender Workbench geometry; dimensions remain
+post-resolve annotations. The C++ build passes; matched curve-edge captures
+across output formats remain open.
+
 ### QPainter perspective cavity footprint (2026-10-13)
 
 - The QPainter SSAO sample step now scales per receiver in perspective views by

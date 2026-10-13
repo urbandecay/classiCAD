@@ -6853,9 +6853,8 @@ public:
         }
         QVector<ViewportSceneStroke> sceneLinearStrokes = strokes;
         for (ViewportSceneStroke &stroke : sceneLinearStrokes) {
-            // Keep the scene-linear Combined pass from changing the depth
-            // attachment. The display-referred overlay below retains its
-            // existing depth-write behavior.
+            // Keep the per-sample stroke color pass from changing depth. The
+            // depth-only overlay below retains stroke visibility for export.
             stroke.writeDepth = false;
         }
         ViewportShadingSettings settings = viewportShadingSettings_;
@@ -6888,7 +6887,6 @@ public:
             outputSize,
             renderCamera,
             [this, &renderFrame, &sceneLinearStrokes, &settings,
-             captureSceneLinearCombined,
              &renderCamera, transparentFilm,
              combinedUsesPremultipliedAlpha,
              useSceneWorldBackground, noSceneWorldBackground,
@@ -6928,8 +6926,7 @@ public:
                         sceneColorPass.report.populatedAttachments);
                 }
                 if (!sceneColorPass.rendered) return false;
-                if (!captureSceneLinearCombined ||
-                    sceneLinearStrokes.isEmpty()) {
+                if (sceneLinearStrokes.isEmpty()) {
                     return true;
                 }
                 return scene.draw(sceneLinearStrokes, aa.sampleCamera(),
@@ -6937,21 +6934,14 @@ public:
                                   smoothWiresOverlay_, smoothWiresEditMode_,
                                   true);
             },
-            [this, &strokes, &renderCamera,
-             captureSceneLinearCombined](
+            [this, &strokes, &renderCamera](
                 const QSize &pixelSize, ViewportSceneRenderer &scene) {
                 if (strokes.isEmpty()) return true;
-                if (captureSceneLinearCombined) {
-                    // The scene-linear sample already contains these stroke
-                    // colors. Replay only their existing depth behavior here
-                    // so the Z pass remains identical without double-drawing
-                    // the visible Combined pixels.
-                    return scene.drawDepthOnly(
-                        strokes, renderCamera, pixelSize, 1.0,
-                        smoothWiresOverlay_, smoothWiresEditMode_);
-                }
-                return scene.draw(
-                    strokes, renderCamera, pixelSize, 1.0, true, 1.0,
+                // Stroke colors were rendered with each AA scene sample for
+                // every output format. Preserve their export depth without
+                // drawing their visible color a second time after resolve.
+                return scene.drawDepthOnly(
+                    strokes, renderCamera, pixelSize, 1.0,
                     smoothWiresOverlay_, smoothWiresEditMode_);
             },
             &result.combined, &result.depth, nullptr,

@@ -1820,6 +1820,35 @@ int main(int argc, char *argv[])
                         gpuWorkbenchOutlineBaselineImage.save(
                             workbenchShadowBaselineCapturePath);
                     }
+                    const QString polygonCubeShadowCapturePath =
+                        qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_POLYGON_CUBE_SHADOW_CAPTURE");
+                    if (!polygonCubeShadowCapturePath.isEmpty()) {
+                        const QString polygonCubeShadowBaselinePath =
+                            qEnvironmentVariable(
+                                "CLASSICAD_VIEWPORT_POLYGON_CUBE_SHADOW_BASELINE_CAPTURE");
+                        QImage polygonCubeShadowImage;
+                        QImage polygonCubeShadowBaselineImage;
+                        const bool shadowCaptured =
+                            renderCoordinatedScene(
+                                shadowShading,
+                                QByteArrayLiteral("polygon-cube-shadows"),
+                                &polygonCubeShadowImage, &polygonCubeObject) &&
+                            polygonCubeShadowImage.save(
+                                polygonCubeShadowCapturePath);
+                        const bool baselineCaptured =
+                            polygonCubeShadowBaselinePath.isEmpty() ||
+                            (renderCoordinatedScene(
+                                 rawFaceShading,
+                                 QByteArrayLiteral("polygon-cube-shadow-baseline"),
+                                 &polygonCubeShadowBaselineImage,
+                                 &polygonCubeObject) &&
+                             polygonCubeShadowBaselineImage.save(
+                                 polygonCubeShadowBaselinePath));
+                        passed &= check(
+                            shadowCaptured && baselineCaptured,
+                            "matched polygon cube shadow captures must render and save");
+                    }
                     gpuCavityDrawSucceeded = renderCoordinatedScene(
                         rawFaceShading, QByteArrayLiteral("cavity-baseline"),
                         &gpuCavityBaselineImage);

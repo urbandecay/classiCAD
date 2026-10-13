@@ -1307,6 +1307,11 @@ depth domain. Visual depth comparison remains open.
   effect against its own baseline gives RGB delta MAE 1.74/255, p95 4/255,
   maximum 8/255. This validates the outline pass on Blender's default mesh
   topology as well as the earlier NURBS-solid fixture.
+- The matched polygon cube shadow capture changes 111,480 pixels in both
+  renderers (XOR 0, IoU 1.0). Effect-delta RGB error is 2.10/255 MAE,
+  p95 5/255, maximum 11/255. This independently verifies the shadow coverage
+  on the default six-quad mesh; the earlier production-path measurement on a
+  NURBS extrusion solid remains 0.388/255 MAE.
 - World cavity's first measured mask mismatch was caused in part by the depth
   sampler: classiCAD set its copied `cavityDepthTexture_` to linear filtering,
   while Blender binds its Workbench depth texture with the default sampler,

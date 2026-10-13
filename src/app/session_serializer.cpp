@@ -5,6 +5,7 @@
 #include "core/serialization/shape_json_codec.h"
 
 #include <QFile>
+#include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -169,7 +170,8 @@ bool cameraStateFromJson(const QJsonValue &value, ViewportCameraState *state)
     return true;
 }
 
-QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings)
+QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings,
+                                  const DocumentSettings &documentSettings)
 {
     QJsonArray shadowDirection;
     shadowDirection.append(settings.shadowDirection.x());
@@ -226,6 +228,27 @@ QJsonObject viewportShadingToJson(const ViewportShadingSettings &settings)
                   settings.curvatureRidgeFactor);
     object.insert(QStringLiteral("curvatureValleyFactor"),
                   settings.curvatureValleyFactor);
+    object.insert(QStringLiteral("colorTransform"), settings.colorTransform);
+    const QByteArray lutData = !settings.colorLutData.isEmpty()
+        ? settings.colorLutData
+        : documentSettings.importedBlenderColorLuts.value(settings.colorLutId);
+    const ImportedBlenderColorLutMetadata recordMetadata =
+        documentSettings.importedBlenderColorLutMetadata.contains(settings.colorLutId)
+            ? documentSettings.importedBlenderColorLutMetadata.value(settings.colorLutId)
+            : settings.colorLutMetadata;
+    object.insert(QStringLiteral("colorLutId"), settings.colorLutId);
+    object.insert(QStringLiteral("colorLutDataBase64"),
+                  QString::fromLatin1(lutData.toBase64()));
+    QJsonObject lutMetadata;
+    lutMetadata.insert(QStringLiteral("size"), recordMetadata.size);
+    lutMetadata.insert(QStringLiteral("domainMin"), recordMetadata.domainMin);
+    lutMetadata.insert(QStringLiteral("domainMax"), recordMetadata.domainMax);
+    lutMetadata.insert(QStringLiteral("shaper"), recordMetadata.shaper);
+    lutMetadata.insert(QStringLiteral("shaperScale"), recordMetadata.shaperScale);
+    object.insert(QStringLiteral("colorLutMetadata"), lutMetadata);
+    object.insert(QStringLiteral("colorExposure"), settings.colorExposure);
+    object.insert(QStringLiteral("colorGamma"), settings.colorGamma);
+    object.insert(QStringLiteral("colorDitherIntensity"), settings.colorDitherIntensity);
     return object;
 }
 
@@ -367,6 +390,75 @@ bool viewportShadingFromJson(const QJsonValue &value,
     }
     restored.shadowDirection = QVector3D(shadowX, shadowY, shadowZ);
 
+    // These fields were added after the original version-6 session format.
+    // Their absence is a legacy session and retains the matching defaults.
+    const auto optionalFiniteNumber = [&object](const QString &key, qreal *number) {
+        if (!object.contains(key)) return true;
+        const QJsonValue value = object.value(key);
+        if (number == nullptr || !value.isDouble() ||
+            !std::isfinite(value.toDouble())) return false;
+        *number = value.toDouble();
+        return true;
+    };
+    if (object.contains(QStringLiteral("colorTransform"))) {
+        const QJsonValue transform = object.value(QStringLiteral("colorTransform"));
+        if (!transform.isDouble() || transform.toDouble() != transform.toInt(-1) ||
+            transform.toInt(-1) < 0 || transform.toInt(-1) > 4) return false;
+        restored.colorTransform = transform.toInt();
+    }
+    const QString lutIdKey = QStringLiteral("colorLutId");
+    if (object.contains(lutIdKey)) {
+        if (!object.value(lutIdKey).isString()) return false;
+        restored.colorLutId = object.value(lutIdKey).toString();
+    }
+    if (object.contains(QStringLiteral("colorLutMetadata"))) {
+        const QJsonValue metadataValue = object.value(QStringLiteral("colorLutMetadata"));
+        if (!metadataValue.isObject()) return false;
+        const QJsonObject metadata = metadataValue.toObject();
+        const QJsonValue size = metadata.value(QStringLiteral("size"));
+        const QJsonValue domainMin = metadata.value(QStringLiteral("domainMin"));
+        const QJsonValue domainMax = metadata.value(QStringLiteral("domainMax"));
+        const QJsonValue shaper = metadata.value(QStringLiteral("shaper"));
+        const QJsonValue shaperScale = metadata.value(QStringLiteral("shaperScale"));
+        if (!size.isDouble() || size.toDouble() != size.toInt(-1) ||
+            size.toInt(-1) < 2 || size.toInt(-1) > 140 ||
+            !domainMin.isDouble() || !std::isfinite(domainMin.toDouble()) ||
+            !domainMax.isDouble() || !std::isfinite(domainMax.toDouble()) ||
+            domainMax.toDouble() <= domainMin.toDouble() || !shaper.isString() ||
+            (shaper.toString() != QLatin1String("linear") &&
+             shaper.toString() != QLatin1String("log2_1p")) ||
+            !shaperScale.isDouble() || !std::isfinite(shaperScale.toDouble()) ||
+            shaperScale.toDouble() <= 0.0) return false;
+        restored.colorLutMetadata = {size.toInt(), domainMin.toDouble(),
+            domainMax.toDouble(), shaper.toString(), shaperScale.toDouble()};
+    }
+    if (object.contains(QStringLiteral("colorLutDataBase64"))) {
+        const QJsonValue encodedValue = object.value(QStringLiteral("colorLutDataBase64"));
+        if (!encodedValue.isString()) return false;
+        const QByteArray encoded = encodedValue.toString().toLatin1();
+        restored.colorLutData = QByteArray::fromBase64(encoded);
+        if (restored.colorLutData.toBase64() != encoded) return false;
+    }
+    if (!optionalFiniteNumber(QStringLiteral("colorExposure"), &restored.colorExposure) ||
+        !optionalFiniteNumber(QStringLiteral("colorGamma"), &restored.colorGamma) ||
+        !optionalFiniteNumber(QStringLiteral("colorDitherIntensity"),
+                              &restored.colorDitherIntensity) ||
+        restored.colorExposure < -32.0 || restored.colorExposure > 32.0 ||
+        restored.colorGamma < 0.0 || restored.colorGamma > 5.0 ||
+        restored.colorDitherIntensity < 0.0 ||
+        restored.colorDitherIntensity > 100.0) return false;
+    if (restored.colorTransform == 4) {
+        const qsizetype expectedBytes = qsizetype(restored.colorLutMetadata.size) *
+            restored.colorLutMetadata.size * restored.colorLutMetadata.size * 3 * 4;
+        if (restored.colorLutId.size() != 64 ||
+            restored.colorLutData.size() != expectedBytes ||
+            QString::fromLatin1(QCryptographicHash::hash(
+                restored.colorLutData, QCryptographicHash::Sha256).toHex()) !=
+                restored.colorLutId) return false;
+    } else if (!restored.colorLutId.isEmpty() || !restored.colorLutData.isEmpty()) {
+        return false;
+    }
+
     if (!boolean(QStringLiteral("backfaceCulling"),
                  &restored.backfaceCulling) ||
         !boolean(QStringLiteral("outline"), &restored.outline) ||
@@ -488,7 +580,7 @@ bool SessionSerializer::write(const QString &path,
     root.insert(QStringLiteral("controlPointsVisible"), view.controlPointsVisible);
     root.insert(QStringLiteral("activeTool"), static_cast<int>(view.activeTool));
     root.insert(QStringLiteral("viewportShading"),
-                viewportShadingToJson(view.shading));
+                viewportShadingToJson(view.shading, document.settings()));
 
     const QByteArray data = QJsonDocument(root).toJson(QJsonDocument::Compact);
     if (file.write(data) != data.size()) {

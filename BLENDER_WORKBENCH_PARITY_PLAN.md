@@ -2433,3 +2433,18 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
 - [Workbench color](https://docs.blender.org/manual/en/5.2/render/workbench/color.html)
 - [Workbench lighting](https://docs.blender.org/manual/en/5.2/render/workbench/lighting.html)
 - [Workbench options](https://docs.blender.org/manual/en/5.2/render/workbench/options.html)
+
+### Update-session color management persistence (2026-10-13)
+
+- Update-session snapshots now retain the viewport color transform, imported LUT
+  ID, LUT bytes and metadata, exposure, gamma, and dither intensity. If the
+  active shading snapshot refers to an imported LUT whose bytes are held by the
+  document, the session writer copies those bytes into the snapshot. The reader
+  validates transform ranges, LUT metadata and canonical Base64, scalar bounds,
+  and custom-LUT byte count and SHA-256 identity. Older version-6 sessions that
+  omit these fields keep the established defaults.
+- `update_session_contracts` checks custom LUT/scalar round-trip, legacy
+  defaults, and rejection of a malformed transform. `cmake --build build -j4`
+  completed and the focused CTest passed. The broader `trim_seam` executable
+  still reports three pre-existing box-selection assertion failures and does
+  not serve as evidence for this focused persistence contract.

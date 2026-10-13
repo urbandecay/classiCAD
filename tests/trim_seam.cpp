@@ -1,4 +1,8 @@
 #include <QApplication>
+#include <QCryptographicHash>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
 #include "../src/app/session_serializer.h"
@@ -1157,6 +1161,90 @@ int main(int argc, char **argv)
         const Shape source = lineShape({{-15, 0}, {15, 0}},
                                        makeWorkPlaneFrame(WorkPlane::XZ, 12.0));
         document.append(source);
+        {
+            UpdateSessionViewState sourceView;
+            sourceView.workPlaneFrame = makeWorkPlaneFrame(WorkPlane::XY);
+            sourceView.shading.colorTransform = 4;
+            sourceView.shading.colorLutData = QByteArray(2 * 2 * 2 * 3 * 4, '\0');
+            sourceView.shading.colorLutId = QString::fromLatin1(
+                QCryptographicHash::hash(sourceView.shading.colorLutData,
+                                         QCryptographicHash::Sha256).toHex());
+            sourceView.shading.colorLutMetadata = {2, -0.25, 3.5,
+                                                    QStringLiteral("linear"), 1.0};
+            sourceView.shading.colorExposure = 1.25;
+            sourceView.shading.colorGamma = 0.8;
+            sourceView.shading.colorDitherIntensity = 0.35;
+            const QString colorPath = directory.filePath(QStringLiteral("color-session.json"));
+            RestoredUpdateSession colorRestored;
+            QString colorSessionError;
+            const bool colorSessionWritten = SessionSerializer::write(
+                colorPath, document, sourceView, &colorSessionError);
+            const bool colorSessionRead = colorSessionWritten &&
+                SessionSerializer::read(colorPath, ViewportCameraPreferences{}, false,
+                                         &colorRestored, &colorSessionError);
+            bool colorMatches = colorSessionRead;
+            const auto &color = colorRestored.view.shading;
+            colorMatches = colorMatches && color.colorTransform == 4 &&
+                color.colorLutId == sourceView.shading.colorLutId &&
+                color.colorLutData == sourceView.shading.colorLutData &&
+                color.colorLutMetadata == sourceView.shading.colorLutMetadata &&
+                color.colorExposure == sourceView.shading.colorExposure &&
+                color.colorGamma == sourceView.shading.colorGamma &&
+                color.colorDitherIntensity == sourceView.shading.colorDitherIntensity;
+            if (!colorMatches) {
+                qWarning() << "Update session must preserve render color management"
+                           << "written=" << colorSessionWritten
+                           << "read=" << colorSessionRead
+                           << "error=" << colorSessionError
+                           << "transform=" << color.colorTransform
+                           << "lutId=" << color.colorLutId
+                           << "lutBytes=" << color.colorLutData.size()
+                           << "lutMetadata=" << color.colorLutMetadata.size
+                           << color.colorLutMetadata.domainMin
+                           << color.colorLutMetadata.domainMax
+                           << color.colorLutMetadata.shaper
+                           << color.colorLutMetadata.shaperScale
+                           << "exposure/gamma/dither=" << color.colorExposure
+                           << color.colorGamma << color.colorDitherIntensity;
+                return 1;
+            }
+
+            QFile file(colorPath);
+            if (!file.open(QIODevice::ReadOnly)) return 1;
+            QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+            file.close();
+            QJsonObject shading = root.value(QStringLiteral("viewportShading")).toObject();
+            shading.remove(QStringLiteral("colorTransform"));
+            shading.remove(QStringLiteral("colorLutId"));
+            shading.remove(QStringLiteral("colorLutDataBase64"));
+            shading.remove(QStringLiteral("colorLutMetadata"));
+            shading.remove(QStringLiteral("colorExposure"));
+            shading.remove(QStringLiteral("colorGamma"));
+            shading.remove(QStringLiteral("colorDitherIntensity"));
+            root.insert(QStringLiteral("viewportShading"), shading);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+                file.write(QJsonDocument(root).toJson(QJsonDocument::Compact)) < 0) return 1;
+            file.close();
+            colorMatches = SessionSerializer::read(colorPath, ViewportCameraPreferences{},
+                                                    false, &colorRestored) &&
+                colorRestored.view.shading.colorTransform == 0 &&
+                colorRestored.view.shading.colorLutId.isEmpty() &&
+                colorRestored.view.shading.colorLutData.isEmpty() &&
+                colorRestored.view.shading.colorExposure == 0.0 &&
+                colorRestored.view.shading.colorGamma == 1.0 &&
+                colorRestored.view.shading.colorDitherIntensity == 0.0;
+            shading.insert(QStringLiteral("colorTransform"), 8);
+            root.insert(QStringLiteral("viewportShading"), shading);
+            if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
+                file.write(QJsonDocument(root).toJson(QJsonDocument::Compact)) < 0) return 1;
+            file.close();
+            colorMatches = colorMatches && !SessionSerializer::read(
+                colorPath, ViewportCameraPreferences{}, false, &colorRestored);
+            if (!colorMatches) {
+                qWarning() << "Update session must preserve legacy defaults and reject malformed color settings";
+                return 1;
+            }
+        }
         for (const bool perspective : {false, true}) {
             ViewportTransform sourceTransform;
             sourceTransform.setViewPreset(ViewportViewPreset::Isometric);

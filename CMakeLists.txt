@@ -390,6 +390,10 @@ if (CLASSICAD_BUILD_TESTS)
     )
     add_test(NAME trim_seam COMMAND classicad_trim_seam_test)
     set_tests_properties(trim_seam PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_test(NAME update_session_contracts
+        COMMAND classicad_trim_seam_test --update-only)
+    set_tests_properties(update_session_contracts PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_test(NAME box_selection COMMAND classicad_trim_seam_test --box-only)
     set_tests_properties(box_selection PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;CLASSICAD_LOG_PATH=/tmp/classicad-box-selection-test.log")

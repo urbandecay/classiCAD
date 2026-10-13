@@ -23,6 +23,15 @@ float rasterWorkbenchCameraDepth(const QVector3D &position,
                                  const Point3D &cameraPosition,
                                  const Point3D &viewDirection) noexcept;
 
+// QPainter SSAO sample step, with perspective footprint scaled from the view
+// target depth to the receiver depth. Orthographic views retain the base step.
+float rasterWorkbenchCavityStep(float baseRadiusPixels,
+                                const QVector3D &receiverPosition,
+                                const Point3D &cameraPosition,
+                                const Point3D &viewTarget,
+                                const Point3D &viewDirection,
+                                bool perspective) noexcept;
+
 // Blender's opaque Workbench prepass stores the facing-adjusted view normal
 // with normal_encode in an RG16F target, then effects decode that value.
 QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,

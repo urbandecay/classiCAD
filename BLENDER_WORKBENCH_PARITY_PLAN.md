@@ -20,6 +20,18 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
 
 ## Current classiCAD status
 
+### QPainter perspective cavity footprint (2026-10-13)
+
+- The QPainter SSAO sample step now scales per receiver in perspective views by
+  `viewTargetDepth / receiverDepth`, using the viewport camera position,
+  direction, and target. The existing view-scale-derived radius clamp
+  (`1..64` pixels), minimum step, sampling count, attenuation, and curvature
+  pass are unchanged. Orthographic SSAO keeps its prior constant footprint.
+- This is scoped to the QPainter cavity approximation. It does not change the
+  GPU cavity shader, radius/depth attenuation, background reconstruction,
+  curvature sampling, or claim visual parity with Blender; a matched visual
+  comparison remains pending.
+
 ### GPU opaque depth comparison (2026-10-12)
 
 - The Solid GPU pass now uses `GL_LEQUAL` for opaque surface fragments, so

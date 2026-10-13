@@ -387,6 +387,28 @@ float rasterWorkbenchCameraDepth(const QVector3D &position,
         (position.z() - cameraPosition.z) * viewDirection.z);
 }
 
+float rasterWorkbenchCavityStep(float baseRadiusPixels,
+                                const QVector3D &receiverPosition,
+                                const Point3D &cameraPosition,
+                                const Point3D &viewTarget,
+                                const Point3D &viewDirection,
+                                bool perspective) noexcept
+{
+    float radius = baseRadiusPixels;
+    if (perspective) {
+        const QVector3D target(static_cast<float>(viewTarget.x),
+                               static_cast<float>(viewTarget.y),
+                               static_cast<float>(viewTarget.z));
+        const float targetDepth = rasterWorkbenchCameraDepth(
+            target, cameraPosition, viewDirection);
+        const float receiverDepth = rasterWorkbenchCameraDepth(
+            receiverPosition, cameraPosition, viewDirection);
+        if (targetDepth > 1.0e-6f && receiverDepth > 1.0e-6f)
+            radius *= targetDepth / receiverDepth;
+    }
+    return std::max(1.0f, radius / 2.0f);
+}
+
 QVector3D rasterWorkbenchPrepassNormal(const QVector3D &worldNormal,
                                        bool frontFacing,
                                        const QVector3D &viewRight,
@@ -1769,7 +1791,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         1.0f, 64.0f);
     const float attenuation = std::max(0.01f,
         static_cast<float>(settings.cavityAttenuation));
-    const float step = std::max(1.0f, radius / 2.0f);
+    const Point3D cameraPosition = perspective
+        ? transform.cameraPosition(viewportSize) : transform.viewTarget();
+    const Point3D viewTarget = transform.viewTarget();
     QVector<float> factors(width * height, 1.0f);
     const float ridge = std::max(0.0f,
         static_cast<float>(settings.cavityRidgeFactor));
@@ -1786,6 +1810,9 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         for (int x = 0; x < width; ++x) {
             const RasterSample &center = opaqueSamples[y * width + x];
             if (center.objectId == 0) continue;
+            const float step = rasterWorkbenchCavityStep(
+                radius, center.position, cameraPosition, viewTarget,
+                towardCamera, perspective);
             float cavityAmount = 0.0f;
             float edgeAmount = 0.0f;
             float ridgeResponse = 0.0f;

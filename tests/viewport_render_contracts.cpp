@@ -75,6 +75,26 @@ int main(int argc, char *argv[])
     QGuiApplication application(argc, argv);
     bool passed = true;
 
+    const Point3D cavityCamera{0.0, 0.0, 10.0};
+    const Point3D cavityTarget{0.0, 0.0, 0.0};
+    const Point3D cavityViewDirection{0.0, 0.0, 1.0};
+    const float nearCavityStep = rasterWorkbenchCavityStep(
+        20.0f, QVector3D(0.0f, 0.0f, 8.0f), cavityCamera,
+        cavityTarget, cavityViewDirection, true);
+    const float farCavityStep = rasterWorkbenchCavityStep(
+        20.0f, QVector3D(0.0f, 0.0f, 5.0f), cavityCamera,
+        cavityTarget, cavityViewDirection, true);
+    const float orthographicNearStep = rasterWorkbenchCavityStep(
+        20.0f, QVector3D(0.0f, 0.0f, 8.0f), cavityCamera,
+        cavityTarget, cavityViewDirection, false);
+    const float orthographicFarStep = rasterWorkbenchCavityStep(
+        20.0f, QVector3D(0.0f, 0.0f, 5.0f), cavityCamera,
+        cavityTarget, cavityViewDirection, false);
+    passed &= check(nearCavityStep > farCavityStep &&
+                        orthographicNearStep == 10.0f &&
+                        orthographicFarStep == orthographicNearStep,
+                    "QPainter cavity SSAO footprint must shrink with perspective receiver depth and stay fixed in orthographic views");
+
     const QVector3D frontPrepassNormal = rasterWorkbenchPrepassNormal(
         QVector3D(0.2f, -0.3f, 0.9327379f), true,
         QVector3D(1.0f, 0.0f, 0.0f), QVector3D(0.0f, 1.0f, 0.0f),

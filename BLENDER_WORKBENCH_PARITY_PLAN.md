@@ -527,6 +527,13 @@ in ordinary free views or orthographic views is superseded by this correction.
 
 ### QPainter scene-linear surface resolve (2026-10-12)
 
+- **Stage 1 implemented (2026-10-13):** added the standalone CPU module
+  `viewport_raster_workbench_linear.{h,cpp}` with a premultiplied scene-linear
+  RGBA pixel and depth-ordered straight-color fragment resolver. Its focused
+  `workbench_scene_linear_resolve_contracts` test checks far-to-near source-over,
+  transparent-film alpha, preservation above 1.0, and Standard sRGB conversion
+  after composition versus per-fragment conversion before composition. The
+  resolver is not yet called by the viewport; this stage changes no output.
 - **Blocker:** the QPainter Workbench path does not retain scene-linear
   surface color through cross-object composition. `ViewportRenderer` applies
   `workbenchSceneLinearToDisplaySrgb` while rasterizing mesh triangles and

@@ -185,6 +185,7 @@ set(CLASSICAD_VIEWPORT_SHARED_SOURCES
     src/ui/viewport/viewport_geometry_cache.cpp
     src/ui/viewport/viewport_render_frame.cpp
     src/ui/viewport/viewport_raster_workbench_effects.cpp
+    src/ui/viewport/viewport_raster_workbench_linear.cpp
     src/ui/viewport/navigation_gizmo.cpp
     src/ui/viewport/viewport_arc_compass_renderer.cpp
     src/ui/viewport/viewport_hud_renderer.cpp
@@ -484,6 +485,15 @@ if (CLASSICAD_BUILD_TESTS)
     set_tests_properties(viewport_render_contracts PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+
+    add_executable(classicad_workbench_scene_linear_resolve_contracts_test
+        tests/workbench_scene_linear_resolve_contracts.cpp
+        src/ui/viewport/viewport_raster_workbench_linear.cpp
+    )
+    classicad_configure_cpp_target(
+        classicad_workbench_scene_linear_resolve_contracts_test)
+    add_test(NAME workbench_scene_linear_resolve_contracts
+        COMMAND classicad_workbench_scene_linear_resolve_contracts_test)
 
     add_executable(classicad_workbench_render_pass_capture_test
         tests/workbench_render_pass_capture.cpp

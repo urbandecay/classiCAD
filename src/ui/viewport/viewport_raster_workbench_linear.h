@@ -1,0 +1,41 @@
+/* SPDX-FileCopyrightText: 2026 classiCAD contributors
+ * SPDX-License-Identifier: GPL-2.0-or-later */
+#pragma once
+
+#include <array>
+#include <vector>
+
+namespace classiCAD {
+
+// Premultiplied scene-linear RGBA. RGB is intentionally allowed above 1.0;
+// this type is the CPU Workbench surface path's pre-display-transform value.
+struct RasterWorkbenchLinearPixel {
+    float red = 0.0f;
+    float green = 0.0f;
+    float blue = 0.0f;
+    float alpha = 0.0f;
+
+    static RasterWorkbenchLinearPixel fromStraight(float red, float green,
+                                                    float blue, float alpha) noexcept;
+};
+
+// A straight-color fragment at one pixel. Smaller cameraDepth values are
+// farther from the camera; fragments at a pixel resolve far-to-near. Equal
+// depths retain their input order.
+struct RasterWorkbenchLinearFragment {
+    int x = 0;
+    int y = 0;
+    float cameraDepth = 0.0f;
+    std::array<float, 3> sceneLinearRgb{};
+    float alpha = 1.0f;
+};
+
+// Resolve depth-sorted fragments over a premultiplied scene-linear base.
+// Invalid dimensions, pixels, alpha values, or non-finite inputs fail without
+// modifying `output`. On success output has width*height row-major pixels.
+bool resolveRasterWorkbenchLinearFragments(
+    int width, int height, const RasterWorkbenchLinearPixel &base,
+    const std::vector<RasterWorkbenchLinearFragment> &fragments,
+    std::vector<RasterWorkbenchLinearPixel> *output);
+
+} // namespace classiCAD

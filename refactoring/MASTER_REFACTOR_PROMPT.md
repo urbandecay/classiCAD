@@ -177,6 +177,8 @@ src/ui/viewport/shaders/scene_depth.*     depth-only scene geometry shader pair
 src/ui/viewport/shaders/scene_stroke.*    antialiased GPU scene stroke shader set
 src/ui/viewport/shaders/scene_point.*     antialiased GPU point marker shader pair
 src/ui/viewport/viewport_renderer.* committed-geometry projection, CPU grid fallback, axes, control-point, and subdivision drawing
+src/ui/viewport/viewport_raster_workbench_effects.* CPU fallback depth, surface composition, outline, cavity, and depth-of-field effects
+src/ui/viewport/viewport_raster_workbench_linear.* premultiplied float scene-linear pixels and depth-ordered source-over fragment resolve for the QPainter Workbench path
 src/ui/viewport/viewport_overlay.*  snap-marker/tool-preview coordination, generic selection box, and control-point/subdivision delegation
 src/ui/main_window.*               menus, panel composition, setting application, and window wiring
 cmake/ClassicadTargets.cmake       shared target configuration, unused Qt codegen exclusion, and object-module assembly

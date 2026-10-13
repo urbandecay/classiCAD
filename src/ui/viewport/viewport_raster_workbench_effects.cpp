@@ -655,6 +655,29 @@ bool compositeRasterWorkbenchSurfaces(
     return true;
 }
 
+float rasterWorkbenchCurvatureResponse(
+    quint64 objectUp, quint64 objectDown, quint64 objectRight,
+    quint64 objectLeft, float normalUp, float normalDown,
+    float normalRight, float normalLeft, float ridgeFactor,
+    float valleyFactor) noexcept
+{
+    if (objectUp != objectDown || objectRight != objectLeft ||
+        (objectUp == 0 && objectRight == 0)) {
+        return 0.0f;
+    }
+    const float normalDifference = (normalUp - normalDown) +
+                                   (normalRight - normalLeft);
+    const bool valley = normalDifference < 0.0f;
+    const float factor = std::max(valley ? valleyFactor : ridgeFactor, 0.0f);
+    const float control = (valley ? 0.7f : 0.5f) /
+        std::max(factor * factor, 1.0e-4f);
+    const float value = std::abs(normalDifference);
+    const float softClamp = value < 0.5f / control
+        ? value * (1.0f - value * control)
+        : 0.25f / control;
+    return (valley ? -2.0f : 2.0f) * softClamp;
+}
+
 void applyRasterWorkbenchEffects(QImage *colorImage,
                                  const QVector<ViewportRenderObject> &objects,
                                  const ViewportTransform &transform,
@@ -1127,6 +1150,10 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
         viewUp.y * towardCamera.z - viewUp.z * towardCamera.y,
         viewUp.z * towardCamera.x - viewUp.x * towardCamera.z,
         viewUp.x * towardCamera.y - viewUp.y * towardCamera.x};
+    const QVector3D viewUpVector(float(viewUp.x), float(viewUp.y),
+                                 float(viewUp.z));
+    const QVector3D viewRightVector(float(viewRight.x), float(viewRight.y),
+                                    float(viewRight.z));
     const float cavityDistance = std::max(
         0.0f, static_cast<float>(settings.cavityDistance));
 
@@ -1140,6 +1167,31 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             float valleyResponse = 0.0f;
             int validNeighbors = 0;
             bool hadBackgroundCavitySample = false;
+            if (curvature) {
+                // Blender's curvature pass samples four cardinal neighbors
+                // at ui_scale, rejects object-ID outline pixels, and takes
+                // signed differences of view-space normal components.
+                const int curvatureStep = std::max(1, qRound(dpr));
+                const auto sampleAt = [&](int sx, int sy)
+                    -> const RasterSample & {
+                    sx = std::clamp(sx, 0, width - 1);
+                    sy = std::clamp(sy, 0, height - 1);
+                    return opaqueSamples[sy * width + sx];
+                };
+                const RasterSample &up = sampleAt(x, y - curvatureStep);
+                const RasterSample &down = sampleAt(x, y + curvatureStep);
+                const RasterSample &right = sampleAt(x + curvatureStep, y);
+                const RasterSample &left = sampleAt(x - curvatureStep, y);
+                const float response = rasterWorkbenchCurvatureResponse(
+                    up.objectId, down.objectId, right.objectId, left.objectId,
+                    QVector3D::dotProduct(up.normal, viewUpVector),
+                    QVector3D::dotProduct(down.normal, viewUpVector),
+                    QVector3D::dotProduct(right.normal, viewRightVector),
+                    QVector3D::dotProduct(left.normal, viewRightVector),
+                    curvatureRidge, curvatureValley);
+                if (response < 0.0f) valleyResponse = -response;
+                else ridgeResponse = response;
+            }
             const float noiseAngle = rasterCavityNoise(x, y, 0) *
                                      6.28318530718f;
             const float rotationX = std::cos(noiseAngle);
@@ -1217,7 +1269,6 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     continue;
                 }
                 ++validNeighbors;
-                const float delta = neighbor.depth - center.depth;
                 if (ssao) {
                     // The shader evaluates these values in view space. A
                     // rigid view rotation preserves vector length and dot
@@ -1238,34 +1289,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     if (edgeDot > bias)
                         edgeAmount += edgeDot * distanceAttenuation;
                 }
-                if (curvature) {
-                    const float normalDelta = 1.0f - std::clamp(
-                        QVector3D::dotProduct(center.normal, neighbor.normal),
-                        -1.0f, 1.0f);
-                    const float sign = delta >= 0.0f ? 1.0f : -1.0f;
-                    if (sign > 0.0f) ridgeResponse += normalDelta;
-                    else valleyResponse += normalDelta;
-                    if (neighbor.objectId != center.objectId)
-                        ridgeResponse += 0.25f;
-                }
             }
             if (validNeighbors == 0 && !hadBackgroundCavitySample) continue;
-            const float invCount = validNeighbors > 0
-                                       ? 1.0f / static_cast<float>(validNeighbors)
-                                       : 0.0f;
             cavityAmount = ssao
                 ? saturate(cavityAmount / static_cast<float>(requested) * valley)
                 : 0.0f;
             edgeAmount = ssao
                 ? edgeAmount / static_cast<float>(requested) * ridge
                 : 0.0f;
-            ridgeResponse = saturate(ridgeResponse * invCount *
-                                     curvatureRidge);
-            valleyResponse = saturate(valleyResponse * invCount *
-                                      curvatureValley);
             factors[y * width + x] = std::clamp(
                 (1.0f - cavityAmount) * (1.0f + edgeAmount) *
-                    (1.0f + ridgeResponse + valleyResponse),
+                    (1.0f + ridgeResponse - valleyResponse),
                 0.0f, 4.0f);
         }
     }

@@ -26,6 +26,15 @@ QPointF rasterWorkbenchApertureTap(QPointF tap, int apertureBlades,
                                   qreal apertureRotationRadians,
                                   qreal apertureRatio) noexcept;
 
+// Blender Workbench's signed screen-curvature response from four cardinal
+// view-space normal components and their object-ID outline mask.
+float rasterWorkbenchCurvatureResponse(quint64 objectUp, quint64 objectDown,
+                                      quint64 objectRight, quint64 objectLeft,
+                                      float normalUp, float normalDown,
+                                      float normalRight, float normalLeft,
+                                      float ridgeFactor,
+                                      float valleyFactor) noexcept;
+
 // Retained surface layers let the QPainter cavity approximation shade the
 // opaque receiver before applying the already resolved transparent surface
 // contribution, as Blender does with its opaque and transparent passes.

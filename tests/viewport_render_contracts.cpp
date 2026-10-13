@@ -71,6 +71,23 @@ int main(int argc, char *argv[])
     QGuiApplication application(argc, argv);
     bool passed = true;
 
+    const float ridgeResponse = rasterWorkbenchCurvatureResponse(
+        1, 1, 1, 1, 0.5f, 0.0f, 0.25f, 0.0f, 1.0f, 1.0f);
+    const float valleyResponse = rasterWorkbenchCurvatureResponse(
+        1, 1, 1, 1, 0.0f, 0.5f, 0.0f, 0.25f, 1.0f, 1.0f);
+    const float reducedRidgeResponse = rasterWorkbenchCurvatureResponse(
+        1, 1, 1, 1, 0.5f, 0.0f, 0.25f, 0.0f, 0.5f, 1.0f);
+    passed &= check(ridgeResponse > 0.0f && valleyResponse < 0.0f &&
+                        reducedRidgeResponse > 0.0f &&
+                        reducedRidgeResponse < ridgeResponse,
+                    "QPainter curvature must preserve Blender ridge/valley signs and respond to the separate ridge control");
+    passed &= check(
+        rasterWorkbenchCurvatureResponse(1, 2, 1, 1, 0.5f, 0.0f,
+                                         0.25f, 0.0f, 1.0f, 1.0f) == 0.0f &&
+            rasterWorkbenchCurvatureResponse(0, 0, 0, 0, 0.5f, 0.0f,
+                                             0.25f, 0.0f, 1.0f, 1.0f) == 0.0f,
+        "QPainter curvature must suppress object-ID outlines and background");
+
     passed &= check(
         blenderRenderAntiAliasingMode(QStringLiteral("OFF")) == 0 &&
             blenderRenderAntiAliasingMode(QStringLiteral("FXAA")) == 1 &&

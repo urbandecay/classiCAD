@@ -405,7 +405,9 @@ private:
 
     void showWorkbenchRenderResult(const WorkbenchRenderResult &result)
     {
-        const QSize outputSize = result.combined.size();
+        const QSize outputSize = result.outputSize.isEmpty()
+                                     ? result.combined.size()
+                                     : result.outputSize;
         QDialog window(this);
         window.setWindowTitle(QStringLiteral("Last Workbench Render Result — %1 × %2")
                                   .arg(outputSize.width()).arg(outputSize.height()));
@@ -428,8 +430,13 @@ private:
         auto *preview = new QLabel(&window);
         preview->setAlignment(Qt::AlignCenter);
         preview->setMinimumSize(640, 480);
-        preview->setPixmap(QPixmap::fromImage(result.combined).scaled(
-            960, 680, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        if (result.combinedPassAvailable) {
+            preview->setPixmap(QPixmap::fromImage(result.combined).scaled(
+                960, 680, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        } else {
+            preview->setText(QStringLiteral(
+                "Combined pass disabled in the active Blender view layer."));
+        }
         layout->addWidget(preview, 1);
         auto *buttons = new QHBoxLayout;
         auto *saveCombined = new QPushButton(
@@ -437,7 +444,7 @@ private:
                 .arg(result.combinedFileExtension().toUpper()), &window);
         saveCombined->setEnabled(result.combinedPassAvailable);
         auto *saveDepth = new QPushButton(QStringLiteral("Save Depth PFM…"), &window);
-        saveDepth->setEnabled(result.depthPassAvailable);
+        saveDepth->setEnabled(result.hasDepthPass());
         auto *close = new QPushButton(QStringLiteral("Close"), &window);
         buttons->addWidget(saveCombined);
         buttons->addWidget(saveDepth);

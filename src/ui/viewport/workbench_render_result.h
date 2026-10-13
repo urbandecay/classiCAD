@@ -106,6 +106,7 @@ inline void applyWorkbenchRenderDither(QImage *image, qreal intensity,
 // and optics used to produce it.
 struct WorkbenchRenderResult {
     QImage combined;
+    QSize outputSize;
     // Scene-linear RGBA Combined pass, tightly packed as four floats per
     // pixel. This is independent of the display-referred QImage above.
     QVector<float> sceneLinearRgba;
@@ -140,8 +141,14 @@ struct WorkbenchRenderResult {
 
     bool isValid() const noexcept
     {
-        return !combined.isNull();
+        const bool hasCombined = combinedPassAvailable && !combined.isNull();
+        const bool hasDepth = hasDepthPass();
+        return hasCombined || hasDepth;
     }
+
+    // Drop output payloads that were not registered by the selected Blender
+    // view layer. The renderer may still use depth internally while drawing.
+    void discardUnavailablePassPayloads();
 
     bool hasValidSceneLinearCombined() const noexcept
     {
@@ -154,14 +161,16 @@ struct WorkbenchRenderResult {
 
     bool hasDepthPass() const noexcept
     {
-        return depthPassAvailable && isValid() &&
-               depth.size() == qsizetype(combined.width()) * combined.height();
+        const QSize size = outputSize.isEmpty() ? combined.size() : outputSize;
+        return depthPassAvailable && !size.isEmpty() &&
+               depth.size() == qsizetype(size.width()) * size.height();
     }
 
     bool hasSceneLinearDepthPass() const noexcept
     {
         return hasDepthPass() && hasValidSceneLinearCombined() &&
-               sceneLinearSize == combined.size();
+               sceneLinearSize == (outputSize.isEmpty() ? combined.size()
+                                                         : outputSize);
     }
 
     bool savePng(const QString &path, QString *errorMessage = nullptr) const;

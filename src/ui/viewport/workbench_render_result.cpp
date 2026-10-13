@@ -455,6 +455,17 @@ bool WorkbenchRenderResult::openExrWriterAvailable() noexcept
 #endif
 }
 
+void WorkbenchRenderResult::discardUnavailablePassPayloads()
+{
+    if (outputSize.isEmpty()) outputSize = combined.size();
+    if (!combinedPassAvailable) {
+        combined = QImage();
+        sceneLinearRgba.clear();
+        sceneLinearSize = QSize();
+    }
+    if (!depthPassAvailable) depth.clear();
+}
+
 bool WorkbenchRenderResult::saveCombinedOpenExr(
     const QString &path, QString *errorMessage) const
 {
@@ -779,8 +790,9 @@ bool WorkbenchRenderResult::saveCombinedImage(
                       camera.sensorWidthMillimeters);
     cameraJson.insert(QStringLiteral("opticalSensorSizeMillimeters"),
                       camera.opticalSensorSizeMillimeters);
-    cameraJson.insert(QStringLiteral("outputWidthPixels"), combined.width());
-    cameraJson.insert(QStringLiteral("outputHeightPixels"), combined.height());
+    const QSize imageSize = outputSize.isEmpty() ? combined.size() : outputSize;
+    cameraJson.insert(QStringLiteral("outputWidthPixels"), imageSize.width());
+    cameraJson.insert(QStringLiteral("outputHeightPixels"), imageSize.height());
     cameraJson.insert(QStringLiteral("pixelAspectX"), pixelAspectX);
     cameraJson.insert(QStringLiteral("pixelAspectY"), pixelAspectY);
     cameraJson.insert(QStringLiteral("imageQuality"), imageQuality);
@@ -927,11 +939,12 @@ bool WorkbenchRenderResult::saveDepthPfm(const QString &path,
     // PFM uses the sign of its scale value to declare the byte order of the
     // following float samples. Write native floats and declare that order so
     // the depth pass remains valid on both little- and big-endian hosts.
+    const QSize imageSize = outputSize.isEmpty() ? combined.size() : outputSize;
     const char *scale = QSysInfo::ByteOrder == QSysInfo::LittleEndian
                             ? "-1.0" : "1.0";
     const QByteArray header = QStringLiteral("Pf\n%1 %2\n%3\n")
-                                  .arg(combined.width())
-                                  .arg(combined.height())
+                                  .arg(imageSize.width())
+                                  .arg(imageSize.height())
                                   .arg(QString::fromLatin1(scale)).toLatin1();
     if (file.write(header) != header.size()) {
         if (errorMessage != nullptr) {
@@ -939,10 +952,10 @@ bool WorkbenchRenderResult::saveDepthPfm(const QString &path,
         }
         return false;
     }
-    for (int y = combined.height() - 1; y >= 0; --y) {
+    for (int y = imageSize.height() - 1; y >= 0; --y) {
         const float *row = depth.constData() +
-                           qsizetype(y) * combined.width();
-        const qint64 bytes = qint64(combined.width()) * qint64(sizeof(float));
+                           qsizetype(y) * imageSize.width();
+        const qint64 bytes = qint64(imageSize.width()) * qint64(sizeof(float));
         if (file.write(reinterpret_cast<const char *>(row), bytes) != bytes) {
             if (errorMessage != nullptr) {
                 *errorMessage = file.errorString();

@@ -6896,7 +6896,9 @@ public:
             captureSceneLinearCombined ? &result.sceneLinearRgba : nullptr,
             renderAntiAliasingMode, transparentFilm,
             noSceneWorldBackground);
-        if (result.isValid()) {
+        result.outputSize = outputSize;
+        result.discardUnavailablePassPayloads();
+        if (result.isValid() && result.combinedPassAvailable) {
             // CAD dimensions are committed scene annotations, not transient
             // editor overlays. Include them in the saved result at the chosen
             // output resolution while leaving the grid and tool overlays out.

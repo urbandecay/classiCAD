@@ -982,6 +982,49 @@ int main(int argc, char *argv[])
                         annotationHdrSaved &&
                         QFileInfo(annotationHdrPath).size() > 32,
                     "HDR Combined writer must accept the scene-linear buffer containing committed dimension annotations");
+
+    const auto makePassResult = [](bool combinedAvailable,
+                                   bool depthAvailable) {
+        WorkbenchRenderResult result;
+        result.outputSize = QSize(2, 2);
+        result.combined = QImage(result.outputSize, QImage::Format_RGBA64);
+        result.combined.fill(Qt::black);
+        result.depth = QVector<float>(4, 3.0f);
+        result.combinedPassAvailable = combinedAvailable;
+        result.depthPassAvailable = depthAvailable;
+        result.discardUnavailablePassPayloads();
+        return result;
+    };
+    WorkbenchRenderResult combinedOnly = makePassResult(true, false);
+    WorkbenchRenderResult depthOnly = makePassResult(false, true);
+    WorkbenchRenderResult noPasses = makePassResult(false, false);
+    QTemporaryDir passResultDirectory;
+    const QString combinedOnlyDepthPath = passResultDirectory.filePath(
+        QStringLiteral("combined-only.pfm"));
+    const QString depthOnlyPath = passResultDirectory.filePath(
+        QStringLiteral("depth-only.pfm"));
+    QString passSaveError;
+    const bool combinedOnlyRejectsDepth =
+        !combinedOnly.saveDepthPfm(combinedOnlyDepthPath, &passSaveError);
+    passSaveError.clear();
+    const bool depthOnlySavesDepth =
+        depthOnly.saveDepthPfm(depthOnlyPath, &passSaveError);
+    QFile depthOnlyFile(depthOnlyPath);
+    const bool depthOnlyHeaderValid = depthOnlyFile.open(QIODevice::ReadOnly) &&
+        depthOnlyFile.readLine() == QByteArray("Pf\n") &&
+        depthOnlyFile.readLine() == QByteArray("2 2\n");
+    passSaveError.clear();
+    const bool depthOnlyRejectsCombined = !depthOnly.saveCombinedImage(
+        passResultDirectory.filePath(QStringLiteral("disabled.png")),
+        &passSaveError);
+    passed &= check(combinedOnly.isValid() && !combinedOnly.combined.isNull() &&
+                        combinedOnly.depth.isEmpty() &&
+                        combinedOnlyRejectsDepth && depthOnly.isValid() &&
+                        depthOnly.combined.isNull() && depthOnly.hasDepthPass() &&
+                        depthOnlySavesDepth && depthOnlyHeaderValid &&
+                        depthOnlyRejectsCombined && !noPasses.isValid() &&
+                        noPasses.combined.isNull() && noPasses.depth.isEmpty(),
+                    "Workbench result assembly must expose and save only registered Combined/Z passes, and reject an empty result");
     if (WorkbenchRenderResult::openExrWriterAvailable()) {
         annotationHdrResult.blenderImageFormat = QStringLiteral("OPEN_EXR");
         const QString annotationExrPath = annotationOutputDirectory.filePath(

@@ -1,6 +1,7 @@
 #include "ui/viewport/workbench_render_result.h"
 
 #include <QDebug>
+#include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImageWriter>
@@ -141,6 +142,39 @@ int main(int argc, char *argv[])
                         QFileInfo(extensionlessPngPath).size() > 0,
                     "Blender's disabled file-extension setting must still write the selected image format without adding a suffix");
     result.useFileExtension = true;
+
+    result.blenderImageFormat = QStringLiteral("JPEG");
+    result.combined = QImage(128, 128, QImage::Format_RGB32);
+    quint32 noise = 0x13579bdfu;
+    for (int y = 0; y < result.combined.height(); ++y) {
+        for (int x = 0; x < result.combined.width(); ++x) {
+            noise = noise * 1664525u + 1013904223u;
+            result.combined.setPixel(
+                x, y, qRgb(int((noise >> 16) & 0xff),
+                           int((noise >> 8) & 0xff),
+                           int(noise & 0xff)));
+        }
+    }
+    result.imageQuality = 0;
+    const QString lowQualityPath =
+        outputDirectory.filePath(QStringLiteral("quality_0.jpg"));
+    QString lowQualityError;
+    const bool wroteZeroQuality = result.saveCombinedImage(
+        lowQualityPath, &lowQualityError);
+    result.imageQuality = 75;
+    const QString defaultQualityPath =
+        outputDirectory.filePath(QStringLiteral("quality_75.jpg"));
+    QString defaultQualityError;
+    const bool wroteSeventyFiveQuality = result.saveCombinedImage(
+        defaultQualityPath, &defaultQualityError);
+    QFile lowQualityFile(lowQualityPath);
+    QFile defaultQualityFile(defaultQualityPath);
+    const bool readQualityOutputs = lowQualityFile.open(QIODevice::ReadOnly) &&
+        defaultQualityFile.open(QIODevice::ReadOnly);
+    passed &= check(wroteZeroQuality && wroteSeventyFiveQuality &&
+                        readQualityOutputs &&
+                        lowQualityFile.readAll() != defaultQualityFile.readAll(),
+                    "Blender JPEG quality 0 must be preserved instead of falling back to quality 75");
 
     result.blenderImageFormat = QStringLiteral("HDR");
     const QString hdrPath = outputDirectory.filePath(QStringLiteral("linear.hdr"));

@@ -2503,3 +2503,15 @@ Blender 5.2 manual pages provide the user-facing behavior to cross-check against
   completed and the focused CTest passed. The broader `trim_seam` executable
   still reports three pre-existing box-selection assertion failures and does
   not serve as evidence for this focused persistence contract.
+
+### Render-result JPEG quality zero (2026-10-13)
+
+- Blender image quality accepts the full 0–100 range. The Qt JPEG writer path
+  previously treated zero as an unset value and substituted quality 75; it now
+  clamps only out-of-range values and preserves zero. A format contract saves
+  the same deterministic noisy image at qualities 0 and 75 and verifies the
+  encoded outputs differ, guarding against the old fallback.
+- `cmake --build build -j4` completed, the focused
+  `workbench_render_result_format_contracts` CTest passed, and
+  `git diff --check` passed. Blender documents the range in its pinned
+  [ImageFormatSettings API](https://docs.blender.org/api/5.2/bpy.types.ImageFormatSettings.html#bpy.types.ImageFormatSettings.quality).

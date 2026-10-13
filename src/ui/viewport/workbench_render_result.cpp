@@ -158,7 +158,7 @@ void applyImageWriterSettings(QImageWriter *writer,
     if (writer == nullptr) return;
     const QString key = blenderFormat.toUpper();
     if (writerFormat == QLatin1String("jpeg")) {
-        writer->setQuality(quality <= 0 ? 75 : std::min(quality, 100));
+        writer->setQuality(std::clamp(quality, 0, 100));
     } else if (writerFormat == QLatin1String("png")) {
         const int compressionLevel = std::clamp(
             int(float(std::clamp(compression, 0, 100)) / 11.1111f), 0, 9);

@@ -45,13 +45,15 @@ struct PolygonShadowEdgeUse {
     int to = -1;
 };
 
-bool buildClosedPolygonShadowMesh(
+bool buildPolygonShadowMesh(
     const PolygonMesh3D &mesh,
     const std::array<double, 16> &matrix,
     QVector<QVector3D> *shadowVertices,
-    QVector<std::array<int, 3>> *shadowTriangles)
+    QVector<std::array<int, 3>> *shadowTriangles,
+    bool *closed)
 {
     if (shadowVertices == nullptr || shadowTriangles == nullptr ||
+        closed == nullptr ||
         mesh.vertices.size() < 4 || mesh.faces.isEmpty()) {
         return false;
     }
@@ -128,9 +130,9 @@ bool buildClosedPolygonShadowMesh(
         return false;
     }
 
-    // Edge counts alone admit closed shells pinched together at one vertex.
-    // A triangulated closed 2-manifold has one connected cycle in the link
-    // around every vertex.
+    // Edge counts alone admit shells/sheets pinched together at one vertex.
+    // A manifold triangulation has one connected cycle at interior vertices
+    // and one connected path at boundary vertices.
     QVector<QVector<std::array<int, 2>>> vertexLinks(vertices.size());
     for (const auto &triangle : triangles) {
         vertexLinks[triangle[0]].append({triangle[1], triangle[2]});
@@ -150,9 +152,12 @@ bool buildClosedPolygonShadowMesh(
             adjacency[first].insert(second);
             adjacency[second].insert(first);
         }
+        int pathEnds = 0;
         for (auto it = adjacency.cbegin(); it != adjacency.cend(); ++it) {
-            if (it.value().size() != 2) return false;
+            if (it.value().size() == 1) ++pathEnds;
+            else if (it.value().size() != 2) return false;
         }
+        if (pathEnds != 0 && pathEnds != 2) return false;
         QSet<int> visited;
         QVector<int> pending{adjacency.constBegin().key()};
         while (!pending.isEmpty()) {
@@ -205,8 +210,43 @@ bool buildClosedPolygonShadowMesh(
             if (++use.count > 2) return false;
         }
     }
+    QHash<int, QSet<int>> boundaryAdjacency;
+    bool hasBoundary = false;
     for (const PolygonShadowEdgeUse &use : edgeUses) {
-        if (use.count != 2) return false;
+        if (use.count == 1) {
+            hasBoundary = true;
+            boundaryAdjacency[use.from].insert(use.to);
+            boundaryAdjacency[use.to].insert(use.from);
+        } else if (use.count != 2) {
+            return false;
+        }
+    }
+    // A supported open mesh has disjoint simple boundary loops. This excludes
+    // dangling borders and branched/nonmanifold boundary vertices.
+    for (auto it = boundaryAdjacency.cbegin(); it != boundaryAdjacency.cend(); ++it) {
+        if (it.value().size() != 2) return false;
+    }
+    QSet<int> boundaryVisited;
+    for (auto it = boundaryAdjacency.cbegin(); it != boundaryAdjacency.cend(); ++it) {
+        if (boundaryVisited.contains(it.key())) continue;
+        QSet<int> component;
+        QVector<int> pending{it.key()};
+        while (!pending.isEmpty()) {
+            const int vertex = pending.takeLast();
+            if (component.contains(vertex)) continue;
+            component.insert(vertex);
+            for (const int neighbor : boundaryAdjacency.value(vertex))
+                if (!component.contains(neighbor)) pending.append(neighbor);
+        }
+        if (component.size() < 3) return false;
+        boundaryVisited.unite(component);
+    }
+
+    if (hasBoundary) {
+        *closed = false;
+        *shadowVertices = std::move(vertices);
+        *shadowTriangles = std::move(triangles);
+        return true;
     }
 
     QHash<int, QVector3D> componentOrigins;
@@ -268,6 +308,7 @@ bool buildClosedPolygonShadowMesh(
 
     *shadowVertices = std::move(vertices);
     *shadowTriangles = std::move(triangles);
+    *closed = true;
     return true;
 }
 
@@ -2318,10 +2359,12 @@ void ViewportSurfaceRenderer::prepareGeometry(
             const int meshFirstRange = ranges_.size();
             QVector<QVector3D> meshShadowVertices;
             QVector<std::array<int, 3>> meshShadowTriangles;
-            const bool meshHasClosedShadowTopology =
-                buildClosedPolygonShadowMesh(mesh, object.meshObjectTransform,
-                                             &meshShadowVertices,
-                                             &meshShadowTriangles);
+            bool meshShadowTopologyClosed = false;
+            const bool meshHasShadowTopology =
+                buildPolygonShadowMesh(mesh, object.meshObjectTransform,
+                                       &meshShadowVertices,
+                                       &meshShadowTriangles,
+                                       &meshShadowTopologyClosed);
             const MeshColorAttribute *activeAttribute = nullptr;
             for (const MeshColorAttribute &attribute : mesh.colorAttributes) {
                 if (attribute.name == mesh.activeColorAttributeName) {
@@ -2504,7 +2547,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     : QVector<DocumentImageTextureTile>{};
                 ranges_.append(std::move(range));
             }
-            if (meshHasClosedShadowTopology &&
+            if (meshHasShadowTopology &&
                 meshFirstRange < ranges_.size()) {
                 // Mesh faces have separate material/color draw ranges. Mark
                 // every face as belonging to this validated volume so the
@@ -2514,7 +2557,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                      rangeIndex < ranges_.size(); ++rangeIndex) {
                     DrawRange &range = ranges_[rangeIndex];
                     range.shadowVolumeSupported = true;
-                    range.shadowVolumeClosed = true;
+                    range.shadowVolumeClosed = meshShadowTopologyClosed;
                     range.shadowVolumePolygonMesh = true;
                 }
                 ranges_[meshFirstRange].shadowVertices =

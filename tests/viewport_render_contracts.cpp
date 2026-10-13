@@ -2677,6 +2677,44 @@ int main(int argc, char *argv[])
                         *image = framebuffer.toImage();
                         return !image->isNull();
                     };
+                    // Removing one cube face leaves a manifold sheet with one
+                    // simple boundary loop. It must still contribute its
+                    // boundary-closed forced-fail stencil volume.
+                    ViewportRenderObject openPolygonMesh = polygonCubeObject;
+                    openPolygonMesh.objectId = ObjectId::fromValue(803);
+                    openPolygonMesh.shape.polygonMesh.faces.removeLast();
+                    openPolygonMesh.shape.polygonMesh.faceMaterialIndices =
+                        QVector<int>(openPolygonMesh.shape.polygonMesh.faces.size(), 0);
+                    openPolygonMesh.preparedDepthGeometry =
+                        QSharedPointer<ViewportDepthGeometry>::create(
+                            buildViewportDepthGeometry(openPolygonMesh.shape));
+                    QImage openMeshBaseline;
+                    QImage openMeshShadow;
+                    const bool openMeshBaselineRendered = renderCoordinatedScene(
+                        rawFaceShading, QByteArrayLiteral("open-mesh-shadow-baseline"),
+                        &openMeshBaseline, &openPolygonMesh);
+                    const bool openMeshShadowRendered = renderCoordinatedScene(
+                        shadowShading, QByteArrayLiteral("open-mesh-shadow"),
+                        &openMeshShadow, &openPolygonMesh);
+                    int openMeshShadowChangedPixels = 0;
+                    if (openMeshBaselineRendered && openMeshShadowRendered &&
+                        openMeshBaseline.size() == openMeshShadow.size()) {
+                        for (int y = 0; y < openMeshShadow.height(); ++y) {
+                            for (int x = 0; x < openMeshShadow.width(); ++x) {
+                                const QColor base = openMeshBaseline.pixelColor(x, y);
+                                const QColor shadow = openMeshShadow.pixelColor(x, y);
+                                if (std::max({base.red() - shadow.red(),
+                                              base.green() - shadow.green(),
+                                              base.blue() - shadow.blue()}) >= 2) {
+                                    ++openMeshShadowChangedPixels;
+                                }
+                            }
+                        }
+                    }
+                    passed &= check(openMeshBaselineRendered &&
+                                        openMeshShadowRendered &&
+                                        openMeshShadowChangedPixels > 0,
+                                    "open manifold polygon meshes must render a stencil shadow volume along their simple boundary loop");
                     const QString polygonCubeCapturePath =
                         qEnvironmentVariable(
                             "CLASSICAD_VIEWPORT_POLYGON_CUBE_CAPTURE");

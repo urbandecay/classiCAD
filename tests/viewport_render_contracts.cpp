@@ -1670,18 +1670,28 @@ int main(int argc, char *argv[])
                     const auto renderCoordinatedScene = [&](
                         const ViewportShadingSettings &shading,
                         const QByteArray &historyKey, QImage *image,
-                        const ViewportRenderObject *renderObject = nullptr) {
+                        const ViewportRenderObject *renderObject = nullptr,
+                        const ViewportTransform *cameraOverride = nullptr,
+                        const ViewportCameraPreferences *dofOptics = nullptr) {
                         if (image == nullptr || !framebuffer.bind()) {
                             return false;
                         }
+                        const ViewportTransform &renderCamera =
+                            cameraOverride == nullptr ? gpuTransform
+                                                      : *cameraOverride;
                         functions.glViewport(0, 0, glSize.width(),
                                              glSize.height());
                         ViewportAaRenderer sceneAaRenderer;
                         sceneAaRenderer.setMode(static_cast<int>(
                             ViewportAntiAliasingMode::Off));
                         sceneAaRenderer.setDisplayTransform(shading, true);
+                        if (dofOptics != nullptr) {
+                            sceneAaRenderer.setDepthOfField(
+                                true, *dofOptics,
+                                renderCamera.isPerspectiveEnabled());
+                        }
                         if (!sceneAaRenderer.beginSceneSample(
-                                glSize, 1.0, gpuTransform, historyKey,
+                                glSize, 1.0, renderCamera, historyKey,
                                 false, true)) {
                             return false;
                         }
@@ -1741,6 +1751,118 @@ int main(int argc, char *argv[])
                         passed &= check(
                             polygonCubeCaptureSucceeded,
                             "matched polygon cube diagnostic capture must render and save");
+                    }
+                    const QString gpuDofCapturePath = qEnvironmentVariable(
+                        "CLASSICAD_VIEWPORT_GPU_DOF_CAPTURE");
+                    if (!gpuDofCapturePath.isEmpty()) {
+                        ViewportTransform dofCamera = gpuTransform;
+                        dofCamera.setPerspectiveEnabled(true);
+                        ViewportCameraPreferences dofOptics =
+                            dofCamera.cameraPreferences();
+                        dofOptics.sceneCameraEnabled = true;
+                        dofOptics.focusDistance = std::sqrt(
+                            std::pow(dofCamera.cameraPosition(glSize).x, 2.0) +
+                            std::pow(dofCamera.cameraPosition(glSize).y, 2.0) +
+                            std::pow(dofCamera.cameraPosition(glSize).z, 2.0));
+                        dofOptics.fStop = 2.8;
+                        dofOptics.apertureBlades = 6;
+                        dofOptics.apertureRotationRadians = 0.2;
+                        dofOptics.apertureRatio = 1.2;
+                        QImage dofBaselineImage;
+                        QImage dofImage;
+                        QImage dofGatedImage;
+                        const QString dofBaselinePath = qEnvironmentVariable(
+                            "CLASSICAD_VIEWPORT_GPU_DOF_BASELINE_CAPTURE");
+                        const bool baselineCaptured = renderCoordinatedScene(
+                            rawFaceShading,
+                            QByteArrayLiteral("gpu-dof-baseline"),
+                            &dofBaselineImage, &polygonCubeObject, &dofCamera) &&
+                            (dofBaselinePath.isEmpty() ||
+                             dofBaselineImage.save(dofBaselinePath));
+                        const bool dofCaptured = renderCoordinatedScene(
+                            rawFaceShading, QByteArrayLiteral("gpu-dof-enabled"),
+                            &dofImage, &polygonCubeObject, &dofCamera,
+                            &dofOptics) && dofImage.save(gpuDofCapturePath);
+                        dofOptics.sceneCameraEnabled = false;
+                        const bool gatedCaptured = renderCoordinatedScene(
+                            rawFaceShading, QByteArrayLiteral("gpu-dof-gated"),
+                            &dofGatedImage, &polygonCubeObject, &dofCamera,
+                            &dofOptics);
+                        const QColor expectedBackground(34, 34, 34, 255);
+                        bool knownOpaqueBackground =
+                            baselineCaptured && dofCaptured;
+                        for (const QPoint &sample : {
+                                 QPoint(5, 5),
+                                 QPoint(glSize.width() - 6, 5),
+                                 QPoint(5, glSize.height() - 6),
+                                 QPoint(glSize.width() - 6,
+                                        glSize.height() - 6)}) {
+                            const QColor dofBackground =
+                                dofImage.pixelColor(sample);
+                            knownOpaqueBackground &=
+                                dofBaselineImage.pixelColor(sample) ==
+                                    expectedBackground &&
+                                dofBackground.alpha() == 255 &&
+                                (dofBackground.red() > 0 ||
+                                 dofBackground.green() > 0 ||
+                                 dofBackground.blue() > 0);
+                        }
+                        const auto isFixtureBackground =
+                            [&expectedBackground](const QColor &pixel) {
+                                return pixel == expectedBackground;
+                            };
+                        int changedObjectEdgePixels = 0;
+                        if (baselineCaptured && dofCaptured) {
+                            const auto channelDifference = [](
+                                const QColor &left, const QColor &right) {
+                                return std::max({
+                                    std::abs(left.red() - right.red()),
+                                    std::abs(left.green() - right.green()),
+                                    std::abs(left.blue() - right.blue())});
+                            };
+                            for (int y = 0; y < glSize.height(); ++y) {
+                                for (int x = 0; x < glSize.width(); ++x) {
+                                    const QColor baselinePixel =
+                                        dofBaselineImage.pixelColor(x, y);
+                                    if (isFixtureBackground(baselinePixel)) {
+                                        continue;
+                                    }
+                                    for (const QPoint &offset :
+                                         {QPoint(1, 0), QPoint(0, 1)}) {
+                                        const int neighborX = x + offset.x();
+                                        const int neighborY = y + offset.y();
+                                        if (neighborX >= glSize.width() ||
+                                            neighborY >= glSize.height()) {
+                                            continue;
+                                        }
+                                        const QColor baselineNeighbor =
+                                            dofBaselineImage.pixelColor(
+                                                neighborX, neighborY);
+                                        if (isFixtureBackground(baselineNeighbor)) {
+                                            continue;
+                                        }
+                                        const int baselineContrast =
+                                            channelDifference(baselinePixel,
+                                                              baselineNeighbor);
+                                        if (baselineContrast <= 20) continue;
+                                        const int blurredContrast =
+                                            channelDifference(
+                                                dofImage.pixelColor(x, y),
+                                                dofImage.pixelColor(neighborX,
+                                                                    neighborY));
+                                        if (blurredContrast < baselineContrast - 2) {
+                                            ++changedObjectEdgePixels;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        passed &= check(
+                            baselineCaptured && dofCaptured && gatedCaptured &&
+                                knownOpaqueBackground &&
+                                changedObjectEdgePixels > 0 &&
+                                dofGatedImage == dofBaselineImage,
+                            "GPU Workbench DOF must retain opaque background coverage, smooth high-contrast surface edges, and be bypassed when camera DOF is disabled");
                     }
                     ViewportShadingSettings outlinedSceneShading =
                         rawFaceShading;

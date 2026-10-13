@@ -86,12 +86,14 @@ The target is behavioral and visual parity. Pixel-for-pixel output can still var
   mapping for orthographic depth and retains the perspective formula for
   perspective views. Pass order remains per sample: Workbench resolves DOF
   before anti-aliasing, and classiCAD does the same. Matched orthographic-view
-  output comparison remains pending. The GPU resolve now keeps untouched
-  opaque background pixels at the depth-clear value on the original source
-  color, preventing far-plane CoC from darkening the backdrop; the offscreen
-  contract checks four known background corners and verifies that color still
-  changes along the cube's foreground edges. This change covers the GPU renderer;
-  QPainter still gates its approximate DOF on perspective projection.
+  output comparison remains pending. The offscreen GPU contract now uses a
+  known opaque background, confirms that coverage remains opaque with DOF on,
+  checks that neighboring high-contrast surface colors smooth, and verifies
+  that disabling camera DOF returns the baseline image. A diagnostic Blender
+  5.2.2 Workbench cube capture also changed the backdrop with DOF enabled, so
+  the exact background behavior still needs a matched capture comparison.
+  The separate QPainter path retains its lower-resolution sampling and its own
+  visual-comparison gap.
 
 **DOF gate correction (2026-10-12):** This supersedes older summary bullets
 and the `Cavity and depth of field` matrix row below that describe GPU DOF as

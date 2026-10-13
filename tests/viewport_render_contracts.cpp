@@ -75,6 +75,24 @@ int main(int argc, char *argv[])
     QGuiApplication application(argc, argv);
     bool passed = true;
 
+    ViewportShadingSettings interactiveRenderShading;
+    interactiveRenderShading.colorMode = ViewportColorMode::Object;
+    ViewportShadingSettings importedSceneRenderShading;
+    importedSceneRenderShading.colorMode = ViewportColorMode::Custom;
+    importedSceneRenderShading.customColor = QColor(Qt::red);
+    const ViewportShadingSettings selectedSceneRenderShading =
+        workbenchRenderShadingSettings(interactiveRenderShading,
+                                       importedSceneRenderShading, true);
+    const ViewportShadingSettings nativeRenderShading =
+        workbenchRenderShadingSettings(interactiveRenderShading,
+                                       importedSceneRenderShading, false);
+    passed &= check(selectedSceneRenderShading.colorMode ==
+                            ViewportColorMode::Custom &&
+                        selectedSceneRenderShading.customColor == QColor(Qt::red) &&
+                        nativeRenderShading.colorMode ==
+                            ViewportColorMode::Object,
+                    "Workbench render shading must prefer the selected imported scene settings while preserving interactive shading as the native-document fallback");
+
     ViewportRenderFrame packetFrame;
     packetFrame.viewportSize = QSize(64, 48);
     packetFrame.camera = ViewportTransform();

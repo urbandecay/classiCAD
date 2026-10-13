@@ -132,4 +132,15 @@ struct ViewportShadingSettings {
     }
 };
 
+// Scene renders use Blender's Scene.display.shading record when one was
+// imported. The interactive View3D shading remains the fallback for native
+// documents without imported scene settings.
+inline ViewportShadingSettings workbenchRenderShadingSettings(
+    const ViewportShadingSettings &interactiveSettings,
+    const ViewportShadingSettings &sceneSettings,
+    bool hasSceneSettings)
+{
+    return hasSceneSettings ? sceneSettings : interactiveSettings;
+}
+
 } // namespace classiCAD

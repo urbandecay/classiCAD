@@ -6691,6 +6691,7 @@ public:
         bool importedCombinedPassAvailable = true;
         bool importedDepthPassAvailable = true;
         bool selectedImportedScene = false;
+        QJsonObject selectedSceneWorkbenchShading;
         for (const QJsonValue &sceneValue :
              document_.settings().importedBlenderScenes) {
             const QJsonObject scene = sceneValue.toObject();
@@ -6705,6 +6706,8 @@ public:
             }
             if (!activeScene) continue;
             selectedImportedScene = true;
+            selectedSceneWorkbenchShading = scene.value(
+                QStringLiteral("workbench_shading")).toObject();
             importedCombinedPassAvailable = false;
             importedDepthPassAvailable = false;
             for (const QJsonValue &layerValue :
@@ -6855,7 +6858,18 @@ public:
             // depth-only overlay below retains stroke visibility for export.
             stroke.writeDepth = false;
         }
-        ViewportShadingSettings settings = viewportShadingSettings_;
+        ViewportShadingSettings sceneShadingSettings;
+        if (!selectedSceneWorkbenchShading.isEmpty()) {
+            // Blender's render Workbench engine reads Scene.display.shading;
+            // the interactive viewport's saved View3D shading is independent.
+            QStringList ignoredUnsupported;
+            parseImportedBlenderShading(selectedSceneWorkbenchShading,
+                                        &sceneShadingSettings, false,
+                                        &ignoredUnsupported);
+        }
+        ViewportShadingSettings settings = workbenchRenderShadingSettings(
+            viewportShadingSettings_, sceneShadingSettings,
+            !selectedSceneWorkbenchShading.isEmpty());
         result.colorManagementApplied =
             applyImportedRenderColorManagement(document_, &settings);
         const qreal renderDitherIntensity = workbenchRenderDitherIntensity(
@@ -7013,13 +7027,18 @@ public:
             result.camera.view.targetZ = target.z;
             result.camera.view.storedInProject = true;
         }
-        result.outputFormat = result.combinedPassAvailable
+        const QString imageFormatError = result.combinedImageFormatError();
+        result.outputFormat = result.combinedPassAvailable &&
+                                      imageFormatError.isEmpty()
             ? QStringLiteral("%1 %2-bit %3%4")
                   .arg(result.combinedFileExtension().toUpper())
                   .arg(result.writtenColorDepth())
                   .arg(result.colorMode)
                   .arg(result.depthPassAvailable
                            ? QStringLiteral(" + PFM depth") : QString())
+            : result.combinedPassAvailable
+                  ? QStringLiteral("Combined format unavailable: %1")
+                        .arg(imageFormatError)
             : (result.depthPassAvailable
                    ? QStringLiteral("Depth PFM")
                    : QStringLiteral("No enabled render passes"));
@@ -7092,6 +7111,19 @@ public:
 
     QStringList applyImportedBlenderShading(
         const QJsonObject &source) override
+    {
+        ViewportShadingSettings ignoredSettings;
+        QStringList unsupported;
+        parseImportedBlenderShading(source, &ignoredSettings, true,
+                                    &unsupported);
+        return unsupported;
+    }
+
+    QStringList parseImportedBlenderShading(
+        const QJsonObject &source,
+        ViewportShadingSettings *parsedSettings,
+        bool applyToViewport,
+        QStringList *unsupportedOutput)
     {
         QStringList unsupported;
         for (const QJsonValue &value : source.value(
@@ -7267,11 +7299,15 @@ public:
         const QJsonValue matcapFlip = source.value(QStringLiteral("matcap_flip_x"));
         if (matcapFlip.isBool()) settings.matcapFlipX = matcapFlip.toBool();
 
-        viewportShadingSettings_ = settings;
-        viewportRenderer_.setShadingSettings(viewportShadingSettings_);
-        refreshShadingPopover();
-        notifyViewStateChanged();
-        update();
+        if (parsedSettings != nullptr) *parsedSettings = settings;
+        if (unsupportedOutput != nullptr) *unsupportedOutput = unsupported;
+        if (applyToViewport) {
+            viewportShadingSettings_ = settings;
+            viewportRenderer_.setShadingSettings(viewportShadingSettings_);
+            refreshShadingPopover();
+            notifyViewStateChanged();
+            update();
+        }
         return unsupported;
     }
 

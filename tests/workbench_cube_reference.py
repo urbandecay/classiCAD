@@ -24,6 +24,14 @@ def arguments():
         default="CUBE",
         help="controlled scene to render (default: CUBE)",
     )
+    parser.add_argument(
+        "--ortho-eye-distance",
+        type=float,
+        help=(
+            "orthographic camera distance (defaults to 8 for CUBE and 1000 "
+            "for TRANSPARENT_OVERLAP)"
+        ),
+    )
     parser.add_argument("--aa", choices=("OFF", "FXAA", "8"), default="FXAA")
     parser.add_argument(
         "--effect",
@@ -100,8 +108,21 @@ def main():
     camera_data.ortho_scale = 5.0
     camera = bpy.data.objects.new("ReferenceCamera", camera_data)
     bpy.context.collection.objects.link(camera)
-    camera.location = target + direction * 8.0
-    camera.rotation_euler = (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+    ortho_eye_distance = args.ortho_eye_distance
+    if ortho_eye_distance is None:
+        ortho_eye_distance = (
+            1000.0 if args.scene == "TRANSPARENT_OVERLAP" else 8.0
+        )
+    if args.scene == "TRANSPARENT_OVERLAP":
+        # classiCAD's free orthographic viewport uses near/far planes at
+        # 0.01/2000 for its 1000-unit projection eye. Match the Blender
+        # camera's linear depth so weighted-OIT colors compare fairly too.
+        camera_data.clip_start = 0.01
+        camera_data.clip_end = max(2000.0, ortho_eye_distance * 2.0)
+    camera.location = target + direction * ortho_eye_distance
+    camera.rotation_euler = (
+        (target - camera.location).to_track_quat("-Z", "Y").to_euler()
+    )
     if args.scene == "CUBE":
         bpy.ops.mesh.primitive_cube_add(size=2.0, location=(0.0, 0.0, 0.0))
         cube = bpy.context.object

@@ -1247,7 +1247,12 @@ depth domain. Visual depth comparison remains open.
   explicitly selects World cavity for cavity captures. The offscreen GPU
   contract has opt-in captures for shadow, cavity, outline, and transparency
   scenes. `tests/workbench_pfm_compare.py` compares RGB PFM outputs by channel
-  error and foreground-mask XOR/IoU.
+  error and foreground-mask XOR/IoU. The overlap fixture now defaults to a
+  1000-unit orthographic scene-camera distance with 0.01/2000 clipping,
+  matching classiCAD's current free-view projection depth. Its earlier
+  8-unit camera produced an invalid OIT color comparison despite matching
+  screen-space bounds. This controlled scene-camera comparison isolates OIT
+  depth weighting; it does not capture a live Blender `RegionView3D` viewport.
 - At 640×480 with the same cube scene, AA-off references, and an RGB change
   threshold of 2, shadow masks match exactly: 111,480 changed pixels on each
   renderer, XOR 0, IoU 1.0. The per-pixel effect-delta MAE over the union of
@@ -1270,14 +1275,15 @@ depth domain. Visual depth comparison remains open.
   The offscreen contract checks the known scene bounds to within two pixels.
   At 640×480, both classiCAD and Blender cover `(134,86)`–`(479,393)`; at RGB
   distance thresholds 8 and 20, the masks have 34 and 4 XOR pixels, with IoU
-  0.99968 and 0.99996. Shared foreground RGB MAE is 1.62/255, p95 is 4/255,
-  and maximum error is 13/255. Center overlap probes are `(117,90,124)` and
-  `(121,89,121)` respectively. This confirms silhouette and basic overlap
-  behavior; the test uses a free orthographic viewport whose synthetic eye
-  distance differs from Blender's 8-unit scene camera, so the OIT depth
-  weighting is not yet an exact color-parity comparison. The no-shared-depth
-  sorted-transparency fallback remains less capable than Blender's per-pixel
-  OIT for intersecting ranges.
+  0.99968 and 0.99996. On the corrected depth-matched PNG captures, the same
+  masks remain (34 and 4 XOR pixels), background-subtracted shared-foreground
+  RGB MAE is 2.70/255, p95 is 4/255, and maximum error is 16/255. Center
+  overlap probes are `(117,90,124)` and `(117,90,125)`. The earlier 8-unit
+  reference probes `(121,89,121)` used different OIT depths and are superseded.
+  This validates the OIT shader against a Workbench scene camera with matched
+  projection depth, not Blender's live orthographic viewport matrix. The
+  no-shared-depth sorted-transparency fallback remains less capable than
+  Blender's per-pixel OIT for intersecting ranges.
 
 ### Bounded scalar volume pass (2026-10-12)
 

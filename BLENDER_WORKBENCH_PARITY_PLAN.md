@@ -128,7 +128,12 @@ cannot be created. Regular transparent geometry resolves first; the fallback
 then blends in-front ranges back-to-front over that result. This preserves
 Blender's regular-then-in-front domain order, while explicitly retaining the
 fallback limitation that sorted blending cannot reproduce per-pixel depth
-ordering among overlapping in-front surfaces. Blender 5.2.2 routes
+ordering among overlapping in-front surfaces. When the front depth attachment
+is available, the fallback now draws through a scratch framebuffer using that
+depth, so front opaque geometry still occludes transparent front geometry
+without allowing ordinary scene depth to hide it. If that scratch framebuffer
+cannot be formed, the final fallback keeps front-last sorted blending. Blender
+5.2.2 routes
 `showInFront` through a separate transparent accumulation/depth pass and
 resolves it after regular transparency (`workbench_engine.cc` and
 `workbench_mesh_passes.cc`). The C++ build passes; allocation-failure runtime

@@ -710,6 +710,10 @@ ViewportSurfaceRenderer::~ViewportSurfaceRenderer()
         glDeleteTextures(1, &frontTransparencyWeightTexture_);
         frontTransparencyWeightTexture_ = 0;
     }
+    if (frontTransparencyFallbackFramebuffer_ != 0) {
+        glDeleteFramebuffers(1, &frontTransparencyFallbackFramebuffer_);
+        frontTransparencyFallbackFramebuffer_ = 0;
+    }
     program_.removeAllShaders();
     outlineProgram_.removeAllShaders();
     objectIdProgram_.removeAllShaders();
@@ -6949,6 +6953,143 @@ bool ViewportSurfaceRenderer::draw(
                                      writeMaterialData);
             glDrawArrays(GL_TRIANGLES, firstVertex, vertexCount);
         };
+        const auto drawSortedFrontTransparency = [&]() {
+            if (fallbackFrontTransparentRanges.isEmpty()) return;
+
+            GLint previousDrawFramebuffer = 0;
+            GLint previousReadFramebuffer = 0;
+            GLint previousViewport[4] = {};
+            GLint previousDepthFunction = GL_LESS;
+            GLint previousProgram = 0;
+            GLint previousVertexArray = 0;
+            GLint previousArrayBuffer = 0;
+            GLint previousActiveTexture = GL_TEXTURE0;
+            GLint previousBlendSourceRgb = GL_ONE;
+            GLint previousBlendDestinationRgb = GL_ZERO;
+            GLint previousBlendSourceAlpha = GL_ONE;
+            GLint previousBlendDestinationAlpha = GL_ZERO;
+            GLint previousBlendEquationRgb = GL_FUNC_ADD;
+            GLint previousBlendEquationAlpha = GL_FUNC_ADD;
+            GLboolean previousColorMask[4] = {
+                GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+            GLboolean previousDepthMask = GL_TRUE;
+            const GLboolean previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
+            const GLboolean previousBlend = glIsEnabled(GL_BLEND);
+            const GLboolean previousStencil = glIsEnabled(GL_STENCIL_TEST);
+            const GLboolean previousScissor = glIsEnabled(GL_SCISSOR_TEST);
+            const GLboolean previousFramebufferSrgb =
+                glIsEnabled(GL_FRAMEBUFFER_SRGB);
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,
+                          &previousDrawFramebuffer);
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,
+                          &previousReadFramebuffer);
+            glGetIntegerv(GL_VIEWPORT, previousViewport);
+            glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunction);
+            glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
+            glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previousVertexArray);
+            glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previousArrayBuffer);
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &previousActiveTexture);
+            glGetIntegerv(GL_BLEND_SRC_RGB, &previousBlendSourceRgb);
+            glGetIntegerv(GL_BLEND_DST_RGB, &previousBlendDestinationRgb);
+            glGetIntegerv(GL_BLEND_SRC_ALPHA, &previousBlendSourceAlpha);
+            glGetIntegerv(GL_BLEND_DST_ALPHA, &previousBlendDestinationAlpha);
+            glGetIntegerv(GL_BLEND_EQUATION_RGB, &previousBlendEquationRgb);
+            glGetIntegerv(GL_BLEND_EQUATION_ALPHA,
+                          &previousBlendEquationAlpha);
+            glGetBooleanv(GL_COLOR_WRITEMASK, previousColorMask);
+            glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+            bool frontDepthAvailable = false;
+            if (sharedTargets != nullptr &&
+                sharedTargets->currentSampleColorTexture != 0 &&
+                sharedTargets->frontDepthTexture != 0 &&
+                sharedTargets->pixelSize == transparencyPixelSize) {
+                if (frontTransparencyFallbackFramebuffer_ == 0) {
+                    glGenFramebuffers(
+                        1, &frontTransparencyFallbackFramebuffer_);
+                }
+                glBindFramebuffer(
+                    GL_FRAMEBUFFER, frontTransparencyFallbackFramebuffer_);
+                glFramebufferTexture2D(
+                    GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                    sharedTargets->currentSampleColorTexture, 0);
+                glFramebufferTexture2D(
+                    GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                    GL_TEXTURE_2D, sharedTargets->frontDepthTexture, 0);
+                glDrawBuffer(GL_COLOR_ATTACHMENT0);
+                frontDepthAvailable =
+                    glCheckFramebufferStatus(GL_FRAMEBUFFER) ==
+                    GL_FRAMEBUFFER_COMPLETE;
+            }
+            if (!frontDepthAvailable) {
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                                  static_cast<GLuint>(previousDrawFramebuffer));
+                glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                                  static_cast<GLuint>(previousReadFramebuffer));
+            }
+
+            glViewport(0, 0, transparencyPixelSize.width(),
+                       transparencyPixelSize.height());
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            if (frontDepthAvailable) {
+                glEnable(GL_DEPTH_TEST);
+                glDepthFunc(GL_LEQUAL);
+            } else {
+                // Keep the overlay ordering even if a front-depth FBO cannot
+                // be formed; this is the final allocation-failure fallback.
+                glDisable(GL_DEPTH_TEST);
+            }
+            glDepthMask(GL_FALSE);
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_FRAMEBUFFER_SRGB);
+            glEnable(GL_BLEND);
+            glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                                GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            program_.bind();
+            program_.setUniformValue("uTransparencyAccumulation", false);
+            program_.setUniformValue("uExcludeFrontCoverage", false);
+            vertexArray_.bind();
+            vertexBuffer_.bind();
+            for (const TransparentRange &range :
+                 fallbackFrontTransparentRanges) {
+                const DrawRange &draw = ranges_[range.rangeIndex];
+                drawRange(draw, false, false, draw.first, draw.count);
+            }
+
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
+                              static_cast<GLuint>(previousDrawFramebuffer));
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,
+                              static_cast<GLuint>(previousReadFramebuffer));
+            glViewport(previousViewport[0], previousViewport[1],
+                       previousViewport[2], previousViewport[3]);
+            glDepthFunc(static_cast<GLenum>(previousDepthFunction));
+            glDepthMask(previousDepthMask);
+            glColorMask(previousColorMask[0], previousColorMask[1],
+                        previousColorMask[2], previousColorMask[3]);
+            if (previousDepthTest) glEnable(GL_DEPTH_TEST);
+            else glDisable(GL_DEPTH_TEST);
+            if (previousBlend) glEnable(GL_BLEND);
+            else glDisable(GL_BLEND);
+            if (previousStencil) glEnable(GL_STENCIL_TEST);
+            else glDisable(GL_STENCIL_TEST);
+            if (previousScissor) glEnable(GL_SCISSOR_TEST);
+            else glDisable(GL_SCISSOR_TEST);
+            if (previousFramebufferSrgb) glEnable(GL_FRAMEBUFFER_SRGB);
+            else glDisable(GL_FRAMEBUFFER_SRGB);
+            glBlendEquationSeparate(static_cast<GLenum>(previousBlendEquationRgb),
+                                    static_cast<GLenum>(previousBlendEquationAlpha));
+            glBlendFuncSeparate(static_cast<GLenum>(previousBlendSourceRgb),
+                                static_cast<GLenum>(previousBlendDestinationRgb),
+                                static_cast<GLenum>(previousBlendSourceAlpha),
+                                static_cast<GLenum>(previousBlendDestinationAlpha));
+            glUseProgram(static_cast<GLuint>(previousProgram));
+            glBindVertexArray(static_cast<GLuint>(previousVertexArray));
+            glBindBuffer(GL_ARRAY_BUFFER,
+                         static_cast<GLuint>(previousArrayBuffer));
+            glActiveTexture(static_cast<GLenum>(previousActiveTexture));
+        };
         const auto drawTransparentTriangles = [&]() {
             if (!hasPartialAlpha) return;
             // The in-front merge binds and releases its own shader program.
@@ -6976,14 +7117,7 @@ bool ViewportSurfaceRenderer::draw(
                     const DrawRange &draw = ranges_[range.rangeIndex];
                     drawRange(draw, false, false, draw.first, draw.count);
                 }
-                // Preserve Blender's domain ordering if the separate
-                // showInFront accumulation target could not be allocated.
-                glDisable(GL_DEPTH_TEST);
-                for (const TransparentRange &range :
-                     fallbackFrontTransparentRanges) {
-                    const DrawRange &draw = ranges_[range.rangeIndex];
-                    drawRange(draw, false, false, draw.first, draw.count);
-                }
+                drawSortedFrontTransparency();
                 glDepthFunc(GL_LESS);
                 if (passReport != nullptr) {
                     passReport->markPassCompleted(
@@ -7261,27 +7395,7 @@ bool ViewportSurfaceRenderer::draw(
                         ViewportRenderTargets::CurrentSampleColor;
                 }
             } else if (!fallbackFrontTransparentRanges.isEmpty()) {
-                // The regular scene transparency is already resolved. Blend
-                // the in-front fallback over it in its own back-to-front
-                // ordering, as Blender does with the second front-domain
-                // resolve. This fallback cannot reproduce front-domain
-                // per-pixel depth ordering when OIT allocation fails.
-                glDisable(GL_DEPTH_TEST);
-                glDepthMask(GL_FALSE);
-                glDisable(GL_STENCIL_TEST);
-                glEnable(GL_BLEND);
-                glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
-                                    GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-                program_.bind();
-                program_.setUniformValue("uTransparencyAccumulation", false);
-                vertexArray_.bind();
-                vertexBuffer_.bind();
-                for (const TransparentRange &range :
-                     fallbackFrontTransparentRanges) {
-                    const DrawRange &draw = ranges_[range.rangeIndex];
-                    drawRange(draw, false, false, draw.first, draw.count);
-                }
+                drawSortedFrontTransparency();
             }
             if (passReport != nullptr) {
                 passReport->markPassCompleted(

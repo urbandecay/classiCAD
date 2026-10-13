@@ -198,6 +198,7 @@ private:
     GLuint frontTransparencyFramebuffer_ = 0;
     GLuint frontTransparencyAccumulationTexture_ = 0;
     GLuint frontTransparencyWeightTexture_ = 0;
+    GLuint frontTransparencyFallbackFramebuffer_ = 0;
     QSize transparencyFramebufferSize_;
     QVector<SurfaceVertex> vertices_;
     QVector<DrawRange> ranges_;

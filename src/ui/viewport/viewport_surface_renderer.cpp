@@ -3015,7 +3015,10 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDepthMask(GL_TRUE);
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
+    // Blender Workbench's opaque G-buffer uses DEPTH_LESS_EQUAL. Preserve the
+    // same winner for exactly coplanar fragments so the depth and per-pixel
+    // normal attachments agree at shared triangle/face edges.
+    glDepthFunc(GL_LEQUAL);
     glDisable(GL_BLEND);
     if (settings.backfaceCulling) {
         glEnable(GL_CULL_FACE);

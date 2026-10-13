@@ -2176,7 +2176,10 @@ above is from scene-linear captures and remains the preferred color metric.
 - Source: Blender 5.2.2
   [`overlay_background.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_background.hh#L539-L563).
 - A CPU contract checks the converted viewport color. `cmake --build build -j4`
-  passed; the contract executable was not run in this step.
+  passed. Running `QT_QPA_PLATFORM=offscreen
+  ./build/classicad_viewport_render_contracts_test` produced no CPU contract
+  failures, then stopped at the existing NURBS solid OpenGL-context
+  requirement; this did not validate the GPU path or provide an image match.
 
 ### Implementation plan
 

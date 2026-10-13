@@ -343,6 +343,17 @@ inline QColor workbenchWorldBackgroundDisplayColor(
     return QColor::fromRgbF(display.x(), display.y(), display.z());
 }
 
+inline QColor workbenchWorldBackgroundViewportColor(
+    const QVector3D &worldColorSceneLinear)
+{
+    // Blender's Solid viewport overlay supplies the scene-linear World color
+    // directly to its background pass. The display framebuffer applies only
+    // the sRGB transfer here; Workbench's scene view transform is not used.
+    const QVector3D display = workbenchSceneLinearToSrgb(
+        worldColorSceneLinear);
+    return QColor::fromRgbF(display.x(), display.y(), display.z());
+}
+
 inline QVector3D workbenchDefaultSolidMaterialDiffuseColor()
 {
     // Blender's BKE_material_default_empty() keeps the DNA Material defaults:

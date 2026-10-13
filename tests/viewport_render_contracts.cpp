@@ -1426,7 +1426,13 @@ int main(int argc, char *argv[])
                         hdrWorldFallback.green() == 255 &&
                         hdrWorldFallback.blue() >= 110 &&
                         hdrWorldFallback.blue() <= 112,
-                    "QPainter World background conversion must apply exposure and Standard view transform before QColor clamps HDR channels");
+                    "Workbench World display transform helper must apply exposure and Standard conversion before QColor clamps HDR channels");
+    const QColor viewportWorldColor = workbenchWorldBackgroundViewportColor(
+        QVector3D(1.0f, 0.25f, 0.04f));
+    passed &= check(viewportWorldColor.red() == 255 &&
+                        std::abs(viewportWorldColor.green() - 137) <= 1 &&
+                        std::abs(viewportWorldColor.blue() - 56) <= 1,
+                    "QPainter viewport World background must preserve Blender's scene-linear color with only framebuffer sRGB encoding");
     const QVector3D defaultCubeFace = workbenchStudioShade(
         defaultMaterialColor, QVector3D(0.0f, 0.0f, 1.0f),
         QVector3D(0.0f, 0.0f, 1.0f));

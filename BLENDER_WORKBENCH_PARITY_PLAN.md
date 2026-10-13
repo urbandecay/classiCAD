@@ -2165,6 +2165,19 @@ above is from scene-linear captures and remains the preferred color metric.
   tool, and dimension failures outside this category; its serialization
   contract passed.
 
+### QPainter interactive World background conversion (2026-10-13)
+
+- Blender's Solid viewport overlay supplies the World color as scene-linear
+  data and relies on the framebuffer's sRGB conversion. The QPainter viewport
+  fallback had applied the scene view transform, exposure, and gamma to this
+  background. It now uses only scene-linear-to-sRGB conversion, matching the
+  viewport background path. The Workbench render-result background continues
+  to use its separate scene-linear resolve.
+- Source: Blender 5.2.2
+  [`overlay_background.hh`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/overlay/overlay_background.hh#L539-L563).
+- A CPU contract checks the converted viewport color. `cmake --build build -j4`
+  passed; the contract executable was not run in this step.
+
 ### Implementation plan
 
 1. **Establish a comparable baseline.** Use the same hard-edged cube, viewport pixel dimensions, projection and camera pose, clipping range, color transform, and selection/overlay state in Blender 5.2.2 and classiCAD. Capture classiCAD's native GPU path separately from QPainter. Compare AA Off, Single Pass, and 8 samples, both idle and while navigating. Save pre-AA, post-AA scene-linear, and final display-transformed outputs so edge softness can be attributed to a specific stage. Do not call the AA port complete until the edge profiles and remaining differences are recorded.

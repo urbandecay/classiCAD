@@ -173,10 +173,8 @@ QColor viewportShadingBackgroundColor(
     }
     if (settings.backgroundMode == ViewportBackgroundMode::World) {
         if (worldColorSceneLinear.has_value()) {
-            return workbenchWorldBackgroundDisplayColor(
-                *worldColorSceneLinear, settings.colorTransform,
-                settings.colorExposure, settings.colorGamma,
-                settings.colorLutData, settings.colorLutMetadata);
+            return workbenchWorldBackgroundViewportColor(
+                *worldColorSceneLinear);
         }
         // Blender's Solid viewport falls back to its theme background when
         // the selected World background has no scene World assigned.

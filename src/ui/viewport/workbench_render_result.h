@@ -194,4 +194,13 @@ struct WorkbenchRenderResult {
                       QString *errorMessage = nullptr) const;
 };
 
+// Apply Blender's normalized render border to already rendered full-frame
+// buffers. Border coordinates use Blender's bottom-left origin. Crop mode
+// changes output dimensions while preserving the original camera framing;
+// non-crop mode keeps the full frame and clears pixels outside the border.
+bool applyWorkbenchRenderBorder(WorkbenchRenderResult *result,
+                                bool useBorder, bool cropToBorder,
+                                qreal minX, qreal minY,
+                                qreal maxX, qreal maxY);
+
 } // namespace classiCAD

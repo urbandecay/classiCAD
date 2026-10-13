@@ -6684,6 +6684,12 @@ public:
         const QString activeLayerKey =
             document_.settings().activeViewLayerKey;
         int renderAntiAliasingMode = -1;
+        bool renderUseBorder = false;
+        bool renderCropToBorder = false;
+        qreal renderBorderMinX = 0.0;
+        qreal renderBorderMinY = 0.0;
+        qreal renderBorderMaxX = 1.0;
+        qreal renderBorderMaxY = 1.0;
         bool importedCombinedPassAvailable = true;
         bool importedDepthPassAvailable = true;
         bool selectedImportedScene = false;
@@ -6718,6 +6724,18 @@ public:
             }
             const QJsonObject renderOutput =
                 scene.value(QStringLiteral("render_output")).toObject();
+            renderUseBorder = renderOutput.value(
+                QStringLiteral("use_border")).toBool(false);
+            renderCropToBorder = renderOutput.value(
+                QStringLiteral("use_crop_to_border")).toBool(false);
+            renderBorderMinX = renderOutput.value(
+                QStringLiteral("border_min_x")).toDouble(0.0);
+            renderBorderMinY = renderOutput.value(
+                QStringLiteral("border_min_y")).toDouble(0.0);
+            renderBorderMaxX = renderOutput.value(
+                QStringLiteral("border_max_x")).toDouble(1.0);
+            renderBorderMaxY = renderOutput.value(
+                QStringLiteral("border_max_y")).toDouble(1.0);
             result.transparentFilm = renderOutput.value(
                 QStringLiteral("film_transparent")).toBool(false);
             const QJsonArray worldColor = renderOutput.value(
@@ -6975,6 +6993,13 @@ public:
                                        renderDitherIntensity,
                                        result.writtenColorDepth(),
                                        combinedUsesPremultipliedAlpha);
+        }
+        if (!applyWorkbenchRenderBorder(
+                &result, renderUseBorder, renderCropToBorder,
+                renderBorderMinX, renderBorderMinY,
+                renderBorderMaxX, renderBorderMaxY)) {
+            qWarning() << "Invalid Blender render border settings";
+            return {};
         }
         result.camera.view.perspective = renderCamera.isPerspectiveEnabled();
         if (usingSceneCamera) {

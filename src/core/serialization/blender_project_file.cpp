@@ -2260,6 +2260,32 @@ bool importBlenderScene(const QString &path,
             renderOutput.value(QStringLiteral("pixel_aspect_x"));
         const QJsonValue pixelAspectYValue =
             renderOutput.value(QStringLiteral("pixel_aspect_y"));
+        const QStringList borderBooleanKeys{
+            QStringLiteral("use_border"),
+            QStringLiteral("use_crop_to_border")};
+        bool borderSettingsValid = true;
+        for (const QString &key : borderBooleanKeys) {
+            const QJsonValue value = renderOutput.value(key);
+            borderSettingsValid &= value.isUndefined() || value.isBool();
+        }
+        const QStringList borderCoordinateKeys{
+            QStringLiteral("border_min_x"), QStringLiteral("border_min_y"),
+            QStringLiteral("border_max_x"), QStringLiteral("border_max_y")};
+        qreal borderCoordinates[4] = {0.0, 0.0, 1.0, 1.0};
+        for (qsizetype i = 0; i < borderCoordinateKeys.size(); ++i) {
+            const QJsonValue value = renderOutput.value(borderCoordinateKeys[i]);
+            if (value.isUndefined()) continue;
+            if (!value.isDouble() || !std::isfinite(value.toDouble())) {
+                borderSettingsValid = false;
+                continue;
+            }
+            borderCoordinates[i] = value.toDouble();
+        }
+        borderSettingsValid &= borderCoordinates[0] >= 0.0 &&
+            borderCoordinates[1] >= 0.0 && borderCoordinates[2] <= 1.0 &&
+            borderCoordinates[3] <= 1.0 &&
+            borderCoordinates[0] < borderCoordinates[2] &&
+            borderCoordinates[1] < borderCoordinates[3];
         const QJsonValue ditherIntensityValue =
             renderOutput.value(QStringLiteral("dither_intensity"));
         const QJsonValue colorDepthValue =
@@ -2278,7 +2304,7 @@ bool importBlenderScene(const QString &path,
             !std::isfinite(pixelAspectXValue.toDouble()) ||
             !std::isfinite(pixelAspectYValue.toDouble()) ||
             pixelAspectXValue.toDouble() <= 0.0 ||
-            pixelAspectYValue.toDouble() <= 0.0) {
+            pixelAspectYValue.toDouble() <= 0.0 || !borderSettingsValid) {
             setError(errorMessage,
                      QStringLiteral("A Blender scene render-output record is invalid"));
             return false;

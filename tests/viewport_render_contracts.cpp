@@ -1505,6 +1505,60 @@ int main(int argc, char *argv[])
                      squarePixelElevatedNdc.y() * 0.5) < 1.0e-3,
         "render camera projection must match Blender shifts, pixel aspect, and depth clip range");
 
+    WorkbenchRenderResult borderCropResult;
+    borderCropResult.outputSize = QSize(8, 6);
+    borderCropResult.combined = QImage(8, 6, QImage::Format_RGBA8888);
+    borderCropResult.combined.fill(QColor(20, 40, 60, 255));
+    borderCropResult.depth.fill(3.0f, 48);
+    borderCropResult.sceneLinearSize = QSize(8, 6);
+    borderCropResult.sceneLinearRgba.fill(0.25f, 48 * 4);
+    const bool nonCropBorderApplied = applyWorkbenchRenderBorder(
+        &borderCropResult, true, false, 0.25, 0.25, 0.75, 0.75);
+    passed &= check(nonCropBorderApplied &&
+                        borderCropResult.outputSize == QSize(8, 6) &&
+                        borderCropResult.combined.pixelColor(3, 2).alpha() == 255 &&
+                        borderCropResult.combined.pixelColor(0, 0).alpha() == 0 &&
+                        borderCropResult.depth[0] == 1.0e10f &&
+                        borderCropResult.depth[2 * 8 + 1] == 1.0e10f &&
+                        borderCropResult.depth[2 * 8 + 6] == 1.0e10f &&
+                        borderCropResult.depth[5 * 8 + 3] == 1.0e10f &&
+                        borderCropResult.depth[2 * 8 + 3] == 3.0f &&
+                        borderCropResult.sceneLinearRgba[0] == 0.0f &&
+                        borderCropResult.sceneLinearRgba[(2 * 8 + 3) * 4] == 0.25f,
+                    "non-cropped Blender render borders must retain the full frame and clear pixels outside the selected region");
+    WorkbenchRenderResult fractionalBorderResult;
+    fractionalBorderResult.outputSize = QSize(8, 6);
+    fractionalBorderResult.combined = QImage(8, 6, QImage::Format_RGBA8888);
+    fractionalBorderResult.combined.fill(Qt::white);
+    const bool fractionalBorderApplied = applyWorkbenchRenderBorder(
+        &fractionalBorderResult, true, true, 0.2, 0.2, 0.8, 0.8);
+    passed &= check(fractionalBorderApplied &&
+                        fractionalBorderResult.outputSize == QSize(5, 3),
+                    "Blender render-border endpoints must truncate in bottom-left frame coordinates before converting to image rows");
+    WorkbenchRenderResult croppedBorderResult;
+    croppedBorderResult.outputSize = QSize(8, 6);
+    croppedBorderResult.combined = QImage(8, 6, QImage::Format_RGBA8888);
+    croppedBorderResult.combined.fill(QColor(20, 40, 60, 255));
+    croppedBorderResult.depth.fill(3.0f, 48);
+    croppedBorderResult.sceneLinearSize = QSize(8, 6);
+    croppedBorderResult.sceneLinearRgba.fill(0.25f, 48 * 4);
+    const bool cropBorderApplied = applyWorkbenchRenderBorder(
+        &croppedBorderResult, true, true, 0.25, 1.0 / 6.0, 0.75, 2.0 / 3.0);
+    passed &= check(cropBorderApplied &&
+                        croppedBorderResult.outputSize == QSize(4, 3) &&
+                        croppedBorderResult.combined.size() == QSize(4, 3) &&
+                        croppedBorderResult.combined.pixelColor(0, 0) ==
+                            QColor(20, 40, 60, 255) &&
+                        croppedBorderResult.depth.size() == 12 &&
+                        croppedBorderResult.depth.first() == 3.0f &&
+                        croppedBorderResult.sceneLinearSize == QSize(4, 3) &&
+                        croppedBorderResult.sceneLinearRgba.size() == 48 &&
+                        croppedBorderResult.sceneLinearRgba.first() == 0.25f,
+                    "cropped Blender render borders must crop every pass without changing camera framing");
+    passed &= check(!applyWorkbenchRenderBorder(
+                        &croppedBorderResult, true, true, -0.1, 0.0, 0.5, 1.0),
+                    "invalid normalized render-border coordinates must be rejected");
+
     const WorkbenchStudioLighting basicStudioLight =
         workbenchStudioLightingPreset(QStringLiteral("Basic"));
     const QImage basicGreyDiffuse =
@@ -2098,6 +2152,7 @@ int main(int argc, char *argv[])
             bool gpuBottomDrawSucceeded = false;
             bool gpuShadowDrawSucceeded = false;
             bool gpuCavityDrawSucceeded = false;
+            bool gpuNamedPrepassReportValid = false;
             bool gpuUnselectedBaselineDrawSucceeded = false;
             bool gpuSceneStrokeSuppressesPostOutline = false;
             bool gpuWireLinearBlendMatches = false;
@@ -3022,6 +3077,41 @@ int main(int argc, char *argv[])
                         if (result.rendered) {
                             sceneAaRenderer.markCurrentSampleAttachmentsValid(
                                 result.report.populatedAttachments);
+                        }
+                        if (result.rendered && shading.cavity) {
+                            const quint32 attachments =
+                                result.report.populatedAttachments;
+                            const bool opaquePrepassesCompleted =
+                                result.completed(
+                                    ViewportRenderPass::OpaqueDepthPrepass) &&
+                                result.completed(
+                                    ViewportRenderPass::OpaqueViewNormalPrepass) &&
+                                result.completed(
+                                    ViewportRenderPass::OpaqueObjectIdPrepass);
+                            const quint32 opaqueAttachments =
+                                ViewportRenderTargets::Depth |
+                                ViewportRenderTargets::ViewSpaceNormal |
+                                ViewportRenderTargets::ObjectId;
+                            const bool opaqueAttachmentsPopulated =
+                                (attachments & opaqueAttachments) ==
+                                opaqueAttachments;
+                        const quint32 frontAttachments =
+                                ViewportRenderTargets::FrontDepth |
+                                ViewportRenderTargets::FrontViewSpaceNormal |
+                                ViewportRenderTargets::FrontObjectId |
+                                ViewportRenderTargets::FrontOutlineId;
+                        const bool noFrontDomainReported =
+                            (attachments & frontAttachments) == 0 &&
+                            !result.completed(
+                                ViewportRenderPass::FrontDepthPrepass) &&
+                            !result.completed(
+                                ViewportRenderPass::FrontViewNormalPrepass) &&
+                            !result.completed(
+                                ViewportRenderPass::FrontObjectIdPrepass);
+                            gpuNamedPrepassReportValid =
+                                opaquePrepassesCompleted &&
+                                opaqueAttachmentsPopulated &&
+                            noFrontDomainReported;
                         }
                         if (result.rendered &&
                             !cavityDiagnosticPrefix.isEmpty()) {
@@ -5323,6 +5413,9 @@ int main(int argc, char *argv[])
                                 gpuCavityBaselineImage.size() == glSize &&
                                 gpuCavityChangedPixels > 0,
                             "GPU Workbench world cavity must change pixels from the matching outline-free cube baseline");
+            passed &= check(
+                !gpuCavityDrawSucceeded || gpuNamedPrepassReportValid,
+                "GPU cavity fixture must report populated opaque depth, view-normal, and object-ID prepasses and leave front-domain pass bits clear when no front geometry is present");
             passed &= check(gpuVolumeDrawSucceeded && gpuVolumePassReported,
                             "a bounded scalar volume must complete the GPU volume pass");
             passed &= check(gpuVolumeChangedPixels > 100,

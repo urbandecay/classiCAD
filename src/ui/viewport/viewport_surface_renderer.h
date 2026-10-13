@@ -118,7 +118,8 @@ private:
         const ViewportRenderTargets &targets,
         const QVector<int> &rangeIndices,
         bool snapshotDepth,
-        bool *snapshotDepthReady);
+        bool *snapshotDepthReady,
+        bool *drewAnyRange = nullptr);
     bool renderWorkbenchTransparentDepthPass(
         const ViewportTransform &transform,
         const QSize &viewportSize,

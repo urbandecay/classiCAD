@@ -191,11 +191,20 @@ bool persistedWorkbenchSettingsContracts()
     renderOutput.insert(QStringLiteral("render_aa"), QStringLiteral("11"));
     renderOutput.insert(QStringLiteral("resolution_x"), 1920);
     renderOutput.insert(QStringLiteral("resolution_y"), 1080);
+    renderOutput.insert(QStringLiteral("pixel_aspect_x"), 1.0);
+    renderOutput.insert(QStringLiteral("pixel_aspect_y"), 1.0);
+    renderOutput.insert(QStringLiteral("use_border"), true);
+    renderOutput.insert(QStringLiteral("use_crop_to_border"), true);
+    renderOutput.insert(QStringLiteral("border_min_x"), 0.125);
+    renderOutput.insert(QStringLiteral("border_min_y"), 0.25);
+    renderOutput.insert(QStringLiteral("border_max_x"), 0.875);
+    renderOutput.insert(QStringLiteral("border_max_y"), 0.75);
     renderOutput.insert(QStringLiteral("file_format"), QStringLiteral("OPEN_EXR"));
     renderOutput.insert(QStringLiteral("filepath"),
                         QStringLiteral("/tmp/classicad-output/frame_"));
     renderOutput.insert(QStringLiteral("color_mode"), QStringLiteral("RGBA"));
     renderOutput.insert(QStringLiteral("color_depth"), 16);
+    renderOutput.insert(QStringLiteral("dither_intensity"), 1.0);
     QJsonObject scene;
     scene.insert(QStringLiteral("render_output"), renderOutput);
     settings.importedBlenderScenes = QJsonArray{scene};
@@ -224,6 +233,13 @@ bool persistedWorkbenchSettingsContracts()
                                 QStringLiteral("RGBA") &&
                             restoredOutput.value(QStringLiteral("color_depth")).toInt() == 16,
                         "render AA, output dimensions, and format fields must survive native save/reopen");
+        passed &= check(restoredOutput.value(QStringLiteral("use_border")).toBool() &&
+                            restoredOutput.value(QStringLiteral("use_crop_to_border")).toBool() &&
+                            std::abs(restoredOutput.value(QStringLiteral("border_min_x")).toDouble() - 0.125) < 1.0e-12 &&
+                            std::abs(restoredOutput.value(QStringLiteral("border_min_y")).toDouble() - 0.25) < 1.0e-12 &&
+                            std::abs(restoredOutput.value(QStringLiteral("border_max_x")).toDouble() - 0.875) < 1.0e-12 &&
+                            std::abs(restoredOutput.value(QStringLiteral("border_max_y")).toDouble() - 0.75) < 1.0e-12,
+                        "render border flags and normalized coordinates must survive native save/reopen");
     } else {
         passed = false;
     }

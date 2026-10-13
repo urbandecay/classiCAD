@@ -1617,6 +1617,12 @@ def extract_scene(input_path, mode):
                 "resolution_x": int(render.resolution_x),
                 "resolution_y": int(render.resolution_y),
                 "resolution_percentage": int(render.resolution_percentage),
+                "use_border": bool(render.use_border),
+                "use_crop_to_border": bool(render.use_crop_to_border),
+                "border_min_x": finite_number(render.border_min_x),
+                "border_min_y": finite_number(render.border_min_y),
+                "border_max_x": finite_number(render.border_max_x),
+                "border_max_y": finite_number(render.border_max_y),
                 "pixel_aspect_x": finite_number(render.pixel_aspect_x),
                 "pixel_aspect_y": finite_number(render.pixel_aspect_y),
                 "dither_intensity": finite_number(

@@ -3144,11 +3144,13 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
     const ViewportRenderTargets &targets,
     const QVector<int> &rangeIndices,
     bool snapshotDepth,
-    bool *snapshotDepthReady)
+    bool *snapshotDepthReady,
+    bool *drewAnyRange)
 {
     if (snapshotDepthReady != nullptr) {
         *snapshotDepthReady = !snapshotDepth;
     }
+    if (drewAnyRange != nullptr) *drewAnyRange = false;
     const qreal dpr = std::max<qreal>(devicePixelRatio, 1.0);
     const QSize pixelSize(qRound(viewportSize.width() * dpr),
                           qRound(viewportSize.height() * dpr));
@@ -3261,6 +3263,7 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
         if (range.count <= 0) {
             continue;
         }
+        if (drewAnyRange != nullptr) *drewAnyRange = true;
         const GLuint objectId = range.effectObjectId;
         GLuint outlineObjectId = range.outlineHandledBySceneStroke
                                      ? 0u
@@ -5401,6 +5404,7 @@ bool ViewportSurfaceRenderer::draw(
         (cavityRequested || (outlineRequested && !settings.xrayEnabled()) ||
          !frontOpaqueRangeIndices.isEmpty());
     bool sharedPrepassReady = false;
+    bool opaquePrepassDrewGeometry = false;
     bool cavityDepthReady = false;
     bool frontDomainReady = frontOpaqueRangeIndices.isEmpty();
     if (sharedPrepassRequested) {
@@ -5408,8 +5412,9 @@ bool ViewportSurfaceRenderer::draw(
         sharedPrepassReady = renderWorkbenchEffectPrepass(
             transform, viewportSize, devicePixelRatio, settings,
             *sharedTargets, opaqueRangeIndices, ssaoEnabled,
-            &snapshotDepthReady);
+            &snapshotDepthReady, &opaquePrepassDrewGeometry);
         bool frontPrepassReady = false;
+        bool frontPrepassDrewGeometry = false;
         if (sharedPrepassReady && !frontOpaqueRangeIndices.isEmpty()) {
             ViewportRenderTargets frontTargets = *sharedTargets;
             frontTargets.depthTexture = sharedTargets->frontDepthTexture;
@@ -5420,7 +5425,8 @@ bool ViewportSurfaceRenderer::draw(
                 sharedTargets->frontOutlineIdTexture;
             frontPrepassReady = renderWorkbenchEffectPrepass(
                 transform, viewportSize, devicePixelRatio, settings,
-                frontTargets, frontOpaqueRangeIndices, false, nullptr);
+                frontTargets, frontOpaqueRangeIndices, false, nullptr,
+                &frontPrepassDrewGeometry);
             if (frontPrepassReady) {
                 frontPrepassReady = mergeWorkbenchFrontAttachments(
                     *sharedTargets, false);
@@ -5452,13 +5458,27 @@ bool ViewportSurfaceRenderer::draw(
             (frontOpaqueRangeIndices.isEmpty() || frontPrepassReady);
         cavityDepthReady = sharedPrepassReady && ssaoEnabled &&
                            snapshotDepthReady;
-        if (sharedPrepassReady && passReport != nullptr) {
+        if (sharedPrepassReady && opaquePrepassDrewGeometry &&
+            passReport != nullptr) {
+            passReport->markPassCompleted(
+                ViewportRenderPass::OpaqueDepthPrepass);
+            passReport->markPassCompleted(
+                ViewportRenderPass::OpaqueViewNormalPrepass);
+            passReport->markPassCompleted(
+                ViewportRenderPass::OpaqueObjectIdPrepass);
             passReport->populatedAttachments |=
                 ViewportRenderTargets::Depth |
                 ViewportRenderTargets::ViewSpaceNormal |
                 ViewportRenderTargets::ObjectId;
         }
-        if (frontDomainReady && passReport != nullptr) {
+        if (!frontOpaqueRangeIndices.isEmpty() && frontDomainReady &&
+            frontPrepassDrewGeometry && passReport != nullptr) {
+            passReport->markPassCompleted(
+                ViewportRenderPass::FrontDepthPrepass);
+            passReport->markPassCompleted(
+                ViewportRenderPass::FrontViewNormalPrepass);
+            passReport->markPassCompleted(
+                ViewportRenderPass::FrontObjectIdPrepass);
             passReport->populatedAttachments |=
                 ViewportRenderTargets::FrontDepth |
                 ViewportRenderTargets::FrontViewSpaceNormal |

@@ -30,6 +30,100 @@
 
 namespace classiCAD {
 
+bool applyWorkbenchRenderBorder(WorkbenchRenderResult *result,
+                                bool useBorder, bool cropToBorder,
+                                qreal minX, qreal minY,
+                                qreal maxX, qreal maxY)
+{
+    if (result == nullptr) return false;
+    const QSize fullSize = result->outputSize.isEmpty()
+        ? result->combined.size() : result->outputSize;
+    if (fullSize.isEmpty()) return false;
+    if (!useBorder) return true;
+    const qsizetype pixelCount =
+        qsizetype(fullSize.width()) * fullSize.height();
+    if ((!result->combined.isNull() && result->combined.size() != fullSize) ||
+        (!result->depth.isEmpty() && result->depth.size() != pixelCount) ||
+        (!result->sceneLinearRgba.isEmpty() &&
+         !result->hasValidSceneLinearCombined())) return false;
+    if (!std::isfinite(minX) || !std::isfinite(minY) ||
+        !std::isfinite(maxX) || !std::isfinite(maxY) ||
+        minX < 0.0 || minY < 0.0 || maxX > 1.0 || maxY > 1.0 ||
+        minX >= maxX || minY >= maxY) return false;
+
+    const int x0 = std::clamp(int(minX * fullSize.width()),
+                              0, fullSize.width());
+    const int x1 = std::clamp(int(maxX * fullSize.width()),
+                              0, fullSize.width());
+    const int bottomY0 = std::clamp(int(minY * fullSize.height()),
+                                    0, fullSize.height());
+    const int bottomY1 = std::clamp(int(maxY * fullSize.height()),
+                                    0, fullSize.height());
+    const int y0 = fullSize.height() - bottomY1;
+    const int y1 = fullSize.height() - bottomY0;
+    if (x0 >= x1 || y0 >= y1) return false;
+    const QRect borderRect(x0, y0, x1 - x0, y1 - y0);
+    if (cropToBorder) {
+        if (!result->combined.isNull())
+            result->combined = result->combined.copy(borderRect);
+        if (!result->depth.isEmpty()) {
+            QVector<float> cropped;
+            cropped.reserve(borderRect.width() * borderRect.height());
+            for (int y = y0; y < y1; ++y) {
+                const qsizetype offset = qsizetype(y) * fullSize.width() + x0;
+                cropped += result->depth.mid(offset, borderRect.width());
+            }
+            result->depth = std::move(cropped);
+        }
+        if (result->hasValidSceneLinearCombined()) {
+            QVector<float> cropped;
+            cropped.reserve(borderRect.width() * borderRect.height() * 4);
+            for (int y = y0; y < y1; ++y) {
+                const qsizetype offset =
+                    (qsizetype(y) * fullSize.width() + x0) * 4;
+                cropped += result->sceneLinearRgba.mid(
+                    offset, qsizetype(borderRect.width()) * 4);
+            }
+            result->sceneLinearRgba = std::move(cropped);
+            result->sceneLinearSize = borderRect.size();
+        }
+        result->outputSize = borderRect.size();
+        return true;
+    }
+
+    if (!result->combined.isNull()) {
+        QPainter painter(&result->combined);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(QRect(0, 0, fullSize.width(), y0), Qt::transparent);
+        painter.fillRect(QRect(0, y1, fullSize.width(), fullSize.height() - y1),
+                         Qt::transparent);
+        painter.fillRect(QRect(0, y0, x0, y1 - y0), Qt::transparent);
+        painter.fillRect(QRect(x1, y0, fullSize.width() - x1, y1 - y0),
+                         Qt::transparent);
+    }
+    if (!result->depth.isEmpty()) {
+        for (int y = 0; y < fullSize.height(); ++y) {
+            for (int x = 0; x < fullSize.width(); ++x) {
+                if (!borderRect.contains(x, y))
+                    result->depth[qsizetype(y) * fullSize.width() + x] = 1.0e10f;
+            }
+        }
+    }
+    if (result->hasValidSceneLinearCombined()) {
+        for (int y = 0; y < fullSize.height(); ++y) {
+            for (int x = 0; x < fullSize.width(); ++x) {
+                if (borderRect.contains(x, y)) continue;
+                const qsizetype offset =
+                    (qsizetype(y) * fullSize.width() + x) * 4;
+                for (int channel = 0; channel < 4; ++channel)
+                    result->sceneLinearRgba[offset + channel] = 0.0f;
+            }
+        }
+    }
+    result->outputSize = fullSize;
+    return true;
+}
+
 namespace {
 
 QString qtWriterFormat(const QString &blenderFormat)

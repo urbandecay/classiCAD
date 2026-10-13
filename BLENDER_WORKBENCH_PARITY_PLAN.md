@@ -53,9 +53,10 @@ orthographic views use Blender's constant view direction. Light directions,
 wrap, ambient, specular toggle, rotation, and world-space mode come from the
 existing Workbench Studio-light adapter. The shared normal prepass is requested
 for eligible scene-linear Studio draws. Studio remains on the forward path when
-shadows, cavity, X-Ray, preview, or selected-range tint is active. The C++ build
-passes; shader runtime and matched Blender image comparison remain open because
-this environment has not provided a working OpenGL comparison context.
+shadows, X-Ray, preview, selected-range tint, or cavity diagnostic output is
+active. The C++ build passes; shader runtime and matched Blender image
+comparison remain open because this environment has not provided a working
+OpenGL comparison context.
 
 **MatCap G-buffer resolve update (2026-10-13):** The same eligible deferred
 resolve now handles MatCap using the existing Blender-derived MatCap UV
@@ -66,6 +67,16 @@ the independent front-object material/normal merge are retained. If the MatCap
 resource cannot be prepared, the existing forward output is left in place.
 This path shares the Studio restrictions above. The C++ build passes; GPU
 shader execution and matched Blender image comparison remain open.
+
+**Opaque cavity resolve update (2026-10-13):** Eligible scene-linear opaque
+resolves now apply Workbench cavity and curvature from the shared depth,
+view-normal, object-ID, and blue-noise inputs before transparent accumulation.
+The resolve uses the same per-AA-sample cavity sequence and settings as the
+forward shader. If the shared prepass or required SSAO depth snapshot is
+unavailable, it keeps the forward color result. Shadows, X-Ray, previews,
+selection tint, and cavity diagnostic output still use the forward route. The
+C++ build passes; the GLSL path has not yet been executed in a working GL
+context, so matched output validation remains open.
 
 ### QPainter perspective cavity footprint (2026-10-13)
 

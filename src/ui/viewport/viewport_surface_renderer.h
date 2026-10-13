@@ -112,7 +112,8 @@ private:
         const QSize &pixelSize, const ViewportRenderTargets &targets,
         const ViewportTransform &transform, const QSize &viewportSize,
         const ViewportShadingSettings &settings, bool studioLighting,
-        bool matcapLighting);
+        bool matcapLighting, qreal devicePixelRatio, bool cavityRequested,
+        bool ssaoEnabled, bool cavityDepthReady);
     bool ensureTransparencyFramebuffer(const QSize &pixelSize,
                                       GLuint depthStencilTexture,
                                       bool frontDomain = false);

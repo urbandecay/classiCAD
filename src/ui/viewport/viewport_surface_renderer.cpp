@@ -1563,10 +1563,28 @@ bool ViewportSurfaceRenderer::initialize()
         uniform sampler2D uMaterialData;
         uniform sampler2D uViewNormal;
         uniform sampler2DArray uMatcapTexture;
+        uniform sampler2D uCavityDepth;
+        uniform usampler2D uCavityObjectId;
+        uniform sampler2D uCavityJitterTexture;
         uniform bool uStudioLighting;
         uniform bool uMatcapLighting;
         uniform bool uMatcapAvailable;
         uniform bool uMatcapFlipX;
+        uniform bool uUseCavity;
+        uniform bool uUseSsao;
+        uniform bool uUseCurvature;
+        uniform vec2 uCavityProjectionScale;
+        uniform float uCavityUiScale;
+        uniform float uCavityDistance;
+        uniform float uCavityAttenuation;
+        uniform float uCavityValleyFactor;
+        uniform float uCavityRidgeFactor;
+        uniform float uCurvatureRidgeControl;
+        uniform float uCurvatureValleyControl;
+        uniform int uCavitySampleStart;
+        uniform int uCavitySampleEnd;
+        uniform int uCavitySamplesPerIteration;
+        uniform float uCavitySampleCountInv;
         uniform bool uPerspective;
         uniform bool uUseSpecular;
         uniform mat4 uInverseViewProjection;
@@ -1612,6 +1630,146 @@ bool ViewportSurfaceRenderer::initialize()
                                -incident.y);
             return vec2(dot(basis1, normal), dot(basis2, normal)) * 0.496 +
                    0.5;
+        }
+
+        vec3 cavityViewPosition(vec2 screenCoordinate, float depth)
+        {
+            vec4 worldPosition = uInverseViewProjection *
+                vec4(screenCoordinate * 2.0 - 1.0,
+                     depth * 2.0 - 1.0, 1.0);
+            if (abs(worldPosition.w) <= 1.0e-8) {
+                return vec3(0.0);
+            }
+            worldPosition.xyz /= worldPosition.w;
+            vec3 relative = worldPosition.xyz - uCameraPosition;
+            return vec3(dot(relative, uViewRight),
+                        dot(relative, uViewUp),
+                        dot(relative, uViewFacing));
+        }
+
+        vec3 cavityNoise(vec2 screenCoordinate, ivec2 pixelSize)
+        {
+            vec2 jitterCoordinate = screenCoordinate * vec2(pixelSize) *
+                                    (1.0 / 64.0);
+            return texture(uCavityJitterTexture, jitterCoordinate).rgb;
+        }
+
+        float radicalInverseVdc(uint bits)
+        {
+            bits = (bits << 16u) | (bits >> 16u);
+            bits = ((bits & 0x55555555u) << 1u) |
+                   ((bits & 0xAAAAAAAAu) >> 1u);
+            bits = ((bits & 0x33333333u) << 2u) |
+                   ((bits & 0xCCCCCCCCu) >> 2u);
+            bits = ((bits & 0x0F0F0F0Fu) << 4u) |
+                   ((bits & 0xF0F0F0F0u) >> 4u);
+            bits = ((bits & 0x00FF00FFu) << 8u) |
+                   ((bits & 0xFF00FF00u) >> 8u);
+            return float(bits) * 2.3283064365386963e-10;
+        }
+
+        vec2 workbenchCavity(vec2 screenCoordinate, float depth,
+                             vec3 position, vec3 normal)
+        {
+            if (depth == 1.0 || depth == 0.0) {
+                return vec2(0.0);
+            }
+            ivec2 size = textureSize(uViewNormal, 0);
+            vec3 noise = cavityNoise(screenCoordinate, size);
+            float homcoord = uPerspective ? max(abs(position.z), 1.0e-6) : 1.0;
+            vec2 offset = uCavityProjectionScale *
+                          (uCavityDistance / homcoord) * 0.5;
+            vec2 rotX = noise.rg;
+            vec2 rotY = vec2(-rotX.y, rotX.x);
+            float cavities = 0.0;
+            float edges = 0.0;
+            for (int index = uCavitySampleStart;
+                 index < uCavitySampleEnd && index < 512; ++index) {
+                float iterationOffset =
+                    float(index / uCavitySamplesPerIteration) * 0.499;
+                float radius = fract((float(index) + 0.5 + iterationOffset) /
+                                     float(uCavitySamplesPerIteration));
+                float angle = radicalInverseVdc(uint(index)) *
+                              6.28318530718 + iterationOffset;
+                vec2 sampleDirection = vec2(cos(angle), sin(angle));
+                vec2 jitteredDirection = vec2(
+                    dot(sampleDirection, rotX), dot(sampleDirection, rotY));
+                jitteredDirection *= radius + noise.b;
+                vec2 sampleCoordinate = screenCoordinate +
+                                        jitteredDirection * offset;
+                if (any(greaterThan(abs(sampleCoordinate - 0.5), vec2(0.5)))) {
+                    continue;
+                }
+                float sampleDepth = texture(uCavityDepth, sampleCoordinate).r;
+                bool isBackground = sampleDepth == 1.0;
+                if (isBackground) {
+                    sampleDepth = depth;
+                }
+                vec3 samplePosition = cavityViewPosition(sampleCoordinate,
+                                                         sampleDepth);
+                if (isBackground) {
+                    samplePosition.z -= uCavityDistance;
+                }
+                vec3 direction = samplePosition - position;
+                float lengthToSample = length(direction);
+                float cavityDot = dot(direction, normal);
+                float bias = 0.05 * lengthToSample + 0.0001;
+                float attenuation = 1.0 /
+                    max(lengthToSample * (1.0 + lengthToSample *
+                                              lengthToSample *
+                                              uCavityAttenuation), 1.0e-8);
+                if (cavityDot > -bias) {
+                    cavities += cavityDot * attenuation;
+                }
+                if (-cavityDot > bias) {
+                    edges += -cavityDot * attenuation;
+                }
+            }
+            cavities = clamp(cavities * uCavitySampleCountInv *
+                             uCavityValleyFactor, 0.0, 1.0);
+            edges *= uCavitySampleCountInv * uCavityRidgeFactor;
+            return vec2(cavities, edges);
+        }
+
+        float curvatureSoftClamp(float curvature, float control)
+        {
+            if (curvature < 0.5 / control) {
+                return curvature * (1.0 - curvature * control);
+            }
+            return 0.25 / control;
+        }
+
+        float workbenchCurvature(vec2 screenCoordinate, ivec2 size)
+        {
+            vec2 offset = vec2(uCavityUiScale) / vec2(size);
+            vec2 upCoordinate = screenCoordinate + vec2(0.0, offset.y);
+            vec2 downCoordinate = screenCoordinate - vec2(0.0, offset.y);
+            vec2 rightCoordinate = screenCoordinate + vec2(offset.x, 0.0);
+            vec2 leftCoordinate = screenCoordinate - vec2(offset.x, 0.0);
+            uint objectUp = texture(uCavityObjectId, upCoordinate).r;
+            uint objectDown = texture(uCavityObjectId, downCoordinate).r;
+            uint objectRight = texture(uCavityObjectId, rightCoordinate).r;
+            uint objectLeft = texture(uCavityObjectId, leftCoordinate).r;
+            if (objectUp != objectDown || objectRight != objectLeft ||
+                (objectUp == 0u && objectRight == 0u)) {
+                return 0.0;
+            }
+            vec3 normalUp = decodeWorkbenchNormal(
+                texture(uViewNormal, upCoordinate).xy);
+            vec3 normalDown = decodeWorkbenchNormal(
+                texture(uViewNormal, downCoordinate).xy);
+            vec3 normalRight = decodeWorkbenchNormal(
+                texture(uViewNormal, rightCoordinate).xy);
+            vec3 normalLeft = decodeWorkbenchNormal(
+                texture(uViewNormal, leftCoordinate).xy);
+            float normalDifference = (normalUp.y - normalDown.y) +
+                                     (normalRight.x - normalLeft.x);
+            if (normalDifference < 0.0) {
+                return -2.0 * curvatureSoftClamp(-normalDifference,
+                                                 uCurvatureValleyControl);
+            }
+            return 2.0 * curvatureSoftClamp(normalDifference,
+                                            uCurvatureRidgeControl);
         }
 
         // Adapts Blender 5.2.2 Workbench's world-light shader; Blender
@@ -1713,6 +1871,28 @@ bool ViewportSurfaceRenderer::initialize()
                     ? texture(uMatcapTexture, vec3(uv, 1.0)).rgb
                     : vec3(0.0);
                 color = diffuse * material.rgb + specular;
+            }
+            if (uUseCavity) {
+                vec2 screenCoordinate = (vec2(pixel) + 0.5) /
+                                        vec2(textureSize(uDepth, 0));
+                float cavityAmount = 0.0;
+                float edgeAmount = 0.0;
+                float curvature = 0.0;
+                if (uUseSsao) {
+                    vec3 viewPosition = cavityViewPosition(screenCoordinate,
+                                                          depth);
+                    vec2 cavity = workbenchCavity(
+                        screenCoordinate, depth, viewPosition, normal);
+                    cavityAmount = cavity.x;
+                    edgeAmount = cavity.y;
+                }
+                if (uUseCurvature) {
+                    curvature = workbenchCurvature(
+                        screenCoordinate, textureSize(uViewNormal, 0));
+                }
+                color *= clamp((1.0 - cavityAmount) * (1.0 + edgeAmount) *
+                                   (1.0 + curvature),
+                               0.0, 4.0);
             }
             fragmentColor = vec4(color, 1.0);
         }
@@ -3250,12 +3430,13 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     const QSize &pixelSize, const ViewportRenderTargets &targets,
     const ViewportTransform &transform, const QSize &viewportSize,
     const ViewportShadingSettings &settings, bool studioLighting,
-    bool matcapLighting)
+    bool matcapLighting, qreal devicePixelRatio, bool cavityRequested,
+    bool ssaoEnabled, bool cavityDepthReady)
 {
     if (pixelSize.isEmpty() || targets.currentSampleColorTexture == 0 ||
         targets.depthTexture == 0 || targets.materialDataTexture == 0 ||
         targets.pixelSize != pixelSize || !outlineVertexArray_.isCreated() ||
-        ((studioLighting || matcapLighting) &&
+        ((studioLighting || matcapLighting || cavityRequested) &&
          targets.viewSpaceNormalTexture == 0) ||
         (matcapLighting && !ensureMatcapTexture(settings.matcapPreset))) {
         return false;
@@ -3269,6 +3450,9 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     GLint previousTexture1 = 0;
     GLint previousTexture2 = 0;
     GLint previousTextureArray3 = 0;
+    GLint previousTexture4 = 0;
+    GLint previousTexture5 = 0;
+    GLint previousTexture6 = 0;
     GLint previousProgram = 0;
     GLboolean previousDepthMask = GL_TRUE;
     GLboolean previousColorMask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
@@ -3292,6 +3476,12 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture2);
     glActiveTexture(GL_TEXTURE3);
     glGetIntegerv(GL_TEXTURE_BINDING_2D_ARRAY, &previousTextureArray3);
+    glActiveTexture(GL_TEXTURE4);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture4);
+    glActiveTexture(GL_TEXTURE5);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture5);
+    glActiveTexture(GL_TEXTURE6);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture6);
 
     if (flatMaterialResolveFramebuffer_ == 0) {
         glGenFramebuffers(1, &flatMaterialResolveFramebuffer_);
@@ -3320,11 +3510,23 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D_ARRAY,
                       matcapLighting ? matcapTexture_ : 0);
+        glActiveTexture(GL_TEXTURE4);
+        glBindTexture(GL_TEXTURE_2D, targets.objectIdTexture);
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_2D,
+                      cavityRequested && ssaoEnabled && cavityDepthReady
+                          ? cavityDepthTexture_ : 0);
+        glActiveTexture(GL_TEXTURE6);
+        glBindTexture(GL_TEXTURE_2D,
+                      cavityRequested && ssaoEnabled ? cavityJitterTexture_ : 0);
         flatMaterialResolveProgram_.bind();
         flatMaterialResolveProgram_.setUniformValue("uDepth", 0);
         flatMaterialResolveProgram_.setUniformValue("uMaterialData", 1);
         flatMaterialResolveProgram_.setUniformValue("uViewNormal", 2);
         flatMaterialResolveProgram_.setUniformValue("uMatcapTexture", 3);
+        flatMaterialResolveProgram_.setUniformValue("uCavityObjectId", 4);
+        flatMaterialResolveProgram_.setUniformValue("uCavityDepth", 5);
+        flatMaterialResolveProgram_.setUniformValue("uCavityJitterTexture", 6);
         flatMaterialResolveProgram_.setUniformValue("uStudioLighting",
                                                     studioLighting);
         flatMaterialResolveProgram_.setUniformValue("uMatcapLighting",
@@ -3333,6 +3535,16 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
                                                     matcapLighting);
         flatMaterialResolveProgram_.setUniformValue("uMatcapFlipX",
                                                     settings.matcapFlipX);
+        const bool useSsao = cavityRequested && ssaoEnabled &&
+                             cavityDepthReady;
+        const bool useScreenCurvature = cavityRequested &&
+            (settings.cavityType == ViewportCavityType::Screen ||
+             settings.cavityType == ViewportCavityType::Both);
+        flatMaterialResolveProgram_.setUniformValue("uUseCavity",
+                                                    cavityRequested);
+        flatMaterialResolveProgram_.setUniformValue("uUseSsao", useSsao);
+        flatMaterialResolveProgram_.setUniformValue("uUseCurvature",
+                                                    useScreenCurvature);
         flatMaterialResolveProgram_.setUniformValue(
             "uPerspective", transform.isPerspectiveEnabled());
         flatMaterialResolveProgram_.setUniformValue(
@@ -3349,6 +3561,66 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
         flatMaterialResolveProgram_.setUniformValue("uViewUp", asVector(viewUp));
         flatMaterialResolveProgram_.setUniformValue("uViewFacing",
                                                     asVector(viewDirection));
+        flatMaterialResolveProgram_.setUniformValue(
+            "uInverseViewProjection", targets.inverseViewProjection);
+        const qreal viewScale = std::max<qreal>(
+            transform.viewScalePixelsPerWorldUnit(viewportSize), 1.0e-8);
+        qreal projectionScale = viewScale;
+        if (transform.isPerspectiveEnabled()) {
+            const Point3D target = transform.viewTarget();
+            const Point3D camera = transform.cameraPosition(viewportSize);
+            const qreal cameraDistance = std::hypot(
+                std::hypot(camera.x - target.x, camera.y - target.y),
+                camera.z - target.z);
+            projectionScale *= cameraDistance;
+        }
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCavityProjectionScale",
+            QVector2D(static_cast<float>(2.0 * projectionScale /
+                                         std::max(viewportSize.width(), 1)),
+                      static_cast<float>(2.0 * projectionScale /
+                                         std::max(viewportSize.height(), 1))));
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCavityUiScale", static_cast<float>(devicePixelRatio));
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCavityDistance", static_cast<float>(settings.cavityDistance));
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCavityAttenuation",
+            static_cast<float>(settings.cavityAttenuation));
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCavityValleyFactor",
+            static_cast<float>(settings.cavityValleyFactor));
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCavityRidgeFactor",
+            static_cast<float>(settings.cavityRidgeFactor));
+        const float ridge = static_cast<float>(settings.curvatureRidgeFactor);
+        const float valley = static_cast<float>(settings.curvatureValleyFactor);
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCurvatureRidgeControl",
+            0.5f / std::max(ridge * ridge, 1.0e-4f));
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCurvatureValleyControl",
+            0.7f / std::max(valley * valley, 1.0e-4f));
+        const int samplesPerIteration =
+            std::clamp(settings.cavitySamples, 1, 500);
+        const int sampleCount = std::min(
+            std::clamp(targets.sampleCount, 1, 32) * samplesPerIteration,
+            kWorkbenchCavityMaxSamples);
+        const int iterationCount = std::max(1, sampleCount /
+                                                samplesPerIteration);
+        const int iteration = std::max(0, targets.sampleIndex) %
+                              iterationCount;
+        const int sampleStart = iteration * samplesPerIteration;
+        const int sampleEnd = sampleStart + samplesPerIteration;
+        flatMaterialResolveProgram_.setUniformValue("uCavitySampleStart",
+                                                    sampleStart);
+        flatMaterialResolveProgram_.setUniformValue("uCavitySampleEnd",
+                                                    sampleEnd);
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCavitySamplesPerIteration", samplesPerIteration);
+        flatMaterialResolveProgram_.setUniformValue(
+            "uCavitySampleCountInv",
+            1.0f / static_cast<float>(sampleEnd - sampleStart));
         const WorkbenchStudioLighting &lighting =
             workbenchStudioLightingPreset(settings.studioLightPreset);
         const WorkbenchStudioLighting viewLighting =
@@ -3401,6 +3673,12 @@ bool ViewportSurfaceRenderer::resolveWorkbenchMaterial(
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D_ARRAY,
                   static_cast<GLuint>(previousTextureArray3));
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture4));
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture5));
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture6));
     glActiveTexture(static_cast<GLenum>(previousActiveTexture));
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER,
                       static_cast<GLuint>(previousDrawFramebuffer));
@@ -7122,7 +7400,7 @@ bool ViewportSurfaceRenderer::draw(
              settings.lightingMode == ViewportLightingMode::Studio ||
              settings.lightingMode == ViewportLightingMode::MatCap) &&
             !previewOverlay && !selectionOverlay &&
-            !settings.xrayEnabled() && !settings.shadows && !settings.cavity &&
+            !settings.xrayEnabled() && !settings.shadows &&
             !hasSelectedRange && sharedTargets != nullptr &&
             sharedTargets->materialDataTexture != 0 &&
             sharedTargets->pixelSize == transparencyPixelSize;
@@ -7130,16 +7408,23 @@ bool ViewportSurfaceRenderer::draw(
             settings.lightingMode == ViewportLightingMode::Studio;
         const bool matcapDeferredResolve =
             settings.lightingMode == ViewportLightingMode::MatCap;
+        const bool deferredCavityReady = !settings.cavity ||
+            (cavityRequested && sharedPrepassReady &&
+             (!ssaoEnabled || cavityDepthReady) &&
+             !cavityDiagnosticOutput_);
         const auto resolveOpaqueMaterialGBuffer = [&]() {
             if (!materialDeferredResolveEligible ||
-                (studioDeferredResolve && !sharedPrepassReady) ||
+                ((studioDeferredResolve || matcapDeferredResolve ||
+                  cavityRequested) && !sharedPrepassReady) ||
+                !deferredCavityReady ||
                 !frontOpaqueMaterialMerged ||
                 (opaqueRangeIndices.isEmpty() &&
                  frontOpaqueRangeIndices.isEmpty()) ||
                 !resolveWorkbenchMaterial(
                     transparencyPixelSize, *sharedTargets, transform,
                     viewportSize, settings, studioDeferredResolve,
-                    matcapDeferredResolve)) {
+                    matcapDeferredResolve, devicePixelRatio,
+                    cavityRequested, ssaoEnabled, cavityDepthReady)) {
                 return;
             }
             if (passReport != nullptr) {

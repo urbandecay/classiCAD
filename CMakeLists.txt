@@ -500,6 +500,11 @@ if (CLASSICAD_BUILD_TESTS)
     set_tests_properties(viewport_render_contracts PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+    add_test(NAME workbench_dof_jitter_contracts
+        COMMAND classicad_viewport_render_contracts_test --dof-jitter-only)
+    set_tests_properties(workbench_dof_jitter_contracts PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
 
     add_executable(classicad_workbench_render_result_format_contracts_test
         tests/workbench_render_result_format_contracts.cpp

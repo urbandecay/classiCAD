@@ -21,6 +21,15 @@
 
 namespace classiCAD {
 
+// Blender 5.2.2 Workbench uses scene_state.sample / samples_len as the DOF
+// noise offset. Keep this explicit so the per-sample shader sequence cannot
+// drift from the scene's temporal sample index.
+inline float workbenchDofNoiseOffset(int sampleIndex, int sampleCount) noexcept
+{
+    if (sampleCount <= 0) return 0.0f;
+    return static_cast<float>(sampleIndex) / static_cast<float>(sampleCount);
+}
+
 class ViewportAaRenderer final : protected QOpenGLFunctions_3_3_Core {
 public:
     ~ViewportAaRenderer();

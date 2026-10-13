@@ -844,10 +844,11 @@ bool ViewportAaRenderer::initialize()
                 vec4 sum = vec4(0.0);
                 float total = 0.0;
                 ivec2 size = textureSize(uSource, 0);
-                // Blender 5.2.2 get_random_vector() combines interleaved
-                // gradient noise with channel 1 of the 64x64 EEVEE blue-noise
-                // LUT. It jitters the gather origin; it does not rotate the
-                // sample pattern.
+                // Blender 5.2.2 get_random_vector(): channel 1 (alpha) of
+                // the 64x64 EEVEE blue-noise LUT sets the angle, while
+                // interleaved gradient noise sets radius. The temporal offset
+                // is sampleIndex / sampleCount; this jitters only the gather
+                // origin and does not rotate the fixed sample pattern.
                 ivec2 noiseCoord = ivec2(gl_FragCoord.xy) % 64;
                 float blueNoise = texelFetch(uNoise, noiseCoord, 0).r;
                 float ign = fract(uJitterOffset + 52.9829189 * fract(
@@ -1946,8 +1947,8 @@ bool ViewportAaRenderer::runDepthOfField(GLuint sourceTexture)
             float(depthOfFieldOptics_.apertureRatio));
         depthOfFieldProgram_.setUniformValue(
             "uJitterOffset",
-            float(accumulatedSampleCount_) /
-                float(std::max(requestedSampleCount_, 1)));
+            workbenchDofNoiseOffset(accumulatedSampleCount_,
+                                    requestedSampleCount_));
         glDrawArrays(GL_TRIANGLES, 0, 3);
     };
 

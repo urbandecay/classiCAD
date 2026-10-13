@@ -75,6 +75,34 @@ int main(int argc, char *argv[])
     QGuiApplication application(argc, argv);
     bool passed = true;
 
+    // Blender 5.2.2 DofPass uses sample / samples_len, with no half-sample
+    // offset. The gather shader combines this value with IGN and blue-noise
+    // alpha to produce a deterministic per-pixel vector.
+    passed &= check(
+        std::abs(workbenchDofNoiseOffset(0, 8) - 0.0f) < 1.0e-7f &&
+            std::abs(workbenchDofNoiseOffset(1, 8) - 0.125f) < 1.0e-7f &&
+            std::abs(workbenchDofNoiseOffset(7, 8) - 0.875f) < 1.0e-7f &&
+            workbenchDofNoiseOffset(0, 0) == 0.0f,
+        "GPU Workbench DOF noise offset must follow Blender's temporal sample index divided by sample count");
+    const auto dofNoiseVector = [](float x, float y, float blueNoise,
+                                   float offset) {
+        const auto fract = [](float value) { return value - std::floor(value); };
+        const float ign = fract(offset + 52.9829189f * fract(
+            0.06711056f * x + 0.00583715f * y));
+        const float angle = 6.28318530718f * fract(blueNoise + offset);
+        const float radius = std::sqrt(ign);
+        return QVector2D(std::cos(angle) * radius,
+                         std::sin(angle) * radius);
+    };
+    const QVector2D expectedDofNoise = dofNoiseVector(12.5f, 7.5f, 0.4f,
+                                                       0.375f);
+    passed &= check(std::abs(expectedDofNoise.x() - 0.05872736f) < 2.0e-6f &&
+                        std::abs(expectedDofNoise.y() + 0.37078980f) < 2.0e-6f,
+                    "Workbench DOF IGN and blue-noise vector must match the pinned shader equation");
+    if (application.arguments().contains(QStringLiteral("--dof-jitter-only"))) {
+        return passed ? 0 : 1;
+    }
+
     ViewportShadingSettings interactiveRenderShading;
     interactiveRenderShading.colorMode = ViewportColorMode::Object;
     ViewportShadingSettings importedSceneRenderShading;

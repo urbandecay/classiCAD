@@ -266,6 +266,10 @@ bool persistedWorkbenchSettingsContracts()
     const QByteArray textureBytes(
         reinterpret_cast<const char *>(textureTexel.data()),
         static_cast<qsizetype>(sizeof(textureTexel)));
+    const QString packedTexturePayload =
+        QString::fromLatin1(QByteArrayLiteral("packed RGBA texture").toBase64());
+    const QString packedUdimPayload =
+        QString::fromLatin1(QByteArrayLiteral("packed UDIM tile").toBase64());
     SceneObject *textureObject = nullptr;
     for (SceneObject &object : textureSnapshot.objects) {
         if (object.id == textureObjectId) textureObject = &object;
@@ -273,12 +277,21 @@ bool persistedWorkbenchSettingsContracts()
     bool textureRoundTrip = textureObject != nullptr;
     if (textureObject != nullptr) {
         textureObject->hasWorkbenchMaterial = true;
+        textureObject->workbenchMaterial.textureImagePath =
+            QStringLiteral("textures/object-color.png");
+        textureObject->workbenchMaterial.textureImagePackedDataBase64 =
+            packedTexturePayload;
+        textureObject->workbenchMaterial.textureImageAlphaMode =
+            QStringLiteral("PREMUL");
         textureObject->workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
             QString::fromLatin1(textureBytes.toBase64());
         textureObject->workbenchMaterial.textureImageSceneLinearFloatWidth = 1;
         textureObject->workbenchMaterial.textureImageSceneLinearFloatHeight = 1;
         DocumentImageTextureTile textureTile;
         textureTile.number = 1001;
+        textureTile.filepath = QStringLiteral("textures/udim_1001.png");
+        textureTile.sourceFileExists = true;
+        textureTile.packedDataBase64 = packedUdimPayload;
         textureTile.sceneLinearFloatDataBase64 =
             QString::fromLatin1(textureBytes.toBase64());
         textureTile.sceneLinearFloatWidth = 1;
@@ -294,12 +307,23 @@ bool persistedWorkbenchSettingsContracts()
             const auto &restoredMaterial = reopenedTextureDocument.objects().first()
                                                .workbenchMaterial;
             textureRoundTrip =
+                restoredMaterial.textureImagePath ==
+                    QStringLiteral("textures/object-color.png") &&
+                restoredMaterial.textureImagePackedDataBase64 ==
+                    packedTexturePayload &&
+                restoredMaterial.textureImageAlphaMode ==
+                    QStringLiteral("PREMUL") &&
                 restoredMaterial.textureImageSceneLinearFloatDataBase64 ==
                     QString::fromLatin1(textureBytes.toBase64()) &&
                 restoredMaterial.textureImageSceneLinearFloatWidth == 1 &&
                 restoredMaterial.textureImageSceneLinearFloatHeight == 1 &&
                 restoredMaterial.textureImageTiles.size() == 1 &&
                 restoredMaterial.textureImageTiles.first().number == 1001 &&
+                restoredMaterial.textureImageTiles.first().filepath ==
+                    QStringLiteral("textures/udim_1001.png") &&
+                restoredMaterial.textureImageTiles.first().sourceFileExists &&
+                restoredMaterial.textureImageTiles.first().packedDataBase64 ==
+                    packedUdimPayload &&
                 restoredMaterial.textureImageTiles.first()
                         .sceneLinearFloatDataBase64 ==
                     QString::fromLatin1(textureBytes.toBase64()) &&
@@ -309,7 +333,7 @@ bool persistedWorkbenchSettingsContracts()
                         .sceneLinearFloatHeight == 1;
         }
         passed &= check(textureRoundTrip,
-                        "scene-linear float texture texels and dimensions must survive native save/reopen");
+                        "object Workbench image path, packed bytes, PREMUL mode, UDIM tile, and float texels must survive native save/reopen");
 
         const auto textureObjectJson = textureJson.value(QStringLiteral("objects"))
                                            .toArray().first().toObject();
@@ -337,6 +361,34 @@ bool persistedWorkbenchSettingsContracts()
                             rejectsTextureMutation(
                                 QStringLiteral("textureImageSceneLinearFloatWidth"), 1.5),
                         "native document loading must reject non-finite texels and fractional float texture dimensions");
+
+        QJsonObject legacyMaterial = textureObjectJson.value(
+            QStringLiteral("workbenchMaterial")).toObject();
+        legacyMaterial.remove(QStringLiteral("textureImagePath"));
+        legacyMaterial.remove(QStringLiteral("textureImagePackedDataBase64"));
+        legacyMaterial.remove(QStringLiteral("textureImageAlphaMode"));
+        QJsonObject legacyObject = textureObjectJson;
+        legacyObject.insert(QStringLiteral("workbenchMaterial"), legacyMaterial);
+        QJsonObject legacyDocument = textureJson;
+        legacyDocument.insert(QStringLiteral("objects"), QJsonArray{legacyObject});
+        Document reopenedLegacyTextureDocument;
+        QString legacyTextureError;
+        const bool legacyTextureDefaults = documentFromJson(
+            legacyDocument, &reopenedLegacyTextureDocument,
+            &legacyTextureError) && legacyTextureError.isEmpty() &&
+            reopenedLegacyTextureDocument.objects().first()
+                    .workbenchMaterial.textureImagePath.isEmpty() &&
+            reopenedLegacyTextureDocument.objects().first()
+                    .workbenchMaterial.textureImagePackedDataBase64.isEmpty() &&
+            reopenedLegacyTextureDocument.objects().first()
+                    .workbenchMaterial.textureImageAlphaMode ==
+                QStringLiteral("STRAIGHT");
+        passed &= check(legacyTextureDefaults,
+                        "older native material records must default missing texture path/packed bytes/alpha mode safely");
+        passed &= check(rejectsTextureMutation(
+                            QStringLiteral("textureImagePackedDataBase64"),
+                            QStringLiteral("not base64***")),
+                        "native document loading must reject malformed packed object texture bytes");
     } else {
         passed &= check(false, "texture round-trip fixture object must exist");
     }

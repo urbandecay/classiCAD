@@ -202,6 +202,31 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
         QStringLiteral("textureImageInterpolation")).toString(QStringLiteral("Linear"));
     restored.textureImageExtension = object.value(
         QStringLiteral("textureImageExtension")).toString(QStringLiteral("REPEAT"));
+    const QJsonValue imagePathValue = object.value(QStringLiteral("textureImagePath"));
+    const QJsonValue packedImageValue = object.value(
+        QStringLiteral("textureImagePackedDataBase64"));
+    const QJsonValue alphaModeValue = object.value(
+        QStringLiteral("textureImageAlphaMode"));
+    if ((!imagePathValue.isUndefined() && !imagePathValue.isString()) ||
+        (!packedImageValue.isUndefined() && !packedImageValue.isString()) ||
+        (!alphaModeValue.isUndefined() && !alphaModeValue.isString())) {
+        return false;
+    }
+    restored.textureImagePath = imagePathValue.toString();
+    restored.textureImageAlphaMode = alphaModeValue.toString(
+        QStringLiteral("STRAIGHT"));
+    restored.textureImagePackedDataBase64 = packedImageValue.toString();
+    if (restored.textureImagePackedDataBase64.size() > 44 * 1024 * 1024) {
+        return false;
+    }
+    if (!restored.textureImagePackedDataBase64.isEmpty()) {
+        const QByteArray packedBytes = QByteArray::fromBase64(
+            restored.textureImagePackedDataBase64.toLatin1(),
+            QByteArray::AbortOnBase64DecodingErrors);
+        if (packedBytes.isEmpty() || packedBytes.size() > 32 * 1024 * 1024) {
+            return false;
+        }
+    }
     restored.textureImageSrgb = object.value(QStringLiteral("textureImageSrgb")).toBool(true);
     restored.textureImageColorTransformId = object.value(
         QStringLiteral("textureImageColorTransformId")).toString(QStringLiteral("identity"));
@@ -470,6 +495,12 @@ QJsonObject documentToJson(const Document &document)
                                  sceneObject.workbenchMaterial.metallic);
         workbenchMaterial.insert(QStringLiteral("alpha"),
                                  sceneObject.workbenchMaterial.alpha);
+        workbenchMaterial.insert(QStringLiteral("textureImagePath"),
+                                 sceneObject.workbenchMaterial.textureImagePath);
+        workbenchMaterial.insert(QStringLiteral("textureImagePackedDataBase64"),
+                                 sceneObject.workbenchMaterial.textureImagePackedDataBase64);
+        workbenchMaterial.insert(QStringLiteral("textureImageAlphaMode"),
+                                 sceneObject.workbenchMaterial.textureImageAlphaMode);
         workbenchMaterial.insert(QStringLiteral("textureImageInterpolation"),
                                  sceneObject.workbenchMaterial.textureImageInterpolation);
         workbenchMaterial.insert(QStringLiteral("textureImageExtension"),

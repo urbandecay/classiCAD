@@ -52,9 +52,9 @@ float rasterWorkbenchCurvatureResponse(quint64 objectUp, quint64 objectDown,
 struct RasterWorkbenchSurfaceLayers {
     QImage opaqueColor;
     QImage transparentColor;
-    // True when cavity was folded into the scene-linear opaque layer before
-    // weighted OIT. The later scene effect pass must then skip cavity.
-    bool cavityAppliedBeforeWeightedOit = false;
+    // True when cavity was folded into the opaque contribution before
+    // transparency composition. The later effects pass then skips cavity.
+    bool cavityAppliedBeforeTransparency = false;
 };
 
 // Software Workbench screen-space effects for the QPainter fallback. The color

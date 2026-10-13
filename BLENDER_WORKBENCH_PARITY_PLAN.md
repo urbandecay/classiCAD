@@ -1590,8 +1590,15 @@ depth domain. Visual depth comparison remains open.
   transform once. The later effects stage skips cavity for that resolved layer,
   preventing a second application. A focused contract checks that the opaque
   retained layer changes while the transparent contribution stays the same.
-  This corrects pass placement; cavity sampling remains the QPainter software
-  approximation and still needs a matched Blender image comparison.
+  The bounded sorted fallback also folds cavity into its retained opaque
+  premultiplied layer before sorted transparent fragments are composed, and
+  skips the later cavity effect. Its retained RGB is already display encoded,
+  so that fallback still differs from Blender's scene-linear resolve under
+  nonlinear display transforms. Both paths still use the QPainter software
+  cavity sampling approximation and need matched Blender image comparison.
+  Full build passed after the change. The offscreen viewport contract reached
+  its NURBS-solid display case, then exited because this environment could not
+  create an OpenGL context; preceding CPU cavity assertions passed.
 - The offscreen AA-off presentation contract now exercises the final scene
   resolve with a scene-linear World color, an sRGB viewport background, a
   missing World background, and transparent film. It checks the AgX display
@@ -1894,10 +1901,11 @@ above is from scene-linear captures and remains the preferred color metric.
   [`workbench_effect_antialiasing.cc`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L133-L140) and its late invocation at [lines 243-253](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_effect_antialiasing.cc#L243-L253),
   [`workbench_overlay_depth_frag.glsl`](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/workbench_overlay_depth_frag.glsl#L7-L13),
   and [`workbench_engine.cc` pass order](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/workbench_engine.cc#L496-L504).
-- Separate QPainter caveat: its retained opaque and transparent layers use
-  ARGB32 display RGB, while Blender applies cavity before transparency on the
-  scene-linear target. The GPU overlap fixture does not validate or change
-  that QPainter color-space ordering.
+- Separate QPainter caveat: weighted OIT applies cavity in scene-linear RGB
+  before transparency. The bounded sorted fallback applies cavity before
+  transparency composition to its ARGB32 display-RGB opaque layer, so nonlinear
+  display transforms still produce different cavity results from Blender. The
+  GPU overlap fixture does not validate this QPainter color-space difference.
 - QPainter weighted OIT also accumulates every depth-visible transparent
   triangle sample now, including depth-separated surfaces within one object,
   after opaque-depth rejection. Per-object sorting removes duplicate samples
@@ -1911,8 +1919,8 @@ above is from scene-linear captures and remains the preferred color metric.
   sorting or say it collapses all transparent triangles within each object.
   The bounded fallback used when data or memory limits prevent this compositor
   remains average-depth sorted. The cavity section above likewise supersedes
-  older descriptions of display-space cavity or omitting cavity under visible
-  translucent surfaces.
+  older descriptions of omitting cavity under visible translucent surfaces;
+  its display-space fallback limitation remains current.
 
 ### Bounded scalar volume pass (2026-10-12)
 
@@ -2052,8 +2060,9 @@ Status: in progress; the implementation and source reviews found the blockers li
   The focused contract checks ridge and valley signs, separate ridge-control
   response, outline rejection, and background rejection. Its neighbor step
   rounds Qt DPR, which can differ from Blender's DPI-derived `ui_scale`; the
-  retained QPainter surface layers also remain display RGB, so cavity/effect
-  composition does not match Blender's scene-linear ordering.
+  retained QPainter surface layers also remain display RGB, so the sorted
+  fallback cavity/effect composition does not match Blender's scene-linear
+  ordering.
   Opaque effect normals now also pass through the Blender prepass facing
   adjustment and sphere-map encode/decode at half-float precision before the
   QPainter cavity/curvature consumers use them. This closes the prior CPU-only

@@ -471,7 +471,7 @@ bool compositeRasterWorkbenchSurfaces(
     }
     const int pixelCount = static_cast<int>(pixelCount64);
     if (surfaceLayers != nullptr) {
-        surfaceLayers->cavityAppliedBeforeWeightedOit = false;
+        surfaceLayers->cavityAppliedBeforeTransparency = false;
         surfaceLayers->opaqueColor = QImage(
             colorImage->size(), QImage::Format_ARGB32_Premultiplied);
         surfaceLayers->opaqueColor.setDevicePixelRatio(
@@ -620,13 +620,13 @@ bool compositeRasterWorkbenchSurfaces(
         consume(layer);
     };
 
-    // Compute the existing QPainter cavity mask while the opaque depth and
-    // normals are available, then apply it to the scene-linear base before
-    // transparent fragments enter weighted OIT. The normal post effect pass
-    // is told to skip cavity for this layer below.
+    // Compute cavity while opaque depth and normals are available. Weighted
+    // OIT consumes this in its scene-linear opaque buffer; the sorted fallback
+    // applies it to its retained opaque layer before transparency composition.
     std::vector<float> regularCavityFactors;
     std::vector<float> inFrontCavityFactors;
-    if (useWeightedOit && shadingSettings.cavity) {
+    if (shadingSettings.cavity &&
+        (useWeightedOit || surfaceLayers != nullptr)) {
         ViewportShadingSettings cavityOnly = shadingSettings;
         cavityOnly.outline = false;
         cavityOnly.depthOfField = false;
@@ -822,7 +822,7 @@ bool compositeRasterWorkbenchSurfaces(
                 }
             }
             if (surfaceLayers != nullptr) {
-                surfaceLayers->cavityAppliedBeforeWeightedOit = true;
+                surfaceLayers->cavityAppliedBeforeTransparency = true;
             }
         }
         std::vector<RasterWorkbenchLinearPixel> basePixels(
@@ -1018,6 +1018,40 @@ bool compositeRasterWorkbenchSurfaces(
             }
         }
         return true;
+    }
+
+    // The sorted fallback stores its opaque surface as a premultiplied
+    // QPainter layer. Fold cavity into that layer before transparent surfaces
+    // are alpha-composited so edge coverage and the transparent contribution
+    // remain independent. Unlike weighted OIT, this layer is display RGB; the
+    // scene-linear weighted path above remains the higher-fidelity resolve.
+    if (surfaceLayers != nullptr && shadingSettings.cavity) {
+        const bool haveRegularFactors =
+            regularCavityFactors.size() == static_cast<std::size_t>(pixelCount);
+        const bool haveFrontFactors =
+            inFrontCavityFactors.size() == static_cast<std::size_t>(pixelCount);
+        if (haveRegularFactors || haveFrontFactors) {
+            for (int index = 0; index < pixelCount; ++index) {
+                const auto applyFactor = [](QRgb *pixel, float factor) {
+                    if (pixel == nullptr || qAlpha(*pixel) == 0 || factor == 1.0f)
+                        return;
+                    *pixel = qRgba(
+                        std::clamp(qRound(qRed(*pixel) * factor), 0, 255),
+                        std::clamp(qRound(qGreen(*pixel) * factor), 0, 255),
+                        std::clamp(qRound(qBlue(*pixel) * factor), 0, 255),
+                        qAlpha(*pixel));
+                };
+                if (haveRegularFactors) {
+                    applyFactor(&opaqueColor[index], regularCavityFactors[
+                        static_cast<std::size_t>(index)]);
+                }
+                if (haveFrontFactors) {
+                    applyFactor(&frontOpaqueColor[index], inFrontCavityFactors[
+                        static_cast<std::size_t>(index)]);
+                }
+            }
+            surfaceLayers->cavityAppliedBeforeTransparency = true;
+        }
     }
 
     // Keep QPainter's per-object layer shading, then retain that layer's
@@ -1220,7 +1254,7 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
     // nor receive its shading.
     const bool cavityEnabled = settings.cavity &&
         !(surfaceLayers != nullptr &&
-          surfaceLayers->cavityAppliedBeforeWeightedOit);
+          surfaceLayers->cavityAppliedBeforeTransparency);
     const ViewportCameraPreferences cameraOptics = transform.cameraPreferences();
     const bool perspective = transform.isPerspectiveEnabled();
     const bool depthOfFieldEnabled = settings.depthOfField &&

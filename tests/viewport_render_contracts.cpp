@@ -922,13 +922,48 @@ int main(int argc, char *argv[])
             }
         }
         passed &= check(cavityOffRendered && cavityOnRendered &&
-                            cavityOnLayers.cavityAppliedBeforeWeightedOit &&
+                            cavityOnLayers.cavityAppliedBeforeTransparency &&
                             opaqueCavityChanged &&
                             cavityOffLayers.transparentColor ==
                                 cavityOnLayers.transparentColor &&
                             cavityOffImage != cavityOnImage &&
                             cavityPostEffectImage == cavityOnImage,
                         "QPainter cavity must shade the scene-linear opaque contribution before weighted transparency resolve");
+        ViewportShadingSettings sortedCavitySettings =
+            linearCavitySettings;
+        sortedCavitySettings.colorTransform = 0; // Blender AgX.
+        sortedCavitySettings.cavity = false;
+        QImage sortedCavityOffImage(size,
+                                    QImage::Format_ARGB32_Premultiplied);
+        sortedCavityOffImage.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers sortedCavityOffLayers;
+        renderer.setShadingSettings(sortedCavitySettings);
+        const bool sortedCavityOffRendered = compositeRasterWorkbenchSurfaces(
+            &sortedCavityOffImage, cavityObjects, transform, size, 1.0, true,
+            false, sortedCavitySettings, backgroundLinear, drawObject,
+            &sortedCavityOffLayers);
+        sortedCavitySettings.cavity = true;
+        QImage sortedCavityOnImage(size,
+                                   QImage::Format_ARGB32_Premultiplied);
+        sortedCavityOnImage.fill(Qt::transparent);
+        RasterWorkbenchSurfaceLayers sortedCavityOnLayers;
+        renderer.setShadingSettings(sortedCavitySettings);
+        const bool sortedCavityOnRendered = compositeRasterWorkbenchSurfaces(
+            &sortedCavityOnImage, cavityObjects, transform, size, 1.0, true,
+            false, sortedCavitySettings, backgroundLinear, drawObject,
+            &sortedCavityOnLayers);
+        QImage sortedCavityPostEffectImage = sortedCavityOnImage;
+        applyRasterWorkbenchEffects(
+            &sortedCavityPostEffectImage, cavityObjects, transform, size,
+            1.0, sortedCavitySettings, &sortedCavityOnLayers);
+        passed &= check(
+            sortedCavityOffRendered && sortedCavityOnRendered &&
+                sortedCavityOnLayers.cavityAppliedBeforeTransparency &&
+                sortedCavityOffLayers.transparentColor ==
+                    sortedCavityOnLayers.transparentColor &&
+                sortedCavityOffImage != sortedCavityOnImage &&
+                sortedCavityPostEffectImage == sortedCavityOnImage,
+            "QPainter sorted transparency must composite an AgX cavity-shaded opaque layer without tinting transparent color twice");
         renderer.setShadingSettings(shading);
 
         const QVector3D themeHighSrgb(61.0f / 255.0f,

@@ -577,6 +577,16 @@ in ordinary free views or orthographic views is superseded by this correction.
   order independence, revealage, and HDR preservation. The existing QPainter
   viewport does not yet use the float fragment API and is not claimed to pass
   this production-path regression.
+- **Matched QPainter/Blender overlap capture (2026-10-13):** the headless
+  viewport contract now renders the same two translucent quads separately and
+  overlapped, and the Blender 5.2.2 reference script accepts an explicit camera
+  direction so both captures use a top-down orthographic view. With Flat
+  lighting, Standard transform, AA off, and zero dither, the QPainter output
+  differs from Blender by full-frame MAE 12.67/255 and overlap-region MAE
+  29.77/255 (p95 69/255). At the shared overlap center, classiCAD is
+  `[152,109,103]` and Blender is `[169,112,172]`. This confirms a real
+  transparent composition mismatch in the controlled fixture; the comparison
+  is diagnostic and does not yet exercise the new float OIT resolver.
 
 ### Transparent depth and Blender Object In Front (2026-10-12)
 

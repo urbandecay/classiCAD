@@ -35,6 +35,13 @@ def arguments():
     )
     parser.add_argument("--ortho-scale", type=float, default=5.0)
     parser.add_argument(
+        "--view-direction",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        help="override the controlled camera direction from the target",
+    )
+    parser.add_argument(
         "--match-classicad-ortho",
         action="store_true",
         help=(
@@ -184,9 +191,13 @@ def main():
 
     target = Vector((0.0, 0.0, 0.0))
     direction = (
-        Vector((0.0, 0.0, 1.0))
-        if args.scene == "TRANSPARENT_IN_FRONT"
-        else Vector((4.0, -6.0, 4.0)).normalized()
+        Vector(args.view_direction).normalized()
+        if args.view_direction is not None
+        else (
+            Vector((0.0, 0.0, 1.0))
+            if args.scene == "TRANSPARENT_IN_FRONT"
+            else Vector((4.0, -6.0, 4.0)).normalized()
+        )
     )
     camera_data = bpy.data.cameras.new("ReferenceCamera")
     camera_data.type = "ORTHO"

@@ -373,6 +373,148 @@ int main(int argc, char *argv[])
             outlineScaleDpr2.pixelColor(62, 128).red() > 40,
         "QPainter outlines must sample cardinal object IDs at the integer Blender UI footprint");
 
+    // Keep the transparency fixture independent of an OpenGL context so it
+    // can be captured and compared in the offscreen contract run.
+    {
+        const QSize size(640, 480);
+        ViewportTransform transform;
+        transform.setViewPreset(ViewportViewPreset::Top);
+        transform.setPerspectiveEnabled(false);
+        const auto worldAtScreen = [&](qreal x, qreal y, qreal z) {
+            QPointF local;
+            transform.screenToWorkPlaneUnclipped(QPointF(x, y), size,
+                                                 WorkPlane::XY, z, &local);
+            return QVector3D(float(local.x()), float(local.y()), float(z));
+        };
+        const auto makeQuad = [&](quint64 id, qreal left, qreal top,
+                                  qreal right, qreal bottom, qreal z,
+                                  const QVector3D &color, qreal alpha) {
+            ViewportRenderObject object;
+            object.shape.geometryType = GeometryType::PolygonMesh;
+            const QVector3D a = worldAtScreen(left, bottom, z);
+            const QVector3D b = worldAtScreen(right, bottom, z);
+            const QVector3D c = worldAtScreen(right, top, z);
+            const QVector3D d = worldAtScreen(left, top, z);
+            object.shape.polygonMesh.vertices = {
+                Point3D{a.x(), a.y(), a.z()}, Point3D{b.x(), b.y(), b.z()},
+                Point3D{c.x(), c.y(), c.z()}, Point3D{d.x(), d.y(), d.z()}};
+            object.shape.polygonMesh.faces = {{0, 1, 2, 3}};
+            object.shape.polygonMesh.faceMaterialIndices = {0};
+            object.objectId = ObjectId::fromValue(id);
+            object.geometryRevision = 1;
+            object.hasWorkbenchMaterial = true;
+            object.workbenchMaterial.baseColorSceneLinear = color;
+            object.workbenchMaterial.alpha = alpha;
+            object.meshMaterials = {object.workbenchMaterial};
+            auto geometry = QSharedPointer<ViewportDepthGeometry>::create();
+            geometry->surfaceVertices = {a, b, c, a, c, d};
+            geometry->surfaceNormals = QVector<QVector3D>(6, QVector3D(0, 0, 1));
+            object.preparedDepthGeometry = geometry;
+            return object;
+        };
+        QVector<ViewportRenderObject> objects{
+            makeQuad(9101, 134, 86, 441, 393, 0.0,
+                    QVector3D(0.08f, 0.25f, 0.95f), 0.55),
+            makeQuad(9102, 224, 112, 480, 368, 0.0,
+                    QVector3D(0.95f, 0.12f, 0.04f), 0.48)};
+        ViewportShadingSettings shading;
+        shading.lightingMode = ViewportLightingMode::Flat;
+        shading.colorMode = ViewportColorMode::Material;
+        shading.outline = false;
+        shading.shadows = false;
+        shading.cavity = false;
+        const QVector3D backgroundLinear(0.12f, 0.07f, 0.035f);
+        const QVector3D backgroundDisplay = workbenchSceneLinearToDisplaySrgb(
+            backgroundLinear, shading.colorTransform, shading.colorExposure,
+            shading.colorGamma, shading.colorLutData,
+            shading.colorLutMetadata);
+        QImage image(size, QImage::Format_ARGB32_Premultiplied);
+        const QColor background = QColor::fromRgbF(
+            backgroundDisplay.x(), backgroundDisplay.y(),
+            backgroundDisplay.z());
+        image.fill(background);
+        CurveHitTester transparencyHitTester;
+        ViewportRenderer renderer(transform, transparencyHitTester);
+        renderer.setShadingSettings(shading);
+        const auto drawObject = [&renderer, &size](
+                                    QPainter &painter,
+                                    const ViewportRenderObject &object) {
+            renderer.drawShape(
+                painter, object.shape, size, false, false, true, QColor(),
+                QString(), 0.0, object.objectId, object.geometryRevision,
+                object.preparedDepthGeometry.data(),
+                object.preparedGeometryOffset, object.displayColorSceneLinear,
+                object.workbenchMaterial, object.displayName,
+                object.libraryPath, object.meshObjectTransform,
+                object.meshMaterials);
+        };
+        RasterWorkbenchSurfaceLayers layers;
+        const bool rendered = compositeRasterWorkbenchSurfaces(
+            &image, objects, transform, size, 1.0, false,
+            drawObject, &layers);
+        const QString capturePath = qEnvironmentVariable(
+            "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_CAPTURE");
+        const bool saved = capturePath.isEmpty() || image.save(capturePath);
+        const QString rearCapturePath = qEnvironmentVariable(
+            "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_REAR_CAPTURE");
+        const QString frontCapturePath = qEnvironmentVariable(
+            "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_FRONT_CAPTURE");
+        QImage rearImage(size, QImage::Format_ARGB32_Premultiplied);
+        rearImage.fill(background);
+        QImage frontImage(size, QImage::Format_ARGB32_Premultiplied);
+        frontImage.fill(background);
+        const bool rearRendered = compositeRasterWorkbenchSurfaces(
+            &rearImage, {objects[0]}, transform, size, 1.0, false, drawObject);
+        const bool frontRendered = compositeRasterWorkbenchSurfaces(
+            &frontImage, {objects[1]}, transform, size, 1.0, false, drawObject);
+        const bool isolatedSaved =
+            (rearCapturePath.isEmpty() || rearImage.save(rearCapturePath)) &&
+            (frontCapturePath.isEmpty() || frontImage.save(frontCapturePath));
+        const QColor rearOnly = rearImage.pixelColor(180, 200);
+        const QColor frontOnly = frontImage.pixelColor(460, 200);
+        const QColor overlap = image.pixelColor(320, 240);
+        passed &= check(rendered && rearRendered && frontRendered && saved &&
+                            isolatedSaved &&
+                            image.size() == size && rearOnly != background &&
+                            frontOnly != background && overlap != rearOnly &&
+                            overlap != frontOnly,
+                        "headless QPainter TRANSPARENT_OVERLAP must render rear-only, front-only, and distinct overlap pixels");
+
+        // This variant deliberately reverses object order while supplying
+        // camera-relative depth in the prepared triangles. It isolates the
+        // transparent resolver's far-to-near ordering from QPainter's
+        // separate single-surface visibility path.
+        ViewportRenderObject depthFront = objects[1];
+        ViewportRenderObject depthRear = objects[0];
+        auto offsetPreparedDepth = [](ViewportRenderObject *object,
+                                      float offset) {
+            auto geometry = QSharedPointer<ViewportDepthGeometry>::create(
+                *object->preparedDepthGeometry);
+            for (QVector3D &vertex : geometry->surfaceVertices) {
+                vertex.setZ(vertex.z() + offset);
+            }
+            object->preparedDepthGeometry = geometry;
+        };
+        offsetPreparedDepth(&depthFront, 0.35f);
+        offsetPreparedDepth(&depthRear, -0.35f);
+        const QVector<ViewportRenderObject> depthOrderedObjects{
+            depthFront, depthRear};
+        QImage depthOrderedImage(size, QImage::Format_ARGB32_Premultiplied);
+        depthOrderedImage.fill(background);
+        const bool depthOrderedRendered = compositeRasterWorkbenchSurfaces(
+            &depthOrderedImage, depthOrderedObjects, transform, size, 1.0,
+            false, drawObject);
+        const QString depthCapturePath = qEnvironmentVariable(
+            "CLASSICAD_VIEWPORT_QPAINTER_TRANSPARENCY_DEPTH_CAPTURE");
+        const bool depthSaved = depthCapturePath.isEmpty() ||
+                                depthOrderedImage.save(depthCapturePath);
+        passed &= check(depthOrderedRendered && depthSaved &&
+                            depthOrderedImage.pixelColor(180, 200) == rearOnly &&
+                            depthOrderedImage.pixelColor(460, 200) == frontOnly &&
+                            depthOrderedImage.pixelColor(320, 240) == overlap,
+                        "QPainter transparency must composite by camera depth when object iteration order is reversed");
+    }
+
     ViewportTransform perspectiveDofTransform = orthographicDofTransform;
     perspectiveDofTransform.setPerspectiveEnabled(true);
     const Point3D perspectiveDofEye =

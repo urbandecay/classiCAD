@@ -1256,10 +1256,15 @@ bool ViewportSurfaceRenderer::initialize()
                 if (uUseSsao) {
                     float depth = texture(uCavityDepth,
                                           screenCoordinate).r;
+                    // Workbench cavity reads its per-pixel G-buffer normal;
+                    // use the shared prepass normal instead of the forward
+                    // color pass's interpolant.
+                    vec3 cavityNormal = normalize(texture(
+                        uCavityNormal, screenCoordinate).xyz);
                     vec2 cavity = workbenchCavity(
                         screenCoordinate, depth,
                         cavityViewPosition(screenCoordinate, depth),
-                        normal);
+                        cavityNormal);
                     cavityAmount = cavity.x;
                     edgeAmount = cavity.y;
                 }

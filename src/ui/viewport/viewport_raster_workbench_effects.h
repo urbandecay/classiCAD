@@ -13,6 +13,7 @@
 
 #include <functional>
 #include <optional>
+#include <vector>
 
 namespace classiCAD {
 
@@ -72,6 +73,7 @@ bool compositeRasterWorkbenchSurfaces(
     const std::optional<QVector3D> &sceneLinearBackground,
     const std::function<void(QPainter &, const ViewportRenderObject &,
                              RasterWorkbenchFragmentSink *)> &drawObject,
-    RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr);
+    RasterWorkbenchSurfaceLayers *surfaceLayers = nullptr,
+    const std::vector<QVector3D> &sceneLinearBackgroundPixels = {});
 
 } // namespace classiCAD

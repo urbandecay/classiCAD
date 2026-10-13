@@ -1459,6 +1459,23 @@ depth domain. Visual depth comparison remains open.
   above 2. Edge probes now confirm matching covered/uncovered pixel centers.
   QPainter cavity/effect ordering, Theme-gradient integration, and
   native-fallback composition remain open.
+
+### QPainter Theme background integration (2026-10-13)
+
+- The ordinary bounded QPainter surface compositor now accepts per-pixel
+  scene-linear background samples. The widget builds the Theme gradient with
+  Blender's `viewport_background.frag` factor for Single Color, Linear, and
+  Radial styles, decodes the sRGB theme endpoints, and interpolates them in
+  scene-linear RGB before the surface/OIT resolve. World and Custom continue
+  to use their scalar scene-linear bases; missing-World uses the Theme samples.
+  The existing coverage cap also bounds gradient allocation to the compositor's
+  one-million-pixel limit; oversized targets keep the prior fallback.
+- The headless viewport contract feeds a top-to-bottom linear gradient through
+  the production surface compositor and checks an uncovered pixel after the
+  configured display transform. The focused viewport, scene-linear resolver,
+  and fragment contracts pass. Matched GPU/QPainter captures for the three
+  Theme styles and native-renderer failure fallback remain open.
+- Reference: [Blender 5.2.2 Workbench background shader](https://github.com/blender/blender/blob/v5.2.2/source/blender/draw/engines/workbench/shaders/viewport_background.frag).
 - The offscreen AA-off presentation contract now exercises the final scene
   resolve with a scene-linear World color, an sRGB viewport background, a
   missing World background, and transparent film. It checks the AgX display

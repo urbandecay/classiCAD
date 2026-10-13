@@ -50,6 +50,7 @@
 #include <limits>
 #include <optional>
 #include <utility>
+#include <vector>
 
 using namespace classiCAD;
 
@@ -550,6 +551,47 @@ int main(int argc, char *argv[])
                                 xrayImage.pixelColor(300, 220),
                         "QPainter mesh X-Ray alpha must multiply source alpha before weighted transparency resolve");
         renderer.setShadingSettings(shading);
+
+        const QVector3D themeHighSrgb(61.0f / 255.0f,
+                                      61.0f / 255.0f,
+                                      61.0f / 255.0f);
+        const QVector3D themeLowSrgb(48.0f / 255.0f,
+                                     48.0f / 255.0f,
+                                     48.0f / 255.0f);
+        const QVector3D themeHigh =
+            workbenchSrgbToSceneLinear(themeHighSrgb);
+        const QVector3D themeLow = workbenchSrgbToSceneLinear(themeLowSrgb);
+        std::vector<QVector3D> themeBackgroundPixels;
+        themeBackgroundPixels.reserve(size.width() * size.height());
+        for (int y = 0; y < size.height(); ++y) {
+            const float factor = (y + 0.5f) / size.height();
+            const QVector3D rowColor = themeHigh * (1.0f - factor) +
+                                       themeLow * factor;
+            for (int x = 0; x < size.width(); ++x)
+                themeBackgroundPixels.push_back(rowColor);
+        }
+        QImage themeImage(size, QImage::Format_ARGB32_Premultiplied);
+        themeImage.fill(Qt::transparent);
+        const bool themeRendered = compositeRasterWorkbenchSurfaces(
+            &themeImage, objects, transform, size, 1.0, false, true, shading,
+            std::nullopt, drawObject, nullptr, themeBackgroundPixels);
+        const int themeProbeX = 10;
+        const int themeProbeY = 10;
+        const float themeProbeFactor = (themeProbeY + 0.5f) / size.height();
+        const QVector3D themeProbeLinear = themeHigh * (1.0f - themeProbeFactor) +
+                                           themeLow * themeProbeFactor;
+        const QVector3D themeProbeDisplay = workbenchSceneLinearToDisplaySrgb(
+            themeProbeLinear, shading.colorTransform, shading.colorExposure,
+            shading.colorGamma, shading.colorLutData,
+            shading.colorLutMetadata);
+        const QColor themeProbeExpected = QColor::fromRgb(
+            qRound(themeProbeDisplay.x() * 255.0f),
+            qRound(themeProbeDisplay.y() * 255.0f),
+            qRound(themeProbeDisplay.z() * 255.0f));
+        passed &= check(themeRendered &&
+                            themeImage.pixelColor(themeProbeX, themeProbeY) ==
+                                themeProbeExpected,
+                        "QPainter transparent surfaces must resolve against the per-pixel scene-linear Theme background");
     }
 
     ViewportTransform perspectiveDofTransform = orthographicDofTransform;

@@ -147,6 +147,7 @@
 #include <cmath>
 #include <functional>
 #include <optional>
+#include <vector>
 
 namespace classiCAD {
 
@@ -213,6 +214,46 @@ std::optional<QVector3D> importedWorldColorSceneLinear(
                          static_cast<float>(values[2].toDouble()));
     }
     return std::nullopt;
+}
+
+std::vector<QVector3D> viewportThemeBackgroundSceneLinearPixels(
+    const ViewportThemeBackground &themeBackground, const QSize &pixelSize)
+{
+    if (!isValidViewportThemeBackground(themeBackground) ||
+        pixelSize.isEmpty() ||
+        qint64(pixelSize.width()) * pixelSize.height() > 1000000) {
+        return {};
+    }
+    const QColor highColor = themeBackground.style ==
+            ViewportThemeBackgroundStyle::SingleColor
+        ? themeBackground.lowColor : themeBackground.highColor;
+    const QVector3D high = workbenchSrgbToSceneLinear(QVector3D(
+        highColor.redF(), highColor.greenF(), highColor.blueF()));
+    const QVector3D low = workbenchSrgbToSceneLinear(QVector3D(
+        themeBackground.lowColor.redF(), themeBackground.lowColor.greenF(),
+        themeBackground.lowColor.blueF()));
+    std::vector<QVector3D> pixels;
+    pixels.reserve(static_cast<std::size_t>(pixelSize.width()) *
+                   static_cast<std::size_t>(pixelSize.height()));
+    constexpr qreal kSqrtTwo = 1.4142135623730951;
+    for (int y = 0; y < pixelSize.height(); ++y) {
+        for (int x = 0; x < pixelSize.width(); ++x) {
+            const qreal u = (x + 0.5) / pixelSize.width();
+            const qreal v = (y + 0.5) / pixelSize.height();
+            qreal factor = 0.0;
+            if (themeBackground.style == ViewportThemeBackgroundStyle::Linear) {
+                factor = std::clamp(v, 0.0, 1.0);
+            } else if (themeBackground.style ==
+                       ViewportThemeBackgroundStyle::Radial) {
+                factor = std::clamp(
+                    std::hypot(u - 0.5, v - 0.5) * kSqrtTwo,
+                    0.0, 1.0);
+            }
+            pixels.emplace_back(high * static_cast<float>(1.0 - factor) +
+                                low * static_cast<float>(factor));
+        }
+    }
+    return pixels;
 }
 
 bool renderViewportBackground(
@@ -9132,6 +9173,11 @@ protected:
                     rasterSceneLinearBackground = workbenchSrgbToSceneLinear(
                         QVector3D(color.redF(), color.greenF(), color.blueF()));
                 }
+                const std::vector<QVector3D> rasterThemeBackgroundPixels =
+                    rasterSceneLinearBackground.has_value()
+                        ? std::vector<QVector3D>{}
+                        : viewportThemeBackgroundSceneLinearPixels(
+                              themeBackground_, committedSceneLayer.size());
                 rasterSurfaceBatchRendered = compositeRasterWorkbenchSurfaces(
                     &committedSceneLayer, surfaceDrawObjects,
                     viewportTransform_, renderFrame.viewportSize,
@@ -9155,7 +9201,7 @@ protected:
                                   object.displayName, object.libraryPath,
                                   object.meshObjectTransform,
                                   object.meshMaterials, fragmentSink);
-                    }, &rasterSurfaceLayers);
+                    }, &rasterSurfaceLayers, rasterThemeBackgroundPixels);
             }
         }
         for (const ViewportRenderObject &renderObject : sceneDrawObjects) {

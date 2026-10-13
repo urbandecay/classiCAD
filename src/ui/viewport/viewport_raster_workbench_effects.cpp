@@ -363,7 +363,8 @@ bool compositeRasterWorkbenchSurfaces(
     const std::optional<QVector3D> &sceneLinearBackground,
     const std::function<void(QPainter &, const ViewportRenderObject &,
                              RasterWorkbenchFragmentSink *)> &drawObject,
-    RasterWorkbenchSurfaceLayers *surfaceLayers)
+    RasterWorkbenchSurfaceLayers *surfaceLayers,
+    const std::vector<QVector3D> &sceneLinearBackgroundPixels)
 {
     if (colorImage == nullptr || colorImage->isNull() || objects.isEmpty() ||
         !drawObject || !std::isfinite(devicePixelRatio) ||
@@ -632,11 +633,18 @@ bool compositeRasterWorkbenchSurfaces(
             static_cast<std::size_t>(pixelCount));
         const QVector3D background = sceneLinearBackground.value_or(
             QVector3D(0.0f, 0.0f, 0.0f));
+        const bool hasPixelBackground =
+            sceneLinearBackgroundPixels.size() ==
+            static_cast<std::size_t>(pixelCount);
         for (int index = 0; index < pixelCount; ++index) {
+            const QVector3D pixelBackground = hasPixelBackground
+                ? sceneLinearBackgroundPixels[static_cast<std::size_t>(index)]
+                : background;
             RasterWorkbenchLinearPixel base =
                 RasterWorkbenchLinearPixel::fromStraight(
-                    background.x(), background.y(), background.z(),
-                    sceneLinearBackground.has_value() ? 1.0f : 0.0f);
+                    pixelBackground.x(), pixelBackground.y(),
+                    pixelBackground.z(), hasPixelBackground ||
+                        sceneLinearBackground.has_value() ? 1.0f : 0.0f);
             const RasterWorkbenchLinearPixel &opaque =
                 opaqueScenePixels[static_cast<std::size_t>(index)];
             const float remain = 1.0f - opaque.alpha;

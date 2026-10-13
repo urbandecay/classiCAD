@@ -534,6 +534,12 @@ in ordinary free views or orthographic views is superseded by this correction.
   transparent-film alpha, preservation above 1.0, and Standard sRGB conversion
   after composition versus per-fragment conversion before composition. The
   resolver is not yet called by the viewport; this stage changes no output.
+- **Blender OIT contract implemented (2026-10-13):** the same module now also
+  exposes Blender Workbench 5.2.2's Eq. 7 depth weight, weighted RGB/alpha
+  accumulation, multiplicative revealage, and resolve over a scene-linear
+  base. The contract checks the weight clamps, expected composite, order
+  independence, and invalid-input behavior. This is still a standalone CPU
+  resolver; the QPainter viewport does not yet use it.
 - **Blocker:** the QPainter Workbench path does not retain scene-linear
   surface color through cross-object composition. `ViewportRenderer` applies
   `workbenchSceneLinearToDisplaySrgb` while rasterizing mesh triangles and
@@ -544,30 +550,33 @@ in ordinary free views or orthographic views is superseded by this correction.
   `QImage` format to RGBA64 or RGBA32F is insufficient: it does not make the
   existing QColor path preserve values above 1, guarantee QPainter blending in
   scene-linear space, or convert the byte-oriented cavity/outline effects.
-- **Next implementation contract:** add a production float fragment interface
-  shared by mesh and NURBS surface rasterization. Emit shaded scene-linear RGB,
-  alpha, and depth without passing surface colors through QColor or QPainter.
-  Resolve visible opaque and transparent fragments into a premultiplied float
-  buffer using depth-tested source-over, preserving RGB above 1. Apply the
-  supported QPainter cavity/outline operations to this buffer in float space,
-  then apply the selected display transform exactly once to the completed
-  scene layer. Include the scene-linear background in that resolve when the
-  output is opaque; keep grid, selection, annotation, and other display UI
-  overlays after the transform. For transparent film, retain linear Combined
-  RGB and alpha independently from the display preview so later background
-  composition does not blend already transformed translucent colors.
-- **Required offscreen regression:** exercise the production float resolver
+- **Next implementation contract:** wire the production float fragment interface
+  into the viewport compositor for shared mesh and NURBS surface rasterization.
+  Emit shaded scene-linear RGB,
+  alpha, and linear view depth without passing surface colors through QColor
+  or QPainter. Resolve opaque coverage with nearest-depth testing, then
+  accumulate visible transparent fragments using the Workbench weighted-OIT
+  resolver, preserving RGB above 1. Apply the supported QPainter
+  cavity/outline operations to this buffer in float space, then apply the
+  selected display transform exactly once to the completed scene layer. Include
+  the scene-linear background in that resolve when the output is opaque; keep
+  grid, selection, annotation, and other display UI overlays after the
+  transform. For transparent film, retain linear Combined RGB and alpha
+  independently from the display preview so later background composition does
+  not blend already transformed translucent colors.
+- **Required production-path regression:** exercise the viewport's float resolver
   with a known opaque background and two overlapping translucent surface
-  fragments. For far fragment `(C1, a1)` and near fragment `(C2, a2)`, assert
-  the resolved linear RGB equals
-  `a2*C2 + (1-a2)*(a1*C1 + (1-a1)*B)` and alpha remains one. Include at least
-  one channel above 1 before display conversion; assert that it survives the
-  resolve and that output equals one transform of the expected composite.
+  fragments at different depths. Assert the Eq. 7 weighted color, multiplicative
+  revealage, order independence, and final blend over the background. Include
+  at least one channel above 1 before display conversion; assert that it
+  survives the resolve and that output equals one transform of the expected
+  composite.
   Also assert the result differs from transforming each surface before
   blending. Keep the ordinary interactive Solid viewport at zero render
-  dither. The current compositor has no float fragment API to test, so this
-  regression belongs with that resolver when the implementation is introduced;
-  the present QPainter output is explicitly not claimed to pass it.
+  dither. The new standalone resolver contract verifies the weighted formula,
+  order independence, revealage, and HDR preservation. The existing QPainter
+  viewport does not yet use the float fragment API and is not claimed to pass
+  this production-path regression.
 
 ### Transparent depth and Blender Object In Front (2026-10-12)
 

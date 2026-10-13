@@ -94,4 +94,75 @@ bool resolveRasterWorkbenchLinearFragments(
     return true;
 }
 
+float rasterWorkbenchTransparentWeight(float cameraDepth) noexcept
+{
+    if (!std::isfinite(cameraDepth)) return 0.0f;
+    const float z = std::abs(cameraDepth);
+    const float a = z / 5.0f;
+    float b = z / 200.0f;
+    b *= b;
+    const float weight = 10.0f /
+        ((1.0e-5f + a * a) + b * (b * b));
+    return std::clamp(weight, 1.0e-2f, 3.0e2f);
+}
+
+bool resolveRasterWorkbenchWeightedOitFragments(
+    int width, int height, const RasterWorkbenchLinearPixel &base,
+    const std::vector<RasterWorkbenchLinearFragment> &fragments,
+    std::vector<RasterWorkbenchLinearPixel> *output)
+{
+    if (output == nullptr || width <= 0 || height <= 0 || !finite(base)) {
+        return false;
+    }
+    const std::size_t w = static_cast<std::size_t>(width);
+    const std::size_t h = static_cast<std::size_t>(height);
+    if (w > std::numeric_limits<std::size_t>::max() / h) return false;
+    const std::size_t pixelCount = w * h;
+
+    struct Accumulation {
+        float red = 0.0f;
+        float green = 0.0f;
+        float blue = 0.0f;
+        float weight = 0.0f;
+        float revealage = 1.0f;
+    };
+    std::vector<Accumulation> accumulations(pixelCount);
+    for (const RasterWorkbenchLinearFragment &fragment : fragments) {
+        if (!finite(fragment) || fragment.x < 0 || fragment.x >= width ||
+            fragment.y < 0 || fragment.y >= height) {
+            return false;
+        }
+        const std::size_t index = static_cast<std::size_t>(fragment.y) * w +
+                                  static_cast<std::size_t>(fragment.x);
+        const float weightedAlpha = fragment.alpha *
+            rasterWorkbenchTransparentWeight(fragment.cameraDepth);
+        Accumulation &accumulation = accumulations[index];
+        accumulation.red += fragment.sceneLinearRgb[0] * weightedAlpha;
+        accumulation.green += fragment.sceneLinearRgb[1] * weightedAlpha;
+        accumulation.blue += fragment.sceneLinearRgb[2] * weightedAlpha;
+        accumulation.weight += weightedAlpha;
+        accumulation.revealage *= 1.0f - fragment.alpha;
+    }
+
+    std::vector<RasterWorkbenchLinearPixel> resolved(pixelCount, base);
+    for (std::size_t index = 0; index < pixelCount; ++index) {
+        const Accumulation &accumulation = accumulations[index];
+        if (accumulation.weight <= 0.0f) continue;
+        const float alpha = 1.0f - accumulation.revealage;
+        const float transmittance = 1.0f - alpha;
+        const float weight = std::clamp(accumulation.weight, 1.0e-4f, 5.0e4f);
+        const float sourceRed = accumulation.red / weight;
+        const float sourceGreen = accumulation.green / weight;
+        const float sourceBlue = accumulation.blue / weight;
+        RasterWorkbenchLinearPixel &pixel = resolved[index];
+        pixel.red = sourceRed * alpha + pixel.red * transmittance;
+        pixel.green = sourceGreen * alpha + pixel.green * transmittance;
+        pixel.blue = sourceBlue * alpha + pixel.blue * transmittance;
+        pixel.alpha = alpha + pixel.alpha * transmittance;
+    }
+
+    *output = std::move(resolved);
+    return true;
+}
+
 } // namespace classiCAD

@@ -48,4 +48,14 @@ bool resolveRasterWorkbenchLinearFragments(
     const std::vector<RasterWorkbenchLinearFragment> &fragments,
     std::vector<RasterWorkbenchLinearPixel> *output);
 
+// Resolve transparent fragments with Blender Workbench 5.2.2's weighted
+// blended OIT accumulation and revealage equations. cameraDepth is the
+// fragment's signed camera-forward linear depth; the weight uses its absolute
+// value, as Blender's shader does with linear view-space Z.
+float rasterWorkbenchTransparentWeight(float cameraDepth) noexcept;
+bool resolveRasterWorkbenchWeightedOitFragments(
+    int width, int height, const RasterWorkbenchLinearPixel &base,
+    const std::vector<RasterWorkbenchLinearFragment> &fragments,
+    std::vector<RasterWorkbenchLinearPixel> *output);
+
 } // namespace classiCAD

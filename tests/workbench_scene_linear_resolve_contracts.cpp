@@ -73,6 +73,47 @@ int main()
                              (0.25f * 0.3f + 0.75f * 0.5f * 4.0f)),
                     "transparent-film output must preserve premultiplied linear RGB and alpha");
 
+    passed &= check(near(rasterWorkbenchTransparentWeight(0.0f), 300.0f) &&
+                        near(rasterWorkbenchTransparentWeight(1000.0f),
+                             0.01f),
+                    "Workbench transparent weights must match the 5.2.2 Eq. 7 clamp");
+    const std::vector<RasterWorkbenchLinearFragment> weightedFragments{
+        {0, 0, 8.0f, {0.8f, 0.15f, 0.3f}, 0.25f},
+        {0, 0, 2.0f, {0.2f, 0.4f, 4.0f}, 0.5f},
+    };
+    passed &= check(resolveRasterWorkbenchWeightedOitFragments(
+                        1, 1, background, weightedFragments, &resolved),
+                    "weighted OIT resolver must accept valid fragments");
+    const float weight8 = rasterWorkbenchTransparentWeight(8.0f);
+    const float weight2 = rasterWorkbenchTransparentWeight(2.0f);
+    const float sumWeight = 0.25f * weight8 + 0.5f * weight2;
+    const float revealage = (1.0f - 0.25f) * (1.0f - 0.5f);
+    const float coverage = 1.0f - revealage;
+    const float weightedRed =
+        (0.8f * 0.25f * weight8 + 0.2f * 0.5f * weight2) / sumWeight;
+    const float weightedGreen =
+        (0.15f * 0.25f * weight8 + 0.4f * 0.5f * weight2) / sumWeight;
+    const float weightedBlue =
+        (0.3f * 0.25f * weight8 + 4.0f * 0.5f * weight2) / sumWeight;
+    passed &= check(near(resolved[0].alpha, 1.0f) &&
+                        near(resolved[0].red,
+                             weightedRed * coverage + background.red * revealage) &&
+                        near(resolved[0].green,
+                             weightedGreen * coverage + background.green * revealage) &&
+                        near(resolved[0].blue,
+                             weightedBlue * coverage + background.blue * revealage),
+                    "weighted OIT must use depth-weighted color and multiplicative revealage");
+    const auto weightedResult = resolved;
+    const std::vector<RasterWorkbenchLinearFragment> reversedWeightedFragments{
+        weightedFragments.rbegin(), weightedFragments.rend()};
+    passed &= check(resolveRasterWorkbenchWeightedOitFragments(
+                        1, 1, background, reversedWeightedFragments, &resolved) &&
+                        near(resolved[0].red, weightedResult[0].red) &&
+                        near(resolved[0].green, weightedResult[0].green) &&
+                        near(resolved[0].blue, weightedResult[0].blue) &&
+                        near(resolved[0].alpha, weightedResult[0].alpha),
+                    "weighted OIT must be independent of transparent object order");
+
     const QVector3D straightLinear(opaqueResolved.red / opaqueResolved.alpha,
                                    opaqueResolved.green / opaqueResolved.alpha,
                                    opaqueResolved.blue / opaqueResolved.alpha);
@@ -100,6 +141,10 @@ int main()
                         1, 1, background, invalid, &unchanged) &&
                         unchanged.size() == 1 && unchanged[0].red == 9.0f,
                     "invalid fragments must fail without modifying output");
+    passed &= check(!resolveRasterWorkbenchWeightedOitFragments(
+                        1, 1, background, invalid, &unchanged) &&
+                        unchanged.size() == 1 && unchanged[0].red == 9.0f,
+                    "invalid weighted fragments must fail without modifying output");
 
     return passed ? 0 : 1;
 }

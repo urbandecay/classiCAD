@@ -17,9 +17,11 @@
 #include <QSet>
 #include <QVector3D>
 #include <QtCore/qfloat16.h>
+#include <QtEndian>
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -76,12 +78,37 @@ float radicalInverseVdc(unsigned int bits)
 struct TextureAlphaTriangle {
     QImage image;
     QHash<int, QImage> udimImages;
+    struct FloatImage { int width = 0; int height = 0; QVector<float> rgba; };
+    FloatImage floatImage;
+    QHash<int, FloatImage> floatUdimImages;
     bool udim = false;
     std::array<QPointF, 3> uvs{};
     QString interpolation = QStringLiteral("Linear");
     QString extension = QStringLiteral("REPEAT");
     bool cutout = false;
 };
+
+TextureAlphaTriangle::FloatImage loadFloatAlphaPayload(const QString &encoded,
+                                                        int width, int height)
+{
+    TextureAlphaTriangle::FloatImage result;
+    if (encoded.isEmpty() || width <= 0 || height <= 0 ||
+        quint64(width) * quint64(height) * 16ULL > 32ULL * 1024ULL * 1024ULL ||
+        encoded.size() > 44 * 1024 * 1024) return result;
+    const QByteArray bytes = QByteArray::fromBase64(
+        encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+    if (quint64(bytes.size()) != quint64(width) * quint64(height) * 16ULL)
+        return result;
+    result.width = width;
+    result.height = height;
+    result.rgba.resize(width * height * 4);
+    for (int i = 0; i < result.rgba.size(); ++i) {
+        const auto *source = reinterpret_cast<const uchar *>(bytes.constData() + i * 4);
+        result.rgba[i] = std::bit_cast<float>(qFromLittleEndian<quint32>(source));
+        if (!std::isfinite(result.rgba[i])) return {};
+    }
+    return result;
+}
 
 QVector3D normalized(const QVector3D &value)
 {
@@ -224,11 +251,32 @@ QHash<int, QImage> loadTextureAlphaTiles(
     return images;
 }
 
+QHash<int, TextureAlphaTriangle::FloatImage> loadFloatTextureAlphaTiles(
+    const WorkbenchMaterialData &material)
+{
+    QHash<int, TextureAlphaTriangle::FloatImage> images;
+    quint64 totalBytes = 0;
+    for (const DocumentImageTextureTile &tile : material.textureImageTiles) {
+        if (tile.number < 1001 || tile.number > 1999 || images.contains(tile.number))
+            continue;
+        auto image = loadFloatAlphaPayload(tile.sceneLinearFloatDataBase64,
+            tile.sceneLinearFloatWidth, tile.sceneLinearFloatHeight);
+        const quint64 bytes = quint64(image.rgba.size()) * sizeof(float);
+        if (image.width > 0 && totalBytes + bytes <= 32ULL * 1024ULL * 1024ULL) {
+            totalBytes += bytes;
+            images.insert(tile.number, std::move(image));
+        }
+    }
+    return images;
+}
+
 float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
                          const QPointF &uv)
 {
     QPointF sampleUv = uv;
     const QImage *imagePointer = &triangle.image;
+    const TextureAlphaTriangle::FloatImage *floatPointer =
+        triangle.floatImage.width > 0 ? &triangle.floatImage : nullptr;
     if (triangle.udim) {
         if (!std::isfinite(uv.x()) || !std::isfinite(uv.y()) ||
             uv.x() < 0.0 || uv.y() < 0.0 || uv.x() >= 100000.0 ||
@@ -240,12 +288,19 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
         const qint64 number = 1001LL + tileU + 10LL * tileV;
         if (number < 1001 || number > 1999) return 1.0f;
         const auto found = triangle.udimImages.constFind(static_cast<int>(number));
-        if (found == triangle.udimImages.cend()) return 1.0f;
-        imagePointer = &found.value();
+        const auto floatFound = triangle.floatUdimImages.constFind(static_cast<int>(number));
+        if (floatFound != triangle.floatUdimImages.cend()) {
+            floatPointer = &floatFound.value();
+        } else if (found != triangle.udimImages.cend()) {
+            imagePointer = &found.value();
+            floatPointer = nullptr;
+        } else return 1.0f;
         sampleUv = QPointF(uv.x() - tileU, 1.0 - (uv.y() - tileV));
     }
-    const QImage &image = *imagePointer;
-    if (image.isNull() || !std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
+    const int imageWidth = floatPointer != nullptr ? floatPointer->width : imagePointer->width();
+    const int imageHeight = floatPointer != nullptr ? floatPointer->height : imagePointer->height();
+    if (imageWidth <= 0 || imageHeight <= 0 ||
+        !std::isfinite(uv.x()) || !std::isfinite(uv.y())) {
         return 1.0f;
     }
     const bool repeat = triangle.extension.compare(
@@ -270,14 +325,15 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
     } else if (!clip && !mirror) {
         u = std::clamp(u, 0.0, 1.0);
         v = std::clamp(v, 0.0, 1.0);
-    } else if (clip && (u <= -2.0 / image.width() ||
-               u >= 1.0 + 2.0 / image.width() ||
-               v <= -2.0 / image.height() ||
-               v >= 1.0 + 2.0 / image.height())) {
+    } else if (clip && (u <= -2.0 / imageWidth ||
+               u >= 1.0 + 2.0 / imageWidth ||
+               v <= -2.0 / imageHeight ||
+               v >= 1.0 + 2.0 / imageHeight)) {
         return 0.0f;
     }
-    const qreal x = u * image.width() - 0.5;
-    const qreal y = v * image.height() - 0.5;
+    const qreal x = u * imageWidth - 0.5;
+    const qreal sourceV = floatPointer != nullptr ? 1.0 - v : v;
+    const qreal y = sourceV * imageHeight - 0.5;
     const int x0 = static_cast<int>(std::floor(x));
     const int y0 = static_cast<int>(std::floor(y));
     const qreal tx = x - x0;
@@ -285,28 +341,28 @@ float sampleTextureAlpha(const TextureAlphaTriangle &triangle,
     const bool closest = triangle.interpolation.compare(
         QStringLiteral("Closest"), Qt::CaseInsensitive) == 0;
     const auto alphaAt = [&](int px, int py) -> qreal {
-        if (clip && (px < 0 || px >= image.width() ||
-                     py < 0 || py >= image.height())) return 0.0;
+        if (clip && (px < 0 || px >= imageWidth ||
+                     py < 0 || py >= imageHeight)) return 0.0;
         if (mirror) {
-            px = (px % (2 * image.width()) + 2 * image.width()) %
-                 (2 * image.width());
-            py = (py % (2 * image.height()) + 2 * image.height()) %
-                 (2 * image.height());
-            if (px >= image.width()) px = 2 * image.width() - 1 - px;
-            if (py >= image.height()) py = 2 * image.height() - 1 - py;
+            px = (px % (2 * imageWidth) + 2 * imageWidth) % (2 * imageWidth);
+            py = (py % (2 * imageHeight) + 2 * imageHeight) % (2 * imageHeight);
+            if (px >= imageWidth) px = 2 * imageWidth - 1 - px;
+            if (py >= imageHeight) py = 2 * imageHeight - 1 - py;
         } else if (repeat) {
-            px = (px % image.width() + image.width()) % image.width();
-            py = (py % image.height() + image.height()) % image.height();
+            px = (px % imageWidth + imageWidth) % imageWidth;
+            py = (py % imageHeight + imageHeight) % imageHeight;
         } else {
-            px = std::clamp(px, 0, image.width() - 1);
-            py = std::clamp(py, 0, image.height() - 1);
+            px = std::clamp(px, 0, imageWidth - 1);
+            py = std::clamp(py, 0, imageHeight - 1);
         }
-        return image.constScanLine(py)[px * 4 + 3] / 255.0;
+        return floatPointer != nullptr
+            ? floatPointer->rgba[(py * imageWidth + px) * 4 + 3]
+            : imagePointer->constScanLine(py)[px * 4 + 3] / 255.0;
     };
     if (closest) {
         return static_cast<float>(alphaAt(
-            static_cast<int>(std::floor(u * image.width())),
-            static_cast<int>(std::floor(v * image.height()))));
+            static_cast<int>(std::floor(u * imageWidth)),
+            static_cast<int>(std::floor(sourceV * imageHeight))));
     }
     // Workbench only distinguishes Closest from filtered sampling. Its image
     // material setup enables the GPU's linear sampler for Linear, Cubic, and
@@ -1245,6 +1301,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             }
             QHash<int, QImage> alphaImagesBySlot;
             QHash<int, QHash<int, QImage>> alphaUdimImagesBySlot;
+            QHash<int, TextureAlphaTriangle::FloatImage> floatAlphaImagesBySlot;
+            QHash<int, QHash<int, TextureAlphaTriangle::FloatImage>> floatAlphaUdimImagesBySlot;
             const auto worldPoint = [&](const Point3D &local) {
                 const qreal w = m[12] * local.x + m[13] * local.y +
                                 m[14] * local.z + m[15];
@@ -1293,18 +1351,30 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             alphaUdimImagesBySlot.insert(
                                 faceSlot, loadTextureAlphaTiles(material));
                         }
+                        if (!floatAlphaUdimImagesBySlot.contains(faceSlot))
+                            floatAlphaUdimImagesBySlot.insert(
+                                faceSlot, loadFloatTextureAlphaTiles(material));
                         textureAlphaCutout =
-                            !alphaUdimImagesBySlot.value(faceSlot).isEmpty() &&
+                            (!alphaUdimImagesBySlot.value(faceSlot).isEmpty() ||
+                             !floatAlphaUdimImagesBySlot.value(faceSlot).isEmpty()) &&
                             !ignoresTextureAlpha(
                                 material.textureImageAlphaMode);
                     } else if (!material.textureImagePath.isEmpty() ||
-                               !material.textureImagePackedDataBase64.isEmpty()) {
+                               !material.textureImagePackedDataBase64.isEmpty() ||
+                               !material.textureImageSceneLinearFloatDataBase64.isEmpty()) {
                         if (!alphaImagesBySlot.contains(faceSlot)) {
                             alphaImagesBySlot.insert(
                                 faceSlot, loadTextureAlphaImage(material));
                         }
                         alphaImage = alphaImagesBySlot.value(faceSlot);
-                        textureAlphaCutout = !alphaImage.isNull() &&
+                        if (!floatAlphaImagesBySlot.contains(faceSlot))
+                            floatAlphaImagesBySlot.insert(faceSlot,
+                                loadFloatAlphaPayload(
+                                    material.textureImageSceneLinearFloatDataBase64,
+                                    material.textureImageSceneLinearFloatWidth,
+                                    material.textureImageSceneLinearFloatHeight));
+                        textureAlphaCutout = (!alphaImage.isNull() ||
+                            floatAlphaImagesBySlot.value(faceSlot).width > 0) &&
                             !ignoresTextureAlpha(
                                 material.textureImageAlphaMode);
                     }
@@ -1337,9 +1407,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                             textureAlphaTriangle.udim = true;
                             textureAlphaTriangle.udimImages =
                                 alphaUdimImagesBySlot.value(faceSlot);
-                        } else {
+                        }
+                        if (!floatAlphaUdimImagesBySlot.value(faceSlot).isEmpty()) {
+                            textureAlphaTriangle.udim = true;
+                            textureAlphaTriangle.floatUdimImages =
+                                floatAlphaUdimImagesBySlot.value(faceSlot);
+                        }
+                        if (!alphaImage.isNull()) {
                             textureAlphaTriangle.image = alphaImage;
                         }
+                        textureAlphaTriangle.floatImage =
+                            floatAlphaImagesBySlot.value(faceSlot);
                         textureAlphaTriangle.interpolation =
                             object.meshMaterials[faceSlot].textureImageInterpolation;
                         textureAlphaTriangle.extension =
@@ -1377,7 +1455,8 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
             geometry->surfaceTextureCoordinates.size() == vertices.size() &&
             (!object.workbenchMaterial.textureImageTiles.isEmpty() ||
              !object.workbenchMaterial.textureImagePath.isEmpty() ||
-             !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty()) &&
+             !object.workbenchMaterial.textureImagePackedDataBase64.isEmpty() ||
+             !object.workbenchMaterial.textureImageSceneLinearFloatDataBase64.isEmpty()) &&
             !ignoresTextureAlpha(
                 object.workbenchMaterial.textureImageAlphaMode)) {
             const bool hasUdim =
@@ -1387,7 +1466,17 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                 : QHash<int, QImage>{};
             const QImage alphaImage = hasUdim ? QImage{}
                 : loadTextureAlphaImage(object.workbenchMaterial);
-            if ((hasUdim && !udimImages.isEmpty()) || !alphaImage.isNull()) {
+            const auto floatAlphaImage = hasUdim
+                ? TextureAlphaTriangle::FloatImage{}
+                : loadFloatAlphaPayload(
+                    object.workbenchMaterial.textureImageSceneLinearFloatDataBase64,
+                    object.workbenchMaterial.textureImageSceneLinearFloatWidth,
+                    object.workbenchMaterial.textureImageSceneLinearFloatHeight);
+            const auto floatAlphaUdimImages = hasUdim
+                ? loadFloatTextureAlphaTiles(object.workbenchMaterial)
+                : QHash<int, TextureAlphaTriangle::FloatImage>{};
+            if ((hasUdim && (!udimImages.isEmpty() || !floatAlphaUdimImages.isEmpty())) ||
+                !alphaImage.isNull() || floatAlphaImage.width > 0) {
                 textureAlphaTriangles.resize(vertices.size() / 3);
                 for (int triangle = 0; triangle + 2 < vertices.size();
                      triangle += 3) {
@@ -1396,9 +1485,11 @@ void applyRasterWorkbenchEffects(QImage *colorImage,
                     if (hasUdim) {
                         alphaTriangle.udim = true;
                         alphaTriangle.udimImages = udimImages;
-                    } else {
+                        alphaTriangle.floatUdimImages = floatAlphaUdimImages;
+                    } else if (!alphaImage.isNull()) {
                         alphaTriangle.image = alphaImage;
                     }
+                    alphaTriangle.floatImage = floatAlphaImage;
                     alphaTriangle.interpolation =
                         object.workbenchMaterial.textureImageInterpolation;
                     alphaTriangle.extension =

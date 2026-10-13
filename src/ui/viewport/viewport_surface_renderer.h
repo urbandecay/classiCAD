@@ -73,6 +73,7 @@ private:
         QString textureImagePath;
         QVector<DocumentImageTextureTile> textureImageTiles;
         bool textureImageSrgb = true;
+        QString textureImageColorTransformId = QStringLiteral("identity");
         quint64 objectSeed = 0;
         quint32 effectObjectId = 0;
         QString displayName;
@@ -144,7 +145,10 @@ private:
     GLuint ensureImageTexture(const QString &path, bool srgb);
     GLuint ensureImageTexture(const QString &path,
                               const QString &packedDataBase64,
-                              bool srgb);
+                              bool srgb,
+                              const QString &sceneLinearFloatDataBase64 = {},
+                              int sceneLinearFloatWidth = 0,
+                              int sceneLinearFloatHeight = 0);
     struct UdimTextureSet {
         GLuint imageArray = 0;
         GLuint tileLookup = 0;

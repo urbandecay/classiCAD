@@ -1704,6 +1704,27 @@ int main(int argc, char *argv[])
                         std::abs(sampledTexture.alpha() - 179) <= 2,
                     "QPainter Texture mode must replace material RGB with the image sample and retain material alpha");
 
+    const std::array<float, 8> floatTexels{
+        1.5f, -0.25f, 0.5f, 0.4f,
+        -0.5f, 0.75f, 1.5f, 0.8f};
+    const QByteArray floatTexelBytes(
+        reinterpret_cast<const char *>(floatTexels.data()),
+        static_cast<qsizetype>(sizeof(floatTexels)));
+    WorkbenchMaterialData floatTextureMaterial;
+    floatTextureMaterial.alpha = 0.7;
+    floatTextureMaterial.textureImageInterpolation = QStringLiteral("Linear");
+    floatTextureMaterial.textureImageSceneLinearFloatWidth = 2;
+    floatTextureMaterial.textureImageSceneLinearFloatHeight = 1;
+    floatTextureMaterial.textureImageSceneLinearFloatDataBase64 =
+        QString::fromLatin1(floatTexelBytes.toBase64());
+    const QImage floatTextureImage = renderColorMesh(
+        textureSettings, {floatTextureMaterial});
+    const QColor sampledFloatTexture = floatTextureImage.pixelColor(80, 80);
+    passed &= check(sampledFloatTexture.blue() > sampledFloatTexture.red() &&
+                        sampledFloatTexture.red() > sampledFloatTexture.green() &&
+                        std::abs(sampledFloatTexture.alpha() - 179) <= 2,
+                    "QPainter Texture mode must sample signed/HDR float RGB and preserve alpha independently");
+
     const QSize annotationSize(128, 128);
     ViewportTransform annotationTransform;
     annotationTransform.zoom() = 32.0;
@@ -2393,6 +2414,23 @@ int main(int argc, char *argv[])
                     alphaCaster.preparedDepthGeometry =
                         QSharedPointer<ViewportDepthGeometry>::create(
                             buildViewportDepthGeometry(alphaCaster.shape));
+                    ViewportRenderObject floatAlphaCaster = alphaCaster;
+                    floatAlphaCaster.workbenchMaterial.textureImagePackedDataBase64.clear();
+                    const std::array<float, 16> transparentFloatTexels{
+                        0.8f, 0.2f, 0.1f, 0.0f,
+                        0.3f, 0.7f, 0.2f, 0.0f,
+                        0.1f, 0.4f, 0.9f, 0.0f,
+                        0.6f, 0.3f, 0.8f, 0.0f};
+                    const QByteArray transparentFloatBytes(
+                        reinterpret_cast<const char *>(transparentFloatTexels.data()),
+                        static_cast<qsizetype>(sizeof(transparentFloatTexels)));
+                    floatAlphaCaster.workbenchMaterial
+                        .textureImageSceneLinearFloatDataBase64 =
+                        QString::fromLatin1(transparentFloatBytes.toBase64());
+                    floatAlphaCaster.workbenchMaterial
+                        .textureImageSceneLinearFloatWidth = 2;
+                    floatAlphaCaster.workbenchMaterial
+                        .textureImageSceneLinearFloatHeight = 2;
                     ViewportRenderObject ignoredAlphaCaster = alphaCaster;
                     ignoredAlphaCaster.workbenchMaterial.textureImageAlphaMode =
                         QStringLiteral("NONE");
@@ -2446,6 +2484,8 @@ int main(int argc, char *argv[])
                         renderCpuSolidAlphaScene({alphaReceiver});
                     const QImage cpuSolidAlphaCutout =
                         renderCpuSolidAlphaScene({alphaReceiver, alphaCaster});
+                    const QImage cpuSolidFloatAlphaCutout =
+                        renderCpuSolidAlphaScene({alphaReceiver, floatAlphaCaster});
                     const QImage cpuSolidAlphaIgnored =
                         renderCpuSolidAlphaScene(
                             {alphaReceiver, ignoredAlphaCaster});
@@ -2454,6 +2494,9 @@ int main(int argc, char *argv[])
                     passed &= check(
                         cpuSolidAlphaCutout == cpuSolidAlphaReceiverOnly,
                         "QPainter NurbsSolid alpha cutout must match receiver-only color and outline");
+                    passed &= check(
+                        cpuSolidFloatAlphaCutout == cpuSolidAlphaReceiverOnly,
+                        "QPainter NurbsSolid float-texture alpha must mask color and effect passes");
                     passed &= check(
                         cpuSolidAlphaIgnored != cpuSolidAlphaReceiverOnly,
                         "QPainter NurbsSolid NONE alpha mode must bypass the cutout");

@@ -55,6 +55,44 @@ bool isFiniteColorLutPayload(const QByteArray &bytes, int size)
     return true;
 }
 
+bool decodeFiniteSceneLinearFloatPayload(const QJsonValue &encodedValue,
+                                         const QJsonValue &widthValue,
+                                         const QJsonValue &heightValue,
+                                         QByteArray *decoded,
+                                         int *widthOut = nullptr,
+                                         int *heightOut = nullptr)
+{
+    if (decoded == nullptr || !encodedValue.isString() ||
+        !widthValue.isDouble() || !heightValue.isDouble()) return false;
+    const QString encoded = encodedValue.toString();
+    const double widthNumber = widthValue.toDouble();
+    const double heightNumber = heightValue.toDouble();
+    if (!std::isfinite(widthNumber) || !std::isfinite(heightNumber) ||
+        std::floor(widthNumber) != widthNumber ||
+        std::floor(heightNumber) != heightNumber ||
+        widthNumber < 1.0 || heightNumber < 1.0 ||
+        widthNumber > 16384.0 || heightNumber > 16384.0 ||
+        encoded.size() > 44 * 1024 * 1024) return false;
+    const int width = static_cast<int>(widthNumber);
+    const int height = static_cast<int>(heightNumber);
+    const quint64 expected = quint64(width) * quint64(height) * 16ULL;
+    if (expected > 32ULL * 1024 * 1024) return false;
+    const QByteArray bytes = QByteArray::fromBase64(
+        encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+    if (quint64(bytes.size()) != expected) return false;
+    const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
+    for (qsizetype offset = 0; offset < bytes.size(); offset += 4) {
+        const quint32 bits = qFromLittleEndian<quint32>(source + offset);
+        float value = 0.0f;
+        std::memcpy(&value, &bits, sizeof(value));
+        if (!std::isfinite(value)) return false;
+    }
+    *decoded = bytes;
+    if (widthOut != nullptr) *widthOut = width;
+    if (heightOut != nullptr) *heightOut = height;
+    return true;
+}
+
 void setError(QString *errorMessage, const QString &message)
 {
     if (errorMessage != nullptr) {
@@ -593,6 +631,17 @@ bool parseBlenderMaterials(
     }
     QVector<classiCAD::DocumentMaterial> parsedMaterials;
     QHash<QString, classiCAD::DocumentMaterial> parsedById;
+    QSet<QByteArray> sceneFloatPayloadIds;
+    quint64 sceneFloatPayloadBytes = 0;
+    const auto addSceneFloatPayload = [&](const QByteArray &decoded) {
+        const QByteArray id = QCryptographicHash::hash(decoded, QCryptographicHash::Sha256);
+        if (sceneFloatPayloadIds.contains(id)) return true;
+        if (sceneFloatPayloadBytes + quint64(decoded.size()) > 64ULL * 1024 * 1024)
+            return false;
+        sceneFloatPayloadIds.insert(id);
+        sceneFloatPayloadBytes += quint64(decoded.size());
+        return true;
+    };
     for (const QString &key : sourceMaterials.keys()) {
         const QJsonObject source = sourceMaterials.value(key).toObject();
         classiCAD::DocumentMaterial material;
@@ -628,6 +677,8 @@ bool parseBlenderMaterials(
                 reference.imageLibraryPath = image.value(QStringLiteral("image_library_path")).toString();
                 reference.filepath = image.value(QStringLiteral("filepath")).toString();
                 reference.colorSpace = image.value(QStringLiteral("color_space")).toString();
+                reference.sourceTransformId = image.value(
+                    QStringLiteral("source_transform_id")).toString(QStringLiteral("identity"));
                 reference.alphaMode = image.value(QStringLiteral("alpha_mode"))
                                           .toString(QStringLiteral("STRAIGHT"));
                 reference.interpolation = image.value(QStringLiteral("interpolation"))
@@ -653,9 +704,40 @@ bool parseBlenderMaterials(
                     }
                     return false;
                 }
+                const QJsonValue floatPayloadValue = image.value(
+                    QStringLiteral("scene_linear_float_data_base64"));
+                if (!floatPayloadValue.isUndefined() && !floatPayloadValue.isString()) {
+                    if (warnings != nullptr) warnings->append(
+                        QStringLiteral("%1: malformed scene-linear float image payload was omitted")
+                            .arg(reference.imageName));
+                }
+                reference.sceneLinearFloatDataBase64 = floatPayloadValue.toString();
+                const QJsonValue floatWidthValue = image.value(
+                    QStringLiteral("scene_linear_float_width"));
+                const QJsonValue floatHeightValue = image.value(
+                    QStringLiteral("scene_linear_float_height"));
+                if (!reference.sceneLinearFloatDataBase64.isEmpty()) {
+                    QByteArray decoded;
+                    if (!decodeFiniteSceneLinearFloatPayload(
+                            image.value(QStringLiteral("scene_linear_float_data_base64")),
+                            floatWidthValue, floatHeightValue, &decoded,
+                            &reference.sceneLinearFloatWidth,
+                            &reference.sceneLinearFloatHeight) ||
+                        (reference.sourceTransformId.size() != 64 &&
+                         reference.sourceTransformId != QStringLiteral("blender-float-buffer")) ||
+                        !addSceneFloatPayload(decoded)) {
+                        if (warnings != nullptr) warnings->append(
+                            QStringLiteral("%1: invalid scene-linear float image payload was omitted")
+                                .arg(reference.imageName));
+                        reference.sceneLinearFloatDataBase64.clear();
+                        reference.sceneLinearFloatWidth = 0;
+                        reference.sceneLinearFloatHeight = 0;
+                    }
+                }
                 reference.sourceFileExists = image.value(QStringLiteral("source_file_exists")).toBool();
                 const QJsonArray tiles = image.value(QStringLiteral("tiles")).toArray();
                 qsizetype packedTileBytes = 0;
+                quint64 floatTileBytes = 0;
                 for (const QJsonValue &tileValue : tiles) {
                     if (!tileValue.isObject()) continue;
                     const QJsonObject tileObject = tileValue.toObject();
@@ -673,7 +755,12 @@ bool parseBlenderMaterials(
                         }
                         return false;
                     }
-                    const int number = numberValue.toInt(-1);
+                    const double numberNumber = numberValue.toDouble(-1.0);
+                    const int number = numberValue.isDouble() &&
+                            std::isfinite(numberNumber) &&
+                            std::floor(numberNumber) == numberNumber &&
+                            numberNumber >= 1001.0 && numberNumber <= 1999.0
+                        ? static_cast<int>(numberNumber) : -1;
                     if (number < 1001 || number > 1999) {
                         if (warnings != nullptr) {
                             warnings->append(QStringLiteral("%1: invalid UDIM tile number")
@@ -703,8 +790,42 @@ bool parseBlenderMaterials(
                             validPackedData = packedData;
                         }
                     }
-                    reference.tiles.append({number, filepathValue.toString(),
-                                            existsValue.toBool(), validPackedData});
+                    classiCAD::DocumentImageTextureTile parsedTile{
+                        number, filepathValue.toString(), existsValue.toBool(),
+                        validPackedData, {}, 0, 0};
+                    const QJsonValue floatPayloadValue = tileObject.value(
+                        QStringLiteral("scene_linear_float_data_base64"));
+                    const QString floatPayload = floatPayloadValue.toString();
+                    const QJsonValue floatWidthValue = tileObject.value(
+                        QStringLiteral("scene_linear_float_width"));
+                    const QJsonValue floatHeightValue = tileObject.value(
+                        QStringLiteral("scene_linear_float_height"));
+                    if (!floatPayload.isEmpty()) {
+                        QByteArray decoded;
+                        int floatWidth = 0;
+                        int floatHeight = 0;
+                        if (!decodeFiniteSceneLinearFloatPayload(
+                                tileObject.value(QStringLiteral("scene_linear_float_data_base64")),
+                                floatWidthValue, floatHeightValue, &decoded,
+                                &floatWidth, &floatHeight) ||
+                            floatTileBytes + quint64(decoded.size()) > 32ULL * 1024 * 1024 ||
+                            !addSceneFloatPayload(decoded)) {
+                            if (warnings != nullptr) warnings->append(
+                                QStringLiteral("%1: invalid scene-linear float payload for tile %2 was omitted")
+                                    .arg(reference.imageName).arg(number));
+                        } else {
+                            floatTileBytes += quint64(decoded.size());
+                            parsedTile.sceneLinearFloatDataBase64 = floatPayload;
+                            parsedTile.sceneLinearFloatWidth = floatWidth;
+                            parsedTile.sceneLinearFloatHeight = floatHeight;
+                        }
+                    } else if (!floatPayloadValue.isUndefined() &&
+                               !floatPayloadValue.isString() && warnings != nullptr) {
+                        warnings->append(
+                            QStringLiteral("%1: malformed scene-linear float payload for tile %2 was omitted")
+                                .arg(reference.imageName).arg(number));
+                    }
+                    reference.tiles.append(std::move(parsedTile));
                 }
                 if (!reference.imageName.isEmpty()) material.imageTextures.append(std::move(reference));
             }
@@ -916,6 +1037,14 @@ bool parseBlenderMeshItem(const QJsonObject &item,
                     result.workbenchMaterial.textureImageSrgb =
                         image.colorSpace.compare(QStringLiteral("sRGB"),
                                                  Qt::CaseInsensitive) == 0;
+                    result.workbenchMaterial.textureImageColorTransformId =
+                        image.sourceTransformId;
+                    result.workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
+                        image.sceneLinearFloatDataBase64;
+                    result.workbenchMaterial.textureImageSceneLinearFloatWidth =
+                        image.sceneLinearFloatWidth;
+                    result.workbenchMaterial.textureImageSceneLinearFloatHeight =
+                        image.sceneLinearFloatHeight;
                     result.workbenchMaterial.textureImageAlphaMode = image.alphaMode;
                     result.workbenchMaterial.textureImageInterpolation = image.interpolation;
                     result.workbenchMaterial.textureImageExtension = image.extension;
@@ -1393,6 +1522,14 @@ bool parseBlenderSurfaceItem(
             result.workbenchMaterial.textureImageSrgb =
                 image.colorSpace.compare(QStringLiteral("sRGB"),
                                          Qt::CaseInsensitive) == 0;
+            result.workbenchMaterial.textureImageColorTransformId =
+                image.sourceTransformId;
+            result.workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
+                image.sceneLinearFloatDataBase64;
+            result.workbenchMaterial.textureImageSceneLinearFloatWidth =
+                image.sceneLinearFloatWidth;
+            result.workbenchMaterial.textureImageSceneLinearFloatHeight =
+                image.sceneLinearFloatHeight;
             result.workbenchMaterial.textureImageAlphaMode = image.alphaMode;
             result.workbenchMaterial.textureImageInterpolation = image.interpolation;
             result.workbenchMaterial.textureImageExtension = image.extension;
@@ -1930,7 +2067,8 @@ bool importBlenderScene(const QString &path,
             QLatin1String("classiCAD.blender-scene-extract") ||
         !jsonInteger(root.value(QStringLiteral("format_version")), &bridgeVersion) ||
         (bridgeVersion != 10 && bridgeVersion != 11 && bridgeVersion != 12 &&
-         bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15)) {
+         bridgeVersion != 13 && bridgeVersion != 14 && bridgeVersion != 15 &&
+         bridgeVersion != 16)) {
         setError(errorMessage,
                  QStringLiteral("The Blender scene extraction format is unsupported"));
         return false;

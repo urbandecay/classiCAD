@@ -31,6 +31,11 @@ struct DocumentImageTextureTile {
     // Base64 encoded packed bytes for this exact UDIM tile, empty when the
     // tile is external or Blender omitted it due to the aggregate byte cap.
     QString packedDataBase64;
+    // Optional exact scene-linear RGBA32F Workbench payload (base64 encoded,
+    // little-endian), used when an OCIO source-space conversion is needed.
+    QString sceneLinearFloatDataBase64;
+    int sceneLinearFloatWidth = 0;
+    int sceneLinearFloatHeight = 0;
 };
 
 // Workbench material inputs are stored in scene-linear RGB, matching Blender's
@@ -45,6 +50,13 @@ struct WorkbenchMaterialData {
     // entries travel separately in textureImageTiles.
     QString textureImagePath;
     bool textureImageSrgb = true;
+    // Identifies the source-space conversion used for the float texel payload.
+    // ACEScg byte images use a config-specific OCIO transform hash; float
+    // buffers use Blender's direct-upload semantics identifier.
+    QString textureImageColorTransformId = QStringLiteral("identity");
+    QString textureImageSceneLinearFloatDataBase64;
+    int textureImageSceneLinearFloatWidth = 0;
+    int textureImageSceneLinearFloatHeight = 0;
     QString textureImageAlphaMode = QStringLiteral("STRAIGHT");
     QString textureImageInterpolation = QStringLiteral("Linear");
     QString textureImageExtension = QStringLiteral("REPEAT");
@@ -59,6 +71,7 @@ struct DocumentImageTextureReference {
     QString imageLibraryPath;
     QString filepath;
     QString colorSpace;
+    QString sourceTransformId = QStringLiteral("identity");
     // Blender Image.alpha_mode: STRAIGHT, PREMUL, CHANNEL_PACKED, or NONE.
     QString alphaMode = QStringLiteral("STRAIGHT");
     // Blender image-texture node sampling settings. Environment Texture uses
@@ -71,6 +84,9 @@ struct DocumentImageTextureReference {
     bool packed = false;
     bool sourceFileExists = false;
     QVector<DocumentImageTextureTile> tiles;
+    QString sceneLinearFloatDataBase64;
+    int sceneLinearFloatWidth = 0;
+    int sceneLinearFloatHeight = 0;
 };
 
 struct DocumentMaterial {

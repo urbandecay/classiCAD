@@ -48,7 +48,9 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 
 using namespace classiCAD;
@@ -219,6 +221,91 @@ bool persistedWorkbenchSettingsContracts()
                         "render AA, output dimensions, and format fields must survive native save/reopen");
     } else {
         passed = false;
+    }
+
+    Document textureDocument;
+    Shape textureShape;
+    textureShape.geometryType = GeometryType::Point;
+    textureShape.points = {QPointF(0.0, 0.0)};
+    const ObjectId textureObjectId = textureDocument.append(textureShape);
+    auto textureSnapshot = textureDocument.snapshot();
+    const std::array<float, 4> textureTexel{1.5f, -0.25f, 0.5f, 0.75f};
+    const QByteArray textureBytes(
+        reinterpret_cast<const char *>(textureTexel.data()),
+        static_cast<qsizetype>(sizeof(textureTexel)));
+    SceneObject *textureObject = nullptr;
+    for (SceneObject &object : textureSnapshot.objects) {
+        if (object.id == textureObjectId) textureObject = &object;
+    }
+    bool textureRoundTrip = textureObject != nullptr;
+    if (textureObject != nullptr) {
+        textureObject->hasWorkbenchMaterial = true;
+        textureObject->workbenchMaterial.textureImageSceneLinearFloatDataBase64 =
+            QString::fromLatin1(textureBytes.toBase64());
+        textureObject->workbenchMaterial.textureImageSceneLinearFloatWidth = 1;
+        textureObject->workbenchMaterial.textureImageSceneLinearFloatHeight = 1;
+        DocumentImageTextureTile textureTile;
+        textureTile.number = 1001;
+        textureTile.sceneLinearFloatDataBase64 =
+            QString::fromLatin1(textureBytes.toBase64());
+        textureTile.sceneLinearFloatWidth = 1;
+        textureTile.sceneLinearFloatHeight = 1;
+        textureObject->workbenchMaterial.textureImageTiles.append(textureTile);
+        textureDocument.restoreSnapshot(textureSnapshot);
+        const QJsonObject textureJson = documentToJson(textureDocument);
+        Document reopenedTextureDocument;
+        QString textureError;
+        textureRoundTrip = documentFromJson(textureJson, &reopenedTextureDocument,
+                                             &textureError) && textureError.isEmpty();
+        if (textureRoundTrip) {
+            const auto &restoredMaterial = reopenedTextureDocument.objects().first()
+                                               .workbenchMaterial;
+            textureRoundTrip =
+                restoredMaterial.textureImageSceneLinearFloatDataBase64 ==
+                    QString::fromLatin1(textureBytes.toBase64()) &&
+                restoredMaterial.textureImageSceneLinearFloatWidth == 1 &&
+                restoredMaterial.textureImageSceneLinearFloatHeight == 1 &&
+                restoredMaterial.textureImageTiles.size() == 1 &&
+                restoredMaterial.textureImageTiles.first().number == 1001 &&
+                restoredMaterial.textureImageTiles.first()
+                        .sceneLinearFloatDataBase64 ==
+                    QString::fromLatin1(textureBytes.toBase64()) &&
+                restoredMaterial.textureImageTiles.first()
+                        .sceneLinearFloatWidth == 1 &&
+                restoredMaterial.textureImageTiles.first()
+                        .sceneLinearFloatHeight == 1;
+        }
+        passed &= check(textureRoundTrip,
+                        "scene-linear float texture texels and dimensions must survive native save/reopen");
+
+        const auto textureObjectJson = textureJson.value(QStringLiteral("objects"))
+                                           .toArray().first().toObject();
+        auto rejectsTextureMutation = [&](const QString &field,
+                                          const QJsonValue &replacement) {
+            QJsonObject invalidMaterial = textureObjectJson.value(
+                QStringLiteral("workbenchMaterial")).toObject();
+            invalidMaterial.insert(field, replacement);
+            QJsonObject invalidObject = textureObjectJson;
+            invalidObject.insert(QStringLiteral("workbenchMaterial"), invalidMaterial);
+            QJsonObject invalidDocument = textureJson;
+            invalidDocument.insert(QStringLiteral("objects"), QJsonArray{invalidObject});
+            Document rejected;
+            QString error;
+            return !documentFromJson(invalidDocument, &rejected, &error);
+        };
+        const std::array<float, 4> nonFiniteTexel{
+            std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f, 1.0f};
+        const QByteArray nonFiniteBytes(
+            reinterpret_cast<const char *>(nonFiniteTexel.data()),
+            static_cast<qsizetype>(sizeof(nonFiniteTexel)));
+        passed &= check(rejectsTextureMutation(
+                            QStringLiteral("textureImageSceneLinearFloatDataBase64"),
+                            QString::fromLatin1(nonFiniteBytes.toBase64())) &&
+                            rejectsTextureMutation(
+                                QStringLiteral("textureImageSceneLinearFloatWidth"), 1.5),
+                        "native document loading must reject non-finite texels and fractional float texture dimensions");
+    } else {
+        passed &= check(false, "texture round-trip fixture object must exist");
     }
 
     QTemporaryDir settingsDir;

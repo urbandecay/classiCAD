@@ -154,6 +154,14 @@ ViewportRenderFrame buildViewportRenderFrame(
                                 slotData.textureImageSrgb =
                                     image.colorSpace.compare(QStringLiteral("sRGB"),
                                                              Qt::CaseInsensitive) == 0;
+                                slotData.textureImageColorTransformId =
+                                    image.sourceTransformId;
+                                slotData.textureImageSceneLinearFloatDataBase64 =
+                                    image.sceneLinearFloatDataBase64;
+                                slotData.textureImageSceneLinearFloatWidth =
+                                    image.sceneLinearFloatWidth;
+                                slotData.textureImageSceneLinearFloatHeight =
+                                    image.sceneLinearFloatHeight;
                                 slotData.textureImageAlphaMode = image.alphaMode;
                                 slotData.textureImageInterpolation = image.interpolation;
                                 slotData.textureImageExtension = image.extension;

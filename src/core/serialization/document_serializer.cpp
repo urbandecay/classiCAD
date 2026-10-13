@@ -7,9 +7,12 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
+#include <QtEndian>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <functional>
 #include <limits>
 #include <utility>
 
@@ -18,6 +21,45 @@ namespace classiCAD {
 namespace {
 
 constexpr qsizetype kColorLutTotalByteLimit = 32 * 1024 * 1024;
+constexpr quint64 kSceneLinearImageByteLimit = 32ULL * 1024 * 1024;
+
+bool decodeFiniteSceneLinearFloatPayload(const QString &encoded,
+                                         const QJsonValue &widthValue,
+                                         const QJsonValue &heightValue,
+                                         QByteArray *decoded,
+                                         int *widthOut = nullptr,
+                                         int *heightOut = nullptr)
+{
+    if (decoded == nullptr || !widthValue.isDouble() || !heightValue.isDouble())
+        return false;
+    const double widthNumber = widthValue.toDouble();
+    const double heightNumber = heightValue.toDouble();
+    if (!std::isfinite(widthNumber) || !std::isfinite(heightNumber) ||
+        std::floor(widthNumber) != widthNumber ||
+        std::floor(heightNumber) != heightNumber ||
+        widthNumber < 1.0 || heightNumber < 1.0 ||
+        widthNumber > 16384.0 || heightNumber > 16384.0)
+        return false;
+    const int width = static_cast<int>(widthNumber);
+    const int height = static_cast<int>(heightNumber);
+    const quint64 expected = quint64(width) * quint64(height) * 16ULL;
+    if (expected > kSceneLinearImageByteLimit || encoded.size() > 44 * 1024 * 1024)
+        return false;
+    const QByteArray bytes = QByteArray::fromBase64(
+        encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+    if (quint64(bytes.size()) != expected) return false;
+    const auto *source = reinterpret_cast<const uchar *>(bytes.constData());
+    for (qsizetype offset = 0; offset < bytes.size(); offset += 4) {
+        const quint32 bits = qFromLittleEndian<quint32>(source + offset);
+        float value = 0.0f;
+        std::memcpy(&value, &bits, sizeof(value));
+        if (!std::isfinite(value)) return false;
+    }
+    *decoded = bytes;
+    if (widthOut != nullptr) *widthOut = width;
+    if (heightOut != nullptr) *heightOut = height;
+    return true;
+}
 
 bool isValidImportedColorLuts(
     const QHash<QString, QByteArray> &luts,
@@ -160,6 +202,26 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
         QStringLiteral("textureImageInterpolation")).toString(QStringLiteral("Linear"));
     restored.textureImageExtension = object.value(
         QStringLiteral("textureImageExtension")).toString(QStringLiteral("REPEAT"));
+    restored.textureImageSrgb = object.value(QStringLiteral("textureImageSrgb")).toBool(true);
+    restored.textureImageColorTransformId = object.value(
+        QStringLiteral("textureImageColorTransformId")).toString(QStringLiteral("identity"));
+    const QJsonValue floatImagePayload = object.value(
+        QStringLiteral("textureImageSceneLinearFloatDataBase64"));
+    if (!floatImagePayload.isUndefined() && !floatImagePayload.isString())
+        return false;
+    restored.textureImageSceneLinearFloatDataBase64 = floatImagePayload.toString();
+    restored.textureImageSceneLinearFloatWidth = object.value(
+        QStringLiteral("textureImageSceneLinearFloatWidth")).toInt();
+    restored.textureImageSceneLinearFloatHeight = object.value(
+        QStringLiteral("textureImageSceneLinearFloatHeight")).toInt();
+    if (!restored.textureImageSceneLinearFloatDataBase64.isEmpty()) {
+        QByteArray payload;
+        if (!decodeFiniteSceneLinearFloatPayload(
+                restored.textureImageSceneLinearFloatDataBase64,
+                object.value(QStringLiteral("textureImageSceneLinearFloatWidth")),
+                object.value(QStringLiteral("textureImageSceneLinearFloatHeight")),
+                &payload)) return false;
+    }
     const QJsonValue tilesValue = object.value(QStringLiteral("textureImageTiles"));
     if (!tilesValue.isUndefined()) {
         if (!tilesValue.isArray()) return false;
@@ -171,8 +233,12 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
             const QJsonValue filepathValue = tileObject.value(QStringLiteral("filepath"));
             const QJsonValue existsValue = tileObject.value(QStringLiteral("sourceFileExists"));
             const QJsonValue packedDataValue = tileObject.value(QStringLiteral("packedDataBase64"));
-            const int number = numberValue.toInt(-1);
-            if (!numberValue.isDouble() || number < 1001 || number > 1999 ||
+            const double numberNumber = numberValue.toDouble(-1.0);
+            const int number = numberValue.isDouble() && std::isfinite(numberNumber) &&
+                    std::floor(numberNumber) == numberNumber &&
+                    numberNumber >= 1001.0 && numberNumber <= 1999.0
+                ? static_cast<int>(numberNumber) : -1;
+            if (number < 1001 || number > 1999 ||
                 !filepathValue.isString() || !existsValue.isBool() ||
                 (!packedDataValue.isUndefined() && !packedDataValue.isString())) return false;
             const QString packedData = packedDataValue.toString();
@@ -184,8 +250,27 @@ bool workbenchMaterialFromJson(const QJsonValue &value,
             if (!packedData.isEmpty() && decoded.isEmpty()) return false;
             packedTileBytes += decoded.size();
             if (packedTileBytes > 32 * 1024 * 1024) return false;
-            restored.textureImageTiles.append({number, filepathValue.toString(),
-                                               existsValue.toBool(), packedData});
+            DocumentImageTextureTile tile{number, filepathValue.toString(),
+                                           existsValue.toBool(), packedData,
+                                           {}, 0, 0};
+            const QJsonValue floatTilePayload = tileObject.value(
+                QStringLiteral("sceneLinearFloatDataBase64"));
+            if (!floatTilePayload.isUndefined() && !floatTilePayload.isString())
+                return false;
+            tile.sceneLinearFloatDataBase64 = floatTilePayload.toString();
+            tile.sceneLinearFloatWidth = tileObject.value(
+                QStringLiteral("sceneLinearFloatWidth")).toInt();
+            tile.sceneLinearFloatHeight = tileObject.value(
+                QStringLiteral("sceneLinearFloatHeight")).toInt();
+            if (!tile.sceneLinearFloatDataBase64.isEmpty()) {
+                QByteArray floatPayload;
+                if (!decodeFiniteSceneLinearFloatPayload(
+                        tile.sceneLinearFloatDataBase64,
+                        tileObject.value(QStringLiteral("sceneLinearFloatWidth")),
+                        tileObject.value(QStringLiteral("sceneLinearFloatHeight")),
+                        &floatPayload)) return false;
+            }
+            restored.textureImageTiles.append(std::move(tile));
         }
     }
     *material = restored;
@@ -296,6 +381,13 @@ QJsonObject documentToJson(const Document &document)
             image.insert(QStringLiteral("imageLibraryPath"), reference.imageLibraryPath);
             image.insert(QStringLiteral("filepath"), reference.filepath);
             image.insert(QStringLiteral("colorSpace"), reference.colorSpace);
+            image.insert(QStringLiteral("sourceTransformId"), reference.sourceTransformId);
+            image.insert(QStringLiteral("sceneLinearFloatDataBase64"),
+                         reference.sceneLinearFloatDataBase64);
+            image.insert(QStringLiteral("sceneLinearFloatWidth"),
+                         reference.sceneLinearFloatWidth);
+            image.insert(QStringLiteral("sceneLinearFloatHeight"),
+                         reference.sceneLinearFloatHeight);
             image.insert(QStringLiteral("alphaMode"), reference.alphaMode);
             image.insert(QStringLiteral("interpolation"), reference.interpolation);
             image.insert(QStringLiteral("extension"), reference.extension);
@@ -309,6 +401,12 @@ QJsonObject documentToJson(const Document &document)
                 tileObject.insert(QStringLiteral("filepath"), tile.filepath);
                 tileObject.insert(QStringLiteral("sourceFileExists"), tile.sourceFileExists);
                 tileObject.insert(QStringLiteral("packedDataBase64"), tile.packedDataBase64);
+                tileObject.insert(QStringLiteral("sceneLinearFloatDataBase64"),
+                                  tile.sceneLinearFloatDataBase64);
+                tileObject.insert(QStringLiteral("sceneLinearFloatWidth"),
+                                  tile.sceneLinearFloatWidth);
+                tileObject.insert(QStringLiteral("sceneLinearFloatHeight"),
+                                  tile.sceneLinearFloatHeight);
                 tiles.append(tileObject);
             }
             image.insert(QStringLiteral("tiles"), tiles);
@@ -367,6 +465,16 @@ QJsonObject documentToJson(const Document &document)
                                  sceneObject.workbenchMaterial.textureImageInterpolation);
         workbenchMaterial.insert(QStringLiteral("textureImageExtension"),
                                  sceneObject.workbenchMaterial.textureImageExtension);
+        workbenchMaterial.insert(QStringLiteral("textureImageSrgb"),
+                                 sceneObject.workbenchMaterial.textureImageSrgb);
+        workbenchMaterial.insert(QStringLiteral("textureImageColorTransformId"),
+                                 sceneObject.workbenchMaterial.textureImageColorTransformId);
+        workbenchMaterial.insert(QStringLiteral("textureImageSceneLinearFloatDataBase64"),
+                                 sceneObject.workbenchMaterial.textureImageSceneLinearFloatDataBase64);
+        workbenchMaterial.insert(QStringLiteral("textureImageSceneLinearFloatWidth"),
+                                 sceneObject.workbenchMaterial.textureImageSceneLinearFloatWidth);
+        workbenchMaterial.insert(QStringLiteral("textureImageSceneLinearFloatHeight"),
+                                 sceneObject.workbenchMaterial.textureImageSceneLinearFloatHeight);
         QJsonArray textureImageTiles;
         for (const DocumentImageTextureTile &tile :
              sceneObject.workbenchMaterial.textureImageTiles) {
@@ -375,6 +483,12 @@ QJsonObject documentToJson(const Document &document)
             tileObject.insert(QStringLiteral("filepath"), tile.filepath);
             tileObject.insert(QStringLiteral("sourceFileExists"), tile.sourceFileExists);
             tileObject.insert(QStringLiteral("packedDataBase64"), tile.packedDataBase64);
+            tileObject.insert(QStringLiteral("sceneLinearFloatDataBase64"),
+                              tile.sceneLinearFloatDataBase64);
+            tileObject.insert(QStringLiteral("sceneLinearFloatWidth"),
+                              tile.sceneLinearFloatWidth);
+            tileObject.insert(QStringLiteral("sceneLinearFloatHeight"),
+                              tile.sceneLinearFloatHeight);
             textureImageTiles.append(tileObject);
         }
         workbenchMaterial.insert(QStringLiteral("textureImageTiles"), textureImageTiles);
@@ -600,6 +714,30 @@ bool documentFromJson(const QJsonValue &value,
                     reference.imageLibraryPath = image.value(QStringLiteral("imageLibraryPath")).toString();
                     reference.filepath = image.value(QStringLiteral("filepath")).toString();
                     reference.colorSpace = image.value(QStringLiteral("colorSpace")).toString();
+                    reference.sourceTransformId = image.value(
+                        QStringLiteral("sourceTransformId")).toString(QStringLiteral("identity"));
+                    const QJsonValue floatImagePayload = image.value(
+                        QStringLiteral("sceneLinearFloatDataBase64"));
+                    if (!floatImagePayload.isUndefined() &&
+                        !floatImagePayload.isString()) {
+                        setError(errorMessage,
+                                 QStringLiteral("invalid scene-linear float image payload"));
+                        return false;
+                    }
+                    reference.sceneLinearFloatDataBase64 = floatImagePayload.toString();
+                    if (!reference.sceneLinearFloatDataBase64.isEmpty()) {
+                        QByteArray floatPayload;
+                        if (!decodeFiniteSceneLinearFloatPayload(
+                                reference.sceneLinearFloatDataBase64,
+                                image.value(QStringLiteral("sceneLinearFloatWidth")),
+                                image.value(QStringLiteral("sceneLinearFloatHeight")),
+                                &floatPayload,
+                                &reference.sceneLinearFloatWidth,
+                                &reference.sceneLinearFloatHeight)) {
+                            setError(errorMessage, QStringLiteral("invalid scene-linear float image payload"));
+                            return false;
+                        }
+                    }
                     reference.alphaMode = image.value(QStringLiteral("alphaMode"))
                                               .toString(QStringLiteral("STRAIGHT"));
                     reference.interpolation = image.value(QStringLiteral("interpolation"))
@@ -636,8 +774,13 @@ bool documentFromJson(const QJsonValue &value,
                         const QJsonValue existsValue = tileObject.value(QStringLiteral("sourceFileExists"));
                         const QJsonValue packedDataValue = tileObject.value(
                             QStringLiteral("packedDataBase64"));
-                        const int number = numberValue.toInt(-1);
-                        if (!numberValue.isDouble() || number < 1001 || number > 1999 ||
+                        const double numberNumber = numberValue.toDouble(-1.0);
+                        const int number = numberValue.isDouble() &&
+                                std::isfinite(numberNumber) &&
+                                std::floor(numberNumber) == numberNumber &&
+                                numberNumber >= 1001.0 && numberNumber <= 1999.0
+                            ? static_cast<int>(numberNumber) : -1;
+                        if (number < 1001 || number > 1999 ||
                             !filepathValue.isString() || !existsValue.isBool() ||
                             (!packedDataValue.isUndefined() && !packedDataValue.isString())) {
                             setError(errorMessage,
@@ -664,8 +807,32 @@ bool documentFromJson(const QJsonValue &value,
                                      QStringLiteral("document packed UDIM tiles exceed the per-image size limit"));
                             return false;
                         }
-                        reference.tiles.append({number, filepathValue.toString(),
-                                                existsValue.toBool(), packedData});
+                        DocumentImageTextureTile tile{number, filepathValue.toString(),
+                                                      existsValue.toBool(), packedData,
+                                                      {}, 0, 0};
+                        const QJsonValue floatTilePayload = tileObject.value(
+                            QStringLiteral("sceneLinearFloatDataBase64"));
+                        if (!floatTilePayload.isUndefined() &&
+                            !floatTilePayload.isString()) {
+                            setError(errorMessage,
+                                     QStringLiteral("invalid scene-linear float UDIM payload"));
+                            return false;
+                        }
+                        tile.sceneLinearFloatDataBase64 = floatTilePayload.toString();
+                        if (!tile.sceneLinearFloatDataBase64.isEmpty()) {
+                            QByteArray floatPayload;
+                            if (!decodeFiniteSceneLinearFloatPayload(
+                                    tile.sceneLinearFloatDataBase64,
+                                    tileObject.value(QStringLiteral("sceneLinearFloatWidth")),
+                                    tileObject.value(QStringLiteral("sceneLinearFloatHeight")),
+                                    &floatPayload,
+                                    &tile.sceneLinearFloatWidth,
+                                    &tile.sceneLinearFloatHeight)) {
+                                setError(errorMessage, QStringLiteral("invalid scene-linear float UDIM payload"));
+                                return false;
+                            }
+                        }
+                        reference.tiles.append(std::move(tile));
                     }
                     material.imageTextures.append(std::move(reference));
                 }
@@ -1164,6 +1331,48 @@ bool documentFromJson(const QJsonValue &value,
         }
     }
 
+    // Keep native documents under the same scene-wide unique float-texture
+    // budget as Blender extraction. Material/object records may repeat an
+    // identical shared image payload, so count hashes rather than occurrences.
+    QSet<QByteArray> floatTextureIds;
+    quint64 floatTextureBytes = 0;
+    std::function<bool(const QJsonValue &)> validateFloatTextureBudget =
+        [&](const QJsonValue &node) -> bool {
+            if (node.isObject()) {
+                const QJsonObject object = node.toObject();
+                for (auto it = object.begin(); it != object.end(); ++it) {
+                    if (it.key() == QStringLiteral("sceneLinearFloatDataBase64") ||
+                        it.key() == QStringLiteral("textureImageSceneLinearFloatDataBase64")) {
+                        if (!it.value().isString()) return false;
+                        const QString encoded = it.value().toString();
+                        if (!encoded.isEmpty()) {
+                            if (encoded.size() > 44 * 1024 * 1024) return false;
+                            const QByteArray bytes = QByteArray::fromBase64(
+                                encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+                            if (bytes.isEmpty() || bytes.size() > 32 * 1024 * 1024)
+                                return false;
+                            const QByteArray hash = QCryptographicHash::hash(
+                                bytes, QCryptographicHash::Sha256);
+                            if (!floatTextureIds.contains(hash)) {
+                                if (floatTextureBytes + quint64(bytes.size()) >
+                                    64ULL * 1024 * 1024) return false;
+                                floatTextureIds.insert(hash);
+                                floatTextureBytes += quint64(bytes.size());
+                            }
+                        }
+                    }
+                    if (!validateFloatTextureBudget(it.value())) return false;
+                }
+            } else if (node.isArray()) {
+                for (const QJsonValue &child : node.toArray())
+                    if (!validateFloatTextureBudget(child)) return false;
+            }
+            return true;
+        };
+    if (!validateFloatTextureBudget(value)) {
+        setError(errorMessage, QStringLiteral("scene-linear float image payloads exceed the document limits"));
+        return false;
+    }
     snapshot.nextLayerValue = nextLayerValue;
     snapshot.nextObjectValue = nextObjectValue;
     document->restoreSnapshot(snapshot);

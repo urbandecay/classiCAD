@@ -17,16 +17,22 @@ import struct
 import sys
 import tempfile
 import traceback
+import zlib
 
 import bpy
 
 
 PINNED_BLENDER_VERSION = (5, 2, 2)
 BRIDGE_FORMAT = "classiCAD.blender-scene-extract"
-BRIDGE_FORMAT_VERSION = 15
+BRIDGE_FORMAT_VERSION = 16
 # Keep packed image data from expanding the extractor's JSON transport without
 # bound. For UDIMs this is the aggregate decoded byte limit across all tiles.
 MAX_PACKED_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_SCENE_LINEAR_IMAGE_BYTES = 32 * 1024 * 1024
+MAX_SCENE_LINEAR_IMAGE_PIXELS = MAX_SCENE_LINEAR_IMAGE_BYTES // 16
+MAX_SCENE_LINEAR_FLOAT_BYTES = 64 * 1024 * 1024
+SCENE_LINEAR_FLOAT_PAYLOAD_BYTES = 0
+SCENE_LINEAR_FLOAT_PAYLOAD_CACHE = {}
 MAX_COLOR_LUTS = 8
 MAX_COLOR_LUT_BYTES = 32 * 1024 * 1024
 COLOR_LUT_SIZE = 65
@@ -149,6 +155,86 @@ def bake_color_lut(scene, lut_records, lut_bytes_by_id, unsupported):
     return color_management
 
 
+def bake_image_source_transform(image, cache_key=""):
+    """Convert supported image texels to scene-linear float RGBA before filtering."""
+    if cache_key and cache_key in SCENE_LINEAR_FLOAT_PAYLOAD_CACHE:
+        return dict(SCENE_LINEAR_FLOAT_PAYLOAD_CACHE[cache_key])
+    source = image.colorspace_settings.name
+    if source in {"Non-Color", "Linear Rec.709", "sRGB"} and not image.is_float:
+        return {"id": "identity", "payload": "", "width": 0, "height": 0, "error": ""}
+    if not image.is_float and source != "ACEScg":
+        return {"id": "", "payload": "", "width": 0, "height": 0,
+                "error": "image color space %r is unsupported; only ACEScg, Linear Rec.709, and Non-Color are supported" % source}
+    try:
+        processor = None
+        if not image.is_float:
+            import PyOpenColorIO as ocio
+            config = ocio.GetCurrentConfig()
+            scene_linear = config.getRoleColorSpace(ocio.ROLE_SCENE_LINEAR)
+            source_space = config.getColorSpace(source)
+            if source_space is None:
+                raise ValueError("ACEScg is not present in Blender's active OCIO config")
+            processor = config.getProcessor(source, scene_linear).getDefaultCPUProcessor()
+            basis = [processor.applyRGB(axis[:]) for axis in
+                     ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0])]
+            probe = [0.3, 0.7, 0.2]
+            actual = processor.applyRGB(probe[:])
+            expected = [sum(probe[column] * basis[column][row]
+                            for column in range(3)) for row in range(3)]
+            if max(abs(actual[row] - expected[row]) for row in range(3)) > 1.0e-5:
+                raise ValueError("ACEScg processor is not a linear RGB matrix")
+            matrix = [finite_number(basis[column][row])
+                      for row in range(3) for column in range(3)]
+            transform_id = hashlib.sha256(
+                b"ACEScg-to-scene-linear:" +
+                b"".join(struct.pack("<f", value) for value in matrix)).hexdigest()
+        else:
+            # Blender 5.2.2's float image-texture path copies float-buffer
+            # texels into its GPU texture without an additional OCIO transform.
+            transform_id = "blender-float-buffer"
+        width, height = int(image.size[0]), int(image.size[1])
+        pixel_count = width * height
+        if width <= 0 or height <= 0 or pixel_count > MAX_SCENE_LINEAR_IMAGE_PIXELS:
+            raise ValueError("image exceeds the bounded %d-pixel float transport limit" %
+                             MAX_SCENE_LINEAR_IMAGE_PIXELS)
+        premultiply = getattr(image, "alpha_mode", "STRAIGHT") == "PREMUL"
+        source_pixels = image.pixels[:]
+        if len(source_pixels) != pixel_count * 4:
+            raise ValueError("Blender did not expose a complete RGBA texel array")
+        converted = bytearray(pixel_count * 16)
+        for pixel_index in range(pixel_count):
+            offset = pixel_index * 4
+            rgb = [float(source_pixels[offset]), float(source_pixels[offset + 1]),
+                   float(source_pixels[offset + 2])]
+            alpha = float(source_pixels[offset + 3])
+            if processor is not None:
+                processor.applyRGB(rgb)
+            # Blender premultiplies float image buffers for PREMUL even though
+            # that upload path does not run the OCIO processor.
+            if premultiply:
+                rgb = [component * alpha for component in rgb]
+            if not all(math.isfinite(component) for component in rgb + [alpha]):
+                raise ValueError("image contains non-finite float texels")
+            converted[offset * 4:offset * 4 + 16] = struct.pack(
+                "<ffff", rgb[0], rgb[1], rgb[2], alpha)
+        payload = bytes(converted)
+        if len(payload) > MAX_SCENE_LINEAR_IMAGE_BYTES:
+            raise ValueError("image exceeds the 32 MiB float transport limit")
+        global SCENE_LINEAR_FLOAT_PAYLOAD_BYTES
+        if SCENE_LINEAR_FLOAT_PAYLOAD_BYTES + len(payload) > MAX_SCENE_LINEAR_FLOAT_BYTES:
+            raise ValueError("scene-wide scene-linear float texture payload exceeds the 64 MiB transport limit")
+        SCENE_LINEAR_FLOAT_PAYLOAD_BYTES += len(payload)
+        result = {"id": transform_id,
+                  "payload": base64.b64encode(payload).decode("ascii"),
+                  "width": width, "height": height, "error": ""}
+        if cache_key:
+            SCENE_LINEAR_FLOAT_PAYLOAD_CACHE[cache_key] = result
+        return result
+    except Exception as error:
+        return {"id": "", "payload": "", "width": 0, "height": 0,
+                "error": "Blender scene-linear image texture conversion failed: " + str(error)}
+
+
 def require_pinned_blender():
     if tuple(bpy.app.version[:3]) != PINNED_BLENDER_VERSION:
         raise RuntimeError(
@@ -246,14 +332,24 @@ def image_references(material):
         image = getattr(node, "image", None)
         if image is None:
             continue
+        source_transform = (
+            {"id": "identity", "payload": "", "width": 0,
+             "height": 0, "error": ""}
+            if getattr(image, "source", "") == "TILED" else
+            bake_image_source_transform(
+                image, "image:%s:%s" %
+                (image.name_full, source_library_path(image))))
         image_tiles = []
         packed_tile_bytes = 0
+        scene_linear_tile_bytes = 0
         packed_tiles = {
             int(getattr(packed, "tile_number", 0)): packed
             for packed in getattr(image, "packed_files", ())
             if int(getattr(packed, "tile_number", 0)) > 0
         }
         if getattr(image, "source", "") == "TILED":
+            source_transform = {"id": "identity", "payload": "",
+                                "width": 0, "height": 0, "error": ""}
             # Blender Workbench maps floor(UV) to the tile grid (1001 at
             # (0, 0), increasing across X, then Y). Preserve the explicit
             # tile numbers and resolve the conventional <UDIM> path token
@@ -267,6 +363,8 @@ def image_references(material):
                 packed_tile = packed_tiles.get(tile_number)
                 tile_packed_data_base64 = ""
                 tile_packed_data_error = ""
+                tile_source_transform = {"id": "identity", "payload": "",
+                                         "width": 0, "height": 0, "error": ""}
                 if packed_tile is not None:
                     try:
                         payload = bytes(packed_tile.packed_file.data)
@@ -285,6 +383,57 @@ def image_references(material):
                             tile_packed_data_base64 = base64.b64encode(payload).decode("ascii")
                     except Exception as error:
                         tile_packed_data_error = "could not read packed UDIM tile bytes: " + str(error)
+                # Read each tile through Blender so its declared OCIO space is
+                # converted per texel before any renderer filters it.
+                tile_image = None
+                temporary_path = ""
+                try:
+                    tile_source_bytes = (bytes(packed_tile.packed_file.data)
+                                         if packed_tile is not None else b"")
+                    if tile_source_bytes:
+                        with tempfile.NamedTemporaryFile(delete=False,
+                                                         suffix=os.path.splitext(tile_path)[1]) as temp:
+                            temp.write(tile_source_bytes)
+                            temporary_path = temp.name
+                    tile_load_path = temporary_path or tile_path
+                    if tile_load_path and os.path.isfile(tile_load_path):
+                        tile_image = bpy.data.images.load(tile_load_path,
+                                                          check_existing=False)
+                        tile_image.colorspace_settings.name = image.colorspace_settings.name
+                        tile_image.alpha_mode = image.alpha_mode
+                        tile_source_transform = bake_image_source_transform(
+                            tile_image, "tile:%s:%s:%d" %
+                            (image.name_full, source_library_path(image), tile_number))
+                        payload_bytes = len(base64.b64decode(
+                            tile_source_transform["payload"])) if tile_source_transform["payload"] else 0
+                        if scene_linear_tile_bytes + payload_bytes > MAX_SCENE_LINEAR_IMAGE_BYTES:
+                            if payload_bytes:
+                                global SCENE_LINEAR_FLOAT_PAYLOAD_BYTES
+                                SCENE_LINEAR_FLOAT_PAYLOAD_BYTES -= payload_bytes
+                                cache_key = "tile:%s:%s:%d" % (
+                                    image.name_full, source_library_path(image), tile_number)
+                                SCENE_LINEAR_FLOAT_PAYLOAD_CACHE[cache_key] = {
+                                    "id": tile_source_transform["id"],
+                                    "payload": "", "width": 0, "height": 0,
+                                    "error": "UDIM tiles exceed the 32 MiB per-image float transport limit",
+                                }
+                            tile_source_transform = {
+                                "id": "", "payload": "", "width": 0,
+                                "height": 0,
+                                "error": "UDIM tiles exceed the 32 MiB per-image float transport limit",
+                            }
+                        else:
+                            scene_linear_tile_bytes += payload_bytes
+                except Exception as error:
+                    tile_source_transform["error"] = "could not decode UDIM tile for scene-linear conversion: " + str(error)
+                finally:
+                    if tile_image is not None:
+                        bpy.data.images.remove(tile_image)
+                    if temporary_path:
+                        try:
+                            os.unlink(temporary_path)
+                        except OSError:
+                            pass
                 image_tiles.append(
                     {
                         "number": tile_number,
@@ -294,6 +443,11 @@ def image_references(material):
                         ),
                         "packed_data_base64": tile_packed_data_base64,
                         "packed_data_error": tile_packed_data_error,
+                        "scene_linear_float_data_base64": tile_source_transform["payload"],
+                        "scene_linear_float_width": tile_source_transform["width"],
+                        "scene_linear_float_height": tile_source_transform["height"],
+                        "source_transform_id": tile_source_transform["id"],
+                        "source_transform_error": tile_source_transform["error"],
                     }
                 )
         packed_data_base64 = ""
@@ -341,6 +495,11 @@ def image_references(material):
                 ),
                 "tiles": image_tiles,
                 "color_space": image.colorspace_settings.name,
+                "source_transform_id": source_transform["id"],
+                "scene_linear_float_data_base64": source_transform["payload"],
+                "scene_linear_float_width": source_transform["width"],
+                "scene_linear_float_height": source_transform["height"],
+                "source_transform_error": source_transform["error"],
                 "alpha_mode": image.alpha_mode,
                 "interpolation": getattr(node, "interpolation", "Linear"),
                 # Environment Texture has no extension control. Workbench's
@@ -751,7 +910,20 @@ def extract_mesh_object(obj, scene, mode, depsgraph, materials, unsupported):
                             "image_texture:" + image["image_name"],
                             image["packed_data_error"],
                         )
+                    if image["source_transform_error"]:
+                        add_unsupported(
+                            unsupported, item_id,
+                            "image_color_space:" + image["image_name"],
+                            image["source_transform_error"],
+                        )
                     for tile in image["tiles"]:
+                        if tile["source_transform_error"]:
+                            add_unsupported(
+                                unsupported, item_id,
+                                "image_color_space_tile:%s:%d" %
+                                (image["image_name"], tile["number"]),
+                                tile["source_transform_error"],
+                            )
                         if tile["packed_data_error"]:
                             add_unsupported(
                                 unsupported, item_id,
@@ -1203,7 +1375,20 @@ def extract_surface_patches(obj, scene, materials, unsupported):
                         "image_texture:" + image["image_name"],
                         image["packed_data_error"],
                     )
+                if image["source_transform_error"]:
+                    add_unsupported(
+                        unsupported, source_id,
+                        "image_color_space:" + image["image_name"],
+                        image["source_transform_error"],
+                    )
                 for tile in image["tiles"]:
+                    if tile["source_transform_error"]:
+                        add_unsupported(
+                            unsupported, source_id,
+                            "image_color_space_tile:%s:%d" %
+                            (image["image_name"], tile["number"]),
+                            tile["source_transform_error"],
+                        )
                     if tile["packed_data_error"]:
                         add_unsupported(
                             unsupported, source_id,
@@ -1304,6 +1489,9 @@ def depsgraph_for_scene(scene):
 
 
 def extract_scene(input_path, mode):
+    global SCENE_LINEAR_FLOAT_PAYLOAD_BYTES
+    SCENE_LINEAR_FLOAT_PAYLOAD_BYTES = 0
+    SCENE_LINEAR_FLOAT_PAYLOAD_CACHE.clear()
     global SOURCE_PROJECT_NAMESPACE
     require_pinned_blender()
     if mode not in {"original", "evaluated"}:

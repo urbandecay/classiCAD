@@ -2542,6 +2542,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
                     range.hasWorkbenchMaterial = true;
                 }
                 range.textureImageSrgb = range.workbenchMaterial.textureImageSrgb;
+                range.textureImageColorTransformId = range.workbenchMaterial.textureImageColorTransformId;
                 range.textureImageTiles = textureAvailable
                     ? range.workbenchMaterial.textureImageTiles
                     : QVector<DocumentImageTextureTile>{};
@@ -2605,6 +2606,7 @@ void ViewportSurfaceRenderer::prepareGeometry(
             range.textureImageTiles = range.useTextureColor
                 ? object.workbenchMaterial.textureImageTiles
                 : QVector<DocumentImageTextureTile>{};
+            range.textureImageColorTransformId = range.workbenchMaterial.textureImageColorTransformId;
             range.textureImageSrgb = object.workbenchMaterial.textureImageSrgb;
             if ((object.shape.geometryType == GeometryType::NurbsSolid ||
                  object.shape.geometryType == GeometryType::NurbsSurface) &&
@@ -3216,7 +3218,10 @@ bool ViewportSurfaceRenderer::renderWorkbenchEffectPrepass(
                 range.useTextureColor
             ? ensureImageTexture(range.textureImagePath,
                                  range.workbenchMaterial.textureImagePackedDataBase64,
-                                 range.textureImageSrgb)
+                                 range.textureImageSrgb,
+                                 range.workbenchMaterial.textureImageSceneLinearFloatDataBase64,
+                                 range.workbenchMaterial.textureImageSceneLinearFloatWidth,
+                                 range.workbenchMaterial.textureImageSceneLinearFloatHeight)
             : 0;
         const UdimTextureSet udimTexture = settings.colorMode == ViewportColorMode::Texture &&
                 range.useTextureColor
@@ -3468,7 +3473,10 @@ bool ViewportSurfaceRenderer::renderWorkbenchTransparentDepthPass(
                 ? ensureImageTexture(
                       range.textureImagePath,
                       range.workbenchMaterial.textureImagePackedDataBase64,
-                      range.textureImageSrgb)
+                      range.textureImageSrgb,
+                      range.workbenchMaterial.textureImageSceneLinearFloatDataBase64,
+                      range.workbenchMaterial.textureImageSceneLinearFloatWidth,
+                      range.workbenchMaterial.textureImageSceneLinearFloatHeight)
                 : 0;
         const UdimTextureSet udimTexture = settings.colorMode == ViewportColorMode::Texture &&
                 range.useTextureColor
@@ -3684,7 +3692,10 @@ bool ViewportSurfaceRenderer::renderShadowMap(
                 !ignoreTextureAlpha
             ? ensureImageTexture(range.textureImagePath,
                                  range.workbenchMaterial.textureImagePackedDataBase64,
-                                 range.textureImageSrgb)
+                                 range.textureImageSrgb,
+                                 range.workbenchMaterial.textureImageSceneLinearFloatDataBase64,
+                                 range.workbenchMaterial.textureImageSceneLinearFloatWidth,
+                                 range.workbenchMaterial.textureImageSceneLinearFloatHeight)
             : 0;
         const UdimTextureSet udimTexture = range.shadowTextureAlphaMask &&
                 settings.colorMode == ViewportColorMode::Texture &&
@@ -4174,18 +4185,66 @@ GLuint ViewportSurfaceRenderer::ensureImageTexture(const QString &path, bool srg
 }
 
 GLuint ViewportSurfaceRenderer::ensureImageTexture(
-    const QString &path, const QString &packedDataBase64, bool srgb)
+    const QString &path, const QString &packedDataBase64, bool srgb,
+    const QString &sceneLinearFloatDataBase64,
+    int sceneLinearFloatWidth, int sceneLinearFloatHeight)
 {
-    if (path.isEmpty() && packedDataBase64.isEmpty()) return 0;
+    if (path.isEmpty() && packedDataBase64.isEmpty() &&
+        sceneLinearFloatDataBase64.isEmpty()) return 0;
     const QString sourceKey = !packedDataBase64.isEmpty()
         ? QStringLiteral("PACKED\n") + QString::fromLatin1(
               QCryptographicHash::hash(packedDataBase64.toLatin1(),
                                        QCryptographicHash::Sha256).toHex())
         : path;
     const QString cacheKey = sourceKey + (srgb ? QStringLiteral("\nSRGB")
-                                               : QStringLiteral("\nLINEAR"));
+                                               : QStringLiteral("\nLINEAR")) +
+        QStringLiteral("\nFLOAT:") + QString::fromLatin1(
+            QCryptographicHash::hash(sceneLinearFloatDataBase64.toLatin1(),
+                                     QCryptographicHash::Sha256).toHex()) +
+        QStringLiteral("\nFLOAT_SIZE:%1x%2")
+            .arg(sceneLinearFloatWidth).arg(sceneLinearFloatHeight);
     const auto cached = imageTextures_.constFind(cacheKey);
     if (cached != imageTextures_.cend()) return cached.value();
+    if (!sceneLinearFloatDataBase64.isEmpty()) {
+        const QByteArray encoded = sceneLinearFloatDataBase64.toLatin1();
+        const QByteArray floatPixels = encoded.size() <= 44 * 1024 * 1024
+            ? QByteArray::fromBase64(encoded, QByteArray::AbortOnBase64DecodingErrors)
+            : QByteArray{};
+        const quint64 expected = sceneLinearFloatWidth > 0 &&
+                sceneLinearFloatHeight > 0
+            ? quint64(sceneLinearFloatWidth) * quint64(sceneLinearFloatHeight) * 16ULL
+            : 0ULL;
+        if (expected == 0 || expected > 32ULL * 1024 * 1024 ||
+            quint64(floatPixels.size()) != expected ||
+            sceneLinearFloatWidth > 16384 || sceneLinearFloatHeight > 16384) {
+            imageTextures_.insert(cacheKey, 0);
+            return 0;
+        }
+        const float *floatData = reinterpret_cast<const float *>(floatPixels.constData());
+        const qsizetype floatCount = floatPixels.size() / qsizetype(sizeof(float));
+        for (qsizetype index = 0; index < floatCount; ++index) {
+            if (!std::isfinite(floatData[index])) {
+                imageTextures_.insert(cacheKey, 0);
+                return 0;
+            }
+        }
+        GLuint texture = 0;
+        glGenTextures(1, &texture);
+        if (texture == 0) {
+            imageTextures_.insert(cacheKey, 0);
+            return 0;
+        }
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F,
+                     sceneLinearFloatWidth, sceneLinearFloatHeight, 0,
+                     GL_RGBA, GL_FLOAT, floatPixels.constData());
+        imageTextures_.insert(cacheKey, texture);
+        return texture;
+    }
     QImage image;
     if (!packedDataBase64.isEmpty()) {
         const QByteArray encoded = packedDataBase64.toLatin1();
@@ -4263,8 +4322,13 @@ ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTextu
         const QFileInfo info(tile.filepath);
         cacheStream << qint32(tile.number) << tile.filepath << tile.sourceFileExists
                     << info.size() << info.lastModified().toMSecsSinceEpoch()
+                    << qint32(tile.sceneLinearFloatWidth)
+                    << qint32(tile.sceneLinearFloatHeight)
                     << QCryptographicHash::hash(tile.packedDataBase64.toLatin1(),
-                                                QCryptographicHash::Sha256);
+                                                QCryptographicHash::Sha256)
+                    << QCryptographicHash::hash(
+                           tile.sceneLinearFloatDataBase64.toLatin1(),
+                           QCryptographicHash::Sha256);
     }
     const QString cacheKey = QStringLiteral("UDIM\n") + QString::fromLatin1(
         QCryptographicHash::hash(cacheMaterial, QCryptographicHash::Sha256).toHex());
@@ -4274,17 +4338,61 @@ ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTextu
     struct LoadedTile {
         int number = 0;
         QImage image;
+        QVector<float> floatPixels;
+        int width = 0;
+        int height = 0;
     };
+    const bool floatMode = std::any_of(
+        tiles.cbegin(), tiles.cend(), [](const DocumentImageTextureTile &tile) {
+            return !tile.sceneLinearFloatDataBase64.isEmpty();
+        });
     QVector<LoadedTile> loaded;
     QSet<int> seenNumbers;
     int maximumWidth = 0;
     int maximumHeight = 0;
     quint64 decodedPixelCount = 0;
     qsizetype packedTileBytes = 0;
+    quint64 floatPayloadBytes = 0;
     for (const DocumentImageTextureTile &tile : tiles) {
         if (tile.number < 1001 || tile.number > 1999 ||
             seenNumbers.contains(tile.number)) continue;
         seenNumbers.insert(tile.number);
+        if (floatMode) {
+            const QByteArray encoded = tile.sceneLinearFloatDataBase64.toLatin1();
+            const QByteArray decoded = encoded.size() <= 44 * 1024 * 1024
+                ? QByteArray::fromBase64(encoded, QByteArray::AbortOnBase64DecodingErrors)
+                : QByteArray{};
+            const quint64 expected = tile.sceneLinearFloatWidth > 0 &&
+                    tile.sceneLinearFloatHeight > 0
+                ? quint64(tile.sceneLinearFloatWidth) *
+                      quint64(tile.sceneLinearFloatHeight) * 16ULL : 0ULL;
+            if (expected != 0 && expected <= 32ULL * 1024 * 1024 &&
+                quint64(decoded.size()) == expected &&
+                floatPayloadBytes + expected <= 32ULL * 1024 * 1024 &&
+                tile.sceneLinearFloatWidth <= 16384 &&
+                tile.sceneLinearFloatHeight <= 16384) {
+                const float *values = reinterpret_cast<const float *>(decoded.constData());
+                const qsizetype valueCount = decoded.size() / qsizetype(sizeof(float));
+                bool finite = true;
+                for (qsizetype index = 0; index < valueCount; ++index)
+                    finite &= std::isfinite(values[index]);
+                if (finite) {
+                    LoadedTile loadedTile;
+                    loadedTile.number = tile.number;
+                    loadedTile.width = tile.sceneLinearFloatWidth;
+                    loadedTile.height = tile.sceneLinearFloatHeight;
+                    loadedTile.floatPixels.resize(valueCount);
+                    std::memcpy(loadedTile.floatPixels.data(), decoded.constData(),
+                                static_cast<size_t>(decoded.size()));
+                    floatPayloadBytes += expected;
+                    decodedPixelCount += quint64(loadedTile.width) * loadedTile.height;
+                    maximumWidth = std::max(maximumWidth, loadedTile.width);
+                    maximumHeight = std::max(maximumHeight, loadedTile.height);
+                    loaded.append(std::move(loadedTile));
+                    continue;
+                }
+            }
+        }
         const QFileInfo info(tile.filepath);
         const QByteArray suffix = info.suffix().toLower().toLatin1();
         static const QSet<QByteArray> allowedFormats{
@@ -4334,12 +4442,42 @@ ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTextu
                      .mirrored(false, true);
         maximumWidth = std::max(maximumWidth, image.width());
         maximumHeight = std::max(maximumHeight, image.height());
-        loaded.append({tile.number, std::move(image)});
+        LoadedTile loadedTile;
+        loadedTile.number = tile.number;
+        loadedTile.width = image.width();
+        loadedTile.height = image.height();
+        if (floatMode) {
+            loadedTile.floatPixels.resize(image.width() * image.height() * 4);
+            const auto srgbToLinear = [](float value) {
+                return value <= 0.04045f ? value / 12.92f
+                    : std::pow((value + 0.055f) / 1.055f, 2.4f);
+            };
+            for (int y = 0; y < image.height(); ++y) {
+                const uchar *sourceLine = image.constScanLine(y);
+                for (int x = 0; x < image.width(); ++x) {
+                    const int offset = (y * image.width() + x) * 4;
+                    for (int component = 0; component < 3; ++component) {
+                        const float encoded = sourceLine[x * 4 + component] / 255.0f;
+                        loadedTile.floatPixels[offset + component] =
+                            srgb ? srgbToLinear(encoded) : encoded;
+                    }
+                    loadedTile.floatPixels[offset + 3] = sourceLine[x * 4 + 3] / 255.0f;
+                }
+            }
+        }
+        loadedTile.image = std::move(image);
+        loaded.append(std::move(loadedTile));
     }
     if (loaded.isEmpty()) {
         QImage missingTile(1, 1, QImage::Format_RGBA8888);
         missingTile.fill(QColor(255, 0, 255, 255));
-        loaded.append({0, std::move(missingTile)});
+        LoadedTile missing;
+        missing.number = 0;
+        missing.width = 1;
+        missing.height = 1;
+        missing.image = std::move(missingTile);
+        if (floatMode) missing.floatPixels = {1.0f, 0.0f, 1.0f, 1.0f};
+        loaded.append(std::move(missing));
         maximumWidth = 1;
         maximumHeight = 1;
     }
@@ -4355,31 +4493,52 @@ ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTextu
 
     QVector<float> tileLookup(10 * 100 * 4, 0.0f);
     QVector<QImage> paddedImages;
+    QVector<QVector<float>> paddedFloatImages;
     paddedImages.reserve(loaded.size());
+    if (floatMode) paddedFloatImages.reserve(loaded.size());
     for (int layer = 0; layer < loaded.size(); ++layer) {
         QImage image(maximumWidth, maximumHeight, QImage::Format_RGBA8888);
-        const QImage &source = loaded[layer].image;
-        for (int y = 0; y < maximumHeight; ++y) {
-            uchar *destination = image.scanLine(y);
-            const int sourceY = std::min(y, source.height() - 1);
-            const uchar *sourceLine = source.constScanLine(sourceY);
-            for (int x = 0; x < maximumWidth; ++x) {
-                const int sourceX = std::min(x, source.width() - 1);
-                std::memcpy(destination + x * 4, sourceLine + sourceX * 4, 4);
+        const LoadedTile &loadedSource = loaded[layer];
+        const bool floatTile = !loadedSource.floatPixels.isEmpty();
+        QVector<float> paddedFloat;
+        if (floatTile) {
+            paddedFloat.resize(maximumWidth * maximumHeight * 4);
+            for (int y = 0; y < maximumHeight; ++y) {
+                const int sourceY = std::min(y, loadedSource.height - 1);
+                for (int x = 0; x < maximumWidth; ++x) {
+                    const int sourceX = std::min(x, loadedSource.width - 1);
+                    const int sourceOffset = (sourceY * loadedSource.width + sourceX) * 4;
+                    const int targetOffset = (y * maximumWidth + x) * 4;
+                    std::copy_n(loadedSource.floatPixels.constData() + sourceOffset, 4,
+                                paddedFloat.data() + targetOffset);
+                }
+            }
+        } else {
+            const QImage &source = loadedSource.image;
+            for (int y = 0; y < maximumHeight; ++y) {
+                uchar *destination = image.scanLine(y);
+                const int sourceY = std::min(y, source.height() - 1);
+                const uchar *sourceLine = source.constScanLine(sourceY);
+                for (int x = 0; x < maximumWidth; ++x) {
+                    const int sourceX = std::min(x, source.width() - 1);
+                    std::memcpy(destination + x * 4, sourceLine + sourceX * 4, 4);
+                }
             }
         }
         if (loaded[layer].number < 1001 || loaded[layer].number > 1999) {
             paddedImages.append(std::move(image));
+            if (floatMode) paddedFloatImages.append(std::move(paddedFloat));
             continue;
         }
         const int tileOffset = loaded[layer].number - 1001;
         const int mapOffset = tileOffset * 4;
         tileLookup[mapOffset] = static_cast<float>(layer + 1);
-        tileLookup[mapOffset + 1] = static_cast<float>(source.width()) /
+        tileLookup[mapOffset + 1] = static_cast<float>(loadedSource.width) /
                                     static_cast<float>(maximumWidth);
-        tileLookup[mapOffset + 2] = static_cast<float>(source.height()) /
+        tileLookup[mapOffset + 2] = static_cast<float>(loadedSource.height) /
                                     static_cast<float>(maximumHeight);
         paddedImages.append(std::move(image));
+        if (floatMode) paddedFloatImages.append(std::move(paddedFloat));
     }
 
     GLint previousArrayBinding = 0;
@@ -4396,13 +4555,16 @@ ViewportSurfaceRenderer::UdimTextureSet ViewportSurfaceRenderer::ensureUdimTextu
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8,
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0,
+                 floatMode ? GL_RGBA32F : (srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8),
                  maximumWidth, maximumHeight, paddedImages.size(), 0, GL_RGBA,
-                 GL_UNSIGNED_BYTE, nullptr);
+                 floatMode ? GL_FLOAT : GL_UNSIGNED_BYTE, nullptr);
     for (int layer = 0; layer < paddedImages.size(); ++layer) {
         glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer,
                         maximumWidth, maximumHeight, 1, GL_RGBA,
-                        GL_UNSIGNED_BYTE, paddedImages[layer].constBits());
+                        floatMode ? GL_FLOAT : GL_UNSIGNED_BYTE,
+                        floatMode ? static_cast<const void *>(paddedFloatImages[layer].constData())
+                                  : static_cast<const void *>(paddedImages[layer].constBits()));
     }
     glGenTextures(1, &lookupTexture);
     glBindTexture(GL_TEXTURE_2D, lookupTexture);
@@ -5799,7 +5961,10 @@ bool ViewportSurfaceRenderer::draw(
                     range.useTextureColor
                 ? ensureImageTexture(range.textureImagePath,
                                      range.workbenchMaterial.textureImagePackedDataBase64,
-                                     range.textureImageSrgb) : 0;
+                                     range.textureImageSrgb,
+                                     range.workbenchMaterial.textureImageSceneLinearFloatDataBase64,
+                                     range.workbenchMaterial.textureImageSceneLinearFloatWidth,
+                                     range.workbenchMaterial.textureImageSceneLinearFloatHeight) : 0;
             const UdimTextureSet udimTexture =
                 settings.colorMode == ViewportColorMode::Texture &&
                         range.useTextureColor
@@ -6720,7 +6885,10 @@ bool ViewportSurfaceRenderer::draw(
                               range.textureImagePath,
                               range.workbenchMaterial
                                   .textureImagePackedDataBase64,
-                              range.textureImageSrgb)
+                              range.textureImageSrgb,
+                              range.workbenchMaterial.textureImageSceneLinearFloatDataBase64,
+                              range.workbenchMaterial.textureImageSceneLinearFloatWidth,
+                              range.workbenchMaterial.textureImageSceneLinearFloatHeight)
                         : 0;
                     const UdimTextureSet udimTexture = textureColorEnabled
                         ? ensureUdimTexture(range.textureImageTiles,
